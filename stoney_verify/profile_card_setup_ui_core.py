@@ -15,7 +15,8 @@ from .profile_card_runtime import (
 _RUNTIME_ATTRIBUTE = "_dank_live_profile_card_runtime"
 _MAX_LIVE_CHANNELS = 10
 _FIELD_LABELS = {
-    "roles": "Profile roles",
+    "server_roles": "Server roles",
+    "profile_tags": "Profile tags",
     "account_dates": "Account dates",
     "platforms": "Shared platforms",
 }
@@ -114,7 +115,7 @@ class _FieldToggleButton(discord.ui.Button):
         label = _FIELD_LABELS[field_key]
         super().__init__(
             label=f"{label}: {'Allowed' if allowed else 'Hidden'}",
-            emoji={"roles": "🎭", "account_dates": "📅", "platforms": "🔗"}[field_key],
+            emoji={"server_roles": "🏷️", "profile_tags": "🎭", "account_dates": "📅", "platforms": "🔗"}[field_key],
             style=discord.ButtonStyle.success if allowed else discord.ButtonStyle.secondary,
             custom_id=f"dank_setup_profile_cards:field:{field_key}",
             row=2,

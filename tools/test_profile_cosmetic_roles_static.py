@@ -20,13 +20,13 @@ def test_cosmetic_allowlist_is_per_guild_config() -> None:
 
 
 def test_staff_builder_has_cosmetic_manager_entry() -> None:
-    assert 'label="Profile Roles / Cosmetics"' in TEXT
+    assert 'label="Profile Tags & Cosmetics"' in TEXT
     assert 'custom_id=f"{PROFILE_PREFIX}builder:cosmetics"' in TEXT
     assert 'if action == "cosmetics":' in TEXT
 
 
 def test_user_panel_has_cosmetic_picker_entry() -> None:
-    assert 'label="Server Roles / Cosmetics"' in TEXT
+    assert 'label="Profile Tags & Cosmetics"' in TEXT
     assert 'custom_id=f"{PROFILE_PREFIX}cosmetics"' in TEXT
     assert 'if suffix == "cosmetics":' in TEXT
 

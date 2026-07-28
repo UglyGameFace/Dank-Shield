@@ -224,7 +224,8 @@ async def _studio_embed(member: discord.Member) -> discord.Embed:
         name="Sharing",
         value=(
             f"**Live signature:** {'On' if effective_privacy.get('live_cards_enabled', True) else 'Off'}\n"
-            f"**Roles:** {'Shown' if effective_privacy.get('show_roles', True) else 'Hidden'}\n"
+            f"**Server roles:** {'Shown' if effective_privacy.get('show_server_roles', False) else 'Hidden'}\n"
+            f"**Profile tags:** {'Shown' if effective_privacy.get('show_profile_tags', True) else 'Hidden'}\n"
             f"**Dates:** {'Shown' if effective_privacy.get('show_account_dates', True) else 'Hidden'}\n"
             f"**Platforms:** {shared} shared"
         ),
@@ -233,8 +234,8 @@ async def _studio_embed(member: discord.Member) -> discord.Embed:
     embed.add_field(
         name="Easy rule",
         value=(
-            "**Appearance** changes how your signature looks. **Privacy** changes what it may show. "
-            "**Platforms** manages gaming and social identities. These settings never change the server's welcome cards."
+            "**Server Roles** only controls whether safe roles already assigned by this server appear. "
+            "**Profile Tags** opens pronouns, identity, interests, and optional cosmetics. They are separate menus."
         ),
         inline=False,
     )
@@ -259,14 +260,13 @@ class SignaturePreviewView(discord.ui.View):
                         url=str(child.url),
                     )
                 )
-            elif child.custom_id or child.disabled:
+            elif child.custom_id:
                 self.add_item(
                     discord.ui.Button(
-                        label=str(child.label)[:80] if child.label else None,
+                        label=str(child.label or "Username")[:80],
                         emoji=child.emoji,
                         style=child.style,
-                        custom_id=str(child.custom_id) if child.custom_id else None,
-                        disabled=bool(child.disabled),
+                        custom_id=str(child.custom_id),
                     )
                 )
 
@@ -716,7 +716,7 @@ class ProfileAppearanceView(discord.ui.View):
 class PlatformEditModal(discord.ui.Modal):
     def __init__(self, *, author_id: int, platform: str, entry: Mapping[str, Any]) -> None:
         spec = PLATFORM_SPECS[platform]
-        super().__init__(title=f"{spec.label} Profile", timeout=900)
+        super().__init__(title=f"{spec.label} Details", timeout=900)
         self.author_id = int(author_id)
         self.platform = platform
         self.username = discord.ui.TextInput(
@@ -748,8 +748,12 @@ class PlatformEditModal(discord.ui.Modal):
         mode = platform_entry_mode(current) if current else ""
         if not username and not profile_url:
             mode = "logo"
+        elif mode == "link" and not profile_url:
+            mode = "username" if username else "logo"
+        elif mode == "username" and not username:
+            mode = "link" if profile_url else "logo"
         elif not mode or mode == "logo":
-            mode = "link" if profile_url else "username"
+            mode = "link" if profile_url else "username" if username else "logo"
         try:
             entry = await save_platform_identity(
                 self.author_id,
@@ -767,7 +771,7 @@ class PlatformEditModal(discord.ui.Modal):
         spec = PLATFORM_SPECS[self.platform]
         await _edit_private(
             interaction,
-            content=f"✅ {spec.label} saved. Choose **Link**, **Username**, **Logo only**, or **Private** below.",
+            content=f"✅ {spec.label} saved. Choose how it should appear below.",
             embed=_platform_detail_embed(self.platform, entry),
             view=PlatformDetailView(author_id=self.author_id, platform=self.platform, entry=entry),
         )
@@ -780,31 +784,32 @@ def _platform_detail_embed(platform: str, entry: Mapping[str, Any]) -> discord.E
     shared = bool(raw.get("shared"))
     mode = platform_entry_mode(raw)
     mode_label = {
-        "link": "🔗 Link button",
-        "username": "📋 Copyable username button",
-        "logo": "🎮 Logo only",
+        "link": "Official profile link",
+        "username": "Copy-ready username button",
+        "logo": "Logo only",
     }[mode]
+    title_prefix = f"{spec.emoji} " if spec.emoji else ""
     embed = discord.Embed(
-        title=f"{spec.emoji} {spec.label}",
+        title=f"{title_prefix}{spec.label}",
         description=(
-            "Choose exactly how this platform appears. **Username** creates a fast same-channel private copy box, "
-            "**Link** opens the official profile, and **Logo only** requires no username or link."
+            "**Link** opens an official profile. **Username** shows the gamertag as a button and returns a private "
+            "copy-ready box in the same channel. **Logo only** shows the real platform mark without requiring details."
         ),
         color=discord.Color.green() if shared else discord.Color.blurple(),
     )
     embed.add_field(
-        name="Username",
-        value=f"`{display_profile_username(username)}`" if username else "Optional — not saved",
+        name="Saved username",
+        value=f"`{display_profile_username(username)}`" if username else "Not required",
         inline=False,
     )
-    embed.add_field(name="Visibility", value="🌐 Public" if shared else "🔒 Private", inline=True)
+    embed.add_field(name="Visibility", value="Public" if shared else "Private", inline=True)
     embed.add_field(name="Public display", value=mode_label if shared else "Hidden", inline=True)
     embed.add_field(name="Official link", value="Saved" if raw.get("url") else "Not saved", inline=True)
     return embed
 
 
 class _PlatformModeButton(discord.ui.Button):
-    def __init__(self, *, author_id: int, platform: str, entry: Mapping[str, Any], mode: str, row: int = 0) -> None:
+    def __init__(self, *, author_id: int, platform: str, entry: Mapping[str, Any], mode: str) -> None:
         spec = PLATFORM_SPECS[platform]
         raw = dict(entry or {})
         labels = {"link": "Show Link", "username": "Show Username", "logo": "Logo Only"}
@@ -813,9 +818,14 @@ class _PlatformModeButton(discord.ui.Button):
         )
         super().__init__(
             label=labels[mode],
-            style=discord.ButtonStyle.success if bool(raw.get("shared")) and platform_entry_mode(raw) == mode else discord.ButtonStyle.secondary,
+            emoji=spec.emoji if mode == "logo" else None,
+            style=(
+                discord.ButtonStyle.success
+                if bool(raw.get("shared")) and platform_entry_mode(raw) == mode
+                else discord.ButtonStyle.secondary
+            ),
             disabled=disabled,
-            row=row,
+            row=0,
         )
         self.author_id = int(author_id)
         self.platform = platform
@@ -839,20 +849,20 @@ class _PlatformModeButton(discord.ui.Button):
         await _invalidate(interaction, all_guilds=True)
         await _edit_private(
             interaction,
-            content=f"✅ {PLATFORM_SPECS[self.platform].label} now uses **{self.label}** on public signatures.",
+            content=f"✅ {PLATFORM_SPECS[self.platform].label} now uses **{self.label}**.",
             embed=_platform_detail_embed(self.platform, entry),
             view=PlatformDetailView(author_id=self.author_id, platform=self.platform, entry=entry),
         )
 
 
 class _PlatformPrivateButton(discord.ui.Button):
-    def __init__(self, *, author_id: int, platform: str, entry: Mapping[str, Any], row: int = 0) -> None:
+    def __init__(self, *, author_id: int, platform: str, entry: Mapping[str, Any]) -> None:
         raw = dict(entry or {})
         super().__init__(
             label="Make Private",
             style=discord.ButtonStyle.danger,
             disabled=not bool(raw.get("shared")),
-            row=row,
+            row=0,
         )
         self.author_id = int(author_id)
         self.platform = platform
@@ -889,7 +899,8 @@ class PlatformDetailView(discord.ui.View):
         self.author_id = int(author_id)
         self.platform = str(platform)
         raw = dict(entry or {})
-        if PLATFORM_SPECS[self.platform].supports_url:
+        spec = PLATFORM_SPECS[self.platform]
+        if spec.supports_url:
             self.add_item(_PlatformModeButton(author_id=self.author_id, platform=self.platform, entry=raw, mode="link"))
         self.add_item(_PlatformModeButton(author_id=self.author_id, platform=self.platform, entry=raw, mode="username"))
         self.add_item(_PlatformModeButton(author_id=self.author_id, platform=self.platform, entry=raw, mode="logo"))
@@ -935,7 +946,7 @@ class PlatformSelect(discord.ui.Select):
             min_values=1,
             max_values=1,
             options=[
-                discord.SelectOption(label=spec.label, value=key)
+                discord.SelectOption(label=spec.label, value=key, emoji=spec.emoji)
                 for key, spec in PLATFORM_SPECS.items()
             ],
             custom_id="dank:profile:platform_picker:v1",
@@ -995,14 +1006,15 @@ async def open_platform_manager(interaction: discord.Interaction, *, replace: bo
             if username and mode != "logo"
             else "Logo only"
         )
+        prefix = f"{spec.emoji} " if spec.emoji else ""
         lines.append(
-            f"**{spec.label}:** {identity} — "
-            f"{'Public' if raw.get('shared') else 'Private'} • {mode.title()}"
+            f"{prefix}**{spec.label}:** {identity} — "
+            f"{'🌐 Public' if raw.get('shared') else '🔒 Private'} • {mode.title()}"
         )
     embed = discord.Embed(
-        title="Platforms & Accounts",
+        title="🎮 Platforms & Accounts",
         description=(
-            "Choose a platform below, then select **Link**, **Username**, **Logo only**, or **Private**. "
+            "Choose a platform, then select **Link**, **Username**, **Logo only**, or **Private**. "
             "Logo only needs no account details, and saving details never exposes them automatically."
         ),
         color=discord.Color.blurple(),
@@ -1013,6 +1025,58 @@ async def open_platform_manager(interaction: discord.Interaction, *, replace: bo
         await _edit_private(interaction, embed=embed, view=panel)
     else:
         await _private(interaction, embed=embed, view=panel)
+
+
+async def open_server_role_display(interaction: discord.Interaction) -> None:
+    member = _member(interaction)
+    if member is None or interaction.guild is None:
+        return await _private(interaction, content="❌ Use this inside a server as a member.")
+    user = await get_profile_user(member.id, refresh=True)
+    guild_row = await get_profile_guild_settings(member.guild.id, member.id, refresh=True)
+    enabled = bool(
+        effective_preferences(user.get("preferences"), guild_row.get("settings")).get("show_server_roles", False)
+    )
+    embed = discord.Embed(
+        title="Server Role Display",
+        description=(
+            "This only controls whether safe roles already assigned by this server appear on your signature. "
+            "It does **not** open or edit pronouns, identity, interests, or cosmetic tags."
+        ),
+        color=discord.Color.green() if enabled else discord.Color.blurple(),
+    )
+    embed.add_field(name="Current setting", value="Shown" if enabled else "Hidden", inline=False)
+    await _edit_private(
+        interaction,
+        embed=embed,
+        view=ServerRoleDisplayView(author_id=member.id, enabled=enabled),
+    )
+
+
+class ServerRoleDisplayView(discord.ui.View):
+    def __init__(self, *, author_id: int, enabled: bool) -> None:
+        super().__init__(timeout=600)
+        self.author_id = int(author_id)
+        self.enabled = bool(enabled)
+        self.toggle.label = "Hide Server Roles" if self.enabled else "Show Server Roles"
+        self.toggle.style = discord.ButtonStyle.danger if self.enabled else discord.ButtonStyle.success
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != self.author_id:
+            await _private(interaction, content="❌ Open your own profile settings to use this.")
+            return False
+        return True
+
+    @discord.ui.button(label="Show Server Roles", style=discord.ButtonStyle.success, row=0)
+    async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await upsert_profile_user_preferences(self.author_id, {"show_server_roles": not self.enabled})
+        await _invalidate(interaction, all_guilds=True)
+        await open_server_role_display(interaction)
+
+    @discord.ui.button(label="Back to Signature", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_profile_signature_studio(interaction, replace=True)
 
 
 class SignatureStudioView(discord.ui.View):
@@ -1055,8 +1119,13 @@ class SignatureStudioView(discord.ui.View):
         _ = button
         await open_platform_manager(interaction, replace=True)
 
-    @discord.ui.button(label="Profile Roles", emoji="🎭", style=discord.ButtonStyle.secondary, row=1)
-    async def roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="Server Roles", style=discord.ButtonStyle.secondary, row=1)
+    async def server_roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_server_role_display(interaction)
+
+    @discord.ui.button(label="Profile Tags", style=discord.ButtonStyle.secondary, row=1)
+    async def profile_tags(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         member = _member(interaction)
         if member is None:

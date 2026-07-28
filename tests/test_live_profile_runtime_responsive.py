@@ -264,7 +264,8 @@ def test_unchanged_signature_render_is_reused_from_bounded_cache(monkeypatch):
             return {
                 "preferences": {
                     "live_cards_enabled": True,
-                    "show_roles": False,
+                    "show_server_roles": False,
+                    "show_profile_tags": False,
                     "show_account_dates": False,
                     "show_platforms": False,
                 },

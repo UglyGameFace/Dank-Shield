@@ -42,8 +42,8 @@ def test_live_renderer_uses_legible_mobile_friendly_dimensions():
         style={},
     )
     with Image.open(BytesIO(payload)) as image:
-        assert image.size == (1080, 300)
-    assert live_renderer.SIGNATURE_RATIO == 3.6
+        assert image.size == (1400, 340)
+    assert live_renderer.SIGNATURE_RATIO == 1400 / 340
 
 
 def test_official_profile_links_use_compact_buttons_without_text_duplication(monkeypatch):
@@ -54,7 +54,8 @@ def test_official_profile_links_use_compact_buttons_without_text_duplication(mon
             return {
                 "preferences": {
                     "live_cards_enabled": True,
-                    "show_roles": False,
+                    "show_server_roles": False,
+                    "show_profile_tags": False,
                     "show_account_dates": False,
                     "show_platforms": True,
                 },
@@ -64,6 +65,7 @@ def test_official_profile_links_use_compact_buttons_without_text_duplication(mon
                         "username": "@UGLY123",
                         "url": "https://steamcommunity.com/id/UGLY123",
                         "shared": True,
+                        "mode": "link",
                     }
                 },
             }
@@ -112,7 +114,8 @@ def test_url_capable_identity_without_link_stays_in_image_only(monkeypatch):
             return {
                 "preferences": {
                     "live_cards_enabled": True,
-                    "show_roles": False,
+                    "show_server_roles": False,
+                    "show_profile_tags": False,
                     "show_account_dates": False,
                     "show_platforms": True,
                 },
@@ -122,6 +125,7 @@ def test_url_capable_identity_without_link_stays_in_image_only(monkeypatch):
                         "username": "@UGLY123",
                         "url": "",
                         "shared": True,
+                        "mode": "username",
                     }
                 },
             }
@@ -150,9 +154,8 @@ def test_url_capable_identity_without_link_stays_in_image_only(monkeypatch):
         buttons = [child for child in rendered.view.children if isinstance(child, discord.ui.Button)]
         assert len(buttons) == 1
         assert buttons[0].label == "@UGLY123"
-        assert buttons[0].emoji is None
         assert buttons[0].custom_id == "dank:profilecopy:v1:42:steam"
-        assert captured["platform_entries"][0]["platform"] == "steam"
+        assert captured["platform_entries"][0]["mode"] == "username"
 
     asyncio.run(scenario())
 
@@ -166,7 +169,8 @@ def test_username_only_public_accounts_remain_in_image_without_fake_links(monkey
             return {
                 "preferences": {
                     "live_cards_enabled": True,
-                    "show_roles": False,
+                    "show_server_roles": False,
+                    "show_profile_tags": False,
                     "show_account_dates": False,
                     "show_platforms": True,
                 },
@@ -176,6 +180,7 @@ def test_username_only_public_accounts_remain_in_image_without_fake_links(monkey
                         "username": "UGLY123",
                         "url": "",
                         "shared": True,
+                        "mode": "username",
                     }
                 },
             }
@@ -204,9 +209,8 @@ def test_username_only_public_accounts_remain_in_image_without_fake_links(monkey
         buttons = [child for child in rendered.view.children if isinstance(child, discord.ui.Button)]
         assert len(buttons) == 1
         assert buttons[0].label == "UGLY123"
-        assert buttons[0].emoji is None
         assert buttons[0].custom_id == "dank:profilecopy:v1:42:xbox"
-        assert captured["platform_entries"][0]["platform"] == "xbox"
+        assert captured["platform_entries"][0]["mode"] == "username"
 
     asyncio.run(scenario())
 

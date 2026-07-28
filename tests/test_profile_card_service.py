@@ -93,20 +93,23 @@ def test_per_server_user_privacy_can_only_be_stricter_than_global_defaults():
     effective = effective_preferences(
         {
             "live_cards_enabled": False,
-            "show_roles": True,
+            "show_server_roles": True,
+            "show_profile_tags": True,
             "show_account_dates": False,
             "show_platforms": True,
         },
         {
             "live_cards_enabled": True,
-            "show_roles": False,
+            "show_server_roles": False,
+            "show_profile_tags": False,
             "show_account_dates": True,
             "show_platforms": False,
         },
     )
     assert effective == {
         "live_cards_enabled": False,
-        "show_roles": False,
+        "show_server_roles": False,
+        "show_profile_tags": False,
         "show_account_dates": False,
         "show_platforms": False,
     }

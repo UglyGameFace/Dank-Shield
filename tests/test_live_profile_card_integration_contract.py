@@ -99,7 +99,7 @@ def test_privacy_is_resolved_before_compact_signature_rendering():
 def test_public_signature_does_not_repeat_platform_usernames_above_image():
     assert "Connected profiles" not in PROFILE_RUNTIME
     assert "description=_platform_link_line" not in PROFILE_RUNTIME
-    assert "view = _platform_view(platforms)" in PROFILE_RUNTIME
+    assert "view = _platform_view(platforms, owner_user_id=member.id)" in PROFILE_RUNTIME
     assert "live_card_marker_url" in PROFILE_RUNTIME
 
 
@@ -149,8 +149,8 @@ def test_server_setup_uses_only_the_profile_signature_channel_picker():
 
 
 def test_signature_visual_is_legible_compact_and_shares_style_not_welcome_behavior():
-    assert "SIGNATURE_WIDTH = 1080" in SIGNATURE_RENDERER
-    assert "SIGNATURE_HEIGHT = 300" in SIGNATURE_RENDERER
+    assert "SIGNATURE_WIDTH = 1400" in SIGNATURE_RENDERER
+    assert "SIGNATURE_HEIGHT = 340" in SIGNATURE_RENDERER
     assert "render_profile_signature" in SIGNATURE_RENDERER
     assert "render_welcome_card" not in SIGNATURE_RENDERER
     assert "on_member_join" not in SIGNATURE_RENDERER

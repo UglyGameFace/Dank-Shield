@@ -137,7 +137,7 @@ def config(channel_id: int) -> dict[str, object]:
     return {
         "profile_live_cards_enabled": True,
         "profile_live_card_channel_ids": [str(channel_id)],
-        "profile_live_card_allowed_fields": ["roles", "account_dates", "platforms"],
+        "profile_live_card_allowed_fields": ["server_roles", "profile_tags", "account_dates", "platforms"],
     }
 
 

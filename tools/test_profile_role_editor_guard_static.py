@@ -31,12 +31,12 @@ def test_profile_panel_and_editor_get_suggest_role_buttons() -> None:
 
 
 def test_native_profile_source_has_new_role_cosmetics_labels() -> None:
-    assert "Server Roles / Cosmetics" in PROFILE
-    assert "Profile Roles / Cosmetics" in PROFILE
-    assert "Browse / Add Server Roles" in PROFILE
-    assert "Add Server Roles / Cosmetics" in PROFILE
+    assert "Server Roles / Cosmetics" not in PROFILE
+    assert "Profile Tags & Cosmetics" in PROFILE
+    assert "Browse / Add Profile Tags" in PROFILE
+    assert "Add Profile Tags & Cosmetics" in PROFILE
     assert "ProfileRoleAddPickerView(DankMultiPickerView)" in PROFILE
-    assert "Remove Role / Cosmetic" in PROFILE
+    assert "Remove Profile Tag" in PROFILE
 
 
 def test_old_profile_cosmetics_user_facing_copy_is_gone() -> None:
@@ -55,15 +55,15 @@ def test_old_profile_cosmetics_user_facing_copy_is_gone() -> None:
 
 
 def test_server_roles_cosmetics_button_is_relabelled_with_roles() -> None:
-    assert "Server Roles / Cosmetics" in GUARD
+    assert "Server Roles / Cosmetics" not in GUARD
     assert "PROFILE_ROLES_COSMETICS_LABEL" in GUARD
     assert "_retitle_profile_roles_button" in GUARD
-    assert "These are profile/server roles/cosmetics" in GUARD
+    assert "These are optional profile tags/cosmetics" in GUARD
 
 
 def test_builder_gets_profile_roles_cosmetics_editor_button() -> None:
     assert "ProfileBuilderViewWithRoleEditor" in GUARD
-    assert "Profile Roles / Cosmetics" in GUARD
+    assert "Profile Tags & Cosmetics" in GUARD
     assert "builder:role_editor" in GUARD
     assert "_open_role_editor" in GUARD
 

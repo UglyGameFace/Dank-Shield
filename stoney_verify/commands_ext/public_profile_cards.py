@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 """Public profile controls backed by compact forum-style signatures."""
 
 from typing import Any, Mapping, Optional
 
+import asyncio
 import discord
 from discord import app_commands
 
@@ -239,7 +239,8 @@ class ProfileSettingsView(_core.ProfileSettingsView):
         global_values = dict(user_preferences or {})
         local_values = dict(guild_settings or {})
         detail_specs = (
-            ("Roles", "show_roles", "🎭"),
+            ("Server Roles", "show_server_roles", "🏷️"),
+            ("Profile Tags", "show_profile_tags", "🎭"),
             ("Dates", "show_account_dates", "📅"),
             ("Accounts", "show_platforms", "🔗"),
         )
@@ -333,7 +334,7 @@ async def send_privacy_aware_profile(
         )
 
     preferences = dict(effective.get("preferences") or {})
-    show_roles = bool(preferences.get("show_roles", True)) and "roles" in config.allowed_fields
+    show_roles = bool(preferences.get("show_profile_tags", True)) and "profile_tags" in config.allowed_fields
     if rendered is None:
         embed = discord.Embed(
             title=member.display_name,
@@ -365,29 +366,34 @@ async def send_privacy_aware_profile(
     await _send_private(interaction, **payload)
 
 
-async def _handle_profile_username_copy(interaction: discord.Interaction) -> None:
+async def _handle_profile_username_copy(interaction: discord.Interaction) -> bool:
+    """Return one currently-public username in a private, copy-ready response."""
     if interaction.type != discord.InteractionType.component:
-        return
-    custom_id = str((interaction.data or {}).get("custom_id") or "")
+        return False
+    data = interaction.data or {}
+    custom_id = str(data.get("custom_id") or "")
     if not custom_id.startswith(_PROFILE_COPY_PREFIX):
-        return
-    parts = custom_id.split(":")
+        return False
+    parts = custom_id.split(":", 4)
     if len(parts) != 5:
-        return await _safe_ephemeral(interaction, "That platform username is no longer available.", ok=False)
+        await _safe_ephemeral(interaction, "That platform username is no longer available.", ok=False)
+        return True
     try:
         owner_id = int(parts[3])
     except Exception:
         owner_id = 0
-    platform = parts[4]
+    platform = str(parts[4] or "")
     if interaction.guild is None or owner_id <= 0 or platform not in PLATFORM_SPECS:
-        return await _safe_ephemeral(interaction, "That platform username is no longer available.", ok=False)
+        await _safe_ephemeral(interaction, "That platform username is no longer available.", ok=False)
+        return True
     try:
         user_row, guild_row = await asyncio.gather(
             get_profile_user(owner_id, refresh=True),
             get_profile_guild_settings(interaction.guild.id, owner_id, refresh=True),
         )
     except ProfileStorageUnavailable:
-        return await _safe_ephemeral(interaction, "Private profile storage is temporarily unavailable.", ok=False)
+        await _safe_ephemeral(interaction, "Private profile storage is temporarily unavailable.", ok=False)
+        return True
     preferences = effective_preferences(user_row.get("preferences"), guild_row.get("settings"))
     raw = dict(user_row.get("platforms") or {}).get(platform)
     if (
@@ -397,9 +403,11 @@ async def _handle_profile_username_copy(interaction: discord.Interaction) -> Non
         or platform_entry_mode(raw) != "username"
         or not str(raw.get("username") or "").strip()
     ):
-        return await _safe_ephemeral(interaction, "That member no longer shares this username.", ok=False)
+        await _safe_ephemeral(interaction, "That member no longer shares this username.", ok=False)
+        return True
     username = display_profile_username(raw.get("username"))
     await _send_private(interaction, content=f"```text\n{username}\n```")
+    return True
 
 
 def _attach_profile_commands() -> None:
@@ -432,7 +440,12 @@ def register_public_profile_cards(bot: Any, tree: Any) -> None:
         bot.add_listener(runtime.on_member_remove, "on_member_remove")
         bot.add_listener(runtime.on_guild_channel_delete, "on_guild_channel_delete")
     if not _PROFILE_COPY_LISTENER_REGISTERED:
-        bot.add_listener(_handle_profile_username_copy, "on_interaction")
+        @bot.listen("on_interaction")
+        async def _dank_profile_username_copy_listener(interaction: discord.Interaction) -> None:
+            try:
+                await _handle_profile_username_copy(interaction)
+            except Exception as exc:
+                print(f"⚠️ profile username copy failed: {type(exc).__name__}: {exc}")
         _PROFILE_COPY_LISTENER_REGISTERED = True
     if not _REGISTERED:
         _REGISTERED = True

@@ -147,7 +147,7 @@ def _config(channel_id):
     return {
         "profile_live_cards_enabled": True,
         "profile_live_card_channel_ids": [str(channel_id)],
-        "profile_live_card_allowed_fields": ["roles", "account_dates", "platforms"],
+        "profile_live_card_allowed_fields": ["server_roles", "profile_tags", "account_dates", "platforms"],
     }
 
 
@@ -423,7 +423,8 @@ def test_basic_signature_renders_when_every_optional_field_is_hidden(monkeypatch
             return {
                 "preferences": {
                     "live_cards_enabled": True,
-                    "show_roles": False,
+                    "show_server_roles": False,
+                    "show_profile_tags": False,
                     "show_account_dates": False,
                     "show_platforms": False,
                 },
@@ -433,8 +434,16 @@ def test_basic_signature_renders_when_every_optional_field_is_hidden(monkeypatch
         async def config(_guild_id):
             return {}
 
-        async def render_image(_member, *, style, role_labels, date_labels, platform_labels):
-            seen.append((style, role_labels, date_labels, platform_labels))
+        async def render_image(
+            _member,
+            *,
+            style,
+            server_role_labels,
+            profile_tag_labels,
+            date_labels,
+            platform_entries,
+        ):
+            seen.append((style, server_role_labels, profile_tag_labels, date_labels, platform_entries))
             return b"image-bytes"
 
         monkeypatch.setattr(runtime_module, "get_effective_profile_settings", settings)
@@ -451,7 +460,7 @@ def test_basic_signature_renders_when_every_optional_field_is_hidden(monkeypatch
         assert rendered is not None
         assert rendered.file is not None
         assert rendered.embed.description is None
-        assert seen and seen[0][1:] == ([], [], [])
+        assert seen and seen[0][1:] == ([], [], [], [])
 
     asyncio.run(scenario())
 

@@ -159,7 +159,59 @@ def _sync_core_dependencies() -> None:
         setattr(_core, name, globals()[name])
 
 
-def _compact_role_labels(member: discord.Member) -> list[str]:
+def _profile_role_name_keys() -> set[str]:
+    from .commands_ext.public_self_roles_group import _all_profile_role_names, _role_name_key
+
+    return {_role_name_key(name) for name in _all_profile_role_names()}
+
+
+def _configured_role_ids(config: Mapping[str, Any], *keys: str) -> set[int]:
+    out: set[int] = set()
+    for key in keys:
+        raw = config.get(key)
+        values = raw if isinstance(raw, (list, tuple, set, frozenset)) else [raw]
+        for value in values:
+            try:
+                role_id = int(str(value or "0").strip())
+            except Exception:
+                role_id = 0
+            if role_id > 0:
+                out.add(role_id)
+    return out
+
+
+def _compact_server_role_labels(member: discord.Member, config: Mapping[str, Any]) -> list[str]:
+    """Return safe real server roles, separate from member-selected profile tags."""
+    from .commands_ext.public_self_roles_group import _role_name_key, _short_role_label
+
+    profile_name_keys = _profile_role_name_keys()
+    cosmetic_ids = _configured_role_ids(config, "profile_cosmetic_role_ids")
+    protected_ids = _configured_role_ids(
+        config,
+        "unverified_role_id",
+        "verified_role_id",
+        "resident_role_id",
+        "staff_role_id",
+        "vc_staff_role_id",
+        "server_control_role_id",
+        "bot_manager_role_id",
+    )
+    excluded_ids = cosmetic_ids | protected_ids
+    roles: list[discord.Role] = []
+    for role in sorted(list(getattr(member, "roles", []) or []), reverse=True):
+        try:
+            if role.is_default() or role.managed or int(role.id) in excluded_ids:
+                continue
+        except Exception:
+            continue
+        if _role_name_key(role.name) in profile_name_keys:
+            continue
+        roles.append(role)
+    return [_short_role_label(role.name) for role in roles[:3]]
+
+
+def _compact_profile_tag_labels(member: discord.Member, config: Mapping[str, Any]) -> list[str]:
+    """Return pronouns/identity/interests and configured cosmetic tags only."""
     from .commands_ext.public_self_roles_group import (
         DEFAULT_IDENTITY_ROLE_NAMES,
         DEFAULT_INTEREST_ROLE_NAMES,
@@ -189,6 +241,15 @@ def _compact_role_labels(member: discord.Member) -> list[str]:
         shown = interests[:3]
         suffix = " + more" if len(interests) > len(shown) else ""
         labels.append("Interests: " + " • ".join(shown) + suffix)
+
+    cosmetic_ids = _configured_role_ids(config, "profile_cosmetic_role_ids")
+    cosmetics = [
+        _short_role_label(role.name)
+        for role in sorted(list(getattr(member, "roles", []) or []), reverse=True)
+        if int(getattr(role, "id", 0) or 0) in cosmetic_ids
+    ]
+    if cosmetics:
+        labels.append("Tags: " + " • ".join(cosmetics[:3]))
     return labels
 
 
@@ -278,18 +339,26 @@ async def render_live_profile_card(
     if require_live_enabled and not bool(preferences.get("live_cards_enabled", True)):
         return None
 
-    show_roles = bool(preferences.get("show_roles", True)) and "roles" in server_allowed_fields
+    show_server_roles = (
+        bool(preferences.get("show_server_roles", False))
+        and "server_roles" in server_allowed_fields
+    )
+    show_profile_tags = (
+        bool(preferences.get("show_profile_tags", True))
+        and "profile_tags" in server_allowed_fields
+    )
     show_dates = bool(preferences.get("show_account_dates", True)) and "account_dates" in server_allowed_fields
     show_platforms = bool(preferences.get("show_platforms", True)) and "platforms" in server_allowed_fields
     platforms = visible_platform_entries(settings.get("platforms"), allowed=show_platforms)
-    role_labels = _compact_role_labels(member) if show_roles else []
-    date_labels = _compact_date_labels(member) if show_dates else []
-    platform_labels = _compact_platform_labels(platforms)
 
     try:
         guild_config = await get_guild_config(member.guild.id)
     except Exception:
         guild_config = {}
+    server_role_labels = _compact_server_role_labels(member, guild_config) if show_server_roles else []
+    profile_tag_labels = _compact_profile_tag_labels(member, guild_config) if show_profile_tags else []
+    date_labels = _compact_date_labels(member) if show_dates else []
+    platform_labels = _compact_platform_labels(platforms)
     style = effective_profile_style(preferences, guild_config)
     avatar = getattr(member, "display_avatar", None)
     avatar_identity = str(getattr(avatar, "key", None) or getattr(avatar, "url", "") or "")
@@ -300,9 +369,9 @@ async def render_live_profile_card(
         str(getattr(member, "display_name", None) or member),
         avatar_identity,
         tuple(sorted(str(value) for value in server_allowed_fields)),
-        tuple(role_labels),
+        tuple(server_role_labels),
+        tuple(profile_tag_labels),
         tuple(date_labels),
-        tuple(platform_labels),
         _stable_cache_value(platforms),
         _stable_cache_value(style),
     )
@@ -311,9 +380,9 @@ async def render_live_profile_card(
         image_bytes = await render_member_profile_signature(
             member,
             style=style,
-            role_labels=role_labels,
+            server_role_labels=server_role_labels,
+            profile_tag_labels=profile_tag_labels,
             date_labels=date_labels,
-            platform_labels=platform_labels,
             platform_entries=platforms,
         )
         _signature_cache_put(cache_key, image_bytes)

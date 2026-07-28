@@ -1,0 +1,11 @@
+........................................................................ [ 67%]
+..................................                                       [100%]Task was destroyed but it is pending!
+task: <Task pending name='Task-78' coro=<LiveProfileCardRuntime._run_channel_worker() running at /home/runner/work/Dank-Shield/Dank-Shield/stoney_verify/profile_card_runtime.py:538> wait_for=<Future pending cb=[Task.task_wakeup()]> cb=[LiveProfileCardRuntime._ensure_channel_worker.<locals>.<lambda>() at /home/runner/work/Dank-Shield/Dank-Shield/stoney_verify/profile_card_runtime.py:499]>
+
+=============================== warnings summary ===============================
+../../../../../opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/site-packages/discord/player.py:30
+  /opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/site-packages/discord/player.py:30: DeprecationWarning: 'audioop' is deprecated and slated for removal in Python 3.13
+    import audioop
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+106 passed, 1 warning in 1.28s

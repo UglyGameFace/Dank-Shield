@@ -19,19 +19,16 @@ PROFILE_USER_TABLE = "dank_profile_users"
 PROFILE_GUILD_SETTINGS_TABLE = "dank_profile_guild_settings"
 LIVE_CARD_STATE_TABLE = "dank_live_profile_cards"
 
-PROFILE_FIELDS = frozenset({"roles", "account_dates", "platforms"})
+PROFILE_FIELDS = frozenset({"server_roles", "profile_tags", "account_dates", "platforms"})
 DEFAULT_PROFILE_PREFERENCES: dict[str, bool] = {
     "live_cards_enabled": True,
-    "show_roles": True,
+    # Actual server roles are opt-in because they may reveal staff/access structure.
+    "show_server_roles": False,
+    # Existing "show_roles" behavior represented member-selected profile tags.
+    "show_profile_tags": True,
     "show_account_dates": True,
     "show_platforms": True,
 }
-
-_USERNAME_MAX = 80
-_URL_MAX = 500
-_DB_ATTEMPTS = 3
-_CACHE_TTL_SECONDS = 60.0
-_BIDI_CONTROL_RE = re.compile("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 
 PLATFORM_MODE_LINK = "link"
 PLATFORM_MODE_USERNAME = "username"
@@ -41,6 +38,12 @@ PLATFORM_SHARE_MODES = frozenset({
     PLATFORM_MODE_USERNAME,
     PLATFORM_MODE_LOGO,
 })
+
+_USERNAME_MAX = 80
+_URL_MAX = 500
+_DB_ATTEMPTS = 3
+_CACHE_TTL_SECONDS = 60.0
+_BIDI_CONTROL_RE = re.compile("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 
 
 class ProfileStorageUnavailable(RuntimeError):
@@ -55,7 +58,7 @@ class InvalidPlatformProfile(ValueError):
 class PlatformSpec:
     key: str
     label: str
-    emoji: str
+    application_emoji_id: Optional[int] = None
     hosts: tuple[str, ...] = ()
     path_kind: str = "username_only"
 
@@ -63,23 +66,37 @@ class PlatformSpec:
     def supports_url(self) -> bool:
         return bool(self.hosts) and self.path_kind != "username_only"
 
+    @property
+    def emoji(self) -> Optional[str]:
+        """Return the uploaded application emoji, never a substitute Unicode icon."""
+        if not self.application_emoji_id:
+            return None
+        return f"<:{self.key}:{int(self.application_emoji_id)}>"
 
+    @property
+    def logo_url(self) -> Optional[str]:
+        if not self.application_emoji_id:
+            return None
+        return f"https://cdn.discordapp.com/emojis/{int(self.application_emoji_id)}.png?size=128&quality=lossless"
+
+
+# Uploaded in the Dank Shield Developer Portal. These are application emojis,
+# so Discord only displays them when the bot explicitly references their IDs.
 PLATFORM_SPECS: dict[str, PlatformSpec] = {
-    "steam": PlatformSpec("steam", "Steam", "🎮", ("steamcommunity.com",), "steam"),
-    "epic": PlatformSpec("epic", "Epic Games", "🛡️"),
+    "steam": PlatformSpec("steam", "Steam", 1531448150173286460, ("steamcommunity.com",), "steam"),
+    "epic": PlatformSpec("epic", "Epic Games", 1531448144796188702),
     # Xbox and PlayStation do not expose one stable, reliably canonical
-    # public-profile URL format across regions. Keep them username-only rather
-    # than accepting a generic official-site page or inventing a link.
-    "xbox": PlatformSpec("xbox", "Xbox", "🟢"),
-    "playstation": PlatformSpec("playstation", "PlayStation", "🔷"),
-    "nintendo": PlatformSpec("nintendo", "Nintendo", "🔴"),
-    "riot": PlatformSpec("riot", "Riot Games", "⚔️"),
-    "battle_net": PlatformSpec("battle_net", "Battle.net", "🌀"),
-    "roblox": PlatformSpec("roblox", "Roblox", "⬜", ("roblox.com", "www.roblox.com"), "roblox"),
-    "twitch": PlatformSpec("twitch", "Twitch", "🟣", ("twitch.tv", "www.twitch.tv"), "single"),
-    "youtube": PlatformSpec("youtube", "YouTube", "▶️", ("youtube.com", "www.youtube.com"), "youtube"),
-    "kick": PlatformSpec("kick", "Kick", "🟩", ("kick.com", "www.kick.com"), "single"),
-    "custom": PlatformSpec("custom", "Other", "🔗"),
+    # public-profile URL format across regions. Keep them username/logo only.
+    "xbox": PlatformSpec("xbox", "Xbox", 1531448152157061130),
+    "playstation": PlatformSpec("playstation", "PlayStation", 1531448147899977909),
+    "nintendo": PlatformSpec("nintendo", "Nintendo", 1531448151255289917),
+    "riot": PlatformSpec("riot", "Riot Games", 1531448143609331835),
+    "battle_net": PlatformSpec("battle_net", "Battle.net"),
+    "roblox": PlatformSpec("roblox", "Roblox", 1531448146968842240, ("roblox.com", "www.roblox.com"), "roblox"),
+    "twitch": PlatformSpec("twitch", "Twitch", 1531448142481064047, ("twitch.tv", "www.twitch.tv"), "single"),
+    "youtube": PlatformSpec("youtube", "YouTube", 1531448153054773288, ("youtube.com", "www.youtube.com"), "youtube"),
+    "kick": PlatformSpec("kick", "Kick", 1531448141604323338, ("kick.com", "www.kick.com"), "single"),
+    "custom": PlatformSpec("custom", "Other"),
 }
 
 _RESERVED_SINGLE_PATHS = {
@@ -142,7 +159,7 @@ def display_profile_username(value: Any) -> str:
 
 
 def platform_entry_mode(entry: Optional[Mapping[str, Any]]) -> str:
-    """Resolve legacy and current entries to link, username, or logo-only display."""
+    """Resolve current and legacy entries to link, username, or logo-only display."""
     raw = dict(entry or {}) if isinstance(entry, Mapping) else {}
     mode = str(raw.get("mode") or "").strip().lower()
     if mode in PLATFORM_SHARE_MODES:
@@ -261,9 +278,9 @@ def normalize_platform_entry(
         if not spec.supports_url:
             raise InvalidPlatformProfile(f"{spec.label} does not support a reliable public profile link.")
         if not clean_url:
-            raise InvalidPlatformProfile(f"Add an official {spec.label} profile link before showing Link mode.")
+            raise InvalidPlatformProfile(f"Add an official {spec.label} profile link before using Link mode.")
     if requested == PLATFORM_MODE_USERNAME and not clean_username:
-        raise InvalidPlatformProfile("Add the username before showing Username mode.")
+        raise InvalidPlatformProfile("Add the username before using Username mode.")
     return {
         "platform": key,
         "username": clean_username,
@@ -280,6 +297,10 @@ def normalize_preferences(value: Optional[Mapping[str, Any]]) -> dict[str, Any]:
     for key in DEFAULT_PROFILE_PREFERENCES:
         if key in raw:
             result[key] = bool(raw.get(key))
+    # Backward compatibility: the former show_roles switch controlled only
+    # pronouns/identity/interests, which are now clearly named Profile Tags.
+    if "show_profile_tags" not in raw and "show_roles" in raw:
+        result["show_profile_tags"] = bool(raw.get("show_roles"))
     result.update(normalize_member_profile_style(raw))
     return result
 
@@ -304,6 +325,10 @@ def normalize_server_allowed_fields(value: Any) -> set[str]:
     else:
         return set(PROFILE_FIELDS)
     cleaned = {str(item or "").strip().lower() for item in candidates}
+    # Existing servers stored one ambiguous "roles" field. Preserve access to
+    # both newly separated displays until an admin changes the setting.
+    if "roles" in cleaned:
+        cleaned.update({"server_roles", "profile_tags"})
     return cleaned & set(PROFILE_FIELDS)
 
 

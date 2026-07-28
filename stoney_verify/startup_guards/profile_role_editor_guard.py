@@ -38,8 +38,8 @@ _RESERVED_ROLE_WORDS = {
     "here",
 }
 
-PROFILE_ROLES_COSMETICS_LABEL = "Server Roles / Cosmetics"
-PROFILE_ROLE_EDITOR_LABEL = "Profile Roles / Cosmetics"
+PROFILE_ROLES_COSMETICS_LABEL = "Profile Tags & Cosmetics"
+PROFILE_ROLE_EDITOR_LABEL = "Profile Tags & Cosmetics"
 
 
 def _log(message: str) -> None:
@@ -97,7 +97,7 @@ def _button(*, label: str, emoji: str, custom_id: str, row: int, style: discord.
 
 
 def _retitle_profile_roles_button(view: discord.ui.View, prefix: str) -> None:
-    """Make the profile role/cosmetic button obvious to normal users."""
+    """Make the Profile Tags & Cosmetics button obvious to normal users."""
 
     for child in list(getattr(view, "children", []) or []):
         try:
@@ -216,7 +216,7 @@ def _patch_embeds(profile: Any) -> None:
         )
         embed.add_field(
             name="What this controls",
-            value="These are profile/server roles/cosmetics members can choose for themselves. They are still real Discord roles, just safety-checked before being offered.",
+            value="These are optional profile tags/cosmetics members can choose for themselves. They are still real Discord roles, just safety-checked before being offered.",
             inline=False,
         )
         embed.add_field(
@@ -231,7 +231,7 @@ def _patch_embeds(profile: Any) -> None:
         embed = original_panel_embed(guild, *args, **kwargs) if callable(original_panel_embed) else discord.Embed()
         embed.add_field(
             name=PROFILE_ROLES_COSMETICS_LABEL,
-            value="Use **Server Roles / Cosmetics** to pick optional server roles offered through the Profile Builder.",
+            value="Use **Profile Tags & Cosmetics** to pick optional self-selected tags and cosmetics.",
             inline=False,
         )
         embed.add_field(
