@@ -42,7 +42,7 @@ concurrency:
 
 jobs:
   apply-four-color-mixer:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/fix/live-profile-channel-spam'
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'fix/live-profile-channel-spam'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
