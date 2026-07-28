@@ -62,20 +62,21 @@ jobs:
         if: steps.materializer.outputs.present == 'true'
         run: python tools/_apply_pr145_color_mixer.py
 
-      - name: Commit exact failure evidence
+      - name: Verify exact failure evidence exists
         if: failure() && steps.materializer.outputs.present == 'true'
         run: |
-          if [ ! -s tools/_pr145_failure.log ]; then
-            echo "Materializer failed without producing its required evidence log."
-            exit 1
-          fi
+          test -s tools/_pr145_failure.log
           echo "===== PR145 FAILURE TAIL ====="
           tail -n 160 tools/_pr145_failure.log
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add tools/_pr145_failure.log
-          git commit -m "Capture PR145 native integration failure"
-          git push origin HEAD:fix/live-profile-channel-spam
+
+      - name: Upload exact failure evidence
+        if: failure() && steps.materializer.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr145-native-integration-failure
+          path: tools/_pr145_failure.log
+          if-no-files-found: error
+          retention-days: 2
 
       - name: Compile native implementation
         if: success() && steps.materializer.outputs.present == 'true'
