@@ -95,31 +95,49 @@ jobs:
         run: exit 1
 
       - name: Validate corrected source
+        id: validate_corrections
         if: steps.materializer.outputs.present == 'true' && steps.apply_corrections.outcome == 'success'
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
-          python -m py_compile \
-            stoney_verify/profile_card_service.py \
-            stoney_verify/profile_card_runtime.py \
-            stoney_verify/profile_custom_background.py \
-            stoney_verify/profile_signature_style.py \
-            stoney_verify/profile_signature_live_renderer.py \
-            stoney_verify/profile_signature_studio.py \
-            stoney_verify/commands_ext/public_profile_cards.py \
-            tests/test_profile_signature_owner_customization.py
-          python -m pytest -q \
-            tests/test_profile_signature_owner_customization.py \
-            tests/test_profile_signature_theme_application.py \
-            tests/test_profile_signature_reference_visuals.py \
-            tests/test_profile_signature_color_mixer.py \
-            tests/test_profile_role_display_separation.py \
-            tests/test_live_profile_card_visual_links.py \
-            tests/test_live_profile_card_runtime.py
-          git diff --check
+          set -o pipefail
+          (
+            set -euo pipefail
+            python -m py_compile \
+              stoney_verify/profile_card_service.py \
+              stoney_verify/profile_card_runtime.py \
+              stoney_verify/profile_custom_background.py \
+              stoney_verify/profile_signature_style.py \
+              stoney_verify/profile_signature_live_renderer.py \
+              stoney_verify/profile_signature_studio.py \
+              stoney_verify/commands_ext/public_profile_cards.py \
+              tests/test_profile_signature_owner_customization.py
+            python -m pytest -q \
+              tests/test_profile_signature_owner_customization.py \
+              tests/test_profile_signature_theme_application.py \
+              tests/test_profile_signature_reference_visuals.py \
+              tests/test_profile_signature_color_mixer.py \
+              tests/test_profile_role_display_separation.py \
+              tests/test_live_profile_card_visual_links.py \
+              tests/test_live_profile_card_runtime.py
+            git diff --check
+          ) 2>&1 | tee pr145-validation.log
+
+      - name: Upload validation failure output
+        if: steps.validate_corrections.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr145-final-validation-failure
+          path: pr145-validation.log
+          if-no-files-found: error
+          retention-days: 2
+
+      - name: Fail when validation failed
+        if: steps.validate_corrections.outcome == 'failure'
+        run: exit 1
 
       - name: Commit validated native source
-        if: steps.materializer.outputs.present == 'true' && steps.apply_corrections.outcome == 'success'
+        if: steps.materializer.outputs.present == 'true' && steps.apply_corrections.outcome == 'success' && steps.validate_corrections.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
