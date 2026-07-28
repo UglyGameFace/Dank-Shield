@@ -3,6 +3,7 @@ name: Profile Runtime Diagnostics
 on:
   pull_request:
     paths:
+      - "ACTIVE_TASK.md"
       - "stoney_verify/profile_card_runtime.py"
       - "stoney_verify/profile_card_runtime_core.py"
       - "stoney_verify/profile_card_service.py"
