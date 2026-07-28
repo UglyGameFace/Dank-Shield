@@ -77,9 +77,7 @@ jobs:
             stoney_verify/startup_guards/profile_role_editor_guard.py
 
       - name: Run focused profile regression suite
-        shell: bash
         run: |
-          set -o pipefail
           python -m pytest -q \
             tests/test_live_profile_card_runtime.py \
             tests/test_live_profile_channel_spam_regression.py \
@@ -96,17 +94,7 @@ jobs:
             tests/test_profile_platform_display_modes.py \
             tests/test_profile_platform_privacy_preview_ux.py \
             tests/test_profile_role_display_separation.py \
-            tests/test_profile_signature_reference_visuals.py \
-            2>&1 | tee profile-pytest.log
-
-      - name: Upload focused pytest log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: profile-pytest-log
-          path: profile-pytest.log
-          if-no-files-found: error
-          retention-days: 1
+            tests/test_profile_signature_reference_visuals.py
 
       - name: Run role-menu compatibility checks
         run: |
