@@ -137,14 +137,26 @@ jobs:
           EOF
 
       - name: Apply wide banner and split role displays
+        shell: bash
         run: |
-          test -f tools/apply_profile_banner_roles_patch.py
-          python tools/apply_profile_banner_roles_patch.py
+          set -euo pipefail
+          if grep -q '"show_server_roles": False' stoney_verify/profile_card_service.py \
+            && grep -q 'SIGNATURE_WIDTH = 1400' stoney_verify/profile_signature_live_renderer.py; then
+            echo 'Wide banner and split role displays are already materialized.'
+          else
+            test -f tools/apply_profile_banner_roles_patch.py
+            python tools/apply_profile_banner_roles_patch.py
+          fi
 
       - name: Correct upgraded regression and wording contracts
+        shell: bash
         run: |
-          test -f tools/apply_profile_upgrade_regression_fixes.py
-          python tools/apply_profile_upgrade_regression_fixes.py
+          set -euo pipefail
+          if [[ -f tools/apply_profile_upgrade_regression_fixes.py ]]; then
+            python tools/apply_profile_upgrade_regression_fixes.py
+          else
+            echo 'Regression and wording contracts are already materialized.'
+          fi
 
       - name: Compile complete profile implementation
         run: python -m compileall -q stoney_verify tests tools
@@ -215,6 +227,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # GitHub Apps cannot push a commit that changes a workflow file without
+          # workflow scope. Keep this materializer in place for the source commit;
+          # the final read-only workflow is installed separately after the push.
+          git checkout HEAD -- .github/workflows/profile-runtime-diagnostics.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
