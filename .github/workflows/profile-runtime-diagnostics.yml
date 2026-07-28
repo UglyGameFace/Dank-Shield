@@ -70,13 +70,30 @@ jobs:
           python -m pip install pytest
 
       - name: Apply native corrections
+        id: apply_corrections
         if: steps.materializer.outputs.present == 'true'
+        continue-on-error: true
+        shell: bash
         run: |
-          python tools/_apply_pr145_final_smoke_corrections.py
+          set -o pipefail
+          python tools/_apply_pr145_final_smoke_corrections.py 2>&1 | tee pr145-materializer.log
           git checkout -- .github/workflows/profile-runtime-diagnostics.yml
 
+      - name: Upload materializer failure output
+        if: steps.apply_corrections.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr145-final-materializer-failure
+          path: pr145-materializer.log
+          if-no-files-found: error
+          retention-days: 2
+
+      - name: Fail when materializer failed
+        if: steps.apply_corrections.outcome == 'failure'
+        run: exit 1
+
       - name: Validate corrected source
-        if: steps.materializer.outputs.present == 'true'
+        if: steps.materializer.outputs.present == 'true' && steps.apply_corrections.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -100,7 +117,7 @@ jobs:
           git diff --check
 
       - name: Commit validated native source
-        if: steps.materializer.outputs.present == 'true'
+        if: steps.materializer.outputs.present == 'true' && steps.apply_corrections.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
