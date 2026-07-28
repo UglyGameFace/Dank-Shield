@@ -46,29 +46,8 @@ jobs:
       - name: Apply final profile spacing guard
         run: python tools/apply_profile_spacing_guard.py
 
-      - name: Capture profile role-manager cleanup
-        id: dedupe
-        continue-on-error: true
-        shell: bash
-        run: |
-          set +e
-          python tools/apply_profile_role_menu_dedupe.py > profile-role-dedupe.txt 2>&1
-          status=$?
-          cat profile-role-dedupe.txt
-          exit "$status"
-
-      - name: Upload role-manager cleanup diagnostic
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: profile-role-dedupe-diagnostic
-          path: profile-role-dedupe.txt
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Stop when role-manager cleanup failed
-        if: steps.dedupe.outcome == 'failure'
-        run: exit 1
+      - name: Remove duplicate profile role manager
+        run: python tools/apply_profile_role_menu_dedupe.py
 
       - uses: actions/setup-python@v5
         with:
@@ -142,6 +121,7 @@ jobs:
           test ! -e tools/fix_profile_privacy_defaults.py
           test ! -e tools/apply_profile_spacing_guard.py
           test ! -e tools/apply_profile_role_menu_dedupe.py
+          git diff --check
 
       - name: Commit validated profile cleanup
         shell: bash
