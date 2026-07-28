@@ -1,0 +1,62 @@
+name: Apply PR145 Color Mixer
+
+on:
+  push:
+    branches:
+      - fix/live-profile-channel-spam
+    paths:
+      - tools/_apply_pr145_color_mixer.py
+      - .github/workflows/_apply-pr145-color-mixer.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-pr145-color-mixer
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/live-profile-channel-spam
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Apply native color mixer
+        run: python tools/_apply_pr145_color_mixer.py
+
+      - name: Compile changed implementation
+        run: |
+          python -m py_compile \
+            stoney_verify/profile_signature_studio.py \
+            tests/test_profile_signature_color_mixer.py
+
+      - name: Run targeted appearance tests
+        run: |
+          python -m pytest -q \
+            tests/test_profile_signature_color_mixer.py \
+            tests/test_profile_platform_privacy_preview_ux.py \
+            tests/test_profile_signature_reference_visuals.py
+
+      - name: Commit native implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            stoney_verify/profile_signature_studio.py \
+            tests/test_profile_signature_color_mixer.py \
+            .github/workflows/profile-runtime-diagnostics.yml
+          git diff --cached --check
+          git commit -m "Add visual profile color mixer"
+          git push origin HEAD:fix/live-profile-channel-spam
