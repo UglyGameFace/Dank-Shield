@@ -11,7 +11,9 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
 from .welcome_card_typography_engine import (
+    BUILTIN_THEMES,
     COLOR_PRESETS,
+    DEFAULT_THEME_KEY,
     FONT_STYLES,
     parse_hex_color,
 )
@@ -52,10 +54,10 @@ PROFILE_THEME_SPECS: dict[str, ProfileThemeSpec] = {
     "epic_focus": ProfileThemeSpec("epic_focus", "Epic Vault", "Epic-focused black, white, and violet vault design.", "⬛"),
     "multi_platform": ProfileThemeSpec("multi_platform", "Multi-Platform Grid", "A balanced platform grid for players active everywhere.", "🕹️"),
 }
-PROFILE_THEME_KEYS = frozenset(PROFILE_THEME_SPECS)
+PROFILE_THEME_KEYS = frozenset(set(PROFILE_THEME_SPECS) | set(BUILTIN_THEMES))
 
 DEFAULT_SERVER_PROFILE_STYLE: dict[str, str] = {
-    "theme": "default",
+    "theme": DEFAULT_THEME_KEY,
     "font": "clean",
     "color_mode": "profile",
     "custom_primary": "",
