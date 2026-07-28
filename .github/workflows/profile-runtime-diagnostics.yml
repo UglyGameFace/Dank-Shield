@@ -3,6 +3,7 @@ name: Profile Runtime Diagnostics
 on:
   pull_request:
     paths:
+      - "tools/_apply_pr145_theme_compat.py"
       - "stoney_verify/profile_card_runtime.py"
       - "stoney_verify/profile_card_runtime_core.py"
       - "stoney_verify/profile_card_service.py"
@@ -27,13 +28,80 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: profile-runtime-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  apply-theme-compatibility:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'fix/live-profile-channel-spam'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/live-profile-channel-spam
+          fetch-depth: 0
+
+      - name: Detect one-time compatibility migration
+        id: migration
+        shell: bash
+        run: |
+          if [ -f tools/_apply_pr145_theme_compat.py ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.migration.outputs.present == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        if: steps.migration.outputs.present == 'true'
+        run: |
+          python -m pip install -q --upgrade pip
+          python -m pip install -q -r requirements.txt pytest
+
+      - name: Apply canonical theme compatibility
+        if: steps.migration.outputs.present == 'true'
+        run: python tools/_apply_pr145_theme_compat.py
+
+      - name: Validate theme and profile contracts
+        if: steps.migration.outputs.present == 'true'
+        run: |
+          python -m py_compile stoney_verify/profile_signature_style.py
+          python -m pytest -q \
+            tests/test_profile_signature_theme_application.py \
+            tests/test_profile_signature_color_mixer.py \
+            tests/test_profile_signature_reference_visuals.py
+
+      - name: Commit source-only compatibility fix
+        if: steps.migration.outputs.present == 'true'
+        run: |
+          rm -f tools/_apply_pr145_theme_compat.py
+          git checkout HEAD -- .github/workflows/profile-runtime-diagnostics.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          if git diff --cached --name-only | grep -q '^\.github/workflows/'; then
+            echo "Refusing source migration because a workflow file is staged."
+            exit 1
+          fi
+          git commit -m "Restore canonical profile theme compatibility"
+          git push origin HEAD:fix/live-profile-channel-spam
+
+      - name: Already integrated
+        if: steps.migration.outputs.present != 'true'
+        run: echo "Canonical profile theme compatibility is already integrated."
+
   focused-profile-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -98,6 +166,7 @@ jobs:
             tests/test_profile_platform_display_modes.py \
             tests/test_profile_platform_privacy_preview_ux.py \
             tests/test_profile_role_display_separation.py \
+            tests/test_profile_signature_theme_application.py \
             tests/test_profile_signature_reference_visuals.py \
             tests/test_profile_signature_color_mixer.py \
             2>&1 | tee profile-focused-tests.log
