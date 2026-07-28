@@ -240,7 +240,7 @@ def _compact_profile_tag_labels(member: discord.Member, config: Mapping[str, Any
     if interests:
         shown = interests[:3]
         suffix = " + more" if len(interests) > len(shown) else ""
-        labels.append("Interests: " + " • ".join(shown) + suffix)
+        labels.append("Interests: " + " / ".join(shown) + suffix)
 
     cosmetic_ids = _configured_role_ids(config, "profile_cosmetic_role_ids")
     cosmetics = [
@@ -249,7 +249,7 @@ def _compact_profile_tag_labels(member: discord.Member, config: Mapping[str, Any
         if int(getattr(role, "id", 0) or 0) in cosmetic_ids
     ]
     if cosmetics:
-        labels.append("Tags: " + " • ".join(cosmetics[:3]))
+        labels.append("Tags: " + " / ".join(cosmetics[:3]))
     return labels
 
 

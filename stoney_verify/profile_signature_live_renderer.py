@@ -41,20 +41,30 @@ class ProfilePalette:
     secondary: tuple[int, int, int]
     text: tuple[int, int, int] = (248, 250, 253)
     muted: tuple[int, int, int] = (197, 207, 220)
+    tertiary: tuple[int, int, int] = (120, 220, 255)
+    highlight: tuple[int, int, int] = (255, 255, 255)
     motif: str = "leaf"
+    focus_platform: str = ""
+
+    @property
+    def accents(self) -> tuple[tuple[int, int, int], ...]:
+        return self.primary, self.secondary, self.tertiary, self.highlight
 
 
 PROFILE_THEME_PALETTES: dict[str, ProfilePalette] = {
-    "420_lobby": ProfilePalette((2, 8, 4), (4, 15, 8), (137, 255, 76), (37, 211, 111), motif="leaf"),
-    "cyber_neon": ProfilePalette((7, 3, 15), (16, 7, 29), (190, 94, 255), (123, 54, 232), motif="smoke"),
-    "premium_gold": ProfilePalette((10, 7, 2), (23, 16, 6), (255, 207, 78), (210, 141, 28), motif="flow"),
-    "community_glow": ProfilePalette((1, 11, 11), (4, 23, 21), (43, 234, 206), (12, 165, 151), motif="leaf"),
-    "esports": ProfilePalette((13, 3, 4), (27, 6, 8), (255, 76, 65), (215, 27, 45), motif="embers"),
-    "minimal_glass": ProfilePalette((2, 8, 16), (6, 17, 31), (69, 179, 255), (24, 112, 232), motif="ice"),
+    "420_lobby": ProfilePalette((2, 8, 4), (4, 15, 8), (137, 255, 76), (37, 211, 111), tertiary=(255, 204, 82), highlight=(225, 255, 215), motif="leaf"),
+    "cyber_neon": ProfilePalette((7, 3, 15), (16, 7, 29), (190, 94, 255), (255, 61, 154), tertiary=(45, 232, 205), highlight=(248, 250, 253), motif="smoke"),
+    "premium_gold": ProfilePalette((10, 7, 2), (23, 16, 6), (255, 207, 78), (210, 141, 28), tertiary=(255, 78, 68), highlight=(255, 247, 214), motif="flow"),
+    "community_glow": ProfilePalette((1, 11, 11), (4, 23, 21), (43, 234, 206), (12, 165, 151), tertiary=(143, 255, 82), highlight=(226, 255, 250), motif="leaf"),
+    "esports": ProfilePalette((13, 3, 4), (27, 6, 8), (255, 76, 65), (255, 138, 61), tertiary=(255, 204, 82), highlight=(255, 241, 236), motif="embers"),
+    "minimal_glass": ProfilePalette((2, 8, 16), (6, 17, 31), (69, 179, 255), (45, 232, 205), tertiary=(184, 91, 255), highlight=(238, 248, 255), motif="ice"),
+    "steam_focus": ProfilePalette((3, 11, 19), (7, 27, 43), (45, 154, 220), (102, 192, 244), tertiary=(123, 135, 152), highlight=(245, 251, 255), motif="steam", focus_platform="steam"),
+    "xbox_focus": ProfilePalette((2, 11, 4), (6, 27, 10), (16, 180, 71), (143, 255, 82), tertiary=(45, 232, 205), highlight=(240, 255, 242), motif="xbox", focus_platform="xbox"),
+    "playstation_focus": ProfilePalette((2, 7, 18), (6, 17, 38), (37, 108, 229), (70, 177, 255), tertiary=(184, 91, 255), highlight=(242, 247, 255), motif="playstation", focus_platform="playstation"),
+    "epic_focus": ProfilePalette((7, 7, 9), (20, 18, 25), (248, 250, 253), (184, 91, 255), tertiary=(45, 232, 205), highlight=(255, 204, 82), motif="epic", focus_platform="epic"),
+    "multi_platform": ProfilePalette((4, 6, 15), (12, 15, 34), (45, 232, 205), (255, 61, 154), tertiary=(143, 255, 82), highlight=(255, 204, 82), motif="multi"),
 }
 
-# Keep the studio's existing names while routing them to the approved profile
-# families. Previously these old keys fell back to unrelated welcome-card colors.
 THEME_ALIASES: dict[str, str] = {
     "420_lobby": "420_lobby",
     "default": "420_lobby",
@@ -70,6 +80,11 @@ THEME_ALIASES: dict[str, str] = {
     "sunset": "esports",
     "minimal_glass": "minimal_glass",
     "ocean": "minimal_glass",
+    "steam_focus": "steam_focus",
+    "xbox_focus": "xbox_focus",
+    "playstation_focus": "playstation_focus",
+    "epic_focus": "epic_focus",
+    "multi_platform": "multi_platform",
 }
 
 
@@ -96,7 +111,9 @@ _EMOJI_BASE_RE = re.compile("[\\U0001F000-\\U0001FAFF\\u2300-\\u23FF\\u2600-\\u2
 
 
 def _safe(value: Any, limit: int = 160) -> str:
-    return " ".join(str(value or "").replace("\r", " ").replace("\n", " ").split())[:limit]
+    text = " ".join(str(value or "").replace("\r", " ").replace("\n", " ").split())
+    text = text.replace("\ufffd", "").replace(" • ", " / ")
+    return text[:limit]
 
 
 def _mix(a: tuple[int, int, int], b: tuple[int, int, int], amount: float) -> tuple[int, int, int]:
@@ -127,32 +144,36 @@ def _canonical_theme(style: Mapping[str, Any]) -> str:
 def _palette(style: Mapping[str, Any], avatar_bytes: bytes) -> ProfilePalette:
     base = PROFILE_THEME_PALETTES[_canonical_theme(style)]
     mode = str(style.get("color_mode") or "theme").strip().lower()
-    primary, secondary = base.primary, base.secondary
+    primary, secondary, tertiary, highlight = base.accents
 
     if mode == "custom":
         try:
             primary = parse_hex_color(str(style.get("custom_primary") or "")) or primary
-            secondary = parse_hex_color(str(style.get("custom_secondary") or "")) or secondary
+            secondary = parse_hex_color(str(style.get("custom_secondary") or "")) or _mix(primary, (255, 255, 255), 0.28)
+            tertiary = parse_hex_color(str(style.get("custom_tertiary") or "")) or _mix(primary, secondary, 0.50)
+            highlight = parse_hex_color(str(style.get("custom_highlight") or "")) or _mix(tertiary, (255, 255, 255), 0.58)
         except Exception:
-            primary, secondary = base.primary, base.secondary
+            primary, secondary, tertiary, highlight = base.accents
     elif mode in {"profile", "auto"}:
-        # Avatar matching is a restrained tint now, not a replacement for the
-        # selected theme. This prevents green cards becoming orange/pink.
         sampled_primary, sampled_secondary = _legacy._avatar_colors(avatar_bytes, base.primary)
         strength = 0.12 if mode == "profile" else 0.07
         primary = _mix(base.primary, sampled_primary, strength)
         secondary = _mix(base.secondary, sampled_secondary, strength)
+        tertiary = _mix(base.tertiary, sampled_primary, strength / 2)
+        highlight = _mix(base.highlight, sampled_secondary, strength / 3)
 
     return ProfilePalette(
         background=base.background,
         panel=base.panel,
         primary=_bright(tuple(primary)),
         secondary=_bright(tuple(secondary), 0.52),
+        tertiary=_bright(tuple(tertiary), 0.50),
+        highlight=_bright(tuple(highlight), 0.68),
         text=base.text,
         muted=base.muted,
         motif=base.motif,
+        focus_platform=base.focus_platform,
     )
-
 
 def _linear_background(palette: ProfilePalette) -> Image.Image:
     image = Image.new("RGBA", (SIGNATURE_WIDTH, SIGNATURE_HEIGHT), palette.background + (255,))
@@ -193,13 +214,20 @@ def _draw_wisps(image: Image.Image, palette: ProfilePalette, seed: int) -> None:
     layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer, "RGBA")
     rng = random.Random(seed)
-    for index in range(13):
-        left = 390 + rng.randint(-40, 610)
-        top = rng.randint(-110, 220)
-        width = rng.randint(260, 560)
-        height = rng.randint(100, 260)
-        color = palette.primary if index % 2 == 0 else palette.secondary
-        draw.arc((left, top, left + width, top + height), rng.randint(150, 205), rng.randint(300, 355), fill=color + (28,), width=rng.randint(3, 8))
+    accents = palette.accents
+    for index in range(16):
+        left = 360 + rng.randint(-40, 680)
+        top = rng.randint(-120, 220)
+        width = rng.randint(240, 570)
+        height = rng.randint(90, 270)
+        color = accents[index % len(accents)]
+        draw.arc(
+            (left, top, left + width, top + height),
+            rng.randint(150, 205),
+            rng.randint(300, 355),
+            fill=color + (24 + (index % 3) * 5,),
+            width=rng.randint(3, 8),
+        )
     image.alpha_composite(layer.filter(ImageFilter.GaussianBlur(11)))
 
 
@@ -207,11 +235,12 @@ def _draw_particles(image: Image.Image, palette: ProfilePalette, seed: int, *, i
     layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer, "RGBA")
     rng = random.Random(seed)
-    for _ in range(95):
-        x = rng.randint(420, 1370)
+    accents = palette.accents
+    for index in range(105):
+        x = rng.randint(410, 1370)
         y = rng.randint(18, 282)
         radius = rng.randint(1, 3 if icy else 4)
-        color = palette.primary if rng.random() > 0.4 else palette.secondary
+        color = accents[index % len(accents)]
         alpha = rng.randint(18, 82)
         if icy:
             draw.line((x - radius * 2, y, x + radius * 2, y), fill=color + (alpha,), width=1)
@@ -226,56 +255,132 @@ def _texture(image: Image.Image, palette: ProfilePalette, layout: str, theme_key
     draw = ImageDraw.Draw(layer, "RGBA")
     if layout == "minimal":
         draw.line((32, 30, 1138, 30), fill=palette.primary + (92,), width=2)
-        draw.line((32, 270, 1138, 270), fill=palette.secondary + (52,), width=1)
-    elif palette.motif == "leaf":
-        for x, y, scale in ((520, 122, 0.78), (712, 250, 1.04), (980, 112, 0.78)):
-            _draw_leaf(draw, x, y, scale, palette.primary + (22,))
+        draw.line((32, 270, 1138, 270), fill=palette.tertiary + (52,), width=1)
+
+    if palette.motif == "leaf":
+        for index, (x, y, scale) in enumerate(((520, 122, 0.78), (712, 250, 1.04), (980, 112, 0.78))):
+            _draw_leaf(draw, x, y, scale, palette.accents[index % 4] + (22,))
         _draw_wisps(image, palette, 420 if theme_key == "420_lobby" else 1337)
     elif palette.motif == "smoke":
         _draw_wisps(image, palette, 690)
-        for radius in (64, 104, 152):
-            draw.ellipse((925 - radius, 145 - radius, 925 + radius, 145 + radius), outline=palette.primary + (20,), width=2)
+        for index, radius in enumerate((64, 104, 152, 202)):
+            draw.ellipse(
+                (925 - radius, 145 - radius, 925 + radius, 145 + radius),
+                outline=palette.accents[index % 4] + (20,),
+                width=2,
+            )
     elif palette.motif == "flow":
-        for offset in range(-180, 520, 65):
-            draw.arc((430 + offset, -170, 1120 + offset, 430), 178, 350, fill=palette.primary + (34,), width=3)
+        for index, offset in enumerate(range(-180, 520, 65)):
+            draw.arc(
+                (430 + offset, -170, 1120 + offset, 430),
+                178,
+                350,
+                fill=palette.accents[index % 4] + (32,),
+                width=3,
+            )
         _draw_particles(image, palette, 100)
     elif palette.motif == "embers":
-        for x in range(500, 1140, 86):
-            draw.polygon([(x, 300), (x + 42, 300), (x + 230, 0), (x + 188, 0)], fill=palette.primary + (15,))
+        for index, x in enumerate(range(500, 1140, 86)):
+            draw.polygon(
+                [(x, 300), (x + 42, 300), (x + 230, 0), (x + 188, 0)],
+                fill=palette.accents[index % 4] + (15,),
+            )
         _draw_particles(image, palette, 77)
     elif palette.motif == "ice":
-        for x in range(470, 1100, 90):
-            draw.line((x, 300, x + 170, 0), fill=palette.primary + (20,), width=2)
-            draw.line((x + 20, 300, x + 190, 0), fill=palette.secondary + (11,), width=1)
+        for index, x in enumerate(range(470, 1100, 90)):
+            draw.line((x, 300, x + 170, 0), fill=palette.accents[index % 4] + (20,), width=2)
+            draw.line((x + 20, 300, x + 190, 0), fill=palette.highlight + (11,), width=1)
         _draw_particles(image, palette, 55, icy=True)
+    elif palette.motif == "steam":
+        for index, radius in enumerate((42, 78, 118, 164)):
+            draw.ellipse((915 - radius, 145 - radius, 915 + radius, 145 + radius), outline=palette.accents[index % 4] + (28,), width=3)
+        draw.line((760, 230, 1070, 70), fill=palette.highlight + (35,), width=8)
+        _draw_particles(image, palette, 145)
+    elif palette.motif == "xbox":
+        for index, offset in enumerate(range(-50, 250, 55)):
+            color = palette.accents[index % 4] + (24,)
+            draw.arc((675 + offset, -125, 1115 + offset, 315), 212, 328, fill=color, width=8)
+            draw.arc((675 + offset, -125, 1115 + offset, 315), 32, 148, fill=color, width=8)
+        _draw_particles(image, palette, 360)
+    elif palette.motif == "playstation":
+        for index, x in enumerate(range(560, 1130, 95)):
+            color = palette.accents[index % 4] + (25,)
+            draw.line((x, 245, x + 120, 55), fill=color, width=5)
+            draw.rectangle((x + 18, 65, x + 76, 123), outline=color, width=3)
+        _draw_particles(image, palette, 1994, icy=True)
+    elif palette.motif == "epic":
+        for index, x in enumerate(range(500, 1120, 110)):
+            color = palette.accents[index % 4] + (24,)
+            draw.polygon([(x, 25), (x + 80, 25), (x + 20, 275), (x - 60, 275)], fill=color)
+        _draw_particles(image, palette, 2017)
+    elif palette.motif == "multi":
+        for index, y in enumerate((48, 94, 140, 186, 232)):
+            draw.line((470, y, 1135, y - 28), fill=palette.accents[index % 4] + (30,), width=10)
+        _draw_particles(image, palette, 404)
+
     image.alpha_composite(layer.filter(ImageFilter.GaussianBlur(1.4)))
+
+def _is_emoji_base(ch: str) -> bool:
+    code = ord(ch)
+    return bool(
+        _EMOJI_BASE_RE.fullmatch(ch)
+        or 0x1F1E6 <= code <= 0x1F1FF
+        or ch in "©®™"
+    )
+
+
+def _consume_emoji(text: str, index: int) -> tuple[str, int]:
+    if index >= len(text):
+        return "", index
+    ch = text[index]
+    if ch in "#*0123456789":
+        cursor = index + 1
+        if cursor < len(text) and text[cursor] == "\ufe0f":
+            cursor += 1
+        if cursor < len(text) and text[cursor] == "\u20e3":
+            return text[index : cursor + 1], cursor + 1
+        return "", index
+
+    code = ord(ch)
+    if 0x1F1E6 <= code <= 0x1F1FF:
+        cursor = index + 1
+        if cursor < len(text) and 0x1F1E6 <= ord(text[cursor]) <= 0x1F1FF:
+            cursor += 1
+        return text[index:cursor], cursor
+
+    if not _is_emoji_base(ch):
+        return "", index
+
+    cursor = index + 1
+
+    def consume_suffix(position: int) -> int:
+        if position < len(text) and text[position] == "\ufe0f":
+            position += 1
+        if position < len(text) and 0x1F3FB <= ord(text[position]) <= 0x1F3FF:
+            position += 1
+        while position < len(text) and 0xE0020 <= ord(text[position]) <= 0xE007E:
+            position += 1
+        if position < len(text) and ord(text[position]) == 0xE007F:
+            position += 1
+        return position
+
+    cursor = consume_suffix(cursor)
+    while cursor + 1 < len(text) and text[cursor] == "\u200d" and _is_emoji_base(text[cursor + 1]):
+        cursor += 2
+        cursor = consume_suffix(cursor)
+    return text[index:cursor], cursor
 
 
 def _emoji_sequences(text: str) -> list[str]:
     out: list[str] = []
     index = 0
     while index < len(text):
-        ch = text[index]
-        code = ord(ch)
-        regional = 0x1F1E6 <= code <= 0x1F1FF
-        if not (_EMOJI_BASE_RE.fullmatch(ch) or regional or ch in "©®™"):
+        sequence, next_index = _consume_emoji(text, index)
+        if sequence:
+            out.append(sequence)
+            index = next_index
+        else:
             index += 1
-            continue
-        sequence = ch
-        index += 1
-        if regional and index < len(text) and 0x1F1E6 <= ord(text[index]) <= 0x1F1FF:
-            sequence += text[index]
-            index += 1
-        if index < len(text) and text[index] == "\ufe0f":
-            sequence += text[index]
-            index += 1
-        while index + 1 < len(text) and text[index] == "\u200d":
-            sequence += text[index] + text[index + 1]
-            index += 2
-            if index < len(text) and text[index] == "\ufe0f":
-                sequence += text[index]
-                index += 1
-        out.append(sequence)
     return out
 
 
@@ -309,19 +414,23 @@ async def _fetch_emoji(session: aiohttp.ClientSession, emoji: str) -> bytes:
     if emoji in _EMOJI_MISSES:
         return b""
     code = _twemoji_code(emoji)
-    for url in (
+    urls = (
         f"https://cdn.jsdelivr.net/gh/jdecked/twemoji@latest/assets/72x72/{code}.png",
-        f"https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/72x72/{code}.png",
-    ):
+        f"https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/{code}.png",
+        f"https://raw.githubusercontent.com/jdecked/twemoji/main/assets/72x72/{code}.png",
+    )
+    for url in urls:
         try:
             async with session.get(url) as response:
                 if response.status == 200:
                     payload = await response.read()
                     if payload:
+                        with Image.open(BytesIO(payload)) as opened:
+                            opened.verify()
                         _EMOJIS[emoji] = payload
                         return payload
         except Exception:
-            pass
+            continue
     _EMOJI_MISSES.add(emoji)
     return b""
 
@@ -330,18 +439,20 @@ async def _emoji_assets(values: Sequence[Any]) -> dict[str, bytes]:
     emojis: list[str] = []
     for value in values:
         for emoji in _emoji_sequences(str(value or "")):
-            if emoji not in emojis and len(emojis) < 16:
+            if emoji not in emojis and len(emojis) < 64:
                 emojis.append(emoji)
     missing = [emoji for emoji in emojis if emoji not in _EMOJIS and emoji not in _EMOJI_MISSES]
     if missing:
-        timeout = aiohttp.ClientTimeout(total=3.5)
+        timeout = aiohttp.ClientTimeout(total=8.0, connect=3.0)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with aiohttp.ClientSession(
+                timeout=timeout,
+                headers={"User-Agent": "DankShield-ProfileRenderer/1.0"},
+            ) as session:
                 await asyncio.gather(*(_fetch_emoji(session, emoji) for emoji in missing))
         except Exception:
             pass
     return {emoji: _EMOJIS[emoji] for emoji in emojis if emoji in _EMOJIS}
-
 
 def _rich_width(draw: ImageDraw.ImageDraw, text: str, font: Any, assets: Mapping[str, bytes], emoji_size: int) -> int:
     width = 0
@@ -427,7 +538,7 @@ def _draw_card_frame(image: Image.Image, palette: ProfilePalette) -> None:
     image.alpha_composite(glow.filter(ImageFilter.GaussianBlur(12)))
     draw = ImageDraw.Draw(image, "RGBA")
     draw.rounded_rectangle((18, 18, 1382, 282), radius=28, outline=palette.primary + (175,), width=2)
-    draw.rounded_rectangle((22, 22, 1378, 278), radius=25, outline=(255, 255, 255, 24), width=1)
+    draw.rounded_rectangle((22, 22, 1378, 278), radius=25, outline=palette.highlight + (36,), width=1)
 
 
 def _draw_avatar(image: Image.Image, avatar_bytes: bytes, display_name: str, palette: ProfilePalette, spec: Layout, frame: str) -> None:
@@ -441,7 +552,7 @@ def _draw_avatar(image: Image.Image, avatar_bytes: bytes, display_name: str, pal
     draw = ImageDraw.Draw(image, "RGBA")
     if frame != "none":
         draw.ellipse((x - 8, y - 8, x + size + 8, y + size + 8), fill=(1, 4, 6, 225), outline=palette.primary + (250,), width=4 if frame == "glow" else 3)
-        draw.ellipse((x - 2, y - 2, x + size + 2, y + size + 2), outline=palette.secondary + (135,), width=2)
+        draw.ellipse((x - 2, y - 2, x + size + 2, y + size + 2), outline=palette.tertiary + (150,), width=2)
     mask = Image.new("L", (size, size), 0)
     ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
     avatar = _avatar_image(avatar_bytes, (size, size))
@@ -454,6 +565,36 @@ def _draw_avatar(image: Image.Image, avatar_bytes: bytes, display_name: str, pal
         adraw.text(((size - (box[2] - box[0])) / 2, (size - (box[3] - box[1])) / 2 - 8), initial, font=font, fill=(255, 255, 255, 255))
     image.paste(avatar, (x, y), mask)
 
+
+def _bounded_name_tile(
+    name: str,
+    *,
+    style_key: str,
+    spec: Layout,
+    palette: ProfilePalette,
+    custom_font_bytes: bytes,
+) -> Image.Image:
+    max_width = max(120, spec.content_right - spec.content_x - 24)
+    max_height = 76
+    tile = render_styled_text_tile(
+        name,
+        style_key=style_key,
+        start_size=spec.name_size,
+        min_size=30,
+        max_width=max_width - 8,
+        max_height=max_height,
+        primary=palette.primary,
+        secondary=palette.secondary,
+        role="name",
+        custom_font_bytes=custom_font_bytes,
+    )
+    bounds = tile.getbbox()
+    cropped = tile.crop(bounds) if bounds else tile
+    if cropped.width > max_width or cropped.height > max_height:
+        cropped.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
+    layer = Image.new("RGBA", (max_width, max_height), (0, 0, 0, 0))
+    layer.alpha_composite(cropped, (0, max(0, (max_height - cropped.height) // 2)))
+    return layer
 
 def _draw_meta_dates(image: Image.Image, dates: Sequence[str], palette: ProfilePalette, spec: Layout, assets: Mapping[str, bytes]) -> None:
     values = [_safe(value, 70) for value in dates if _safe(value, 70)][:2]
@@ -510,49 +651,180 @@ def _role_icon(draw: ImageDraw.ImageDraw, x: int, y: int, palette: ProfilePalett
         _draw_leaf(draw, x + 11, y + 14, 0.18, color)
 
 
-def _draw_platforms(image: Image.Image, entries: Sequence[Mapping[str, Any]], logos: Mapping[str, bytes], role: str, palette: ProfilePalette, spec: Layout, assets: Mapping[str, bytes], theme_key: str) -> None:
+def _draw_platforms(
+    image: Image.Image,
+    entries: Sequence[Mapping[str, Any]],
+    logos: Mapping[str, bytes],
+    role: str,
+    palette: ProfilePalette,
+    spec: Layout,
+    assets: Mapping[str, bytes],
+    theme_key: str,
+) -> None:
     draw = ImageDraw.Draw(image, "RGBA")
     role_font = _font(17, regular=True)
     fitted_role = _fit(draw, role.upper(), role_font, 245, assets, 18, 60) or "MEMBER"
     role_width = min(278, _rich_width(draw, fitted_role, role_font, assets, 18) + 58)
     role_fill = _mix((3, 7, 10), palette.primary, 0.13)
-    draw.rounded_rectangle((spec.platform_x, 37, spec.platform_x + role_width, 75), radius=16, fill=role_fill + (225,), outline=palette.primary + (185,), width=2)
+    draw.rounded_rectangle(
+        (spec.platform_x, 37, spec.platform_x + role_width, 75),
+        radius=16,
+        fill=role_fill + (225,),
+        outline=palette.primary + (185,),
+        width=2,
+    )
     _role_icon(draw, spec.platform_x + 13, 45, palette, theme_key)
-    _draw_rich(image, draw, (spec.platform_x + 43, 46), fitted_role, font=role_font, fill=palette.primary + (255,), assets=assets, emoji_size=18)
+    _draw_rich(
+        image,
+        draw,
+        (spec.platform_x + 43, 46),
+        fitted_role,
+        font=role_font,
+        fill=palette.highlight + (255,),
+        assets=assets,
+        emoji_size=18,
+    )
+
+    normalized = [dict(entry) for entry in entries if isinstance(entry, Mapping)]
+    focus = palette.focus_platform
+    if focus:
+        focus_spec = PLATFORM_SPECS.get(focus)
+        focus_entry = next((entry for entry in normalized if str(entry.get("platform") or "") == focus), {})
+        size = 92
+        x, y = spec.platform_x, 91
+        accent = palette.primary
+        shadow = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        ImageDraw.Draw(shadow, "RGBA").rounded_rectangle(
+            (x - 5, y - 5, x + size + 5, y + size + 5),
+            radius=24,
+            fill=accent + (70,),
+        )
+        image.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(12)))
+        draw = ImageDraw.Draw(image, "RGBA")
+        draw.rounded_rectangle(
+            (x, y, x + size, y + size),
+            radius=22,
+            fill=(3, 6, 10, 236),
+            outline=palette.highlight + (190,),
+            width=3,
+        )
+        focus_logo = bytes(logos.get(focus) or _logo_bytes(focus))
+        image.alpha_composite(
+            _asset_tile(focus_logo, size - 12, getattr(focus_spec, "label", focus)),
+            (x + 6, y + 6),
+        )
+        label_font = _font(15, regular=True)
+        label = f"{getattr(focus_spec, 'label', focus).upper()} FOCUS"
+        draw.text((x + size + 16, y + 5), label, font=label_font, fill=palette.primary + (255,))
+        username = _safe(focus_entry.get("username"), 40)
+        username_font = _font(18, regular=True)
+        username_text = username if username and platform_entry_mode(focus_entry) != "logo" else "Platform-focused style"
+        fitted = _fit(draw, username_text, username_font, 190, assets, 18, 60)
+        _draw_rich(
+            image,
+            draw,
+            (x + size + 16, y + 34),
+            fitted,
+            font=username_font,
+            fill=palette.highlight + (250,),
+            assets=assets,
+            emoji_size=18,
+        )
+        others = [entry for entry in normalized if str(entry.get("platform") or "") != focus][:3]
+        small_x = x + size + 16
+        small_y = y + 68
+        for index, entry in enumerate(others):
+            platform = str(entry.get("platform") or "")
+            platform_spec = PLATFORM_SPECS.get(platform)
+            if platform_spec is None:
+                continue
+            tile_size = 38
+            tile_accent = palette.accents[(index + 1) % 4]
+            draw.rounded_rectangle(
+                (small_x, small_y, small_x + tile_size, small_y + tile_size),
+                radius=10,
+                fill=(3, 6, 10, 225),
+                outline=tile_accent + (150,),
+                width=2,
+            )
+            image.alpha_composite(
+                _asset_tile(bytes(logos.get(platform) or _logo_bytes(platform)), tile_size - 6, platform_spec.label),
+                (small_x + 3, small_y + 3),
+            )
+            small_x += 46
+        return
+
+    if theme_key == "multi_platform":
+        x, y, size = spec.platform_x, 91, 52
+        for index, entry in enumerate(normalized[:4]):
+            platform = str(entry.get("platform") or "")
+            platform_spec = PLATFORM_SPECS.get(platform)
+            if platform_spec is None:
+                continue
+            column, row = index % 2, index // 2
+            tx = x + column * 64
+            ty = y + row * 64
+            accent = palette.accents[index % 4]
+            draw.rounded_rectangle(
+                (tx, ty, tx + size, ty + size),
+                radius=14,
+                fill=(3, 6, 10, 226),
+                outline=accent + (175,),
+                width=2,
+            )
+            image.alpha_composite(
+                _asset_tile(bytes(logos.get(platform) or _logo_bytes(platform)), size - 8, platform_spec.label),
+                (tx + 4, ty + 4),
+            )
+        label_font = _font(15, regular=True)
+        draw.text((x + 140, y + 12), "MULTI-PLATFORM", font=label_font, fill=palette.highlight + (245,))
+        draw.text((x + 140, y + 42), "PLAYER GRID", font=label_font, fill=palette.tertiary + (245,))
+        return
 
     x, y, size = spec.platform_x, 91, 57
     shared: list[str] = []
-    for index, entry in enumerate(list(entries)[:5]):
+    for index, entry in enumerate(normalized[:5]):
         platform = str(entry.get("platform") or "")
-        spec_data = PLATFORM_SPECS.get(platform)
-        if spec_data is None:
+        platform_spec = PLATFORM_SPECS.get(platform)
+        if platform_spec is None:
             continue
-        accent = palette.primary if index % 2 == 0 else palette.secondary
+        accent = palette.accents[index % 4]
         shadow = Image.new("RGBA", image.size, (0, 0, 0, 0))
         sdraw = ImageDraw.Draw(shadow, "RGBA")
         sdraw.rounded_rectangle((x - 2, y - 2, x + size + 2, y + size + 2), radius=15, fill=accent + (42,))
         image.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(7)))
         draw = ImageDraw.Draw(image, "RGBA")
         draw.rounded_rectangle((x, y, x + size, y + size), radius=14, fill=(3, 6, 10, 226), outline=accent + (135,), width=2)
-        image.alpha_composite(_asset_tile(bytes(logos.get(platform) or b""), size - 8, spec_data.label), (x + 4, y + 4))
+        image.alpha_composite(
+            _asset_tile(bytes(logos.get(platform) or _logo_bytes(platform)), size - 8, platform_spec.label),
+            (x + 4, y + 4),
+        )
         username = _safe(entry.get("username"), 34)
         if username and platform_entry_mode(entry) != "logo":
-            shared.append(f"{spec_data.label}: {username}")
+            shared.append(f"{platform_spec.label}: {username}")
         x += 66
 
     if shared:
         draw = ImageDraw.Draw(image, "RGBA")
         font = _font(17, regular=True)
         line = _fit(draw, "   ".join(shared[:2]), font, 304, assets, 18, 150)
-        _draw_rich(image, draw, (spec.platform_x, 168), line, font=font, fill=palette.secondary + (255,), assets=assets, emoji_size=18)
-
+        _draw_rich(
+            image,
+            draw,
+            (spec.platform_x, 168),
+            line,
+            font=font,
+            fill=palette.tertiary + (255,),
+            assets=assets,
+            emoji_size=18,
+        )
 
 def _draw_brand(image: Image.Image, server_name: str, icon_bytes: bytes, palette: ProfilePalette, spec: Layout, assets: Mapping[str, bytes], theme_key: str) -> None:
     draw = ImageDraw.Draw(image, "RGBA")
     x = spec.brand_x
     draw.polygon([(x, 20), (1382, 20), (1382, 280), (x - 48, 280)], fill=(2, 4, 7, 208))
     draw.line((x, 24, x - 44, 276), fill=palette.primary + (230,), width=3)
-    draw.line((x + 7, 24, x - 37, 276), fill=palette.secondary + (70,), width=1)
+    draw.line((x + 7, 24, x - 37, 276), fill=palette.tertiary + (92,), width=1)
     if theme_key in {"420_lobby", "community_glow"}:
         _draw_leaf(draw, 1290, 146, 0.74, palette.primary + (22,))
 
@@ -569,7 +841,7 @@ def _draw_brand(image: Image.Image, server_name: str, icon_bytes: bytes, palette
     small = _font(13, regular=True)
     small_text = "COMMUNITY"
     small_width = draw.textbbox((0, 0), small_text, font=small)[2]
-    draw.text((icon_x + (size - small_width) / 2, 160), small_text, font=small, fill=palette.primary + (225,))
+    draw.text((icon_x + (size - small_width) / 2, 160), small_text, font=small, fill=palette.highlight + (235,))
     font = _font(18, regular=True)
     label = _fit(draw, server_name, font, 160, assets, 18, 70)
     width = _rich_width(draw, label, font, assets, 18)
@@ -617,21 +889,29 @@ def render_profile_signature(
     _draw_rich(image, draw, (spec.content_x, 42), eyebrow, font=eyebrow_font, fill=palette.primary + (255,), assets=assets, emoji_size=18)
 
     name = _safe(display_name, 72) or "Member"
+    name_max_width = max(120, spec.content_right - spec.content_x - 24)
     if _emoji_sequences(name):
         font = _font(spec.name_size)
-        fitted = _fit(draw, name, font, spec.content_right - spec.content_x, assets, 50, 72)
-        _draw_rich(image, draw, (spec.content_x, spec.name_y), fitted, font=font, fill=palette.text + (255,), assets=assets, emoji_size=50)
+        fitted = _fit(draw, name, font, name_max_width, assets, 50, 72)
+        name_layer = Image.new("RGBA", (name_max_width, 76), (0, 0, 0, 0))
+        name_draw = ImageDraw.Draw(name_layer, "RGBA")
+        _draw_rich(
+            name_layer,
+            name_draw,
+            (0, 6),
+            fitted,
+            font=font,
+            fill=palette.text + (255,),
+            assets=assets,
+            emoji_size=50,
+        )
+        image.alpha_composite(name_layer, (spec.content_x, spec.name_y - 6))
     else:
-        name_tile = render_styled_text_tile(
+        name_tile = _bounded_name_tile(
             name,
             style_key=style_key,
-            start_size=spec.name_size,
-            min_size=34,
-            max_width=spec.content_right - spec.content_x,
-            max_height=78,
-            primary=palette.primary,
-            secondary=palette.secondary,
-            role="name",
+            spec=spec,
+            palette=palette,
             custom_font_bytes=bytes(style.get("custom_font") or b""),
         )
         image.alpha_composite(name_tile, (spec.content_x, spec.name_y - 6))
@@ -641,9 +921,13 @@ def render_profile_signature(
     server_roles = [_safe(value, 80) for value in server_role_labels if _safe(value, 80)]
     tags = [_safe(value, 110) for value in profile_tag_labels if _safe(value, 110)]
     pills: list[tuple[str, tuple[int, int, int]]] = []
-    pills.extend((value, palette.secondary) for value in tags[:4])
-    pills.extend((f"Role: {value}", palette.primary) for value in server_roles[1:3])
-    pills.extend((value, palette.secondary) for value in role_labels[:2] if value not in {item[0] for item in pills})
+    for index, value in enumerate(tags[:4]):
+        pills.append((value, palette.accents[index % 4]))
+    for index, value in enumerate(server_roles[1:3], start=len(pills)):
+        pills.append((f"Role: {value}", palette.accents[index % 4]))
+    for value in role_labels[:2]:
+        if value not in {item[0] for item in pills}:
+            pills.append((value, palette.accents[len(pills) % 4]))
     if not pills and not server_roles:
         pills.append(("Private profile", palette.primary))
     _draw_pills(image, pills, palette, spec, assets)

@@ -416,7 +416,7 @@ async def _handle_profile_username_copy(interaction: discord.Interaction) -> boo
         await _safe_ephemeral(interaction, "That member no longer shares this username.", ok=False)
         return True
     username = display_profile_username(raw.get("username"))
-    await _send_private(interaction, content=f"```text\n{username}\n```")
+    await _send_private(interaction, content=username)
     return True
 
 

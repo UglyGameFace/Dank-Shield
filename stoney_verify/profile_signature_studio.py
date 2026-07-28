@@ -10,7 +10,7 @@ surface reads or changes welcome/join settings except the explicit one-time
 
 import asyncio
 from io import BytesIO
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 import discord
 
@@ -36,6 +36,7 @@ from .profile_signature_style import (
     PROFILE_CUSTOM_BACKGROUND_KEY,
     PROFILE_CUSTOM_FONT_KEY,
     PROFILE_CUSTOM_FONT_NAME_KEY,
+    PROFILE_THEME_SPECS,
     SERVER_STYLE_CONFIG_KEYS,
     effective_profile_style,
     encode_profile_asset,
@@ -53,7 +54,6 @@ from .welcome_card_service import (
     decode_custom_background,
 )
 from .welcome_card_typography_engine import (
-    BUILTIN_THEMES,
     COLOR_PRESETS,
     CUSTOM_FONT_STYLE_KEY,
     FONT_STYLES,
@@ -91,6 +91,402 @@ _FONT_EMOJIS = {
     "retro": "📼",
 }
 
+
+_COLOR_MIX_CHOICES: tuple[tuple[str, str, str, str, str], ...] = (
+    ("neon_green", "Neon Green", "#8FFF52", "🟢", "Bright 420-style green"),
+    ("emerald", "Emerald", "#20CF70", "💚", "Deep clean green"),
+    ("cyan", "Electric Cyan", "#2DE8CD", "🩵", "Bright teal-cyan glow"),
+    ("ice_blue", "Ice Blue", "#46B1FF", "🔵", "Cold bright blue"),
+    ("royal_blue", "Royal Blue", "#256CE5", "💙", "Strong gaming blue"),
+    ("violet", "Violet", "#B85BFF", "🟣", "Neon purple accent"),
+    ("magenta", "Magenta", "#FF3D9A", "🩷", "Hot pink-magenta glow"),
+    ("red", "Ember Red", "#FF4E44", "🔴", "Competitive red"),
+    ("orange", "Blaze Orange", "#FF8A3D", "🟠", "Warm energetic orange"),
+    ("gold", "Premium Gold", "#FFCC52", "🟡", "Black-and-gold highlight"),
+    ("white", "Clean White", "#F8FAFD", "⚪", "Bright neutral highlight"),
+    ("graphite", "Graphite", "#7B8798", "⚫", "Muted steel accent"),
+)
+_COLOR_MIX_BY_KEY = {
+    key: {"label": label, "hex": value, "emoji": emoji, "description": description}
+    for key, label, value, emoji, description in _COLOR_MIX_CHOICES
+}
+_COLOR_SLOT_NAMES = ("Primary", "Secondary", "Accent 3", "Highlight")
+_MEMBER_COLOR_KEYS = (
+    "signature_custom_primary",
+    "signature_custom_secondary",
+    "signature_custom_tertiary",
+    "signature_custom_highlight",
+)
+_SERVER_COLOR_KEYS = (
+    SERVER_STYLE_CONFIG_KEYS["custom_primary"],
+    SERVER_STYLE_CONFIG_KEYS["custom_secondary"],
+    SERVER_STYLE_CONFIG_KEYS["custom_tertiary"],
+    SERVER_STYLE_CONFIG_KEYS["custom_highlight"],
+)
+_REMOVE_COLOR_VALUE = "__remove_color__"
+
+
+def _normalize_mix_values(values: Sequence[Any]) -> tuple[str, str, str, str]:
+    cleaned: list[str] = []
+    for value in list(values)[:4]:
+        raw = str(value or "").strip()
+        cleaned.append(normalize_hex_color(raw) if raw else "")
+    while len(cleaned) < 4:
+        cleaned.append("")
+    return tuple(cleaned)  # type: ignore[return-value]
+
+
+def _mix_updates(values: Sequence[Any], *, server: bool) -> dict[str, str]:
+    colors = _normalize_mix_values(values)
+    keys = _SERVER_COLOR_KEYS if server else _MEMBER_COLOR_KEYS
+    mode_key = SERVER_STYLE_CONFIG_KEYS["color_mode"] if server else "signature_color_mode"
+    return {mode_key: "custom", **{key: value for key, value in zip(keys, colors)}}
+
+
+def _mix_label(value: str) -> str:
+    normalized = str(value or "").upper()
+    for item in _COLOR_MIX_BY_KEY.values():
+        if str(item["hex"]).upper() == normalized:
+            return str(item["label"])
+    return normalized or "Auto-derived"
+
+
+async def _current_mix_values(member: discord.Member, *, server: bool) -> tuple[str, str, str, str]:
+    if server:
+        style = server_profile_style(await get_guild_config(member.guild.id, refresh=True))
+        return _normalize_mix_values(
+            (
+                style.get("custom_primary"),
+                style.get("custom_secondary"),
+                style.get("custom_tertiary"),
+                style.get("custom_highlight"),
+            )
+        )
+    user = await get_profile_user(member.id, refresh=True)
+    style = normalize_member_profile_style(user.get("preferences"))
+    return _normalize_mix_values(style.get(key) for key in _MEMBER_COLOR_KEYS)
+
+
+async def _open_appearance_panel(interaction: discord.Interaction, *, author_id: int, server: bool) -> None:
+    await _edit_private(
+        interaction,
+        embed=discord.Embed(
+            title="🎨 Server Signature Appearance" if server else "🎨 Signature Appearance",
+            description=(
+                "Choose a theme, font, colors, background, layout, and avatar frame. "
+                "Saved changes immediately render the real card."
+            ),
+            color=discord.Color.blurple(),
+        ),
+        view=ProfileAppearanceView(author_id=author_id, server=server),
+    )
+
+
+async def _preview_color_mixer(
+    interaction: discord.Interaction,
+    *,
+    member: discord.Member,
+    server: bool,
+    values: Sequence[Any],
+    notice: str,
+) -> None:
+    colors = _normalize_mix_values(values)
+    await _preview(
+        interaction,
+        member=member,
+        notice=notice,
+        view_factory=lambda _source: ColorMixerView(
+            author_id=member.id,
+            server=server,
+            values=colors,
+        ),
+    )
+
+
+async def _save_mix_and_preview(
+    interaction: discord.Interaction,
+    *,
+    server: bool,
+    values: Sequence[Any],
+    message: str,
+) -> None:
+    member = _member(interaction)
+    if member is None:
+        return await _private(interaction, content="❌ Use this inside a server as a member.")
+    colors = _normalize_mix_values(values)
+    if server:
+        from .commands_ext.public_setup_group import _require_setup_permission
+
+        if not await _require_setup_permission(interaction):
+            return
+        await _defer(interaction)
+        await upsert_guild_config(member.guild.id, _mix_updates(colors, server=True))
+        await _invalidate_guild(interaction)
+    else:
+        await _defer(interaction)
+        try:
+            await upsert_profile_user_preferences(member.id, _mix_updates(colors, server=False))
+            await _invalidate(interaction, all_guilds=True)
+        except ProfileStorageUnavailable:
+            return await _edit_private(interaction, content="❌ Private profile storage is unavailable. Nothing changed.")
+    await _preview_color_mixer(
+        interaction,
+        member=member,
+        server=server,
+        values=colors,
+        notice=f"✅ {message}",
+    )
+
+
+async def _reset_mix_and_preview(interaction: discord.Interaction, *, server: bool) -> None:
+    member = _member(interaction)
+    if member is None:
+        return await _private(interaction, content="❌ Use this inside a server as a member.")
+    keys = _SERVER_COLOR_KEYS if server else _MEMBER_COLOR_KEYS
+    mode_key = SERVER_STYLE_CONFIG_KEYS["color_mode"] if server else "signature_color_mode"
+    updates = {mode_key: "theme", **{key: "" for key in keys}}
+    if server:
+        from .commands_ext.public_setup_group import _require_setup_permission
+
+        if not await _require_setup_permission(interaction):
+            return
+        await _defer(interaction)
+        await upsert_guild_config(member.guild.id, updates)
+        await _invalidate_guild(interaction)
+    else:
+        await _defer(interaction)
+        try:
+            await upsert_profile_user_preferences(member.id, updates)
+            await _invalidate(interaction, all_guilds=True)
+        except ProfileStorageUnavailable:
+            return await _edit_private(interaction, content="❌ Private profile storage is unavailable. Nothing changed.")
+    await _preview_color_mixer(
+        interaction,
+        member=member,
+        server=server,
+        values=("", "", "", ""),
+        notice="✅ Custom colors reset. The selected theme colors are active again.",
+    )
+
+
+async def _open_color_slot_picker(
+    interaction: discord.Interaction,
+    *,
+    author_id: int,
+    server: bool,
+    values: Sequence[Any],
+    slot: int,
+) -> None:
+    colors = list(_normalize_mix_values(values))
+
+    async def go_home(component: discord.Interaction) -> None:
+        member = _member(component)
+        if member is None:
+            return await _private(component, content="❌ Use this inside a server as a member.")
+        await _preview_color_mixer(
+            component,
+            member=member,
+            server=server,
+            values=colors,
+            notice="Choose any color slot to continue mixing.",
+        )
+
+    async def picked(component: discord.Interaction, value: str) -> None:
+        updated = list(colors)
+        if value == _REMOVE_COLOR_VALUE:
+            updated[slot] = ""
+            label = f"{_COLOR_SLOT_NAMES[slot]} removed"
+        else:
+            item = _COLOR_MIX_BY_KEY.get(value)
+            if item is None:
+                return await _private(component, content="❌ That color is no longer available.")
+            updated[slot] = str(item["hex"])
+            label = f"{_COLOR_SLOT_NAMES[slot]} set to {item['label']}"
+        await _save_mix_and_preview(component, server=server, values=updated, message=label)
+
+    choices = [
+        make_choice(
+            str(item["label"]),
+            key,
+            description=str(item["description"]),
+            emoji=str(item["emoji"]),
+            default=str(item["hex"]).upper() == colors[slot].upper(),
+        )
+        for key, item in _COLOR_MIX_BY_KEY.items()
+    ]
+    choices.append(
+        make_choice(
+            "Remove This Color",
+            _REMOVE_COLOR_VALUE,
+            description="Let Dank Shield derive this slot from the other selected colors.",
+            emoji="➖",
+        )
+    )
+    await _private(
+        interaction,
+        content=(
+            f"## 🎨 {_COLOR_SLOT_NAMES[slot]}\n"
+            "Choose a named color. The real profile card saves and redraws immediately."
+        ),
+        view=DankPickerView(
+            author_id=author_id,
+            choices=choices,
+            on_pick=picked,
+            custom_id=f"dank:profile:mix:{'server' if server else 'member'}:{slot}:{author_id}",
+            placeholder=f"Choose {_COLOR_SLOT_NAMES[slot].lower()}…",
+            title="Profile Signature Color Mixer",
+            on_home=go_home,
+        ),
+    )
+
+
+class AdvancedProfileColorsModal(discord.ui.Modal):
+    def __init__(self, *, server: bool, author_id: int, values: Sequence[Any]) -> None:
+        super().__init__(title="Advanced Four-Color Hex", timeout=900)
+        self.server = bool(server)
+        self.author_id = int(author_id)
+        self.inputs: list[discord.ui.TextInput] = []
+        for label, value in zip(_COLOR_SLOT_NAMES, _normalize_mix_values(values)):
+            item = discord.ui.TextInput(
+                label=f"{label} hex (optional)",
+                placeholder="#22DCFF",
+                default=value or None,
+                required=False,
+                max_length=7,
+            )
+            self.inputs.append(item)
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.author_id:
+            return await _private(interaction, content="❌ Only the person who opened this editor can submit it.")
+        try:
+            values = _normalize_mix_values(item.value for item in self.inputs)
+        except ValueError as exc:
+            return await _private(interaction, content=f"❌ {exc}")
+        if not any(values):
+            return await _reset_mix_and_preview(interaction, server=self.server)
+        await _save_mix_and_preview(
+            interaction,
+            server=self.server,
+            values=values,
+            message="Advanced four-color values saved",
+        )
+
+
+class _ColorSlotButton(discord.ui.Button):
+    def __init__(self, *, slot: int, value: str) -> None:
+        super().__init__(
+            label=f"{slot + 1}. {_COLOR_SLOT_NAMES[slot]}: {_mix_label(value)}"[:80],
+            style=discord.ButtonStyle.primary if value else discord.ButtonStyle.secondary,
+            row=slot // 2,
+        )
+        self.slot = int(slot)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, ColorMixerView) or not await view.interaction_check(interaction):
+            return
+        await _open_color_slot_picker(
+            interaction,
+            author_id=view.author_id,
+            server=view.server,
+            values=view.values,
+            slot=self.slot,
+        )
+
+
+class _ColorMixerActionButton(discord.ui.Button):
+    def __init__(self, *, action: str, label: str, emoji: str, style: discord.ButtonStyle, row: int) -> None:
+        super().__init__(label=label, emoji=emoji, style=style, row=row)
+        self.action = action
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, ColorMixerView) or not await view.interaction_check(interaction):
+            return
+        values = list(view.values)
+        if self.action == "swap":
+            values[0], values[1] = values[1], values[0]
+            return await _save_mix_and_preview(
+                interaction,
+                server=view.server,
+                values=values,
+                message="Primary and Secondary swapped",
+            )
+        if self.action == "rotate":
+            values = [values[-1], *values[:-1]]
+            return await _save_mix_and_preview(
+                interaction,
+                server=view.server,
+                values=values,
+                message="Color order rotated",
+            )
+        if self.action == "remove":
+            found = next((index for index in range(3, -1, -1) if values[index]), None)
+            if found is not None:
+                values[found] = ""
+            return await _save_mix_and_preview(
+                interaction,
+                server=view.server,
+                values=values,
+                message="Last selected color removed",
+            )
+        if self.action == "reset":
+            return await _reset_mix_and_preview(interaction, server=view.server)
+        if self.action == "hex":
+            return await interaction.response.send_modal(
+                AdvancedProfileColorsModal(
+                    server=view.server,
+                    author_id=view.author_id,
+                    values=view.values,
+                )
+            )
+        if self.action == "back":
+            return await _open_appearance_panel(
+                interaction,
+                author_id=view.author_id,
+                server=view.server,
+            )
+
+
+class ColorMixerView(discord.ui.View):
+    def __init__(self, *, author_id: int, server: bool, values: Sequence[Any]) -> None:
+        super().__init__(timeout=900)
+        self.author_id = int(author_id)
+        self.server = bool(server)
+        self.values = _normalize_mix_values(values)
+        for slot, value in enumerate(self.values):
+            self.add_item(_ColorSlotButton(slot=slot, value=value))
+        self.add_item(_ColorMixerActionButton(action="swap", label="Swap 1 ↔ 2", emoji="🔁", style=discord.ButtonStyle.secondary, row=2))
+        self.add_item(_ColorMixerActionButton(action="rotate", label="Rotate Order", emoji="🔄", style=discord.ButtonStyle.secondary, row=2))
+        self.add_item(_ColorMixerActionButton(action="remove", label="Remove Last", emoji="➖", style=discord.ButtonStyle.secondary, row=2))
+        self.add_item(_ColorMixerActionButton(action="reset", label="Reset to Theme", emoji="🛡️", style=discord.ButtonStyle.danger, row=3))
+        self.add_item(_ColorMixerActionButton(action="hex", label="Advanced Hex", emoji="⌨️", style=discord.ButtonStyle.secondary, row=3))
+        self.add_item(_ColorMixerActionButton(action="back", label="Back to Appearance", emoji="↩️", style=discord.ButtonStyle.secondary, row=3))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != self.author_id:
+            await _private(interaction, content="❌ Only the person who opened this mixer can use it.")
+            return False
+        return True
+
+
+async def _open_color_mixer(interaction: discord.Interaction, *, server: bool, author_id: int) -> None:
+    member = _member(interaction)
+    if member is None or int(member.id) != int(author_id):
+        return await _private(interaction, content="❌ Open your own profile appearance settings first.")
+    values = await _current_mix_values(member, server=server)
+    await _preview_color_mixer(
+        interaction,
+        member=member,
+        server=server,
+        values=values,
+        notice=(
+            "Choose any of the four color slots below. Every selection saves and redraws this real card immediately. "
+            "Exact color codes stay under Advanced Hex."
+        ),
+    )
 
 def _member(interaction: discord.Interaction) -> Optional[discord.Member]:
     return interaction.user if isinstance(interaction.user, discord.Member) else None
@@ -172,7 +568,7 @@ async def _invalidate_guild(interaction: discord.Interaction) -> None:
 
 def _style_labels(preferences: Mapping[str, Any], config: Any) -> dict[str, str]:
     effective = effective_profile_style(preferences, config)
-    theme = BUILTIN_THEMES.get(str(effective.get("theme")))
+    theme = PROFILE_THEME_SPECS.get(str(effective.get("theme")))
     font = FONT_STYLES.get(str(effective.get("font")))
     return {
         "theme": getattr(theme, "label", str(effective.get("theme") or "Default")),
@@ -287,6 +683,7 @@ async def _preview(
     *,
     member: Optional[discord.Member] = None,
     notice: str = "",
+    view_factory: Optional[Callable[[Optional[discord.ui.View]], discord.ui.View]] = None,
 ) -> None:
     target = member or _member(interaction)
     guild = interaction.guild
@@ -311,11 +708,16 @@ async def _preview(
             view=SignatureStudioView(author_id=target.id),
         )
     rendered.embed.set_footer(text="Preview only • compact profile signature • nothing posted publicly")
+    preview_view = (
+        view_factory(rendered.view)
+        if view_factory is not None
+        else SignaturePreviewView(author_id=target.id, source_view=rendered.view)
+    )
     await _edit_private(
         interaction,
         content=notice,
         embed=rendered.embed,
-        view=SignaturePreviewView(author_id=target.id, source_view=rendered.view),
+        view=preview_view,
         file=rendered.file,
     )
 
@@ -375,10 +777,10 @@ async def _theme_picker(interaction: discord.Interaction, *, server: bool) -> No
             await _save_server_style(
                 component,
                 theme_style_updates(value, member=False),
-                message=f"Server profile-signature theme set to **{BUILTIN_THEMES[value].label}** with its colors and background.",
+                message=f"Server profile-signature theme set to **{PROFILE_THEME_SPECS[value].label}** with its colors and background.",
             )
         else:
-            label = "Server Default" if value == "server" else BUILTIN_THEMES[value].label
+            label = "Server Default" if value == "server" else PROFILE_THEME_SPECS[value].label
             await _save_member_style(
                 component,
                 theme_style_updates(value, member=True),
@@ -393,10 +795,10 @@ async def _theme_picker(interaction: discord.Interaction, *, server: bool) -> No
             theme.label,
             theme.key,
             description="Apply this theme's colors, background, and artwork",
-            emoji=_THEME_EMOJIS.get(theme.key, "🎨"),
+            emoji=theme.emoji,
             default=current == theme.key,
         )
-        for theme in BUILTIN_THEMES.values()
+        for theme in PROFILE_THEME_SPECS.values()
     )
     await _private(
         interaction,
@@ -526,46 +928,6 @@ async def _color_picker(interaction: discord.Interaction, *, server: bool) -> No
     )
 
 
-class CustomProfileColorsModal(discord.ui.Modal):
-    def __init__(self, *, server: bool, author_id: int) -> None:
-        super().__init__(title="Advanced Signature Colors", timeout=900)
-        self.server = bool(server)
-        self.author_id = int(author_id)
-        self.primary = discord.ui.TextInput(label="Primary color", placeholder="#22DCFF", max_length=7)
-        self.secondary = discord.ui.TextInput(label="Secondary color", placeholder="#BC42FF", max_length=7)
-        self.add_item(self.primary)
-        self.add_item(self.secondary)
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        if int(interaction.user.id) != self.author_id:
-            return await _private(interaction, content="❌ Only the person who opened this editor can submit it.")
-        try:
-            primary = normalize_hex_color(str(self.primary.value))
-            secondary = normalize_hex_color(str(self.secondary.value))
-        except ValueError as exc:
-            return await _private(interaction, content=f"❌ {exc}")
-        if self.server:
-            await _save_server_style(
-                interaction,
-                {
-                    SERVER_STYLE_CONFIG_KEYS["color_mode"]: "custom",
-                    SERVER_STYLE_CONFIG_KEYS["custom_primary"]: primary,
-                    SERVER_STYLE_CONFIG_KEYS["custom_secondary"]: secondary,
-                },
-                message="Advanced server signature colors saved.",
-            )
-        else:
-            await _save_member_style(
-                interaction,
-                {
-                    "signature_color_mode": "custom",
-                    "signature_custom_primary": primary,
-                    "signature_custom_secondary": secondary,
-                },
-                message="Your advanced signature colors were saved.",
-            )
-
-
 async def _simple_picker(
     interaction: discord.Interaction,
     *,
@@ -677,11 +1039,13 @@ class ProfileAppearanceView(discord.ui.View):
         _ = button
         await _color_picker(interaction, server=self.server)
 
-    @discord.ui.button(label="Custom Colors", emoji="🖌️", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Mix Colors", emoji="🖌️", style=discord.ButtonStyle.secondary, row=0)
     async def custom_colors(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await interaction.response.send_modal(
-            CustomProfileColorsModal(server=self.server, author_id=self.author_id)
+        await _open_color_mixer(
+            interaction,
+            server=self.server,
+            author_id=self.author_id,
         )
 
     @discord.ui.button(label="Background", emoji="🌄", style=discord.ButtonStyle.secondary, row=1)
