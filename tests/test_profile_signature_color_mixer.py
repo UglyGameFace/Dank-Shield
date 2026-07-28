@@ -28,6 +28,7 @@ def test_appearance_menu_exposes_every_real_control() -> None:
         "Background",
         "Layout",
         "Avatar Frame",
+        "Custom Art Guide",
         "Preview",
         "Back",
     }

@@ -427,6 +427,7 @@ def test_basic_signature_renders_when_every_optional_field_is_hidden(monkeypatch
                     "show_profile_tags": False,
                     "show_account_dates": False,
                     "show_platforms": False,
+                    "show_server_branding": False,
                 },
                 "platforms": {},
             }
@@ -442,8 +443,18 @@ def test_basic_signature_renders_when_every_optional_field_is_hidden(monkeypatch
             profile_tag_labels,
             date_labels,
             platform_entries,
+            show_server_branding,
         ):
-            seen.append((style, server_role_labels, profile_tag_labels, date_labels, platform_entries))
+            seen.append(
+                (
+                    style,
+                    server_role_labels,
+                    profile_tag_labels,
+                    date_labels,
+                    platform_entries,
+                    show_server_branding,
+                )
+            )
             return b"image-bytes"
 
         monkeypatch.setattr(runtime_module, "get_effective_profile_settings", settings)
@@ -460,7 +471,7 @@ def test_basic_signature_renders_when_every_optional_field_is_hidden(monkeypatch
         assert rendered is not None
         assert rendered.file is not None
         assert rendered.embed.description is None
-        assert seen and seen[0][1:] == ([], [], [], [])
+        assert seen and seen[0][1:] == ([], [], [], [], False)
 
     asyncio.run(scenario())
 

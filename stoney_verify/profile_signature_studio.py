@@ -15,6 +15,7 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 import discord
 
 from .guild_config import get_guild_config, upsert_guild_config
+from .profile_custom_background import profile_background_guide, profile_background_requirements
 from .profile_card_runtime import LiveProfileCardRuntime, parse_live_card_config, render_live_profile_card
 from .profile_card_service import (
     PLATFORM_SPECS,
@@ -33,6 +34,7 @@ from .profile_card_service import (
 from .profile_signature_style import (
     DEFAULT_MEMBER_PROFILE_STYLE,
     DEFAULT_SERVER_PROFILE_STYLE,
+    MEMBER_CUSTOM_BACKGROUND_KEY,
     PROFILE_CUSTOM_BACKGROUND_KEY,
     PROFILE_CUSTOM_FONT_KEY,
     PROFILE_CUSTOM_FONT_NAME_KEY,
@@ -621,6 +623,7 @@ async def _studio_embed(member: discord.Member) -> discord.Embed:
         value=(
             f"**Live signature:** {'On' if effective_privacy.get('live_cards_enabled', True) else 'Off'}\n"
             f"**Server roles:** {'Shown' if effective_privacy.get('show_server_roles', False) else 'Hidden'}\n"
+            f"**Server branding:** {'Shown' if effective_privacy.get('show_server_branding', True) else 'Hidden'}\n"
             f"**Profile tags:** {'Shown' if effective_privacy.get('show_profile_tags', True) else 'Hidden'}\n"
             f"**Dates:** {'Shown' if effective_privacy.get('show_account_dates', True) else 'Hidden'}\n"
             f"**Platforms:** {shared} shared"
@@ -777,14 +780,14 @@ async def _theme_picker(interaction: discord.Interaction, *, server: bool) -> No
             await _save_server_style(
                 component,
                 theme_style_updates(value, member=False),
-                message=f"Server profile-signature theme set to **{PROFILE_THEME_SPECS[value].label}** with its colors and background.",
+                message=f"Server profile-signature theme set to **{PROFILE_THEME_SPECS[value].label}** while preserving existing custom colors and artwork.",
             )
         else:
             label = "Server Default" if value == "server" else PROFILE_THEME_SPECS[value].label
             await _save_member_style(
                 component,
                 theme_style_updates(value, member=True),
-                message=f"Your signature theme is now **{label}** with its colors and background.",
+                message=f"Your signature theme is now **{label}** while preserving existing custom colors and artwork.",
             )
 
     choices = []
@@ -794,7 +797,7 @@ async def _theme_picker(interaction: discord.Interaction, *, server: bool) -> No
         make_choice(
             theme.label,
             theme.key,
-            description="Apply this theme's colors, background, and artwork",
+            description="Change the visual family while preserving custom colors and artwork",
             emoji=theme.emoji,
             default=current == theme.key,
         )
@@ -802,7 +805,7 @@ async def _theme_picker(interaction: discord.Interaction, *, server: bool) -> No
     )
     await _private(
         interaction,
-        content="## 🖼️ Signature Themes\nPick a complete look. Its colors, background, and artwork apply immediately; you can override individual parts afterward.",
+        content="## 🖼️ Signature Themes\nPick the visual family. Custom colors and custom artwork stay active. Use **Selected Theme** under Colors or **Theme Artwork** under Background only when you want those parts reset to the theme.",
         view=DankPickerView(
             author_id=member.id,
             choices=choices,
@@ -944,7 +947,7 @@ async def _simple_picker(
                 ("Server Default", "server", "Follow the server's background choice.", "🏠"),
                 ("Theme Artwork", "theme", "Use a clean theme gradient.", "🖼️"),
                 ("Match My Avatar", "profile", "Use a blurred version of your avatar.", "👤"),
-                ("Server Custom Artwork", "custom", "Use the server's uploaded profile artwork when available.", "📎"),
+                ("Custom Artwork", "custom", "Use your personal upload, or the server upload when no personal image exists.", "📎"),
             ],
         ),
         "layout": (
@@ -1062,6 +1065,20 @@ class ProfileAppearanceView(discord.ui.View):
     async def frame(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _simple_picker(interaction, server=self.server, kind="frame")
+
+    @discord.ui.button(label="Custom Art Guide", emoji="📎", style=discord.ButtonStyle.secondary, row=2)
+    async def art_guide(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _private(
+            interaction,
+            content=(
+                "## 📎 Custom Profile Background\n"
+                "Use `/dank profile background-upload`, attach the image, and set **server_default** only when editing server defaults.\n\n"
+                + profile_background_requirements()
+            ),
+            file=discord.File(BytesIO(profile_background_guide()), filename="profile-background-safe-zones.png"),
+            view=ProfileAppearanceView(author_id=self.author_id, server=self.server),
+        )
 
     @discord.ui.button(label="Preview", emoji="👀", style=discord.ButtonStyle.success, row=2)
     async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1519,7 +1536,7 @@ class SignatureStudioView(discord.ui.View):
                 effective_preferences(
                     user.get("preferences"),
                     guild_row.get("settings"),
-                ).get("live_cards_enabled", True)
+                ).get("live_cards_enabled", False)
             )
             if current:
                 await upsert_profile_user_preferences(member.id, {"live_cards_enabled": False})
@@ -1539,7 +1556,7 @@ class SignatureStudioView(discord.ui.View):
                 effective_preferences(
                     updated_user.get("preferences"),
                     updated_guild.get("settings"),
-                ).get("live_cards_enabled", True)
+                ).get("live_cards_enabled", False)
             )
             embed = await _studio_embed(member)
         except ProfileStorageUnavailable:
@@ -1582,7 +1599,7 @@ async def open_profile_signature_studio(interaction: discord.Interaction, *, rep
         effective_preferences(
             user.get("preferences"),
             guild_row.get("settings"),
-        ).get("live_cards_enabled", True)
+        ).get("live_cards_enabled", False)
     )
     panel = SignatureStudioView(author_id=member.id, live_enabled=live_enabled)
     if replace:

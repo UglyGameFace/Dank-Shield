@@ -127,7 +127,9 @@ def test_banner_rich_text_fitter_respects_reserved_pixel_widths() -> None:
 def test_banner_applies_fitting_and_reserved_zones_to_dynamic_labels() -> None:
     assert "spec.content_right - spec.content_x" in RENDERER
     assert "role_width = min(" in RENDERER
-    assert "available = spec.content_right - x" in RENDERER
+    assert "def _complete_lines" in RENDERER
+    assert "def _draw_complete" in RENDERER
+    assert '"   ".join(shared[:2])' not in RENDERER
     assert "def _draw_platforms" in RENDERER
     assert "def _draw_pills" in RENDERER
     assert "def _draw_brand" in RENDERER

@@ -6,7 +6,7 @@ import asyncio
 import colorsys
 import random
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
@@ -480,6 +480,95 @@ def _fit(draw: ImageDraw.ImageDraw, value: Any, font: Any, max_width: int, asset
     return clean[:low].rstrip() + ellipsis if low else ""
 
 
+def _complete_lines(
+    draw: ImageDraw.ImageDraw,
+    value: Any,
+    *,
+    max_width: int,
+    max_lines: int,
+    assets: Mapping[str, bytes],
+    start_size: int,
+    min_size: int,
+    limit: int = 240,
+) -> tuple[Any, list[str], int]:
+    # Fit every character by shrinking/wrapping; never return ellipsis.
+    clean = _safe(value, limit)
+    if not clean:
+        return None, [], min_size
+    for size in range(start_size, min_size - 1, -1):
+        font = _font(size, regular=True)
+        remaining = clean
+        lines: list[str] = []
+        while remaining and len(lines) < max_lines:
+            if _rich_width(draw, remaining, font, assets, size) <= max_width:
+                lines.append(remaining)
+                remaining = ""
+                break
+            low, high = 1, len(remaining)
+            while low < high:
+                middle = (low + high + 1) // 2
+                if _rich_width(draw, remaining[:middle], font, assets, size) <= max_width:
+                    low = middle
+                else:
+                    high = middle - 1
+            split_at = max(1, low)
+            space_at = remaining.rfind(" ", 0, split_at + 1)
+            if space_at > 0:
+                line = remaining[:space_at].rstrip()
+                remaining = remaining[space_at + 1 :].lstrip()
+            else:
+                line = remaining[:split_at]
+                remaining = remaining[split_at:]
+            if not line:
+                break
+            lines.append(line)
+        if lines and not remaining:
+            return font, lines, size
+    return None, [], min_size
+
+
+def _draw_complete(
+    image: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[int, int],
+    value: Any,
+    *,
+    max_width: int,
+    max_lines: int,
+    assets: Mapping[str, bytes],
+    start_size: int,
+    min_size: int,
+    fill: tuple[int, int, int, int],
+    limit: int = 240,
+    line_gap: int = 2,
+) -> int:
+    font, lines, size = _complete_lines(
+        draw,
+        value,
+        max_width=max_width,
+        max_lines=max_lines,
+        assets=assets,
+        start_size=start_size,
+        min_size=min_size,
+        limit=limit,
+    )
+    if font is None:
+        return 0
+    x, y = xy
+    for index, line in enumerate(lines):
+        _draw_rich(
+            image,
+            draw,
+            (x, y + index * (size + line_gap)),
+            line,
+            font=font,
+            fill=fill,
+            assets=assets,
+            emoji_size=size,
+        )
+    return len(lines) * size + max(0, len(lines) - 1) * line_gap
+
+
 def _draw_rich(image: Image.Image, draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, *, font: Any, fill: tuple[int, int, int, int], assets: Mapping[str, bytes], emoji_size: int) -> int:
     x, y = xy
     for token, is_emoji in _emoji_tokens(text):
@@ -614,25 +703,34 @@ def _draw_meta_dates(image: Image.Image, dates: Sequence[str], palette: ProfileP
 
 def _draw_pills(image: Image.Image, labels: Sequence[tuple[str, tuple[int, int, int]]], palette: ProfilePalette, spec: Layout, assets: Mapping[str, bytes]) -> None:
     draw = ImageDraw.Draw(image, "RGBA")
-    font = _font(17, regular=True)
     x, y = spec.content_x, spec.tags_y
     row = 0
     for raw, accent in labels:
         clean = _safe(raw, 110)
-        natural = _rich_width(draw, clean, font, assets, 18) + 28
-        if x + natural > spec.content_right and x > spec.content_x:
+        if not clean:
+            continue
+        row_width = spec.content_right - spec.content_x
+        font = None
+        size = 17
+        width = 0
+        for candidate in range(17, 10, -1):
+            trial = _font(candidate, regular=True)
+            trial_width = _rich_width(draw, clean, trial, assets, candidate) + 28
+            if trial_width <= row_width:
+                font, size, width = trial, candidate, trial_width
+                break
+        if font is None:
+            continue
+        if x + width > spec.content_right and x > spec.content_x:
             row += 1
             if row >= 2:
                 break
             x, y = spec.content_x, y + 39
-        available = spec.content_right - x
-        fitted = _fit(draw, clean, font, max(0, available - 28), assets, 18, 110)
-        if not fitted:
+        if x + width > spec.content_right:
             continue
-        width = min(available, _rich_width(draw, fitted, font, assets, 18) + 28)
         fill = _mix((3, 7, 10), accent, 0.12)
         draw.rounded_rectangle((x, y, x + width, y + 32), radius=14, fill=fill + (224,), outline=accent + (185,), width=2)
-        _draw_rich(image, draw, (x + 14, y + 5), fitted, font=font, fill=palette.text + (248,), assets=assets, emoji_size=18)
+        _draw_rich(image, draw, (x + 14, y + max(3, (32 - size) // 2 - 1)), clean, font=font, fill=palette.text + (248,), assets=assets, emoji_size=size)
         x += width + 8
 
 
@@ -662,28 +760,41 @@ def _draw_platforms(
     theme_key: str,
 ) -> None:
     draw = ImageDraw.Draw(image, "RGBA")
-    role_font = _font(17, regular=True)
-    fitted_role = _fit(draw, role.upper(), role_font, 245, assets, 18, 60) or "MEMBER"
-    role_width = min(278, _rich_width(draw, fitted_role, role_font, assets, 18) + 58)
+    role_max = max(150, spec.brand_x - spec.platform_x - 24)
+    role_font, role_lines, role_size = _complete_lines(
+        draw,
+        role.upper() or "MEMBER",
+        max_width=role_max - 58,
+        max_lines=2,
+        assets=assets,
+        start_size=17,
+        min_size=10,
+        limit=100,
+    )
+    if role_font is None:
+        role_font, role_lines, role_size = _font(15, regular=True), ["MEMBER"], 15
+    role_width = min(role_max, max(_rich_width(draw, line, role_font, assets, role_size) for line in role_lines) + 58)
     role_fill = _mix((3, 7, 10), palette.primary, 0.13)
     draw.rounded_rectangle(
-        (spec.platform_x, 37, spec.platform_x + role_width, 75),
-        radius=16,
+        (spec.platform_x, 32, spec.platform_x + role_width, 82),
+        radius=18,
         fill=role_fill + (225,),
         outline=palette.primary + (185,),
         width=2,
     )
-    _role_icon(draw, spec.platform_x + 13, 45, palette, theme_key)
-    _draw_rich(
-        image,
-        draw,
-        (spec.platform_x + 43, 46),
-        fitted_role,
-        font=role_font,
-        fill=palette.highlight + (255,),
-        assets=assets,
-        emoji_size=18,
-    )
+    _role_icon(draw, spec.platform_x + 13, 46, palette, theme_key)
+    role_y = 40 if len(role_lines) == 1 else 35
+    for index, line in enumerate(role_lines):
+        _draw_rich(
+            image,
+            draw,
+            (spec.platform_x + 43, role_y + index * (role_size + 1)),
+            line,
+            font=role_font,
+            fill=palette.highlight + (255,),
+            assets=assets,
+            emoji_size=role_size,
+        )
 
     normalized = [dict(entry) for entry in entries if isinstance(entry, Mapping)]
     focus = palette.focus_platform
@@ -716,19 +827,20 @@ def _draw_platforms(
         label_font = _font(15, regular=True)
         label = f"{getattr(focus_spec, 'label', focus).upper()} FOCUS"
         draw.text((x + size + 16, y + 5), label, font=label_font, fill=palette.primary + (255,))
-        username = _safe(focus_entry.get("username"), 40)
-        username_font = _font(18, regular=True)
+        username = _safe(focus_entry.get("username"), 80)
         username_text = username if username and platform_entry_mode(focus_entry) != "logo" else "Platform-focused style"
-        fitted = _fit(draw, username_text, username_font, 190, assets, 18, 60)
-        _draw_rich(
+        _draw_complete(
             image,
             draw,
-            (x + size + 16, y + 34),
-            fitted,
-            font=username_font,
-            fill=palette.highlight + (250,),
+            (x + size + 16, y + 31),
+            username_text,
+            max_width=max(100, spec.brand_x - (x + size + 16) - 20),
+            max_lines=2,
             assets=assets,
-            emoji_size=18,
+            start_size=18,
+            min_size=10,
+            fill=palette.highlight + (250,),
+            limit=100,
         )
         others = [entry for entry in normalized if str(entry.get("platform") or "") != focus][:3]
         small_x = x + size + 16
@@ -799,25 +911,31 @@ def _draw_platforms(
             _asset_tile(bytes(logos.get(platform) or _logo_bytes(platform)), size - 8, platform_spec.label),
             (x + 4, y + 4),
         )
-        username = _safe(entry.get("username"), 34)
+        username = _safe(entry.get("username"), 80)
         if username and platform_entry_mode(entry) != "logo":
             shared.append(f"{platform_spec.label}: {username}")
         x += 66
 
     if shared:
         draw = ImageDraw.Draw(image, "RGBA")
-        font = _font(17, regular=True)
-        line = _fit(draw, "   ".join(shared[:2]), font, 304, assets, 18, 150)
-        _draw_rich(
-            image,
-            draw,
-            (spec.platform_x, 168),
-            line,
-            font=font,
-            fill=palette.tertiary + (255,),
-            assets=assets,
-            emoji_size=18,
-        )
+        line_y = 164
+        max_width = max(120, spec.brand_x - spec.platform_x - 24)
+        for value in shared[:2]:
+            used = _draw_complete(
+                image,
+                draw,
+                (spec.platform_x, line_y),
+                value,
+                max_width=max_width,
+                max_lines=2,
+                assets=assets,
+                start_size=16,
+                min_size=10,
+                fill=palette.tertiary + (255,),
+                limit=120,
+            )
+            if used:
+                line_y += used + 5
 
 def _draw_brand(image: Image.Image, server_name: str, icon_bytes: bytes, palette: ProfilePalette, spec: Layout, assets: Mapping[str, bytes], theme_key: str) -> None:
     draw = ImageDraw.Draw(image, "RGBA")
@@ -842,10 +960,29 @@ def _draw_brand(image: Image.Image, server_name: str, icon_bytes: bytes, palette
     small_text = "COMMUNITY"
     small_width = draw.textbbox((0, 0), small_text, font=small)[2]
     draw.text((icon_x + (size - small_width) / 2, 160), small_text, font=small, fill=palette.highlight + (235,))
-    font = _font(18, regular=True)
-    label = _fit(draw, server_name, font, 160, assets, 18, 70)
-    width = _rich_width(draw, label, font, assets, 18)
-    _draw_rich(image, draw, (icon_x + max(-24, (size - width) // 2), 184), label, font=font, fill=palette.text + (248,), assets=assets, emoji_size=18)
+    font, lines, brand_size = _complete_lines(
+        draw,
+        server_name,
+        max_width=176,
+        max_lines=2,
+        assets=assets,
+        start_size=18,
+        min_size=11,
+        limit=100,
+    )
+    if font is not None:
+        for index, line in enumerate(lines):
+            width = _rich_width(draw, line, font, assets, brand_size)
+            _draw_rich(
+                image,
+                draw,
+                (icon_x + (size - width) // 2, 182 + index * (brand_size + 2)),
+                line,
+                font=font,
+                fill=palette.text + (248,),
+                assets=assets,
+                emoji_size=brand_size,
+            )
 
 
 def render_profile_signature(
@@ -863,11 +1000,14 @@ def render_profile_signature(
     platform_logo_bytes: Optional[Mapping[str, bytes]] = None,
     guild_icon_bytes: bytes = b"",
     emoji_assets: Optional[Mapping[str, bytes]] = None,
+    show_server_branding: bool = True,
 ) -> bytes:
     palette = _palette(style, avatar_bytes)
     theme_key = _canonical_theme(style)
     layout_key = str(style.get("layout") or "classic").lower()
     spec = _LAYOUTS.get(layout_key, _LAYOUTS["classic"])
+    if not show_server_branding:
+        spec = replace(spec, brand_x=1370)
     frame = str(style.get("avatar_frame") or "glow").lower()
     frame = frame if frame in {"glow", "ring", "none"} else "glow"
     style_key = str(style.get("font") or "clean")
@@ -885,7 +1025,8 @@ def render_profile_signature(
 
     draw = ImageDraw.Draw(image, "RGBA")
     eyebrow_font = _font(17, regular=True)
-    eyebrow = _fit(draw, server_name.upper(), eyebrow_font, spec.content_right - spec.content_x, assets, 18, 70)
+    eyebrow_value = server_name.upper() if show_server_branding else "MEMBER PROFILE"
+    eyebrow = _fit(draw, eyebrow_value, eyebrow_font, spec.content_right - spec.content_x, assets, 18, 70)
     _draw_rich(image, draw, (spec.content_x, 42), eyebrow, font=eyebrow_font, fill=palette.primary + (255,), assets=assets, emoji_size=18)
 
     name = _safe(display_name, 72) or "Member"
@@ -943,7 +1084,8 @@ def render_profile_signature(
         assets,
         theme_key,
     )
-    _draw_brand(image, server_name, guild_icon_bytes, palette, spec, assets, theme_key)
+    if show_server_branding:
+        _draw_brand(image, server_name, guild_icon_bytes, palette, spec, assets, theme_key)
 
     output = BytesIO()
     image.convert("RGB").save(output, format="PNG", optimize=True)
@@ -985,6 +1127,7 @@ async def render_member_profile_signature(
     server_role_labels: Sequence[str] = (),
     profile_tag_labels: Sequence[str] = (),
     platform_entries: Sequence[Mapping[str, Any]] = (),
+    show_server_branding: bool = True,
 ) -> bytes:
     entries = [dict(entry) for entry in platform_entries if isinstance(entry, Mapping)]
     display_name = getattr(member, "display_name", None) or str(member)
@@ -1008,6 +1151,7 @@ async def render_member_profile_signature(
         platform_logo_bytes=logos,
         guild_icon_bytes=guild_icon,
         emoji_assets=emojis,
+        show_server_branding=show_server_branding,
     )
 
 

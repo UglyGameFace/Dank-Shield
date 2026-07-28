@@ -56,6 +56,9 @@ PROFILE_THEME_SPECS: dict[str, ProfileThemeSpec] = {
 }
 PROFILE_THEME_KEYS = frozenset(set(PROFILE_THEME_SPECS) | set(BUILTIN_THEMES))
 
+MEMBER_CUSTOM_BACKGROUND_KEY = "signature_custom_background_b64"
+
+
 DEFAULT_SERVER_PROFILE_STYLE: dict[str, str] = {
     "theme": DEFAULT_THEME_KEY,
     "font": "clean",
@@ -77,6 +80,7 @@ DEFAULT_MEMBER_PROFILE_STYLE: dict[str, str] = {
     "signature_custom_secondary": "",
     "signature_custom_tertiary": "",
     "signature_custom_highlight": "",
+    MEMBER_CUSTOM_BACKGROUND_KEY: "",
     "signature_background_mode": PROFILE_BACKGROUND_INHERIT,
     "signature_layout": PROFILE_LAYOUT_INHERIT,
     "signature_avatar_frame": PROFILE_FRAME_INHERIT,
@@ -177,6 +181,7 @@ def normalize_member_profile_style(value: Optional[Mapping[str, Any]]) -> dict[s
         "signature_custom_secondary": _clean_hex(raw.get("signature_custom_secondary")),
         "signature_custom_tertiary": _clean_hex(raw.get("signature_custom_tertiary")),
         "signature_custom_highlight": _clean_hex(raw.get("signature_custom_highlight")),
+        MEMBER_CUSTOM_BACKGROUND_KEY: str(raw.get(MEMBER_CUSTOM_BACKGROUND_KEY) or "")[:2_500_000],
         "signature_background_mode": _clean_choice(
             raw.get("signature_background_mode"), PROFILE_BACKGROUND_MODES, PROFILE_BACKGROUND_INHERIT
         ),
@@ -267,7 +272,11 @@ def effective_profile_style(preferences: Mapping[str, Any], config: Any) -> dict
         "avatar_frame": resolved(
             "signature_avatar_frame", "avatar_frame", PROFILE_FRAME_INHERIT
         ),
-        "custom_background": decode_profile_asset(_value(config, PROFILE_CUSTOM_BACKGROUND_KEY, "")),
+        "custom_background": (
+            decode_profile_asset(member.get(MEMBER_CUSTOM_BACKGROUND_KEY, ""))
+            if member["signature_background_mode"] == "custom" and member.get(MEMBER_CUSTOM_BACKGROUND_KEY)
+            else decode_profile_asset(_value(config, PROFILE_CUSTOM_BACKGROUND_KEY, ""))
+        ),
         "custom_font": decode_profile_asset(_value(config, PROFILE_CUSTOM_FONT_KEY, "")),
         "custom_font_name": str(_value(config, PROFILE_CUSTOM_FONT_NAME_KEY, "") or "")[:120],
     }
@@ -280,26 +289,15 @@ def server_style_updates(style: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def theme_style_updates(theme_key: str, *, member: bool) -> dict[str, str]:
+    # Theme selection changes only the visual family. Color/background controls are independent.
     clean = str(theme_key or "").strip().lower().replace("-", "_")
     if member and clean == PROFILE_THEME_INHERIT:
-        return {
-            "signature_theme": PROFILE_THEME_INHERIT,
-            "signature_color_mode": PROFILE_COLOR_INHERIT,
-            "signature_background_mode": PROFILE_BACKGROUND_INHERIT,
-        }
+        return {"signature_theme": PROFILE_THEME_INHERIT}
     if clean not in PROFILE_THEME_KEYS:
         raise ValueError("That profile-signature theme is no longer available.")
     if member:
-        return {
-            "signature_theme": clean,
-            "signature_color_mode": "theme",
-            "signature_background_mode": "theme",
-        }
-    return {
-        SERVER_STYLE_CONFIG_KEYS["theme"]: clean,
-        SERVER_STYLE_CONFIG_KEYS["color_mode"]: "theme",
-        SERVER_STYLE_CONFIG_KEYS["background_mode"]: "theme",
-    }
+        return {"signature_theme": clean}
+    return {SERVER_STYLE_CONFIG_KEYS["theme"]: clean}
 
 
 def palette_style_updates(preset_key: str, *, member: bool) -> dict[str, str]:
@@ -338,6 +336,7 @@ __all__ = [
     "PROFILE_BACKGROUND_MODES",
     "PROFILE_COLOR_MODES",
     "PROFILE_CUSTOM_BACKGROUND_KEY",
+    "MEMBER_CUSTOM_BACKGROUND_KEY",
     "PROFILE_CUSTOM_FONT_KEY",
     "PROFILE_CUSTOM_FONT_NAME_KEY",
     "PROFILE_LAYOUTS",

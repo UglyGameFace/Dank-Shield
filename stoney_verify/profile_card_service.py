@@ -21,13 +21,16 @@ LIVE_CARD_STATE_TABLE = "dank_live_profile_cards"
 
 PROFILE_FIELDS = frozenset({"server_roles", "profile_tags", "account_dates", "platforms"})
 DEFAULT_PROFILE_PREFERENCES: dict[str, bool] = {
-    "live_cards_enabled": True,
+    # Signatures are opt-in. Missing/legacy rows remain off until the member enables them.
+    "live_cards_enabled": False,
     # Actual server roles are opt-in because they may reveal staff/access structure.
     "show_server_roles": False,
     # Existing "show_roles" behavior represented member-selected profile tags.
     "show_profile_tags": True,
     "show_account_dates": True,
     "show_platforms": True,
+    # The server icon/name panel is independently optional.
+    "show_server_branding": True,
 }
 
 PLATFORM_MODE_LINK = "link"

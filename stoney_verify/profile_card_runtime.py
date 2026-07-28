@@ -181,33 +181,40 @@ def _configured_role_ids(config: Mapping[str, Any], *keys: str) -> set[int]:
 
 
 def _compact_server_role_labels(member: discord.Member, config: Mapping[str, Any]) -> list[str]:
-    """Return safe real server roles, separate from member-selected profile tags."""
+    # Return truthful complete server roles, with Discord owner status first.
     from .commands_ext.public_self_roles_group import _role_name_key, _short_role_label
+
+    labels: list[str] = []
+    guild = getattr(member, "guild", None)
+    try:
+        if guild is not None and int(getattr(guild, "owner_id", 0) or 0) == int(member.id):
+            labels.append("Server Owner")
+    except Exception:
+        pass
 
     profile_name_keys = _profile_role_name_keys()
     cosmetic_ids = _configured_role_ids(config, "profile_cosmetic_role_ids")
-    protected_ids = _configured_role_ids(
-        config,
-        "unverified_role_id",
-        "verified_role_id",
-        "resident_role_id",
-        "staff_role_id",
-        "vc_staff_role_id",
-        "server_control_role_id",
-        "bot_manager_role_id",
-    )
-    excluded_ids = cosmetic_ids | protected_ids
-    roles: list[discord.Role] = []
     for role in sorted(list(getattr(member, "roles", []) or []), reverse=True):
         try:
-            if role.is_default() or role.managed or int(role.id) in excluded_ids:
+            if role.is_default() or role.managed or int(role.id) in cosmetic_ids:
                 continue
         except Exception:
             continue
         if _role_name_key(role.name) in profile_name_keys:
             continue
-        roles.append(role)
-    return [_short_role_label(role.name) for role in roles[:3]]
+        label = _short_role_label(role.name)
+        if label and label not in labels:
+            labels.append(label)
+        if len(labels) >= 4:
+            break
+    return labels
+
+
+def _member_is_guild_owner(member: discord.Member) -> bool:
+    try:
+        return int(getattr(member.guild, "owner_id", 0) or 0) == int(member.id)
+    except Exception:
+        return False
 
 
 def _compact_profile_tag_labels(member: discord.Member, config: Mapping[str, Any]) -> list[str]:
@@ -336,7 +343,7 @@ async def render_live_profile_card(
 
     settings = await get_effective_profile_settings(member.guild.id, member.id)
     preferences = dict(settings.get("preferences") or {})
-    if require_live_enabled and not bool(preferences.get("live_cards_enabled", True)):
+    if require_live_enabled and not bool(preferences.get("live_cards_enabled", False)):
         return None
 
     show_server_roles = (
@@ -349,13 +356,17 @@ async def render_live_profile_card(
     )
     show_dates = bool(preferences.get("show_account_dates", True)) and "account_dates" in server_allowed_fields
     show_platforms = bool(preferences.get("show_platforms", True)) and "platforms" in server_allowed_fields
+    show_server_branding = bool(preferences.get("show_server_branding", True))
     platforms = visible_platform_entries(settings.get("platforms"), allowed=show_platforms)
 
     try:
         guild_config = await get_guild_config(member.guild.id)
     except Exception:
         guild_config = {}
-    server_role_labels = _compact_server_role_labels(member, guild_config) if show_server_roles else []
+    discovered_roles = _compact_server_role_labels(member, guild_config)
+    server_role_labels = discovered_roles if show_server_roles else (
+        ["Server Owner"] if _member_is_guild_owner(member) else []
+    )
     profile_tag_labels = _compact_profile_tag_labels(member, guild_config) if show_profile_tags else []
     date_labels = _compact_date_labels(member) if show_dates else []
     platform_labels = _compact_platform_labels(platforms)
@@ -372,6 +383,7 @@ async def render_live_profile_card(
         tuple(server_role_labels),
         tuple(profile_tag_labels),
         tuple(date_labels),
+        show_server_branding,
         _stable_cache_value(platforms),
         _stable_cache_value(style),
     )
@@ -384,6 +396,7 @@ async def render_live_profile_card(
             profile_tag_labels=profile_tag_labels,
             date_labels=date_labels,
             platform_entries=platforms,
+            show_server_branding=show_server_branding,
         )
         _signature_cache_put(cache_key, image_bytes)
 

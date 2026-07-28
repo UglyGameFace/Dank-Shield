@@ -102,7 +102,7 @@ class _LiveSignatureToggleButton(discord.ui.Button):
                 _core.effective_preferences(
                     user_row.get("preferences"),
                     guild_row.get("settings"),
-                ).get("live_cards_enabled", True)
+                ).get("live_cards_enabled", False)
             )
             if current:
                 await _core.upsert_profile_user_preferences(
@@ -234,6 +234,117 @@ class _PreviewProfileButton(discord.ui.Button):
         await interaction.edit_original_response(**payload)
 
 
+async def profile_background_upload(
+    interaction: discord.Interaction,
+    image: discord.Attachment,
+    server_default: bool = False,
+) -> None:
+    from stoney_verify.profile_custom_background import (
+        PROFILE_BACKGROUND_UPLOAD_MAX_BYTES,
+        normalize_profile_background_upload,
+        profile_background_requirements,
+    )
+    from stoney_verify.profile_signature_studio import _invalidate, _invalidate_guild, _preview
+    from stoney_verify.profile_signature_style import (
+        MEMBER_CUSTOM_BACKGROUND_KEY,
+        PROFILE_CUSTOM_BACKGROUND_KEY,
+        SERVER_STYLE_CONFIG_KEYS,
+        encode_profile_asset,
+    )
+    from stoney_verify.guild_config import upsert_guild_config
+    from stoney_verify.profile_card_service import upsert_profile_user_preferences
+
+    member = interaction.user if isinstance(interaction.user, discord.Member) else None
+    if member is None or interaction.guild is None:
+        return await _safe_ephemeral(interaction, "Use this command inside a server.", ok=False)
+    if server_default:
+        from .public_setup_group import _require_setup_permission
+        if not await _require_setup_permission(interaction):
+            return
+    await _defer_private(interaction)
+    try:
+        if int(getattr(image, "size", 0) or 0) > PROFILE_BACKGROUND_UPLOAD_MAX_BYTES:
+            raise ValueError("The upload is larger than 8 MB.")
+        normalized = normalize_profile_background_upload(await image.read())
+        encoded = encode_profile_asset(normalized)
+        if server_default:
+            await upsert_guild_config(
+                interaction.guild.id,
+                {
+                    PROFILE_CUSTOM_BACKGROUND_KEY: encoded,
+                    SERVER_STYLE_CONFIG_KEYS["background_mode"]: "custom",
+                },
+            )
+            await _invalidate_guild(interaction)
+        else:
+            await upsert_profile_user_preferences(
+                member.id,
+                {
+                    MEMBER_CUSTOM_BACKGROUND_KEY: encoded,
+                    "signature_background_mode": "custom",
+                },
+            )
+            await _invalidate(interaction, all_guilds=True)
+    except ValueError as exc:
+        return await _safe_ephemeral(
+            interaction,
+            f"{exc}\n\n{profile_background_requirements()}",
+            ok=False,
+        )
+    except ProfileStorageUnavailable:
+        return await _safe_ephemeral(interaction, "Private profile storage is unavailable. Nothing changed.", ok=False)
+    await _preview(
+        interaction,
+        member=member,
+        notice="✅ Custom background uploaded. Theme, custom colors, font, layout, and frame were preserved.",
+    )
+
+
+async def profile_background_clear(
+    interaction: discord.Interaction,
+    server_default: bool = False,
+) -> None:
+    from stoney_verify.profile_signature_studio import _invalidate, _invalidate_guild, _preview
+    from stoney_verify.profile_signature_style import (
+        MEMBER_CUSTOM_BACKGROUND_KEY,
+        PROFILE_CUSTOM_BACKGROUND_KEY,
+        SERVER_STYLE_CONFIG_KEYS,
+    )
+    from stoney_verify.guild_config import upsert_guild_config
+    from stoney_verify.profile_card_service import upsert_profile_user_preferences
+
+    member = interaction.user if isinstance(interaction.user, discord.Member) else None
+    if member is None or interaction.guild is None:
+        return await _safe_ephemeral(interaction, "Use this command inside a server.", ok=False)
+    if server_default:
+        from .public_setup_group import _require_setup_permission
+        if not await _require_setup_permission(interaction):
+            return
+    await _defer_private(interaction)
+    if server_default:
+        await upsert_guild_config(
+            interaction.guild.id,
+            {
+                PROFILE_CUSTOM_BACKGROUND_KEY: "",
+                SERVER_STYLE_CONFIG_KEYS["background_mode"]: "theme",
+            },
+        )
+        await _invalidate_guild(interaction)
+    else:
+        try:
+            await upsert_profile_user_preferences(
+                member.id,
+                {
+                    MEMBER_CUSTOM_BACKGROUND_KEY: "",
+                    "signature_background_mode": "theme",
+                },
+            )
+            await _invalidate(interaction, all_guilds=True)
+        except ProfileStorageUnavailable:
+            return await _safe_ephemeral(interaction, "Private profile storage is unavailable. Nothing changed.", ok=False)
+    await _preview(interaction, member=member, notice="✅ Custom background removed. Theme artwork is active again.")
+
+
 class ProfileSettingsView(_core.ProfileSettingsView):
     def __init__(
         self,
@@ -253,11 +364,12 @@ class ProfileSettingsView(_core.ProfileSettingsView):
             ("Profile Tags", "show_profile_tags", "🎭"),
             ("Dates", "show_account_dates", "📅"),
             ("Accounts", "show_platforms", "🔗"),
+            ("Server Branding", "show_server_branding", "🏰"),
         )
         effective_values = _core.effective_preferences(global_values, local_values)
         self.add_item(
             _LiveSignatureToggleButton(
-                enabled=bool(effective_values.get("live_cards_enabled", True)),
+                enabled=bool(effective_values.get("live_cards_enabled", False)),
                 row=0,
             )
         )
@@ -423,6 +535,8 @@ async def _handle_profile_username_copy(interaction: discord.Interaction) -> boo
 def _attach_profile_commands() -> None:
     command_specs = (
         ("settings", "Open your private profile privacy and platform settings.", profile_settings),
+        ("background-upload", "Upload personal or server-default profile background artwork.", profile_background_upload),
+        ("background-clear", "Remove personal or server-default profile background artwork.", profile_background_clear),
         ("platform", "Save or update one private/shared platform identity.", profile_platform),
         ("platform-remove", "Remove one saved platform identity.", profile_platform_remove),
         ("live-cards", "Manager fallback: toggle one channel; the full picker is in /dank setup.", profile_live_cards),

@@ -42,24 +42,18 @@ def test_default_profile_theme_is_a_real_builtin_theme() -> None:
     assert DEFAULT_SERVER_PROFILE_STYLE["theme"] in BUILTIN_THEMES
 
 
-def test_member_theme_selection_applies_the_complete_theme_look() -> None:
+def test_member_theme_selection_preserves_independent_colors_and_background() -> None:
     assert theme_style_updates("420_lobby", member=True) == {
         "signature_theme": "420_lobby",
-        "signature_color_mode": "theme",
-        "signature_background_mode": "theme",
     }
     assert theme_style_updates("server", member=True) == {
         "signature_theme": "server",
-        "signature_color_mode": "server",
-        "signature_background_mode": "server",
     }
 
 
-def test_server_theme_selection_applies_theme_palette_and_background() -> None:
+def test_server_theme_selection_preserves_independent_colors_and_background() -> None:
     assert theme_style_updates("cyber_neon", member=False) == {
         SERVER_STYLE_CONFIG_KEYS["theme"]: "cyber_neon",
-        SERVER_STYLE_CONFIG_KEYS["color_mode"]: "theme",
-        SERVER_STYLE_CONFIG_KEYS["background_mode"]: "theme",
     }
 
 
