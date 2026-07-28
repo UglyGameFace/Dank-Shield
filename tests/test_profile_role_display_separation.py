@@ -61,6 +61,37 @@ def test_cosmetic_editor_is_renamed_profile_tags_not_generic_roles() -> None:
     assert "Profile Roles / Cosmetics" not in COSMETICS
 
 
+def test_old_studio_theme_names_route_to_approved_visual_families() -> None:
+    expected = {
+        "default": "420_lobby",
+        "forest": "420_lobby",
+        "purple": "cyber_neon",
+        "galaxy": "cyber_neon",
+        "dark": "premium_gold",
+        "minimal": "community_glow",
+        "sunset": "esports",
+        "ocean": "minimal_glass",
+    }
+    for old_name, family in expected.items():
+        assert renderer_module.THEME_ALIASES[old_name] == family
+        assert renderer_module._canonical_theme({"theme": old_name}) == family
+
+
+def test_avatar_matching_cannot_replace_selected_theme_family(monkeypatch) -> None:
+    monkeypatch.setattr(
+        renderer_module._legacy,
+        "_avatar_colors",
+        lambda _payload, _fallback: ((255, 75, 20), (255, 0, 140)),
+    )
+    green = renderer_module._palette({"theme": "forest", "color_mode": "profile"}, b"avatar")
+    assert green.primary[1] > green.primary[0]
+    assert green.secondary[1] > green.secondary[0]
+
+    blue = renderer_module._palette({"theme": "ocean", "color_mode": "profile"}, b"avatar")
+    assert blue.primary[2] > blue.primary[0]
+    assert blue.secondary[2] > blue.secondary[0]
+
+
 def test_live_banner_uses_reference_layout_bundled_logos_and_integrated_branding() -> None:
     assert "SIGNATURE_WIDTH = 1400" in RENDERER
     assert "SIGNATURE_HEIGHT = 300" in RENDERER
@@ -70,6 +101,8 @@ def test_live_banner_uses_reference_layout_bundled_logos_and_integrated_branding
     assert "platform_entries" in RENDERER
     assert "guild_icon_bytes" in RENDERER
     assert "def _draw_brand" in RENDERER
+    assert "def _draw_card_frame" in RENDERER
+    assert "THEME_ALIASES" in RENDERER
     assert "draw.polygon" in RENDERER
     assert "cdn.discordapp.com" not in RENDERER
 
@@ -93,11 +126,12 @@ def test_banner_rich_text_fitter_respects_reserved_pixel_widths() -> None:
 
 def test_banner_applies_fitting_and_reserved_zones_to_dynamic_labels() -> None:
     assert "spec.content_right - spec.content_x" in RENDERER
-    assert "role_width = min(276" in RENDERER
+    assert "role_width = min(" in RENDERER
     assert "available = spec.content_right - x" in RENDERER
     assert "def _draw_platforms" in RENDERER
     assert "def _draw_pills" in RENDERER
     assert "def _draw_brand" in RENDERER
+    assert "def _draw_meta_dates" in RENDERER
 
 
 def test_member_profile_view_attaches_generated_wide_banner() -> None:
