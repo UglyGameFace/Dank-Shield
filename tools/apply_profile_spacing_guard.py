@@ -246,7 +246,7 @@ def test_banner_applies_pixel_fitting_to_every_dynamic_right_side_label() -> Non
 '''
     if "test_banner_text_fitter_respects_reserved_pixel_widths" in test_text:
         raise RuntimeError("spacing regression tests already exist")
-    test_path.write_text(test_text.rstrip() + test_block + "\n", encoding="utf-8")
+    test_path.write_text(test_text.rstrip() + test_block.rstrip() + "\n", encoding="utf-8")
 
     Path(__file__).unlink()
     print("Applied and validated pixel-safe profile banner spacing.")
