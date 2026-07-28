@@ -2,14 +2,14 @@
 
 ## DS-PROFILE-CARDS-012 — Premium live profile banners and separated role controls
 
-**Status:** IMPLEMENTED / FULL EXACT-HEAD CI AND DEPLOYED DISCORD SMOKE PENDING
+**Status:** IMPLEMENTED / EXACT-HEAD CI PASSED / DEPLOYED DISCORD SMOKE PENDING
 **Branch:** `fix/live-profile-channel-spam`
 **PR:** #145
 **Base:** current `main` (`0` commits behind at the latest comparison)
 
 ## Single Active Task Lock
 
-Do not switch to unrelated implementation work until the profile-card runtime, wide banner renderer, platform controls, privacy defaults, and the separate **Server Roles** / **Profile Tags & Cosmetics** workflows pass exact-head validation and deployed Discord smoke.
+Do not switch to unrelated implementation work until the profile-card runtime, wide banner renderer, platform controls, privacy defaults, and the separate **Server Roles** / **Profile Tags & Cosmetics** workflows pass deployed Discord smoke.
 
 ## Scope
 
@@ -25,7 +25,8 @@ Do not switch to unrelated implementation work until the profile-card runtime, w
 - Slow renders could finish after a newer speaker and place a stale card under the wrong conversation position.
 - The startup compatibility guard injected a second Profile Tags manager route even though the native builder already owned one.
 - Character-count truncation did not guarantee that long role names, platform usernames, or server names stayed inside their reserved pixel regions.
-- Temporary materializer workflows competed over the same profile files during development; those workflows and scripts are no longer present in the final branch tree.
+- The member-profile viewer reused the generated-image embed without attaching the generated PNG.
+- Temporary materializer and diagnostic workflows competed over the same profile files during development; they are absent from the final branch tree.
 
 ## Implemented behavior
 
@@ -46,6 +47,7 @@ Do not switch to unrelated implementation work until the profile-card runtime, w
 - Bundled real platform artwork; no generic Unicode substitutes in the rendered card.
 - Pixel-width fitting with ellipsis for server-role badges, platform usernames, profile-tag/role chips, and server labels.
 - Reserved right-side platform and server-branding regions cannot be crossed by long dynamic text.
+- Live cards, previews, and View Member Profile responses attach the generated wide-banner image.
 
 ### Platforms
 
@@ -67,17 +69,26 @@ Do not switch to unrelated implementation work until the profile-card runtime, w
 
 ## Validation status
 
-- [x] Focused Profile Runtime Diagnostics passed on source head `7c49cf3`.
-- [x] Application Command Size Diagnostics passed on source head `7c49cf3`.
-- [x] Profile implementation compilation passed.
-- [x] Focused live-delivery, lifecycle, cleanup, migration, privacy, platform-mode, visual-link, role-separation, and spacing regressions passed.
-- [x] Static Profile Tags manager and compatibility-guard checks passed.
+- [x] Focused Profile Runtime Diagnostics passed on exact implementation head `8a9d403`.
+- [x] Application Command Size Diagnostics passed on exact implementation head `8a9d403`.
+- [x] Full profile and repository compilation passed.
+- [x] Full repository unit suite passed.
+- [x] Every standalone `tools/test_*.py` contract passed.
+- [x] Public setup/isolation audit passed.
+- [x] Canonical public command-surface audit passed.
+- [x] Public command-friction audit passed.
+- [x] Public invite-permission audit passed.
+- [x] Setup-safety audit passed.
+- [x] Dank Design Smart Auto-Detect audit passed.
+- [x] Role-truth ownership audit passed.
+- [x] Event-boundary ownership audit passed.
+- [x] Focused live-delivery, lifecycle, cleanup, migration, privacy, platform-mode, visual-link, role-separation, member-profile attachment, and spacing regressions passed.
+- [x] Static Profile Tags manager, centralized-picker, and compatibility-guard checks passed.
 - [x] Bundled platform assets and attribution checks passed.
 - [x] `git diff --check` passed.
-- [x] Temporary patch scripts, payload directories, and competing workflows are absent.
+- [x] Temporary patch scripts, payload directories, diagnostic jobs, and competing workflows are absent.
 - [x] Branch comparison reports `0` commits behind `main`.
-- [ ] Full repository unit suite, standalone tools, and all safety/ownership audits finish successfully on the latest exact head.
-- [ ] Final PR diff and GitHub mergeability are rechecked after all workflows settle.
+- [x] PR is draft, open, mergeable, and has no implementation conflict identified.
 
 ## Deployed Discord smoke gates
 
@@ -90,6 +101,7 @@ Do not switch to unrelated implementation work until the profile-card runtime, w
 - [ ] **Server Roles** opens only role visibility and never redirects into pronouns/identity/interests.
 - [ ] **Profile Tags & Cosmetics** opens only the self-selected tag manager and appears once in the builder.
 - [ ] Default privacy shows profile tags but hides ordinary server roles until the member opts in.
+- [ ] View Member Profile displays the same generated banner rather than a blank attachment URL.
 - [ ] Turning Live Signature off removes the current card and prevents reposting.
 - [ ] Bot-authored cards cause no SpamGuard, RaidGuard, AutoMod, cleanup, or member-activity event.
 
@@ -97,14 +109,15 @@ Do not switch to unrelated implementation work until the profile-card runtime, w
 
 - Temporary source-transfer payloads: removed.
 - Temporary patch/materializer scripts: removed.
+- Temporary standalone diagnostic workflow and artifact-producing steps: removed.
 - Competing profile patch workflow: removed.
 - Canonical profile diagnostics workflow: read-only and retained.
 - Duplicate Profile Tags manager route: removed.
 - Obsolete mixed **Server Roles / Cosmetics** wording: removed from the active user flow.
+- Stale centralized-picker static contract: updated to the Profile Tags terminology.
 
 ## Blockers
 
-- Full exact-head CI is still running.
 - Deployed Discord visual and interaction smoke has not yet been performed.
 
 ## Backlog
