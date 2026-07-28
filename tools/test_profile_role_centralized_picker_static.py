@@ -7,14 +7,15 @@ PROFILE = (ROOT / "stoney_verify/commands_ext/public_self_roles_group.py").read_
 PICKER = (ROOT / "stoney_verify/ui/picker.py").read_text(encoding="utf-8")
 
 
-def test_profile_role_builder_does_not_use_native_role_select() -> None:
+def test_profile_tag_builder_does_not_use_native_role_select() -> None:
     manager = PROFILE.split("class ProfileCosmeticRoleManagerView", 1)[1].split("class ProfileBuilderView", 1)[0]
     assert "DankRoleSelect(" not in manager
     assert "discord.ui.RoleSelect" not in manager
-    assert "Browse / Add Server Roles" in manager
+    assert "Browse / Add Profile Tags" in manager
+    assert "Browse / Add Server Roles" not in manager
 
 
-def test_profile_role_builder_uses_centralized_multi_picker() -> None:
+def test_profile_tag_builder_uses_centralized_multi_picker() -> None:
     assert "ProfileRoleAddPickerView(DankMultiPickerView)" in PROFILE
     assert "_profile_role_picker_candidates" in PROFILE
     assert "_profile_role_picker_choices" in PROFILE
@@ -22,7 +23,7 @@ def test_profile_role_builder_uses_centralized_multi_picker() -> None:
     assert "DankMultiPickerView" in PROFILE
 
 
-def test_profile_role_picker_has_pagination_controls() -> None:
+def test_profile_tag_picker_has_pagination_controls() -> None:
     assert "PROFILE_ROLE_PICKER_PAGE_SIZE" in PROFILE
     assert "Previous Roles" in PROFILE
     assert "Next Roles" in PROFILE
@@ -36,18 +37,18 @@ def test_centralized_picker_contract_exists() -> None:
     assert "class DankRoleSelect" in PICKER
 
 
-def test_native_role_select_import_removed_from_profile_builder() -> None:
+def test_native_role_select_import_removed_from_profile_tag_builder() -> None:
     assert "DankRoleSelect" not in PROFILE
     assert "from stoney_verify.ui.picker import DankChoice, DankMultiPickerView" in PROFILE
 
 
 if __name__ == "__main__":
     for test in (
-        test_profile_role_builder_does_not_use_native_role_select,
-        test_profile_role_builder_uses_centralized_multi_picker,
-        test_profile_role_picker_has_pagination_controls,
+        test_profile_tag_builder_does_not_use_native_role_select,
+        test_profile_tag_builder_uses_centralized_multi_picker,
+        test_profile_tag_picker_has_pagination_controls,
         test_centralized_picker_contract_exists,
-        test_native_role_select_import_removed_from_profile_builder,
+        test_native_role_select_import_removed_from_profile_tag_builder,
     ):
         test()
         print(f"PASS {test.__name__}")
