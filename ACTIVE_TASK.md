@@ -2,8 +2,8 @@
 
 ## DS-PROFILE-CARDS-012 — Premium live profile banners
 
-**Status:** IMPLEMENTED — FINAL CI AND DEPLOYED DISCORD SMOKE PENDING  
-**Branch:** `fix/live-profile-channel-spam`  
+**Status:** IMPLEMENTED — FINAL CI AND DEPLOYED DISCORD SMOKE PENDING
+**Branch:** `fix/live-profile-channel-spam`
 **PR:** #145
 
 ## Single Active Task Lock
