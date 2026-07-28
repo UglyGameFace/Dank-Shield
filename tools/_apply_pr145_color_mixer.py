@@ -18,7 +18,7 @@ if len(payload) != 27288:
 if hashlib.sha256(payload.encode("ascii")).hexdigest() != "114974c50e7f32e3bf4deb9649bc6abc1de3fed8896f58a748732a968e5c3fb0":
     raise SystemExit("PR145 payload checksum mismatch")
 source = zlib.decompress(base64.b64decode(payload)).decode("utf-8")
-source = source.replace("-first layout", "-focused layout")
+source = source.replace("-first", "-focused")
 
 saved_stdout = os.dup(1)
 saved_stderr = os.dup(2)
