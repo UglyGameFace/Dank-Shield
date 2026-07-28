@@ -24,6 +24,7 @@ permissions:
 
 jobs:
   apply-platform-modes:
+    # The PNGs below are the exact application emoji artwork uploaded in the Discord Developer Portal.
     if: ${{ github.head_ref == 'fix/live-profile-channel-spam' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
