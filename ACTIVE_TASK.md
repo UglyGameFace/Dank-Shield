@@ -2,9 +2,9 @@
 
 ## DS-PROFILE-CARDS-012 — Premium live profile banners and separated role controls
 
-**Status:** IMPLEMENTED / FULL EXACT-HEAD CI AND DEPLOYED DISCORD SMOKE PENDING  
-**Branch:** `fix/live-profile-channel-spam`  
-**PR:** #145  
+**Status:** IMPLEMENTED / FULL EXACT-HEAD CI AND DEPLOYED DISCORD SMOKE PENDING
+**Branch:** `fix/live-profile-channel-spam`
+**PR:** #145
 **Base:** current `main` (`0` commits behind at the latest comparison)
 
 ## Single Active Task Lock
