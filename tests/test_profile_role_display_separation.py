@@ -61,37 +61,43 @@ def test_cosmetic_editor_is_renamed_profile_tags_not_generic_roles() -> None:
     assert "Profile Roles / Cosmetics" not in COSMETICS
 
 
-def test_live_banner_uses_wide_layout_bundled_logos_and_server_branding() -> None:
+def test_live_banner_uses_reference_layout_bundled_logos_and_integrated_branding() -> None:
     assert "SIGNATURE_WIDTH = 1400" in RENDERER
-    assert "SIGNATURE_HEIGHT = 340" in RENDERER
+    assert "SIGNATURE_HEIGHT = 300" in RENDERER
     assert "PLATFORM_LOGO_DIR" in RENDERER
-    assert "_PLATFORM_LOGO_BYTES_CACHE" in RENDERER
-    assert "_bundled_platform_logo_bytes" in RENDERER
+    assert "_LOGOS" in RENDERER
+    assert "def _logo_bytes" in RENDERER
     assert "platform_entries" in RENDERER
     assert "guild_icon_bytes" in RENDERER
+    assert "def _draw_brand" in RENDERER
+    assert "draw.polygon" in RENDERER
     assert "cdn.discordapp.com" not in RENDERER
 
-def test_banner_text_fitter_respects_reserved_pixel_widths() -> None:
-    image = Image.new("RGBA", (1400, 340), (0, 0, 0, 0))
+
+def test_banner_rich_text_fitter_respects_reserved_pixel_widths() -> None:
+    image = Image.new("RGBA", (1400, 300), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
     font = renderer_module._font(20, style_key="clean", regular=True)
-    for max_width in (126, 335, 884):
-        fitted = renderer_module._fit_text_width(
+    for max_width in (126, 286, 526):
+        fitted = renderer_module._fit(
             draw,
             "WIDE SERVER ROLE AND PLATFORM USERNAME " * 20,
             font,
-            max_width=max_width,
+            max_width,
+            {},
+            20,
         )
         assert fitted.endswith("…")
-        box = draw.textbbox((0, 0), fitted, font=font)
-        assert box[2] - box[0] <= max_width
+        assert renderer_module._rich_width(draw, fitted, font, {}, 20) <= max_width
 
 
-def test_banner_applies_pixel_fitting_to_every_dynamic_right_side_label() -> None:
-    assert "badge_max_width = 335" in RENDERER
-    assert 'max_width=335' in RENDERER
-    assert 'max_width=server_size' in RENDERER
-    assert "available_text_width = max(0, max_chip_x - chip_x - 32)" in RENDERER
+def test_banner_applies_fitting_and_reserved_zones_to_dynamic_labels() -> None:
+    assert "spec.content_right - spec.content_x" in RENDERER
+    assert "role_width = min(276" in RENDERER
+    assert "available = spec.content_right - x" in RENDERER
+    assert "def _draw_platforms" in RENDERER
+    assert "def _draw_pills" in RENDERER
+    assert "def _draw_brand" in RENDERER
 
 
 def test_member_profile_view_attaches_generated_wide_banner() -> None:
