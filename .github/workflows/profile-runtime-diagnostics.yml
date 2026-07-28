@@ -6,21 +6,20 @@ on:
       - "stoney_verify/profile_card_runtime.py"
       - "stoney_verify/profile_card_runtime_core.py"
       - "stoney_verify/profile_card_service.py"
-      - "stoney_verify/profile_role_visibility.py"
       - "stoney_verify/profile_signature_live_renderer.py"
       - "stoney_verify/profile_signature_studio.py"
-      - "stoney_verify/startup_guards/profile_role_editor_guard.py"
+      - "stoney_verify/profile_card_setup_ui.py"
+      - "stoney_verify/profile_card_setup_ui_core.py"
       - "stoney_verify/commands_ext/public_profile_cards.py"
       - "stoney_verify/commands_ext/public_profile_cards_core.py"
       - "stoney_verify/commands_ext/public_self_roles_group.py"
+      - "stoney_verify/startup_guards/profile_role_editor_guard.py"
       - "stoney_verify/assets/platform_logos/**"
       - "supabase/migrations/*live_profile*.sql"
       - "tests/test_live_profile*.py"
       - "tests/test_profile_card*.py"
       - "tests/test_profile_platform*.py"
       - "tests/test_profile_role*.py"
-      - "tests/test_ui_first_dank_command_surface.py"
-      - "tools/build_profile_platform_logos.mjs"
       - "tools/apply_profile_platform_modes*.py"
       - "tools/apply_profile_banner_roles_patch.py"
       - "tools/apply_profile_upgrade_regression_fixes.py"
@@ -56,7 +55,13 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Materialize platform modes when needed
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+
+      - name: Materialize platform display modes when needed
         shell: bash
         run: |
           set -euo pipefail
@@ -65,71 +70,90 @@ jobs:
             python tools/apply_profile_platform_modes_v2.py
           fi
 
-      - name: Apply premium banner and split-role payload
-        id: materialize
+      - name: Preserve uploaded application logo artwork
         shell: bash
         run: |
           set -euo pipefail
-          applied=false
-          if ! grep -q 'ROLE_VISIBILITY_PREFERENCES' stoney_verify/profile_card_service.py; then
-            if ! compgen -G 'tools/profile_banner_roles_payload/*.part' > /dev/null; then
-              echo 'Profile banner payload is not present yet; validating the current branch only.'
-            else
-              python - <<'PY'
-          import base64
-          import lzma
-          from pathlib import Path
+          mkdir -p stoney_verify/assets/platform_logos
+          download_logo() {
+            local key="$1"
+            local emoji_id="$2"
+            curl --fail --location --silent --show-error \
+              "https://cdn.discordapp.com/emojis/${emoji_id}.png?size=128&quality=lossless" \
+              --output "stoney_verify/assets/platform_logos/${key}.png"
+            test -s "stoney_verify/assets/platform_logos/${key}.png"
+          }
+          download_logo youtube 1531448153054773288
+          download_logo xbox 1531448152157061130
+          download_logo nintendo 1531448151255289917
+          download_logo steam 1531448150173286460
+          download_logo playstation 1531448147899977909
+          download_logo roblox 1531448146968842240
+          download_logo epic 1531448144796188702
+          download_logo riot 1531448143609331835
+          download_logo twitch 1531448142481064047
+          download_logo kick 1531448141604323338
 
-          part_dir = Path("tools/profile_banner_roles_payload")
-          encoded = "".join(path.read_text(encoding="ascii").strip() for path in sorted(part_dir.glob("*.part")))
-          Path("/tmp/profile-lobby-roles.patch").write_bytes(lzma.decompress(base64.b64decode(encoded)))
-          PY
-              git apply --check /tmp/profile-lobby-roles.patch
-              git apply /tmp/profile-lobby-roles.patch
-              applied=true
-            fi
-          fi
-          echo "applied=${applied}" >> "$GITHUB_OUTPUT"
-
-      - name: Generate missing official platform logos
-        if: steps.materialize.outputs.applied == 'true'
+      - name: Generate missing real platform assets
         shell: bash
         run: |
           set -euo pipefail
-          npm install --no-save --no-package-lock \
-            simple-icons@16.27.0 \
-            @fortawesome/fontawesome-free@7.3.1 \
-            sharp@0.34.4
-          node tools/build_profile_platform_logos.mjs
-          rm -rf node_modules
-          rm -f package.json package-lock.json
-          for key in steam epic xbox playstation nintendo riot battle_net roblox twitch youtube kick discord spotify custom; do
+          npm install --no-save --no-package-lock simple-icons@16.27.0 sharp@0.34.4
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const sharp = require('sharp');
+
+          (async () => {
+            const outDir = path.resolve('stoney_verify/assets/platform_logos');
+            const battlePath = path.resolve('node_modules/simple-icons/icons/battledotnet.svg');
+            if (!fs.existsSync(battlePath)) {
+              throw new Error(`Battle.net logo was not found at ${battlePath}`);
+            }
+            const battleSvg = fs.readFileSync(battlePath, 'utf8').replace('<svg', '<svg fill="#FFFFFF"');
+            await sharp(Buffer.from(battleSvg))
+              .resize(96, 96, { fit: 'contain' })
+              .png()
+              .toFile(path.join(outDir, 'battle_net.png'));
+
+            const linkSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96"><g fill="none" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round"><path d="M39 58 29 68a17 17 0 0 1-24-24l17-17a17 17 0 0 1 24 0"/><path d="m57 38 10-10a17 17 0 0 1 24 24L74 69a17 17 0 0 1-24 0"/><path d="m34 62 28-28"/></g></svg>`;
+            await sharp(Buffer.from(linkSvg))
+              .resize(96, 96, { fit: 'contain' })
+              .png()
+              .toFile(path.join(outDir, 'custom.png'));
+          })().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
+          rm -rf node_modules package.json package-lock.json
+          for key in steam epic xbox playstation nintendo riot battle_net roblox twitch youtube kick custom; do
             test -s "stoney_verify/assets/platform_logos/${key}.png"
           done
+          cat > stoney_verify/assets/platform_logos/ATTRIBUTION.md <<'EOF'
+          # Platform logo assets
 
-      - name: Remove superseded transfer machinery
-        if: steps.materialize.outputs.applied == 'true'
-        shell: bash
+          Steam, Epic, Xbox, PlayStation, Nintendo, Riot, Roblox, Twitch, YouTube, and Kick use the application emoji artwork uploaded by the Dank Shield owner in the Discord Developer Portal. Battle.net is generated from Simple Icons (CC0-1.0). The generic Other/link icon is generated locally. Brand marks remain property of their respective owners and are used only to identify a member-selected platform.
+          EOF
+
+      - name: Apply wide banner and split role displays
         run: |
-          set -euo pipefail
-          rm -rf tools/profile_banner_roles_payload
-          rm -f tools/apply_profile_banner_roles_patch.py
-          rm -f tools/apply_profile_upgrade_regression_fixes.py
-          rm -f tools/apply_profile_platform_modes_patch.py
-          rm -f tools/apply_profile_platform_modes_v2.py
+          test -f tools/apply_profile_banner_roles_patch.py
+          python tools/apply_profile_banner_roles_patch.py
 
-      - name: Install Python dependencies
+      - name: Correct upgraded regression and wording contracts
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install pytest
+          test -f tools/apply_profile_upgrade_regression_fixes.py
+          python tools/apply_profile_upgrade_regression_fixes.py
 
-      - name: Compile profile implementation
+      - name: Compile complete profile implementation
         run: python -m compileall -q stoney_verify tests tools
 
       - name: Run focused profile regression suite
+        id: tests
         shell: bash
         run: |
+          set +e
           python -m pytest -q \
             tests/test_live_profile_card_runtime.py \
             tests/test_live_profile_channel_spam_regression.py \
@@ -145,25 +169,49 @@ jobs:
             tests/test_profile_card_migration_safety.py \
             tests/test_profile_platform_display_modes.py \
             tests/test_profile_platform_privacy_preview_ux.py \
-            tests/test_profile_role_visibility_split.py \
-            tests/test_ui_first_dank_command_surface.py
+            tests/test_profile_role_display_separation.py \
+            > profile-upgrade-tests.txt 2>&1
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          tail -n 300 profile-upgrade-tests.txt
+          exit 0
+
+      - name: Upload exact test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: profile-upgrade-tests
+          path: profile-upgrade-tests.txt
+          if-no-files-found: warn
+          retention-days: 1
+
+      - name: Fail when focused suite failed
+        if: steps.tests.outputs.exit_code != '0'
+        run: exit 1
 
       - name: Run role-menu compatibility checks
+        if: steps.tests.outputs.exit_code == '0'
         shell: bash
         run: |
           python tools/test_profile_cosmetic_roles_static.py
           python tools/test_profile_role_editor_guard_static.py
 
-      - name: Inspect generated diff
+      - name: Inspect generated diff and cleanup
+        if: steps.tests.outputs.exit_code == '0'
         shell: bash
         run: |
           set -euo pipefail
           git diff --check
           git status --short
+          test ! -e tools/apply_profile_banner_roles_patch.py
+          test ! -e tools/apply_profile_upgrade_regression_fixes.py
           test ! -d tools/profile_banner_roles_payload
+          test ! -e .github/workflows/apply-profile-platform-modes.yml
+          test ! -e tools/apply_profile_platform_modes_patch.py
+          test ! -e tools/apply_profile_platform_modes_v2.py
 
-      - name: Commit validated materialized implementation
-        if: steps.materialize.outputs.applied == 'true'
+      - name: Commit validated implementation
+        if: steps.tests.outputs.exit_code == '0'
         shell: bash
         run: |
           set -euo pipefail
@@ -174,5 +222,5 @@ jobs:
             echo 'No materialized changes needed.'
             exit 0
           fi
-          git commit -m 'Add premium profile banners and split role visibility'
+          git commit -m 'Add wide profile banners and separate role displays'
           git push origin HEAD:fix/live-profile-channel-spam
