@@ -28,6 +28,7 @@ from stoney_verify.profile_card_service import (
     get_effective_profile_settings,
     get_profile_guild_settings,
     get_profile_user,
+    platform_entry_mode,
     remove_platform_identity,
     save_platform_identity,
     upsert_profile_guild_settings,
@@ -159,7 +160,8 @@ def _settings_embed(
         name="Right now in this server",
         value=(
             f"**Live signature:** {'✅ On' if preferences.get('live_cards_enabled', True) else '⏸️ Off'}\n"
-            f"**Profile roles:** {shown(preferences.get('show_roles', True))}\n"
+            f"**Server roles:** {shown(preferences.get('show_server_roles', False))}\n"
+            f"**Profile tags:** {shown(preferences.get('show_profile_tags', True))}\n"
             f"**Account dates:** {shown(preferences.get('show_account_dates', True))}\n"
             f"**Gaming/social accounts:** {shown(preferences.get('show_platforms', True))}"
         ),
@@ -168,7 +170,8 @@ def _settings_embed(
     embed.add_field(
         name="Your default choices",
         value=(
-            f"Roles: {'Show' if global_preferences.get('show_roles', True) else 'Hide'} • "
+            f"Server roles: {'Show' if global_preferences.get('show_server_roles', False) else 'Hide'} • "
+            f"Profile tags: {'Show' if global_preferences.get('show_profile_tags', True) else 'Hide'} • "
             f"Dates: {'Show' if global_preferences.get('show_account_dates', True) else 'Hide'} • "
             f"Accounts: {'Show' if global_preferences.get('show_platforms', True) else 'Hide'}"
         ),
@@ -178,7 +181,8 @@ def _settings_embed(
         label
         for key, label in (
             ("live_cards_enabled", "live signature"),
-            ("show_roles", "roles"),
+            ("show_server_roles", "server roles"),
+            ("show_profile_tags", "profile tags"),
             ("show_account_dates", "account dates"),
             ("show_platforms", "gaming/social accounts"),
         )
@@ -200,13 +204,16 @@ def _settings_embed(
         if not isinstance(entry, Mapping):
             continue
         username = str(entry.get("username") or "").strip()
-        if not username:
-            continue
+        mode = platform_entry_mode(entry)
         visibility = "🌐 Public" if bool(entry.get("shared")) else "🔒 Private"
-        link_state = " • official link" if str(entry.get("url") or "").strip() else " • username only"
-        safe_username = display_profile_username(username)
+        display_value = (
+            f"`{display_profile_username(username)}`"
+            if username and mode != "logo"
+            else "Logo only"
+        )
+        prefix = f"{spec.emoji} " if spec.emoji else ""
         identity_lines.append(
-            f"{spec.emoji} **{spec.label}:** `{safe_username}` — {visibility}{link_state}"
+            f"{prefix}**{spec.label}:** {display_value} — {visibility} • {mode.title()}"
         )
     account_summary = "\n".join(identity_lines)[:820] if identity_lines else "No accounts saved yet."
     embed.add_field(
@@ -246,7 +253,8 @@ class ProfileSettingsView(discord.ui.View):
         local_values = dict(guild_settings or {})
         specs = (
             ("Live", "live_cards_enabled", "🪪"),
-            ("Roles", "show_roles", "🎭"),
+            ("Server Roles", "show_server_roles", "🏷️"),
+            ("Profile Tags", "show_profile_tags", "🎭"),
             ("Dates", "show_account_dates", "📅"),
             ("Platforms", "show_platforms", "🔗"),
         )
@@ -297,7 +305,7 @@ class _GlobalPrivacyToggleButton(discord.ui.Button):
         row: int,
     ) -> None:
         self.preference_key = key
-        current = bool(preferences.get(key, True))
+        current = bool(preferences.get(key, DEFAULT_PROFILE_PREFERENCES.get(key, True)))
         super().__init__(
             label=f"Hide {label} Everywhere" if current else f"Show {label} Everywhere",
             emoji=emoji,
@@ -313,7 +321,8 @@ class _GlobalPrivacyToggleButton(discord.ui.Button):
         await _defer_private(interaction, component_update=True)
         try:
             user_row = await get_profile_user(view.author_id, refresh=True)
-            current = bool(dict(user_row.get("preferences") or {}).get(self.preference_key, True))
+            default = DEFAULT_PROFILE_PREFERENCES.get(self.preference_key, True)
+            current = bool(dict(user_row.get("preferences") or {}).get(self.preference_key, default))
             await upsert_profile_user_preferences(
                 view.author_id,
                 {self.preference_key: not current},
@@ -513,7 +522,7 @@ async def profile_platform_remove(
 class _PublicFullRolesButton(discord.ui.Button):
     def __init__(self, member_id: int) -> None:
         super().__init__(
-            label="View Full Profile Roles",
+            label="View Full Profile Tags",
             emoji="📋",
             style=discord.ButtonStyle.secondary,
             custom_id=f"dank:profilecard:v1:full_roles:{int(member_id)}",
@@ -535,8 +544,8 @@ class _PublicFullRolesButton(discord.ui.Button):
         except ProfileStorageUnavailable:
             return await _safe_ephemeral(interaction, "Private profile storage is unavailable.", ok=False)
         preferences = dict(effective.get("preferences") or {})
-        if not bool(preferences.get("show_roles", True)) or "roles" not in config.allowed_fields:
-            return await _safe_ephemeral(interaction, "This member has hidden their profile roles.", ok=False)
+        if not bool(preferences.get("show_profile_tags", True)) or "profile_tags" not in config.allowed_fields:
+            return await _safe_ephemeral(interaction, "This member has hidden their profile tags.", ok=False)
         from .public_self_roles_group import _profile_full_roles_embed
 
         await _send_private(
@@ -570,17 +579,28 @@ class PublicProfileView(discord.ui.View):
     ) -> None:
         super().__init__(timeout=300)
         for child in list(getattr(source_view, "children", []) or []):
-            if not isinstance(child, discord.ui.Button) or not child.url:
+            if not isinstance(child, discord.ui.Button):
                 continue
-            self.add_item(
-                discord.ui.Button(
-                    label=str(child.label or "Profile")[:80],
-                    emoji=child.emoji,
-                    style=discord.ButtonStyle.link,
-                    url=str(child.url),
-                    row=child.row,
+            if child.url:
+                self.add_item(
+                    discord.ui.Button(
+                        label=str(child.label or "Profile")[:80],
+                        emoji=child.emoji,
+                        style=discord.ButtonStyle.link,
+                        url=str(child.url),
+                        row=child.row,
+                    )
                 )
-            )
+            elif child.custom_id:
+                self.add_item(
+                    discord.ui.Button(
+                        label=str(child.label or "Username")[:80],
+                        emoji=child.emoji,
+                        style=child.style,
+                        custom_id=str(child.custom_id),
+                        row=child.row,
+                    )
+                )
         if show_roles:
             self.add_item(_PublicFullRolesButton(member_id))
         if show_settings:
@@ -612,7 +632,7 @@ async def send_privacy_aware_profile(
         )
 
     preferences = dict(effective.get("preferences") or {})
-    show_roles = bool(preferences.get("show_roles", True)) and "roles" in config.allowed_fields
+    show_roles = bool(preferences.get("show_profile_tags", True)) and "profile_tags" in config.allowed_fields
     if rendered is None:
         from .public_self_roles_group import _profile_card
 
@@ -638,6 +658,7 @@ async def send_privacy_aware_profile(
         interaction,
         embed=rendered_embed,
         view=view if view.children else None,
+        file=rendered.file if rendered is not None else None,
     )
 
 
@@ -743,13 +764,15 @@ async def profile_live_cards(
 
 
 @app_commands.describe(
-    roles="Allow profile roles/labels when the member also allows them.",
+    server_roles="Allow safe server roles when the member also allows them.",
+    profile_tags="Allow pronouns, identity, interests, and cosmetic profile tags.",
     account_dates="Allow joined/account-created dates when the member also allows them.",
     platforms="Allow explicitly shared platform identities.",
 )
 async def profile_live_fields(
     interaction: discord.Interaction,
-    roles: bool,
+    server_roles: bool,
+    profile_tags: bool,
     account_dates: bool,
     platforms: bool,
 ) -> None:
@@ -760,8 +783,10 @@ async def profile_live_fields(
         return await _safe_ephemeral(interaction, "Use this command inside a server.", ok=False)
     await _defer_private(interaction)
     allowed: list[str] = []
-    if roles:
-        allowed.append("roles")
+    if server_roles:
+        allowed.append("server_roles")
+    if profile_tags:
+        allowed.append("profile_tags")
     if account_dates:
         allowed.append("account_dates")
     if platforms:

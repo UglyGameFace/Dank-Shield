@@ -467,7 +467,7 @@ def _profile_cosmetics_embed(
 ) -> discord.Embed:
     selected = [role for role in roles if role in member.roles]
     embed = discord.Embed(
-        title="🎭 Profile Roles / Cosmetics",
+        title="🎭 Profile Tags & Cosmetics",
         description=(
             "Pick the optional cosmetic roles you want shown on your server profile. "
             "These never grant access, staff tools, verification, moderation, or ticket permissions."
@@ -638,7 +638,7 @@ def _profile_role_picker_choices(guild: discord.Guild, *, page: int = 0) -> tupl
 def _profile_role_picker_embed(guild: discord.Guild, *, page: int = 0) -> discord.Embed:
     choices, page, pages, total = _profile_role_picker_choices(guild, page=page)
     embed = discord.Embed(
-        title="🧩 Add Server Roles / Cosmetics",
+        title="🧩 Add Profile Tags & Cosmetics",
         description=(
             "Browse existing server roles with the Dank Shield picker. "
             "No Discord search box needed. Pick one or more safe roles from this page."
@@ -689,7 +689,7 @@ async def _handle_profile_role_add_picker(interaction: discord.Interaction, valu
             skipped.append(f"{role.mention}: already added")
             continue
         if len(role_ids) >= PROFILE_COSMETIC_MAX_ROLES:
-            skipped.append(f"{role.mention}: role/cosmetic limit reached")
+            skipped.append(f"{role.mention}: profile tag limit reached")
             continue
         role_ids.append(int(role.id))
         added.append(role.mention)
@@ -702,7 +702,7 @@ async def _handle_profile_role_add_picker(interaction: discord.Interaction, valu
         lines.append("Added: " + ", ".join(added))
     if skipped:
         lines.append("Skipped:\n" + "\n".join(f"• {item}" for item in skipped[:8]))
-    await _reply(interaction, "\n".join(lines) if lines else "No role/cosmetic changes needed.", ok=bool(added))
+    await _reply(interaction, "\n".join(lines) if lines else "No profile tag changes needed.", ok=bool(added))
 
 
 class ProfileRoleAddPickerView(DankMultiPickerView):
@@ -742,7 +742,7 @@ class ProfileRolePickerPageButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         view = self.view
         if not isinstance(view, ProfileRoleAddPickerView):
-            return await _reply(interaction, "Picker expired. Reopen Profile Roles / Cosmetics.", ok=False)
+            return await _reply(interaction, "Picker expired. Reopen Profile Tags & Cosmetics.", ok=False)
         if not await view.interaction_check(interaction):
             return
         guild = interaction.guild
@@ -800,7 +800,7 @@ async def _open_profile_cosmetics(
 
     if not roles:
         await interaction.response.send_message(
-            "🎭 No server role/cosmetics are available yet. Staff can add them in `/dank profile builder` → **Profile Roles / Cosmetics**.",
+            "🎭 No profile tags/cosmetics are available yet. Staff can add them in `/dank profile builder` → **Profile Tags & Cosmetics**.",
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -813,7 +813,7 @@ async def _open_profile_cosmetics(
             choices=_profile_cosmetic_choices(member, roles),
             on_pick=_handle_profile_cosmetics_pick,
             custom_id=f"{PROFILE_PREFIX}cosmetics_select",
-            placeholder="Choose your server role/cosmetics…",
+            placeholder="Choose your profile tags/cosmetics…",
             min_values=0,
             max_values=len(roles),
             allow_anyone=False,
@@ -1031,7 +1031,7 @@ def _profile_card_view_with_actions(member: discord.Member, *, page: int = 0) ->
     if f"{PROFILE_PREFIX}full_roles_self" not in existing_ids:
         view.add_item(
             discord.ui.Button(
-                label="View Full Profile Roles",
+                label="View Full Profile Tags",
                 emoji="📋",
                 style=discord.ButtonStyle.secondary,
                 custom_id=f"{PROFILE_PREFIX}full_roles_self",
@@ -1134,7 +1134,7 @@ def _profile_role_lines(member: discord.Member, names: tuple[str, ...]) -> str:
 
 def _profile_full_roles_embed(member: discord.Member) -> discord.Embed:
     embed = discord.Embed(
-        title=f"📋 {member.display_name}'s Profile Roles",
+        title=f"📋 {member.display_name}'s Profile Tags",
         description="Exact Discord roles currently shown on this member's profile.",
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
@@ -1154,7 +1154,7 @@ def _profile_full_roles_embed(member: discord.Member) -> discord.Embed:
     except Exception:
         pass
 
-    embed.set_footer(text="Dank Shield profile roles")
+    embed.set_footer(text="Dank Shield profile tags")
     return embed
 
 
@@ -1163,7 +1163,7 @@ class ProfileCardActionView(discord.ui.View):
         super().__init__(timeout=300)
         self.member_id = int(member_id)
 
-    @discord.ui.button(label="View Full Profile Roles", emoji="📋", style=discord.ButtonStyle.secondary, custom_id="dank:profile:v1:full_roles", row=0)
+    @discord.ui.button(label="View Full Profile Tags", emoji="📋", style=discord.ButtonStyle.secondary, custom_id="dank:profile:v1:full_roles", row=0)
     async def full_roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         guild = interaction.guild
@@ -1365,11 +1365,11 @@ class ProfilePanelView(discord.ui.View):
         self.add_item(discord.ui.Button(label="Edit Identity", emoji="🌈", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:identity", row=1))
         self.add_item(discord.ui.Button(label="Edit Interests", emoji="🎮", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:interests", row=1))
         self.add_item(discord.ui.Button(label="Signature Settings", emoji="🔐", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}privacy", row=1))
-        self.add_item(discord.ui.Button(label="Server Roles / Cosmetics", emoji="🎭", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}cosmetics", row=2))
+        self.add_item(discord.ui.Button(label="Profile Tags & Cosmetics", emoji="🎭", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}cosmetics", row=2))
 
         self.add_item(discord.ui.Button(label="Suggest Missing Interest", emoji="➕", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing_interest", row=2))
         self.add_item(discord.ui.Button(label="Missing Identity?", emoji="✍️", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing", row=2))
-        self.add_item(discord.ui.Button(label="Clear Profile Roles", emoji="🧹", style=discord.ButtonStyle.danger, custom_id=f"{PROFILE_PREFIX}clear", row=3))
+        self.add_item(discord.ui.Button(label="Clear Profile Tags", emoji="🧹", style=discord.ButtonStyle.danger, custom_id=f"{PROFILE_PREFIX}clear", row=3))
 
 
 def _profile_edit_embed(member: discord.Member) -> discord.Embed:
@@ -1397,7 +1397,7 @@ def _profile_edit_embed(member: discord.Member) -> discord.Embed:
         name="How editing works",
         value=(
             "Use **Edit Pronouns**, **Edit Identity**, or **Edit Interests** to pick from the available choices. "
-            "Use **Clear Profile Roles** to remove all optional profile labels."
+            "Use **Clear Profile Tags** to remove all optional profile labels."
         ),
         inline=False,
     )
@@ -1413,7 +1413,7 @@ class ProfileEditView(discord.ui.View):
         self.add_item(discord.ui.Button(label="Edit Interests", emoji="🎮", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}open:interests", row=0))
         self.add_item(discord.ui.Button(label="View My Profile", emoji="👤", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}view", row=1))
         self.add_item(discord.ui.Button(label="Learn Terms", emoji="📘", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}learn", row=1))
-        self.add_item(discord.ui.Button(label="Clear Profile Roles", emoji="🧹", style=discord.ButtonStyle.danger, custom_id=f"{PROFILE_PREFIX}clear", row=1))
+        self.add_item(discord.ui.Button(label="Clear Profile Tags", emoji="🧹", style=discord.ButtonStyle.danger, custom_id=f"{PROFILE_PREFIX}clear", row=1))
         self.add_item(discord.ui.Button(label="Signature Settings", emoji="🔐", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}privacy", row=1))
         self.add_item(discord.ui.Button(label="Missing Identity?", emoji="✍️", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing", row=2))
         self.add_item(discord.ui.Button(label="Suggest Missing Interest", emoji="➕", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing_interest", row=2))
@@ -1616,7 +1616,7 @@ class ProfileCosmeticRoleManagerView(discord.ui.View):
         super().__init__(timeout=300)
         self.author_id = int(author_id)
 
-    @discord.ui.button(label="Browse / Add Server Roles", emoji="🧩", style=discord.ButtonStyle.primary, custom_id="dank:profile:v1:builder:cosmetics_add_browser", row=0)
+    @discord.ui.button(label="Browse / Add Profile Tags", emoji="🧩", style=discord.ButtonStyle.primary, custom_id="dank:profile:v1:builder:cosmetics_add_browser", row=0)
     async def browse_add_roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _open_profile_role_add_picker(interaction, page=0)
@@ -1638,16 +1638,16 @@ class ProfileCosmeticRoleManagerView(discord.ui.View):
             return await _reply(interaction, blocker, ok=False)
 
         if int(role.id) in role_ids:
-            return await _reply(interaction, f"{role.mention} is already a server role/cosmetic.", ok=True)
+            return await _reply(interaction, f"{role.mention} is already a profile tag/cosmetic.", ok=True)
 
         if len(role_ids) >= PROFILE_COSMETIC_MAX_ROLES:
             return await _reply(interaction, f"Role/cosmetic limit reached ({PROFILE_COSMETIC_MAX_ROLES}). Remove one first.", ok=False)
 
         role_ids.append(int(role.id))
         await _save_profile_cosmetic_role_ids(guild, role_ids)
-        await _reply(interaction, f"Added {role.mention} as a server role/cosmetic.", ok=True)
+        await _reply(interaction, f"Added {role.mention} as a profile tag/cosmetic.", ok=True)
 
-    @discord.ui.button(label="Remove Role / Cosmetic", emoji="➖", style=discord.ButtonStyle.danger, custom_id="dank:profile:v1:builder:cosmetics_remove", row=1)
+    @discord.ui.button(label="Remove Profile Tag", emoji="➖", style=discord.ButtonStyle.danger, custom_id="dank:profile:v1:builder:cosmetics_remove", row=1)
     async def remove_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         guild = interaction.guild
@@ -1656,13 +1656,13 @@ class ProfileCosmeticRoleManagerView(discord.ui.View):
 
         roles = await _profile_configured_cosmetic_roles(guild, validate=False)
         if not roles:
-            return await _reply(interaction, "No profile roles/cosmetics are configured yet.", ok=True)
+            return await _reply(interaction, "No profile tags/cosmetics are configured yet.", ok=True)
 
         choices = [
             DankChoice(
                 label=str(role.name or "Role / Cosmetic")[:100],
                 value=str(int(role.id)),
-                description="Remove from Profile Builder roles/cosmetics",
+                description="Remove from Profile Tags & Cosmetics",
                 emoji="➖",
             )
             for role in roles[:PROFILE_COSMETIC_MAX_ROLES]
@@ -1670,7 +1670,7 @@ class ProfileCosmeticRoleManagerView(discord.ui.View):
 
         await interaction.response.send_message(
             embed=discord.Embed(
-                title="➖ Remove Roles / Cosmetics",
+                title="➖ Remove Profile Tags",
                 description="Choose one or more roles to remove from the Profile Builder roles/cosmetics allowlist.",
                 color=discord.Color.red(),
                 timestamp=discord.utils.utcnow(),
@@ -1714,7 +1714,7 @@ class ProfileBuilderView(discord.ui.View):
         elif fixable:
             self.add_item(discord.ui.Button(label="Fix Channel Permissions", emoji="🛠️", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:fix", row=0))
 
-        self.add_item(discord.ui.Button(label="Profile Roles / Cosmetics", emoji="🎭", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:cosmetics", row=1))
+        self.add_item(discord.ui.Button(label="Profile Tags & Cosmetics", emoji="🎭", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:cosmetics", row=1))
         self.add_item(discord.ui.Button(label="Health", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}builder:health", row=1))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -2038,7 +2038,7 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
             if to_remove:
                 await member.remove_roles(*to_remove, reason="Dank Shield profile picker")
         except Exception as exc:
-            await _reply(interaction, f"Could not update your profile roles: {type(exc).__name__}.", ok=False)
+            await _reply(interaction, f"Could not update your profile tags: {type(exc).__name__}.", ok=False)
             return True
 
         changes: list[str] = []
@@ -2069,11 +2069,11 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
                 from .public_profile_cards import invalidate_member_live_cards
 
                 await invalidate_member_live_cards(interaction.client, guild, member.id)
-                await _reply(interaction, "Removed your optional profile roles.", ok=True)
+                await _reply(interaction, "Removed your optional profile tags.", ok=True)
             except Exception as exc:
-                await _reply(interaction, f"Could not clear your profile roles: {type(exc).__name__}.", ok=False)
+                await _reply(interaction, f"Could not clear your profile tags: {type(exc).__name__}.", ok=False)
         else:
-            await _reply(interaction, "You do not have any optional profile roles from this panel.", ok=True)
+            await _reply(interaction, "You do not have any optional profile tags from this panel.", ok=True)
         return True
 
     if suffix == "missing":

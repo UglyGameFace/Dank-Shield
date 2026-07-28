@@ -10,11 +10,12 @@ surface reads or changes welcome/join settings except the explicit one-time
 
 import asyncio
 from io import BytesIO
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 import discord
 
 from .guild_config import get_guild_config, upsert_guild_config
+from .profile_custom_background import profile_background_guide, profile_background_requirements
 from .profile_card_runtime import LiveProfileCardRuntime, parse_live_card_config, render_live_profile_card
 from .profile_card_service import (
     PLATFORM_SPECS,
@@ -24,6 +25,7 @@ from .profile_card_service import (
     effective_preferences,
     get_profile_guild_settings,
     get_profile_user,
+    platform_entry_mode,
     remove_platform_identity,
     save_platform_identity,
     upsert_profile_guild_settings,
@@ -32,9 +34,11 @@ from .profile_card_service import (
 from .profile_signature_style import (
     DEFAULT_MEMBER_PROFILE_STYLE,
     DEFAULT_SERVER_PROFILE_STYLE,
+    MEMBER_CUSTOM_BACKGROUND_KEY,
     PROFILE_CUSTOM_BACKGROUND_KEY,
     PROFILE_CUSTOM_FONT_KEY,
     PROFILE_CUSTOM_FONT_NAME_KEY,
+    PROFILE_THEME_SPECS,
     SERVER_STYLE_CONFIG_KEYS,
     effective_profile_style,
     encode_profile_asset,
@@ -52,7 +56,6 @@ from .welcome_card_service import (
     decode_custom_background,
 )
 from .welcome_card_typography_engine import (
-    BUILTIN_THEMES,
     COLOR_PRESETS,
     CUSTOM_FONT_STYLE_KEY,
     FONT_STYLES,
@@ -90,6 +93,402 @@ _FONT_EMOJIS = {
     "retro": "📼",
 }
 
+
+_COLOR_MIX_CHOICES: tuple[tuple[str, str, str, str, str], ...] = (
+    ("neon_green", "Neon Green", "#8FFF52", "🟢", "Bright 420-style green"),
+    ("emerald", "Emerald", "#20CF70", "💚", "Deep clean green"),
+    ("cyan", "Electric Cyan", "#2DE8CD", "🩵", "Bright teal-cyan glow"),
+    ("ice_blue", "Ice Blue", "#46B1FF", "🔵", "Cold bright blue"),
+    ("royal_blue", "Royal Blue", "#256CE5", "💙", "Strong gaming blue"),
+    ("violet", "Violet", "#B85BFF", "🟣", "Neon purple accent"),
+    ("magenta", "Magenta", "#FF3D9A", "🩷", "Hot pink-magenta glow"),
+    ("red", "Ember Red", "#FF4E44", "🔴", "Competitive red"),
+    ("orange", "Blaze Orange", "#FF8A3D", "🟠", "Warm energetic orange"),
+    ("gold", "Premium Gold", "#FFCC52", "🟡", "Black-and-gold highlight"),
+    ("white", "Clean White", "#F8FAFD", "⚪", "Bright neutral highlight"),
+    ("graphite", "Graphite", "#7B8798", "⚫", "Muted steel accent"),
+)
+_COLOR_MIX_BY_KEY = {
+    key: {"label": label, "hex": value, "emoji": emoji, "description": description}
+    for key, label, value, emoji, description in _COLOR_MIX_CHOICES
+}
+_COLOR_SLOT_NAMES = ("Primary", "Secondary", "Accent 3", "Highlight")
+_MEMBER_COLOR_KEYS = (
+    "signature_custom_primary",
+    "signature_custom_secondary",
+    "signature_custom_tertiary",
+    "signature_custom_highlight",
+)
+_SERVER_COLOR_KEYS = (
+    SERVER_STYLE_CONFIG_KEYS["custom_primary"],
+    SERVER_STYLE_CONFIG_KEYS["custom_secondary"],
+    SERVER_STYLE_CONFIG_KEYS["custom_tertiary"],
+    SERVER_STYLE_CONFIG_KEYS["custom_highlight"],
+)
+_REMOVE_COLOR_VALUE = "__remove_color__"
+
+
+def _normalize_mix_values(values: Sequence[Any]) -> tuple[str, str, str, str]:
+    cleaned: list[str] = []
+    for value in list(values)[:4]:
+        raw = str(value or "").strip()
+        cleaned.append(normalize_hex_color(raw) if raw else "")
+    while len(cleaned) < 4:
+        cleaned.append("")
+    return tuple(cleaned)  # type: ignore[return-value]
+
+
+def _mix_updates(values: Sequence[Any], *, server: bool) -> dict[str, str]:
+    colors = _normalize_mix_values(values)
+    keys = _SERVER_COLOR_KEYS if server else _MEMBER_COLOR_KEYS
+    mode_key = SERVER_STYLE_CONFIG_KEYS["color_mode"] if server else "signature_color_mode"
+    return {mode_key: "custom", **{key: value for key, value in zip(keys, colors)}}
+
+
+def _mix_label(value: str) -> str:
+    normalized = str(value or "").upper()
+    for item in _COLOR_MIX_BY_KEY.values():
+        if str(item["hex"]).upper() == normalized:
+            return str(item["label"])
+    return normalized or "Auto-derived"
+
+
+async def _current_mix_values(member: discord.Member, *, server: bool) -> tuple[str, str, str, str]:
+    if server:
+        style = server_profile_style(await get_guild_config(member.guild.id, refresh=True))
+        return _normalize_mix_values(
+            (
+                style.get("custom_primary"),
+                style.get("custom_secondary"),
+                style.get("custom_tertiary"),
+                style.get("custom_highlight"),
+            )
+        )
+    user = await get_profile_user(member.id, refresh=True)
+    style = normalize_member_profile_style(user.get("preferences"))
+    return _normalize_mix_values(style.get(key) for key in _MEMBER_COLOR_KEYS)
+
+
+async def _open_appearance_panel(interaction: discord.Interaction, *, author_id: int, server: bool) -> None:
+    await _edit_private(
+        interaction,
+        embed=discord.Embed(
+            title="🎨 Server Signature Appearance" if server else "🎨 Signature Appearance",
+            description=(
+                "Choose a theme, font, colors, background, layout, and avatar frame. "
+                "Saved changes immediately render the real card."
+            ),
+            color=discord.Color.blurple(),
+        ),
+        view=ProfileAppearanceView(author_id=author_id, server=server),
+    )
+
+
+async def _preview_color_mixer(
+    interaction: discord.Interaction,
+    *,
+    member: discord.Member,
+    server: bool,
+    values: Sequence[Any],
+    notice: str,
+) -> None:
+    colors = _normalize_mix_values(values)
+    await _preview(
+        interaction,
+        member=member,
+        notice=notice,
+        view_factory=lambda _source: ColorMixerView(
+            author_id=member.id,
+            server=server,
+            values=colors,
+        ),
+    )
+
+
+async def _save_mix_and_preview(
+    interaction: discord.Interaction,
+    *,
+    server: bool,
+    values: Sequence[Any],
+    message: str,
+) -> None:
+    member = _member(interaction)
+    if member is None:
+        return await _private(interaction, content="❌ Use this inside a server as a member.")
+    colors = _normalize_mix_values(values)
+    if server:
+        from .commands_ext.public_setup_group import _require_setup_permission
+
+        if not await _require_setup_permission(interaction):
+            return
+        await _defer(interaction)
+        await upsert_guild_config(member.guild.id, _mix_updates(colors, server=True))
+        await _invalidate_guild(interaction)
+    else:
+        await _defer(interaction)
+        try:
+            await upsert_profile_user_preferences(member.id, _mix_updates(colors, server=False))
+            await _invalidate(interaction, all_guilds=True)
+        except ProfileStorageUnavailable:
+            return await _edit_private(interaction, content="❌ Private profile storage is unavailable. Nothing changed.")
+    await _preview_color_mixer(
+        interaction,
+        member=member,
+        server=server,
+        values=colors,
+        notice=f"✅ {message}",
+    )
+
+
+async def _reset_mix_and_preview(interaction: discord.Interaction, *, server: bool) -> None:
+    member = _member(interaction)
+    if member is None:
+        return await _private(interaction, content="❌ Use this inside a server as a member.")
+    keys = _SERVER_COLOR_KEYS if server else _MEMBER_COLOR_KEYS
+    mode_key = SERVER_STYLE_CONFIG_KEYS["color_mode"] if server else "signature_color_mode"
+    updates = {mode_key: "theme", **{key: "" for key in keys}}
+    if server:
+        from .commands_ext.public_setup_group import _require_setup_permission
+
+        if not await _require_setup_permission(interaction):
+            return
+        await _defer(interaction)
+        await upsert_guild_config(member.guild.id, updates)
+        await _invalidate_guild(interaction)
+    else:
+        await _defer(interaction)
+        try:
+            await upsert_profile_user_preferences(member.id, updates)
+            await _invalidate(interaction, all_guilds=True)
+        except ProfileStorageUnavailable:
+            return await _edit_private(interaction, content="❌ Private profile storage is unavailable. Nothing changed.")
+    await _preview_color_mixer(
+        interaction,
+        member=member,
+        server=server,
+        values=("", "", "", ""),
+        notice="✅ Custom colors reset. The selected theme colors are active again.",
+    )
+
+
+async def _open_color_slot_picker(
+    interaction: discord.Interaction,
+    *,
+    author_id: int,
+    server: bool,
+    values: Sequence[Any],
+    slot: int,
+) -> None:
+    colors = list(_normalize_mix_values(values))
+
+    async def go_home(component: discord.Interaction) -> None:
+        member = _member(component)
+        if member is None:
+            return await _private(component, content="❌ Use this inside a server as a member.")
+        await _preview_color_mixer(
+            component,
+            member=member,
+            server=server,
+            values=colors,
+            notice="Choose any color slot to continue mixing.",
+        )
+
+    async def picked(component: discord.Interaction, value: str) -> None:
+        updated = list(colors)
+        if value == _REMOVE_COLOR_VALUE:
+            updated[slot] = ""
+            label = f"{_COLOR_SLOT_NAMES[slot]} removed"
+        else:
+            item = _COLOR_MIX_BY_KEY.get(value)
+            if item is None:
+                return await _private(component, content="❌ That color is no longer available.")
+            updated[slot] = str(item["hex"])
+            label = f"{_COLOR_SLOT_NAMES[slot]} set to {item['label']}"
+        await _save_mix_and_preview(component, server=server, values=updated, message=label)
+
+    choices = [
+        make_choice(
+            str(item["label"]),
+            key,
+            description=str(item["description"]),
+            emoji=str(item["emoji"]),
+            default=str(item["hex"]).upper() == colors[slot].upper(),
+        )
+        for key, item in _COLOR_MIX_BY_KEY.items()
+    ]
+    choices.append(
+        make_choice(
+            "Remove This Color",
+            _REMOVE_COLOR_VALUE,
+            description="Let Dank Shield derive this slot from the other selected colors.",
+            emoji="➖",
+        )
+    )
+    await _private(
+        interaction,
+        content=(
+            f"## 🎨 {_COLOR_SLOT_NAMES[slot]}\n"
+            "Choose a named color. The real profile card saves and redraws immediately."
+        ),
+        view=DankPickerView(
+            author_id=author_id,
+            choices=choices,
+            on_pick=picked,
+            custom_id=f"dank:profile:mix:{'server' if server else 'member'}:{slot}:{author_id}",
+            placeholder=f"Choose {_COLOR_SLOT_NAMES[slot].lower()}…",
+            title="Profile Signature Color Mixer",
+            on_home=go_home,
+        ),
+    )
+
+
+class AdvancedProfileColorsModal(discord.ui.Modal):
+    def __init__(self, *, server: bool, author_id: int, values: Sequence[Any]) -> None:
+        super().__init__(title="Advanced Four-Color Hex", timeout=900)
+        self.server = bool(server)
+        self.author_id = int(author_id)
+        self.inputs: list[discord.ui.TextInput] = []
+        for label, value in zip(_COLOR_SLOT_NAMES, _normalize_mix_values(values)):
+            item = discord.ui.TextInput(
+                label=f"{label} hex (optional)",
+                placeholder="#22DCFF",
+                default=value or None,
+                required=False,
+                max_length=7,
+            )
+            self.inputs.append(item)
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.author_id:
+            return await _private(interaction, content="❌ Only the person who opened this editor can submit it.")
+        try:
+            values = _normalize_mix_values(item.value for item in self.inputs)
+        except ValueError as exc:
+            return await _private(interaction, content=f"❌ {exc}")
+        if not any(values):
+            return await _reset_mix_and_preview(interaction, server=self.server)
+        await _save_mix_and_preview(
+            interaction,
+            server=self.server,
+            values=values,
+            message="Advanced four-color values saved",
+        )
+
+
+class _ColorSlotButton(discord.ui.Button):
+    def __init__(self, *, slot: int, value: str) -> None:
+        super().__init__(
+            label=f"{slot + 1}. {_COLOR_SLOT_NAMES[slot]}: {_mix_label(value)}"[:80],
+            style=discord.ButtonStyle.primary if value else discord.ButtonStyle.secondary,
+            row=slot // 2,
+        )
+        self.slot = int(slot)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, ColorMixerView) or not await view.interaction_check(interaction):
+            return
+        await _open_color_slot_picker(
+            interaction,
+            author_id=view.author_id,
+            server=view.server,
+            values=view.values,
+            slot=self.slot,
+        )
+
+
+class _ColorMixerActionButton(discord.ui.Button):
+    def __init__(self, *, action: str, label: str, emoji: str, style: discord.ButtonStyle, row: int) -> None:
+        super().__init__(label=label, emoji=emoji, style=style, row=row)
+        self.action = action
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, ColorMixerView) or not await view.interaction_check(interaction):
+            return
+        values = list(view.values)
+        if self.action == "swap":
+            values[0], values[1] = values[1], values[0]
+            return await _save_mix_and_preview(
+                interaction,
+                server=view.server,
+                values=values,
+                message="Primary and Secondary swapped",
+            )
+        if self.action == "rotate":
+            values = [values[-1], *values[:-1]]
+            return await _save_mix_and_preview(
+                interaction,
+                server=view.server,
+                values=values,
+                message="Color order rotated",
+            )
+        if self.action == "remove":
+            found = next((index for index in range(3, -1, -1) if values[index]), None)
+            if found is not None:
+                values[found] = ""
+            return await _save_mix_and_preview(
+                interaction,
+                server=view.server,
+                values=values,
+                message="Last selected color removed",
+            )
+        if self.action == "reset":
+            return await _reset_mix_and_preview(interaction, server=view.server)
+        if self.action == "hex":
+            return await interaction.response.send_modal(
+                AdvancedProfileColorsModal(
+                    server=view.server,
+                    author_id=view.author_id,
+                    values=view.values,
+                )
+            )
+        if self.action == "back":
+            return await _open_appearance_panel(
+                interaction,
+                author_id=view.author_id,
+                server=view.server,
+            )
+
+
+class ColorMixerView(discord.ui.View):
+    def __init__(self, *, author_id: int, server: bool, values: Sequence[Any]) -> None:
+        super().__init__(timeout=900)
+        self.author_id = int(author_id)
+        self.server = bool(server)
+        self.values = _normalize_mix_values(values)
+        for slot, value in enumerate(self.values):
+            self.add_item(_ColorSlotButton(slot=slot, value=value))
+        self.add_item(_ColorMixerActionButton(action="swap", label="Swap 1 ↔ 2", emoji="🔁", style=discord.ButtonStyle.secondary, row=2))
+        self.add_item(_ColorMixerActionButton(action="rotate", label="Rotate Order", emoji="🔄", style=discord.ButtonStyle.secondary, row=2))
+        self.add_item(_ColorMixerActionButton(action="remove", label="Remove Last", emoji="➖", style=discord.ButtonStyle.secondary, row=2))
+        self.add_item(_ColorMixerActionButton(action="reset", label="Reset to Theme", emoji="🛡️", style=discord.ButtonStyle.danger, row=3))
+        self.add_item(_ColorMixerActionButton(action="hex", label="Advanced Hex", emoji="⌨️", style=discord.ButtonStyle.secondary, row=3))
+        self.add_item(_ColorMixerActionButton(action="back", label="Back to Appearance", emoji="↩️", style=discord.ButtonStyle.secondary, row=3))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != self.author_id:
+            await _private(interaction, content="❌ Only the person who opened this mixer can use it.")
+            return False
+        return True
+
+
+async def _open_color_mixer(interaction: discord.Interaction, *, server: bool, author_id: int) -> None:
+    member = _member(interaction)
+    if member is None or int(member.id) != int(author_id):
+        return await _private(interaction, content="❌ Open your own profile appearance settings first.")
+    values = await _current_mix_values(member, server=server)
+    await _preview_color_mixer(
+        interaction,
+        member=member,
+        server=server,
+        values=values,
+        notice=(
+            "Choose any of the four color slots below. Every selection saves and redraws this real card immediately. "
+            "Exact color codes stay under Advanced Hex."
+        ),
+    )
 
 def _member(interaction: discord.Interaction) -> Optional[discord.Member]:
     return interaction.user if isinstance(interaction.user, discord.Member) else None
@@ -171,7 +570,7 @@ async def _invalidate_guild(interaction: discord.Interaction) -> None:
 
 def _style_labels(preferences: Mapping[str, Any], config: Any) -> dict[str, str]:
     effective = effective_profile_style(preferences, config)
-    theme = BUILTIN_THEMES.get(str(effective.get("theme")))
+    theme = PROFILE_THEME_SPECS.get(str(effective.get("theme")))
     font = FONT_STYLES.get(str(effective.get("font")))
     return {
         "theme": getattr(theme, "label", str(effective.get("theme") or "Default")),
@@ -223,7 +622,9 @@ async def _studio_embed(member: discord.Member) -> discord.Embed:
         name="Sharing",
         value=(
             f"**Live signature:** {'On' if effective_privacy.get('live_cards_enabled', True) else 'Off'}\n"
-            f"**Roles:** {'Shown' if effective_privacy.get('show_roles', True) else 'Hidden'}\n"
+            f"**Server roles:** {'Shown' if effective_privacy.get('show_server_roles', False) else 'Hidden'}\n"
+            f"**Server branding:** {'Shown' if effective_privacy.get('show_server_branding', True) else 'Hidden'}\n"
+            f"**Profile tags:** {'Shown' if effective_privacy.get('show_profile_tags', True) else 'Hidden'}\n"
             f"**Dates:** {'Shown' if effective_privacy.get('show_account_dates', True) else 'Hidden'}\n"
             f"**Platforms:** {shared} shared"
         ),
@@ -232,8 +633,8 @@ async def _studio_embed(member: discord.Member) -> discord.Embed:
     embed.add_field(
         name="Easy rule",
         value=(
-            "**Appearance** changes how your signature looks. **Privacy** changes what it may show. "
-            "**Platforms** manages gaming and social identities. These settings never change the server's welcome cards."
+            "**Server Roles** only controls whether safe roles already assigned by this server appear. "
+            "**Profile Tags** opens pronouns, identity, interests, and optional cosmetics. They are separate menus."
         ),
         inline=False,
     )
@@ -247,16 +648,26 @@ class SignaturePreviewView(discord.ui.View):
         super().__init__(timeout=600)
         self.author_id = int(author_id)
         for child in list(getattr(source_view, "children", []) or []):
-            if not isinstance(child, discord.ui.Button) or not child.url:
+            if not isinstance(child, discord.ui.Button):
                 continue
-            self.add_item(
-                discord.ui.Button(
-                    label=str(child.label or "Profile")[:80],
-                    emoji=child.emoji,
-                    style=discord.ButtonStyle.link,
-                    url=str(child.url),
+            if child.url:
+                self.add_item(
+                    discord.ui.Button(
+                        label=str(child.label or "Profile")[:80],
+                        emoji=child.emoji,
+                        style=discord.ButtonStyle.link,
+                        url=str(child.url),
+                    )
                 )
-            )
+            elif child.custom_id:
+                self.add_item(
+                    discord.ui.Button(
+                        label=str(child.label or "Username")[:80],
+                        emoji=child.emoji,
+                        style=child.style,
+                        custom_id=str(child.custom_id),
+                    )
+                )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.author_id:
@@ -275,6 +686,7 @@ async def _preview(
     *,
     member: Optional[discord.Member] = None,
     notice: str = "",
+    view_factory: Optional[Callable[[Optional[discord.ui.View]], discord.ui.View]] = None,
 ) -> None:
     target = member or _member(interaction)
     guild = interaction.guild
@@ -299,11 +711,16 @@ async def _preview(
             view=SignatureStudioView(author_id=target.id),
         )
     rendered.embed.set_footer(text="Preview only • compact profile signature • nothing posted publicly")
+    preview_view = (
+        view_factory(rendered.view)
+        if view_factory is not None
+        else SignaturePreviewView(author_id=target.id, source_view=rendered.view)
+    )
     await _edit_private(
         interaction,
         content=notice,
         embed=rendered.embed,
-        view=SignaturePreviewView(author_id=target.id, source_view=rendered.view),
+        view=preview_view,
         file=rendered.file,
     )
 
@@ -363,14 +780,14 @@ async def _theme_picker(interaction: discord.Interaction, *, server: bool) -> No
             await _save_server_style(
                 component,
                 theme_style_updates(value, member=False),
-                message=f"Server profile-signature theme set to **{BUILTIN_THEMES[value].label}** with its colors and background.",
+                message=f"Server profile-signature theme set to **{PROFILE_THEME_SPECS[value].label}** while preserving existing custom colors and artwork.",
             )
         else:
-            label = "Server Default" if value == "server" else BUILTIN_THEMES[value].label
+            label = "Server Default" if value == "server" else PROFILE_THEME_SPECS[value].label
             await _save_member_style(
                 component,
                 theme_style_updates(value, member=True),
-                message=f"Your signature theme is now **{label}** with its colors and background.",
+                message=f"Your signature theme is now **{label}** while preserving existing custom colors and artwork.",
             )
 
     choices = []
@@ -380,15 +797,15 @@ async def _theme_picker(interaction: discord.Interaction, *, server: bool) -> No
         make_choice(
             theme.label,
             theme.key,
-            description="Apply this theme's colors, background, and artwork",
-            emoji=_THEME_EMOJIS.get(theme.key, "🎨"),
+            description="Change the visual family while preserving custom colors and artwork",
+            emoji=theme.emoji,
             default=current == theme.key,
         )
-        for theme in BUILTIN_THEMES.values()
+        for theme in PROFILE_THEME_SPECS.values()
     )
     await _private(
         interaction,
-        content="## 🖼️ Signature Themes\nPick a complete look. Its colors, background, and artwork apply immediately; you can override individual parts afterward.",
+        content="## 🖼️ Signature Themes\nPick the visual family. Custom colors and custom artwork stay active. Use **Selected Theme** under Colors or **Theme Artwork** under Background only when you want those parts reset to the theme.",
         view=DankPickerView(
             author_id=member.id,
             choices=choices,
@@ -514,46 +931,6 @@ async def _color_picker(interaction: discord.Interaction, *, server: bool) -> No
     )
 
 
-class CustomProfileColorsModal(discord.ui.Modal):
-    def __init__(self, *, server: bool, author_id: int) -> None:
-        super().__init__(title="Advanced Signature Colors", timeout=900)
-        self.server = bool(server)
-        self.author_id = int(author_id)
-        self.primary = discord.ui.TextInput(label="Primary color", placeholder="#22DCFF", max_length=7)
-        self.secondary = discord.ui.TextInput(label="Secondary color", placeholder="#BC42FF", max_length=7)
-        self.add_item(self.primary)
-        self.add_item(self.secondary)
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        if int(interaction.user.id) != self.author_id:
-            return await _private(interaction, content="❌ Only the person who opened this editor can submit it.")
-        try:
-            primary = normalize_hex_color(str(self.primary.value))
-            secondary = normalize_hex_color(str(self.secondary.value))
-        except ValueError as exc:
-            return await _private(interaction, content=f"❌ {exc}")
-        if self.server:
-            await _save_server_style(
-                interaction,
-                {
-                    SERVER_STYLE_CONFIG_KEYS["color_mode"]: "custom",
-                    SERVER_STYLE_CONFIG_KEYS["custom_primary"]: primary,
-                    SERVER_STYLE_CONFIG_KEYS["custom_secondary"]: secondary,
-                },
-                message="Advanced server signature colors saved.",
-            )
-        else:
-            await _save_member_style(
-                interaction,
-                {
-                    "signature_color_mode": "custom",
-                    "signature_custom_primary": primary,
-                    "signature_custom_secondary": secondary,
-                },
-                message="Your advanced signature colors were saved.",
-            )
-
-
 async def _simple_picker(
     interaction: discord.Interaction,
     *,
@@ -570,7 +947,7 @@ async def _simple_picker(
                 ("Server Default", "server", "Follow the server's background choice.", "🏠"),
                 ("Theme Artwork", "theme", "Use a clean theme gradient.", "🖼️"),
                 ("Match My Avatar", "profile", "Use a blurred version of your avatar.", "👤"),
-                ("Server Custom Artwork", "custom", "Use the server's uploaded profile artwork when available.", "📎"),
+                ("Custom Artwork", "custom", "Use your personal upload, or the server upload when no personal image exists.", "📎"),
             ],
         ),
         "layout": (
@@ -665,11 +1042,13 @@ class ProfileAppearanceView(discord.ui.View):
         _ = button
         await _color_picker(interaction, server=self.server)
 
-    @discord.ui.button(label="Custom Colors", emoji="🖌️", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Mix Colors", emoji="🖌️", style=discord.ButtonStyle.secondary, row=0)
     async def custom_colors(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await interaction.response.send_modal(
-            CustomProfileColorsModal(server=self.server, author_id=self.author_id)
+        await _open_color_mixer(
+            interaction,
+            server=self.server,
+            author_id=self.author_id,
         )
 
     @discord.ui.button(label="Background", emoji="🌄", style=discord.ButtonStyle.secondary, row=1)
@@ -686,6 +1065,20 @@ class ProfileAppearanceView(discord.ui.View):
     async def frame(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _simple_picker(interaction, server=self.server, kind="frame")
+
+    @discord.ui.button(label="Custom Art Guide", emoji="📎", style=discord.ButtonStyle.secondary, row=2)
+    async def art_guide(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _private(
+            interaction,
+            content=(
+                "## 📎 Custom Profile Background\n"
+                "Use `/dank profile background-upload`, attach the image, and set **server_default** only when editing server defaults.\n\n"
+                + profile_background_requirements()
+            ),
+            file=discord.File(BytesIO(profile_background_guide()), filename="profile-background-safe-zones.png"),
+            view=ProfileAppearanceView(author_id=self.author_id, server=self.server),
+        )
 
     @discord.ui.button(label="Preview", emoji="👀", style=discord.ButtonStyle.success, row=2)
     async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -704,21 +1097,22 @@ class ProfileAppearanceView(discord.ui.View):
 class PlatformEditModal(discord.ui.Modal):
     def __init__(self, *, author_id: int, platform: str, entry: Mapping[str, Any]) -> None:
         spec = PLATFORM_SPECS[platform]
-        super().__init__(title=f"{spec.label} Profile", timeout=900)
+        super().__init__(title=f"{spec.label} Details", timeout=900)
         self.author_id = int(author_id)
         self.platform = platform
         self.username = discord.ui.TextInput(
-            label="Username or handle",
+            label="Username or handle (optional)",
             default=str(entry.get("username") or "")[:80],
             max_length=80,
-            required=True,
+            required=False,
+            placeholder="Leave blank when you only want the platform logo",
         )
         self.url = discord.ui.TextInput(
             label="Official profile link (optional)",
             default=str(entry.get("url") or "")[:500],
             max_length=500,
             required=False,
-            placeholder="Leave blank for username-only platforms",
+            placeholder="Only supported official profile links are accepted",
         )
         self.add_item(self.username)
         self.add_item(self.url)
@@ -728,14 +1122,27 @@ class PlatformEditModal(discord.ui.Modal):
             return await _private(interaction, content="❌ Only the person who opened this editor can submit it.")
         user = await get_profile_user(self.author_id, refresh=True)
         current = dict(user.get("platforms") or {}).get(self.platform)
-        shared = bool(current.get("shared")) if isinstance(current, Mapping) else False
+        current = dict(current) if isinstance(current, Mapping) else {}
+        shared = bool(current.get("shared"))
+        username = str(self.username.value or "").strip()
+        profile_url = str(self.url.value or "").strip()
+        mode = platform_entry_mode(current) if current else ""
+        if not username and not profile_url:
+            mode = "logo"
+        elif mode == "link" and not profile_url:
+            mode = "username" if username else "logo"
+        elif mode == "username" and not username:
+            mode = "link" if profile_url else "logo"
+        elif not mode or mode == "logo":
+            mode = "link" if profile_url else "username" if username else "logo"
         try:
             entry = await save_platform_identity(
                 self.author_id,
                 self.platform,
-                username=str(self.username.value),
-                profile_url=str(self.url.value),
+                username=username,
+                profile_url=profile_url,
                 shared=shared,
+                mode=mode,
             )
         except InvalidPlatformProfile as exc:
             return await _private(interaction, content=f"❌ {exc}")
@@ -745,7 +1152,7 @@ class PlatformEditModal(discord.ui.Modal):
         spec = PLATFORM_SPECS[self.platform]
         await _edit_private(
             interaction,
-            content=f"✅ {spec.label} saved. Choose **Make Public** when you want it shown on your signature.",
+            content=f"✅ {spec.label} saved. Choose how it should appear below.",
             embed=_platform_detail_embed(self.platform, entry),
             view=PlatformDetailView(author_id=self.author_id, platform=self.platform, entry=entry),
         )
@@ -753,24 +1160,118 @@ class PlatformEditModal(discord.ui.Modal):
 
 def _platform_detail_embed(platform: str, entry: Mapping[str, Any]) -> discord.Embed:
     spec = PLATFORM_SPECS[platform]
-    username = str(entry.get("username") or "").strip()
-    shared = bool(entry.get("shared")) and bool(username)
+    raw = dict(entry or {})
+    username = str(raw.get("username") or "").strip()
+    shared = bool(raw.get("shared"))
+    mode = platform_entry_mode(raw)
+    mode_label = {
+        "link": "Official profile link",
+        "username": "Copy-ready username button",
+        "logo": "Logo only",
+    }[mode]
+    title_prefix = f"{spec.emoji} " if spec.emoji else ""
     embed = discord.Embed(
-        title=f"{spec.emoji} {spec.label}",
+        title=f"{title_prefix}{spec.label}",
         description=(
-            "Use the large visibility button below. **Make Public** allows this account to appear on your compact "
-            "signature; **Make Private** hides it everywhere."
+            "**Link** opens an official profile. **Username** shows the gamertag as a button and returns a private "
+            "copy-ready box in the same channel. **Logo only** shows the real platform mark without requiring details."
         ),
         color=discord.Color.green() if shared else discord.Color.blurple(),
     )
     embed.add_field(
-        name="Username",
-        value=f"`{display_profile_username(username)}`" if username else "Not saved yet",
+        name="Saved username",
+        value=f"`{display_profile_username(username)}`" if username else "Not required",
         inline=False,
     )
-    embed.add_field(name="Visibility", value="🌐 Public" if shared else "🔒 Private", inline=True)
-    embed.add_field(name="Official link", value="Saved" if entry.get("url") else "Username only", inline=True)
+    embed.add_field(name="Visibility", value="Public" if shared else "Private", inline=True)
+    embed.add_field(name="Public display", value=mode_label if shared else "Hidden", inline=True)
+    embed.add_field(name="Official link", value="Saved" if raw.get("url") else "Not saved", inline=True)
     return embed
+
+
+class _PlatformModeButton(discord.ui.Button):
+    def __init__(self, *, author_id: int, platform: str, entry: Mapping[str, Any], mode: str) -> None:
+        spec = PLATFORM_SPECS[platform]
+        raw = dict(entry or {})
+        labels = {"link": "Show Link", "username": "Show Username", "logo": "Logo Only"}
+        disabled = (mode == "link" and not str(raw.get("url") or "").strip()) or (
+            mode == "username" and not str(raw.get("username") or "").strip()
+        )
+        super().__init__(
+            label=labels[mode],
+            emoji=spec.emoji if mode == "logo" else None,
+            style=(
+                discord.ButtonStyle.success
+                if bool(raw.get("shared")) and platform_entry_mode(raw) == mode
+                else discord.ButtonStyle.secondary
+            ),
+            disabled=disabled,
+            row=0,
+        )
+        self.author_id = int(author_id)
+        self.platform = platform
+        self.mode = mode
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        user = await get_profile_user(self.author_id, refresh=True)
+        raw = dict(user.get("platforms") or {}).get(self.platform)
+        raw = dict(raw) if isinstance(raw, Mapping) else {}
+        try:
+            entry = await save_platform_identity(
+                self.author_id,
+                self.platform,
+                username=raw.get("username", ""),
+                profile_url=raw.get("url", ""),
+                shared=True,
+                mode=self.mode,
+            )
+        except (InvalidPlatformProfile, ProfileStorageUnavailable) as exc:
+            return await _private(interaction, content=f"❌ {exc}")
+        await _invalidate(interaction, all_guilds=True)
+        await _edit_private(
+            interaction,
+            content=f"✅ {PLATFORM_SPECS[self.platform].label} now uses **{self.label}**.",
+            embed=_platform_detail_embed(self.platform, entry),
+            view=PlatformDetailView(author_id=self.author_id, platform=self.platform, entry=entry),
+        )
+
+
+class _PlatformPrivateButton(discord.ui.Button):
+    def __init__(self, *, author_id: int, platform: str, entry: Mapping[str, Any]) -> None:
+        raw = dict(entry or {})
+        super().__init__(
+            label="Make Private",
+            style=discord.ButtonStyle.danger,
+            disabled=not bool(raw.get("shared")),
+            row=0,
+        )
+        self.author_id = int(author_id)
+        self.platform = platform
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        user = await get_profile_user(self.author_id, refresh=True)
+        raw = dict(user.get("platforms") or {}).get(self.platform)
+        raw = dict(raw) if isinstance(raw, Mapping) else {}
+        if not raw:
+            return await _private(interaction, content="Nothing is saved for that platform yet.")
+        try:
+            entry = await save_platform_identity(
+                self.author_id,
+                self.platform,
+                username=raw.get("username", ""),
+                profile_url=raw.get("url", ""),
+                shared=False,
+                mode=platform_entry_mode(raw),
+            )
+        except (InvalidPlatformProfile, ProfileStorageUnavailable) as exc:
+            return await _private(interaction, content=f"❌ {exc}")
+        await _invalidate(interaction, all_guilds=True)
+        await _edit_private(
+            interaction,
+            content=f"✅ {PLATFORM_SPECS[self.platform].label} is now private.",
+            embed=_platform_detail_embed(self.platform, entry),
+            view=PlatformDetailView(author_id=self.author_id, platform=self.platform, entry=entry),
+        )
 
 
 class PlatformDetailView(discord.ui.View):
@@ -779,12 +1280,13 @@ class PlatformDetailView(discord.ui.View):
         self.author_id = int(author_id)
         self.platform = str(platform)
         raw = dict(entry or {})
-        has_identity = bool(str(raw.get("username") or "").strip())
-        shared = bool(raw.get("shared")) and has_identity
-        self.share.label = "Make Private" if shared else "Make Public"
-        self.share.emoji = "🔒" if shared else "🌐"
-        self.share.style = discord.ButtonStyle.danger if shared else discord.ButtonStyle.success
-        self.share.disabled = not has_identity
+        spec = PLATFORM_SPECS[self.platform]
+        if spec.supports_url:
+            self.add_item(_PlatformModeButton(author_id=self.author_id, platform=self.platform, entry=raw, mode="link"))
+        self.add_item(_PlatformModeButton(author_id=self.author_id, platform=self.platform, entry=raw, mode="username"))
+        self.add_item(_PlatformModeButton(author_id=self.author_id, platform=self.platform, entry=raw, mode="logo"))
+        self.add_item(_PlatformPrivateButton(author_id=self.author_id, platform=self.platform, entry=raw))
+        self.remove.disabled = not bool(raw)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.author_id:
@@ -792,7 +1294,7 @@ class PlatformDetailView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="Add / Edit", emoji="✏️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Add / Edit Details", style=discord.ButtonStyle.primary, row=1)
     async def edit(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         user = await get_profile_user(self.author_id, refresh=True)
@@ -802,45 +1304,17 @@ class PlatformDetailView(discord.ui.View):
             PlatformEditModal(author_id=self.author_id, platform=self.platform, entry=entry)
         )
 
-    @discord.ui.button(label="Make Public", emoji="🌐", style=discord.ButtonStyle.success, row=0)
-    async def share(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        try:
-            user = await get_profile_user(self.author_id, refresh=True)
-            raw = dict(user.get("platforms") or {}).get(self.platform)
-            if not isinstance(raw, Mapping) or not str(raw.get("username") or "").strip():
-                return await _private(interaction, content="Add the username first, then choose whether to share it.")
-            entry = await save_platform_identity(
-                self.author_id,
-                self.platform,
-                username=raw.get("username"),
-                profile_url=raw.get("url"),
-                shared=not bool(raw.get("shared")),
-            )
-        except (InvalidPlatformProfile, ProfileStorageUnavailable) as exc:
-            return await _private(interaction, content=f"❌ {exc}")
-        await _invalidate(interaction, all_guilds=True)
-        await _edit_private(
-            interaction,
-            content=(
-                f"✅ {PLATFORM_SPECS[self.platform].label} is now "
-                f"**{'Public' if entry['shared'] else 'Private'}**."
-            ),
-            embed=_platform_detail_embed(self.platform, entry),
-            view=PlatformDetailView(author_id=self.author_id, platform=self.platform, entry=entry),
-        )
-
-    @discord.ui.button(label="Remove", emoji="🗑️", style=discord.ButtonStyle.danger, row=0)
+    @discord.ui.button(label="Remove", style=discord.ButtonStyle.danger, row=1)
     async def remove(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         try:
-            removed = await remove_platform_identity(self.author_id, self.platform)
+            await remove_platform_identity(self.author_id, self.platform)
         except ProfileStorageUnavailable:
             return await _private(interaction, content="❌ Private profile storage is unavailable. Nothing changed.")
         await _invalidate(interaction, all_guilds=True)
         await open_platform_manager(interaction, replace=True)
 
-    @discord.ui.button(label="Back to Platforms", emoji="↩️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Back to Platforms", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_platform_manager(interaction, replace=True)
@@ -904,17 +1378,25 @@ async def open_platform_manager(interaction: discord.Interaction, *, replace: bo
     lines = []
     for key, spec in PLATFORM_SPECS.items():
         raw = platforms.get(key)
-        if not isinstance(raw, Mapping) or not raw.get("username"):
+        if not isinstance(raw, Mapping):
             continue
+        mode = platform_entry_mode(raw)
+        username = str(raw.get("username") or "").strip()
+        identity = (
+            f"`{display_profile_username(username)}`"
+            if username and mode != "logo"
+            else "Logo only"
+        )
+        prefix = f"{spec.emoji} " if spec.emoji else ""
         lines.append(
-            f"{spec.emoji} **{spec.label}:** `{display_profile_username(raw.get('username'))}` — "
-            f"{'🌐 Public' if raw.get('shared') else '🔒 Private'}"
+            f"{prefix}**{spec.label}:** {identity} — "
+            f"{'🌐 Public' if raw.get('shared') else '🔒 Private'} • {mode.title()}"
         )
     embed = discord.Embed(
         title="🎮 Platforms & Accounts",
         description=(
-            "Choose an account below. The next screen gives you an obvious **Make Public** or **Make Private** "
-            "button. Saving a username never exposes it automatically."
+            "Choose a platform, then select **Link**, **Username**, **Logo only**, or **Private**. "
+            "Logo only needs no account details, and saving details never exposes them automatically."
         ),
         color=discord.Color.blurple(),
     )
@@ -924,6 +1406,58 @@ async def open_platform_manager(interaction: discord.Interaction, *, replace: bo
         await _edit_private(interaction, embed=embed, view=panel)
     else:
         await _private(interaction, embed=embed, view=panel)
+
+
+async def open_server_role_display(interaction: discord.Interaction) -> None:
+    member = _member(interaction)
+    if member is None or interaction.guild is None:
+        return await _private(interaction, content="❌ Use this inside a server as a member.")
+    user = await get_profile_user(member.id, refresh=True)
+    guild_row = await get_profile_guild_settings(member.guild.id, member.id, refresh=True)
+    enabled = bool(
+        effective_preferences(user.get("preferences"), guild_row.get("settings")).get("show_server_roles", False)
+    )
+    embed = discord.Embed(
+        title="Server Role Display",
+        description=(
+            "This only controls whether safe roles already assigned by this server appear on your signature. "
+            "It does **not** open or edit pronouns, identity, interests, or cosmetic tags."
+        ),
+        color=discord.Color.green() if enabled else discord.Color.blurple(),
+    )
+    embed.add_field(name="Current setting", value="Shown" if enabled else "Hidden", inline=False)
+    await _edit_private(
+        interaction,
+        embed=embed,
+        view=ServerRoleDisplayView(author_id=member.id, enabled=enabled),
+    )
+
+
+class ServerRoleDisplayView(discord.ui.View):
+    def __init__(self, *, author_id: int, enabled: bool) -> None:
+        super().__init__(timeout=600)
+        self.author_id = int(author_id)
+        self.enabled = bool(enabled)
+        self.toggle.label = "Hide Server Roles" if self.enabled else "Show Server Roles"
+        self.toggle.style = discord.ButtonStyle.danger if self.enabled else discord.ButtonStyle.success
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != self.author_id:
+            await _private(interaction, content="❌ Open your own profile settings to use this.")
+            return False
+        return True
+
+    @discord.ui.button(label="Show Server Roles", style=discord.ButtonStyle.success, row=0)
+    async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await upsert_profile_user_preferences(self.author_id, {"show_server_roles": not self.enabled})
+        await _invalidate(interaction, all_guilds=True)
+        await open_server_role_display(interaction)
+
+    @discord.ui.button(label="Back to Signature", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_profile_signature_studio(interaction, replace=True)
 
 
 class SignatureStudioView(discord.ui.View):
@@ -966,8 +1500,13 @@ class SignatureStudioView(discord.ui.View):
         _ = button
         await open_platform_manager(interaction, replace=True)
 
-    @discord.ui.button(label="Profile Roles", emoji="🎭", style=discord.ButtonStyle.secondary, row=1)
-    async def roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="Server Roles", style=discord.ButtonStyle.secondary, row=1)
+    async def server_roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_server_role_display(interaction)
+
+    @discord.ui.button(label="Profile Tags", style=discord.ButtonStyle.secondary, row=1)
+    async def profile_tags(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         member = _member(interaction)
         if member is None:
@@ -997,7 +1536,7 @@ class SignatureStudioView(discord.ui.View):
                 effective_preferences(
                     user.get("preferences"),
                     guild_row.get("settings"),
-                ).get("live_cards_enabled", True)
+                ).get("live_cards_enabled", False)
             )
             if current:
                 await upsert_profile_user_preferences(member.id, {"live_cards_enabled": False})
@@ -1017,7 +1556,7 @@ class SignatureStudioView(discord.ui.View):
                 effective_preferences(
                     updated_user.get("preferences"),
                     updated_guild.get("settings"),
-                ).get("live_cards_enabled", True)
+                ).get("live_cards_enabled", False)
             )
             embed = await _studio_embed(member)
         except ProfileStorageUnavailable:
@@ -1060,7 +1599,7 @@ async def open_profile_signature_studio(interaction: discord.Interaction, *, rep
         effective_preferences(
             user.get("preferences"),
             guild_row.get("settings"),
-        ).get("live_cards_enabled", True)
+        ).get("live_cards_enabled", False)
     )
     panel = SignatureStudioView(author_id=member.id, live_enabled=live_enabled)
     if replace:

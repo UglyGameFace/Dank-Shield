@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-"""Profile Builder role editor + member role suggestions.
+"""Profile Tags guidance and review-only member suggestions.
 
-Extends the existing profile/self-role module without creating a second role
-system. Staff can keep using the Profile Builder to add existing safe server
-roles to the member profile panel. Members can suggest roles for staff/owner
-review, but suggestions never create or assign roles automatically.
+The native Profile Builder owns the single Profile Tags & Cosmetics manager.
+This guard only improves labels/guidance and adds a review-only suggestion
+button. It never creates a second manager route or assigns a suggested role.
 """
 
 import re
@@ -15,11 +14,9 @@ import discord
 
 _PATCHED = False
 _ORIGINAL_HANDLE_PROFILE = None
-_ORIGINAL_HANDLE_BUILDER = None
 _ORIGINAL_MANAGER_EMBED = None
 
-_RESERVERED_ROLE_WORDS_TYPING_HELPER = ""
-_RESERVED_ROLE_WORDS = {
+_RESERVED_TAG_WORDS = {
     "admin",
     "administrator",
     "mod",
@@ -38,8 +35,7 @@ _RESERVED_ROLE_WORDS = {
     "here",
 }
 
-PROFILE_ROLES_COSMETICS_LABEL = "Server Roles / Cosmetics"
-PROFILE_ROLE_EDITOR_LABEL = "Profile Roles / Cosmetics"
+PROFILE_TAGS_LABEL = "Profile Tags & Cosmetics"
 
 
 def _log(message: str) -> None:
@@ -56,7 +52,7 @@ def _warn(message: str) -> None:
         pass
 
 
-def _clean_role_suggestion(value: Any) -> tuple[str, Optional[str]]:
+def _clean_profile_tag_suggestion(value: Any) -> tuple[str, Optional[str]]:
     raw = str(value or "").strip()
     raw = raw.replace("@everyone", "everyone").replace("@here", "here")
     raw = " ".join(raw.split())
@@ -64,14 +60,20 @@ def _clean_role_suggestion(value: Any) -> tuple[str, Optional[str]]:
     raw = raw[:80]
 
     if len(raw) < 2:
-        return "", "Role name is too short."
+        return "", "Profile tag name is too short."
     lowered = raw.casefold()
     if "http://" in lowered or "https://" in lowered or "discord.gg" in lowered:
-        return "", "Links are not allowed in role suggestions."
+        return "", "Links are not allowed in profile tag suggestions."
     words = {part.strip(" .-/()'\"") for part in re.split(r"\s+", lowered) if part.strip()}
-    if words & _RESERVED_ROLE_WORDS:
-        return "", "That role name looks like a staff/access/system role. Suggest cosmetic/community roles only."
+    if words & _RESERVED_TAG_WORDS:
+        return "", "That looks like a staff, access, or system role. Suggest optional community/profile tags only."
     return raw, None
+
+
+def _safe_reason(value: Any) -> str:
+    text = str(value or "").strip()
+    text = text.replace("@everyone", "everyone").replace("@here", "here")
+    return " ".join(text.split())[:500]
 
 
 def _custom_id(interaction: discord.Interaction) -> str:
@@ -84,72 +86,74 @@ def _custom_id(interaction: discord.Interaction) -> str:
 
 def _has_child(view: discord.ui.View, custom_id: str) -> bool:
     for child in list(getattr(view, "children", []) or []):
-        try:
-            if str(getattr(child, "custom_id", "") or "") == str(custom_id):
-                return True
-        except Exception:
-            continue
+        if str(getattr(child, "custom_id", "") or "") == str(custom_id):
+            return True
     return False
 
 
-def _button(*, label: str, emoji: str, custom_id: str, row: int, style: discord.ButtonStyle = discord.ButtonStyle.secondary) -> discord.ui.Button:
-    return discord.ui.Button(label=label, emoji=emoji, style=style, custom_id=custom_id, row=row)
-
-
-def _retitle_profile_roles_button(view: discord.ui.View, prefix: str) -> None:
-    """Make the profile role/cosmetic button obvious to normal users."""
-
+def _retitle_profile_tags_button(view: discord.ui.View, prefix: str) -> None:
     for child in list(getattr(view, "children", []) or []):
         try:
             custom_id = str(getattr(child, "custom_id", "") or "")
-            if custom_id == f"{prefix}cosmetics":
-                child.label = PROFILE_ROLES_COSMETICS_LABEL
-                child.emoji = "🧩"
-            elif custom_id == f"{prefix}builder:cosmetics":
-                child.label = PROFILE_ROLE_EDITOR_LABEL
-                child.emoji = "🧩"
+            if custom_id in {f"{prefix}cosmetics", f"{prefix}builder:cosmetics"}:
+                child.label = PROFILE_TAGS_LABEL
+                child.emoji = "🎭"
         except Exception:
             continue
 
 
-def _safe_reason(value: Any) -> str:
-    text = str(value or "").strip()
-    text = text.replace("@everyone", "everyone").replace("@here", "here")
-    text = " ".join(text.split())
-    return text[:500]
+def _suggest_button(prefix: str, *, row: int) -> discord.ui.Button:
+    return discord.ui.Button(
+        label="Suggest Profile Tag",
+        emoji="💡",
+        style=discord.ButtonStyle.secondary,
+        custom_id=f"{prefix}suggest_role",
+        row=row,
+    )
 
 
-def _role_suggestion_embed(profile: Any, guild: discord.Guild, member: discord.Member, role_name: str, reason: str) -> discord.Embed:
-    existing = None
+def _suggestion_embed(
+    profile: Any,
+    guild: discord.Guild,
+    member: discord.Member,
+    tag_name: str,
+    reason: str,
+) -> discord.Embed:
     try:
-        existing = profile._find_role_by_name(guild, role_name)
+        existing = profile._find_role_by_name(guild, tag_name)
     except Exception:
         existing = None
 
     embed = discord.Embed(
-        title="💡 Profile Role Suggestion",
-        description="A member suggested a role for the Profile Builder. Staff/owner review is required.",
+        title="💡 Profile Tag Suggestion",
+        description=(
+            "A member suggested an optional profile tag. Staff or the server owner must review it. "
+            "This request never creates or assigns a Discord role automatically."
+        ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
     )
     embed.add_field(name="Member", value=f"{member.mention}\n`{member}` (`{member.id}`)", inline=False)
     if isinstance(existing, discord.Role):
         embed.add_field(name="Existing role found", value=f"{existing.mention}\n`{existing.name}` (`{existing.id}`)", inline=False)
-        action = f"Open `/dank profile builder` → **{PROFILE_ROLE_EDITOR_LABEL}**, then add this existing role if it is safe/cosmetic."
+        action = f"Open `/dank profile builder` → **{PROFILE_TAGS_LABEL}**, then add it only if it is safe and cosmetic."
     else:
-        embed.add_field(name="Requested role", value=f"`{role_name}`", inline=False)
-        action = f"Create the role manually only if appropriate, then open `/dank profile builder` → **{PROFILE_ROLE_EDITOR_LABEL}** and add it as an existing role."
+        embed.add_field(name="Requested profile tag", value=f"`{tag_name}`", inline=False)
+        action = (
+            "Create the role manually only when appropriate, then open "
+            f"`/dank profile builder` → **{PROFILE_TAGS_LABEL}** and add the existing role."
+        )
     embed.add_field(name="Reason", value=reason or "No reason provided.", inline=False)
     embed.add_field(
         name="Safety",
         value=(
-            "This request does **not** create, assign, or approve a role automatically. "
-            "Only add safe cosmetic/community roles. Do not use this for staff, access, verification, moderation, or ticket permissions."
+            "Do not use this for staff, access, verification, moderation, ticket, or other permission-bearing roles. "
+            "Suggestions are review-only and never approve themselves."
         ),
         inline=False,
     )
     embed.add_field(name="Owner/staff action", value=action, inline=False)
-    embed.set_footer(text="Dank Shield Profile Builder • role suggestion review")
+    embed.set_footer(text="Dank Shield Profile Tags • staff-reviewed suggestion")
     return embed
 
 
@@ -158,42 +162,35 @@ def _patch_panel_views(profile: Any) -> None:
     original_edit = profile.ProfileEditView
     prefix = profile.PROFILE_PREFIX
 
-    class ProfilePanelViewWithRoleSuggestions(original_panel):
+    class ProfilePanelViewWithTagSuggestions(original_panel):
         def __init__(self) -> None:
             super().__init__()
-            _retitle_profile_roles_button(self, prefix)
-            cid = f"{prefix}suggest_role"
-            if not _has_child(self, cid):
-                self.add_item(_button(label="Suggest Role", emoji="💡", custom_id=cid, row=2))
+            _retitle_profile_tags_button(self, prefix)
+            custom_id = f"{prefix}suggest_role"
+            if not _has_child(self, custom_id):
+                self.add_item(_suggest_button(prefix, row=2))
 
-    class ProfileEditViewWithRoleSuggestions(original_edit):
+    class ProfileEditViewWithTagSuggestions(original_edit):
         def __init__(self) -> None:
             super().__init__()
-            _retitle_profile_roles_button(self, prefix)
-            cosmetics_cid = f"{prefix}cosmetics"
-            if not _has_child(self, cosmetics_cid):
-                self.add_item(_button(label=PROFILE_ROLES_COSMETICS_LABEL, emoji="🧩", custom_id=cosmetics_cid, row=2))
-            cid = f"{prefix}suggest_role"
-            if not _has_child(self, cid):
-                self.add_item(_button(label="Suggest Role", emoji="💡", custom_id=cid, row=2))
+            _retitle_profile_tags_button(self, prefix)
+            cosmetics_id = f"{prefix}cosmetics"
+            if not _has_child(self, cosmetics_id):
+                self.add_item(
+                    discord.ui.Button(
+                        label=PROFILE_TAGS_LABEL,
+                        emoji="🎭",
+                        style=discord.ButtonStyle.secondary,
+                        custom_id=cosmetics_id,
+                        row=2,
+                    )
+                )
+            suggest_id = f"{prefix}suggest_role"
+            if not _has_child(self, suggest_id):
+                self.add_item(_suggest_button(prefix, row=2))
 
-    profile.ProfilePanelView = ProfilePanelViewWithRoleSuggestions
-    profile.ProfileEditView = ProfileEditViewWithRoleSuggestions
-
-
-def _patch_builder_view(profile: Any) -> None:
-    original_builder = profile.ProfileBuilderView
-    prefix = profile.PROFILE_PREFIX
-
-    class ProfileBuilderViewWithRoleEditor(original_builder):
-        def __init__(self, *, author_id: int, ready: bool, fixable: bool, title: str) -> None:
-            super().__init__(author_id=author_id, ready=ready, fixable=fixable, title=title)
-            _retitle_profile_roles_button(self, prefix)
-            cid = f"{prefix}builder:role_editor"
-            if not _has_child(self, cid):
-                self.add_item(_button(label=PROFILE_ROLE_EDITOR_LABEL, emoji="🧩", custom_id=cid, row=1, style=discord.ButtonStyle.primary))
-
-    profile.ProfileBuilderView = ProfileBuilderViewWithRoleEditor
+    profile.ProfilePanelView = ProfilePanelViewWithTagSuggestions
+    profile.ProfileEditView = ProfileEditViewWithTagSuggestions
 
 
 def _patch_embeds(profile: Any) -> None:
@@ -204,81 +201,69 @@ def _patch_embeds(profile: Any) -> None:
     original_panel_embed = getattr(profile, "_profile_panel_embed", None)
     original_edit_embed = getattr(profile, "_profile_edit_embed", None)
 
-    async def _profile_role_editor_embed(guild: discord.Guild) -> discord.Embed:
+    async def _profile_tags_manager_embed(guild: discord.Guild) -> discord.Embed:
         if callable(_ORIGINAL_MANAGER_EMBED):
             embed = await _ORIGINAL_MANAGER_EMBED(guild)
         else:
             embed = discord.Embed(color=discord.Color.blurple(), timestamp=discord.utils.utcnow())
-        embed.title = f"🧩 {PROFILE_ROLE_EDITOR_LABEL}"
+        embed.title = f"🎭 {PROFILE_TAGS_LABEL}"
         embed.description = (
-            "Add existing safe server roles that members may self-select from the Profile Panel. "
-            "Members can also suggest roles, but staff/owner must review and add them here."
+            "Choose existing safe Discord roles that members may self-select as optional profile tags. "
+            "This is separate from the member's ordinary server-role visibility setting."
         )
         embed.add_field(
-            name="What this controls",
-            value="These are profile/server roles/cosmetics members can choose for themselves. They are still real Discord roles, just safety-checked before being offered.",
+            name="What belongs here",
+            value="Pronouns, identity, interests, community labels, and harmless cosmetics.",
             inline=False,
         )
         embed.add_field(
-            name="Member suggestions",
-            value="Suggestions are review-only. They never create or assign roles automatically.",
+            name="What never belongs here",
+            value="Staff, access, verification, moderation, ticket, or permission-bearing roles.",
             inline=False,
         )
-        embed.set_footer(text="Dank Shield Profile Builder • existing-role editor")
+        embed.set_footer(text="Dank Shield Profile Tags • one native manager")
         return embed
 
-    def _panel_embed_with_role_suggestions(guild: discord.Guild, *args: Any, **kwargs: Any) -> discord.Embed:
+    def _panel_embed_with_suggestions(guild: discord.Guild, *args: Any, **kwargs: Any) -> discord.Embed:
         embed = original_panel_embed(guild, *args, **kwargs) if callable(original_panel_embed) else discord.Embed()
         embed.add_field(
-            name=PROFILE_ROLES_COSMETICS_LABEL,
-            value="Use **Server Roles / Cosmetics** to pick optional server roles offered through the Profile Builder.",
-            inline=False,
-        )
-        embed.add_field(
-            name="Suggest a role",
-            value="Use **Suggest Role** if a safe community/profile role is missing. Staff/owner reviews it first.",
+            name="Missing profile tag?",
+            value="Use **Suggest Profile Tag**. Staff or the owner reviews it before anything is created or offered.",
             inline=False,
         )
         return embed
 
-    def _edit_embed_with_role_suggestions(member: discord.Member, *args: Any, **kwargs: Any) -> discord.Embed:
+    def _edit_embed_with_suggestions(member: discord.Member, *args: Any, **kwargs: Any) -> discord.Embed:
         embed = original_edit_embed(member, *args, **kwargs) if callable(original_edit_embed) else discord.Embed()
         embed.add_field(
-            name=PROFILE_ROLES_COSMETICS_LABEL,
-            value="Pick optional server roles/cosmetics, or suggest one the owner should add.",
-            inline=False,
-        )
-        embed.add_field(
-            name="Missing role?",
-            value="Use **Suggest Role** for profile roles you think the server owner should add.",
+            name=PROFILE_TAGS_LABEL,
+            value="Pick optional self-selected tags and cosmetics, or suggest a missing safe profile tag.",
             inline=False,
         )
         return embed
 
-    profile._profile_cosmetic_manager_embed = _profile_role_editor_embed
+    profile._profile_cosmetic_manager_embed = _profile_tags_manager_embed
     if callable(original_panel_embed):
-        profile._profile_panel_embed = _panel_embed_with_role_suggestions
+        profile._profile_panel_embed = _panel_embed_with_suggestions
     if callable(original_edit_embed):
-        profile._profile_edit_embed = _edit_embed_with_role_suggestions
+        profile._profile_edit_embed = _edit_embed_with_suggestions
 
 
 def _patch_handlers(profile: Any) -> None:
-    global _ORIGINAL_HANDLE_PROFILE, _ORIGINAL_HANDLE_BUILDER
+    global _ORIGINAL_HANDLE_PROFILE
     if _ORIGINAL_HANDLE_PROFILE is None:
         _ORIGINAL_HANDLE_PROFILE = getattr(profile, "_handle_profile_interaction", None)
-    if _ORIGINAL_HANDLE_BUILDER is None:
-        _ORIGINAL_HANDLE_BUILDER = getattr(profile, "_handle_builder_action", None)
 
-    class ProfileRoleSuggestionModal(discord.ui.Modal, title="Suggest Profile Role"):
-        role_name = discord.ui.TextInput(
-            label="Role you want added",
+    class ProfileTagSuggestionModal(discord.ui.Modal, title="Suggest Profile Tag"):
+        tag_name = discord.ui.TextInput(
+            label="Profile tag you want added",
             placeholder="Example: Artist, Night Owl, D&D, Horror Fans",
             min_length=2,
             max_length=80,
             required=True,
         )
         reason = discord.ui.TextInput(
-            label="Why should this role exist?",
+            label="Why should this profile tag exist?",
             placeholder="Optional: who would use it or where it fits",
             max_length=500,
             required=False,
@@ -291,53 +276,35 @@ def _patch_handlers(profile: Any) -> None:
             if guild is None or member is None:
                 return await profile._reply(interaction, "This only works inside the server.", ok=False)
 
-            clean, error = _clean_role_suggestion(str(self.role_name.value or ""))
+            clean, error = _clean_profile_tag_suggestion(self.tag_name.value)
             if error:
                 return await profile._reply(interaction, error, ok=False)
 
             channel = await profile._staff_review_channel(guild)
             if not isinstance(channel, discord.TextChannel):
-                return await profile._reply(interaction, "No staff/modlog channel found for role suggestions. Set a modlog channel first.", ok=False)
+                return await profile._reply(
+                    interaction,
+                    "No staff/modlog channel was found for profile tag suggestions. Set a modlog channel first.",
+                    ok=False,
+                )
 
             try:
                 await channel.send(
-                    embed=_role_suggestion_embed(profile, guild, member, clean, _safe_reason(self.reason.value)),
+                    embed=_suggestion_embed(profile, guild, member, clean, _safe_reason(self.reason.value)),
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
-                await profile._reply(interaction, f"Role suggestion sent to staff: `{clean}`", ok=True)
+                await profile._reply(interaction, f"Profile tag suggestion sent to staff: `{clean}`", ok=True)
             except Exception as exc:
-                await profile._reply(interaction, f"Could not send role suggestion: {type(exc).__name__}.", ok=False)
-
-    async def _open_role_editor(interaction: discord.Interaction) -> None:
-        guild = interaction.guild
-        if guild is None:
-            return await profile._reply(interaction, "This only works inside the server.", ok=False)
-        await interaction.response.send_message(
-            embed=await profile._profile_cosmetic_manager_embed(guild),
-            view=profile.ProfileCosmeticRoleManagerView(author_id=int(interaction.user.id)),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-
-    async def _handle_builder_action_patched(interaction: discord.Interaction, action: str) -> bool:
-        if str(action or "") == "role_editor":
-            await _open_role_editor(interaction)
-            return True
-        if callable(_ORIGINAL_HANDLE_BUILDER):
-            return await _ORIGINAL_HANDLE_BUILDER(interaction, action)
-        return False
+                await profile._reply(interaction, f"Could not send profile tag suggestion: {type(exc).__name__}.", ok=False)
 
     async def _handle_profile_interaction_patched(interaction: discord.Interaction) -> bool:
-        custom_id = _custom_id(interaction)
-        prefix = profile.PROFILE_PREFIX
-        if custom_id == f"{prefix}suggest_role":
-            await interaction.response.send_modal(ProfileRoleSuggestionModal())
+        if _custom_id(interaction) == f"{profile.PROFILE_PREFIX}suggest_role":
+            await interaction.response.send_modal(ProfileTagSuggestionModal())
             return True
         if callable(_ORIGINAL_HANDLE_PROFILE):
             return await _ORIGINAL_HANDLE_PROFILE(interaction)
         return False
 
-    profile._handle_builder_action = _handle_builder_action_patched
     profile._handle_profile_interaction = _handle_profile_interaction_patched
 
 
@@ -349,11 +316,10 @@ def apply() -> bool:
         from stoney_verify.commands_ext import public_self_roles_group as profile
 
         _patch_panel_views(profile)
-        _patch_builder_view(profile)
         _patch_embeds(profile)
         _patch_handlers(profile)
         _PATCHED = True
-        _log("active; Profile Builder has server roles/cosmetics editor and member role suggestions")
+        _log("active; native Profile Tags manager retained and review-only suggestions enabled")
         return True
     except Exception as exc:
         _warn(f"failed: {type(exc).__name__}: {exc}")

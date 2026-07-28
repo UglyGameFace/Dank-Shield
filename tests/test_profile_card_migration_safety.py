@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "supabase" / "migrations"
 PROFILE_MIGRATION = MIGRATIONS / "20260725_live_profile_cards.sql"
 PER_MEMBER_PROFILE_MIGRATION = MIGRATIONS / "202607270001_live_profile_cards_per_member.sql"
+PROFILE_RUNTIME = ROOT / "stoney_verify" / "profile_card_runtime.py"
 ORIGINAL_GUILD_CONFIG_MIGRATION = MIGRATIONS / "20260426_create_guild_configs.sql"
 GUILD_CONFIG_MIGRATION = MIGRATIONS / "202604260001_guild_configs.sql"
 TICKET_PARITY_MIGRATION = MIGRATIONS / "20260424_tickettool_parity_ticket_columns.sql"
@@ -100,13 +101,22 @@ def test_live_profile_card_migration_is_idempotent_and_service_role_only():
     assert "primary key (guild_id, channel_id)" in source
 
 
-def test_live_profile_card_per_member_migration_changes_the_primary_key_safely():
-    source = PER_MEMBER_PROFILE_MIGRATION.read_text(encoding="utf-8").lower()
+def test_deployed_per_member_migration_remains_safe_and_runtime_collapses_rows():
+    migration = PER_MEMBER_PROFILE_MIGRATION.read_text(encoding="utf-8").lower()
+    runtime = PROFILE_RUNTIME.read_text(encoding="utf-8")
 
-    assert "to_regclass('public.dank_live_profile_cards') is null" in source
-    assert "delete from public.dank_live_profile_cards" in source
-    assert "alter column user_id set not null" in source
-    assert "drop constraint" in source
-    assert "primary key (guild_id, channel_id, user_id)" in source
-    assert "idx_dank_live_profile_cards_channel" in source
-    assert "one bot-authored live profile card per member per configured channel" in source
+    assert "to_regclass('public.dank_live_profile_cards') is null" in migration
+    assert "delete from public.dank_live_profile_cards" in migration
+    assert "alter column user_id set not null" in migration
+    assert "drop constraint" in migration
+    assert "primary key (guild_id, channel_id, user_id)" in migration
+    assert "idx_dank_live_profile_cards_channel" in migration
+
+    # The deployed schema can retain multiple historical rows, but the runtime
+    # must query all channel rows, delete them as one unit, and persist only the
+    # single current channel owner before another public card is allowed.
+    assert "list_live_card_states_for_channel(*key)" in runtime
+    assert "await delete_live_card_state(*key)" in runtime
+    assert "collapsed legacy stack" in runtime
+    assert "_ChannelKey = tuple[int, int]" in runtime
+    assert "_MemberCardKey" not in runtime

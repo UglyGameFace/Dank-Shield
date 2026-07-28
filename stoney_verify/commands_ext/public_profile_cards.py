@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional
 
+import asyncio
 import discord
 from discord import app_commands
 
@@ -16,10 +17,21 @@ from stoney_verify.profile_card_runtime import (
     parse_live_card_config,
     render_live_profile_card,
 )
-from stoney_verify.profile_card_service import ProfileStorageUnavailable, get_effective_profile_settings
+from stoney_verify.profile_card_service import (
+    PLATFORM_SPECS,
+    ProfileStorageUnavailable,
+    display_profile_username,
+    effective_preferences,
+    get_effective_profile_settings,
+    get_profile_guild_settings,
+    get_profile_user,
+    platform_entry_mode,
+)
 
 _RUNTIME_ATTRIBUTE = _core._RUNTIME_ATTRIBUTE
 _REGISTERED = False
+_PROFILE_COPY_LISTENER_REGISTERED = False
+_PROFILE_COPY_PREFIX = "dank:profilecopy:v1:"
 
 _defer_private = _core._defer_private
 _send_private = _core._send_private
@@ -90,7 +102,7 @@ class _LiveSignatureToggleButton(discord.ui.Button):
                 _core.effective_preferences(
                     user_row.get("preferences"),
                     guild_row.get("settings"),
-                ).get("live_cards_enabled", True)
+                ).get("live_cards_enabled", False)
             )
             if current:
                 await _core.upsert_profile_user_preferences(
@@ -140,16 +152,26 @@ class _ProfilePreviewView(discord.ui.View):
         super().__init__(timeout=600)
         self.author_id = int(author_id)
         for child in list(getattr(source_view, "children", []) or []):
-            if not isinstance(child, discord.ui.Button) or not child.url:
+            if not isinstance(child, discord.ui.Button):
                 continue
-            self.add_item(
-                discord.ui.Button(
-                    label=str(child.label or "Profile")[:80],
-                    emoji=child.emoji,
-                    style=discord.ButtonStyle.link,
-                    url=str(child.url),
+            if child.url:
+                self.add_item(
+                    discord.ui.Button(
+                        label=str(child.label or "Profile")[:80],
+                        emoji=child.emoji,
+                        style=discord.ButtonStyle.link,
+                        url=str(child.url),
+                    )
                 )
-            )
+            elif child.custom_id:
+                self.add_item(
+                    discord.ui.Button(
+                        label=str(child.label or "Username")[:80],
+                        emoji=child.emoji,
+                        style=child.style,
+                        custom_id=str(child.custom_id),
+                    )
+                )
         self.add_item(_BackToPrivacyButton())
         self.add_item(_BackToSignatureButton())
 
@@ -212,6 +234,117 @@ class _PreviewProfileButton(discord.ui.Button):
         await interaction.edit_original_response(**payload)
 
 
+async def profile_background_upload(
+    interaction: discord.Interaction,
+    image: discord.Attachment,
+    server_default: bool = False,
+) -> None:
+    from stoney_verify.profile_custom_background import (
+        PROFILE_BACKGROUND_UPLOAD_MAX_BYTES,
+        normalize_profile_background_upload,
+        profile_background_requirements,
+    )
+    from stoney_verify.profile_signature_studio import _invalidate, _invalidate_guild, _preview
+    from stoney_verify.profile_signature_style import (
+        MEMBER_CUSTOM_BACKGROUND_KEY,
+        PROFILE_CUSTOM_BACKGROUND_KEY,
+        SERVER_STYLE_CONFIG_KEYS,
+        encode_profile_asset,
+    )
+    from stoney_verify.guild_config import upsert_guild_config
+    from stoney_verify.profile_card_service import upsert_profile_user_preferences
+
+    member = interaction.user if isinstance(interaction.user, discord.Member) else None
+    if member is None or interaction.guild is None:
+        return await _safe_ephemeral(interaction, "Use this command inside a server.", ok=False)
+    if server_default:
+        from .public_setup_group import _require_setup_permission
+        if not await _require_setup_permission(interaction):
+            return
+    await _defer_private(interaction)
+    try:
+        if int(getattr(image, "size", 0) or 0) > PROFILE_BACKGROUND_UPLOAD_MAX_BYTES:
+            raise ValueError("The upload is larger than 8 MB.")
+        normalized = normalize_profile_background_upload(await image.read())
+        encoded = encode_profile_asset(normalized)
+        if server_default:
+            await upsert_guild_config(
+                interaction.guild.id,
+                {
+                    PROFILE_CUSTOM_BACKGROUND_KEY: encoded,
+                    SERVER_STYLE_CONFIG_KEYS["background_mode"]: "custom",
+                },
+            )
+            await _invalidate_guild(interaction)
+        else:
+            await upsert_profile_user_preferences(
+                member.id,
+                {
+                    MEMBER_CUSTOM_BACKGROUND_KEY: encoded,
+                    "signature_background_mode": "custom",
+                },
+            )
+            await _invalidate(interaction, all_guilds=True)
+    except ValueError as exc:
+        return await _safe_ephemeral(
+            interaction,
+            f"{exc}\n\n{profile_background_requirements()}",
+            ok=False,
+        )
+    except ProfileStorageUnavailable:
+        return await _safe_ephemeral(interaction, "Private profile storage is unavailable. Nothing changed.", ok=False)
+    await _preview(
+        interaction,
+        member=member,
+        notice="✅ Custom background uploaded. Theme, custom colors, font, layout, and frame were preserved.",
+    )
+
+
+async def profile_background_clear(
+    interaction: discord.Interaction,
+    server_default: bool = False,
+) -> None:
+    from stoney_verify.profile_signature_studio import _invalidate, _invalidate_guild, _preview
+    from stoney_verify.profile_signature_style import (
+        MEMBER_CUSTOM_BACKGROUND_KEY,
+        PROFILE_CUSTOM_BACKGROUND_KEY,
+        SERVER_STYLE_CONFIG_KEYS,
+    )
+    from stoney_verify.guild_config import upsert_guild_config
+    from stoney_verify.profile_card_service import upsert_profile_user_preferences
+
+    member = interaction.user if isinstance(interaction.user, discord.Member) else None
+    if member is None or interaction.guild is None:
+        return await _safe_ephemeral(interaction, "Use this command inside a server.", ok=False)
+    if server_default:
+        from .public_setup_group import _require_setup_permission
+        if not await _require_setup_permission(interaction):
+            return
+    await _defer_private(interaction)
+    if server_default:
+        await upsert_guild_config(
+            interaction.guild.id,
+            {
+                PROFILE_CUSTOM_BACKGROUND_KEY: "",
+                SERVER_STYLE_CONFIG_KEYS["background_mode"]: "theme",
+            },
+        )
+        await _invalidate_guild(interaction)
+    else:
+        try:
+            await upsert_profile_user_preferences(
+                member.id,
+                {
+                    MEMBER_CUSTOM_BACKGROUND_KEY: "",
+                    "signature_background_mode": "theme",
+                },
+            )
+            await _invalidate(interaction, all_guilds=True)
+        except ProfileStorageUnavailable:
+            return await _safe_ephemeral(interaction, "Private profile storage is unavailable. Nothing changed.", ok=False)
+    await _preview(interaction, member=member, notice="✅ Custom background removed. Theme artwork is active again.")
+
+
 class ProfileSettingsView(_core.ProfileSettingsView):
     def __init__(
         self,
@@ -227,14 +360,16 @@ class ProfileSettingsView(_core.ProfileSettingsView):
         global_values = dict(user_preferences or {})
         local_values = dict(guild_settings or {})
         detail_specs = (
-            ("Roles", "show_roles", "🎭"),
+            ("Server Roles", "show_server_roles", "🏷️"),
+            ("Profile Tags", "show_profile_tags", "🎭"),
             ("Dates", "show_account_dates", "📅"),
             ("Accounts", "show_platforms", "🔗"),
+            ("Server Branding", "show_server_branding", "🏰"),
         )
         effective_values = _core.effective_preferences(global_values, local_values)
         self.add_item(
             _LiveSignatureToggleButton(
-                enabled=bool(effective_values.get("live_cards_enabled", True)),
+                enabled=bool(effective_values.get("live_cards_enabled", False)),
                 row=0,
             )
         )
@@ -321,7 +456,7 @@ async def send_privacy_aware_profile(
         )
 
     preferences = dict(effective.get("preferences") or {})
-    show_roles = bool(preferences.get("show_roles", True)) and "roles" in config.allowed_fields
+    show_roles = bool(preferences.get("show_profile_tags", True)) and "profile_tags" in config.allowed_fields
     if rendered is None:
         embed = discord.Embed(
             title=member.display_name,
@@ -353,9 +488,55 @@ async def send_privacy_aware_profile(
     await _send_private(interaction, **payload)
 
 
+async def _handle_profile_username_copy(interaction: discord.Interaction) -> bool:
+    """Return one currently-public username in a private, copy-ready response."""
+    if interaction.type != discord.InteractionType.component:
+        return False
+    data = interaction.data or {}
+    custom_id = str(data.get("custom_id") or "")
+    if not custom_id.startswith(_PROFILE_COPY_PREFIX):
+        return False
+    parts = custom_id.split(":", 4)
+    if len(parts) != 5:
+        await _safe_ephemeral(interaction, "That platform username is no longer available.", ok=False)
+        return True
+    try:
+        owner_id = int(parts[3])
+    except Exception:
+        owner_id = 0
+    platform = str(parts[4] or "")
+    if interaction.guild is None or owner_id <= 0 or platform not in PLATFORM_SPECS:
+        await _safe_ephemeral(interaction, "That platform username is no longer available.", ok=False)
+        return True
+    try:
+        user_row, guild_row = await asyncio.gather(
+            get_profile_user(owner_id, refresh=True),
+            get_profile_guild_settings(interaction.guild.id, owner_id, refresh=True),
+        )
+    except ProfileStorageUnavailable:
+        await _safe_ephemeral(interaction, "Private profile storage is temporarily unavailable.", ok=False)
+        return True
+    preferences = effective_preferences(user_row.get("preferences"), guild_row.get("settings"))
+    raw = dict(user_row.get("platforms") or {}).get(platform)
+    if (
+        not bool(preferences.get("show_platforms", True))
+        or not isinstance(raw, Mapping)
+        or not bool(raw.get("shared"))
+        or platform_entry_mode(raw) != "username"
+        or not str(raw.get("username") or "").strip()
+    ):
+        await _safe_ephemeral(interaction, "That member no longer shares this username.", ok=False)
+        return True
+    username = display_profile_username(raw.get("username"))
+    await _send_private(interaction, content=username)
+    return True
+
+
 def _attach_profile_commands() -> None:
     command_specs = (
         ("settings", "Open your private profile privacy and platform settings.", profile_settings),
+        ("background-upload", "Upload personal or server-default profile background artwork.", profile_background_upload),
+        ("background-clear", "Remove personal or server-default profile background artwork.", profile_background_clear),
         ("platform", "Save or update one private/shared platform identity.", profile_platform),
         ("platform-remove", "Remove one saved platform identity.", profile_platform_remove),
         ("live-cards", "Manager fallback: toggle one channel; the full picker is in /dank setup.", profile_live_cards),
@@ -370,7 +551,7 @@ def _attach_profile_commands() -> None:
 
 def register_public_profile_cards(bot: Any, tree: Any) -> None:
     del tree
-    global _REGISTERED
+    global _REGISTERED, _PROFILE_COPY_LISTENER_REGISTERED
     _attach_profile_commands()
     if bot is None:
         return
@@ -382,6 +563,14 @@ def register_public_profile_cards(bot: Any, tree: Any) -> None:
         bot.add_listener(runtime.on_ready, "on_ready")
         bot.add_listener(runtime.on_member_remove, "on_member_remove")
         bot.add_listener(runtime.on_guild_channel_delete, "on_guild_channel_delete")
+    if not _PROFILE_COPY_LISTENER_REGISTERED:
+        @bot.listen("on_interaction")
+        async def _dank_profile_username_copy_listener(interaction: discord.Interaction) -> None:
+            try:
+                await _handle_profile_username_copy(interaction)
+            except Exception as exc:
+                print(f"⚠️ profile username copy failed: {type(exc).__name__}: {exc}")
+        _PROFILE_COPY_LISTENER_REGISTERED = True
     if not _REGISTERED:
         _REGISTERED = True
         print("✅ public_profile_cards: attached compact signatures, privacy, platforms, and lifecycle controls")

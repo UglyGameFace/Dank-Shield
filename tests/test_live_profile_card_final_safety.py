@@ -43,6 +43,7 @@ class FakeStoredMessage:
         self.id = int(message_id)
         self.author = author
         self.deleted = False
+        self.attachments = []
         embed = discord.Embed(title="Stored")
         embed.set_footer(text=live_card_footer(user_id, trigger_id))
         self.embeds = [embed]
@@ -135,7 +136,7 @@ def test_malformed_profile_ports_are_user_safe_validation_errors():
         normalize_platform_url("steam", "https://steamcommunity.com:notaport/id/example")
 
 
-def test_legacy_cooldowns_migrate_to_fast_burst_coalescing_defaults():
+def test_legacy_cooldowns_migrate_to_short_quiet_window_defaults():
     config = parse_live_card_config(
         {
             "profile_live_cards_enabled": True,
@@ -145,12 +146,12 @@ def test_legacy_cooldowns_migrate_to_fast_burst_coalescing_defaults():
             "profile_live_card_same_speaker_cooldown_seconds": 180,
         }
     )
-    assert config.debounce_seconds == 0.0
-    assert config.replacement_cooldown_seconds < 1.0
+    assert 0.5 <= config.debounce_seconds <= 2.0
+    assert config.replacement_cooldown_seconds == config.debounce_seconds
     assert config.same_speaker_cooldown_seconds <= 2.0
 
 
-def test_alternating_speaker_uses_short_trailing_burst_window(monkeypatch):
+def test_every_message_uses_the_same_short_trailing_quiet_window(monkeypatch):
     async def scenario():
         _patch_types(monkeypatch)
         bot = FakeBot()
@@ -170,13 +171,12 @@ def test_alternating_speaker_uses_short_trailing_burst_window(monkeypatch):
 
         monkeypatch.setattr(runtime_module, "get_guild_config", config)
         runtime = LiveProfileCardRuntime(bot)
-        runtime._last_activity[(guild.id, channel.id, member.id)] = runtime_module.monotonic()
         await runtime.on_message(FakeIncomingMessage(1, guild, channel, member))
-        trigger = runtime._latest[(guild.id, channel.id, member.id)]
+        trigger = runtime._latest[(guild.id, channel.id)]
         assert trigger.user_id == member.id
-        assert trigger.delay_seconds == runtime_module.DEFAULT_REPLACEMENT_COOLDOWN_SECONDS
-        assert trigger.delay_seconds < 1.0
-        pending = runtime._pending[(guild.id, channel.id, member.id)]
+        assert trigger.delay_seconds == runtime_module.DEFAULT_DEBOUNCE_SECONDS
+        assert 0.5 <= trigger.delay_seconds <= 2.0
+        pending = runtime._pending[(guild.id, channel.id)]
         pending.cancel()
         await asyncio.gather(pending, return_exceptions=True)
 
@@ -194,26 +194,33 @@ def test_reconcile_validates_persisted_card_even_outside_history_window(monkeypa
         channel.fetch_messages[stored.id] = stored
         channel.history_messages = []
         saved = []
+        state = {
+            "guild_id": str(guild.id),
+            "channel_id": str(channel.id),
+            "message_id": str(stored.id),
+            "user_id": "303",
+            "trigger_message_id": "9",
+        }
+
+        async def list_states(_guild_id, _channel_id):
+            return [state]
+
+        async def delete_state(*_args):
+            return None
 
         async def save_state(guild_id, channel_id, **payload):
             saved.append((guild_id, channel_id, payload))
 
+        monkeypatch.setattr(runtime_module, "list_live_card_states_for_channel", list_states)
+        monkeypatch.setattr(runtime_module, "delete_live_card_state", delete_state)
         monkeypatch.setattr(runtime_module, "upsert_live_card_state", save_state)
         runtime = LiveProfileCardRuntime(bot)
-        await runtime._reconcile_channel(
-            channel,
-            {
-                "guild_id": str(guild.id),
-                "channel_id": str(channel.id),
-                "message_id": str(stored.id),
-                "user_id": "303",
-                "trigger_message_id": "9",
-            },
-        )
+        await runtime._reconcile_channel(channel, [state])
 
         assert saved[0][2]["message_id"] == stored.id
         assert saved[0][2]["user_id"] == 303
         assert stored.deleted is False
+        assert runtime._current_cards[(guild.id, channel.id)].message_id == stored.id
 
     asyncio.run(scenario())
 
@@ -222,7 +229,6 @@ def test_user_cleanup_uses_indexed_user_query_not_global_state_scan():
     service = (ROOT / "stoney_verify/profile_card_service.py").read_text(encoding="utf-8")
     runtime = (ROOT / "stoney_verify/profile_card_runtime_core.py").read_text(encoding="utf-8")
     migration = (ROOT / "supabase/migrations/20260725_live_profile_cards.sql").read_text(encoding="utf-8")
-    per_member_migration = (ROOT / "supabase/migrations/202607270001_live_profile_cards_per_member.sql").read_text(encoding="utf-8")
     assert "async def list_live_card_states_for_user" in service
     assert '.eq("user_id", str(uid))' in service
     helper = runtime.split("async def _remove_user_card_states", 1)[1].split(
@@ -231,7 +237,6 @@ def test_user_cleanup_uses_indexed_user_query_not_global_state_scan():
     assert "list_live_card_states_for_user(" in helper
     assert "list_live_card_states()" not in helper
     assert "idx_dank_live_profile_cards_user" in migration
-    assert "primary key (guild_id, channel_id, user_id)" in per_member_migration
 
 
 def test_member_and_deleted_channel_cleanup_are_registered_once():

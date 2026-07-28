@@ -3,41 +3,91 @@ name: Profile Runtime Diagnostics
 on:
   pull_request:
     paths:
+      - "ACTIVE_TASK.md"
       - "stoney_verify/profile_card_runtime.py"
+      - "stoney_verify/profile_card_runtime_core.py"
       - "stoney_verify/profile_card_service.py"
+      - "stoney_verify/profile_custom_background.py"
+      - "stoney_verify/profile_signature_style.py"
       - "stoney_verify/profile_signature_live_renderer.py"
       - "stoney_verify/profile_signature_studio.py"
+      - "stoney_verify/profile_card_setup_ui.py"
+      - "stoney_verify/profile_card_setup_ui_core.py"
+      - "stoney_verify/commands_ext/public_profile_cards.py"
+      - "stoney_verify/commands_ext/public_profile_cards_core.py"
+      - "stoney_verify/commands_ext/public_self_roles_group.py"
+      - "stoney_verify/startup_guards/profile_role_editor_guard.py"
+      - "stoney_verify/startup_guards/__init__.py"
+      - "stoney_verify/assets/platform_logos/**"
       - "supabase/migrations/*live_profile*.sql"
       - "tests/test_live_profile*.py"
       - "tests/test_profile_card*.py"
+      - "tests/test_profile_platform*.py"
+      - "tests/test_profile_role*.py"
+      - "tests/test_profile_signature*.py"
       - ".github/workflows/profile-runtime-diagnostics.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: profile-runtime-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   focused-profile-tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install pytest
-      - name: Run focused profile runtime tests
-        id: tests
+
+      - name: Verify bundled platform artwork
         shell: bash
         run: |
-          set +e
+          set -euo pipefail
+          for key in steam epic xbox playstation nintendo riot battle_net roblox twitch youtube kick custom; do
+            test -s "stoney_verify/assets/platform_logos/${key}.png"
+          done
+          test -s stoney_verify/assets/platform_logos/ATTRIBUTION.md
+
+      - name: Compile profile implementation
+        run: |
+          python -m py_compile \
+            stoney_verify/profile_card_service.py \
+            stoney_verify/profile_card_runtime_core.py \
+            stoney_verify/profile_card_runtime.py \
+            stoney_verify/profile_custom_background.py \
+            stoney_verify/profile_signature_style.py \
+            stoney_verify/profile_signature_live_renderer.py \
+            stoney_verify/profile_signature_studio.py \
+            stoney_verify/profile_card_setup_ui.py \
+            stoney_verify/profile_card_setup_ui_core.py \
+            stoney_verify/commands_ext/public_profile_cards.py \
+            stoney_verify/commands_ext/public_profile_cards_core.py \
+            stoney_verify/commands_ext/public_self_roles_group.py \
+            stoney_verify/startup_guards/profile_role_editor_guard.py
+
+      - name: Run focused profile regression suite
+        id: profile_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
           python -m pytest -q \
             tests/test_live_profile_card_runtime.py \
+            tests/test_live_profile_channel_spam_regression.py \
             tests/test_live_profile_runtime_delivery_regression.py \
             tests/test_live_profile_card_cleanup.py \
             tests/test_live_profile_card_final_safety.py \
@@ -45,28 +95,58 @@ jobs:
             tests/test_live_profile_card_lifecycle.py \
             tests/test_live_profile_card_visual_links.py \
             tests/test_live_profile_runtime_responsive.py \
+            tests/test_profile_card_service.py \
             tests/test_profile_card_setup_picker_ux.py \
             tests/test_profile_card_migration_safety.py \
-            > profile-runtime-tests.txt 2>&1
-          status=$?
-          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
-          tail -n 250 profile-runtime-tests.txt
-          exit 0
-      - name: Upload exact test output and repository snapshot
-        if: always()
+            tests/test_profile_platform_display_modes.py \
+            tests/test_profile_platform_privacy_preview_ux.py \
+            tests/test_profile_role_display_separation.py \
+            tests/test_profile_signature_theme_application.py \
+            tests/test_profile_signature_reference_visuals.py \
+            tests/test_profile_signature_color_mixer.py \
+            tests/test_profile_signature_owner_customization.py \
+            2>&1 | tee profile-focused-tests.log
+
+      - name: Upload focused profile failure output
+        if: steps.profile_tests.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
-          name: profile-runtime-diagnostics
-          path: |
-            profile-runtime-tests.txt
-            requirements.txt
-            main.py
-            stoney_verify/
-            tests/
-            tools/
-            supabase/
+          name: profile-focused-test-failure
+          path: profile-focused-tests.log
           if-no-files-found: error
-          retention-days: 1
-      - name: Fail when focused tests failed
-        if: steps.tests.outputs.exit_code != '0'
+          retention-days: 2
+
+      - name: Fail when focused profile tests failed
+        if: steps.profile_tests.outcome == 'failure'
         run: exit 1
+
+      - name: Run role-menu compatibility checks
+        run: |
+          python tools/test_profile_cosmetic_roles_static.py
+          python tools/test_profile_role_centralized_picker_static.py
+          python tools/test_profile_role_editor_guard_static.py
+
+      - name: Confirm temporary and competing profile patches are absent
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e tools/apply_profile_banner_roles_patch.py
+          test ! -e tools/apply_profile_upgrade_regression_fixes.py
+          test ! -d tools/profile_banner_roles_payload
+          test ! -e .github/workflows/apply-profile-platform-modes.yml
+          test ! -e tools/apply_profile_platform_modes_patch.py
+          test ! -e tools/apply_profile_platform_modes_v2.py
+          test ! -e tools/fix_profile_privacy_defaults.py
+          test ! -e tools/apply_profile_spacing_guard.py
+          test ! -e tools/apply_profile_role_menu_dedupe.py
+          test ! -e tools/apply_profile_view_attachment_fix.py
+          test ! -e tools/_apply_pr145_color_mixer.py
+          test ! -e tools/_apply_pr145_theme_compat.py
+          test ! -e tools/_apply_pr145_final_smoke_corrections.py
+          test ! -e tools/_apply_pr145_final_smoke_tail.py
+          test ! -e tools/_repair_pr145_art_guide_literal.py
+          test ! -e .github/workflows/_apply-pr145-color-mixer.yml
+          test ! -e stoney_verify/startup_guards/profile_username_copy_guard.py
+          ! grep -R "profile_username_copy_guard" -n stoney_verify tests .github/workflows
+          ! grep -R '```text' -n stoney_verify/commands_ext/public_profile_cards.py
+          git diff --check

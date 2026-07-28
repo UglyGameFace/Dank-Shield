@@ -9,13 +9,13 @@ SELF_GUARD = (ROOT / "stoney_verify/startup_guards/self_roles_command_guard.py")
 PROFILE = (ROOT / "stoney_verify/commands_ext/public_self_roles_group.py").read_text(encoding="utf-8")
 
 
-def test_profile_role_editor_guard_loads_before_self_roles_registration() -> None:
+def test_profile_tag_guard_loads_before_self_roles_registration() -> None:
     assert "stoney_verify.startup_guards.self_roles_command_guard" in STARTUP
     assert "stoney_verify.startup_guards.profile_role_editor_guard" in STARTUP
     assert STARTUP.index("profile_role_editor_guard") < STARTUP.index("self_roles_command_guard")
 
 
-def test_self_roles_applies_role_editor_before_registering_panel() -> None:
+def test_self_roles_applies_profile_tag_guard_before_registration() -> None:
     assert "profile_role_editor_guard.apply()" in SELF_GUARD
     assert "register = getattr(public_self_roles_group" in SELF_GUARD
     assert "register(bot," in SELF_GUARD
@@ -23,75 +23,62 @@ def test_self_roles_applies_role_editor_before_registering_panel() -> None:
     assert SELF_GUARD.index("profile_role_editor_guard.apply()") < SELF_GUARD.index("register(bot,")
 
 
-def test_profile_panel_and_editor_get_suggest_role_buttons() -> None:
-    assert "ProfilePanelViewWithRoleSuggestions" in GUARD
-    assert "ProfileEditViewWithRoleSuggestions" in GUARD
-    assert "Suggest Role" in GUARD
+def test_profile_panel_and_editor_get_review_only_suggestion_buttons() -> None:
+    assert "ProfilePanelViewWithTagSuggestions" in GUARD
+    assert "ProfileEditViewWithTagSuggestions" in GUARD
+    assert "Suggest Profile Tag" in GUARD
     assert "suggest_role" in GUARD
-
-
-def test_native_profile_source_has_new_role_cosmetics_labels() -> None:
-    assert "Server Roles / Cosmetics" in PROFILE
-    assert "Profile Roles / Cosmetics" in PROFILE
-    assert "Browse / Add Server Roles" in PROFILE
-    assert "Add Server Roles / Cosmetics" in PROFILE
-    assert "ProfileRoleAddPickerView(DankMultiPickerView)" in PROFILE
-    assert "Remove Role / Cosmetic" in PROFILE
-
-
-def test_old_profile_cosmetics_user_facing_copy_is_gone() -> None:
-    for forbidden in (
-        "Server Cosmetics",
-        "Server Cosmetic Roles",
-        "Add an existing cosmetic role",
-        "Add an existing server role / cosmetic",
-        "Remove Cosmetic Role",
-        "Remove Cosmetic Roles",
-        "DankRoleSelect(",
-    ):
-        assert forbidden not in PROFILE, f"old native profile wording still present: {forbidden}"
-        assert forbidden not in GUARD, f"old guard profile wording still present: {forbidden}"
-        assert forbidden not in SELF_GUARD, f"old self-role guard wording still present: {forbidden}"
-
-
-def test_server_roles_cosmetics_button_is_relabelled_with_roles() -> None:
-    assert "Server Roles / Cosmetics" in GUARD
-    assert "PROFILE_ROLES_COSMETICS_LABEL" in GUARD
-    assert "_retitle_profile_roles_button" in GUARD
-    assert "These are profile/server roles/cosmetics" in GUARD
-
-
-def test_builder_gets_profile_roles_cosmetics_editor_button() -> None:
-    assert "ProfileBuilderViewWithRoleEditor" in GUARD
-    assert "Profile Roles / Cosmetics" in GUARD
-    assert "builder:role_editor" in GUARD
-    assert "_open_role_editor" in GUARD
-
-
-def test_role_suggestions_are_review_only() -> None:
-    assert "ProfileRoleSuggestionModal" in GUARD
-    assert "does **not** create, assign, or approve" in GUARD
-    assert "never create or assign roles automatically" in GUARD
+    assert "never creates or assigns" in GUARD
     assert "await guild.create_role" not in GUARD
     assert "member.add_roles" not in GUARD
 
 
-def test_existing_profile_role_manager_still_exists() -> None:
+def test_native_profile_source_has_clear_profile_tag_labels() -> None:
+    assert "Server Roles / Cosmetics" not in PROFILE
+    assert "Profile Tags & Cosmetics" in PROFILE
+    assert "Browse / Add Profile Tags" in PROFILE
+    assert "Add Profile Tags & Cosmetics" in PROFILE
+    assert "ProfileRoleAddPickerView(DankMultiPickerView)" in PROFILE
+    assert "Remove Profile Tag" in PROFILE
+
+
+def test_old_mixed_cosmetic_wording_is_not_restored_by_guard() -> None:
+    for forbidden in (
+        "Server Roles / Cosmetics",
+        "ProfileBuilderViewWithRoleEditor",
+        "builder:role_editor",
+        "_open_role_editor",
+        "_ORIGINAL_HANDLE_BUILDER",
+        "_handle_builder_action_patched",
+        "Suggest Role",
+        "Suggest Profile Role",
+    ):
+        assert forbidden not in GUARD, f"obsolete duplicate or mixed wording remains: {forbidden}"
+
+
+def test_builder_reuses_one_native_profile_tags_manager_button() -> None:
+    route = 'custom_id=f"{PROFILE_PREFIX}builder:cosmetics"'
+    assert route in PROFILE
+    assert PROFILE.count(route) == 1
     assert "class ProfileCosmeticRoleManagerView" in PROFILE
     assert "PROFILE_COSMETIC_ROLE_IDS_KEY" in PROFILE
 
 
+def test_guard_describes_server_roles_and_profile_tags_as_separate_concepts() -> None:
+    assert "separate from the member's ordinary server-role visibility setting" in GUARD
+    assert "Pronouns, identity, interests, community labels" in GUARD
+    assert "staff, access, verification, moderation, ticket" in GUARD.casefold()
+
+
 if __name__ == "__main__":
     for test in (
-        test_profile_role_editor_guard_loads_before_self_roles_registration,
-        test_self_roles_applies_role_editor_before_registering_panel,
-        test_profile_panel_and_editor_get_suggest_role_buttons,
-        test_native_profile_source_has_new_role_cosmetics_labels,
-        test_old_profile_cosmetics_user_facing_copy_is_gone,
-        test_server_roles_cosmetics_button_is_relabelled_with_roles,
-        test_builder_gets_profile_roles_cosmetics_editor_button,
-        test_role_suggestions_are_review_only,
-        test_existing_profile_role_manager_still_exists,
+        test_profile_tag_guard_loads_before_self_roles_registration,
+        test_self_roles_applies_profile_tag_guard_before_registration,
+        test_profile_panel_and_editor_get_review_only_suggestion_buttons,
+        test_native_profile_source_has_clear_profile_tag_labels,
+        test_old_mixed_cosmetic_wording_is_not_restored_by_guard,
+        test_builder_reuses_one_native_profile_tags_manager_button,
+        test_guard_describes_server_roles_and_profile_tags_as_separate_concepts,
     ):
         test()
         print(f"PASS {test.__name__}")

@@ -206,7 +206,7 @@ def _setup_embed(
     pending = set(live.channel_ids) if pending_channel_ids is None else _clean_channel_ids(pending_channel_ids)
     fields = [
         _FIELD_LABELS[key]
-        for key in ("roles", "account_dates", "platforms")
+        for key in ("server_roles", "profile_tags", "account_dates", "platforms")
         if key in live.allowed_fields
     ]
     embed = discord.Embed(
@@ -329,17 +329,17 @@ class _ServerDefaultsButton(discord.ui.Button):
 class _ProfileRoleBuilderButton(discord.ui.Button):
     def __init__(self) -> None:
         super().__init__(
-            label="Profile Panel & Roles",
+            label="Profile Tags & Cosmetics",
             emoji="🎭",
             style=discord.ButtonStyle.secondary,
-            custom_id="dank_setup_profile_cards:roles",
+            custom_id="dank_setup_profile_cards:profile_tags",
             row=3,
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
         from .commands_ext.public_self_roles_group import _post_profile_builder
 
-        await _post_profile_builder(interaction, title="Profile Panel")
+        await _post_profile_builder(interaction, title="Profile Tags & Cosmetics")
 
 
 class ProfileCardSetupView(_core.ProfileCardSetupView):
@@ -360,7 +360,7 @@ class ProfileCardSetupView(_core.ProfileCardSetupView):
         )
         self.add_item(LiveProfileChannelSelect())
         self.add_item(_ServerLiveToggleButton(enabled=live.enabled, has_channels=bool(live.channel_ids)))
-        for field_key in ("roles", "account_dates", "platforms"):
+        for field_key in ("server_roles", "profile_tags", "account_dates", "platforms"):
             self.add_item(_core._FieldToggleButton(field_key, allowed=field_key in live.allowed_fields))
         self.add_item(_PreviewButton())
         self.add_item(_core._RefreshButton())

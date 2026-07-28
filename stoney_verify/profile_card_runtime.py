@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-"""Fast, burst-aware compact live profile signatures.
+"""Channel-scoped, burst-safe compact profile signatures.
 
-The durable ownership and cleanup primitives remain in
-``profile_card_runtime_core``. This module owns the public runtime hot path,
-compact image rendering, responsive burst coalescing, and warm in-memory state.
+Discord cannot attach a bot-rendered image to another member's message. The safe
+public approximation is therefore one Dank Shield-owned signature per configured
+channel, representing the latest eligible speaker after the current chat burst
+settles.
+
+The runtime fails closed whenever ownership or cleanup cannot be verified. A
+temporarily missing signature is acceptable; stacked, stale, or misattributed
+public cards are not.
 """
 
 import asyncio
@@ -21,20 +26,27 @@ from . import profile_card_runtime_core as _core
 from .profile_card_service import (
     PLATFORM_SPECS,
     ProfileStorageUnavailable,
+    delete_live_card_state,
     display_profile_username,
     get_effective_profile_settings,
+    get_live_card_state,
+    list_live_card_states,
     list_live_card_states_for_channel,
+    list_live_card_states_for_user,
+    platform_entry_mode,
+    upsert_live_card_state,
     visible_platform_entries,
 )
 from .profile_signature_live_renderer import render_member_profile_signature
 from .profile_signature_style import effective_profile_style
 
-# Responsive runtime timings. The old 4s / 30s / 180s defaults made a forum
-# signature feel broken. A quiet channel posts immediately; rapid traffic gets
-# one trailing replacement after the burst settles.
-DEFAULT_DEBOUNCE_SECONDS = 0.0
-DEFAULT_REPLACEMENT_COOLDOWN_SECONDS = 0.65
+# Wait for a short quiet window before posting. This prevents a completed render
+# for speaker A from landing below a newer message from speaker B.
+DEFAULT_DEBOUNCE_SECONDS = 0.85
+DEFAULT_REPLACEMENT_COOLDOWN_SECONDS = DEFAULT_DEBOUNCE_SECONDS
 DEFAULT_SAME_SPEAKER_COOLDOWN_SECONDS = 1.5
+LIVE_CARD_HISTORY_SCAN_LIMIT = 100
+
 LIVE_ALLOWED_FIELDS_KEY = _core.LIVE_ALLOWED_FIELDS_KEY
 LIVE_CARD_FOOTER_PREFIX = _core.LIVE_CARD_FOOTER_PREFIX
 LIVE_CHANNEL_IDS_KEY = _core.LIVE_CHANNEL_IDS_KEY
@@ -52,26 +64,17 @@ _LIVE_CARD_MARKER_PREFIX = "https://dankshield.app/live-profile/"
 _LIVE_CARD_MARKER_RE = re.compile(r"^https://dankshield\.app/live-profile/(\d+)/(\d+)$")
 _LIVE_CARD_ATTACHMENT_RE = re.compile(r"^dank-live-profile-(\d+)-(\d+)\.png$")
 
-# Existing private helper imports remain available for callers and tests.
 _channel_ids = _core._channel_ids
 _channel_can_host_cards = _core._channel_can_host_cards
 _copy_base_profile_embed = _core._copy_base_profile_embed
 _is_supported_message = _core._is_supported_message
 _platform_view = _core._platform_view
 
-# Dependency hooks stay at this public module boundary. Existing tests and
-# callers may replace these without knowing about the internal lifecycle split.
+# Dependency hooks remain patchable at this public module boundary for tests and
+# callers that historically replaced them.
 get_guild_config = _core.get_guild_config
 upsert_guild_config = _core.upsert_guild_config
-delete_live_card_state = _core.delete_live_card_state
-get_live_card_state = _core.get_live_card_state
-list_live_card_states = _core.list_live_card_states
-list_live_card_states_for_channel = _core.list_live_card_states_for_channel
-list_live_card_states_for_user = _core.list_live_card_states_for_user
-upsert_live_card_state = _core.upsert_live_card_state
 
-# PNG bytes are the largest in-process objects in this feature. Keep the cache
-# small enough for constrained public hosting while still covering hot speakers.
 _SIGNATURE_CACHE_TTL_SECONDS = 300.0
 _SIGNATURE_CACHE_MAX_ITEMS = 512
 _SIGNATURE_CACHE: dict[tuple[Any, ...], tuple[float, bytes]] = {}
@@ -92,27 +95,22 @@ class _CurrentCard:
     message: Optional[discord.Message] = None
 
 
-_ChannelKey = tuple[int, int]
-_MemberCardKey = tuple[int, int, int]
-_TriggerTimeKey = tuple[int, int, int, int]
-
-
 class _CurrentCardVerificationUnavailable(RuntimeError):
-    """Raised when ownership cannot be verified without risking duplicates."""
+    """Ownership cannot be verified without risking another visible card."""
 
 
+_ChannelKey = tuple[int, int]
+_TriggerTimeKey = tuple[int, int, int]
 RenderProfile = Callable[..., Awaitable[Optional[LiveCardRender]]]
 Sleep = Callable[[float], Awaitable[None]]
 
 
 def live_card_marker_url(user_id: int, trigger_message_id: int) -> str:
-    """Return an invisible embed URL used as durable ownership metadata."""
-
     return f"{_LIVE_CARD_MARKER_PREFIX}{int(user_id)}/{int(trigger_message_id)}"
 
 
 def parse_live_card_footer(message: Any) -> Optional[tuple[int, int]]:
-    """Parse legacy footers plus invisible URL/attachment ownership markers."""
+    """Recognize both old footer metadata and current invisible markers."""
 
     legacy = _legacy_parse_live_card_footer(message)
     if legacy is not None:
@@ -134,13 +132,6 @@ def parse_live_card_footer(message: Any) -> Optional[tuple[int, int]]:
 
 
 def parse_live_card_config(config: Mapping[str, Any]) -> LiveCardConfig:
-    """Resolve server scope while migrating legacy anti-spam delays.
-
-    The timing keys were never exposed as a supported manager control. Existing
-    rows may still contain the old 4/30/180 values, so the public runtime uses
-    one responsive policy instead of inheriting those stale delays forever.
-    """
-
     parsed = _core.parse_live_card_config(config)
     return LiveCardConfig(
         enabled=parsed.enabled,
@@ -168,7 +159,66 @@ def _sync_core_dependencies() -> None:
         setattr(_core, name, globals()[name])
 
 
-def _compact_role_labels(member: discord.Member) -> list[str]:
+def _profile_role_name_keys() -> set[str]:
+    from .commands_ext.public_self_roles_group import _all_profile_role_names, _role_name_key
+
+    return {_role_name_key(name) for name in _all_profile_role_names()}
+
+
+def _configured_role_ids(config: Mapping[str, Any], *keys: str) -> set[int]:
+    out: set[int] = set()
+    for key in keys:
+        raw = config.get(key)
+        values = raw if isinstance(raw, (list, tuple, set, frozenset)) else [raw]
+        for value in values:
+            try:
+                role_id = int(str(value or "0").strip())
+            except Exception:
+                role_id = 0
+            if role_id > 0:
+                out.add(role_id)
+    return out
+
+
+def _compact_server_role_labels(member: discord.Member, config: Mapping[str, Any]) -> list[str]:
+    # Return truthful complete server roles, with Discord owner status first.
+    from .commands_ext.public_self_roles_group import _role_name_key, _short_role_label
+
+    labels: list[str] = []
+    guild = getattr(member, "guild", None)
+    try:
+        if guild is not None and int(getattr(guild, "owner_id", 0) or 0) == int(member.id):
+            labels.append("Server Owner")
+    except Exception:
+        pass
+
+    profile_name_keys = _profile_role_name_keys()
+    cosmetic_ids = _configured_role_ids(config, "profile_cosmetic_role_ids")
+    for role in sorted(list(getattr(member, "roles", []) or []), reverse=True):
+        try:
+            if role.is_default() or role.managed or int(role.id) in cosmetic_ids:
+                continue
+        except Exception:
+            continue
+        if _role_name_key(role.name) in profile_name_keys:
+            continue
+        label = _short_role_label(role.name)
+        if label and label not in labels:
+            labels.append(label)
+        if len(labels) >= 4:
+            break
+    return labels
+
+
+def _member_is_guild_owner(member: discord.Member) -> bool:
+    try:
+        return int(getattr(member.guild, "owner_id", 0) or 0) == int(member.id)
+    except Exception:
+        return False
+
+
+def _compact_profile_tag_labels(member: discord.Member, config: Mapping[str, Any]) -> list[str]:
+    """Return pronouns/identity/interests and configured cosmetic tags only."""
     from .commands_ext.public_self_roles_group import (
         DEFAULT_IDENTITY_ROLE_NAMES,
         DEFAULT_INTEREST_ROLE_NAMES,
@@ -190,7 +240,6 @@ def _compact_role_labels(member: discord.Member) -> list[str]:
         _short_role_label(role.name)
         for role in _member_profile_roles(member, DEFAULT_INTEREST_ROLE_NAMES)
     ]
-
     if pronouns:
         labels.append("Pronouns: " + ", ".join(pronouns[:2]))
     if identity:
@@ -198,7 +247,16 @@ def _compact_role_labels(member: discord.Member) -> list[str]:
     if interests:
         shown = interests[:3]
         suffix = " + more" if len(interests) > len(shown) else ""
-        labels.append("Interests: " + " • ".join(shown) + suffix)
+        labels.append("Interests: " + " / ".join(shown) + suffix)
+
+    cosmetic_ids = _configured_role_ids(config, "profile_cosmetic_role_ids")
+    cosmetics = [
+        _short_role_label(role.name)
+        for role in sorted(list(getattr(member, "roles", []) or []), reverse=True)
+        if int(getattr(role, "id", 0) or 0) in cosmetic_ids
+    ]
+    if cosmetics:
+        labels.append("Tags: " + " / ".join(cosmetics[:3]))
     return labels
 
 
@@ -223,38 +281,16 @@ def _compact_platform_labels(entries: list[dict[str, Any]]) -> list[str]:
     labels: list[str] = []
     for entry in entries[:4]:
         spec = PLATFORM_SPECS.get(str(entry.get("platform") or ""))
-        if spec is None:
+        if spec is None or platform_entry_mode(entry) == "logo":
             continue
-        try:
-            username = display_profile_username(entry.get("username"))
-        except Exception:
-            continue
-        labels.append(f"{spec.label}: {username}")
+        username = ""
+        if str(entry.get("username") or "").strip():
+            try:
+                username = display_profile_username(entry.get("username"))
+            except Exception:
+                username = ""
+        labels.append(f"{spec.label}: {username}" if username else spec.label)
     return labels
-
-
-def _platform_link_line(entries: list[dict[str, Any]]) -> str:
-    """Build a neat clickable account row inside the same Discord embed."""
-
-    parts: list[str] = []
-    for entry in entries[:5]:
-        spec = PLATFORM_SPECS.get(str(entry.get("platform") or ""))
-        if spec is None:
-            continue
-        try:
-            username = display_profile_username(entry.get("username"))
-        except Exception:
-            continue
-        url = str(entry.get("url") or "").strip()
-        if url:
-            parts.append(f"[{spec.emoji} {spec.label}]({url}) `{username}`")
-        elif spec.supports_url:
-            parts.append(f"⚠️ **{spec.label}** `{username}` *(add official link)*")
-        else:
-            parts.append(f"{spec.emoji} **{spec.label}** `{username}`")
-    if not parts:
-        return ""
-    return "**Connected profiles**  •  " + "  •  ".join(parts)
 
 
 def _stable_cache_value(value: Any) -> Any:
@@ -303,26 +339,38 @@ async def render_live_profile_card(
     trigger_message_id: int,
     require_live_enabled: bool = True,
 ) -> Optional[LiveCardRender]:
-    """Render one legible horizontal signature with member-first privacy."""
+    """Render one compact signature with member privacy taking precedence."""
 
     settings = await get_effective_profile_settings(member.guild.id, member.id)
     preferences = dict(settings.get("preferences") or {})
-    if require_live_enabled and not bool(preferences.get("live_cards_enabled", True)):
+    if require_live_enabled and not bool(preferences.get("live_cards_enabled", False)):
         return None
 
-    show_roles = bool(preferences.get("show_roles", True)) and "roles" in server_allowed_fields
+    show_server_roles = (
+        bool(preferences.get("show_server_roles", False))
+        and "server_roles" in server_allowed_fields
+    )
+    show_profile_tags = (
+        bool(preferences.get("show_profile_tags", True))
+        and "profile_tags" in server_allowed_fields
+    )
     show_dates = bool(preferences.get("show_account_dates", True)) and "account_dates" in server_allowed_fields
     show_platforms = bool(preferences.get("show_platforms", True)) and "platforms" in server_allowed_fields
+    show_server_branding = bool(preferences.get("show_server_branding", True))
     platforms = visible_platform_entries(settings.get("platforms"), allowed=show_platforms)
-    role_labels = _compact_role_labels(member) if show_roles else []
-    date_labels = _compact_date_labels(member) if show_dates else []
-    platform_labels = _compact_platform_labels(platforms)
 
     try:
-        cfg = await get_guild_config(member.guild.id)
+        guild_config = await get_guild_config(member.guild.id)
     except Exception:
-        cfg = {}
-    style = effective_profile_style(preferences, cfg)
+        guild_config = {}
+    discovered_roles = _compact_server_role_labels(member, guild_config)
+    server_role_labels = discovered_roles if show_server_roles else (
+        ["Server Owner"] if _member_is_guild_owner(member) else []
+    )
+    profile_tag_labels = _compact_profile_tag_labels(member, guild_config) if show_profile_tags else []
+    date_labels = _compact_date_labels(member) if show_dates else []
+    platform_labels = _compact_platform_labels(platforms)
+    style = effective_profile_style(preferences, guild_config)
     avatar = getattr(member, "display_avatar", None)
     avatar_identity = str(getattr(avatar, "key", None) or getattr(avatar, "url", "") or "")
     cache_key = (
@@ -332,9 +380,11 @@ async def render_live_profile_card(
         str(getattr(member, "display_name", None) or member),
         avatar_identity,
         tuple(sorted(str(value) for value in server_allowed_fields)),
-        tuple(role_labels),
+        tuple(server_role_labels),
+        tuple(profile_tag_labels),
         tuple(date_labels),
-        tuple(platform_labels),
+        show_server_branding,
+        _stable_cache_value(platforms),
         _stable_cache_value(style),
     )
     image_bytes = _signature_cache_get(cache_key)
@@ -342,9 +392,11 @@ async def render_live_profile_card(
         image_bytes = await render_member_profile_signature(
             member,
             style=style,
-            role_labels=role_labels,
+            server_role_labels=server_role_labels,
+            profile_tag_labels=profile_tag_labels,
             date_labels=date_labels,
-            platform_labels=platform_labels,
+            platform_entries=platforms,
+            show_server_branding=show_server_branding,
         )
         _signature_cache_put(cache_key, image_bytes)
 
@@ -356,13 +408,14 @@ async def render_live_profile_card(
         color = discord.Color.blurple()
     embed = discord.Embed(
         color=color,
-        description=_platform_link_line(platforms) or None,
         url=live_card_marker_url(member.id, trigger_message_id),
     )
     embed.set_image(url=f"attachment://{filename}")
-    # No visible technical footer. Ownership is stored in invisible embed and
-    # attachment metadata; legacy footer-marked cards remain cleanup-compatible.
-    return LiveCardRender(embed=embed, view=None, file=file)
+
+    # The image already contains public platform chips. Do not repeat usernames
+    # in a large public text block; validated official URLs remain link buttons.
+    view = _platform_view(platforms, owner_user_id=member.id)
+    return LiveCardRender(embed=embed, view=view, file=file)
 
 
 def _live_card_send_payload(rendered: LiveCardRender) -> dict[str, Any]:
@@ -387,36 +440,36 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
     ) -> None:
         _sync_core_dependencies()
         super().__init__(bot, renderer=renderer, sleep=sleep)
-        self._leading: dict[_MemberCardKey, asyncio.Task[Any]] = {}
-        self._latest_messages: dict[_MemberCardKey, discord.Message] = {}
-        self._latest_configs: dict[_MemberCardKey, LiveCardConfig] = {}
-        self._last_activity: dict[_MemberCardKey, float] = {}
-        self._current_cards: dict[_MemberCardKey, _CurrentCard] = {}
+        self._leading: dict[_ChannelKey, asyncio.Task[Any]] = {}
+        self._pending: dict[_ChannelKey, asyncio.Task[Any]] = {}
+        self._latest: dict[_ChannelKey, PendingTrigger] = {}
+        self._locks: dict[_ChannelKey, asyncio.Lock] = {}
+        self._last_activity: dict[_ChannelKey, float] = {}
+        self._last_posted: dict[_ChannelKey, tuple[int, float]] = {}
+        self._latest_messages: dict[_ChannelKey, discord.Message] = {}
+        self._latest_configs: dict[_ChannelKey, LiveCardConfig] = {}
+        self._current_cards: dict[_ChannelKey, _CurrentCard] = {}
         self._trigger_received_at: dict[_TriggerTimeKey, float] = {}
-        self._channel_send_locks: dict[_ChannelKey, asyncio.Lock] = {}
+        self._recovered_channels: set[_ChannelKey] = set()
 
     async def on_ready(self) -> None:
-        """Avoid an all-guild history scan during every process start/reconnect.
-
-        Durable state is verified lazily on the first message in each active
-        channel. This keeps startup bounded when the bot is sharded across many
-        servers while preserving exact bot-owned cleanup on demand.
-        """
-
         _sync_core_dependencies()
         self._last_reconcile_at = monotonic()
-        print("🪪 live_profile_card ready lazy_recovery=enabled startup_history_scan=skipped")
+        print(
+            "🪪 live_profile_card ready mode=one_per_channel "
+            "scheduler=quiet_window stale_render_guard=enabled"
+        )
+
+    @staticmethod
+    def _task_running(task: Optional[asyncio.Task[Any]]) -> bool:
+        return task is not None and not task.done()
 
     async def on_message(self, message: discord.Message) -> None:
         _sync_core_dependencies()
         if not _is_supported_message(message):
             return
-
         try:
-            # The shared guild config cache is updated immediately by setup
-            # writes. Never force a Supabase read for every Discord message.
-            raw_config = await get_guild_config(message.guild.id)
-            config = parse_live_card_config(raw_config)
+            config = parse_live_card_config(await get_guild_config(message.guild.id))
         except Exception as exc:
             print(
                 "⚠️ live_profile_card skipped "
@@ -434,89 +487,47 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             )
             return
 
-        key = (int(message.guild.id), int(message.channel.id), int(message.author.id))
-        now = monotonic()
-        prior_activity = self._last_activity.get(key)
-        idle = prior_activity is None or now - prior_activity >= config.same_speaker_cooldown_seconds
-        self._last_activity[key] = now
-
+        key = (int(message.guild.id), int(message.channel.id))
+        self._last_activity[key] = monotonic()
         trigger = PendingTrigger(
             guild_id=key[0],
             channel_id=key[1],
-            user_id=key[2],
+            user_id=int(message.author.id),
             message_id=int(message.id),
-            delay_seconds=0.0 if idle else config.replacement_cooldown_seconds,
+            delay_seconds=config.debounce_seconds,
         )
         self._latest[key] = trigger
         self._latest_messages[key] = message
         self._latest_configs[key] = config
-        self._trigger_received_at[(key[0], key[1], key[2], trigger.message_id)] = now
+        self._trigger_received_at[(key[0], key[1], trigger.message_id)] = monotonic()
         self._prune_trigger_times()
+        self._ensure_channel_worker(key)
 
-        if idle and not self._task_running(self._leading.get(key)):
-            previous = self._pending.pop(key, None)
-            if self._task_running(previous):
-                previous.cancel()
-            task = asyncio.create_task(self._run_immediate(key, message, config, trigger))
-            self._leading[key] = task
-            # Preserve the historical contract that _pending contains every
-            # outstanding channel worker, including the immediate leading task.
-            self._pending[key] = task
-            task.add_done_callback(
-                lambda finished, resolved_key=key: self._leading_done(resolved_key, finished)
-            )
+    def _ensure_channel_worker(self, key: _ChannelKey) -> None:
+        if self._task_running(self._pending.get(key)):
             return
-
-        previous = self._pending.get(key)
-        leading = self._leading.get(key)
-        if previous is not leading and self._task_running(previous):
-            previous.cancel()
-        task = asyncio.create_task(self._run_trailing(key, trigger))
+        task = asyncio.create_task(self._run_channel_worker(key))
         self._pending[key] = task
         task.add_done_callback(
-            lambda finished, resolved_key=key: self._task_done(self._pending, resolved_key, finished)
+            lambda finished, resolved_key=key: self._channel_worker_done(resolved_key, finished)
         )
 
-    @staticmethod
-    def _task_running(task: Optional[asyncio.Task[Any]]) -> bool:
-        return task is not None and not task.done()
-
-    @staticmethod
-    def _consume_task_result(task: asyncio.Task[Any]) -> None:
+    def _channel_worker_done(self, key: _ChannelKey, task: asyncio.Task[Any]) -> None:
+        if self._pending.get(key) is task:
+            self._pending.pop(key, None)
         try:
             task.result()
         except asyncio.CancelledError:
             pass
         except Exception as exc:
-            print(f"⚠️ live_profile_card worker failed: {type(exc).__name__}: {exc}")
-
-    @classmethod
-    def _task_done(
-        cls,
-        bucket: dict[_MemberCardKey, asyncio.Task[Any]],
-        key: _MemberCardKey,
-        task: asyncio.Task[Any],
-    ) -> None:
-        if bucket.get(key) is task:
-            bucket.pop(key, None)
-        cls._consume_task_result(task)
-
-    def _leading_done(self, key: _MemberCardKey, task: asyncio.Task[Any]) -> None:
-        if self._leading.get(key) is task:
-            self._leading.pop(key, None)
-        if self._pending.get(key) is task:
-            self._pending.pop(key, None)
-        self._consume_task_result(task)
-
-    def _release_trigger_context(self, key: _MemberCardKey, trigger: PendingTrigger) -> None:
-        """Release heavy incoming message/config references after the worker."""
-
-        if self._latest.get(key) != trigger:
-            return
-        self._latest.pop(key, None)
-        self._latest_messages.pop(key, None)
-        self._latest_configs.pop(key, None)
-        self._trigger_received_at.pop((key[0], key[1], key[2], trigger.message_id), None)
+            print(
+                "⚠️ live_profile_card channel worker failed "
+                f"guild={key[0]} channel={key[1]} error={type(exc).__name__}: {exc}"
+            )
+        # A message can arrive after the worker releases its old context but
+        # before this callback removes the finished task. Do not strand it.
+        if key in self._latest and not self._task_running(self._pending.get(key)):
+            self._ensure_channel_worker(key)
 
     def _prune_trigger_times(self) -> None:
         if len(self._trigger_received_at) <= 2048:
@@ -525,79 +536,317 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
         for trigger_key, _created_at in oldest:
             self._trigger_received_at.pop(trigger_key, None)
 
-    async def _run_immediate(
-        self,
-        key: _MemberCardKey,
-        fallback_message: discord.Message,
-        fallback_config: LiveCardConfig,
-        fallback_trigger: PendingTrigger,
-    ) -> None:
-        # Yield once so messages delivered in the same event-loop turn collapse
-        # before any image or network work begins. This is not a user-visible
-        # debounce and introduces no timer delay.
-        await asyncio.sleep(0)
-        lock = self._locks.setdefault(key, asyncio.Lock())
-        async with lock:
-            trigger = self._latest.get(key, fallback_trigger)
-            message = self._latest_messages.get(key, fallback_message)
-            config = self._latest_configs.get(key, fallback_config)
-            try:
+    async def _run_channel_worker(self, key: _ChannelKey) -> None:
+        while True:
+            trigger = self._latest.get(key)
+            config = self._latest_configs.get(key)
+            if trigger is None or config is None:
+                return
+            received_at = self._trigger_received_at.get(
+                (key[0], key[1], trigger.message_id),
+                monotonic(),
+            )
+            remaining = max(0.0, config.debounce_seconds - (monotonic() - received_at))
+            if remaining:
+                await self.sleep(remaining)
+            if self._latest.get(key) != trigger:
+                continue
+
+            lock = self._locks.setdefault(key, asyncio.Lock())
+            async with lock:
+                if self._latest.get(key) != trigger:
+                    continue
+                message = self._latest_messages.get(key)
+                config = self._latest_configs.get(key)
+                if message is None or config is None:
+                    return
                 await self._replace_card(
                     message,
                     config,
                     trigger,
                     force_reposition=True,
-                    source="leading",
+                    source="settled",
                 )
-            finally:
+
+            if self._latest.get(key) == trigger:
                 self._release_trigger_context(key, trigger)
+                return
 
-    async def _run_trailing(self, key: _MemberCardKey, trigger: PendingTrigger) -> None:
-        config = self._latest_configs.get(key)
-        quiet_seconds = (
-            config.replacement_cooldown_seconds
-            if config is not None
-            else DEFAULT_REPLACEMENT_COOLDOWN_SECONDS
-        )
-        await self.sleep(max(0.0, quiet_seconds))
-
-        # The quiet timer may overlap the leading render, but a trailing worker
-        # must never overtake it. Shielding prevents cancellation of a new burst
-        # target from canceling the already-started instant post.
-        leading = self._leading.get(key)
-        if leading is not None and leading is not asyncio.current_task() and self._task_running(leading):
-            await asyncio.shield(leading)
-
+    def _release_trigger_context(self, key: _ChannelKey, trigger: PendingTrigger) -> None:
         if self._latest.get(key) != trigger:
             return
-        lock = self._locks.setdefault(key, asyncio.Lock())
-        async with lock:
-            if self._latest.get(key) != trigger:
-                return
-            message = self._latest_messages.get(key)
-            config = self._latest_configs.get(key)
-            if message is None or config is None:
-                self._release_trigger_context(key, trigger)
-                return
+        self._latest.pop(key, None)
+        self._latest_messages.pop(key, None)
+        self._latest_configs.pop(key, None)
+        self._trigger_received_at.pop((key[0], key[1], trigger.message_id), None)
+
+    async def _verified_owned_messages(
+        self,
+        channel: discord.TextChannel,
+        states: list[Mapping[str, Any]],
+        *,
+        include_history: bool,
+    ) -> dict[int, discord.Message]:
+        bot_user = getattr(self.bot, "user", None)
+        if bot_user is None:
+            raise _CurrentCardVerificationUnavailable
+
+        owned: dict[int, discord.Message] = {}
+        for state in states:
             try:
-                await self._replace_card(
-                    message,
-                    config,
-                    trigger,
-                    force_reposition=True,
-                    source="trailing",
+                message_id = int(str(state.get("message_id") or "0"))
+            except Exception:
+                message_id = 0
+            if message_id <= 0:
+                continue
+            try:
+                stored = await channel.fetch_message(message_id)
+            except discord.NotFound:
+                continue
+            except Exception as exc:
+                raise _CurrentCardVerificationUnavailable from exc
+            if (
+                int(getattr(stored.author, "id", 0) or 0) == int(bot_user.id)
+                and parse_live_card_footer(stored) is not None
+            ):
+                owned[int(stored.id)] = stored
+
+        history = getattr(channel, "history", None)
+        if include_history and callable(history):
+            try:
+                async for candidate in history(limit=LIVE_CARD_HISTORY_SCAN_LIMIT):
+                    if int(getattr(candidate.author, "id", 0) or 0) != int(bot_user.id):
+                        continue
+                    if parse_live_card_footer(candidate) is not None:
+                        owned[int(candidate.id)] = candidate
+            except Exception as exc:
+                raise _CurrentCardVerificationUnavailable from exc
+        return owned
+
+    async def _read_channel_states(self, key: _ChannelKey) -> list[dict[str, Any]]:
+        """Read all rows, with the pre-migration single-row API as fallback."""
+
+        try:
+            rows = await list_live_card_states_for_channel(*key)
+            return [dict(item) for item in rows if isinstance(item, Mapping)]
+        except ProfileStorageUnavailable:
+            try:
+                legacy = await get_live_card_state(*key)
+            except Exception as exc:
+                raise _CurrentCardVerificationUnavailable from exc
+            return [dict(legacy)] if isinstance(legacy, Mapping) else []
+        except Exception as exc:
+            raise _CurrentCardVerificationUnavailable from exc
+
+    async def _load_current_card(self, channel: discord.TextChannel) -> Optional[_CurrentCard]:
+        key = (int(channel.guild.id), int(channel.id))
+        cached = self._current_cards.get(key)
+        if cached is not None:
+            return cached
+        states = await self._read_channel_states(key)
+        owned = await self._verified_owned_messages(
+            channel,
+            states,
+            include_history=key not in self._recovered_channels,
+        )
+
+        newest = max(owned.values(), key=lambda item: int(item.id), default=None)
+        for old in sorted(owned.values(), key=lambda item: int(item.id)):
+            if newest is not None and int(old.id) == int(newest.id):
+                continue
+            if not await self._delete_verified_card(old):
+                raise _CurrentCardVerificationUnavailable
+
+        # The deployed table may still permit per-member rows. Collapse every row
+        # in this channel before storing the single surviving owner. An actually
+        # empty channel performs no pointless delete, which also preserves the
+        # historical single-row test and compatibility path.
+        if states:
+            try:
+                await delete_live_card_state(*key)
+            except Exception as exc:
+                raise _CurrentCardVerificationUnavailable from exc
+
+        current: Optional[_CurrentCard] = None
+        if newest is not None:
+            parsed = parse_live_card_footer(newest)
+            if parsed is None:
+                raise _CurrentCardVerificationUnavailable
+            current = _CurrentCard(
+                message_id=int(newest.id),
+                user_id=int(parsed[0]),
+                trigger_message_id=int(parsed[1]),
+                message=newest,
+            )
+            try:
+                await upsert_live_card_state(
+                    key[0],
+                    key[1],
+                    message_id=current.message_id,
+                    user_id=current.user_id,
+                    trigger_message_id=current.trigger_message_id,
                 )
-            finally:
-                self._release_trigger_context(key, trigger)
+            except Exception as exc:
+                await self._delete_verified_card(newest)
+                raise _CurrentCardVerificationUnavailable from exc
+            self._current_cards[key] = current
+
+        self._recovered_channels.add(key)
+        if len(owned) > 1 or len(states) > 1:
+            print(
+                "🧹 live_profile_card collapsed legacy stack "
+                f"guild={key[0]} channel={key[1]} visible_found={len(owned)} states={len(states)}"
+            )
+        return current
+
+    def _is_latest(self, key: _ChannelKey, trigger: PendingTrigger) -> bool:
+        current = self._latest.get(key)
+        # Direct internal calls used by cleanup tests and diagnostics have no
+        # scheduler context. Live workers always populate _latest first.
+        return current is None or current == trigger
+
+    async def _replace_card(
+        self,
+        message: discord.Message,
+        config: LiveCardConfig,
+        trigger: PendingTrigger,
+        *,
+        force_reposition: bool = False,
+        source: str = "direct",
+    ) -> None:
+        del force_reposition
+        _sync_core_dependencies()
+        channel = message.channel
+        guild = message.guild
+        message_author = getattr(message, "author", None)
+        member = (
+            message_author
+            if isinstance(message_author, discord.Member)
+            and int(message_author.id) == int(trigger.user_id)
+            else guild.get_member(trigger.user_id) if guild else None
+        )
+        if not isinstance(channel, discord.TextChannel) or not isinstance(member, discord.Member):
+            return
+        if not _channel_can_host_cards(channel):
+            return
+
+        key = (trigger.guild_id, trigger.channel_id)
+        render_started = monotonic()
+        try:
+            rendered = await self.renderer(
+                member,
+                set(config.allowed_fields),
+                trigger_message_id=trigger.message_id,
+            )
+        except Exception as exc:
+            print(
+                "⚠️ live_profile_card render failed "
+                f"guild={key[0]} channel={key[1]} user={trigger.user_id} "
+                f"error={type(exc).__name__}: {exc}"
+            )
+            return
+        if rendered is None or not self._is_latest(key, trigger):
+            return
+
+        try:
+            current = await self._load_current_card(channel)
+        except (ProfileStorageUnavailable, _CurrentCardVerificationUnavailable) as exc:
+            print(
+                "⚠️ live_profile_card skipped "
+                f"guild={key[0]} channel={key[1]} user={trigger.user_id} "
+                f"reason=ownership_cleanup_unavailable error={type(exc).__name__}"
+            )
+            return
+        if current is not None and current.trigger_message_id == trigger.message_id:
+            return
+        if not self._is_latest(key, trigger):
+            return
+
+        # Delete before send. Briefly showing no card is preferable to ever
+        # showing two cards or a card beneath the wrong speaker.
+        if current is not None:
+            removed = (
+                await self._delete_verified_card(current.message)
+                if current.message is not None
+                else await self._delete_stored_message(channel, current.message_id)
+            )
+            if not removed:
+                print(
+                    "⚠️ live_profile_card replacement blocked "
+                    f"guild={key[0]} channel={key[1]} reason=old_card_delete_failed"
+                )
+                return
+            self._current_cards.pop(key, None)
+            try:
+                await delete_live_card_state(*key)
+            except Exception as exc:
+                print(
+                    "⚠️ live_profile_card replacement blocked "
+                    f"guild={key[0]} channel={key[1]} reason=state_cleanup_failed "
+                    f"error={type(exc).__name__}: {exc}"
+                )
+                return
+
+        if not self._is_latest(key, trigger):
+            return
+        try:
+            new_message = await channel.send(**_live_card_send_payload(rendered))
+        except Exception as exc:
+            print(
+                "⚠️ live_profile_card send failed "
+                f"guild={key[0]} channel={key[1]} user={trigger.user_id} "
+                f"error={type(exc).__name__}: {exc}"
+            )
+            return
+        if not self._is_latest(key, trigger):
+            await self._delete_verified_card(new_message)
+            return
+
+        try:
+            await upsert_live_card_state(
+                key[0],
+                key[1],
+                message_id=int(new_message.id),
+                user_id=int(trigger.user_id),
+                trigger_message_id=int(trigger.message_id),
+            )
+        except Exception as exc:
+            await self._delete_verified_card(new_message)
+            print(
+                "⚠️ live_profile_card state write failed; removed new card "
+                f"guild={key[0]} channel={key[1]} user={trigger.user_id} "
+                f"error={type(exc).__name__}: {exc}"
+            )
+            return
+        if not self._is_latest(key, trigger):
+            await self._delete_verified_card(new_message)
+            try:
+                await delete_live_card_state(*key)
+            except Exception:
+                pass
+            return
+
+        self._current_cards[key] = _CurrentCard(
+            message_id=int(new_message.id),
+            user_id=int(trigger.user_id),
+            trigger_message_id=int(trigger.message_id),
+            message=new_message,
+        )
+        self._last_posted[key] = (int(trigger.user_id), monotonic())
+        render_ms = int((monotonic() - render_started) * 1000)
+        received_at = self._trigger_received_at.pop(
+            (key[0], key[1], trigger.message_id),
+            render_started,
+        )
+        total_ms = int((monotonic() - received_at) * 1000)
+        print(
+            "✅ live_profile_card posted one_per_channel "
+            f"guild={key[0]} channel={key[1]} user={trigger.user_id} "
+            f"message={new_message.id} trigger={trigger.message_id} source={source} "
+            f"render_ms={render_ms} total_ms={total_ms}"
+        )
 
     async def reconcile(self) -> None:
-        """Keep setup-time reconciliation bounded in public deployments.
-
-        Small development installs retain the historical deep audit. Once the
-        bot spans more than five guilds, normal ownership is recovered lazily
-        per active channel and setup buttons never trigger an all-server scan.
-        """
-
         _sync_core_dependencies()
         guild_count = len(list(getattr(self.bot, "guilds", []) or []))
         if guild_count <= 5:
@@ -609,14 +858,10 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
         )
 
     async def reconcile_deep(self) -> None:
-        """Run the legacy all-guild ownership audit only when explicitly asked."""
-
         _sync_core_dependencies()
         await super().reconcile()
 
     async def reconcile_guild(self, guild: discord.Guild) -> None:
-        """Warm only one guild after setup without scanning every public server."""
-
         _sync_core_dependencies()
         try:
             config = parse_live_card_config(await get_guild_config(guild.id))
@@ -626,37 +871,45 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             channel = guild.get_channel(channel_id)
             if not isinstance(channel, discord.TextChannel) or not _channel_can_host_cards(channel):
                 continue
-            channel_key = (int(guild.id), int(channel.id))
-            for key in list(self._current_cards):
-                if key[:2] == channel_key:
-                    self._current_cards.pop(key, None)
+            key = (int(guild.id), int(channel.id))
+            self._current_cards.pop(key, None)
+            self._recovered_channels.discard(key)
             try:
-                states = await list_live_card_states_for_channel(*channel_key)
-            except ProfileStorageUnavailable:
+                await self._load_current_card(channel)
+            except _CurrentCardVerificationUnavailable:
                 continue
-            for state in states:
-                try:
-                    user_id = int(str(state.get("user_id") or "0"))
-                except Exception:
-                    user_id = 0
-                if user_id <= 0:
-                    continue
-                try:
-                    await self._load_current_card(channel, user_id)
-                except (ProfileStorageUnavailable, _CurrentCardVerificationUnavailable):
-                    continue
 
     async def _reconcile_channel(
         self,
         channel: discord.TextChannel,
         states: Optional[Any],
     ) -> None:
-        _sync_core_dependencies()
-        await super()._reconcile_channel(channel, states)
-        channel_key = (int(channel.guild.id), int(channel.id))
-        for key in list(self._current_cards):
-            if key[:2] == channel_key:
-                self._current_cards.pop(key, None)
+        del states
+        key = (int(channel.guild.id), int(channel.id))
+        self._current_cards.pop(key, None)
+        self._recovered_channels.discard(key)
+        try:
+            await self._load_current_card(channel)
+        except _CurrentCardVerificationUnavailable:
+            return
+
+    def _forget_channel(self, key: _ChannelKey, *, cancel_tasks: bool = True) -> None:
+        if cancel_tasks:
+            task = self._pending.pop(key, None)
+            if self._task_running(task):
+                task.cancel()
+        self._leading.pop(key, None)
+        self._latest.pop(key, None)
+        self._latest_messages.pop(key, None)
+        self._latest_configs.pop(key, None)
+        self._last_activity.pop(key, None)
+        self._last_posted.pop(key, None)
+        self._locks.pop(key, None)
+        self._current_cards.pop(key, None)
+        self._recovered_channels.discard(key)
+        for trigger_key in list(self._trigger_received_at):
+            if trigger_key[:2] == key:
+                self._trigger_received_at.pop(trigger_key, None)
 
     async def _remove_channel_card_state(
         self,
@@ -674,82 +927,39 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
             cancel_pending=cancel_pending,
         )
 
-    def _forget_member_card(self, key: _MemberCardKey, *, cancel_tasks: bool = True) -> None:
-        if cancel_tasks:
-            for bucket in (self._leading, self._pending):
-                task = bucket.pop(key, None)
-                if self._task_running(task):
-                    task.cancel()
-        self._latest.pop(key, None)
-        self._latest_messages.pop(key, None)
-        self._latest_configs.pop(key, None)
-        self._last_activity.pop(key, None)
-        self._last_posted.pop(key, None)
-        self._locks.pop(key, None)
-        self._current_cards.pop(key, None)
-        for trigger_key in list(self._trigger_received_at):
-            if trigger_key[:3] == key:
-                self._trigger_received_at.pop(trigger_key, None)
-
-    def _forget_channel(self, key: _ChannelKey, *, cancel_tasks: bool = True) -> None:
-        for member_key in {
-            *[item for item in self._latest if item[:2] == key],
-            *[item for item in self._pending if item[:2] == key],
-            *[item for item in self._leading if item[:2] == key],
-            *[item for item in self._current_cards if item[:2] == key],
-            *[item for item in self._last_activity if item[:2] == key],
-        }:
-            self._forget_member_card(member_key, cancel_tasks=cancel_tasks)
-        self._channel_send_locks.pop(key, None)
-        for trigger_key in list(self._trigger_received_at):
-            if trigger_key[:2] == key:
-                self._trigger_received_at.pop(trigger_key, None)
-
-    def _cancel_user_leading_tasks(self, user_id: int, *, guild_id: Optional[int] = None) -> None:
-        resolved_user_id = int(user_id)
-        resolved_guild_id = int(guild_id) if guild_id is not None else None
-        for key, trigger in list(self._latest.items()):
-            if trigger.user_id != resolved_user_id:
-                continue
-            if resolved_guild_id is not None and key[0] != resolved_guild_id:
-                continue
-            task = self._leading.pop(key, None)
-            if self._task_running(task):
-                task.cancel()
-            if self._pending.get(key) is task:
-                self._pending.pop(key, None)
-            self._latest_messages.pop(key, None)
-            self._latest_configs.pop(key, None)
-
     async def remove_user_cards(self, guild: discord.Guild, user_id: int) -> None:
+        resolved = int(user_id)
+        for key, trigger in list(self._latest.items()):
+            if key[0] == int(guild.id) and int(trigger.user_id) == resolved:
+                self._forget_channel(key)
         _sync_core_dependencies()
-        self._cancel_user_leading_tasks(user_id, guild_id=guild.id)
-        await super().remove_user_cards(guild, user_id)
+        await super().remove_user_cards(guild, resolved)
         for key, current in list(self._current_cards.items()):
-            if key[0] == int(guild.id) and current.user_id == int(user_id):
-                self._forget_member_card(key)
+            if key[0] == int(guild.id) and int(current.user_id) == resolved:
+                self._forget_channel(key, cancel_tasks=False)
 
     async def remove_user_cards_all_guilds(self, user_id: int) -> None:
+        resolved = int(user_id)
+        for key, trigger in list(self._latest.items()):
+            if int(trigger.user_id) == resolved:
+                self._forget_channel(key)
         _sync_core_dependencies()
-        self._cancel_user_leading_tasks(user_id)
-        await super().remove_user_cards_all_guilds(user_id)
+        await super().remove_user_cards_all_guilds(resolved)
         for key, current in list(self._current_cards.items()):
-            if current.user_id == int(user_id):
-                self._forget_member_card(key)
+            if int(current.user_id) == resolved:
+                self._forget_channel(key, cancel_tasks=False)
 
     async def invalidate_guild_cards(self, guild: discord.Guild) -> None:
         _sync_core_dependencies()
         await super().invalidate_guild_cards(guild)
-        channel_keys = {key[:2] for key in self._current_cards if key[0] == int(guild.id)}
-        for channel_key in channel_keys:
-            self._forget_channel(channel_key)
+        for key in list(self._current_cards):
+            if key[0] == int(guild.id):
+                self._forget_channel(key)
 
     async def disable_channel(self, guild: discord.Guild, channel: discord.TextChannel) -> None:
-        _sync_core_dependencies()
         await self._remove_channel_card_state(guild, channel.id)
 
     async def on_member_remove(self, member: discord.Member) -> None:
-        _sync_core_dependencies()
         await self.remove_user_cards(member.guild, member.id)
 
     async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
@@ -757,230 +967,6 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
         await super().on_guild_channel_delete(channel)
         if isinstance(channel, discord.TextChannel):
             self._forget_channel((int(channel.guild.id), int(channel.id)))
-
-    async def _load_current_card(
-        self,
-        channel: discord.TextChannel,
-        user_id: int,
-    ) -> Optional[_CurrentCard]:
-        key = (int(channel.guild.id), int(channel.id), int(user_id))
-        cached = self._current_cards.get(key)
-        if cached is not None:
-            return cached
-        state = await get_live_card_state(*key)
-        if not isinstance(state, Mapping):
-            return None
-        try:
-            message_id = int(str(state.get("message_id") or "0"))
-            stored_user_id = int(str(state.get("user_id") or "0"))
-            trigger_message_id = int(str(state.get("trigger_message_id") or "0"))
-        except Exception:
-            message_id = stored_user_id = trigger_message_id = 0
-        if message_id <= 0 or stored_user_id <= 0 or stored_user_id != int(user_id):
-            return None
-        try:
-            stored = await channel.fetch_message(message_id)
-        except discord.NotFound:
-            stored = None
-        except Exception as exc:
-            print(
-                "⚠️ live_profile_card state verification failed "
-                f"guild={channel.guild.id} channel={channel.id} message={message_id} "
-                f"error={type(exc).__name__}: {exc}"
-            )
-            raise _CurrentCardVerificationUnavailable from exc
-        bot_user = getattr(self.bot, "user", None)
-        parsed = parse_live_card_footer(stored) if stored is not None else None
-        if (
-            stored is None
-            or bot_user is None
-            or int(getattr(stored.author, "id", 0) or 0) != int(bot_user.id)
-            or parsed is None
-            or int(parsed[0]) != stored_user_id
-        ):
-            try:
-                await delete_live_card_state(*key)
-            except Exception:
-                pass
-            return None
-        current = _CurrentCard(
-            message_id=message_id,
-            user_id=stored_user_id,
-            trigger_message_id=trigger_message_id or int(parsed[1]),
-            message=stored,
-        )
-        self._current_cards[key] = current
-        return current
-
-    async def _replace_card(
-        self,
-        message: discord.Message,
-        config: LiveCardConfig,
-        trigger: PendingTrigger,
-        *,
-        force_reposition: bool = False,
-        source: str = "direct",
-    ) -> None:
-        _sync_core_dependencies()
-        channel = message.channel
-        guild = message.guild
-        message_author = getattr(message, "author", None)
-        if isinstance(message_author, discord.Member) and int(message_author.id) == int(trigger.user_id):
-            member = message_author
-        else:
-            member = guild.get_member(trigger.user_id) if guild else None
-        if not isinstance(channel, discord.TextChannel):
-            return
-        if not isinstance(member, discord.Member):
-            print(
-                "⚠️ live_profile_card skipped member unavailable "
-                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
-                "source=message_author_then_cache"
-            )
-            return
-        if not _channel_can_host_cards(channel):
-            print(
-                "⚠️ live_profile_card skipped channel permissions "
-                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
-                "required=view,send,embed,history,attach"
-            )
-            return
-
-        key = (trigger.guild_id, trigger.channel_id, trigger.user_id)
-        try:
-            current = await self._load_current_card(channel, trigger.user_id)
-        except (ProfileStorageUnavailable, _CurrentCardVerificationUnavailable) as exc:
-            print(
-                "⚠️ live_profile_card skipped "
-                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
-                f"reason=current_card_verification_unavailable error={type(exc).__name__}"
-            )
-            return
-        if current is not None:
-            if current.user_id == trigger.user_id and current.trigger_message_id == trigger.message_id:
-                return
-            if current.user_id == trigger.user_id and not force_reposition:
-                return
-
-        render_started = monotonic()
-        try:
-            rendered = await self.renderer(
-                member,
-                set(config.allowed_fields),
-                trigger_message_id=trigger.message_id,
-            )
-        except Exception as exc:
-            print(
-                "⚠️ live_profile_card render failed "
-                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
-                f"error={type(exc).__name__}: {exc}"
-            )
-            return
-        if rendered is None:
-            print(
-                "ℹ️ live_profile_card skipped "
-                f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
-                "reason=member_live_signature_disabled"
-            )
-            return
-        render_ms = int((monotonic() - render_started) * 1000)
-
-        channel_key = (trigger.guild_id, trigger.channel_id)
-        send_lock = self._channel_send_locks.setdefault(channel_key, asyncio.Lock())
-        async with send_lock:
-            try:
-                new_message = await channel.send(**_live_card_send_payload(rendered))
-            except Exception as exc:
-                print(
-                    "⚠️ live_profile_card send failed "
-                    f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
-                    f"error={type(exc).__name__}: {exc}"
-                )
-                return
-
-            try:
-                await upsert_live_card_state(
-                    trigger.guild_id,
-                    trigger.channel_id,
-                    message_id=new_message.id,
-                    user_id=trigger.user_id,
-                    trigger_message_id=trigger.message_id,
-                )
-            except Exception as exc:
-                await self._delete_verified_card(new_message)
-                print(
-                    "⚠️ live_profile_card state write failed; removed new card "
-                    f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
-                    f"error={type(exc).__name__}: {exc}"
-                )
-                return
-
-        old = current
-        self._current_cards[key] = _CurrentCard(
-            message_id=int(new_message.id),
-            user_id=int(trigger.user_id),
-            trigger_message_id=int(trigger.message_id),
-            message=new_message,
-        )
-        self._last_posted[key] = (trigger.user_id, monotonic())
-        received_at = self._trigger_received_at.pop(
-            (trigger.guild_id, trigger.channel_id, trigger.user_id, trigger.message_id),
-            render_started,
-        )
-        total_ms = int((monotonic() - received_at) * 1000)
-        print(
-            "✅ live_profile_card posted "
-            f"guild={trigger.guild_id} channel={trigger.channel_id} user={trigger.user_id} "
-            f"message={new_message.id} trigger={trigger.message_id} source={source} "
-            f"render_ms={render_ms} total_ms={total_ms}"
-        )
-
-        if old is not None and old.message_id != int(new_message.id):
-            if old.message is not None:
-                removed = await self._delete_verified_card(old.message)
-            else:
-                removed = await self._delete_stored_message(channel, old.message_id)
-            if not removed:
-                print(
-                    "⚠️ live_profile_card old card cleanup deferred "
-                    f"guild={trigger.guild_id} channel={trigger.channel_id} message={old.message_id}"
-                )
-
-    async def _stored_state_is_live(
-        self,
-        channel: discord.TextChannel,
-        state: Optional[Mapping[str, Any]],
-    ) -> bool:
-        if not isinstance(state, Mapping):
-            return False
-        try:
-            message_id = int(str(state.get("message_id") or "0"))
-        except Exception:
-            return False
-        if message_id <= 0:
-            return False
-        try:
-            stored = await channel.fetch_message(message_id)
-        except discord.NotFound:
-            return False
-        except Exception as exc:
-            print(
-                "⚠️ live_profile_card state verification failed "
-                f"guild={channel.guild.id} channel={channel.id} message={message_id} "
-                f"error={type(exc).__name__}: {exc}"
-            )
-            return True
-        bot_user = getattr(self.bot, "user", None)
-        if bot_user is None or int(getattr(stored.author, "id", 0) or 0) != int(bot_user.id):
-            return False
-        parsed = parse_live_card_footer(stored)
-        if parsed is None:
-            return False
-        try:
-            stored_user_id = int(str(state.get("user_id") or "0"))
-        except Exception:
-            return False
-        return int(parsed[0]) == stored_user_id
 
 
 __all__ = [
@@ -999,9 +985,20 @@ __all__ = [
     "LiveCardRender",
     "LiveProfileCardRuntime",
     "PendingTrigger",
+    "_channel_can_host_cards",
+    "_channel_ids",
+    "_copy_base_profile_embed",
+    "_is_supported_message",
+    "_platform_view",
+    "delete_live_card_state",
+    "get_live_card_state",
+    "list_live_card_states",
+    "list_live_card_states_for_channel",
+    "list_live_card_states_for_user",
     "live_card_footer",
     "live_card_marker_url",
     "parse_live_card_config",
     "parse_live_card_footer",
     "render_live_profile_card",
+    "upsert_live_card_state",
 ]

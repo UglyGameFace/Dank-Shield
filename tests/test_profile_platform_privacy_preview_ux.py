@@ -52,31 +52,69 @@ def test_privacy_panel_has_obvious_account_management_and_navigation():
     assert "Back to Profile" in labels
 
 
-def test_every_platform_detail_uses_explicit_public_private_language():
-    for platform in profile_signature_studio.PLATFORM_SPECS:
+
+def test_server_roles_default_hidden_button_is_truthful():
+    view = public_profile_cards.ProfileSettingsView(
+        author_id=42,
+        guild_id=7,
+        user_preferences={},
+        guild_settings={},
+    )
+    labels = {str(child.label) for child in view.children if isinstance(child, discord.ui.Button)}
+    assert "Show Server Roles Everywhere" in labels
+    assert "Hide Server Roles Everywhere" not in labels
+
+
+def test_privacy_preview_keeps_copy_ready_username_controls():
+    source_view = discord.ui.View(timeout=None)
+    source_view.add_item(
+        discord.ui.Button(
+            label="UglyGameFace",
+            custom_id="dank:profilecopy:v1:42:xbox",
+            style=discord.ButtonStyle.secondary,
+        )
+    )
+    preview = public_profile_cards._ProfilePreviewView(author_id=42, source_view=source_view)
+    copied = next(
+        child
+        for child in preview.children
+        if isinstance(child, discord.ui.Button) and child.custom_id == "dank:profilecopy:v1:42:xbox"
+    )
+    assert copied.label == "UglyGameFace"
+
+
+def test_every_platform_detail_uses_explicit_display_modes_and_private_control():
+    for platform, spec in profile_signature_studio.PLATFORM_SPECS.items():
         private_view = profile_signature_studio.PlatformDetailView(
             author_id=42,
             platform=platform,
-            entry={"username": "player", "shared": False},
+            entry={"username": "player", "shared": False, "mode": "username"},
         )
         public_view = profile_signature_studio.PlatformDetailView(
             author_id=42,
             platform=platform,
-            entry={"username": "player", "shared": True},
+            entry={"username": "player", "shared": True, "mode": "username"},
         )
-        private_button = next(child for child in private_view.children if child.label == "Make Public")
-        public_button = next(child for child in public_view.children if child.label == "Make Private")
-        assert private_button.label == "Make Public"
-        assert private_button.disabled is False
-        assert public_button.label == "Make Private"
-        assert public_button.disabled is False
+        private_labels = {child.label: child for child in private_view.children if child.label}
+        public_labels = {child.label: child for child in public_view.children if child.label}
+        assert "Show Username" in private_labels
+        assert private_labels["Show Username"].disabled is False
+        assert "Logo Only" in private_labels
+        assert private_labels["Logo Only"].disabled is False
+        assert private_labels["Make Private"].disabled is True
+        assert public_labels["Show Username"].style == discord.ButtonStyle.success
+        assert public_labels["Make Private"].disabled is False
+        if spec.supports_url:
+            assert "Show Link" in private_labels
 
 
-def test_unsaved_platform_cannot_be_published_before_username_exists():
+def test_unsaved_platform_allows_logo_only_without_username_or_link():
     view = profile_signature_studio.PlatformDetailView(author_id=42, platform="steam", entry={})
-    button = next(child for child in view.children if child.label == "Make Public")
-    assert button.label == "Make Public"
-    assert button.disabled is True
+    buttons = {child.label: child for child in view.children if child.label}
+    assert buttons["Show Link"].disabled is True
+    assert buttons["Show Username"].disabled is True
+    assert buttons["Logo Only"].disabled is False
+    assert buttons["Make Private"].disabled is True
 
 
 def test_privacy_embed_points_to_manage_accounts_and_marks_visibility():
@@ -120,12 +158,19 @@ def test_privacy_buttons_use_plain_action_language():
     view = public_profile_cards.ProfileSettingsView(
         author_id=42,
         guild_id=7,
-        user_preferences={"show_roles": True, "show_account_dates": True, "show_platforms": True},
+        user_preferences={
+            "show_server_roles": True,
+            "show_profile_tags": True,
+            "show_account_dates": True,
+            "show_platforms": True,
+        },
         guild_settings={},
     )
     labels = {str(child.label) for child in view.children if isinstance(child, discord.ui.Button)}
-    assert "Hide Roles Everywhere" in labels
-    assert "Hide Roles In This Server" in labels
+    assert "Hide Server Roles Everywhere" in labels
+    assert "Hide Server Roles In This Server" in labels
+    assert "Hide Profile Tags Everywhere" in labels
+    assert "Hide Profile Tags In This Server" in labels
     assert "Hide Dates Everywhere" in labels
     assert "Hide Accounts In This Server" in labels
     assert not any("Inherit" in label for label in labels)

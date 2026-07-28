@@ -21,6 +21,7 @@ from .profile_card_service import (
     list_live_card_states_for_channel,
     list_live_card_states_for_user,
     normalize_server_allowed_fields,
+    platform_entry_mode,
     upsert_live_card_state,
     visible_platform_entries,
 )
@@ -238,24 +239,55 @@ def _copy_base_profile_embed(base: discord.Embed, *, show_roles: bool, show_date
     return embed
 
 
-def _platform_view(entries: list[dict[str, Any]]) -> Optional[discord.ui.View]:
-    linked = [entry for entry in entries if str(entry.get("url") or "").strip()]
-    if not linked:
-        return None
+def _platform_view(
+    entries: list[dict[str, Any]],
+    *,
+    owner_user_id: Optional[int] = None,
+) -> Optional[discord.ui.View]:
+    """Build real-logo controls for link and copy-ready username modes.
+
+    Logo-only accounts are rendered inside the image and intentionally do not
+    create a dead disabled button beneath it.
+    """
     view = discord.ui.View(timeout=None)
-    for index, entry in enumerate(linked[:20]):
-        spec = PLATFORM_SPECS.get(str(entry.get("platform") or ""))
+    control_index = 0
+    for entry in entries[:20]:
+        platform = str(entry.get("platform") or "")
+        spec = PLATFORM_SPECS.get(platform)
         if spec is None:
             continue
-        view.add_item(
-            discord.ui.Button(
-                label=spec.label[:80],
-                emoji=spec.emoji,
-                style=discord.ButtonStyle.link,
-                url=str(entry.get("url")),
-                row=min(3, index // 5),
+        mode = platform_entry_mode(entry)
+        username = ""
+        if str(entry.get("username") or "").strip():
+            try:
+                username = display_profile_username(entry.get("username"))
+            except Exception:
+                username = ""
+        url = str(entry.get("url") or "").strip()
+        row = min(3, control_index // 5)
+        if mode == "link" and url:
+            view.add_item(
+                discord.ui.Button(
+                    label=spec.label[:80],
+                    emoji=spec.emoji,
+                    style=discord.ButtonStyle.link,
+                    url=url,
+                    row=row,
+                )
             )
-        )
+            control_index += 1
+            continue
+        if mode == "username" and username and owner_user_id:
+            view.add_item(
+                discord.ui.Button(
+                    label=username[:80],
+                    emoji=spec.emoji,
+                    style=discord.ButtonStyle.secondary,
+                    custom_id=f"dank:profilecopy:v1:{int(owner_user_id)}:{platform}",
+                    row=row,
+                )
+            )
+            control_index += 1
     return view if view.children else None
 
 
@@ -272,7 +304,7 @@ async def render_live_profile_card(
     if require_live_enabled and not bool(preferences.get("live_cards_enabled", True)):
         return None
 
-    show_roles = bool(preferences.get("show_roles", True)) and "roles" in server_allowed_fields
+    show_roles = bool(preferences.get("show_profile_tags", True)) and "profile_tags" in server_allowed_fields
     show_dates = bool(preferences.get("show_account_dates", True)) and "account_dates" in server_allowed_fields
     show_platforms = bool(preferences.get("show_platforms", True)) and "platforms" in server_allowed_fields
     platforms = visible_platform_entries(settings.get("platforms"), allowed=show_platforms)
@@ -292,13 +324,16 @@ async def render_live_profile_card(
             spec = PLATFORM_SPECS.get(str(entry.get("platform") or ""))
             if spec is None:
                 continue
-            username = display_profile_username(entry.get("username"))
-            lines.append(f"{spec.emoji} **{spec.label}:** `{username}`")
+            username = ""
+            if str(entry.get("username") or "").strip():
+                username = display_profile_username(entry.get("username"))
+            prefix = f"{spec.emoji} " if spec.emoji else ""
+            lines.append(f"{prefix}**{spec.label}:** " + (f"`{username}`" if username else "Logo only"))
         if lines:
             embed.add_field(name="Connected identities", value="\n".join(lines)[:1024], inline=False)
 
     embed.set_footer(text=live_card_footer(member.id, trigger_message_id))
-    return LiveCardRender(embed=embed, view=_platform_view(platforms))
+    return LiveCardRender(embed=embed, view=_platform_view(platforms, owner_user_id=member.id))
 
 
 class LiveProfileCardRuntime:
