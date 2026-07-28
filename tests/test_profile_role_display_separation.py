@@ -92,3 +92,11 @@ def test_banner_applies_pixel_fitting_to_every_dynamic_right_side_label() -> Non
     assert 'max_width=335' in RENDERER
     assert 'max_width=server_size' in RENDERER
     assert "available_text_width = max(0, max_chip_x - chip_x - 32)" in RENDERER
+
+
+def test_member_profile_view_attaches_generated_wide_banner() -> None:
+    profile_send = PRIVACY_CORE.split("async def send_privacy_aware_profile", 1)[1].split(
+        "def _live_status_embed", 1
+    )[0]
+    assert "file=rendered.file if rendered is not None else None" in profile_send
+    assert "render_live_profile_card(" in profile_send

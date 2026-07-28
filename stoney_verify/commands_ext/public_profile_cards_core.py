@@ -658,6 +658,7 @@ async def send_privacy_aware_profile(
         interaction,
         embed=rendered_embed,
         view=view if view.children else None,
+        file=rendered.file if rendered is not None else None,
     )
 
 
