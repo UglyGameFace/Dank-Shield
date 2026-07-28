@@ -24,6 +24,7 @@ from .profile_card_service import (
     effective_preferences,
     get_profile_guild_settings,
     get_profile_user,
+    platform_entry_mode,
     remove_platform_identity,
     save_platform_identity,
     upsert_profile_guild_settings,
@@ -247,16 +248,27 @@ class SignaturePreviewView(discord.ui.View):
         super().__init__(timeout=600)
         self.author_id = int(author_id)
         for child in list(getattr(source_view, "children", []) or []):
-            if not isinstance(child, discord.ui.Button) or not child.url:
+            if not isinstance(child, discord.ui.Button):
                 continue
-            self.add_item(
-                discord.ui.Button(
-                    label=str(child.label or "Profile")[:80],
-                    emoji=child.emoji,
-                    style=discord.ButtonStyle.link,
-                    url=str(child.url),
+            if child.url:
+                self.add_item(
+                    discord.ui.Button(
+                        label=str(child.label or "Profile")[:80],
+                        emoji=child.emoji,
+                        style=discord.ButtonStyle.link,
+                        url=str(child.url),
+                    )
                 )
-            )
+            elif child.custom_id or child.disabled:
+                self.add_item(
+                    discord.ui.Button(
+                        label=str(child.label)[:80] if child.label else None,
+                        emoji=child.emoji,
+                        style=child.style,
+                        custom_id=str(child.custom_id) if child.custom_id else None,
+                        disabled=bool(child.disabled),
+                    )
+                )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.author_id:
@@ -708,17 +720,18 @@ class PlatformEditModal(discord.ui.Modal):
         self.author_id = int(author_id)
         self.platform = platform
         self.username = discord.ui.TextInput(
-            label="Username or handle",
+            label="Username or handle (optional)",
             default=str(entry.get("username") or "")[:80],
             max_length=80,
-            required=True,
+            required=False,
+            placeholder="Leave blank when you only want the platform logo",
         )
         self.url = discord.ui.TextInput(
             label="Official profile link (optional)",
             default=str(entry.get("url") or "")[:500],
             max_length=500,
             required=False,
-            placeholder="Leave blank for username-only platforms",
+            placeholder="Only supported official profile links are accepted",
         )
         self.add_item(self.username)
         self.add_item(self.url)
@@ -728,14 +741,23 @@ class PlatformEditModal(discord.ui.Modal):
             return await _private(interaction, content="❌ Only the person who opened this editor can submit it.")
         user = await get_profile_user(self.author_id, refresh=True)
         current = dict(user.get("platforms") or {}).get(self.platform)
-        shared = bool(current.get("shared")) if isinstance(current, Mapping) else False
+        current = dict(current) if isinstance(current, Mapping) else {}
+        shared = bool(current.get("shared"))
+        username = str(self.username.value or "").strip()
+        profile_url = str(self.url.value or "").strip()
+        mode = platform_entry_mode(current) if current else ""
+        if not username and not profile_url:
+            mode = "logo"
+        elif not mode or mode == "logo":
+            mode = "link" if profile_url else "username"
         try:
             entry = await save_platform_identity(
                 self.author_id,
                 self.platform,
-                username=str(self.username.value),
-                profile_url=str(self.url.value),
+                username=username,
+                profile_url=profile_url,
                 shared=shared,
+                mode=mode,
             )
         except InvalidPlatformProfile as exc:
             return await _private(interaction, content=f"❌ {exc}")
@@ -745,7 +767,7 @@ class PlatformEditModal(discord.ui.Modal):
         spec = PLATFORM_SPECS[self.platform]
         await _edit_private(
             interaction,
-            content=f"✅ {spec.label} saved. Choose **Make Public** when you want it shown on your signature.",
+            content=f"✅ {spec.label} saved. Choose **Link**, **Username**, **Logo only**, or **Private** below.",
             embed=_platform_detail_embed(self.platform, entry),
             view=PlatformDetailView(author_id=self.author_id, platform=self.platform, entry=entry),
         )
@@ -753,24 +775,112 @@ class PlatformEditModal(discord.ui.Modal):
 
 def _platform_detail_embed(platform: str, entry: Mapping[str, Any]) -> discord.Embed:
     spec = PLATFORM_SPECS[platform]
-    username = str(entry.get("username") or "").strip()
-    shared = bool(entry.get("shared")) and bool(username)
+    raw = dict(entry or {})
+    username = str(raw.get("username") or "").strip()
+    shared = bool(raw.get("shared"))
+    mode = platform_entry_mode(raw)
+    mode_label = {
+        "link": "🔗 Link button",
+        "username": "📋 Copyable username button",
+        "logo": "🎮 Logo only",
+    }[mode]
     embed = discord.Embed(
         title=f"{spec.emoji} {spec.label}",
         description=(
-            "Use the large visibility button below. **Make Public** allows this account to appear on your compact "
-            "signature; **Make Private** hides it everywhere."
+            "Choose exactly how this platform appears. **Username** creates a fast same-channel private copy box, "
+            "**Link** opens the official profile, and **Logo only** requires no username or link."
         ),
         color=discord.Color.green() if shared else discord.Color.blurple(),
     )
     embed.add_field(
         name="Username",
-        value=f"`{display_profile_username(username)}`" if username else "Not saved yet",
+        value=f"`{display_profile_username(username)}`" if username else "Optional — not saved",
         inline=False,
     )
     embed.add_field(name="Visibility", value="🌐 Public" if shared else "🔒 Private", inline=True)
-    embed.add_field(name="Official link", value="Saved" if entry.get("url") else "Username only", inline=True)
+    embed.add_field(name="Public display", value=mode_label if shared else "Hidden", inline=True)
+    embed.add_field(name="Official link", value="Saved" if raw.get("url") else "Not saved", inline=True)
     return embed
+
+
+class _PlatformModeButton(discord.ui.Button):
+    def __init__(self, *, author_id: int, platform: str, entry: Mapping[str, Any], mode: str, row: int = 0) -> None:
+        spec = PLATFORM_SPECS[platform]
+        raw = dict(entry or {})
+        labels = {"link": "Show Link", "username": "Show Username", "logo": "Logo Only"}
+        disabled = (mode == "link" and not str(raw.get("url") or "").strip()) or (
+            mode == "username" and not str(raw.get("username") or "").strip()
+        )
+        super().__init__(
+            label=labels[mode],
+            style=discord.ButtonStyle.success if bool(raw.get("shared")) and platform_entry_mode(raw) == mode else discord.ButtonStyle.secondary,
+            disabled=disabled,
+            row=row,
+        )
+        self.author_id = int(author_id)
+        self.platform = platform
+        self.mode = mode
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        user = await get_profile_user(self.author_id, refresh=True)
+        raw = dict(user.get("platforms") or {}).get(self.platform)
+        raw = dict(raw) if isinstance(raw, Mapping) else {}
+        try:
+            entry = await save_platform_identity(
+                self.author_id,
+                self.platform,
+                username=raw.get("username", ""),
+                profile_url=raw.get("url", ""),
+                shared=True,
+                mode=self.mode,
+            )
+        except (InvalidPlatformProfile, ProfileStorageUnavailable) as exc:
+            return await _private(interaction, content=f"❌ {exc}")
+        await _invalidate(interaction, all_guilds=True)
+        await _edit_private(
+            interaction,
+            content=f"✅ {PLATFORM_SPECS[self.platform].label} now uses **{self.label}** on public signatures.",
+            embed=_platform_detail_embed(self.platform, entry),
+            view=PlatformDetailView(author_id=self.author_id, platform=self.platform, entry=entry),
+        )
+
+
+class _PlatformPrivateButton(discord.ui.Button):
+    def __init__(self, *, author_id: int, platform: str, entry: Mapping[str, Any], row: int = 0) -> None:
+        raw = dict(entry or {})
+        super().__init__(
+            label="Make Private",
+            style=discord.ButtonStyle.danger,
+            disabled=not bool(raw.get("shared")),
+            row=row,
+        )
+        self.author_id = int(author_id)
+        self.platform = platform
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        user = await get_profile_user(self.author_id, refresh=True)
+        raw = dict(user.get("platforms") or {}).get(self.platform)
+        raw = dict(raw) if isinstance(raw, Mapping) else {}
+        if not raw:
+            return await _private(interaction, content="Nothing is saved for that platform yet.")
+        try:
+            entry = await save_platform_identity(
+                self.author_id,
+                self.platform,
+                username=raw.get("username", ""),
+                profile_url=raw.get("url", ""),
+                shared=False,
+                mode=platform_entry_mode(raw),
+            )
+        except (InvalidPlatformProfile, ProfileStorageUnavailable) as exc:
+            return await _private(interaction, content=f"❌ {exc}")
+        await _invalidate(interaction, all_guilds=True)
+        await _edit_private(
+            interaction,
+            content=f"✅ {PLATFORM_SPECS[self.platform].label} is now private.",
+            embed=_platform_detail_embed(self.platform, entry),
+            view=PlatformDetailView(author_id=self.author_id, platform=self.platform, entry=entry),
+        )
 
 
 class PlatformDetailView(discord.ui.View):
@@ -779,12 +889,12 @@ class PlatformDetailView(discord.ui.View):
         self.author_id = int(author_id)
         self.platform = str(platform)
         raw = dict(entry or {})
-        has_identity = bool(str(raw.get("username") or "").strip())
-        shared = bool(raw.get("shared")) and has_identity
-        self.share.label = "Make Private" if shared else "Make Public"
-        self.share.emoji = "🔒" if shared else "🌐"
-        self.share.style = discord.ButtonStyle.danger if shared else discord.ButtonStyle.success
-        self.share.disabled = not has_identity
+        if PLATFORM_SPECS[self.platform].supports_url:
+            self.add_item(_PlatformModeButton(author_id=self.author_id, platform=self.platform, entry=raw, mode="link"))
+        self.add_item(_PlatformModeButton(author_id=self.author_id, platform=self.platform, entry=raw, mode="username"))
+        self.add_item(_PlatformModeButton(author_id=self.author_id, platform=self.platform, entry=raw, mode="logo"))
+        self.add_item(_PlatformPrivateButton(author_id=self.author_id, platform=self.platform, entry=raw))
+        self.remove.disabled = not bool(raw)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.author_id:
@@ -792,7 +902,7 @@ class PlatformDetailView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="Add / Edit", emoji="✏️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Add / Edit Details", style=discord.ButtonStyle.primary, row=1)
     async def edit(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         user = await get_profile_user(self.author_id, refresh=True)
@@ -802,45 +912,17 @@ class PlatformDetailView(discord.ui.View):
             PlatformEditModal(author_id=self.author_id, platform=self.platform, entry=entry)
         )
 
-    @discord.ui.button(label="Make Public", emoji="🌐", style=discord.ButtonStyle.success, row=0)
-    async def share(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        try:
-            user = await get_profile_user(self.author_id, refresh=True)
-            raw = dict(user.get("platforms") or {}).get(self.platform)
-            if not isinstance(raw, Mapping) or not str(raw.get("username") or "").strip():
-                return await _private(interaction, content="Add the username first, then choose whether to share it.")
-            entry = await save_platform_identity(
-                self.author_id,
-                self.platform,
-                username=raw.get("username"),
-                profile_url=raw.get("url"),
-                shared=not bool(raw.get("shared")),
-            )
-        except (InvalidPlatformProfile, ProfileStorageUnavailable) as exc:
-            return await _private(interaction, content=f"❌ {exc}")
-        await _invalidate(interaction, all_guilds=True)
-        await _edit_private(
-            interaction,
-            content=(
-                f"✅ {PLATFORM_SPECS[self.platform].label} is now "
-                f"**{'Public' if entry['shared'] else 'Private'}**."
-            ),
-            embed=_platform_detail_embed(self.platform, entry),
-            view=PlatformDetailView(author_id=self.author_id, platform=self.platform, entry=entry),
-        )
-
-    @discord.ui.button(label="Remove", emoji="🗑️", style=discord.ButtonStyle.danger, row=0)
+    @discord.ui.button(label="Remove", style=discord.ButtonStyle.danger, row=1)
     async def remove(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         try:
-            removed = await remove_platform_identity(self.author_id, self.platform)
+            await remove_platform_identity(self.author_id, self.platform)
         except ProfileStorageUnavailable:
             return await _private(interaction, content="❌ Private profile storage is unavailable. Nothing changed.")
         await _invalidate(interaction, all_guilds=True)
         await open_platform_manager(interaction, replace=True)
 
-    @discord.ui.button(label="Back to Platforms", emoji="↩️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Back to Platforms", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_platform_manager(interaction, replace=True)
@@ -853,7 +935,7 @@ class PlatformSelect(discord.ui.Select):
             min_values=1,
             max_values=1,
             options=[
-                discord.SelectOption(label=spec.label, value=key, emoji=spec.emoji)
+                discord.SelectOption(label=spec.label, value=key)
                 for key, spec in PLATFORM_SPECS.items()
             ],
             custom_id="dank:profile:platform_picker:v1",
@@ -904,17 +986,24 @@ async def open_platform_manager(interaction: discord.Interaction, *, replace: bo
     lines = []
     for key, spec in PLATFORM_SPECS.items():
         raw = platforms.get(key)
-        if not isinstance(raw, Mapping) or not raw.get("username"):
+        if not isinstance(raw, Mapping):
             continue
+        mode = platform_entry_mode(raw)
+        username = str(raw.get("username") or "").strip()
+        identity = (
+            f"`{display_profile_username(username)}`"
+            if username and mode != "logo"
+            else "Logo only"
+        )
         lines.append(
-            f"{spec.emoji} **{spec.label}:** `{display_profile_username(raw.get('username'))}` — "
-            f"{'🌐 Public' if raw.get('shared') else '🔒 Private'}"
+            f"**{spec.label}:** {identity} — "
+            f"{'Public' if raw.get('shared') else 'Private'} • {mode.title()}"
         )
     embed = discord.Embed(
-        title="🎮 Platforms & Accounts",
+        title="Platforms & Accounts",
         description=(
-            "Choose an account below. The next screen gives you an obvious **Make Public** or **Make Private** "
-            "button. Saving a username never exposes it automatically."
+            "Choose a platform below, then select **Link**, **Username**, **Logo only**, or **Private**. "
+            "Logo only needs no account details, and saving details never exposes them automatically."
         ),
         color=discord.Color.blurple(),
     )

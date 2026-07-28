@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 """Public profile controls backed by compact forum-style signatures."""
 
 from typing import Any, Mapping, Optional
@@ -16,10 +17,21 @@ from stoney_verify.profile_card_runtime import (
     parse_live_card_config,
     render_live_profile_card,
 )
-from stoney_verify.profile_card_service import ProfileStorageUnavailable, get_effective_profile_settings
+from stoney_verify.profile_card_service import (
+    PLATFORM_SPECS,
+    ProfileStorageUnavailable,
+    display_profile_username,
+    effective_preferences,
+    get_effective_profile_settings,
+    get_profile_guild_settings,
+    get_profile_user,
+    platform_entry_mode,
+)
 
 _RUNTIME_ATTRIBUTE = _core._RUNTIME_ATTRIBUTE
 _REGISTERED = False
+_PROFILE_COPY_LISTENER_REGISTERED = False
+_PROFILE_COPY_PREFIX = "dank:profilecopy:v1:"
 
 _defer_private = _core._defer_private
 _send_private = _core._send_private
@@ -353,6 +365,43 @@ async def send_privacy_aware_profile(
     await _send_private(interaction, **payload)
 
 
+async def _handle_profile_username_copy(interaction: discord.Interaction) -> None:
+    if interaction.type != discord.InteractionType.component:
+        return
+    custom_id = str((interaction.data or {}).get("custom_id") or "")
+    if not custom_id.startswith(_PROFILE_COPY_PREFIX):
+        return
+    parts = custom_id.split(":")
+    if len(parts) != 5:
+        return await _safe_ephemeral(interaction, "That platform username is no longer available.", ok=False)
+    try:
+        owner_id = int(parts[3])
+    except Exception:
+        owner_id = 0
+    platform = parts[4]
+    if interaction.guild is None or owner_id <= 0 or platform not in PLATFORM_SPECS:
+        return await _safe_ephemeral(interaction, "That platform username is no longer available.", ok=False)
+    try:
+        user_row, guild_row = await asyncio.gather(
+            get_profile_user(owner_id, refresh=True),
+            get_profile_guild_settings(interaction.guild.id, owner_id, refresh=True),
+        )
+    except ProfileStorageUnavailable:
+        return await _safe_ephemeral(interaction, "Private profile storage is temporarily unavailable.", ok=False)
+    preferences = effective_preferences(user_row.get("preferences"), guild_row.get("settings"))
+    raw = dict(user_row.get("platforms") or {}).get(platform)
+    if (
+        not bool(preferences.get("show_platforms", True))
+        or not isinstance(raw, Mapping)
+        or not bool(raw.get("shared"))
+        or platform_entry_mode(raw) != "username"
+        or not str(raw.get("username") or "").strip()
+    ):
+        return await _safe_ephemeral(interaction, "That member no longer shares this username.", ok=False)
+    username = display_profile_username(raw.get("username"))
+    await _send_private(interaction, content=f"```text\n{username}\n```")
+
+
 def _attach_profile_commands() -> None:
     command_specs = (
         ("settings", "Open your private profile privacy and platform settings.", profile_settings),
@@ -370,7 +419,7 @@ def _attach_profile_commands() -> None:
 
 def register_public_profile_cards(bot: Any, tree: Any) -> None:
     del tree
-    global _REGISTERED
+    global _REGISTERED, _PROFILE_COPY_LISTENER_REGISTERED
     _attach_profile_commands()
     if bot is None:
         return
@@ -382,6 +431,9 @@ def register_public_profile_cards(bot: Any, tree: Any) -> None:
         bot.add_listener(runtime.on_ready, "on_ready")
         bot.add_listener(runtime.on_member_remove, "on_member_remove")
         bot.add_listener(runtime.on_guild_channel_delete, "on_guild_channel_delete")
+    if not _PROFILE_COPY_LISTENER_REGISTERED:
+        bot.add_listener(_handle_profile_username_copy, "on_interaction")
+        _PROFILE_COPY_LISTENER_REGISTERED = True
     if not _REGISTERED:
         _REGISTERED = True
         print("✅ public_profile_cards: attached compact signatures, privacy, platforms, and lifecycle controls")

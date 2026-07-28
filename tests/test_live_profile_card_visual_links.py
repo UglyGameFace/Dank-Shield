@@ -146,8 +146,13 @@ def test_url_capable_identity_without_link_stays_in_image_only(monkeypatch):
 
         assert rendered is not None
         assert rendered.embed.description is None
-        assert rendered.view is None
-        assert captured["platform_labels"] == ["Steam: @UGLY123"]
+        assert rendered.view is not None
+        buttons = [child for child in rendered.view.children if isinstance(child, discord.ui.Button)]
+        assert len(buttons) == 1
+        assert buttons[0].label == "@UGLY123"
+        assert buttons[0].emoji is None
+        assert buttons[0].custom_id == "dank:profilecopy:v1:42:steam"
+        assert captured["platform_entries"][0]["platform"] == "steam"
 
     asyncio.run(scenario())
 
@@ -195,8 +200,13 @@ def test_username_only_public_accounts_remain_in_image_without_fake_links(monkey
 
         assert rendered is not None
         assert rendered.embed.description is None
-        assert rendered.view is None
-        assert captured["platform_labels"] == ["Xbox: UGLY123"]
+        assert rendered.view is not None
+        buttons = [child for child in rendered.view.children if isinstance(child, discord.ui.Button)]
+        assert len(buttons) == 1
+        assert buttons[0].label == "UGLY123"
+        assert buttons[0].emoji is None
+        assert buttons[0].custom_id == "dank:profilecopy:v1:42:xbox"
+        assert captured["platform_entries"][0]["platform"] == "xbox"
 
     asyncio.run(scenario())
 

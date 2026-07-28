@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from io import BytesIO
+from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 import discord
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
+
+from .profile_card_service import PLATFORM_SPECS, platform_entry_mode
 
 from . import profile_signature_renderer as _legacy
 from .welcome_card_typography_engine import (
@@ -21,6 +24,8 @@ from .welcome_card_typography_engine import (
 SIGNATURE_WIDTH = 1080
 SIGNATURE_HEIGHT = 300
 SIGNATURE_RATIO = SIGNATURE_WIDTH / SIGNATURE_HEIGHT
+PLATFORM_LOGO_DIR = Path(__file__).resolve().parent / "assets" / "platform_logos"
+_PLATFORM_LOGO_CACHE: dict[tuple[str, int], Optional[Image.Image]] = {}
 
 
 def _safe_text(value: Any, limit: int = 120) -> str:
@@ -255,30 +260,58 @@ def _avatar_tile(
     return tile
 
 
-def _chip_width(draw: ImageDraw.ImageDraw, label: str, font: Any) -> int:
-    box = draw.textbbox((0, 0), label, font=font)
-    return max(54, box[2] - box[0] + 32)
+def _platform_logo(platform: str, size: int = 24) -> Optional[Image.Image]:
+    cache_key = (str(platform or ""), int(size))
+    if cache_key in _PLATFORM_LOGO_CACHE:
+        cached = _PLATFORM_LOGO_CACHE[cache_key]
+        return cached.copy() if cached is not None else None
+    try:
+        with Image.open(PLATFORM_LOGO_DIR / f"{cache_key[0]}.png") as source:
+            logo = source.convert("RGBA")
+            logo.thumbnail((size, size), Image.Resampling.LANCZOS)
+    except Exception:
+        _PLATFORM_LOGO_CACHE[cache_key] = None
+        return None
+    _PLATFORM_LOGO_CACHE[cache_key] = logo.copy()
+    return logo
+
+
+def _chip_width(draw: ImageDraw.ImageDraw, label: str, font: Any, *, has_logo: bool = False) -> int:
+    text_width = 0
+    if label:
+        box = draw.textbbox((0, 0), label, font=font)
+        text_width = box[2] - box[0]
+    return max(54, text_width + 32 + (34 if has_logo else 0))
 
 
 def _draw_chip(
+    image: Image.Image,
     draw: ImageDraw.ImageDraw,
     x: int,
     y: int,
     label: str,
     *,
+    platform: str = "",
     font: Any,
     accent: tuple[int, int, int],
     text: tuple[int, int, int],
 ) -> int:
-    width = _chip_width(draw, label, font)
+    logo = _platform_logo(platform, 24) if platform else None
+    width = _chip_width(draw, label, font, has_logo=logo is not None)
     draw.rounded_rectangle((x, y, x + width, y + 42), radius=18, fill=accent + (62,), outline=accent + (155,), width=2)
-    draw.text((x + 16, y + 10), label, font=font, fill=text + (255,))
+    text_x = x + 16
+    if logo is not None:
+        image.alpha_composite(logo, (x + 12, y + 9))
+        text_x = x + 46
+    if label:
+        draw.text((text_x, y + 10), label, font=font, fill=text + (255,))
     return width
 
 
 def _pack_chips(
+    image: Image.Image,
     draw: ImageDraw.ImageDraw,
-    chips: Sequence[tuple[str, tuple[int, int, int]]],
+    chips: Sequence[tuple[str, tuple[int, int, int], str]],
     *,
     start_x: int,
     start_y: int,
@@ -290,18 +323,29 @@ def _pack_chips(
     x = start_x
     y = start_y
     row = 0
-    for raw_label, accent in chips:
+    for raw_label, accent, platform in chips:
         label = _safe_text(raw_label, 44)
-        if not label:
+        logo = _platform_logo(platform, 24) if platform else None
+        if not label and logo is None:
             continue
-        width = _chip_width(draw, label, font)
+        width = _chip_width(draw, label, font, has_logo=logo is not None)
         if x + width > max_x and x > start_x:
             row += 1
             if row >= max_rows:
                 break
             x = start_x
             y += 52
-        width = _draw_chip(draw, x, y, label, font=font, accent=accent, text=text)
+        width = _draw_chip(
+            image,
+            draw,
+            x,
+            y,
+            label,
+            platform=platform,
+            font=font,
+            accent=accent,
+            text=text,
+        )
         x += width + 10
 
 
@@ -313,6 +357,7 @@ def render_profile_signature(
     role_labels: Sequence[str],
     date_labels: Sequence[str],
     platform_labels: Sequence[str],
+    platform_entries: Sequence[Mapping[str, Any]] = (),
     style: Mapping[str, Any],
 ) -> bytes:
     theme, primary, secondary = _resolve_colors(style, avatar_bytes)
@@ -387,17 +432,28 @@ def render_profile_signature(
     image.alpha_composite(name_tile, (content_x, metrics["name_y"] - 6))
     draw = ImageDraw.Draw(image, "RGBA")
 
-    chips: list[tuple[str, tuple[int, int, int]]] = []
+    chips: list[tuple[str, tuple[int, int, int], str]] = []
     for index, label in enumerate(role_labels[:3]):
-        chips.append((label, primary if index % 2 == 0 else secondary))
-    for index, label in enumerate(platform_labels[:3]):
-        chips.append((label, secondary if index % 2 == 0 else primary))
+        chips.append((label, primary if index % 2 == 0 else secondary, ""))
+    if platform_entries:
+        for index, entry in enumerate(platform_entries[:4]):
+            platform = str(entry.get("platform") or "")
+            if platform not in PLATFORM_SPECS:
+                continue
+            mode = platform_entry_mode(entry)
+            username = _safe_text(entry.get("username"), 32)
+            label = "" if mode == "logo" else (username or PLATFORM_SPECS[platform].label)
+            chips.append((label, secondary if index % 2 == 0 else primary, platform))
+    else:
+        for index, label in enumerate(platform_labels[:3]):
+            chips.append((label, secondary if index % 2 == 0 else primary, ""))
     for index, label in enumerate(date_labels[:2]):
-        chips.append((label, secondary if index % 2 == 0 else primary))
+        chips.append((label, secondary if index % 2 == 0 else primary, ""))
     if not chips:
-        chips.append(("Private profile", primary))
+        chips.append(("Private profile", primary, ""))
 
     _pack_chips(
+        image,
         draw,
         chips,
         start_x=content_x,
@@ -431,6 +487,7 @@ async def render_member_profile_signature(
     role_labels: Sequence[str],
     date_labels: Sequence[str],
     platform_labels: Sequence[str],
+    platform_entries: Sequence[Mapping[str, Any]] = (),
 ) -> bytes:
     avatar = await _avatar_bytes(member)
     return await asyncio.to_thread(
@@ -441,6 +498,7 @@ async def render_member_profile_signature(
         role_labels=list(role_labels),
         date_labels=list(date_labels),
         platform_labels=list(platform_labels),
+        platform_entries=[dict(entry) for entry in platform_entries],
         style=dict(style or {}),
     )
 

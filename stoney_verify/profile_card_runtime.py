@@ -33,6 +33,7 @@ from .profile_card_service import (
     list_live_card_states,
     list_live_card_states_for_channel,
     list_live_card_states_for_user,
+    platform_entry_mode,
     upsert_live_card_state,
     visible_platform_entries,
 )
@@ -212,13 +213,15 @@ def _compact_platform_labels(entries: list[dict[str, Any]]) -> list[str]:
     labels: list[str] = []
     for entry in entries[:4]:
         spec = PLATFORM_SPECS.get(str(entry.get("platform") or ""))
-        if spec is None:
+        if spec is None or platform_entry_mode(entry) == "logo":
             continue
-        try:
-            username = display_profile_username(entry.get("username"))
-        except Exception:
-            continue
-        labels.append(f"{spec.label}: {username}")
+        username = ""
+        if str(entry.get("username") or "").strip():
+            try:
+                username = display_profile_username(entry.get("username"))
+            except Exception:
+                username = ""
+        labels.append(f"{spec.label}: {username}" if username else spec.label)
     return labels
 
 
@@ -300,6 +303,7 @@ async def render_live_profile_card(
         tuple(role_labels),
         tuple(date_labels),
         tuple(platform_labels),
+        _stable_cache_value(platforms),
         _stable_cache_value(style),
     )
     image_bytes = _signature_cache_get(cache_key)
@@ -310,6 +314,7 @@ async def render_live_profile_card(
             role_labels=role_labels,
             date_labels=date_labels,
             platform_labels=platform_labels,
+            platform_entries=platforms,
         )
         _signature_cache_put(cache_key, image_bytes)
 
@@ -327,7 +332,7 @@ async def render_live_profile_card(
 
     # The image already contains public platform chips. Do not repeat usernames
     # in a large public text block; validated official URLs remain link buttons.
-    view = _platform_view(platforms)
+    view = _platform_view(platforms, owner_user_id=member.id)
     return LiveCardRender(embed=embed, view=view, file=file)
 
 

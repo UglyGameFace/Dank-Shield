@@ -21,6 +21,7 @@ from .profile_card_service import (
     list_live_card_states_for_channel,
     list_live_card_states_for_user,
     normalize_server_allowed_fields,
+    platform_entry_mode,
     upsert_live_card_state,
     visible_platform_entries,
 )
@@ -238,24 +239,46 @@ def _copy_base_profile_embed(base: discord.Embed, *, show_roles: bool, show_date
     return embed
 
 
-def _platform_view(entries: list[dict[str, Any]]) -> Optional[discord.ui.View]:
-    linked = [entry for entry in entries if str(entry.get("url") or "").strip()]
-    if not linked:
-        return None
+def _platform_view(
+    entries: list[dict[str, Any]],
+    *,
+    owner_user_id: Optional[int] = None,
+) -> Optional[discord.ui.View]:
+    """Build fast text controls; real brand marks are rendered inside the card."""
     view = discord.ui.View(timeout=None)
-    for index, entry in enumerate(linked[:20]):
-        spec = PLATFORM_SPECS.get(str(entry.get("platform") or ""))
+    for index, entry in enumerate(entries[:20]):
+        platform = str(entry.get("platform") or "")
+        spec = PLATFORM_SPECS.get(platform)
         if spec is None:
             continue
-        view.add_item(
-            discord.ui.Button(
-                label=spec.label[:80],
-                emoji=spec.emoji,
-                style=discord.ButtonStyle.link,
-                url=str(entry.get("url")),
-                row=min(3, index // 5),
+        mode = platform_entry_mode(entry)
+        row = min(3, index // 5)
+        url = str(entry.get("url") or "").strip()
+        username = ""
+        if str(entry.get("username") or "").strip():
+            try:
+                username = display_profile_username(entry.get("username"))
+            except Exception:
+                username = ""
+        if mode == "link" and url:
+            view.add_item(
+                discord.ui.Button(
+                    label=spec.label[:80],
+                    style=discord.ButtonStyle.link,
+                    url=url,
+                    row=row,
+                )
             )
-        )
+        elif mode == "username" and username and owner_user_id:
+            view.add_item(
+                discord.ui.Button(
+                    label=username[:80],
+                    style=discord.ButtonStyle.secondary,
+                    custom_id=f"dank:profilecopy:v1:{int(owner_user_id)}:{platform}",
+                    row=row,
+                )
+            )
+        # Logo-only identities are already visible in the card image and need no dead button.
     return view if view.children else None
 
 

@@ -33,6 +33,15 @@ _DB_ATTEMPTS = 3
 _CACHE_TTL_SECONDS = 60.0
 _BIDI_CONTROL_RE = re.compile("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 
+PLATFORM_MODE_LINK = "link"
+PLATFORM_MODE_USERNAME = "username"
+PLATFORM_MODE_LOGO = "logo"
+PLATFORM_SHARE_MODES = frozenset({
+    PLATFORM_MODE_LINK,
+    PLATFORM_MODE_USERNAME,
+    PLATFORM_MODE_LOGO,
+})
+
 
 class ProfileStorageUnavailable(RuntimeError):
     """Raised when private profile state cannot be read or written safely."""
@@ -120,9 +129,29 @@ def clean_profile_username(value: Any) -> str:
     return text
 
 
+def clean_optional_profile_username(value: Any) -> str:
+    """Normalize an optional username without forcing logo-only profiles to invent one."""
+    if not str(value or "").strip():
+        return ""
+    return clean_profile_username(value)
+
+
 def display_profile_username(value: Any) -> str:
     """Return a Discord-safe username that cannot create markdown links."""
     return clean_profile_username(value).replace("`", "ʼ")
+
+
+def platform_entry_mode(entry: Optional[Mapping[str, Any]]) -> str:
+    """Resolve legacy and current entries to link, username, or logo-only display."""
+    raw = dict(entry or {}) if isinstance(entry, Mapping) else {}
+    mode = str(raw.get("mode") or "").strip().lower()
+    if mode in PLATFORM_SHARE_MODES:
+        return mode
+    if str(raw.get("url") or "").strip():
+        return PLATFORM_MODE_LINK
+    if str(raw.get("username") or "").strip():
+        return PLATFORM_MODE_USERNAME
+    return PLATFORM_MODE_LOGO
 
 
 def _normalized_path(parsed_path: str) -> str:
@@ -210,16 +239,37 @@ def normalize_platform_url(platform: Any, value: Any) -> str:
 def normalize_platform_entry(
     platform: Any,
     *,
-    username: Any,
+    username: Any = "",
     profile_url: Any = "",
     shared: bool = False,
+    mode: Any = "",
 ) -> dict[str, Any]:
     key = clean_platform_key(platform)
+    spec = PLATFORM_SPECS[key]
+    clean_username = clean_optional_profile_username(username)
+    clean_url = normalize_platform_url(key, profile_url)
+    requested = str(mode or "").strip().lower()
+    if requested not in PLATFORM_SHARE_MODES:
+        requested = (
+            PLATFORM_MODE_LINK
+            if clean_url
+            else PLATFORM_MODE_USERNAME
+            if clean_username
+            else PLATFORM_MODE_LOGO
+        )
+    if requested == PLATFORM_MODE_LINK:
+        if not spec.supports_url:
+            raise InvalidPlatformProfile(f"{spec.label} does not support a reliable public profile link.")
+        if not clean_url:
+            raise InvalidPlatformProfile(f"Add an official {spec.label} profile link before showing Link mode.")
+    if requested == PLATFORM_MODE_USERNAME and not clean_username:
+        raise InvalidPlatformProfile("Add the username before showing Username mode.")
     return {
         "platform": key,
-        "username": clean_profile_username(username),
-        "url": normalize_platform_url(key, profile_url),
+        "username": clean_username,
+        "url": clean_url,
         "shared": bool(shared),
+        "mode": requested,
         "updated_at": utc_now_iso(),
     }
 
@@ -271,6 +321,7 @@ def visible_platform_entries(platforms: Any, *, allowed: bool) -> list[dict[str,
                 username=raw.get("username"),
                 profile_url=raw.get("url"),
                 shared=True,
+                mode=raw.get("mode"),
             )
         except (InvalidPlatformProfile, ValueError):
             continue
@@ -515,13 +566,20 @@ async def save_platform_identity(
     user_id: int,
     platform: Any,
     *,
-    username: Any,
+    username: Any = "",
     profile_url: Any = "",
     shared: bool = False,
+    mode: Any = "",
 ) -> dict[str, Any]:
     uid = int(user_id)
     key = clean_platform_key(platform)
-    entry = normalize_platform_entry(key, username=username, profile_url=profile_url, shared=shared)
+    entry = normalize_platform_entry(
+        key,
+        username=username,
+        profile_url=profile_url,
+        shared=shared,
+        mode=mode,
+    )
     lock = _USER_LOCKS.setdefault(uid, asyncio.Lock())
     async with lock:
         current = await get_profile_user(uid, refresh=True)

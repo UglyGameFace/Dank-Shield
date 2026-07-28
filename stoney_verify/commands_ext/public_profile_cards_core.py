@@ -28,6 +28,7 @@ from stoney_verify.profile_card_service import (
     get_effective_profile_settings,
     get_profile_guild_settings,
     get_profile_user,
+    platform_entry_mode,
     remove_platform_identity,
     save_platform_identity,
     upsert_profile_guild_settings,
@@ -200,14 +201,11 @@ def _settings_embed(
         if not isinstance(entry, Mapping):
             continue
         username = str(entry.get("username") or "").strip()
-        if not username:
-            continue
-        visibility = "🌐 Public" if bool(entry.get("shared")) else "🔒 Private"
-        link_state = " • official link" if str(entry.get("url") or "").strip() else " • username only"
-        safe_username = display_profile_username(username)
-        identity_lines.append(
-            f"{spec.emoji} **{spec.label}:** `{safe_username}` — {visibility}{link_state}"
-        )
+        visibility = "Public" if bool(entry.get("shared")) else "Private"
+        mode = platform_entry_mode(entry)
+        mode_label = {"link": "profile link", "username": "copyable username", "logo": "logo only"}[mode]
+        identity = f"`{display_profile_username(username)}`" if username and mode != "logo" else "Logo only"
+        identity_lines.append(f"**{spec.label}:** {identity} — {visibility} • {mode_label}")
     account_summary = "\n".join(identity_lines)[:820] if identity_lines else "No accounts saved yet."
     embed.add_field(
         name="Gaming & social accounts",
@@ -570,17 +568,26 @@ class PublicProfileView(discord.ui.View):
     ) -> None:
         super().__init__(timeout=300)
         for child in list(getattr(source_view, "children", []) or []):
-            if not isinstance(child, discord.ui.Button) or not child.url:
+            if not isinstance(child, discord.ui.Button):
                 continue
-            self.add_item(
-                discord.ui.Button(
-                    label=str(child.label or "Profile")[:80],
-                    emoji=child.emoji,
-                    style=discord.ButtonStyle.link,
-                    url=str(child.url),
-                    row=child.row,
+            if child.url:
+                self.add_item(
+                    discord.ui.Button(
+                        label=str(child.label or "Profile")[:80],
+                        style=discord.ButtonStyle.link,
+                        url=str(child.url),
+                        row=child.row,
+                    )
                 )
-            )
+            elif child.custom_id:
+                self.add_item(
+                    discord.ui.Button(
+                        label=str(child.label or "Username")[:80],
+                        style=discord.ButtonStyle.secondary,
+                        custom_id=str(child.custom_id),
+                        row=child.row,
+                    )
+                )
         if show_roles:
             self.add_item(_PublicFullRolesButton(member_id))
         if show_settings:
