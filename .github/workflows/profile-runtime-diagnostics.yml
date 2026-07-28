@@ -26,6 +26,7 @@ on:
       - "tests/test_profile_signature*.py"
       - "tools/_apply_pr145_final_smoke_corrections.py"
       - "tools/_apply_pr145_final_smoke_tail.py"
+      - "tools/_repair_pr145_art_guide_literal.py"
       - ".github/workflows/profile-runtime-diagnostics.yml"
   workflow_dispatch:
 
@@ -57,7 +58,9 @@ jobs:
         id: materializer
         shell: bash
         run: |
-          if [ -f tools/_apply_pr145_final_smoke_corrections.py ] && [ -f tools/_apply_pr145_final_smoke_tail.py ]; then
+          if [ -f tools/_apply_pr145_final_smoke_corrections.py ] && \
+             [ -f tools/_apply_pr145_final_smoke_tail.py ] && \
+             [ -f tools/_repair_pr145_art_guide_literal.py ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
@@ -79,6 +82,7 @@ jobs:
           set -o pipefail
           python tools/_apply_pr145_final_smoke_corrections.py 2>&1 | tee pr145-materializer.log || true
           python tools/_apply_pr145_final_smoke_tail.py 2>&1 | tee -a pr145-materializer.log
+          python tools/_repair_pr145_art_guide_literal.py 2>&1 | tee -a pr145-materializer.log
           git checkout -- .github/workflows/profile-runtime-diagnostics.yml
 
       - name: Upload materializer failure output
@@ -141,7 +145,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f tools/_apply_pr145_final_smoke_corrections.py tools/_apply_pr145_final_smoke_tail.py
+          rm -f \
+            tools/_apply_pr145_final_smoke_corrections.py \
+            tools/_apply_pr145_final_smoke_tail.py \
+            tools/_repair_pr145_art_guide_literal.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
