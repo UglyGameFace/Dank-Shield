@@ -8,14 +8,21 @@ on:
       - "stoney_verify/profile_card_service.py"
       - "stoney_verify/profile_signature_live_renderer.py"
       - "stoney_verify/profile_signature_studio.py"
+      - "stoney_verify/profile_card_setup_ui.py"
+      - "stoney_verify/profile_card_setup_ui_core.py"
       - "stoney_verify/commands_ext/public_profile_cards.py"
       - "stoney_verify/commands_ext/public_profile_cards_core.py"
+      - "stoney_verify/commands_ext/public_self_roles_group.py"
+      - "stoney_verify/startup_guards/profile_role_editor_guard.py"
       - "stoney_verify/assets/platform_logos/**"
       - "supabase/migrations/*live_profile*.sql"
       - "tests/test_live_profile*.py"
       - "tests/test_profile_card*.py"
       - "tests/test_profile_platform*.py"
+      - "tests/test_profile_role*.py"
       - "tools/apply_profile_platform_modes*.py"
+      - "tools/apply_profile_banner_roles_patch.py"
+      - "tools/profile_banner_roles_payload/**"
       - ".github/workflows/profile-runtime-diagnostics.yml"
   workflow_dispatch:
 
@@ -23,11 +30,10 @@ permissions:
   contents: write
 
 jobs:
-  apply-platform-modes:
-    # The PNGs below are the exact application emoji artwork uploaded in the Discord Developer Portal.
+  apply-profile-upgrade:
     if: ${{ github.head_ref == 'fix/live-profile-channel-spam' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,7 +43,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Apply platform modes and real-logo renderer
+          cache: pip
+      - name: Install validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+      - name: Keep platform modes and uploaded logo renderer current
         run: python tools/apply_profile_platform_modes_v2.py
       - name: Bundle uploaded application emoji artwork
         shell: bash
@@ -62,13 +74,9 @@ jobs:
           download_logo riot 1531448143609331835
           download_logo twitch 1531448142481064047
           download_logo kick 1531448141604323338
-          rm -f tools/build_profile_platform_logos.mjs
-          cat > stoney_verify/assets/platform_logos/ATTRIBUTION.md <<'EOF'
-          # Platform logo assets
-
-          These files are the application emoji artwork uploaded by the Dank Shield owner in the Discord Developer Portal. They are bundled locally so live profile cards render consistently without substituting generic Unicode emoji or making a network request for every message. Brand marks remain trademarks of their respective owners and are used only to identify the platform selected by a member.
-          EOF
-      - name: Validate generated Python
+      - name: Apply wide banner and role separation
+        run: python tools/apply_profile_banner_roles_patch.py
+      - name: Compile complete profile implementation
         run: |
           python -m py_compile \
             stoney_verify/profile_card_service.py \
@@ -76,31 +84,43 @@ jobs:
             stoney_verify/profile_card_runtime.py \
             stoney_verify/profile_signature_live_renderer.py \
             stoney_verify/profile_signature_studio.py \
+            stoney_verify/profile_card_setup_ui.py \
+            stoney_verify/profile_card_setup_ui_core.py \
             stoney_verify/commands_ext/public_profile_cards.py \
             stoney_verify/commands_ext/public_profile_cards_core.py \
+            stoney_verify/commands_ext/public_self_roles_group.py \
+            stoney_verify/startup_guards/profile_role_editor_guard.py \
+            tests/test_profile_platform_display_modes.py \
+            tests/test_profile_role_display_separation.py
+      - name: Run focused profile validation
+        run: |
+          python -m pytest -q \
+            tests/test_live_profile_card_runtime.py \
+            tests/test_live_profile_channel_spam_regression.py \
+            tests/test_live_profile_runtime_delivery_regression.py \
+            tests/test_live_profile_card_cleanup.py \
+            tests/test_live_profile_card_final_safety.py \
+            tests/test_live_profile_card_integration_contract.py \
+            tests/test_live_profile_card_lifecycle.py \
             tests/test_live_profile_card_visual_links.py \
-            tests/test_profile_platform_display_modes.py
-      - name: Commit generated source and uploaded logos
+            tests/test_live_profile_runtime_responsive.py \
+            tests/test_profile_card_setup_picker_ux.py \
+            tests/test_profile_card_migration_safety.py \
+            tests/test_profile_card_service.py \
+            tests/test_profile_platform_privacy_preview_ux.py \
+            tests/test_profile_platform_display_modes.py \
+            tests/test_profile_role_display_separation.py
+      - name: Commit validated profile upgrade
         shell: bash
         run: |
           if git diff --quiet && [[ -z "$(git status --porcelain --untracked-files=all)" ]]; then
-            echo 'No generated changes needed.'
+            echo 'No profile upgrade changes needed.'
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            stoney_verify/profile_card_service.py \
-            stoney_verify/profile_card_runtime_core.py \
-            stoney_verify/profile_card_runtime.py \
-            stoney_verify/profile_signature_live_renderer.py \
-            stoney_verify/profile_signature_studio.py \
-            stoney_verify/commands_ext/public_profile_cards.py \
-            stoney_verify/commands_ext/public_profile_cards_core.py \
-            stoney_verify/assets/platform_logos \
-            tests/test_live_profile_card_visual_links.py \
-            tests/test_profile_platform_display_modes.py
-          git commit -m 'Add real uploaded platform logos and display modes [skip platform patch]'
+          git add -A
+          git commit -m 'Use wide profile banners and separate role displays [skip profile upgrade]'
           git push origin HEAD:fix/live-profile-channel-spam
 
   focused-profile-tests:
