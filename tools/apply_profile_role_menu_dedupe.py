@@ -5,73 +5,38 @@ import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+GUARD = ROOT / "stoney_verify/startup_guards/profile_role_editor_guard.py"
+TEST = ROOT / "tools/test_profile_role_editor_guard_static.py"
+WORKFLOW = ROOT / ".github/workflows/profile-runtime-diagnostics.yml"
 
 
-def read(path: str) -> str:
-    return (ROOT / path).read_text(encoding="utf-8")
-
-
-def write(path: str, text: str) -> None:
-    (ROOT / path).write_text(text, encoding="utf-8")
-
-
-def replace_required(path: str, old: str, new: str, *, label: str) -> None:
-    text = read(path)
-    count = text.count(old)
+def required_sub(text: str, pattern: str, replacement: str, *, label: str, flags: int = 0) -> str:
+    updated, count = re.subn(pattern, replacement, text, count=1, flags=flags)
     if count != 1:
-        raise RuntimeError(f"{label}: expected one exact match, found {count}")
-    write(path, text.replace(old, new, 1))
-
-
-def replace_all_required(path: str, old: str, new: str, *, minimum: int, label: str) -> None:
-    text = read(path)
-    count = text.count(old)
-    if count < minimum:
-        raise RuntimeError(f"{label}: expected at least {minimum} matches, found {count}")
-    write(path, text.replace(old, new))
-
-
-def remove_between(path: str, start: str, end: str, *, label: str) -> None:
-    text = read(path)
-    start_index = text.find(start)
-    if start_index < 0:
-        raise RuntimeError(f"{label}: start marker was not found")
-    end_index = text.find(end, start_index + len(start))
-    if end_index < 0:
-        raise RuntimeError(f"{label}: end marker was not found")
-    write(path, text[:start_index] + text[end_index:])
-
-
-def replace_function(path: str, function_name: str, replacement: str, *, label: str) -> None:
-    text = read(path)
-    pattern = rf"^def {re.escape(function_name)}\(.*?(?=^def |\Z)"
-    updated, count = re.subn(pattern, replacement.rstrip() + "\n\n", text, count=1, flags=re.M | re.S)
-    if count != 1:
-        raise RuntimeError(f"{label}: expected one function, found {count}")
-    write(path, updated)
+        raise RuntimeError(f"{label}: expected one match, found {count}")
+    return updated
 
 
 def main() -> None:
-    guard = "stoney_verify/startup_guards/profile_role_editor_guard.py"
-    test_path = "tools/test_profile_role_editor_guard_static.py"
-    workflow = ".github/workflows/profile-runtime-diagnostics.yml"
+    print("dedupe: loading current guard")
+    guard = GUARD.read_text(encoding="utf-8")
 
-    replace_required(
+    guard = required_sub(
         guard,
-        "_ORIGINAL_HANDLE_BUILDER = None\n",
+        r"^_ORIGINAL_HANDLE_BUILDER = None\n",
         "",
-        label="remove obsolete builder handler state",
+        label="obsolete builder handler state",
+        flags=re.M,
     )
-
-    remove_between(
+    guard = required_sub(
         guard,
-        "def _patch_builder_view(profile: Any) -> None:\n",
-        "def _patch_embeds(profile: Any) -> None:\n",
-        label="remove duplicate builder role manager injection",
+        r"^def _patch_builder_view\(profile: Any\) -> None:\n.*?(?=^def _patch_embeds\()",
+        "",
+        label="duplicate builder view",
+        flags=re.M | re.S,
     )
-
-    handler_text = read(guard)
-    handler_text, count = re.subn(
+    guard = required_sub(
+        guard,
         r"def _patch_handlers\(profile: Any\) -> None:\n"
         r"    global _ORIGINAL_HANDLE_PROFILE, _ORIGINAL_HANDLE_BUILDER\n"
         r"    if _ORIGINAL_HANDLE_PROFILE is None:\n"
@@ -82,125 +47,98 @@ def main() -> None:
         "    global _ORIGINAL_HANDLE_PROFILE\n"
         "    if _ORIGINAL_HANDLE_PROFILE is None:\n"
         "        _ORIGINAL_HANDLE_PROFILE = getattr(profile, \"_handle_profile_interaction\", None)\n",
-        handler_text,
-        count=1,
+        label="obsolete builder handler capture",
     )
-    if count != 1:
-        raise RuntimeError(f"remove obsolete builder handler capture: expected one match, found {count}")
-    write(guard, handler_text)
-
-    remove_between(
+    guard = required_sub(
         guard,
-        "    async def _open_role_editor(interaction: discord.Interaction) -> None:\n",
-        "    async def _handle_profile_interaction_patched(interaction: discord.Interaction) -> bool:\n",
-        label="remove duplicate builder action route",
+        r"    async def _open_role_editor\(interaction: discord\.Interaction\) -> None:\n"
+        r".*?(?=    async def _handle_profile_interaction_patched)",
+        "",
+        label="duplicate builder action route",
+        flags=re.S,
     )
-
-    replace_required(
+    guard = required_sub(
         guard,
-        "    profile._handle_builder_action = _handle_builder_action_patched\n"
+        r"    profile\._handle_builder_action = _handle_builder_action_patched\n"
+        r"    profile\._handle_profile_interaction = _handle_profile_interaction_patched\n",
         "    profile._handle_profile_interaction = _handle_profile_interaction_patched\n",
-        "    profile._handle_profile_interaction = _handle_profile_interaction_patched\n",
-        label="keep only suggestion interaction patch",
+        label="builder handler assignment",
     )
-    replace_required(
+    guard = required_sub(
         guard,
-        "        _patch_panel_views(profile)\n"
-        "        _patch_builder_view(profile)\n"
-        "        _patch_embeds(profile)\n",
-        "        _patch_panel_views(profile)\n"
-        "        _patch_embeds(profile)\n",
-        label="stop patching the native builder manager",
-    )
-    replace_required(
-        guard,
-        '        _log("active; Profile Builder has server roles/cosmetics editor and member role suggestions")\n',
-        '        _log("active; native Profile Tags manager retained and member suggestions enabled")\n',
-        label="accurate guard startup log",
+        r"        _patch_panel_views\(profile\)\n"
+        r"        _patch_builder_view\(profile\)\n"
+        r"        _patch_embeds\(profile\)\n",
+        "        _patch_panel_views(profile)\n        _patch_embeds(profile)\n",
+        label="builder patch invocation",
     )
 
-    replace_all_required(
-        guard,
-        'label="Suggest Role"',
-        'label="Suggest Profile Tag"',
-        minimum=2,
-        label="rename suggestion buttons",
+    replacements = (
+        ("Suggest Role", "Suggest Profile Tag"),
+        ("Suggest Profile Role", "Suggest Profile Tag"),
+        ("Role you want added", "Profile tag you want added"),
+        ("Profile Role Suggestion", "Profile Tag Suggestion"),
+        ("A member suggested a role for the Profile Builder.", "A member suggested an optional profile tag."),
+        ("Suggest a role", "Suggest a profile tag"),
+        ("Missing role?", "Missing profile tag?"),
+        ("Pick optional server roles/cosmetics", "Pick optional profile tags/cosmetics"),
+        (
+            "active; Profile Builder has server roles/cosmetics editor and member role suggestions",
+            "active; native Profile Tags manager retained and member suggestions enabled",
+        ),
     )
-    for old, new, label in (
-        (
-            'class ProfileRoleSuggestionModal(discord.ui.Modal, title="Suggest Profile Role"):',
-            'class ProfileRoleSuggestionModal(discord.ui.Modal, title="Suggest Profile Tag"):',
-            "rename suggestion modal",
-        ),
-        ('            label="Role you want added",\n', '            label="Profile tag you want added",\n', "rename suggestion input"),
-        ('        title="💡 Profile Role Suggestion",\n', '        title="💡 Profile Tag Suggestion",\n', "rename staff suggestion title"),
-        (
-            '        description="A member suggested a role for the Profile Builder. Staff/owner review is required.",\n',
-            '        description="A member suggested an optional profile tag. Staff/owner review is required.",\n',
-            "clarify staff suggestion description",
-        ),
-        ('            name="Suggest a role",\n', '            name="Suggest a profile tag",\n', "rename panel suggestion field"),
-        ('            name="Missing role?",\n', '            name="Missing profile tag?",\n', "rename missing tag field"),
-        (
-            '            value="Pick optional server roles/cosmetics, or suggest one the owner should add.",\n',
-            '            value="Pick optional profile tags/cosmetics, or suggest one the owner should add.",\n',
-            "remove mixed server-role wording",
-        ),
-    ):
-        replace_required(guard, old, new, label=label)
-    replace_all_required(
-        guard,
-        "Use **Suggest Role**",
-        "Use **Suggest Profile Tag**",
-        minimum=2,
-        label="rename suggestion instructions",
-    )
+    for old, new in replacements:
+        if old not in guard:
+            raise RuntimeError(f"guard wording marker missing: {old!r}")
+        guard = guard.replace(old, new)
 
-    replace_function(
-        test_path,
-        "test_builder_gets_profile_roles_cosmetics_editor_button",
+    forbidden = ("builder:role_editor", "ProfileBuilderViewWithRoleEditor", "_ORIGINAL_HANDLE_BUILDER")
+    remaining = [marker for marker in forbidden if marker in guard]
+    if remaining:
+        raise RuntimeError(f"duplicate builder markers remain: {remaining}")
+    GUARD.write_text(guard, encoding="utf-8")
+    print("dedupe: guard updated")
+
+    test = TEST.read_text(encoding="utf-8")
+    test = required_sub(
+        test,
+        r"^def test_builder_gets_profile_roles_cosmetics_editor_button\(\) -> None:\n"
+        r".*?(?=^def |\Z)",
         '''def test_builder_reuses_one_native_profile_tags_manager_button() -> None:
     assert "ProfileBuilderViewWithRoleEditor" not in GUARD
     assert "builder:role_editor" not in GUARD
     assert "_open_role_editor" not in GUARD
     assert 'custom_id=f"{PROFILE_PREFIX}builder:cosmetics"' in PROFILE
-    assert PROFILE.count('custom_id=f"{PROFILE_PREFIX}builder:cosmetics"') == 1''',
-        label="replace duplicate builder contract",
+    assert PROFILE.count('custom_id=f"{PROFILE_PREFIX}builder:cosmetics"') == 1
+
+
+''',
+        label="builder static contract",
+        flags=re.M | re.S,
     )
-    replace_required(
-        test_path,
-        '    assert "Suggest Role" in GUARD\n',
-        '    assert "Suggest Profile Tag" in GUARD\n',
-        label="update suggestion button contract",
-    )
-    replace_required(
-        test_path,
+    test = test.replace('    assert "Suggest Role" in GUARD\n', '    assert "Suggest Profile Tag" in GUARD\n')
+    test = test.replace(
         "        test_builder_gets_profile_roles_cosmetics_editor_button,\n",
         "        test_builder_reuses_one_native_profile_tags_manager_button,\n",
-        label="update static test runner",
     )
+    if "test_builder_gets_profile_roles_cosmetics_editor_button" in test:
+        raise RuntimeError("old duplicate-builder test name remains")
+    TEST.write_text(test, encoding="utf-8")
+    print("dedupe: tests updated")
 
-    workflow_text = read(workflow)
-    workflow_text, count = re.subn(
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    workflow = required_sub(
+        workflow,
         r"      - name: Remove duplicate profile role manager\n"
         r"        run: python tools/apply_profile_role_menu_dedupe\.py\n\n",
         "",
-        workflow_text,
-        count=1,
+        label="dedupe workflow step",
     )
-    if count != 1:
-        raise RuntimeError(f"remove dedupe materializer step: expected one match, found {count}")
-    write(workflow, workflow_text)
+    WORKFLOW.write_text(workflow, encoding="utf-8")
 
     Path(__file__).unlink()
     subprocess.run(["git", "diff", "--check"], cwd=ROOT, check=True)
-
-    source = read(guard)
-    if any(marker in source for marker in ("builder:role_editor", "ProfileBuilderViewWithRoleEditor", "_ORIGINAL_HANDLE_BUILDER")):
-        raise RuntimeError("duplicate Profile Tags builder route remains")
-    if 'custom_id=f"{PROFILE_PREFIX}builder:cosmetics"' not in read("stoney_verify/commands_ext/public_self_roles_group.py"):
-        raise RuntimeError("native Profile Tags manager route is missing")
-    print("Removed duplicate Profile Tags manager route and clarified suggestion wording.")
+    print("dedupe: removed duplicate manager route and cleaned temporary script")
 
 
 if __name__ == "__main__":
