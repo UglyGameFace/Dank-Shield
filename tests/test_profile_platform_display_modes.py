@@ -87,7 +87,7 @@ def test_component_controls_use_real_logos_and_skip_dead_logo_only_button() -> N
     assert int(buttons[1].emoji.id) == 1531448152157061130
 
 
-def test_copy_button_rechecks_current_privacy_and_returns_copy_ready_text(monkeypatch) -> None:
+def test_copy_button_rechecks_current_privacy_and_returns_plain_copy_value(monkeypatch) -> None:
     async def scenario() -> None:
         async def user_row(_user_id: int, refresh: bool = False):
             assert refresh is True
@@ -130,6 +130,6 @@ def test_copy_button_rechecks_current_privacy_and_returns_copy_ready_text(monkey
         handled = await public_profile_cards._handle_profile_username_copy(interaction)
         assert handled is True
         assert sent["ephemeral"] is True
-        assert sent["content"] == "```text\nUglyGameFace\n```"
+        assert sent["content"] == "UglyGameFace"
 
     asyncio.run(scenario())
