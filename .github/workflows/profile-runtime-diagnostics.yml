@@ -6,6 +6,7 @@ on:
       - "stoney_verify/profile_card_runtime.py"
       - "stoney_verify/profile_card_runtime_core.py"
       - "stoney_verify/profile_card_service.py"
+      - "stoney_verify/profile_signature_style.py"
       - "stoney_verify/profile_signature_live_renderer.py"
       - "stoney_verify/profile_signature_studio.py"
       - "stoney_verify/profile_card_setup_ui.py"
@@ -24,17 +25,97 @@ on:
       - "tests/test_profile_role*.py"
       - "tests/test_profile_signature*.py"
       - ".github/workflows/profile-runtime-diagnostics.yml"
+  push:
+    branches:
+      - fix/live-profile-channel-spam
+    paths:
+      - "tools/_apply_pr145_color_mixer.py"
+      - ".github/workflows/profile-runtime-diagnostics.yml"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: profile-runtime-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  apply-four-color-mixer:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/fix/live-profile-channel-spam'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/live-profile-channel-spam
+          fetch-depth: 0
+
+      - name: Stop when the one-time materializer is already gone
+        id: materializer
+        shell: bash
+        run: |
+          if [ -f tools/_apply_pr145_color_mixer.py ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.materializer.outputs.present == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        if: steps.materializer.outputs.present == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+
+      - name: Apply native four-color mixer
+        if: steps.materializer.outputs.present == 'true'
+        run: python tools/_apply_pr145_color_mixer.py
+
+      - name: Compile native implementation
+        if: steps.materializer.outputs.present == 'true'
+        run: |
+          python -m py_compile \
+            stoney_verify/profile_signature_style.py \
+            stoney_verify/profile_signature_live_renderer.py \
+            stoney_verify/profile_signature_studio.py \
+            tests/test_profile_signature_color_mixer.py
+
+      - name: Run targeted appearance tests
+        if: steps.materializer.outputs.present == 'true'
+        run: |
+          python -m pytest -q \
+            tests/test_profile_signature_color_mixer.py \
+            tests/test_profile_platform_privacy_preview_ux.py \
+            tests/test_profile_signature_reference_visuals.py \
+            tests/test_profile_card_service.py
+
+      - name: Remove temporary branch-only materializers
+        if: steps.materializer.outputs.present == 'true'
+        run: |
+          rm -f tools/_apply_pr145_color_mixer.py
+          rm -f .github/workflows/_apply-pr145-color-mixer.yml
+
+      - name: Commit native implementation
+        if: steps.materializer.outputs.present == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Add four-color live profile mixer"
+          git push origin HEAD:fix/live-profile-channel-spam
+
   focused-profile-tests:
+    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -66,6 +147,7 @@ jobs:
             stoney_verify/profile_card_service.py \
             stoney_verify/profile_card_runtime_core.py \
             stoney_verify/profile_card_runtime.py \
+            stoney_verify/profile_signature_style.py \
             stoney_verify/profile_signature_live_renderer.py \
             stoney_verify/profile_signature_studio.py \
             stoney_verify/profile_card_setup_ui.py \
