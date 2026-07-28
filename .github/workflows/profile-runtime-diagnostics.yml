@@ -20,13 +20,11 @@ on:
       - "tests/test_profile_card*.py"
       - "tests/test_profile_platform*.py"
       - "tests/test_profile_role*.py"
-      - "tools/apply_profile_spacing_guard.py"
-      - "tools/apply_profile_role_menu_dedupe.py"
       - ".github/workflows/profile-runtime-diagnostics.yml"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: profile-runtime-${{ github.event.pull_request.number || github.ref }}
@@ -38,16 +36,6 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: fix/live-profile-channel-spam
-          fetch-depth: 1
-          show-progress: false
-
-      - name: Apply final profile spacing guard
-        run: python tools/apply_profile_spacing_guard.py
-
-      - name: Remove duplicate profile role manager
-        run: python tools/apply_profile_role_menu_dedupe.py
 
       - uses: actions/setup-python@v5
         with:
@@ -108,7 +96,7 @@ jobs:
           python tools/test_profile_cosmetic_roles_static.py
           python tools/test_profile_role_editor_guard_static.py
 
-      - name: Confirm temporary materializers are gone
+      - name: Confirm temporary materializers are absent
         shell: bash
         run: |
           set -euo pipefail
@@ -122,15 +110,3 @@ jobs:
           test ! -e tools/apply_profile_spacing_guard.py
           test ! -e tools/apply_profile_role_menu_dedupe.py
           git diff --check
-
-      - name: Commit validated profile cleanup
-        shell: bash
-        run: |
-          set -euo pipefail
-          git checkout HEAD -- .github/workflows/profile-runtime-diagnostics.yml
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git diff --cached --check
-          git commit -m 'Finalize profile banner spacing and role menus'
-          git push origin HEAD:fix/live-profile-channel-spam
