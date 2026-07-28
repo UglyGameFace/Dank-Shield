@@ -48,7 +48,8 @@ def test_member_signature_studio_exposes_age_friendly_controls() -> None:
         "Appearance",
         "Privacy",
         "Platforms",
-        "Profile Roles",
+        "Server Roles",
+        "Profile Tags",
         "Preview",
         "Reset My Look",
         "Theme",
@@ -59,6 +60,7 @@ def test_member_signature_studio_exposes_age_friendly_controls() -> None:
         "Avatar Frame",
     ):
         assert f'label="{label}"' in source
+    assert 'label="Profile Roles"' not in source
 
 
 def test_image_signatures_require_attach_files() -> None:
