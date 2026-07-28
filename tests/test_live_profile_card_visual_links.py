@@ -42,8 +42,8 @@ def test_live_renderer_uses_legible_mobile_friendly_dimensions():
         style={},
     )
     with Image.open(BytesIO(payload)) as image:
-        assert image.size == (1400, 340)
-    assert live_renderer.SIGNATURE_RATIO == 1400 / 340
+        assert image.size == (1400, 300)
+    assert live_renderer.SIGNATURE_RATIO == 1400 / 300
 
 
 def test_official_profile_links_use_compact_buttons_without_text_duplication(monkeypatch):
