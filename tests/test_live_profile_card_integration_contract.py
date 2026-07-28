@@ -150,7 +150,7 @@ def test_server_setup_uses_only_the_profile_signature_channel_picker():
 
 def test_signature_visual_is_legible_compact_and_shares_style_not_welcome_behavior():
     assert "SIGNATURE_WIDTH = 1400" in SIGNATURE_RENDERER
-    assert "SIGNATURE_HEIGHT = 340" in SIGNATURE_RENDERER
+    assert "SIGNATURE_HEIGHT = 300" in SIGNATURE_RENDERER
     assert "render_profile_signature" in SIGNATURE_RENDERER
     assert "render_welcome_card" not in SIGNATURE_RENDERER
     assert "on_member_join" not in SIGNATURE_RENDERER
