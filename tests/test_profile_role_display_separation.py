@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PIL import Image, ImageDraw
+
+import stoney_verify.profile_signature_live_renderer as renderer_module
+
 ROOT = Path(__file__).resolve().parents[1]
 SERVICE = (ROOT / "stoney_verify/profile_card_service.py").read_text(encoding="utf-8")
 RUNTIME = (ROOT / "stoney_verify/profile_card_runtime.py").read_text(encoding="utf-8")
@@ -66,3 +70,25 @@ def test_live_banner_uses_wide_layout_bundled_logos_and_server_branding() -> Non
     assert "platform_entries" in RENDERER
     assert "guild_icon_bytes" in RENDERER
     assert "cdn.discordapp.com" not in RENDERER
+
+def test_banner_text_fitter_respects_reserved_pixel_widths() -> None:
+    image = Image.new("RGBA", (1400, 340), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    font = renderer_module._font(20, style_key="clean", regular=True)
+    for max_width in (126, 335, 884):
+        fitted = renderer_module._fit_text_width(
+            draw,
+            "WIDE SERVER ROLE AND PLATFORM USERNAME " * 20,
+            font,
+            max_width=max_width,
+        )
+        assert fitted.endswith("…")
+        box = draw.textbbox((0, 0), fitted, font=font)
+        assert box[2] - box[0] <= max_width
+
+
+def test_banner_applies_pixel_fitting_to_every_dynamic_right_side_label() -> None:
+    assert "badge_max_width = 335" in RENDERER
+    assert 'max_width=335' in RENDERER
+    assert 'max_width=server_size' in RENDERER
+    assert "available_text_width = max(0, max_chip_x - chip_x - 32)" in RENDERER

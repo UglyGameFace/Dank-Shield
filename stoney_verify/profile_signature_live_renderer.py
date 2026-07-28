@@ -33,6 +33,42 @@ def _safe_text(value: Any, limit: int = 120) -> str:
     return text[: max(0, int(limit))]
 
 
+def _fit_text_width(
+    draw: ImageDraw.ImageDraw,
+    value: Any,
+    font: Any,
+    *,
+    max_width: int,
+    limit: int = 160,
+) -> str:
+    """Return one safe line that cannot cross its reserved pixel boundary."""
+    clean = _safe_text(value, limit)
+    width_limit = max(0, int(max_width))
+    if not clean or width_limit <= 0:
+        return ""
+
+    def width(text: str) -> int:
+        box = draw.textbbox((0, 0), text, font=font)
+        return max(0, box[2] - box[0])
+
+    if width(clean) <= width_limit:
+        return clean
+
+    ellipsis = "…"
+    if width(ellipsis) > width_limit:
+        return ""
+    low = 0
+    high = len(clean)
+    while low < high:
+        middle = (low + high + 1) // 2
+        candidate = clean[:middle].rstrip() + ellipsis
+        if width(candidate) <= width_limit:
+            low = middle
+        else:
+            high = middle - 1
+    return clean[:low].rstrip() + ellipsis
+
+
 def _mix(left: tuple[int, int, int], right: tuple[int, int, int], amount: float) -> tuple[int, int, int]:
     return _legacy._mix(left, right, amount)
 
@@ -490,17 +526,25 @@ def render_profile_signature(
     server_roles = [str(value) for value in server_role_labels if str(value).strip()]
     primary_role = server_roles[0] if server_roles else ""
     if primary_role:
-        badge = _safe_text(primary_role, 28).upper()
-        badge_width = _chip_width(draw, badge, small_font)
         badge_x = 857
-        draw.rounded_rectangle(
-            (badge_x, 43, badge_x + badge_width, 83),
-            radius=16,
-            fill=primary + (42,),
-            outline=primary + (180,),
-            width=2,
+        badge_max_width = 335
+        badge = _fit_text_width(
+            draw,
+            primary_role.upper(),
+            small_font,
+            max_width=badge_max_width - 32,
+            limit=80,
         )
-        draw.text((badge_x + 16, 52), badge, font=small_font, fill=primary + (255,))
+        if badge:
+            badge_width = min(badge_max_width, _chip_width(draw, badge, small_font))
+            draw.rounded_rectangle(
+                (badge_x, 43, badge_x + badge_width, 83),
+                radius=16,
+                fill=primary + (42,),
+                outline=primary + (180,),
+                width=2,
+            )
+            draw.text((badge_x + 16, 52), badge, font=small_font, fill=primary + (255,))
 
     entries = [dict(entry) for entry in platform_entries if isinstance(entry, Mapping)]
     logo_map = dict(platform_logo_bytes or {})
@@ -533,8 +577,15 @@ def render_profile_signature(
         if spec is not None and username:
             shared_names.append(f"{spec.label}: {username}")
     if shared_names:
-        platform_line = _safe_text("  •  ".join(shared_names[:2]), 46)
-        draw.text((857, 177), platform_line, font=platform_font, fill=secondary + (255,))
+        platform_line = _fit_text_width(
+            draw,
+            "  •  ".join(shared_names[:2]),
+            platform_font,
+            max_width=335,
+            limit=160,
+        )
+        if platform_line:
+            draw.text((857, 177), platform_line, font=platform_font, fill=secondary + (255,))
 
     # Keep server roles and member-selected profile tags visually distinct.
     chip_x = content_x
@@ -551,14 +602,32 @@ def render_profile_signature(
         labels.append(("Private profile", primary))
     row = 0
     for label, accent in labels:
-        width = _chip_width(draw, _safe_text(label, 34), chip_font)
+        clean_label = _safe_text(label, 120)
+        width = _chip_width(draw, clean_label, chip_font)
         if chip_x + width > max_chip_x and chip_x > content_x:
             row += 1
             if row >= 2:
                 break
             chip_x = content_x
             chip_y += 48
-        width = _draw_compact_label(draw, x=chip_x, y=chip_y, label=label, font=chip_font, accent=accent)
+        available_text_width = max(0, max_chip_x - chip_x - 32)
+        fitted_label = _fit_text_width(
+            draw,
+            clean_label,
+            chip_font,
+            max_width=available_text_width,
+            limit=120,
+        )
+        if not fitted_label:
+            continue
+        width = _draw_compact_label(
+            draw,
+            x=chip_x,
+            y=chip_y,
+            label=fitted_label,
+            font=chip_font,
+            accent=accent,
+        )
         chip_x += width + 10
 
     # Dynamic server branding on the far right replaces baked-in mockup text.
@@ -575,7 +644,13 @@ def render_profile_signature(
     server_tile = _asset_tile(guild_icon_bytes, server_size, fallback_text=server_name[:3])
     image.alpha_composite(server_tile, (server_box_x, server_box_y))
     draw = ImageDraw.Draw(image, "RGBA")
-    server_label = _safe_text(server_name, 22)
+    server_label = _fit_text_width(
+        draw,
+        server_name,
+        chip_font,
+        max_width=server_size,
+        limit=80,
+    )
     if server_label:
         label_box = draw.textbbox((0, 0), server_label, font=chip_font)
         label_width = label_box[2] - label_box[0]
