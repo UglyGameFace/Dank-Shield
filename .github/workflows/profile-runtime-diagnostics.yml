@@ -3,111 +3,123 @@ name: Profile Runtime Diagnostics
 on:
   pull_request:
     paths:
-      - "tools/_apply_pr145_color_mixer.py"
-      - "tools/_pr145_payload_*.txt"
       - "stoney_verify/profile_card_runtime.py"
+      - "stoney_verify/profile_card_runtime_core.py"
       - "stoney_verify/profile_card_service.py"
       - "stoney_verify/profile_signature_style.py"
       - "stoney_verify/profile_signature_live_renderer.py"
       - "stoney_verify/profile_signature_studio.py"
+      - "stoney_verify/profile_card_setup_ui.py"
+      - "stoney_verify/profile_card_setup_ui_core.py"
       - "stoney_verify/commands_ext/public_profile_cards.py"
-      - "stoney_verify/startup_guards/**"
-      - "tests/test_profile*.py"
+      - "stoney_verify/commands_ext/public_profile_cards_core.py"
+      - "stoney_verify/commands_ext/public_self_roles_group.py"
+      - "stoney_verify/startup_guards/profile_role_editor_guard.py"
+      - "stoney_verify/startup_guards/__init__.py"
+      - "stoney_verify/assets/platform_logos/**"
+      - "supabase/migrations/*live_profile*.sql"
+      - "tests/test_live_profile*.py"
+      - "tests/test_profile_card*.py"
+      - "tests/test_profile_platform*.py"
+      - "tests/test_profile_role*.py"
+      - "tests/test_profile_signature*.py"
       - ".github/workflows/profile-runtime-diagnostics.yml"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: pr145-native-profile-integration
+  group: profile-runtime-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  apply-native-profile-correction:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'fix/live-profile-channel-spam'
+  focused-profile-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - name: Check out PR branch
-        uses: actions/checkout@v4
-        with:
-          ref: fix/live-profile-channel-spam
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
-      - name: Detect one-time materializer
-        id: materializer
-        shell: bash
-        run: |
-          if [ -f tools/_apply_pr145_color_mixer.py ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Set up Python
-        if: steps.materializer.outputs.present == 'true'
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
 
-      - name: Install dependencies quietly
-        if: steps.materializer.outputs.present == 'true'
+      - name: Install dependencies
         run: |
-          python -m pip install -q --upgrade pip
-          python -m pip install -q -r requirements.txt pytest
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
 
-      - name: Apply and self-validate native correction
-        if: steps.materializer.outputs.present == 'true'
-        run: python tools/_apply_pr145_color_mixer.py
+      - name: Verify bundled platform artwork
+        shell: bash
+        run: |
+          set -euo pipefail
+          for key in steam epic xbox playstation nintendo riot battle_net roblox twitch youtube kick custom; do
+            test -s "stoney_verify/assets/platform_logos/${key}.png"
+          done
+          test -s stoney_verify/assets/platform_logos/ATTRIBUTION.md
 
-      - name: Upload exact materializer failure
-        if: failure() && steps.materializer.outputs.present == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pr145-native-integration-failure
-          path: tools/_pr145_failure.log
-          if-no-files-found: error
-          retention-days: 2
-
-      - name: Compile native implementation
-        if: success() && steps.materializer.outputs.present == 'true'
+      - name: Compile profile implementation
         run: |
           python -m py_compile \
+            stoney_verify/profile_card_service.py \
+            stoney_verify/profile_card_runtime_core.py \
             stoney_verify/profile_card_runtime.py \
             stoney_verify/profile_signature_style.py \
             stoney_verify/profile_signature_live_renderer.py \
             stoney_verify/profile_signature_studio.py \
+            stoney_verify/profile_card_setup_ui.py \
+            stoney_verify/profile_card_setup_ui_core.py \
             stoney_verify/commands_ext/public_profile_cards.py \
-            tests/test_profile_signature_color_mixer.py \
-            tests/test_profile_signature_reference_visuals.py
+            stoney_verify/commands_ext/public_profile_cards_core.py \
+            stoney_verify/commands_ext/public_self_roles_group.py \
+            stoney_verify/startup_guards/profile_role_editor_guard.py
 
-      - name: Prepare source-only commit
-        if: success() && steps.materializer.outputs.present == 'true'
+      - name: Run focused profile regression suite
         run: |
-          rm -f tools/_apply_pr145_color_mixer.py
-          rm -f tools/_pr145_failure.log
-          rm -f tools/_pr145_payload_*.txt
-          git checkout HEAD -- .github/workflows/profile-runtime-diagnostics.yml
-          git checkout HEAD -- .github/workflows/_apply-pr145-color-mixer.yml
-          git status --short
+          python -m pytest -q \
+            tests/test_live_profile_card_runtime.py \
+            tests/test_live_profile_channel_spam_regression.py \
+            tests/test_live_profile_runtime_delivery_regression.py \
+            tests/test_live_profile_card_cleanup.py \
+            tests/test_live_profile_card_final_safety.py \
+            tests/test_live_profile_card_integration_contract.py \
+            tests/test_live_profile_card_lifecycle.py \
+            tests/test_live_profile_card_visual_links.py \
+            tests/test_live_profile_runtime_responsive.py \
+            tests/test_profile_card_service.py \
+            tests/test_profile_card_setup_picker_ux.py \
+            tests/test_profile_card_migration_safety.py \
+            tests/test_profile_platform_display_modes.py \
+            tests/test_profile_platform_privacy_preview_ux.py \
+            tests/test_profile_role_display_separation.py \
+            tests/test_profile_signature_reference_visuals.py \
+            tests/test_profile_signature_color_mixer.py
 
-      - name: Commit validated source without workflow changes
-        if: success() && steps.materializer.outputs.present == 'true'
+      - name: Run role-menu compatibility checks
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --check
-          if git diff --cached --name-only | grep -q '^\.github/workflows/'; then
-            echo "Refusing source handoff because a workflow file is still staged."
-            git diff --cached --name-status
-            exit 1
-          fi
-          git commit -m "Finish PR145 profile cards, emoji, copy, styles, and colors"
-          git push origin HEAD:fix/live-profile-channel-spam
+          python tools/test_profile_cosmetic_roles_static.py
+          python tools/test_profile_role_centralized_picker_static.py
+          python tools/test_profile_role_editor_guard_static.py
 
-      - name: Already integrated
-        if: steps.materializer.outputs.present != 'true'
-        run: echo "Native PR145 correction is already integrated; normal PR validation owns this head."
+      - name: Confirm temporary and competing profile patches are absent
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e tools/apply_profile_banner_roles_patch.py
+          test ! -e tools/apply_profile_upgrade_regression_fixes.py
+          test ! -d tools/profile_banner_roles_payload
+          test ! -e .github/workflows/apply-profile-platform-modes.yml
+          test ! -e tools/apply_profile_platform_modes_patch.py
+          test ! -e tools/apply_profile_platform_modes_v2.py
+          test ! -e tools/fix_profile_privacy_defaults.py
+          test ! -e tools/apply_profile_spacing_guard.py
+          test ! -e tools/apply_profile_role_menu_dedupe.py
+          test ! -e tools/apply_profile_view_attachment_fix.py
+          test ! -e tools/_apply_pr145_color_mixer.py
+          test ! -e .github/workflows/_apply-pr145-color-mixer.yml
+          test ! -e stoney_verify/startup_guards/profile_username_copy_guard.py
+          ! grep -R "profile_username_copy_guard" -n stoney_verify tests .github/workflows
+          ! grep -R '```text' -n stoney_verify/commands_ext/public_profile_cards.py
+          git diff --check
