@@ -41,6 +41,7 @@ jobs:
         with:
           ref: fix/live-profile-channel-spam
           fetch-depth: 0
+          show-progress: false
 
       - name: Apply final profile spacing guard
         run: python tools/apply_profile_spacing_guard.py
