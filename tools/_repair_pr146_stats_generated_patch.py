@@ -30,6 +30,12 @@ test = replace_once(
     '''    monkeypatch.setattr(security_stats, "_TICKET_STATS_SELECT_COLUMNS", None)\n    monkeypatch.setattr(security_stats, "_TICKET_STATS_PAGE_SIZE", 2)\n''',
     "selector cache test isolation",
 )
+test = replace_once(
+    test,
+    '''    assert ".range(start, end)" in source\n''',
+    '''    assert 'range_method = getattr(query, "range", None)' in source\n''',
+    "pagination static guard",
+)
 test_path.write_text(test, encoding="utf-8")
 
 print("Repaired generated PR #146 Dank Stats patch")
