@@ -21,7 +21,7 @@ replacement = '''service = replace_regex_once(
     "close policy guard",
 )
 '''
-updated, count = pattern.subn(replacement, text, count=1)
+updated, count = pattern.subn(lambda _match: replacement, text, count=1)
 if count != 1:
     raise SystemExit(f"ambiguous close-policy materializer block not found: {count}")
 path.write_text(updated, encoding="utf-8")
