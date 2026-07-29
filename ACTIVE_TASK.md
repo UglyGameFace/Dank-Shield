@@ -2,7 +2,7 @@
 
 ## DS-RUNTIME-013 — Restore member reconciliation and durable Dank Stats
 
-**Status:** IMPLEMENTED — FULL CI AND DEPLOYED SMOKE PENDING
+**Status:** IMPLEMENTED — DEPLOYED SMOKE PENDING
 **Branch:** `fix/member-reconciliation-async-generator`
 **PR:** #146
 
@@ -64,12 +64,12 @@ The live Discord stats display could become stale or misleading when:
 - [x] Temporary materializers and write-enabled workflow changes removed.
 - [x] Changed Python modules compile.
 - [x] Focused member-reconciliation and Dank Stats regressions pass.
-- [ ] Full repository unit suite passes on the clean exact head.
-- [ ] Profile Runtime Diagnostics passes on the clean exact head.
-- [ ] Application Command Size Diagnostics passes on the clean exact head.
-- [ ] Public setup, command-surface, permission, role-truth, and event-boundary audits pass.
-- [ ] `git diff --check` passes.
-- [ ] Branch remains current with `main` and conflict-free.
+- [x] Full repository unit suite passes on the clean exact head.
+- [x] Profile Runtime Diagnostics passes on the clean exact head.
+- [x] Application Command Size Diagnostics passes on the clean exact head.
+- [x] Public setup, command-surface, permission, role-truth, and event-boundary audits pass.
+- [x] `git diff --check` passes.
+- [x] Branch remains current with `main` and conflict-free.
 
 ## Deployed Discord smoke
 
@@ -97,6 +97,6 @@ The live Discord stats display could become stale or misleading when:
 
 Deploy the final clean PR head to Discloud and complete both smoke sections before merging PR #146.
 
-## Backlog
+## Next task after PR #146
 
-None. Finish PR #146 before beginning another task.
+Enforce claim-first ticket handling: the only staff action allowed on an unclaimed ticket is Claim; every other bot control and command requires the current claimant, with transfer required before another staff member can act. The ticket requester may continue providing information and may cancel an unclaimed ticket, but may never delete ticket history. Server owners and administrators receive no silent bypass.
