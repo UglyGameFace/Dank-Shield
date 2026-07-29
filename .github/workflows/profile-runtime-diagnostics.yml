@@ -5,6 +5,7 @@ on:
     paths:
       - "ACTIVE_TASK.md"
       - "tools/_apply_ticket_claim_first_enforcement.py"
+      - "tools/_repair_ticket_claim_first_materializer.py"
       - "stoney_verify/ticket_events.py"
       - "stoney_verify/transcripts.py"
       - "stoney_verify/tickets_new/**"
@@ -64,7 +65,9 @@ jobs:
           python -m pip install pytest
 
       - name: Apply native enforcement
-        run: python tools/_apply_ticket_claim_first_enforcement.py
+        run: |
+          python tools/_repair_ticket_claim_first_materializer.py
+          python tools/_apply_ticket_claim_first_enforcement.py
 
       - name: Compile ticket implementation
         run: |
@@ -95,6 +98,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm tools/_apply_ticket_claim_first_enforcement.py
+          git rm tools/_repair_ticket_claim_first_materializer.py
           git checkout origin/main -- .github/workflows/profile-runtime-diagnostics.yml
           git add \
             stoney_verify/tickets_new/claim_policy.py \
