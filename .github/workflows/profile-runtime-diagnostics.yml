@@ -4,9 +4,6 @@ on:
   pull_request:
     paths:
       - "ACTIVE_TASK.md"
-      - "tools/_apply_ticket_group_claim_guard.py"
-      - "stoney_verify/commands_ext/public_ticket_group.py"
-      - "tests/test_ticket*.py"
       - "stoney_verify/profile_card_runtime.py"
       - "stoney_verify/profile_card_runtime_core.py"
       - "stoney_verify/profile_card_service.py"
@@ -32,62 +29,13 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: profile-runtime-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  apply-ticket-command-claim-guard:
-    if: github.event_name == 'pull_request' && github.head_ref == 'fix/ticket-claim-first-enforcement'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: fix/ticket-claim-first-enforcement
-          fetch-depth: 0
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install pytest
-
-      - name: Apply canonical command guard
-        run: python tools/_apply_ticket_group_claim_guard.py
-
-      - name: Compile guarded command surface
-        run: |
-          python -m py_compile \
-            stoney_verify/commands_ext/public_ticket_group.py \
-            tests/test_ticket_claim_first_policy.py
-
-      - name: Run all ticket regressions
-        run: python -m pytest -q tests/test_ticket*.py
-
-      - name: Commit clean native command guard
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm -f tools/_apply_ticket_group_claim_guard.py
-          git checkout origin/main -- .github/workflows/profile-runtime-diagnostics.yml
-          git add \
-            stoney_verify/commands_ext/public_ticket_group.py \
-            tests/test_ticket_claim_first_policy.py \
-            .github/workflows/profile-runtime-diagnostics.yml
-          git diff --check --cached
-          git commit -m "Claim-gate every canonical ticket command"
-          git push origin HEAD:fix/ticket-claim-first-enforcement
-
   focused-profile-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
