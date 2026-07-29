@@ -140,12 +140,14 @@ def test_service_blocks_unclaimed_human_close_before_repository_write(monkeypatc
 
 
 def test_static_claim_first_enforcement_covers_all_runtime_surfaces() -> None:
+    policy = (ROOT / "stoney_verify/tickets_new/claim_policy.py").read_text(encoding="utf-8")
     service = (ROOT / "stoney_verify/tickets_new/service.py").read_text(encoding="utf-8")
     panel = (ROOT / "stoney_verify/tickets_new/panel.py").read_text(encoding="utf-8")
     macros = (ROOT / "stoney_verify/tickets_new/macros_service.py").read_text(encoding="utf-8")
     events = (ROOT / "stoney_verify/ticket_events.py").read_text(encoding="utf-8")
     transcripts = (ROOT / "stoney_verify/transcripts.py").read_text(encoding="utf-8")
 
+    assert "Claim is the only staff action allowed" in policy
     assert "async def authorize_ticket_action(" in service
     assert 'action="close"' in service
     assert 'action="delete"' in service
@@ -157,7 +159,6 @@ def test_static_claim_first_enforcement_covers_all_runtime_surfaces() -> None:
 
     assert "authorize_ticket_action" in panel
     assert 'label != "claim ticket"' in panel
-    assert "Claim is the only staff action" in panel or "claim first" in panel.lower()
 
     assert "authorize_ticket_action" in macros
     assert 'action="macro"' in macros
