@@ -59,7 +59,9 @@ jobs:
           python -m pip install pytest
 
       - name: Apply native Dank Stats hardening
-        run: python tools/_apply_pr146_dank_stats_hardening.py
+        run: |
+          python tools/_apply_pr146_dank_stats_hardening.py
+          python tools/_repair_pr146_stats_generated_patch.py
 
       - name: Compile changed implementation
         run: |
@@ -85,6 +87,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm tools/_apply_pr146_dank_stats_hardening.py
+          git rm tools/_repair_pr146_stats_generated_patch.py
           git rm .github/workflows/_apply-pr146-dank-stats-hardening.yml
           git checkout origin/main -- .github/workflows/profile-runtime-diagnostics.yml
           git add \
