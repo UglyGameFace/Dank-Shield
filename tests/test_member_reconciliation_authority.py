@@ -21,6 +21,60 @@ class FakeGuild:
         self.members: list[FakeMember] = []
 
 
+class FakeFetchGuild(FakeGuild):
+    def __init__(
+        self,
+        fetched_members: list[FakeMember],
+        *,
+        cached_members: list[FakeMember] | None = None,
+        fetch_error: Exception | None = None,
+        guild_id: int = 123,
+    ) -> None:
+        super().__init__(guild_id)
+        self._fetched_members = list(fetched_members)
+        self.members = list(cached_members or [])
+        self._fetch_error = fetch_error
+        self.requested_limit: int | None | object = object()
+
+    async def fetch_members(self, *, limit=None):
+        self.requested_limit = limit
+        if self._fetch_error is not None:
+            raise self._fetch_error
+        for member in self._fetched_members:
+            yield member
+
+
+def test_collect_membership_snapshot_consumes_async_iterator_authoritatively() -> None:
+    guild = FakeFetchGuild([FakeMember(10), FakeMember(20, bot=True)])
+
+    snapshot = asyncio.run(membership_authority.collect_membership_snapshot(guild))
+
+    assert guild.requested_limit is None
+    assert [member.id for member in snapshot.members] == [10, 20]
+    assert snapshot.active_user_ids == {10, 20}
+    assert snapshot.authoritative is True
+    assert snapshot.source == "discord_fetch_members"
+    assert snapshot.error == ""
+    assert membership_authority.departure_reconciliation_allowed(snapshot) is True
+
+
+def test_collect_membership_snapshot_uses_cache_only_after_fetch_failure() -> None:
+    guild = FakeFetchGuild(
+        [],
+        cached_members=[FakeMember(7)],
+        fetch_error=RuntimeError("temporary Discord failure"),
+    )
+
+    snapshot = asyncio.run(membership_authority.collect_membership_snapshot(guild))
+
+    assert guild.requested_limit is None
+    assert [member.id for member in snapshot.members] == [7]
+    assert snapshot.authoritative is False
+    assert snapshot.source == "discord_member_cache"
+    assert snapshot.error == "RuntimeError: temporary Discord failure"
+    assert membership_authority.departure_reconciliation_allowed(snapshot) is False
+
+
 def test_departed_reconciliation_skips_when_full_member_fetch_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     guild = FakeGuild()
     snapshot = MembershipSnapshot(
@@ -130,9 +184,12 @@ def test_membership_snapshot_authority_contract_is_explicit() -> None:
 
 
 def test_native_sync_service_owns_authority_boundary_without_startup_monkey_patch() -> None:
+    authority_source = Path("stoney_verify/members_new/membership_authority.py").read_text(encoding="utf-8")
     sync_source = Path("stoney_verify/members_new/sync_service.py").read_text(encoding="utf-8")
     main_source = Path("main.py").read_text(encoding="utf-8")
 
+    assert "tuple(member async for member" not in authority_source
+    assert "async for member in guild.fetch_members(limit=None)" in authority_source
     assert "from .membership_authority import collect_membership_snapshot, departure_reconciliation_allowed" in sync_source
     assert sync_source.count("snapshot = await collect_membership_snapshot(guild)") == 2
     assert sync_source.count("if not departure_reconciliation_allowed(snapshot):") == 2
