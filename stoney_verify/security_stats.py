@@ -59,6 +59,10 @@ STAT_CHANNEL_PREFIXES: Dict[str, str] = {
 _STATS_LOCKS: Dict[int, asyncio.Lock] = {}
 _DISPLAY_LOCKS: Dict[int, asyncio.Lock] = {}
 _LAST_REFRESH_AT: Dict[int, float] = {}
+_TICKET_STATS_PAGE_SIZE = 500
+_TICKET_STATS_SELECT_COLUMNS: Optional[str] = None
+_LAST_SPAM_GUARD_ENABLED: Dict[int, bool] = {}
+_LAST_TICKET_QUERY_ERROR: Dict[int, str] = {}
 
 
 def _lock_for(store: Dict[int, asyncio.Lock], guild_id: int) -> asyncio.Lock:
@@ -159,10 +163,17 @@ def _normalize_ticket_status_counts(value: Any) -> Optional[Dict[str, int]]:
     if value is None:
         return None
     raw = _mapping(value)
-    return {
+    normalized = {
         key: max(0, _safe_int(raw.get(key), 0))
         for key in DEFAULT_TICKET_STATUS_COUNTS
     }
+    # A claimed ticket is still active. Never publish the impossible state where
+    # the claimed subset is larger than the active/open total.
+    normalized["open_tickets"] = max(
+        normalized["open_tickets"],
+        normalized["claimed_tickets"],
+    )
+    return normalized
 
 
 def _ticket_has_assignee(row: Mapping[str, Any]) -> bool:
@@ -201,54 +212,149 @@ def _ticket_status_counts_from_rows(rows: Any) -> Dict[str, int]:
     return counts
 
 
+def _ticket_stats_schema_error(exc: BaseException) -> bool:
+    text = repr(exc or "").lower()
+    return any(
+        marker in text
+        for marker in (
+            "pgrst204",
+            "schema cache",
+            "does not exist",
+            "undefined column",
+            "column",
+        )
+    ) and any(name in text for name in ("claimed_by", "assigned_to"))
+
+
+def _ticket_stats_select_candidates() -> tuple[str, ...]:
+    preferred = (
+        "status,claimed_by,assigned_to",
+        "status,claimed_by",
+        "status,assigned_to",
+        "status",
+    )
+    cached = str(_TICKET_STATS_SELECT_COLUMNS or "").strip()
+    if not cached or cached not in preferred:
+        return preferred
+    return (cached, *tuple(item for item in preferred if item != cached))
+
+
 def _query_ticket_status_counts_sync(guild_id: int) -> Optional[Dict[str, int]]:
-    """Read current ticket lifecycle totals from the canonical tickets table."""
+    """Read every ticket lifecycle row with schema-compatible pagination."""
+    global _TICKET_STATS_SELECT_COLUMNS
+
     sb = get_supabase()
     if sb is None:
         return None
 
-    response = (
-        sb.table("tickets")
-        .select("status,claimed_by,assigned_to")
-        .eq("guild_id", str(int(guild_id)))
-        .execute()
-    )
-    rows = getattr(response, "data", None)
-    if rows is None:
-        return None
+    gid = str(int(guild_id))
+    page_size = max(1, int(_TICKET_STATS_PAGE_SIZE))
+    last_schema_error: Optional[BaseException] = None
 
-    return _ticket_status_counts_from_rows(rows)
+    for columns in _ticket_stats_select_candidates():
+        rows: list[Dict[str, Any]] = []
+        try:
+            for page_index in range(200):
+                start = page_index * page_size
+                end = start + page_size - 1
+                query = (
+                    sb.table("tickets")
+                    .select(columns)
+                    .eq("guild_id", gid)
+                )
+                range_method = getattr(query, "range", None)
+                if callable(range_method):
+                    response = range_method(start, end).execute()
+                else:
+                    # Compatibility with older/minimal PostgREST clients. These
+                    # clients can still provide an authoritative single response,
+                    # but cannot be paged by the caller.
+                    if page_index > 0:
+                        break
+                    response = query.execute()
+                raw_page = getattr(response, "data", None)
+                if raw_page is None:
+                    return None
+                page = [dict(row) for row in list(raw_page or []) if isinstance(row, Mapping)]
+                rows.extend(page)
+                if len(page) < page_size:
+                    break
+            else:
+                print(
+                    f"⚠️ security_stats ticket query page cap reached guild={gid} "
+                    f"rows={len(rows)}"
+                )
+
+            previous = _TICKET_STATS_SELECT_COLUMNS
+            _TICKET_STATS_SELECT_COLUMNS = columns
+            if previous != columns and columns != "status,claimed_by,assigned_to":
+                print(
+                    f"⚠️ security_stats ticket query compatibility mode "
+                    f"columns={columns}"
+                )
+            return _ticket_status_counts_from_rows(rows)
+        except Exception as exc:
+            if _ticket_stats_schema_error(exc):
+                last_schema_error = exc
+                if _TICKET_STATS_SELECT_COLUMNS == columns:
+                    _TICKET_STATS_SELECT_COLUMNS = None
+                continue
+            raise
+
+    if last_schema_error is not None:
+        raise last_schema_error
+    return None
 
 
 async def _ticket_status_counts(guild_id: int) -> Optional[Dict[str, int]]:
+    gid = int(guild_id)
     try:
-        counts = await asyncio.to_thread(_query_ticket_status_counts_sync, int(guild_id))
+        counts = await asyncio.to_thread(_query_ticket_status_counts_sync, gid)
+        _LAST_TICKET_QUERY_ERROR.pop(gid, None)
         return _normalize_ticket_status_counts(counts)
-    except Exception:
+    except Exception as exc:
+        marker = f"{type(exc).__name__}: {str(exc)[:240]}"
+        if _LAST_TICKET_QUERY_ERROR.get(gid) != marker:
+            _LAST_TICKET_QUERY_ERROR[gid] = marker
+            print(f"⚠️ security_stats ticket query failed guild={gid} error={marker}")
         return None
 
 
-async def _spam_guard_enabled(guild_id: int) -> bool:
+async def _spam_guard_enabled(guild_id: int) -> Optional[bool]:
+    gid = int(guild_id)
     try:
         from .spam_guard import get_spam_settings
 
-        spam_settings = await get_spam_settings(int(guild_id))
-        return bool(spam_settings.get("enabled"))
-    except Exception:
-        return False
+        spam_settings = await get_spam_settings(gid)
+        enabled = bool(spam_settings.get("enabled"))
+        _LAST_SPAM_GUARD_ENABLED[gid] = enabled
+        return enabled
+    except Exception as exc:
+        cached = _LAST_SPAM_GUARD_ENABLED.get(gid)
+        print(
+            f"⚠️ security_stats SpamGuard state read failed guild={gid} "
+            f"using={'cached' if cached is not None else 'unknown'} "
+            f"error={type(exc).__name__}"
+        )
+        return cached
 
 
 def _display_names(
     *,
-    spam_guard_enabled: bool,
+    spam_guard_enabled: Optional[bool],
     counts: Mapping[str, int],
     member_count: Optional[int] = None,
     ticket_counts: Optional[Mapping[str, int]] = None,
 ) -> Dict[str, str]:
     normalized = normalize_security_stats(counts)
     tickets = _normalize_ticket_status_counts(ticket_counts)
+    spam_status = (
+        "ONLINE" if spam_guard_enabled is True
+        else "OFFLINE" if spam_guard_enabled is False
+        else "UNKNOWN"
+    )
     return {
-        "status": f"🛡️ SpamGuard: {'ONLINE' if spam_guard_enabled else 'OFFLINE'}",
+        "status": f"🛡️ SpamGuard: {spam_status}",
         "members": f"👥 Members: {_format_live_count(member_count)}",
         "spam_blocked": f"🚫 Spam Blocked: {format_security_stat_count(normalized['spam_blocked'])}",
         "invites_blocked": f"🔗 Invites Blocked: {format_security_stat_count(normalized['invites_blocked'])}",
@@ -266,6 +372,46 @@ def _display_names(
     }
 
 
+def _live_open_ticket_count(guild: discord.Guild) -> Optional[int]:
+    """Count visible active ticket channels as a floor against false DB zeroes."""
+    try:
+        channels = list(getattr(guild, "text_channels", []) or [])
+    except Exception:
+        return None
+
+    active = 0
+    for channel in channels:
+        try:
+            name = str(getattr(channel, "name", "") or "").strip().lower()
+            topic = str(getattr(channel, "topic", "") or "").strip().lower()
+            category_name = str(
+                getattr(getattr(channel, "category", None), "name", "") or ""
+            ).strip().lower()
+
+            ticketish = (
+                name.startswith("ticket-")
+                or name.startswith("closed-")
+                or (
+                    "ticket_number=" in topic
+                    and any(owner_key in topic for owner_key in ("owner_id=", "user_id=", "requester_id="))
+                )
+            )
+            if not ticketish:
+                continue
+
+            closed = (
+                name.startswith("closed-")
+                or "archive" in category_name
+                or "archived" in category_name
+                or "closed ticket" in category_name
+            )
+            if not closed:
+                active += 1
+        except Exception:
+            continue
+    return active
+
+
 async def _display_names_for_guild(
     guild: discord.Guild,
     *,
@@ -276,11 +422,27 @@ async def _display_names_for_guild(
         _spam_guard_enabled(gid),
         _ticket_status_counts(gid),
     )
+
+    tickets = _normalize_ticket_status_counts(ticket_counts)
+    live_open = _live_open_ticket_count(guild)
+    if tickets is not None:
+        db_open = int(tickets["open_tickets"])
+        tickets["open_tickets"] = max(
+            db_open,
+            int(tickets["claimed_tickets"]),
+            int(live_open or 0),
+        )
+        if live_open is not None and live_open > db_open:
+            print(
+                f"⚠️ security_stats active ticket mismatch guild={gid} "
+                f"db_open={db_open} live_channels={live_open}; using live floor"
+            )
+
     return _display_names(
-        spam_guard_enabled=bool(spam_enabled),
+        spam_guard_enabled=spam_enabled,
         counts=counts,
         member_count=_guild_member_count(guild),
-        ticket_counts=ticket_counts,
+        ticket_counts=tickets,
     )
 
 
@@ -538,7 +700,11 @@ async def refresh_security_stats_display(
                     await channel.edit(name=names[key], reason="Refresh Dank Shield live stats")
                     changed = True
                 resolved_ids[key] = str(int(channel.id))
-            except (discord.Forbidden, discord.HTTPException):
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                print(
+                    f"⚠️ security_stats channel refresh failed guild={gid} "
+                    f"key={key} error={type(exc).__name__}"
+                )
                 continue
 
         if resolved_ids and resolved_ids != previous_ids:
@@ -551,7 +717,7 @@ async def refresh_security_stats_display(
                 pass
 
         _LAST_REFRESH_AT[gid] = time.monotonic()
-    return changed
+    return True
 
 
 async def refresh_ticket_stats_for_guild_id(guild_id: int) -> bool:
