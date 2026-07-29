@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "ACTIVE_TASK.md"
+      - "tools/_apply_pr146_dank_stats_hardening.py"
+      - "tools/_repair_pr146_stats_generated_patch.py"
       - "stoney_verify/profile_card_runtime.py"
       - "stoney_verify/profile_card_runtime_core.py"
       - "stoney_verify/profile_card_service.py"
