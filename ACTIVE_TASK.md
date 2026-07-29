@@ -1,62 +1,101 @@
 # ACTIVE TASK
 
-## DS-MEMBER-SYNC-013 — Restore authoritative member reconciliation
+## DS-RUNTIME-013 — Restore member reconciliation and durable Dank Stats
 
-**Status:** IMPLEMENTED — CI AND DEPLOYED SMOKE PENDING
+**Status:** IMPLEMENTED — FULL CI AND DEPLOYED SMOKE PENDING
 **Branch:** `fix/member-reconciliation-async-generator`
 **PR:** #146
 
 ## Single Active Task Lock
 
-Do not switch to unrelated work until PR #146 passes automated validation and deployed startup smoke.
+Do not switch to unrelated work until PR #146 passes automated validation and deployed Discord smoke.
 
-## Production failure
+## Production failures
 
-Every guild currently falls back to cache-only membership evidence because authoritative enumeration raises:
+### Member reconciliation
+
+Every guild fell back to cache-only membership evidence because authoritative enumeration raised:
 
 ```text
 TypeError: 'async_generator' object is not iterable
 ```
 
-That safely prevents false departure marking, but it also means actual departed-member reconciliation never runs.
+That prevented false departures, but also prevented real departed-member reconciliation from running.
 
-## Verified root cause
+### Dank Stats
 
-`collect_membership_snapshot()` passed an async generator expression directly to synchronous `tuple()`:
+The live Discord stats display could become stale or misleading when:
 
-```python
-tuple(member async for member in guild.fetch_members(limit=None))
-```
+- a claimed ticket remained active but Open Tickets showed `0`;
+- one optional ticket compatibility column was unavailable;
+- ticket history exceeded one PostgREST page;
+- an external Discord channel deletion bypassed the lifecycle refresh hook;
+- a transient SpamGuard settings read falsely displayed `OFFLINE`;
+- a visible active ticket channel disagreed with a stale database snapshot;
+- Discord rejected a channel rename without a useful diagnostic.
 
-The async generator must be consumed asynchronously before conversion to a tuple.
+## Implemented corrections
 
-## Implemented correction
+### Authoritative members
 
 - Consume `Guild.fetch_members(limit=None)` with a real async list comprehension.
 - Convert the completed member list to the immutable snapshot tuple.
-- Preserve cache-only positive evidence when the Discord fetch genuinely fails.
+- Preserve cache-only positive evidence when Discord fetching genuinely fails.
 - Preserve the rule that cache absence can never mark a member departed.
-- Test the successful authoritative async-iterator path.
-- Test the failed-fetch cache fallback path and captured diagnostic.
+- Test successful authoritative enumeration and failed-fetch fallback behavior.
 - Reject the broken `tuple(member async for ...)` form through regression coverage.
+
+### Durable Dank Stats
+
+- Keep Claimed Tickets as a subset of Open Tickets; Open can never be lower than Claimed.
+- Read all ticket rows with pagination rather than trusting one PostgREST page.
+- Fall back across `status,claimed_by,assigned_to`, `status,claimed_by`, `status,assigned_to`, and `status` when schemas differ.
+- Support older/minimal PostgREST clients that do not expose `.range()`.
+- Use visible active ticket channels as a floor against a false database Open Tickets zero.
+- Refresh stats after externally deleted ticket channels, not only normal lifecycle buttons.
+- Preserve the last known SpamGuard state through transient settings-read failures; use `UNKNOWN` when no truthful state exists.
+- Log ticket-query, DB/live mismatch, and Discord channel-refresh failures instead of silently hiding them.
+- Treat a successful no-change refresh as success rather than a failed refresh.
+- Keep all displayed protection counters tied to durable, auditable actions; no invented totals.
 
 ## Automated gates
 
-- [ ] Python compilation passes.
-- [ ] Focused member-reconciliation tests pass.
-- [ ] Full repository unit suite passes.
+- [x] Native source committed.
+- [x] Temporary materializers and write-enabled workflow changes removed.
+- [x] Changed Python modules compile.
+- [x] Focused member-reconciliation and Dank Stats regressions pass.
+- [ ] Full repository unit suite passes on the clean exact head.
+- [ ] Profile Runtime Diagnostics passes on the clean exact head.
+- [ ] Application Command Size Diagnostics passes on the clean exact head.
 - [ ] Public setup, command-surface, permission, role-truth, and event-boundary audits pass.
 - [ ] `git diff --check` passes.
 - [ ] Branch remains current with `main` and conflict-free.
 
-## Deployed startup smoke
+## Deployed Discord smoke
+
+### Member reconciliation
 
 - [ ] No `TypeError: 'async_generator' object is not iterable` appears.
-- [ ] Each guild reports `membership_source=discord_fetch_members`.
-- [ ] Each guild reports `membership_authoritative=True`.
-- [ ] Departure reconciliation is not skipped for `authoritative_member_fetch_failed`.
-- [ ] Full member sync completes without reconciliation errors.
-- [ ] No false departed members are created.
+- [ ] Guilds report `membership_source=discord_fetch_members` and `membership_authoritative=True` when Discord enumeration succeeds.
+- [ ] Reconciliation is not skipped for `authoritative_member_fetch_failed` during a healthy fetch.
+- [ ] Full member sync completes without reconciliation errors or false departed members.
+
+### Dank Stats
+
+- [ ] A claimed active ticket displays Open Tickets at least equal to Claimed Tickets.
+- [ ] Creating, claiming, unclaiming, closing, reopening, and deleting a ticket updates the display.
+- [ ] Externally deleting a tracked ticket channel updates the display.
+- [ ] A visible active ticket cannot coexist with a displayed Open Tickets zero.
+- [ ] Ticket histories larger than one page remain fully counted.
+- [ ] Transient SpamGuard read failure does not falsely flip ONLINE to OFFLINE.
+- [ ] Real disabled SpamGuard still displays OFFLINE.
+- [ ] Missing/renamed compatibility columns do not blank all ticket counters.
+- [ ] Discord rename failures produce an actionable log line.
+- [ ] No fake or estimated protection totals are displayed.
+
+## Blocker
+
+Deploy the final clean PR head to Discloud and complete both smoke sections before merging PR #146.
 
 ## Backlog
 
