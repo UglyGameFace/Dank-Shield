@@ -92,8 +92,8 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm tools/_apply_ticket_claim_first_enforcement.py
-          git rm tools/_repair_ticket_claim_first_materializer.py
+          git rm -f tools/_apply_ticket_claim_first_enforcement.py
+          git rm -f tools/_repair_ticket_claim_first_materializer.py
           git checkout origin/main -- .github/workflows/profile-runtime-diagnostics.yml
           git add \
             stoney_verify/tickets_new/claim_policy.py \
