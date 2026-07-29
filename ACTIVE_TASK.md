@@ -45,6 +45,8 @@ Do not switch to unrelated work until PR #147 passes exact-head validation and d
 ### Panels and commands
 
 - Every staff panel action except Claim is checked centrally.
+- Every canonical `/ticket` subcommand except `claim` is checked before its callback runs.
+- The group-wide guard covers read actions and direct permission actions, including info, owner, access, add, remove, rename, lock, and unlock.
 - Requester cancellation is allowed only while the ticket remains unclaimed.
 - Macros require the current claimant.
 - Verification approve/deny controls require the current claimant.
@@ -61,11 +63,13 @@ Do not switch to unrelated work until PR #147 passes exact-head validation and d
 - [x] Native source committed.
 - [x] Temporary materializers removed.
 - [x] Write-enabled workflow logic removed; permanent workflow is read-only.
-- [x] Changed ticket modules compile.
+- [x] Changed ticket and command modules compile.
 - [x] Every existing `tests/test_ticket*.py` regression passes on the generated native source.
+- [x] Canonical `/ticket` group guard passes the complete ticket regression suite.
 - [x] Application Command Size Diagnostics passed during implementation validation.
 - [ ] Exact clean-head Dank Shield CI passes.
 - [ ] Exact clean-head Application Command Size Diagnostics passes.
+- [ ] Exact clean-head Profile Runtime Diagnostics passes.
 - [ ] Public setup, command-surface, permission, role-truth, and event-boundary audits pass.
 - [ ] `git diff --check` passes on the clean exact head.
 - [ ] Branch remains current with `main` and conflict-free.
@@ -73,6 +77,7 @@ Do not switch to unrelated work until PR #147 passes exact-head validation and d
 ## Deployed Discord smoke
 
 - [ ] An unclaimed staff member can see the ticket but cannot send a message.
+- [ ] An unclaimed staff member cannot use info, owner, access, add, remove, rename, lock, unlock, or any other `/ticket` action except Claim.
 - [ ] Claim succeeds and grants the claimant reply/control access.
 - [ ] The claimant can use notes, macros, priority, transcript, verification review, close, and other normal controls.
 - [ ] A different staff member cannot reply or use controls until transfer.
