@@ -24,5 +24,18 @@ replacement = '''service = replace_regex_once(
 updated, count = pattern.subn(lambda _match: replacement, text, count=1)
 if count != 1:
     raise SystemExit(f"ambiguous close-policy materializer block not found: {count}")
+
+write_marker = 'service_path.write_text(service, encoding="utf-8")\n'
+removal = '''service = replace_regex_once(
+    service,
+    r''' + "'''" + '''\\n\\ndef _actor_is_elevated_staff\\(actor: Optional\\[discord\\.Member \\| discord\\.User\\]\\) -> bool:\\n.*?\\n    return False\\n\\n\\ndef _ticket_archive_category_id''' + "'''" + ''',
+    "\\n\\ndef _ticket_archive_category_id",
+    "remove obsolete elevated staff helper",
+)
+'''
+if write_marker not in updated:
+    raise SystemExit("service write marker not found")
+updated = updated.replace(write_marker, removal + write_marker, 1)
+
 path.write_text(updated, encoding="utf-8")
-print("Anchored claim-first close policy patch to mark_ticket_closed().")
+print("Anchored close policy patch and removed obsolete elevated-staff helper.")
