@@ -1,140 +1,102 @@
 # ACTIVE TASK
 
-## DS-PROFILE-CARDS-012 — Premium live profile banners
+## DS-RUNTIME-013 — Restore member reconciliation and durable Dank Stats
 
-**Status:** IMPLEMENTED — DEPLOYED DISCORD SMOKE PENDING
-**Branch:** `fix/live-profile-channel-spam`
-**PR:** #145
+**Status:** IMPLEMENTED — DEPLOYED SMOKE PENDING
+**Branch:** `fix/member-reconciliation-async-generator`
+**PR:** #146
 
 ## Single Active Task Lock
 
-Do not switch to unrelated work until this PR passes the deployed Discord smoke and is ready to merge.
+Do not switch to unrelated work until PR #146 passes automated validation and deployed Discord smoke.
 
-## Scope
+## Production failures
 
-- One live profile signature per configured channel with stale-render protection and cleanup.
-- Live signatures are member opt-in and default off when no explicit preference exists.
-- Reference-faithful compact cards using live member/server data.
-- Normal Unicode emoji in names, interests, labels, and profile-tag pills.
-- Hard bounds for names, roles, tags, dates, server labels, and gamertags.
-- Link, raw-username, and logo-only platform modes.
-- Server-owner truth plus complete real-role labels without partial names or ellipses.
-- Separate Server Roles, Profile Tags & Cosmetics, and Server Branding visibility controls.
-- Optional server branding that can be hidden without abandoning the selected style.
-- Six base color directions plus Steam, Xbox, PlayStation, Epic, and multi-platform families.
-- Theme, Font, Colors, Mix Colors, Background, Layout, Avatar Frame, and Preview controls.
-- Four visual color slots with instant real-card previews and Advanced Hex as fallback.
-- Theme changes preserve independently selected custom colors and custom artwork.
-- Personal and server-default custom background artwork with strict validation and safe-zone guidance.
-- Mobile, tablet, desktop, and web support.
+### Member reconciliation
 
-## Implemented behavior
+Every guild fell back to cache-only membership evidence because authoritative enumeration raised:
 
-### Delivery and defaults
+```text
+TypeError: 'async_generator' object is not iterable
+```
 
-- One verified visible signature per configured channel.
-- Message bursts coalesce so the latest eligible speaker wins.
-- Stale work is rejected around rendering, sending, and persistence.
-- Existing stacked cards collapse on first activity.
-- New or missing preferences resolve Live Signature to off.
-- Explicit existing `live_cards_enabled: true` remains on.
-- Turning Live Signature off removes the current card and prevents reposting.
-- Signature output remains isolated from moderation, cleanup, and member-activity listeners.
+That prevented false departures, but also prevented real departed-member reconciliation from running.
 
-### Roles, ownership, and branding
+### Dank Stats
 
-- Discord `guild.owner_id` determines the truthful `Server Owner` badge.
-- Non-owners use a complete real server role when role sharing is enabled; otherwise the safe fallback is `Member`.
-- Role names shrink/wrap as complete values and are skipped when they cannot fit; they are never cut into misleading partial labels.
-- Server Roles defaults hidden.
-- Profile Tags & Cosmetics remains separate and defaults shown subject to policy/privacy.
-- Server Branding is independently toggleable and controls the server icon/name panel.
-- Hiding Server Branding releases its card area to the platform section.
+The live Discord stats display could become stale or misleading when:
 
-### Platforms and copy behavior
+- a claimed ticket remained active but Open Tickets showed `0`;
+- one optional ticket compatibility column was unavailable;
+- ticket history exceeded one PostgREST page;
+- an external Discord channel deletion bypassed the lifecycle refresh hook;
+- a transient SpamGuard settings read falsely displayed `OFFLINE`;
+- a visible active ticket channel disagreed with a stale database snapshot;
+- Discord rejected a channel rename without a useful diagnostic.
 
-- Platform handles render on separate adaptive lines instead of one joined ellipsis line.
-- Complete handles shrink/wrap within the reserved platform zone; an unfit value is omitted rather than partially displayed.
-- Link mode opens validated official URLs.
-- Username mode returns exactly the private raw username with no label, Markdown wrapper, language marker, or helper text.
-- Logo-only mode requires no username and creates no dead control.
+## Implemented corrections
 
-### Styles and four-color customization
+### Authoritative members
 
-- Compact `1400 × 300` card with dynamic avatar, name, dates, roles, tags, platforms, and optional server branding.
-- Classic, Minimal, and Spotlight layouts.
-- Glow, Clean Ring, and No Frame avatar treatments.
-- Base families cover green, purple, gold, teal, red, and blue treatments.
-- Steam Command, Xbox Arena, PlayStation Pulse, Epic Vault, and Multi-Platform Grid use bundled real logos and distinct compositions.
-- Primary, Secondary, Accent 3, and Highlight slots persist independently.
-- Legacy one- and two-color profiles derive missing accents automatically.
-- Named visual choices are the normal flow; Advanced Hex is the exact-color fallback.
-- Color select, replace, rotate, remove, and reset actions save and render immediately.
-- Choosing a different theme changes the visual family only; custom colors and custom artwork remain active.
-- Theme colors and Theme Artwork remain explicit independent reset choices.
+- Consume `Guild.fetch_members(limit=None)` with a real async list comprehension.
+- Convert the completed member list to the immutable snapshot tuple.
+- Preserve cache-only positive evidence when Discord fetching genuinely fails.
+- Preserve the rule that cache absence can never mark a member departed.
+- Test successful authoritative enumeration and failed-fetch fallback behavior.
+- Reject the broken `tuple(member async for ...)` form through regression coverage.
 
-### Custom background artwork
+### Durable Dank Stats
 
-- Personal uploads and manager-controlled server defaults are separate from Welcome/Join cards.
-- Accepted files: PNG, JPG/JPEG, and WebP.
-- Upload maximum: 8 MB; decoded source maximum: 20 megapixels.
-- Recommended/minimum canvas: `1400 × 300`; accepted ratio: 4.29:1 through 5.04:1.
-- Valid artwork is center-cropped and normalized to exactly `1400 × 300`.
-- The studio provides a generated safe-zone guide for avatar, member text, roles/platforms, and optional server branding.
-- Artwork remains a background layer; live names, roles, platforms, ownership, and privacy are rendered by Dank Shield.
+- Keep Claimed Tickets as a subset of Open Tickets; Open can never be lower than Claimed.
+- Read all ticket rows with pagination rather than trusting one PostgREST page.
+- Fall back across `status,claimed_by,assigned_to`, `status,claimed_by`, `status,assigned_to`, and `status` when schemas differ.
+- Support older/minimal PostgREST clients that do not expose `.range()`.
+- Use visible active ticket channels as a floor against a false database Open Tickets zero.
+- Refresh stats after externally deleted ticket channels, not only normal lifecycle buttons.
+- Preserve the last known SpamGuard state through transient settings-read failures; use `UNKNOWN` when no truthful state exists.
+- Log ticket-query, DB/live mismatch, and Discord channel-refresh failures instead of silently hiding them.
+- Treat a successful no-change refresh as success rather than a failed refresh.
+- Keep all displayed protection counters tied to durable, auditable actions; no invented totals.
 
-### Emoji and bounds
-
-- Complete emoji-sequence parsing covers keycaps, flags, variation selectors, skin tones, tag sequences, and ZWJ families.
-- Redundant Twemoji sources, caching, inline raster rendering, and a drawn non-tofu fallback are active.
-- Interests/tags use safe separators.
-- Styled display names are fitted and hard-clipped before compositing.
-- Dynamic text cannot cross the reserved profile, platform, or branding zones.
-
-## Automated validation
+## Automated gates
 
 - [x] Native source committed.
-- [x] Python compilation passed.
-- [x] Focused profile regression suite passed.
-- [x] Full repository unit suite passed.
-- [x] Application Command Size Diagnostics passed.
-- [x] Profile Runtime Diagnostics passed.
-- [x] Dank Shield CI passed.
-- [x] Standalone role-menu compatibility checks passed.
-- [x] Public setup, command-surface, permission, setup-safety, Dank Design, role-truth, and event-boundary audits passed.
-- [x] `git diff --check` passed.
-- [x] Temporary materializers, payloads, failure captures, and write-enabled workflow logic removed.
-- [x] Obsolete username-copy guard and references removed.
-- [x] Permanent diagnostics reject temporary or competing profile patches.
-- [x] Branch is 0 commits behind `main` and conflict-free.
+- [x] Temporary materializers and write-enabled workflow changes removed.
+- [x] Changed Python modules compile.
+- [x] Focused member-reconciliation and Dank Stats regressions pass.
+- [x] Full repository unit suite passes on the clean exact head.
+- [x] Profile Runtime Diagnostics passes on the clean exact head.
+- [x] Application Command Size Diagnostics passes on the clean exact head.
+- [x] Public setup, command-surface, permission, role-truth, and event-boundary audits pass.
+- [x] `git diff --check` passes.
+- [x] Branch remains current with `main` and conflict-free.
 
-## Deployed Discord smoke gates
+## Deployed Discord smoke
 
-- [ ] New/missing profiles start with Live Signature off; explicit enabled profiles remain enabled.
-- [ ] Server owners display `Server Owner` automatically.
-- [ ] Shared real roles display complete names with no overflow or ellipses.
-- [ ] Platform handles display complete values with no overflow or ellipses.
-- [ ] Base and platform-focused themes are selectable and visibly distinct.
-- [ ] Theme changes preserve custom color mixes and custom artwork.
-- [ ] Every color change immediately previews the real card.
-- [ ] Personal custom-background upload enforces the documented file, size, ratio, and canvas rules.
-- [ ] Server-default custom artwork remains manager-only.
-- [ ] Server Branding can be hidden and restored independently.
-- [ ] Regular emoji render correctly in names, labels, interests, and pills.
-- [ ] Long display names and profile tags remain inside reserved zones.
-- [ ] Username mode returns only the raw username on mobile, tablet, desktop, and web.
-- [ ] Rapid speakers leave one card for the latest eligible speaker.
-- [ ] No stale card appears when a message arrives during rendering.
-- [ ] Existing stacked cards collapse on activity.
-- [ ] Link and logo-only modes behave correctly.
-- [ ] View Member Profile uses the same generated banner.
-- [ ] Turning Live Signature off removes the card and prevents reposting.
-- [ ] Signature messages trigger no moderation, cleanup, or activity event.
+### Member reconciliation
+
+- [ ] No `TypeError: 'async_generator' object is not iterable` appears.
+- [ ] Guilds report `membership_source=discord_fetch_members` and `membership_authoritative=True` when Discord enumeration succeeds.
+- [ ] Reconciliation is not skipped for `authoritative_member_fetch_failed` during a healthy fetch.
+- [ ] Full member sync completes without reconciliation errors or false departed members.
+
+### Dank Stats
+
+- [ ] A claimed active ticket displays Open Tickets at least equal to Claimed Tickets.
+- [ ] Creating, claiming, unclaiming, closing, reopening, and deleting a ticket updates the display.
+- [ ] Externally deleting a tracked ticket channel updates the display.
+- [ ] A visible active ticket cannot coexist with a displayed Open Tickets zero.
+- [ ] Ticket histories larger than one page remain fully counted.
+- [ ] Transient SpamGuard read failure does not falsely flip ONLINE to OFFLINE.
+- [ ] Real disabled SpamGuard still displays OFFLINE.
+- [ ] Missing/renamed compatibility columns do not blank all ticket counters.
+- [ ] Discord rename failures produce an actionable log line.
+- [ ] No fake or estimated protection totals are displayed.
 
 ## Blocker
 
-Deploy the final exact branch head to Discloud and complete the Discord smoke gates before PR #145 leaves draft status or is merged.
+Deploy the final clean PR head to Discloud and complete both smoke sections before merging PR #146.
 
-## Backlog
+## Next task after PR #146
 
-None. All profile-card corrections remain in this active task.
+Enforce claim-first ticket handling. Staff may view an unclaimed ticket, but the only permitted staff interaction is Claim. Staff replies and every other bot control or command—including approve/deny, transcripts, notes, priority, transfer, reopen, close, and delete—require the recorded current claimant. Another staff member must complete a formal transfer or takeover first. Enforce staff-message gating with channel permissions where possible and remove unauthorized staff messages with a clear explanation when necessary. The requester may continue providing information and may cancel an unclaimed ticket, but may never delete ticket history. Server owners and administrators receive no silent Dank Shield bypass; unauthorized native Discord actions must be logged as policy violations where observable.

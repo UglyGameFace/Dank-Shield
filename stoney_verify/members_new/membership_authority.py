@@ -38,9 +38,12 @@ async def collect_membership_snapshot(guild: discord.Guild) -> MembershipSnapsho
     """
 
     try:
-        members = tuple(member async for member in guild.fetch_members(limit=None))
+        fetched_members = [
+            member
+            async for member in guild.fetch_members(limit=None)
+        ]
         return MembershipSnapshot(
-            members=members,
+            members=tuple(fetched_members),
             authoritative=True,
             source="discord_fetch_members",
         )

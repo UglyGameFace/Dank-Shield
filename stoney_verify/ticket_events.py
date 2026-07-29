@@ -552,6 +552,16 @@ async def _mark_deleted_after_external_channel_delete(
             deleted_by_name="System",
             reason="Channel deleted event",
         )
+        if deleted_ok:
+            try:
+                from .security_stats import refresh_ticket_stats_for_guild_id
+
+                await refresh_ticket_stats_for_guild_id(int(channel.guild.id))
+            except Exception as exc:
+                _debug(
+                    f"external-delete stats refresh failed channel={channel.id} "
+                    f"error={type(exc).__name__}"
+                )
         return bool(deleted_ok)
     except Exception as e:
         print(
