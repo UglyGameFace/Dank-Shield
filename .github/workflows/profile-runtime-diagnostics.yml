@@ -80,16 +80,11 @@ jobs:
             stoney_verify/transcripts.py \
             tests/test_ticket_claim_first_policy.py
 
-      - name: Run focused ticket security regressions
+      - name: Run all ticket regressions
+        shell: bash
         run: |
-          python -m pytest -q \
-            tests/test_ticket_claim_first_policy.py \
-            tests/test_ticket_stats_lifecycle_refresh_behavior.py \
-            tests/test_ticket_lifecycle_service.py \
-            tests/test_ticket_close_reopen_lifecycle.py \
-            tests/test_ticket_channel_actions.py \
-            tests/test_ticket_macros_service.py \
-            tests/test_ticket_transcript_service.py
+          set -euo pipefail
+          python -m pytest -q tests/test_ticket*.py
 
       - name: Commit clean native source
         shell: bash
