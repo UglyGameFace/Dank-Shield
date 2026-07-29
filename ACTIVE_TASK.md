@@ -1,102 +1,97 @@
 # ACTIVE TASK
 
-## DS-RUNTIME-013 — Restore member reconciliation and durable Dank Stats
+## DS-TICKETS-014 — Enforce claim-first ticket handling
 
-**Status:** IMPLEMENTED — DEPLOYED SMOKE PENDING
-**Branch:** `fix/member-reconciliation-async-generator`
-**PR:** #146
+**Status:** IMPLEMENTED — EXACT-HEAD CI AND DEPLOYED SMOKE PENDING
+**Branch:** `fix/ticket-claim-first-enforcement`
+**PR:** #147
 
 ## Single Active Task Lock
 
-Do not switch to unrelated work until PR #146 passes automated validation and deployed Discord smoke.
+Do not switch to unrelated work until PR #147 passes exact-head validation and deployed Discord smoke.
 
-## Production failures
+## Security rule
 
-### Member reconciliation
+- Staff may view an unclaimed ticket, but **Claim is the only permitted staff interaction**.
+- Staff cannot reply, edit a reply, approve/deny verification, send macros, create or view notes, change priority, view ticket controls, generate transcripts, transfer, unclaim, reopen, close, or delete until the ticket is claimed.
+- After claim, only the recorded current claimant can reply or use ticket actions.
+- Another staff member must receive a formal transfer before interacting.
+- Server owners and administrators receive no silent Dank Shield bypass.
+- The requester may continue providing information.
+- The requester may cancel their own unclaimed ticket, but cannot close it after claim and can never delete ticket history.
+- Delete is a separate second-stage action available only after the current claimant closes the ticket.
 
-Every guild fell back to cache-only membership evidence because authoritative enumeration raised:
+## Implemented enforcement
 
-```text
-TypeError: 'async_generator' object is not iterable
-```
+### Central policy
 
-That prevented false departures, but also prevented real departed-member reconciliation from running.
+- Added one authoritative claim-first decision engine.
+- Human actions require a real Discord actor and registered ticket row.
+- Claim is allowed only for open tickets and cannot be taken by the requester.
+- Unclaimed staff actions return `claim_required`.
+- Actions by anyone other than the current claimant return `claimant_required`.
+- Explicit internal system operations remain possible only through `system_action=True`.
+- Removed the obsolete elevated-owner/administrator lifecycle bypass helper.
 
-### Dank Stats
+### Ticket service
 
-The live Discord stats display could become stale or misleading when:
+- Close, delete, transcript attachment, unclaim, transfer, priority, notes, and reopen are claim-gated in the service layer.
+- Service-layer checks run before repository writes, preventing UI or command bypasses.
+- Staff-role channel overwrites are read-only until a claim is recorded.
+- The current claimant receives the explicit member overwrite needed to reply and manage ticket messages.
+- Unclaim and transfer remove the previous claimant overwrite and apply the new truth.
+- Closed tickets remove claimant write access.
 
-- a claimed ticket remained active but Open Tickets showed `0`;
-- one optional ticket compatibility column was unavailable;
-- ticket history exceeded one PostgREST page;
-- an external Discord channel deletion bypassed the lifecycle refresh hook;
-- a transient SpamGuard settings read falsely displayed `OFFLINE`;
-- a visible active ticket channel disagreed with a stale database snapshot;
-- Discord rejected a channel rename without a useful diagnostic.
+### Panels and commands
 
-## Implemented corrections
+- Every staff panel action except Claim is checked centrally.
+- Requester cancellation is allowed only while the ticket remains unclaimed.
+- Macros require the current claimant.
+- Verification approve/deny controls require the current claimant.
+- The old one-click open-ticket close-and-delete path is removed.
 
-### Authoritative members
+### Runtime enforcement
 
-- Consume `Guild.fetch_members(limit=None)` with a real async list comprehension.
-- Convert the completed member list to the immutable snapshot tuple.
-- Preserve cache-only positive evidence when Discord fetching genuinely fails.
-- Preserve the rule that cache absence can never mark a member departed.
-- Test successful authoritative enumeration and failed-fetch fallback behavior.
-- Reject the broken `tuple(member async for ...)` form through regression coverage.
-
-### Durable Dank Stats
-
-- Keep Claimed Tickets as a subset of Open Tickets; Open can never be lower than Claimed.
-- Read all ticket rows with pagination rather than trusting one PostgREST page.
-- Fall back across `status,claimed_by,assigned_to`, `status,claimed_by`, `status,assigned_to`, and `status` when schemas differ.
-- Support older/minimal PostgREST clients that do not expose `.range()`.
-- Use visible active ticket channels as a floor against a false database Open Tickets zero.
-- Refresh stats after externally deleted ticket channels, not only normal lifecycle buttons.
-- Preserve the last known SpamGuard state through transient settings-read failures; use `UNKNOWN` when no truthful state exists.
-- Log ticket-query, DB/live mismatch, and Discord channel-refresh failures instead of silently hiding them.
-- Treat a successful no-change refresh as success rather than a failed refresh.
-- Keep all displayed protection counters tied to durable, auditable actions; no invented totals.
+- Unauthorized staff messages and edited messages are removed with a clear claim/transfer explanation.
+- Unauthorized direct lifecycle renames are reverted when Dank Shield can observe and edit the channel.
+- Discord-native channel deletion is recorded as a critical policy violation; Discord does not permit a bot to overrule the server owner after deletion occurs.
 
 ## Automated gates
 
 - [x] Native source committed.
-- [x] Temporary materializers and write-enabled workflow changes removed.
-- [x] Changed Python modules compile.
-- [x] Focused member-reconciliation and Dank Stats regressions pass.
-- [x] Full repository unit suite passes on the clean exact head.
-- [x] Profile Runtime Diagnostics passes on the clean exact head.
-- [x] Application Command Size Diagnostics passes on the clean exact head.
-- [x] Public setup, command-surface, permission, role-truth, and event-boundary audits pass.
-- [x] `git diff --check` passes.
-- [x] Branch remains current with `main` and conflict-free.
+- [x] Temporary materializers removed.
+- [x] Write-enabled workflow logic removed; permanent workflow is read-only.
+- [x] Changed ticket modules compile.
+- [x] Every existing `tests/test_ticket*.py` regression passes on the generated native source.
+- [x] Application Command Size Diagnostics passed during implementation validation.
+- [ ] Exact clean-head Dank Shield CI passes.
+- [ ] Exact clean-head Application Command Size Diagnostics passes.
+- [ ] Public setup, command-surface, permission, role-truth, and event-boundary audits pass.
+- [ ] `git diff --check` passes on the clean exact head.
+- [ ] Branch remains current with `main` and conflict-free.
 
 ## Deployed Discord smoke
 
-### Member reconciliation
-
-- [ ] No `TypeError: 'async_generator' object is not iterable` appears.
-- [ ] Guilds report `membership_source=discord_fetch_members` and `membership_authoritative=True` when Discord enumeration succeeds.
-- [ ] Reconciliation is not skipped for `authoritative_member_fetch_failed` during a healthy fetch.
-- [ ] Full member sync completes without reconciliation errors or false departed members.
-
-### Dank Stats
-
-- [ ] A claimed active ticket displays Open Tickets at least equal to Claimed Tickets.
-- [ ] Creating, claiming, unclaiming, closing, reopening, and deleting a ticket updates the display.
-- [ ] Externally deleting a tracked ticket channel updates the display.
-- [ ] A visible active ticket cannot coexist with a displayed Open Tickets zero.
-- [ ] Ticket histories larger than one page remain fully counted.
-- [ ] Transient SpamGuard read failure does not falsely flip ONLINE to OFFLINE.
-- [ ] Real disabled SpamGuard still displays OFFLINE.
-- [ ] Missing/renamed compatibility columns do not blank all ticket counters.
-- [ ] Discord rename failures produce an actionable log line.
-- [ ] No fake or estimated protection totals are displayed.
+- [ ] An unclaimed staff member can see the ticket but cannot send a message.
+- [ ] Claim succeeds and grants the claimant reply/control access.
+- [ ] The claimant can use notes, macros, priority, transcript, verification review, close, and other normal controls.
+- [ ] A different staff member cannot reply or use controls until transfer.
+- [ ] Server owner/administrator receives no Dank Shield action bypass.
+- [ ] Transfer removes the old claimant access and grants the new claimant access.
+- [ ] Unclaim returns the ticket to staff read-only state.
+- [ ] The requester can continue typing before and after claim.
+- [ ] The requester can cancel an unclaimed ticket.
+- [ ] The requester cannot cancel after claim or delete ticket history.
+- [ ] Delete on an open ticket is refused with instructions to close first.
+- [ ] The current claimant can delete only after closure.
+- [ ] Unauthorized staff messages are removed with a clear explanation.
+- [ ] Unauthorized lifecycle rename attempts are reverted and logged.
+- [ ] Direct external deletion is logged as a critical policy violation.
 
 ## Blocker
 
-Deploy the final clean PR head to Discloud and complete both smoke sections before merging PR #146.
+Run the exact clean head through repository CI, deploy it to Discloud, complete the smoke gates, then merge PR #147.
 
-## Next task after PR #146
+## Backlog
 
-Enforce claim-first ticket handling. Staff may view an unclaimed ticket, but the only permitted staff interaction is Claim. Staff replies and every other bot control or command—including approve/deny, transcripts, notes, priority, transfer, reopen, close, and delete—require the recorded current claimant. Another staff member must complete a formal transfer or takeover first. Enforce staff-message gating with channel permissions where possible and remove unauthorized staff messages with a clear explanation when necessary. The requester may continue providing information and may cancel an unclaimed ticket, but may never delete ticket history. Server owners and administrators receive no silent Dank Shield bypass; unauthorized native Discord actions must be logged as policy violations where observable.
+None. Finish PR #147 before beginning another task.
