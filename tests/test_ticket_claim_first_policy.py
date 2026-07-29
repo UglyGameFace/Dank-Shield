@@ -39,6 +39,10 @@ def test_claim_is_only_staff_action_allowed_before_claim() -> None:
         "transcript",
         "verification_review",
         "reopen",
+        "access",
+        "rename",
+        "lock",
+        "unlock",
     ):
         decision = evaluate_ticket_action(ticket, actor_id=200, action=action)
         assert decision.allowed is False, action
@@ -146,6 +150,7 @@ def test_static_claim_first_enforcement_covers_all_runtime_surfaces() -> None:
     macros = (ROOT / "stoney_verify/tickets_new/macros_service.py").read_text(encoding="utf-8")
     events = (ROOT / "stoney_verify/ticket_events.py").read_text(encoding="utf-8")
     transcripts = (ROOT / "stoney_verify/transcripts.py").read_text(encoding="utf-8")
+    public_group = (ROOT / "stoney_verify/commands_ext/public_ticket_group.py").read_text(encoding="utf-8")
 
     assert "Claim is the only staff action allowed" in policy
     assert "async def authorize_ticket_action(" in service
@@ -170,5 +175,13 @@ def test_static_claim_first_enforcement_covers_all_runtime_surfaces() -> None:
     assert "authorize_ticket_action" in transcripts
     assert 'action="verification_review"' in transcripts
     assert "Close the ticket first, then use Delete" in transcripts
+
+    assert "class ClaimFirstTicketGroup" in public_group
+    assert "async def interaction_check" in public_group
+    assert 'if command_name == "claim"' in public_group
+    assert "authorize_ticket_action" in public_group
+    assert '"info": "view_info"' in public_group
+    assert '"owner": "view_info"' in public_group
+    assert '"access": "view_info"' in public_group
 
     assert "send_messages=False" in service
