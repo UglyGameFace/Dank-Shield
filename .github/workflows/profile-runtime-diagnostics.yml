@@ -29,13 +29,72 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: profile-runtime-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  apply-pr146-stats-hardening:
+    if: github.event_name == 'pull_request' && github.head_ref == 'fix/member-reconciliation-async-generator'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/member-reconciliation-async-generator
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+
+      - name: Apply native Dank Stats hardening
+        run: python tools/_apply_pr146_dank_stats_hardening.py
+
+      - name: Compile changed implementation
+        run: |
+          python -m py_compile \
+            stoney_verify/security_stats.py \
+            stoney_verify/ticket_events.py \
+            stoney_verify/members_new/membership_authority.py \
+            tests/test_dank_stats_authority.py \
+            tests/test_member_reconciliation_authority.py
+
+      - name: Run focused member and stats regressions
+        run: |
+          python -m pytest -q \
+            tests/test_dank_stats_authority.py \
+            tests/test_security_stats_channels.py \
+            tests/test_ticket_stats_lifecycle_refresh_behavior.py \
+            tests/test_member_reconciliation_authority.py
+
+      - name: Remove temporary materializers and push native source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm tools/_apply_pr146_dank_stats_hardening.py
+          git rm .github/workflows/_apply-pr146-dank-stats-hardening.yml
+          git checkout origin/main -- .github/workflows/profile-runtime-diagnostics.yml
+          git add \
+            stoney_verify/security_stats.py \
+            stoney_verify/ticket_events.py \
+            tests/test_dank_stats_authority.py \
+            .github/workflows/profile-runtime-diagnostics.yml
+          git commit -m "Harden Dank Stats authority and refresh paths"
+          git push origin HEAD:fix/member-reconciliation-async-generator
+
   focused-profile-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
