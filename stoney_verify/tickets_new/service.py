@@ -33,6 +33,7 @@ from .repository import (
 from .orphan_safety import cleanup_unpersisted_ticket_channel
 from ..services.server_design_ticket_naming import build_ticket_channel_name
 from .counter_allocator import reserve_next_ticket_number as reserve_persistent_ticket_number
+from .claim_policy import TicketActionDecision, evaluate_ticket_action
 
 try:
     from .event_service import (
@@ -499,6 +500,38 @@ def _ticket_owner_id(row: Optional[Dict[str, Any]]) -> int:
     return 0
 
 
+async def authorize_ticket_action(
+    *,
+    channel_id: int | str,
+    actor: Optional[discord.Member | discord.User],
+    action: str,
+    allow_requester_cancel: bool = False,
+    system_action: bool = False,
+    row: Optional[Dict[str, Any]] = None,
+) -> TicketActionDecision:
+    ticket_row = row if isinstance(row, dict) else await _ticket_row_for_channel_id(channel_id)
+    decision = evaluate_ticket_action(
+        ticket_row,
+        actor_id=_actor_id(actor),
+        action=action,
+        system_action=bool(system_action),
+        allow_requester_cancel=bool(allow_requester_cancel),
+    )
+    if not decision.allowed:
+        _service_debug(
+            f"claim-policy denied channel={channel_id} action={decision.action} "
+            f"actor={decision.actor_id} owner={decision.owner_id} "
+            f"claimed_by={decision.claimed_by_id} status={decision.status} "
+            f"code={decision.code}"
+        )
+    elif decision.code == "system_action":
+        _service_debug(
+            f"claim-policy system channel={channel_id} action={decision.action} "
+            f"status={decision.status}"
+        )
+    return decision
+
+
 def _ticket_is_openish(row: Optional[Dict[str, Any]]) -> bool:
     return _ticket_status(row) in {"open", "claimed"}
 
@@ -518,27 +551,6 @@ def _row_is_ghost(row: Optional[Dict[str, Any]], default: bool = False) -> bool:
         return _safe_bool(row.get("is_ghost"), default)
     except Exception:
         return default
-
-
-def _actor_is_elevated_staff(actor: Optional[discord.Member | discord.User]) -> bool:
-    try:
-        if actor is None:
-            return False
-        if not isinstance(actor, discord.Member):
-            return False
-        if actor.guild_permissions.administrator:
-            return True
-        if actor.guild_permissions.manage_channels:
-            return True
-        if actor.guild_permissions.manage_guild:
-            return True
-
-        staff_role_id = _safe_int(globals().get("STAFF_ROLE_ID"), 0)
-        if staff_role_id and any(int(r.id) == staff_role_id for r in actor.roles):
-            return True
-    except Exception:
-        return False
-    return False
 
 
 def _ticket_archive_category_id() -> int:
@@ -1208,11 +1220,11 @@ def _build_overwrites(
                 continue
             overwrites[role] = discord.PermissionOverwrite(
                 view_channel=True,
-                send_messages=True,
-                manage_messages=True,
+                send_messages=False,
+                manage_messages=False,
                 read_message_history=True,
-                attach_files=True,
-                embed_links=True,
+                attach_files=False,
+                embed_links=False,
             )
 
     return overwrites
@@ -1268,17 +1280,20 @@ async def _apply_closed_permissions(
             continue
         overwrites[role] = discord.PermissionOverwrite(
             view_channel=True,
-            send_messages=True,
-            manage_messages=True,
+            send_messages=False,
+            manage_messages=False,
             read_message_history=True,
-            attach_files=True,
-            embed_links=True,
+            attach_files=False,
+            embed_links=False,
         )
 
     try:
         await channel.edit(overwrites=overwrites, reason="Ticket closed; owner reply locked")
     except Exception as e:
         print(f"⚠️ Failed applying closed permissions for {channel.id}: {repr(e)}")
+
+    row = await _ticket_row_for_channel_id(channel.id)
+    await _sync_claimant_channel_permissions(channel, row=row, closed=True)
 
 
 async def _apply_open_permissions(
@@ -1288,6 +1303,8 @@ async def _apply_open_permissions(
     staff_role_ids: Optional[list[int]] = None,
 ) -> None:
     if owner is None:
+        row = await _ticket_row_for_channel_id(channel.id)
+        await _sync_claimant_channel_permissions(channel, row=row, closed=False)
         return
 
     guild = channel.guild
@@ -1301,6 +1318,91 @@ async def _apply_open_permissions(
         await channel.edit(overwrites=overwrites, reason="Ticket reopened; owner reply restored")
     except Exception as e:
         print(f"⚠️ Failed applying open permissions for {channel.id}: {repr(e)}")
+
+    row = await _ticket_row_for_channel_id(channel.id)
+    await _sync_claimant_channel_permissions(channel, row=row, closed=False)
+
+
+async def _sync_claimant_channel_permissions(
+    channel: discord.TextChannel,
+    *,
+    row: Optional[Dict[str, Any]] = None,
+    previous_claimed_by: int = 0,
+    closed: bool = False,
+) -> None:
+    """Make Claim the only path that grants staff write access."""
+    ticket_row = row if isinstance(row, dict) else await _ticket_row_for_channel_id(channel.id)
+    claimant_id = _ticket_claimed_by_id(ticket_row)
+    guild = channel.guild
+
+    for role_id in _default_staff_role_ids(guild_id=guild.id):
+        role = guild.get_role(int(role_id))
+        if role is None:
+            continue
+        try:
+            await channel.set_permissions(
+                role,
+                view_channel=True,
+                send_messages=False,
+                manage_messages=False,
+                read_message_history=True,
+                attach_files=False,
+                embed_links=False,
+                reason="Claim-first ticket policy: staff must claim before interacting",
+            )
+        except Exception as exc:
+            print(f"⚠️ claim-first staff-role overwrite failed channel={channel.id} role={role_id}: {exc!r}")
+
+    prior_id = _safe_int(previous_claimed_by, 0)
+    if prior_id > 0 and prior_id != claimant_id:
+        prior_member = guild.get_member(prior_id)
+        if prior_member is not None:
+            try:
+                await channel.set_permissions(
+                    prior_member,
+                    overwrite=None,
+                    reason="Ticket claim changed; remove previous claimant access",
+                )
+            except Exception as exc:
+                print(f"⚠️ previous claimant overwrite cleanup failed channel={channel.id} member={prior_id}: {exc!r}")
+
+    if claimant_id > 0:
+        claimant = guild.get_member(claimant_id)
+        if claimant is not None:
+            try:
+                can_write = not closed and _ticket_status(ticket_row) in {"open", "claimed"}
+                await channel.set_permissions(
+                    claimant,
+                    view_channel=True,
+                    send_messages=can_write,
+                    manage_messages=can_write,
+                    read_message_history=True,
+                    attach_files=can_write,
+                    embed_links=can_write,
+                    reason="Ticket claimant access",
+                )
+            except Exception as exc:
+                print(f"⚠️ claimant overwrite failed channel={channel.id} member={claimant_id}: {exc!r}")
+
+
+async def _sync_claimant_permissions_by_channel_id(
+    channel_id: int | str,
+    *,
+    row: Optional[Dict[str, Any]] = None,
+    previous_claimed_by: int = 0,
+    closed: bool = False,
+) -> None:
+    try:
+        channel = bot.get_channel(int(channel_id))
+    except Exception:
+        channel = None
+    if isinstance(channel, discord.TextChannel):
+        await _sync_claimant_channel_permissions(
+            channel,
+            row=row,
+            previous_claimed_by=previous_claimed_by,
+            closed=closed,
+        )
 
 
 def _member_has_role_id(member: discord.Member, role_id: int) -> bool:
@@ -2265,6 +2367,17 @@ async def mark_ticket_closed(
         row_before = await _ticket_row_for_channel_id(channel.id)
         status_before = _ticket_status(row_before)
 
+        decision = await authorize_ticket_action(
+            channel_id=channel.id,
+            actor=closed_by,
+            action="close",
+            allow_requester_cancel=True,
+            system_action=closed_by is None,
+            row=row_before,
+        )
+        if not decision.allowed:
+            return False
+
         if status_before == "deleted":
             _service_debug(f"close rejected channel={channel.id} reason=already-deleted")
             return False
@@ -2400,6 +2513,16 @@ async def mark_ticket_deleted(
         row_before = await _ticket_row_for_channel_id(channel_id)
         status_before = _ticket_status(row_before)
 
+        decision = await authorize_ticket_action(
+            channel_id=channel_id,
+            actor=deleted_by,
+            action="delete",
+            system_action=deleted_by is None,
+            row=row_before,
+        )
+        if not decision.allowed:
+            return False
+
         if status_before == "deleted":
             return True
 
@@ -2457,6 +2580,16 @@ async def attach_transcript_to_ticket(
 
     async with lock:
         row_before = await _ticket_row_for_channel_id(channel_id)
+        decision = await authorize_ticket_action(
+            channel_id=channel_id,
+            actor=actor,
+            action="transcript",
+            system_action=actor is None,
+            row=row_before,
+        )
+        if not decision.allowed:
+            return False
+
         if isinstance(row_before, dict):
             same_url = _safe_str(row_before.get("transcript_url")) == _safe_str(transcript_url)
             same_msg = _safe_str(row_before.get("transcript_message_id")) == _safe_str(transcript_message_id)
@@ -2589,6 +2722,12 @@ async def assign_ticket(
             except Exception as e:
                 print(f"⚠️ Failed logging ticket_claimed for {channel_id}: {repr(e)}")
 
+            await _sync_claimant_permissions_by_channel_id(
+                channel_id,
+                row=ticket_row,
+                previous_claimed_by=existing_claimed_by,
+                closed=False,
+            )
             _service_debug(f"assign success channel={channel_id} to={target_staff_id}")
         else:
             _service_debug(f"assign failed channel={channel_id} to={target_staff_id}")
@@ -2622,16 +2761,15 @@ async def unclaim_ticket(
             _service_debug(f"unclaim noop channel={channel_id} reason=not-claimed")
             return True
 
-        actor_id = _actor_id(actor) or 0
-        actor_is_elevated = _actor_is_elevated_staff(actor)
-
-        if actor is not None and actor_id > 0:
-            if actor_id != existing_claimed_by and not actor_is_elevated:
-                _service_debug(
-                    f"unclaim rejected channel={channel_id} "
-                    f"reason=not-owner-of-claim actor={actor_id} claimed_by={existing_claimed_by}"
-                )
-                return False
+        decision = await authorize_ticket_action(
+            channel_id=channel_id,
+            actor=actor,
+            action="unclaim",
+            system_action=actor is None,
+            row=row,
+        )
+        if not decision.allowed:
+            return False
 
         ok = await repo_unclaim_ticket(channel_id=channel_id)
         if ok:
@@ -2656,6 +2794,12 @@ async def unclaim_ticket(
             except Exception as e:
                 print(f"⚠️ Failed logging ticket_unclaimed for {channel_id}: {repr(e)}")
 
+            await _sync_claimant_permissions_by_channel_id(
+                channel_id,
+                row=ticket_row,
+                previous_claimed_by=existing_claimed_by,
+                closed=False,
+            )
             _service_debug(f"unclaim success channel={channel_id} previous={existing_claimed_by}")
         else:
             _service_debug(f"unclaim failed channel={channel_id}")
@@ -2698,16 +2842,15 @@ async def transfer_ticket(
             return False
 
         existing_claimed_by = _ticket_claimed_by_id(row)
-        actor_id = _actor_id(actor) or 0
-        actor_is_elevated = _actor_is_elevated_staff(actor)
-
-        if existing_claimed_by > 0 and actor is not None:
-            if actor_id != existing_claimed_by and not actor_is_elevated:
-                _service_debug(
-                    f"transfer rejected channel={channel_id} "
-                    f"reason=actor-does-not-own-claim actor={actor_id} claimed_by={existing_claimed_by}"
-                )
-                return False
+        decision = await authorize_ticket_action(
+            channel_id=channel_id,
+            actor=actor,
+            action="transfer",
+            system_action=actor is None,
+            row=row,
+        )
+        if not decision.allowed:
+            return False
 
         if existing_claimed_by == target_staff_id and _ticket_status(row) == "claimed":
             _service_debug(
@@ -2747,6 +2890,12 @@ async def transfer_ticket(
             except Exception as e:
                 print(f"⚠️ Failed logging ticket_transferred for {channel_id}: {repr(e)}")
 
+            await _sync_claimant_permissions_by_channel_id(
+                channel_id,
+                row=ticket_row,
+                previous_claimed_by=existing_claimed_by,
+                closed=False,
+            )
             _service_debug(
                 f"transfer success channel={channel_id} "
                 f"from={existing_claimed_by} to={target_staff_id}"
@@ -2771,6 +2920,15 @@ async def set_ticket_priority(
 
     async with lock:
         row_before = await _ticket_row_for_channel_id(channel_id)
+        decision = await authorize_ticket_action(
+            channel_id=channel_id,
+            actor=actor,
+            action="priority",
+            system_action=actor is None,
+            row=row_before,
+        )
+        if not decision.allowed:
+            return False
         if row_before and _ticket_status(row_before) == "deleted":
             _service_debug(f"set-priority rejected channel={channel_id} reason=deleted")
             return False
@@ -2823,6 +2981,14 @@ async def add_internal_note(
 
     async with lock:
         row_before = await _ticket_row_for_channel_id(channel_id)
+        decision = await authorize_ticket_action(
+            channel_id=channel_id,
+            actor=author,
+            action="note",
+            row=row_before,
+        )
+        if not decision.allowed:
+            return False
         if row_before and _ticket_status(row_before) == "deleted":
             _service_debug(f"note rejected channel={channel_id} reason=deleted")
             return False
@@ -2935,6 +3101,16 @@ async def reopen_ticket(
         row_before = await _ticket_row_for_channel_id(channel_id)
         status_before = _ticket_status(row_before)
 
+        decision = await authorize_ticket_action(
+            channel_id=channel_id,
+            actor=actor,
+            action="reopen",
+            system_action=actor is None,
+            row=row_before,
+        )
+        if not decision.allowed:
+            return False
+
         if status_before == "deleted":
             _service_debug(f"reopen rejected channel={channel_id} reason=deleted")
             return False
@@ -2994,6 +3170,16 @@ async def reopen_ticket_channel(
     async with lock:
         row_before = await _ticket_row_for_channel_id(channel.id)
         status_before = _ticket_status(row_before)
+
+        decision = await authorize_ticket_action(
+            channel_id=channel.id,
+            actor=actor,
+            action="reopen",
+            system_action=actor is None,
+            row=row_before,
+        )
+        if not decision.allowed:
+            return False
 
         if status_before == "deleted":
             _service_debug(f"reopen-channel rejected channel={channel.id} reason=deleted")
@@ -3100,6 +3286,7 @@ async def reopen_ticket_channel(
 
 
 __all__ = [
+    "authorize_ticket_action",
     "find_open_ticket_for_owner",
     "create_ticket_channel",
     "sync_existing_ticket_channel",

@@ -7,7 +7,12 @@ from typing import Dict, Optional, Set
 
 import discord
 
-from .globals import TICKET_CATEGORY_ID, TRANSCRIPTS_CHANNEL_ID
+from .globals import STAFF_ROLE_ID, TICKET_CATEGORY_ID, TRANSCRIPTS_CHANNEL_ID
+from .tickets_new.claim_policy import (
+    evaluate_ticket_action,
+    is_staff_member as claim_policy_is_staff_member,
+    ticket_owner_id as claim_policy_ticket_owner_id,
+)
 from .tickets_new.service import (
     mark_ticket_closed,
     reopen_ticket_channel,
@@ -590,6 +595,12 @@ async def _handle_channel_delete(channel: discord.abc.GuildChannel) -> None:
     lock = _channel_lock(channel.id)
     async with lock:
         try:
+            row_before = await _find_ticket_row_by_channel_id(channel.id)
+            print(
+                f"🚨 ticket_claim_policy external channel deletion detected "
+                f"guild={channel.guild.id} channel={channel.id} "
+                f"status={_row_status(row_before)}; Discord-native deletion cannot be prevented"
+            )
             ok = await _mark_deleted_after_external_channel_delete(channel)
             if ok:
                 _debug(f"delete -> channel={channel.id} name='{channel.name}'")
@@ -656,45 +667,30 @@ async def _handle_channel_update(
         try:
             _cancel_pending_sync(after.id)
 
-            if not was_closed and is_closed:
+            row = await _find_ticket_row_by_channel_id(after.id)
+            db_status = _row_status(row)
+
+            unauthorized_close_rename = not was_closed and is_closed and db_status != "closed"
+            unauthorized_reopen_rename = was_closed and is_open and db_status == "closed"
+
+            if unauthorized_close_rename or unauthorized_reopen_rename:
                 _remember_self_mutation(after.id)
-                ok = await mark_ticket_closed(
-                    channel=after,
-                    closed_by=None,
-                    reason="Channel updated to closed state",
-                )
-                if ok:
-                    try:
-                        await _update_channel_name_cache(after)
-                    except Exception:
-                        pass
-                    _debug(f"close-detect -> channel={after.id} name='{after.name}'")
-                    return
-
-                _debug(
-                    f"close-detect write-failed -> channel={after.id} name='{after.name}'"
-                )
-
-            if was_closed and is_open:
-                _remember_self_mutation(after.id)
-                ok = await reopen_ticket_channel(
-                    channel=after,
-                    owner=None,
-                    staff_role_ids=None,
-                    actor=None,
-                    reason="Channel updated to open state",
-                )
-                if ok:
-                    try:
-                        await _update_channel_name_cache(after)
-                    except Exception:
-                        pass
-                    _debug(f"reopen-detect -> channel={after.id} name='{after.name}'")
-                    return
-
-                _debug(
-                    f"reopen-detect write-failed -> channel={after.id} name='{after.name}'"
-                )
+                try:
+                    await after.edit(
+                        name=str(before.name or after.name),
+                        reason="Claim-first ticket policy: lifecycle changes must use Dank Shield controls",
+                    )
+                    print(
+                        f"🚨 ticket_claim_policy lifecycle-bypass reverted guild={after.guild.id} "
+                        f"channel={after.id} before={before.name!r} attempted={after.name!r} "
+                        f"db_status={db_status}"
+                    )
+                except Exception as exc:
+                    print(
+                        f"❌ ticket_claim_policy lifecycle-bypass revert failed guild={after.guild.id} "
+                        f"channel={after.id} db_status={db_status} error={exc!r}"
+                    )
+                return
 
         except Exception as e:
             print(
@@ -760,6 +756,65 @@ async def _handle_message_activity(
     )
 
 
+async def _enforce_claim_first_staff_message(message: discord.Message) -> bool:
+    channel = message.channel
+    author = message.author
+    if not isinstance(channel, discord.TextChannel) or not isinstance(author, discord.Member):
+        return True
+
+    try:
+        row = await _find_ticket_row_by_channel_id(channel.id)
+    except Exception:
+        row = None
+    if not isinstance(row, dict):
+        return True
+
+    owner_id = claim_policy_ticket_owner_id(row)
+    if owner_id > 0 and int(author.id) == owner_id:
+        return True
+
+    staff_ids = tuple(
+        role_id for role_id in (_safe_int(STAFF_ROLE_ID, 0),) if role_id > 0
+    )
+    if not claim_policy_is_staff_member(author, staff_role_ids=staff_ids):
+        return True
+
+    decision = evaluate_ticket_action(
+        row,
+        actor_id=author.id,
+        action="message",
+    )
+    if decision.allowed:
+        return True
+
+    try:
+        await message.delete(
+            reason=f"Claim-first ticket policy: {decision.code}"
+        )
+    except Exception as exc:
+        print(
+            f"⚠️ ticket_claim_policy could not delete unauthorized staff message "
+            f"guild={channel.guild.id} channel={channel.id} actor={author.id} "
+            f"code={decision.code} error={type(exc).__name__}"
+        )
+
+    try:
+        await channel.send(
+            f"🔒 {author.mention}, {decision.message}",
+            delete_after=12,
+            allowed_mentions=discord.AllowedMentions(users=[author], roles=False, everyone=False),
+        )
+    except Exception:
+        pass
+
+    print(
+        f"🚨 ticket_claim_policy blocked staff message guild={channel.guild.id} "
+        f"channel={channel.id} actor={author.id} owner={decision.owner_id} "
+        f"claimed_by={decision.claimed_by_id} code={decision.code}"
+    )
+    return False
+
+
 async def _handle_message(message: discord.Message) -> None:
     try:
         if message.guild is None:
@@ -769,6 +824,9 @@ async def _handle_message(message: discord.Message) -> None:
         if getattr(message.author, "bot", False):
             return
     except Exception:
+        return
+
+    if not await _enforce_claim_first_staff_message(message):
         return
 
     await _handle_message_activity(
@@ -788,6 +846,9 @@ async def _handle_message_edit(before: discord.Message, after: discord.Message) 
         if str(before.content or "") == str(after.content or "") and before.attachments == after.attachments:
             return
     except Exception:
+        return
+
+    if not await _enforce_claim_first_staff_message(after):
         return
 
     await _handle_message_activity(
