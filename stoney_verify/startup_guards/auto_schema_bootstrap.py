@@ -11,8 +11,10 @@ is provided through one of these environment variables:
 - POSTGRES_URL
 - POSTGRES_PRISMA_URL
 
-The SQL is intentionally idempotent. It only creates missing tables/columns and
-never drops user data.
+The base SQL is intentionally idempotent. Durable feature behavior that already
+has a committed Supabase migration is executed from that migration file instead
+of being duplicated here. This keeps production migration and bootstrap
+semantics identical.
 """
 
 import asyncio
@@ -24,6 +26,11 @@ import discord
 
 _HAS_RUN = False
 _TASK: Optional[asyncio.Task] = None
+
+_BOOTSTRAP_MIGRATIONS = (
+    "20260711_member_activity_truth_ledger.sql",
+    "20260731141000_ticket_counter_durability.sql",
+)
 
 
 def _log(message: str) -> None:
@@ -56,57 +63,6 @@ def _db_url() -> str:
 
 
 SCHEMA_SQL = r"""
-create table if not exists public.ticket_counters (
-    guild_id text primary key,
-    last_ticket_number integer not null default 0,
-    updated_at timestamptz not null default now()
-);
-
-create or replace function public.reserve_ticket_number(p_guild_id text)
-returns integer
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-    v_next integer;
-begin
-    if p_guild_id is null or btrim(p_guild_id) = '' then
-        raise exception 'guild_id is required';
-    end if;
-
-    insert into public.ticket_counters (guild_id, last_ticket_number, updated_at)
-    values (
-        p_guild_id,
-        coalesce((
-            select max(ticket_number)
-            from public.tickets
-            where guild_id = p_guild_id
-              and ticket_number is not null
-        ), 0),
-        now()
-    )
-    on conflict (guild_id) do update
-        set last_ticket_number = greatest(
-                public.ticket_counters.last_ticket_number,
-                excluded.last_ticket_number
-            ),
-            updated_at = now();
-
-    update public.ticket_counters
-       set last_ticket_number = last_ticket_number + 1,
-           updated_at = now()
-     where guild_id = p_guild_id
-     returning last_ticket_number into v_next;
-
-    return v_next;
-end;
-$$;
-
-create index if not exists idx_tickets_guild_ticket_number_desc
-    on public.tickets (guild_id, ticket_number desc)
-    where ticket_number is not null;
-
 create table if not exists public.ticket_categories (
     id uuid primary key default gen_random_uuid(),
     guild_id text not null,
@@ -384,16 +340,16 @@ def _execute_schema_sql_sync(url: str) -> None:
     except Exception as e:
         raise RuntimeError("psycopg is not installed. Install requirements.txt after this update.") from e
 
+    migrations_dir = Path(__file__).resolve().parents[2] / "supabase" / "migrations"
+
     with psycopg.connect(url, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(SCHEMA_SQL)
 
-            migration = (
-                Path(__file__).resolve().parents[2]
-                / "supabase/migrations/20260711_member_activity_truth_ledger.sql"
-            )
-
-            if migration.exists():
+            for migration_name in _BOOTSTRAP_MIGRATIONS:
+                migration = migrations_dir / migration_name
+                if not migration.exists():
+                    raise RuntimeError(f"Required bootstrap migration is missing: {migration_name}")
                 cur.execute(migration.read_text(encoding="utf-8"))
 
 
@@ -417,7 +373,7 @@ async def ensure_schema_once() -> bool:
 
     try:
         await asyncio.to_thread(_execute_schema_sql_sync, url)
-        _log("required tables/columns verified")
+        _log("required tables/columns and committed bootstrap migrations verified")
         return True
     except Exception as e:
         _warn(f"schema bootstrap failed: {type(e).__name__}: {e}")
