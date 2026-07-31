@@ -19,7 +19,8 @@ import it. The result is intentionally simple:
 - Legacy persistent controls, top-level commands, dashboard API mutations, and
   dashboard command queues receive central claim-first wrappers.
 - Actorless ticket mutations require a named internal system scope; only the
-  automation worker and departed-member cleanup receive those scopes.
+  automation worker, departed-member cleanup, and verification expiry timers
+  receive those scopes.
 - Startup fails closed if any critical ticket security patch is missing.
 
 No hardcoded guild IDs or role IDs live here. The resolver decides whether env
@@ -220,7 +221,9 @@ def _patch_staff_helpers() -> None:
         print(f"❌ public_staff_scope could not patch ticket permission staff scope: {repr(e)}")
 
     try:
+        from . import kick_timers as modern_ticket_timers
         from . import ticket_admin
+        from .. import timers as legacy_ticket_timers
         from .. import transcripts as ticket_transcript_views
         from ..tickets_new import departed_member_cleanup_service
         from ..tickets_new import service as ticket_service
@@ -237,6 +240,8 @@ def _patch_staff_helpers() -> None:
             automation_worker=ticket_automation_worker,
             departed_cleanup=departed_member_cleanup_service,
             ticket_admin=ticket_admin,
+            legacy_timer_module=legacy_ticket_timers,
+            modern_timer_module=modern_ticket_timers,
         )
         installed["ticket_explicit_system_runtime"] = True
     except Exception as e:
