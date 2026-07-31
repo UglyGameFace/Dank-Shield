@@ -12,9 +12,9 @@ is provided through one of these environment variables:
 - POSTGRES_PRISMA_URL
 
 The base SQL is intentionally idempotent. Durable feature behavior that already
-has a committed Supabase migration is executed from that migration file instead
+has committed Supabase migrations is executed from those migration files instead
 of being duplicated here. This keeps production migration and bootstrap
-semantics identical.
+semantics identical, including future ticket-counter upgrades.
 """
 
 import asyncio
@@ -27,9 +27,11 @@ import discord
 _HAS_RUN = False
 _TASK: Optional[asyncio.Task] = None
 
-_BOOTSTRAP_MIGRATIONS = (
+_BOOTSTRAP_MIGRATION_FILES = (
     "20260711_member_activity_truth_ledger.sql",
-    "20260731141000_ticket_counter_durability.sql",
+)
+_BOOTSTRAP_MIGRATION_PATTERNS = (
+    "*ticket_counter*.sql",
 )
 
 
@@ -334,6 +336,31 @@ end $$;
 """
 
 
+def _required_bootstrap_migrations(migrations_dir: Path) -> list[Path]:
+    migration_paths: list[Path] = []
+
+    for migration_name in _BOOTSTRAP_MIGRATION_FILES:
+        migration = migrations_dir / migration_name
+        if not migration.exists():
+            raise RuntimeError(f"Required bootstrap migration is missing: {migration_name}")
+        migration_paths.append(migration)
+
+    for pattern in _BOOTSTRAP_MIGRATION_PATTERNS:
+        matches = sorted(migrations_dir.glob(pattern))
+        if not matches:
+            raise RuntimeError(f"Required bootstrap migration pattern matched nothing: {pattern}")
+        migration_paths.extend(matches)
+
+    deduplicated: list[Path] = []
+    seen: set[Path] = set()
+    for migration in migration_paths:
+        if migration in seen:
+            continue
+        seen.add(migration)
+        deduplicated.append(migration)
+    return deduplicated
+
+
 def _execute_schema_sql_sync(url: str) -> None:
     try:
         import psycopg
@@ -346,10 +373,7 @@ def _execute_schema_sql_sync(url: str) -> None:
         with conn.cursor() as cur:
             cur.execute(SCHEMA_SQL)
 
-            for migration_name in _BOOTSTRAP_MIGRATIONS:
-                migration = migrations_dir / migration_name
-                if not migration.exists():
-                    raise RuntimeError(f"Required bootstrap migration is missing: {migration_name}")
+            for migration in _required_bootstrap_migrations(migrations_dir):
                 cur.execute(migration.read_text(encoding="utf-8"))
 
 
