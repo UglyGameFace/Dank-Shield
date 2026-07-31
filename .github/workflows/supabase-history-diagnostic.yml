@@ -66,31 +66,55 @@ jobs:
         shell: bash
         run: supabase db dump --linked --schema public --file /tmp/public-schema.sql
 
+      - name: Show relevant schema definitions
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== RELEVANT SCHEMA LINES ==="
+          grep -Eni 'guild_configs|member_activity_notices|ticket_automation_settings|ticket_automation_state' /tmp/public-schema.sql \
+            | head -n 250 || true
+
       - name: Verify legacy schema objects
         shell: bash
         run: |
           set -euo pipefail
+          missing=0
           echo "=== REQUIRED LEGACY TABLES ==="
           for table in guild_configs member_activity_notices ticket_automation_settings ticket_automation_state; do
-            if grep -Eqi "CREATE TABLE (IF NOT EXISTS )?(public\.)?${table}[ (]" /tmp/public-schema.sql; then
+            if grep -Eqi "CREATE TABLE .*\"?${table}\"?[[:space:]]*\(" /tmp/public-schema.sql; then
               echo "PRESENT table=${table}"
             else
               echo "MISSING table=${table}"
+              missing=1
             fi
           done
 
           echo "=== GUILD CONFIG KEY COLUMNS ==="
-          guild_block="$(awk '/CREATE TABLE (IF NOT EXISTS )?(public\.)?guild_configs[ (]/,/;/' /tmp/public-schema.sql)"
+          guild_block="$(awk '
+            /CREATE TABLE .*"?guild_configs"?[[:space:]]*\(/ {capture=1}
+            capture {print}
+            capture && /^\);/ {exit}
+          ' /tmp/public-schema.sql)"
           for column in guild_id settings metadata ticket_category_id staff_role_id updated_at; do
-            if grep -Eqi "^[[:space:]]*${column}[[:space:]]" <<<"$guild_block"; then
+            if grep -Eqi "^[[:space:]]*\"?${column}\"?[[:space:]]" <<<"$guild_block"; then
               echo "PRESENT guild_configs.${column}"
             else
               echo "MISSING guild_configs.${column}"
+              missing=1
             fi
           done
+
+          if [ "$missing" -ne 0 ]; then
+            echo "::error title=Schema verification failed::At least one legacy object expected from the stale history records is absent."
+          fi
+          echo "schema_missing=$missing" >> "$GITHUB_ENV"
 
       - name: Stop before database changes
         shell: bash
         run: |
-          echo "::error title=Read-only diagnostic complete::This intentional stop exposes the logs. No migration-history or schema writes were performed."
+          if [ "${schema_missing:-1}" = "0" ]; then
+            echo "::error title=Read-only diagnostic complete::All expected legacy schema objects are present. No migration-history or schema writes were performed."
+          else
+            echo "::error title=Read-only diagnostic complete::Legacy schema objects are missing or could not be verified. No migration-history or schema writes were performed."
+          fi
           exit 1
