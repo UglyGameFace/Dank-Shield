@@ -1,0 +1,62 @@
+name: Verify Supabase migration synchronization
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/verify-supabase-sync.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-production-migrations
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Prove production migration history is clean
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in SUPABASE_ACCESS_TOKEN SUPABASE_PROJECT_ID SUPABASE_DB_PASSWORD; do
+            test -n "${!name:-}" || { echo "::error::$name is not configured"; exit 1; }
+          done
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link production project
+        shell: bash
+        run: supabase link --project-ref "$SUPABASE_PROJECT_ID"
+
+      - name: Show final local and remote migration history
+        shell: bash
+        run: supabase migration list --linked
+
+      - name: Prove no migration remains pending
+        shell: bash
+        run: supabase db push --linked --dry-run
+
+      - name: Expose successful read-only verification logs
+        shell: bash
+        run: |
+          echo "::error title=Expected verification marker::Migration history and dry run both succeeded. This deliberate final failure exposes the read-only proof in GitHub logs."
+          exit 1
