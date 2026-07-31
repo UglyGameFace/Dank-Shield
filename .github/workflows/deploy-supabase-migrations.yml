@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: Push pending migrations
+    name: Diagnose pending migrations
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production
@@ -44,6 +44,17 @@ jobs:
           done
           exit "$missing"
 
+      - name: List local migrations and duplicate versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== LOCAL MIGRATION FILES ==="
+          find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort
+          echo "=== DUPLICATE VERSION PREFIXES ==="
+          find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' \
+            | awk -F_ '{count[$1]++; files[$1]=files[$1] " " $0} END {for (v in count) if (count[v] > 1) print v ":" files[v]}' \
+            | sort
+
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v1
         with:
@@ -57,10 +68,33 @@ jobs:
         shell: bash
         run: supabase migration list
 
-      - name: Preview pending migrations
+      - name: Dump public schema without data
         shell: bash
-        run: supabase db push --dry-run
+        run: supabase db dump --linked --schema public --file /tmp/public-schema.sql
 
-      - name: Apply pending migrations
+      - name: Verify legacy schema objects
         shell: bash
-        run: supabase db push
+        run: |
+          set -euo pipefail
+          echo "=== REQUIRED LEGACY TABLES ==="
+          for table in guild_configs member_activity_notices ticket_automation_settings ticket_automation_state; do
+            if grep -Eq "CREATE TABLE (IF NOT EXISTS )?(public\.)?${table}[ (]" /tmp/public-schema.sql; then
+              echo "PRESENT table=${table}"
+            else
+              echo "MISSING table=${table}"
+            fi
+          done
+          echo "=== GUILD CONFIG KEY COLUMNS ==="
+          for column in guild_id settings metadata ticket_category_id staff_role_id updated_at; do
+            if awk '/CREATE TABLE (public\.)?guild_configs/,/;/' /tmp/public-schema.sql | grep -Eq "^[[:space:]]*${column}[[:space:]]"; then
+              echo "PRESENT guild_configs.${column}"
+            else
+              echo "MISSING guild_configs.${column}"
+            fi
+          done
+
+      - name: Stop before database changes
+        shell: bash
+        run: |
+          echo "::error title=Read-only diagnostic complete::No migration history or schema changes were made."
+          exit 1
