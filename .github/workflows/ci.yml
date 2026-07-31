@@ -104,6 +104,52 @@ jobs:
       - name: Audit event boundary ownership
         run: python tools/audit_event_boundary.py
 
+  ticket-claim-security:
+    name: Claim-first ticket security
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+
+      - name: Compile claim-first security modules
+        run: |
+          python -m py_compile \
+            stoney_verify/tickets_new/claim_policy.py \
+            stoney_verify/tickets_new/claim_runtime_guard.py \
+            stoney_verify/tickets_new/ticket_admin_claim_guard.py \
+            stoney_verify/tickets_new/api_claim_runtime_guard.py \
+            stoney_verify/tickets_new/command_queue_claim_guard.py \
+            stoney_verify/tickets_new/explicit_system_action_guard.py \
+            stoney_verify/commands_ext/public_staff_scope.py
+
+      - name: Run focused claim-first regression suite
+        run: |
+          python -m pytest -q --tb=short --disable-warnings \
+            tests/test_ticket_claim_first_policy.py \
+            tests/test_ticket_staff_scope_runtime.py \
+            tests/test_ticket_claim_runtime_guard.py \
+            tests/test_ticket_admin_claim_guard.py \
+            tests/test_ticket_api_claim_guard.py \
+            tests/test_ticket_command_queue_claim_guard.py \
+            tests/test_ticket_explicit_system_action_guard.py
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+
   managed-category-sql:
     name: Managed category SQL smoke test
     runs-on: ubuntu-latest

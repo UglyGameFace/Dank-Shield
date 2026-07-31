@@ -22,6 +22,31 @@ except Exception:
         return None
 
 
+# Ticket security is intentionally loaded outside the tolerant command-module
+# registrar. The general registrar may log and continue when an optional command
+# module fails; this security scope is mandatory and must abort startup instead.
+try:
+    from .commands_ext.public_staff_scope import (
+        register_public_staff_scope as register_public_ticket_security_scope,
+    )
+except Exception as e:
+    print(f"❌ commands.py could not import mandatory ticket security scope: {repr(e)}")
+    raise RuntimeError("Dank Shield ticket security bootstrap failed closed during import.") from e
+
+
+def _register_public_ticket_security_scope_strict(tree: Any) -> None:
+    try:
+        register_public_ticket_security_scope(bot, tree)
+    except Exception as e:
+        try:
+            print(f"❌ commands.py mandatory ticket security bootstrap failed: {repr(e)}")
+        except Exception:
+            pass
+        raise RuntimeError(
+            "Dank Shield ticket security bootstrap failed closed; command and API startup were aborted."
+        ) from e
+
+
 # Welcome cards use an explicit canonical registration path. This is deliberately
 # outside startup_guards and never removes/replaces an existing command.
 try:
@@ -110,6 +135,8 @@ except Exception as e:
 # ============================================================
 # Register split slash commands
 # ============================================================
+_register_public_ticket_security_scope_strict(bot.tree)
+
 try:
     register_all_commands(bot, bot.tree)
     register_public_welcome_card_studio_commands(bot, bot.tree)
@@ -156,6 +183,8 @@ except Exception as e:
 # Hook for app.py probing
 # ============================================================
 def register_extra_commands(tree) -> None:
+    _register_public_ticket_security_scope_strict(tree)
+
     try:
         register_all_commands(bot, tree)
         register_public_welcome_card_studio_commands(bot, tree)

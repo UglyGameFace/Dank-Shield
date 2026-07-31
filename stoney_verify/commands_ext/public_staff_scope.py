@@ -14,9 +14,18 @@ import it. The result is intentionally simple:
 - Configured staff role from guild_configs counts as staff for that guild only.
 - VC staff role also counts when configured.
 - Unconfigured guilds do NOT use beta env role IDs; only admins can run setup.
+- Synchronous permission checks read the real guild-config memory cache and
+  never block Discord's event loop on a database request.
+- Ticket panel and transcript controls use the same per-guild staff truth.
+- Ticket channel permission synchronization targets configured guild roles.
+- Legacy persistent controls, top-level commands, dashboard API mutations, and
+  dashboard command queues receive central claim-first wrappers.
+- Actorless ticket mutations require a named internal system scope; only the
+  automation worker, departed-member cleanup, and verification expiry timers
+  receive those scopes.
+- Startup fails closed if any critical ticket security patch is missing.
 
-No hardcoded guild IDs or role IDs live here. The resolver decides whether env
-fallback is allowed for a guild.
+No hardcoded guild IDs or role IDs live here.
 """
 
 from typing import Any
@@ -36,6 +45,52 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
+def _config_value(config: Any, key: str) -> Any:
+    try:
+        if isinstance(config, dict):
+            return config.get(key)
+        getter = getattr(config, "get", None)
+        if callable(getter):
+            value = getter(key)
+            if value is not None:
+                return value
+        return getattr(config, key, None)
+    except Exception:
+        return None
+
+
+def _cached_runtime_config(guild_id: int) -> Any:
+    """Return cached config without performing synchronous network I/O.
+
+    The authoritative async resolver warms ``guild_config._CONFIG_CACHE``.
+    Security-sensitive synchronous checks may use the most recent cached row.
+    On a cold isolated public-server cache, return an empty config so access
+    fails safely to administrator-only instead of inheriting another guild's
+    deployment environment IDs.
+    """
+    gid = _safe_int(guild_id, 0)
+    if gid <= 0:
+        return {}
+
+    try:
+        from .. import guild_config as guild_config_module
+
+        cache = getattr(guild_config_module, "_CONFIG_CACHE", {})
+        if isinstance(cache, dict):
+            cached = cache.get(str(gid))
+            if cached:
+                return cached
+
+        allow_env = getattr(guild_config_module, "_allow_env_fallback_for_guild", None)
+        fallback = getattr(guild_config_module, "env_fallback_guild_config", None)
+        if callable(allow_env) and callable(fallback) and bool(allow_env(gid)):
+            return fallback(gid)
+    except Exception:
+        pass
+
+    return {}
+
+
 def _member_role_ids(member: discord.Member) -> set[int]:
     ids: set[int] = set()
     try:
@@ -48,20 +103,25 @@ def _member_role_ids(member: discord.Member) -> set[int]:
     return ids
 
 
-def _configured_staff_role_ids(member: discord.Member) -> set[int]:
-    try:
-        from ..guild_config import get_cached_guild_config
+def configured_ticket_staff_role_ids(guild_id: int) -> list[int]:
+    """Return only staff roles configured for this Discord guild."""
+    config = _cached_runtime_config(_safe_int(guild_id, 0))
 
-        guild_id = _safe_int(getattr(getattr(member, "guild", None), "id", 0), 0)
-        cfg = get_cached_guild_config(guild_id)
-        ids = {
-            _safe_int(getattr(cfg, "staff_role_id", 0), 0),
-            _safe_int(getattr(cfg, "vc_staff_role_id", 0), 0),
-            _safe_int(getattr(cfg, "effective_vc_staff_role_id", 0), 0),
-        }
-        return {rid for rid in ids if rid > 0}
-    except Exception:
-        return set()
+    ids: list[int] = []
+    for key in (
+        "staff_role_id",
+        "vc_staff_role_id",
+        "effective_vc_staff_role_id",
+    ):
+        role_id = _safe_int(_config_value(config, key), 0)
+        if role_id > 0 and role_id not in ids:
+            ids.append(role_id)
+    return ids
+
+
+def _configured_staff_role_ids(member: discord.Member) -> set[int]:
+    guild_id = _safe_int(getattr(getattr(member, "guild", None), "id", 0), 0)
+    return set(configured_ticket_staff_role_ids(guild_id))
 
 
 def scoped_is_staff(member: discord.Member) -> bool:
@@ -86,41 +146,155 @@ def _patch_staff_helpers() -> None:
     if _PATCHED:
         return
 
-    patched_any = False
+    installed = {
+        "globals": False,
+        "common": False,
+        "ticket_panel": False,
+        "ticket_transcripts": False,
+        "ticket_permissions": False,
+        "ticket_claim_runtime": False,
+        "ticket_admin_claim_runtime": False,
+        "ticket_api_claim_runtime": False,
+        "ticket_tasks_queue_claim_runtime": False,
+        "ticket_bot_worker_claim_runtime": False,
+        "ticket_explicit_system_runtime": False,
+    }
 
     try:
         from .. import globals as g
 
         g.is_staff = scoped_is_staff  # type: ignore[assignment]
-        patched_any = True
+        installed["globals"] = True
     except Exception as e:
-        try:
-            print(f"⚠️ public_staff_scope could not patch globals.is_staff: {repr(e)}")
-        except Exception:
-            pass
+        print(f"❌ public_staff_scope could not patch globals.is_staff: {repr(e)}")
 
     try:
         from . import common
 
         common._staff_check = lambda interaction: scoped_is_staff(getattr(interaction, "user", None))  # type: ignore[assignment]
-        patched_any = True
+        installed["common"] = True
     except Exception as e:
-        try:
-            print(f"⚠️ public_staff_scope could not patch common._staff_check: {repr(e)}")
-        except Exception:
-            pass
+        print(f"❌ public_staff_scope could not patch common._staff_check: {repr(e)}")
 
-    _PATCHED = bool(patched_any)
-    if _PATCHED:
+    try:
+        from ..tickets_new import panel as ticket_panel
+
+        ticket_panel._is_staff_member = scoped_is_staff  # type: ignore[assignment]
+        installed["ticket_panel"] = True
+    except Exception as e:
+        print(f"❌ public_staff_scope could not patch ticket panel staff scope: {repr(e)}")
+
+    ticket_transcripts = None
+    try:
+        from .. import transcripts as loaded_ticket_transcripts
+
+        ticket_transcripts = loaded_ticket_transcripts
+        ticket_transcripts._is_staff_member = scoped_is_staff  # type: ignore[assignment]
+        installed["ticket_transcripts"] = True
+    except Exception as e:
+        print(f"❌ public_staff_scope could not patch transcript staff scope: {repr(e)}")
+
+    if ticket_transcripts is not None:
         try:
-            print("✅ public_staff_scope: per-guild staff permission isolation active")
-        except Exception:
-            pass
+            from ..tickets_new.claim_runtime_guard import install_transcript_claim_runtime_guards
+
+            install_transcript_claim_runtime_guards(ticket_transcripts)
+            installed["ticket_claim_runtime"] = True
+        except Exception as e:
+            print(f"❌ public_staff_scope could not install claim runtime guards: {repr(e)}")
+
+        try:
+            from . import ticket_admin
+            from ..tickets_new.ticket_admin_claim_guard import install_ticket_admin_claim_guard
+
+            install_ticket_admin_claim_guard(
+                ticket_admin,
+                ticket_transcripts=ticket_transcripts,
+            )
+            installed["ticket_admin_claim_runtime"] = True
+        except Exception as e:
+            print(f"❌ public_staff_scope could not install legacy ticket command guards: {repr(e)}")
+
+    try:
+        from ..api_new import server as ticket_api_server
+        from ..tickets_new.api_claim_runtime_guard import install_api_claim_runtime_guards
+
+        install_api_claim_runtime_guards(ticket_api_server)
+        installed["ticket_api_claim_runtime"] = True
+    except Exception as e:
+        print(f"❌ public_staff_scope could not install dashboard ticket claim guards: {repr(e)}")
+
+    try:
+        from ..tasks_new import command_queue as ticket_tasks_queue
+        from ..workers import bot_command_worker as ticket_bot_worker
+        from ..tickets_new.command_queue_claim_guard import (
+            install_bot_command_worker_claim_guard,
+            install_tasks_command_queue_claim_guard,
+        )
+
+        install_tasks_command_queue_claim_guard(ticket_tasks_queue)
+        installed["ticket_tasks_queue_claim_runtime"] = True
+
+        install_bot_command_worker_claim_guard(ticket_bot_worker)
+        installed["ticket_bot_worker_claim_runtime"] = True
+    except Exception as e:
+        print(f"❌ public_staff_scope could not install dashboard command queue guards: {repr(e)}")
+
+    try:
+        from ..tickets_new import service as ticket_service
+
+        ticket_service._default_staff_role_ids = configured_ticket_staff_role_ids  # type: ignore[assignment]
+        installed["ticket_permissions"] = True
+    except Exception as e:
+        print(f"❌ public_staff_scope could not patch ticket permission staff scope: {repr(e)}")
+
+    try:
+        from . import kick_timers as modern_ticket_timers
+        from . import ticket_admin
+        from .. import timers as legacy_ticket_timers
+        from .. import transcripts as ticket_transcript_views
+        from ..tickets_new import departed_member_cleanup_service
+        from ..tickets_new import service as ticket_service
+        from ..tickets_new import transcript_service
+        from ..tickets_new.explicit_system_action_guard import (
+            install_explicit_system_action_guards,
+        )
+        from ..workers import ticket_automation_worker
+
+        install_explicit_system_action_guards(
+            service_module=ticket_service,
+            transcript_service=transcript_service,
+            transcript_views=ticket_transcript_views,
+            automation_worker=ticket_automation_worker,
+            departed_cleanup=departed_member_cleanup_service,
+            ticket_admin=ticket_admin,
+            legacy_timer_module=legacy_ticket_timers,
+            modern_timer_module=modern_ticket_timers,
+        )
+        installed["ticket_explicit_system_runtime"] = True
+    except Exception as e:
+        print(f"❌ public_staff_scope could not install explicit system ticket guards: {repr(e)}")
+
+    missing = sorted(name for name, ok in installed.items() if not ok)
+    _PATCHED = not missing
+    if missing:
+        raise RuntimeError(
+            "Per-guild ticket security scope failed closed; missing patches: "
+            + ", ".join(missing)
+        )
+
+    print("✅ public_staff_scope: per-guild ticket security scope active")
 
 
 def register_public_staff_scope(bot, tree) -> None:
     _ = bot, tree
     _patch_staff_helpers()
+    if not _PATCHED:
+        raise RuntimeError("Per-guild ticket security scope is not active.")
 
 
-__all__ = ["register_public_staff_scope", "scoped_is_staff"]
+__all__ = [
+    "configured_ticket_staff_role_ids",
+    "register_public_staff_scope",
+    "scoped_is_staff",
+]

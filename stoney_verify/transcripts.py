@@ -20,6 +20,7 @@ from .verify_ui import (
 
 from .tickets_new.service import (
     attach_transcript_to_ticket,
+    authorize_ticket_action,
     mark_ticket_closed,
     mark_ticket_deleted,
     reopen_ticket_channel,
@@ -44,6 +45,16 @@ except Exception:
 
 async def _approve_verification_service(*args, **kwargs) -> Dict[str, Any]:
     try:
+        channel = kwargs.get("channel")
+        staff_member = kwargs.get("staff_member")
+        if isinstance(channel, discord.TextChannel):
+            decision = await authorize_ticket_action(
+                channel_id=channel.id,
+                actor=staff_member,
+                action="verification_review",
+            )
+            if not decision.allowed:
+                return {"ok": False, "message": decision.message}
         from .verification_new.service import approve_verification as _approve_verification
         return await _approve_verification(*args, **kwargs)
     except Exception as e:
@@ -55,6 +66,16 @@ async def _approve_verification_service(*args, **kwargs) -> Dict[str, Any]:
 
 async def _deny_verification_service(*args, **kwargs) -> Dict[str, Any]:
     try:
+        channel = kwargs.get("channel")
+        staff_member = kwargs.get("staff_member")
+        if isinstance(channel, discord.TextChannel):
+            decision = await authorize_ticket_action(
+                channel_id=channel.id,
+                actor=staff_member,
+                action="verification_review",
+            )
+            if not decision.allowed:
+                return {"ok": False, "message": decision.message}
         from .verification_new.service import deny_verification as _deny_verification
         return await _deny_verification(*args, **kwargs)
     except Exception as e:
@@ -1950,65 +1971,10 @@ class TicketOpenActionsView(discord.ui.View):
                 return await _reply_ephemeral(interaction, "❌ Ticket is already deleted.")
 
             if await _ticket_is_open_like(channel):
-                try:
-                    closed_ok = await mark_ticket_closed(
-                        channel=channel,
-                        closed_by=interaction.user,
-                        reason="Closed as part of staff delete from open controls",
-                    )
-                except Exception as e:
-                    print("⚠️ open-delete close step failed:", e)
-                    closed_ok = False
-
-                if not closed_ok:
-                    actually_closed = False
-                    try:
-                        actually_closed = await _ticket_is_closed(channel)
-                    except Exception:
-                        actually_closed = False
-
-                    if not actually_closed:
-                        return await _reply_ephemeral(
-                            interaction,
-                            "❌ Failed to move ticket into closed state before delete.",
-                        )
-
-                try:
-                    await _rename_channel_closed(channel)
-                except Exception:
-                    pass
-
-                try:
-                    owner = await _resolve_ticket_owner(channel)
-                    await _lock_ticket_for_owner(channel, owner)
-                except Exception:
-                    pass
-
-                try:
-                    await _move_ticket_to_archive_if_configured(channel)
-                except Exception:
-                    pass
-
-                try:
-                    await _freeze_message_controls(
-                        interaction.message,
-                        content_suffix=f"🗑️ Delete started by {interaction.user.mention}.",
-                    )
-                except Exception:
-                    pass
-
-                try:
-                    await _freeze_all_close_prompts(
-                        channel,
-                        suffix=f"🗑️ Delete started by {interaction.user.mention}.",
-                    )
-                except Exception:
-                    pass
-
-                try:
-                    await _post_staff_closed_message(channel, interaction.user)
-                except Exception:
-                    pass
+                return await _reply_ephemeral(
+                    interaction,
+                    "❌ Close the ticket first, then use Delete as a separate action.",
+                )
 
             is_ghost = await _detect_is_ghost_ticket(channel)
 

@@ -26,8 +26,12 @@ except Exception:
         return False
 
 try:
-    from .service import mark_ticket_closed as service_mark_ticket_closed
+    from .service import (
+        authorize_ticket_action,
+        mark_ticket_closed as service_mark_ticket_closed,
+    )
 except Exception:
+    authorize_ticket_action = None  # type: ignore
     service_mark_ticket_closed = None  # type: ignore
 
 
@@ -991,6 +995,28 @@ async def send_ticket_macro(
             return {
                 "ok": False,
                 "message": "Ticket row not found for this channel.",
+                "macro": macro,
+                "content": content,
+            }
+
+        if authorize_ticket_action is None:
+            return {
+                "ok": False,
+                "message": "Ticket authorization service is unavailable.",
+                "macro": macro,
+                "content": content,
+            }
+
+        decision = await authorize_ticket_action(
+            channel_id=channel.id,
+            actor=actor,
+            action="macro",
+            row=row,
+        )
+        if not decision.allowed:
+            return {
+                "ok": False,
+                "message": decision.message,
                 "macro": macro,
                 "content": content,
             }

@@ -21,6 +21,7 @@ from ..interaction_guard import run_guarded_interaction
 from .repository import get_ticket_by_any_channel_id
 from .service import (
     add_internal_note,
+    authorize_ticket_action,
     assign_ticket,
     create_ticket_channel,
     find_open_ticket_for_owner,
@@ -479,6 +480,36 @@ async def _run_ticket_panel_action(
     label: str,
 ) -> None:
     async def _runner() -> None:
+        channel = interaction.channel
+        member = _resolve_member(interaction)
+        if (
+            isinstance(channel, discord.TextChannel)
+            and isinstance(member, discord.Member)
+            and _is_staff_member(member)
+            and label != "claim ticket"
+        ):
+            row = await _ticket_row_for_channel(channel)
+            if isinstance(row, dict):
+                action_map = {
+                    "unclaim ticket": "unclaim",
+                    "transfer ticket": "transfer",
+                    "set priority": "priority",
+                    "add internal note": "note",
+                    "view internal notes": "view_notes",
+                    "list macros": "macro",
+                    "send macro": "macro",
+                    "close ticket": "close",
+                    "ticket info": "view_info",
+                }
+                decision = await authorize_ticket_action(
+                    channel_id=channel.id,
+                    actor=member,
+                    action=action_map.get(label, "interaction"),
+                    row=row,
+                )
+                if not decision.allowed:
+                    await _safe_followup(interaction, f"❌ {decision.message}")
+                    return
         await action()
 
     result = await run_guarded_interaction(
@@ -2559,6 +2590,16 @@ async def _action_close(interaction: discord.Interaction) -> None:
     row = await _ticket_row_for_channel(channel)
     if not _ticket_is_open_like(channel, row):
         return await _safe_followup(interaction, _open_panel_state_error(channel, row))
+
+    decision = await authorize_ticket_action(
+        channel_id=channel.id,
+        actor=member,
+        action="close",
+        allow_requester_cancel=True,
+        row=row,
+    )
+    if not decision.allowed:
+        return await _safe_followup(interaction, f"❌ {decision.message}")
 
     try:
         await prompt_ticket_close_confirmation(
