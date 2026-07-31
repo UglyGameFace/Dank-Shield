@@ -10,11 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_configured_ticket_staff_roles_support_object_and_dict_configs(monkeypatch) -> None:
-    from stoney_verify import guild_config
-
     monkeypatch.setattr(
-        guild_config,
-        "get_cached_guild_config",
+        public_staff_scope,
+        "_cached_runtime_config",
         lambda _guild_id: SimpleNamespace(
             staff_role_id="111",
             vc_staff_role_id=222,
@@ -24,8 +22,8 @@ def test_configured_ticket_staff_roles_support_object_and_dict_configs(monkeypat
     assert public_staff_scope.configured_ticket_staff_role_ids(1) == [111, 222]
 
     monkeypatch.setattr(
-        guild_config,
-        "get_cached_guild_config",
+        public_staff_scope,
+        "_cached_runtime_config",
         lambda _guild_id: {
             "staff_role_id": "333",
             "vc_staff_role_id": None,
@@ -33,6 +31,11 @@ def test_configured_ticket_staff_roles_support_object_and_dict_configs(monkeypat
         },
     )
     assert public_staff_scope.configured_ticket_staff_role_ids(2) == [333, 444]
+
+
+def test_cold_public_config_cache_fails_safe_to_no_staff_roles(monkeypatch) -> None:
+    monkeypatch.setattr(public_staff_scope, "_cached_runtime_config", lambda _guild_id: {})
+    assert public_staff_scope.configured_ticket_staff_role_ids(999) == []
 
 
 def test_ticket_ui_and_permission_sync_use_per_guild_staff_truth() -> None:
