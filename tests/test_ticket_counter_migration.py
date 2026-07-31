@@ -58,15 +58,17 @@ def test_runtime_allocator_uses_the_persistent_counter() -> None:
     assert "_db_max_ticket_number_sync" in allocator
 
 
-def test_bootstrap_executes_the_real_counter_migration_without_redefining_it() -> None:
+def test_bootstrap_executes_the_complete_counter_migration_chain() -> None:
     bootstrap = _text(BOOTSTRAP)
     schema_sql = bootstrap.split('SCHEMA_SQL = r"""', 1)[1].split('"""', 1)[0]
 
     assert "reserve_ticket_number" not in schema_sql
     assert "create table if not exists public.ticket_counters" not in schema_sql
-    assert '"20260731141000_ticket_counter_durability.sql"' in bootstrap
-    assert "for migration_name in _BOOTSTRAP_MIGRATIONS" in bootstrap
-    assert "Required bootstrap migration is missing" in bootstrap
+    assert "_BOOTSTRAP_MIGRATION_PATTERNS" in bootstrap
+    assert '"*ticket_counter*.sql"' in bootstrap
+    assert "sorted(migrations_dir.glob(pattern))" in bootstrap
+    assert "_required_bootstrap_migrations" in bootstrap
+    assert "Required bootstrap migration pattern matched nothing" in bootstrap
 
 
 def test_postgres_smoke_proves_legacy_218_continues_at_219() -> None:
@@ -75,6 +77,8 @@ def test_postgres_smoke_proves_legacy_218_continues_at_219() -> None:
     assert "('legacy-guild', 218)" in workflow
     assert "find supabase/migrations" in workflow
     assert "-name '*ticket_counter*.sql'" in workflow
+    assert "for pass in 1 2" in workflow
+    assert "Applying complete ticket-counter migration chain" in workflow
     assert "expected first reserved number 219" in workflow
     assert "expected second reserved number 220" in workflow
     assert "expected fresh guild number 1" in workflow
