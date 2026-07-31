@@ -7,6 +7,11 @@ from discord import app_commands
 
 from .common import _staff_check, reply_once
 from . import ticket_category_admin as legacy
+from ..tickets_new.managed_category_service import (
+    ManagedCategorySyncError,
+    summarize_sync,
+    sync_managed_categories,
+)
 
 
 ticket_category_group = app_commands.Group(
@@ -30,6 +35,36 @@ async def _guild_only(interaction: discord.Interaction) -> Optional[discord.Guil
     return guild
 
 
+def _is_managed_category(row: Dict[str, Any]) -> bool:
+    return bool(row.get("managed_by_dank")) or bool(legacy._safe_str(row.get("managed_category_key")))
+
+
+async def _block_managed_mutation(
+    interaction: discord.Interaction,
+    row: Dict[str, Any],
+    *,
+    action: str,
+) -> bool:
+    if not _is_managed_category(row):
+        return False
+
+    name = legacy._safe_str(row.get("name"), "This category")
+    key = legacy._safe_str(row.get("managed_category_key"), legacy._safe_str(row.get("slug"), "managed"))
+    await reply_once(
+        interaction,
+        {
+            "content": (
+                f"🔒 **{name}** is managed by the global Dank Shield catalog and cannot be {action} locally.\n\n"
+                f"Managed key: `{key}`\n"
+                "Global category improvements automatically reach every server. "
+                "Create a new category with `/ticket-category create` for server-specific routing; custom categories stay untouched."
+            ),
+            "ephemeral": True,
+        },
+    )
+    return True
+
+
 def _add_governance_warnings(embed: discord.Embed, rows: list[Dict[str, Any]]) -> discord.Embed:
     try:
         warnings = legacy._governance_warnings(rows)
@@ -45,12 +80,59 @@ def _add_governance_warnings(embed: discord.Embed, rows: list[Dict[str, Any]]) -
 
 
 @ticket_category_group.command(
+    name="sync",
+    description="Restore and update this server's global Dank Shield categories.",
+)
+async def category_sync(interaction: discord.Interaction):
+    if not await _staff_only(interaction):
+        return
+
+    guild = await _guild_only(interaction)
+    if guild is None:
+        return
+
+    try:
+        rows = await sync_managed_categories(guild.id)
+    except ManagedCategorySyncError as exc:
+        return await reply_once(
+            interaction,
+            {
+                "content": (
+                    "❌ Managed ticket categories could not be synchronized. Nothing was changed.\n"
+                    f"`{type(exc).__name__}: {str(exc)[:500]}`"
+                ),
+                "ephemeral": True,
+            },
+        )
+
+    summary = summarize_sync(rows)
+    categories = await legacy._fetch_categories(guild.id)
+    managed_count = sum(1 for row in categories if _is_managed_category(row))
+    custom_count = max(0, len(categories) - managed_count)
+
+    await reply_once(
+        interaction,
+        {
+            "content": (
+                "✅ **Ticket category catalog synchronized.**\n"
+                f"• Added missing managed categories: `{summary['inserted']}`\n"
+                f"• Updated managed categories: `{summary['updated']}`\n"
+                f"• Removed managed duplicates: `{summary['deleted_duplicates']}`\n"
+                f"• Current managed/custom total: `{managed_count}` / `{custom_count}`\n\n"
+                "Custom server categories were preserved."
+            ),
+            "ephemeral": True,
+        },
+    )
+
+
+@ticket_category_group.command(
     name="create",
-    description="Create a dashboard ticket category.",
+    description="Create a server-specific custom ticket category.",
 )
 @app_commands.describe(
     name="Display name for the category.",
-    slug="URL-style slug, like support or verification-issue.",
+    slug="URL-style slug, like billing-help or clan-application.",
     intake_type="Type used by routing logic.",
     description="Optional category description.",
     keywords="Comma-separated match keywords.",
@@ -101,7 +183,14 @@ async def category_create(
 
     existing = await legacy._fetch_category_by_slug(guild.id, slug_clean)
     if existing:
-        return await reply_once(interaction, {"content": f"❌ Category `{slug_clean}` already exists.", "ephemeral": True})
+        ownership = "managed" if _is_managed_category(existing) else "custom"
+        return await reply_once(
+            interaction,
+            {
+                "content": f"❌ Category `{slug_clean}` already exists and is `{ownership}`.",
+                "ephemeral": True,
+            },
+        )
 
     payload = {
         "guild_id": str(guild.id),
@@ -112,6 +201,9 @@ async def category_create(
         "match_keywords": legacy._normalize_keywords(legacy._safe_str(keywords)),
         "is_default": bool(is_default),
         "sort_order": sort_clean,
+        "managed_by_dank": False,
+        "managed_catalog_version": None,
+        "managed_category_key": None,
     }
 
     ok = await legacy._insert_category(payload)
@@ -122,7 +214,7 @@ async def category_create(
         await legacy._set_default(guild.id, slug_clean)
 
     created = await legacy._fetch_category_by_slug(guild.id, slug_clean) or payload
-    embed = legacy._category_embed("✅ Ticket Category Created", created)
+    embed = legacy._category_embed("✅ Custom Ticket Category Created", created)
     rows = await legacy._fetch_categories(guild.id)
     _add_governance_warnings(embed, rows)
     await reply_once(interaction, {"embed": embed, "ephemeral": True})
@@ -130,10 +222,10 @@ async def category_create(
 
 @ticket_category_group.command(
     name="edit",
-    description="Edit an existing dashboard ticket category.",
+    description="Edit an existing custom ticket category.",
 )
 @app_commands.describe(
-    slug="Existing category slug to edit.",
+    slug="Existing custom category slug to edit.",
     name="New display name.",
     intake_type="New intake type.",
     description="New description.",
@@ -162,6 +254,8 @@ async def category_edit(
     row = await legacy._fetch_category_by_slug(guild.id, slug_clean)
     if not row:
         return await reply_once(interaction, {"content": f"❌ Category `{slug_clean}` was not found.", "ephemeral": True})
+    if await _block_managed_mutation(interaction, row, action="edited"):
+        return
 
     patch: Dict[str, Any] = {}
 
@@ -219,7 +313,7 @@ async def category_edit(
             await legacy._set_default(guild.id, slug_clean)
 
     updated = await legacy._fetch_category_by_slug(guild.id, slug_clean) or {**row, **patch}
-    embed = legacy._category_embed("✅ Ticket Category Updated", updated)
+    embed = legacy._category_embed("✅ Custom Ticket Category Updated", updated)
     rows = await legacy._fetch_categories(guild.id)
     _add_governance_warnings(embed, rows)
     await reply_once(interaction, {"embed": embed, "ephemeral": True})
@@ -227,9 +321,9 @@ async def category_edit(
 
 @ticket_category_group.command(
     name="delete",
-    description="Delete a dashboard ticket category safely.",
+    description="Delete a custom ticket category safely.",
 )
-@app_commands.describe(slug="Category slug to delete.")
+@app_commands.describe(slug="Custom category slug to delete.")
 async def category_delete(interaction: discord.Interaction, slug: str):
     if not await _staff_only(interaction):
         return
@@ -242,6 +336,8 @@ async def category_delete(interaction: discord.Interaction, slug: str):
     row = await legacy._fetch_category_by_slug(guild.id, slug_clean)
     if not row:
         return await reply_once(interaction, {"content": f"❌ Category `{slug_clean}` was not found.", "ephemeral": True})
+    if await _block_managed_mutation(interaction, row, action="deleted"):
+        return
 
     rows_before = await legacy._fetch_categories(guild.id)
     if len(rows_before) <= 1:
@@ -289,15 +385,15 @@ async def category_delete(interaction: discord.Interaction, slug: str):
 
     await reply_once(
         interaction,
-        {"content": f"✅ Deleted ticket category `{slug_clean}`.{auto_msg}", "ephemeral": True},
+        {"content": f"✅ Deleted custom ticket category `{slug_clean}`.{auto_msg}", "ephemeral": True},
     )
 
 
 @ticket_category_group.command(
     name="set-default",
-    description="Set the default dashboard ticket category.",
+    description="Set a custom category as this server's local default.",
 )
-@app_commands.describe(slug="Category slug to make default.")
+@app_commands.describe(slug="Custom category slug to make default.")
 async def category_set_default(interaction: discord.Interaction, slug: str):
     if not await _staff_only(interaction):
         return
@@ -310,13 +406,15 @@ async def category_set_default(interaction: discord.Interaction, slug: str):
     row = await legacy._fetch_category_by_slug(guild.id, slug_clean)
     if not row:
         return await reply_once(interaction, {"content": f"❌ Category `{slug_clean}` was not found.", "ephemeral": True})
+    if await _block_managed_mutation(interaction, row, action="made the local default"):
+        return
 
     ok = await legacy._set_default(guild.id, slug_clean)
     if not ok:
         return await reply_once(interaction, {"content": "❌ Failed to set default category.", "ephemeral": True})
 
     updated = await legacy._fetch_category_by_slug(guild.id, slug_clean) or {**row, "is_default": True}
-    embed = legacy._category_embed("⭐ Default Ticket Category Updated", updated)
+    embed = legacy._category_embed("⭐ Custom Default Ticket Category Updated", updated)
     rows = await legacy._fetch_categories(guild.id)
     _add_governance_warnings(embed, rows)
     await reply_once(interaction, {"embed": embed, "ephemeral": True})
@@ -324,10 +422,10 @@ async def category_set_default(interaction: discord.Interaction, slug: str):
 
 @ticket_category_group.command(
     name="reorder",
-    description="Set sort order for a dashboard ticket category.",
+    description="Set sort order for a custom ticket category.",
 )
 @app_commands.describe(
-    slug="Category slug to reorder.",
+    slug="Custom category slug to reorder.",
     sort_order="Lower numbers appear first.",
 )
 async def category_reorder(interaction: discord.Interaction, slug: str, sort_order: int):
@@ -342,6 +440,8 @@ async def category_reorder(interaction: discord.Interaction, slug: str, sort_ord
     row = await legacy._fetch_category_by_slug(guild.id, slug_clean)
     if not row:
         return await reply_once(interaction, {"content": f"❌ Category `{slug_clean}` was not found.", "ephemeral": True})
+    if await _block_managed_mutation(interaction, row, action="reordered"):
+        return
 
     sort_clean = legacy._validated_sort_order(sort_order)
     if sort_clean is None:
@@ -358,16 +458,16 @@ async def category_reorder(interaction: discord.Interaction, slug: str, sort_ord
         return await reply_once(interaction, {"content": "❌ Failed to reorder ticket category.", "ephemeral": True})
 
     updated = await legacy._fetch_category_by_slug(guild.id, slug_clean) or {**row, "sort_order": sort_clean}
-    embed = legacy._category_embed("↕️ Ticket Category Reordered", updated)
+    embed = legacy._category_embed("↕️ Custom Ticket Category Reordered", updated)
     await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
 
 @ticket_category_group.command(
     name="keywords",
-    description="Replace the keyword list for a dashboard ticket category.",
+    description="Replace the keyword list for a custom ticket category.",
 )
 @app_commands.describe(
-    slug="Category slug to update.",
+    slug="Custom category slug to update.",
     keywords="Comma-separated keywords to use for routing.",
 )
 async def category_keywords(interaction: discord.Interaction, slug: str, keywords: str):
@@ -382,6 +482,8 @@ async def category_keywords(interaction: discord.Interaction, slug: str, keyword
     row = await legacy._fetch_category_by_slug(guild.id, slug_clean)
     if not row:
         return await reply_once(interaction, {"content": f"❌ Category `{slug_clean}` was not found.", "ephemeral": True})
+    if await _block_managed_mutation(interaction, row, action="given local keywords"):
+        return
 
     kw = legacy._normalize_keywords(keywords)
     ok = await legacy._update_category(guild.id, slug_clean, {"match_keywords": kw})
@@ -389,7 +491,7 @@ async def category_keywords(interaction: discord.Interaction, slug: str, keyword
         return await reply_once(interaction, {"content": "❌ Failed to update category keywords.", "ephemeral": True})
 
     updated = await legacy._fetch_category_by_slug(guild.id, slug_clean) or {**row, "match_keywords": kw}
-    embed = legacy._category_embed("🏷️ Ticket Category Keywords Updated", updated)
+    embed = legacy._category_embed("🏷️ Custom Ticket Category Keywords Updated", updated)
     await reply_once(interaction, {"embed": embed, "ephemeral": True})
 
 
