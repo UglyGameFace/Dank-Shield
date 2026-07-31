@@ -1,0 +1,186 @@
+name: Ticket Counter SQL
+
+on:
+  pull_request:
+    paths:
+      - "supabase/migrations/**ticket_counter**.sql"
+      - ".github/workflows/ticket-counter-sql.yml"
+      - "stoney_verify/tickets_new/counter_allocator.py"
+      - "tests/test_ticket_counter_migration.py"
+  push:
+    branches:
+      - main
+    paths:
+      - "supabase/migrations/**ticket_counter**.sql"
+      - ".github/workflows/ticket-counter-sql.yml"
+      - "stoney_verify/tickets_new/counter_allocator.py"
+      - "tests/test_ticket_counter_migration.py"
+
+permissions:
+  contents: read
+
+jobs:
+  ticket-counter-sql:
+    name: Durable ticket number allocation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Ensure PostgreSQL client is available
+        shell: bash
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+
+      - name: Prepare Supabase-compatible roles and ticket history
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+              if not exists (select 1 from pg_roles where rolname = 'anon') then
+                  create role anon;
+              end if;
+              if not exists (select 1 from pg_roles where rolname = 'authenticated') then
+                  create role authenticated;
+              end if;
+              if not exists (select 1 from pg_roles where rolname = 'service_role') then
+                  create role service_role bypassrls;
+              end if;
+          end;
+          $$;
+
+          create table public.tickets (
+              id bigserial primary key,
+              guild_id text not null,
+              ticket_number integer
+          );
+
+          insert into public.tickets(guild_id, ticket_number) values
+              ('legacy-guild', 1),
+              ('legacy-guild', 218),
+              ('other-guild', 3);
+          SQL
+
+      - name: Apply durable counter migration twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pass in 1 2; do
+            echo "Applying ticket counter migration, pass ${pass}"
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260731141000_ticket_counter_durability.sql
+          done
+
+      - name: Prove history backfill and atomic reservation
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+              first_number integer;
+              second_number integer;
+              fresh_number integer;
+              legacy_floor integer;
+          begin
+              select last_ticket_number into legacy_floor
+              from public.ticket_counters
+              where guild_id = 'legacy-guild';
+
+              if legacy_floor <> 218 then
+                  raise exception 'expected legacy floor 218, got %', legacy_floor;
+              end if;
+
+              select public.reserve_ticket_number('legacy-guild') into first_number;
+              select public.reserve_ticket_number('legacy-guild') into second_number;
+              select public.reserve_ticket_number('fresh-guild') into fresh_number;
+
+              if first_number <> 219 then
+                  raise exception 'expected first reserved number 219, got %', first_number;
+              end if;
+              if second_number <> 220 then
+                  raise exception 'expected second reserved number 220, got %', second_number;
+              end if;
+              if fresh_number <> 1 then
+                  raise exception 'expected fresh guild number 1, got %', fresh_number;
+              end if;
+          end;
+          $$;
+          SQL
+
+      - name: Prove reruns never lower counters
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          insert into public.tickets(guild_id, ticket_number)
+          values ('legacy-guild', 100);
+          SQL
+
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260731141000_ticket_counter_durability.sql
+
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+              current_floor integer;
+          begin
+              select last_ticket_number into current_floor
+              from public.ticket_counters
+              where guild_id = 'legacy-guild';
+
+              if current_floor <> 220 then
+                  raise exception 'migration lowered or changed reserved floor; expected 220, got %', current_floor;
+              end if;
+          end;
+          $$;
+          SQL
+
+      - name: Verify service-role-only access
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+              if has_function_privilege('anon', 'public.reserve_ticket_number(text)', 'EXECUTE') then
+                  raise exception 'anon unexpectedly has reserve_ticket_number execute access';
+              end if;
+              if has_function_privilege('authenticated', 'public.reserve_ticket_number(text)', 'EXECUTE') then
+                  raise exception 'authenticated unexpectedly has reserve_ticket_number execute access';
+              end if;
+              if not has_function_privilege('service_role', 'public.reserve_ticket_number(text)', 'EXECUTE') then
+                  raise exception 'service_role is missing reserve_ticket_number execute access';
+              end if;
+              if not exists (
+                  select 1 from pg_class
+                  where oid = 'public.ticket_counters'::regclass
+                    and relrowsecurity = true
+              ) then
+                  raise exception 'ticket_counters RLS is not enabled';
+              end if;
+          end;
+          $$;
+          SQL
