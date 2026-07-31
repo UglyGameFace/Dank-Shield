@@ -46,6 +46,8 @@ def test_ticket_ui_and_permission_sync_use_per_guild_staff_truth() -> None:
     assert "install_tasks_command_queue_claim_guard(ticket_tasks_queue)" in source
     assert "install_bot_command_worker_claim_guard(ticket_bot_worker)" in source
     assert "install_explicit_system_action_guards(" in source
+    assert "legacy_timer_module=legacy_ticket_timers" in source
+    assert "modern_timer_module=modern_ticket_timers" in source
     assert 'globals().get("STAFF_ROLE_ID")' not in source
     assert 'globals().get("MOD_ROLE_ID")' not in source
     assert 'globals().get("ADMIN_ROLE_ID")' not in source
