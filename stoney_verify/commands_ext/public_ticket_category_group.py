@@ -19,6 +19,30 @@ ticket_category_group = app_commands.Group(
     description="Manage ticket categories, routing keywords, and defaults.",
 )
 
+# ticket_category_admin normalizes underscores to hyphens and historically did
+# not expose the new ownership columns. Keep this exact canonical fallback so
+# managed rows remain protected even while older schema-tolerant helpers are in
+# the call path. Unknown/custom slugs are never classified by substring.
+_MANAGED_SLUGS = frozenset(
+    {
+        "verification-issue",
+        "account-access",
+        "payments-refunds",
+        "appeal",
+        "report",
+        "staff-complaint",
+        "technical-support",
+        "cod-services",
+        "service-request",
+        "vouch-referral",
+        "giveaway-reward",
+        "content-media",
+        "partnership",
+        "question",
+        "support",
+    }
+)
+
 
 async def _staff_only(interaction: discord.Interaction) -> bool:
     if not _staff_check(interaction):
@@ -36,7 +60,9 @@ async def _guild_only(interaction: discord.Interaction) -> Optional[discord.Guil
 
 
 def _is_managed_category(row: Dict[str, Any]) -> bool:
-    return bool(row.get("managed_by_dank")) or bool(legacy._safe_str(row.get("managed_category_key")))
+    if bool(row.get("managed_by_dank")) or bool(legacy._safe_str(row.get("managed_category_key"))):
+        return True
+    return legacy._slugify(legacy._safe_str(row.get("slug"))) in _MANAGED_SLUGS
 
 
 async def _block_managed_mutation(
@@ -49,7 +75,10 @@ async def _block_managed_mutation(
         return False
 
     name = legacy._safe_str(row.get("name"), "This category")
-    key = legacy._safe_str(row.get("managed_category_key"), legacy._safe_str(row.get("slug"), "managed"))
+    key = legacy._safe_str(
+        row.get("managed_category_key"),
+        legacy._slugify(legacy._safe_str(row.get("slug"), "managed")),
+    )
     await reply_once(
         interaction,
         {
@@ -66,6 +95,21 @@ async def _block_managed_mutation(
 
 
 def _add_governance_warnings(embed: discord.Embed, rows: list[Dict[str, Any]]) -> discord.Embed:
+    try:
+        managed_count = sum(1 for row in rows if _is_managed_category(row))
+        custom_count = max(0, len(rows) - managed_count)
+        embed.add_field(
+            name="Category Ownership",
+            value=(
+                f"🌐 Managed by Dank Shield: `{managed_count}`\n"
+                f"🏠 Server-specific custom: `{custom_count}`\n"
+                "Managed categories receive global updates; custom categories are preserved."
+            )[:1024],
+            inline=False,
+        )
+    except Exception:
+        pass
+
     try:
         warnings = legacy._governance_warnings(rows)
         if warnings:
@@ -159,6 +203,18 @@ async def category_create(
     slug_clean = legacy._slugify(slug)
     if not slug_clean:
         return await reply_once(interaction, {"content": "❌ Invalid slug.", "ephemeral": True})
+
+    if slug_clean in _MANAGED_SLUGS:
+        return await reply_once(
+            interaction,
+            {
+                "content": (
+                    f"❌ `{slug_clean}` is reserved by the global Dank Shield catalog. "
+                    "Choose a different slug for the server-specific custom category."
+                ),
+                "ephemeral": True,
+            },
+        )
 
     name_clean = legacy._normalize_name(name)
     if not name_clean:
