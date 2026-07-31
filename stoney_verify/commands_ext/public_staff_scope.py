@@ -16,7 +16,8 @@ import it. The result is intentionally simple:
 - Unconfigured guilds do NOT use beta env role IDs; only admins can run setup.
 - Ticket panel and transcript controls use the same per-guild staff truth.
 - Ticket channel permission synchronization targets configured guild roles.
-- Startup fails closed if any critical ticket staff-scope patch is missing.
+- Legacy persistent ticket controls receive central claim-first wrappers.
+- Startup fails closed if any critical ticket security patch is missing.
 
 No hardcoded guild IDs or role IDs live here. The resolver decides whether env
 fallback is allowed for a guild.
@@ -119,6 +120,7 @@ def _patch_staff_helpers() -> None:
         "ticket_panel": False,
         "ticket_transcripts": False,
         "ticket_permissions": False,
+        "ticket_claim_runtime": False,
     }
 
     try:
@@ -137,9 +139,6 @@ def _patch_staff_helpers() -> None:
     except Exception as e:
         print(f"❌ public_staff_scope could not patch common._staff_check: {repr(e)}")
 
-    # These modules historically kept local copies of the legacy helper. Patch
-    # them to the same per-guild resolver so configured public-server staff can
-    # use the ticket UI and are still subject to claim-first authorization.
     try:
         from ..tickets_new import panel as ticket_panel
 
@@ -148,13 +147,24 @@ def _patch_staff_helpers() -> None:
     except Exception as e:
         print(f"❌ public_staff_scope could not patch ticket panel staff scope: {repr(e)}")
 
+    ticket_transcripts = None
     try:
-        from .. import transcripts as ticket_transcripts
+        from .. import transcripts as loaded_ticket_transcripts
 
+        ticket_transcripts = loaded_ticket_transcripts
         ticket_transcripts._is_staff_member = scoped_is_staff  # type: ignore[assignment]
         installed["ticket_transcripts"] = True
     except Exception as e:
         print(f"❌ public_staff_scope could not patch transcript staff scope: {repr(e)}")
+
+    if ticket_transcripts is not None:
+        try:
+            from ..tickets_new.claim_runtime_guard import install_transcript_claim_runtime_guards
+
+            install_transcript_claim_runtime_guards(ticket_transcripts)
+            installed["ticket_claim_runtime"] = True
+        except Exception as e:
+            print(f"❌ public_staff_scope could not install claim runtime guards: {repr(e)}")
 
     try:
         from ..tickets_new import service as ticket_service
@@ -168,18 +178,18 @@ def _patch_staff_helpers() -> None:
     _PATCHED = not missing
     if missing:
         raise RuntimeError(
-            "Per-guild ticket staff scope failed closed; missing patches: "
+            "Per-guild ticket security scope failed closed; missing patches: "
             + ", ".join(missing)
         )
 
-    print("✅ public_staff_scope: per-guild staff permission isolation active")
+    print("✅ public_staff_scope: per-guild ticket security scope active")
 
 
 def register_public_staff_scope(bot, tree) -> None:
     _ = bot, tree
     _patch_staff_helpers()
     if not _PATCHED:
-        raise RuntimeError("Per-guild ticket staff scope is not active.")
+        raise RuntimeError("Per-guild ticket security scope is not active.")
 
 
 __all__ = [
