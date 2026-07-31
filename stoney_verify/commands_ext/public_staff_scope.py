@@ -16,6 +16,7 @@ import it. The result is intentionally simple:
 - Unconfigured guilds do NOT use beta env role IDs; only admins can run setup.
 - Ticket panel and transcript controls use the same per-guild staff truth.
 - Ticket channel permission synchronization targets configured guild roles.
+- Startup fails closed if any critical ticket staff-scope patch is missing.
 
 No hardcoded guild IDs or role IDs live here. The resolver decides whether env
 fallback is allowed for a guild.
@@ -112,29 +113,29 @@ def _patch_staff_helpers() -> None:
     if _PATCHED:
         return
 
-    patched_any = False
+    installed = {
+        "globals": False,
+        "common": False,
+        "ticket_panel": False,
+        "ticket_transcripts": False,
+        "ticket_permissions": False,
+    }
 
     try:
         from .. import globals as g
 
         g.is_staff = scoped_is_staff  # type: ignore[assignment]
-        patched_any = True
+        installed["globals"] = True
     except Exception as e:
-        try:
-            print(f"⚠️ public_staff_scope could not patch globals.is_staff: {repr(e)}")
-        except Exception:
-            pass
+        print(f"❌ public_staff_scope could not patch globals.is_staff: {repr(e)}")
 
     try:
         from . import common
 
         common._staff_check = lambda interaction: scoped_is_staff(getattr(interaction, "user", None))  # type: ignore[assignment]
-        patched_any = True
+        installed["common"] = True
     except Exception as e:
-        try:
-            print(f"⚠️ public_staff_scope could not patch common._staff_check: {repr(e)}")
-        except Exception:
-            pass
+        print(f"❌ public_staff_scope could not patch common._staff_check: {repr(e)}")
 
     # These modules historically kept local copies of the legacy helper. Patch
     # them to the same per-guild resolver so configured public-server staff can
@@ -143,46 +144,42 @@ def _patch_staff_helpers() -> None:
         from ..tickets_new import panel as ticket_panel
 
         ticket_panel._is_staff_member = scoped_is_staff  # type: ignore[assignment]
-        patched_any = True
+        installed["ticket_panel"] = True
     except Exception as e:
-        try:
-            print(f"⚠️ public_staff_scope could not patch ticket panel staff scope: {repr(e)}")
-        except Exception:
-            pass
+        print(f"❌ public_staff_scope could not patch ticket panel staff scope: {repr(e)}")
 
     try:
         from .. import transcripts as ticket_transcripts
 
         ticket_transcripts._is_staff_member = scoped_is_staff  # type: ignore[assignment]
-        patched_any = True
+        installed["ticket_transcripts"] = True
     except Exception as e:
-        try:
-            print(f"⚠️ public_staff_scope could not patch transcript staff scope: {repr(e)}")
-        except Exception:
-            pass
+        print(f"❌ public_staff_scope could not patch transcript staff scope: {repr(e)}")
 
     try:
         from ..tickets_new import service as ticket_service
 
         ticket_service._default_staff_role_ids = configured_ticket_staff_role_ids  # type: ignore[assignment]
-        patched_any = True
+        installed["ticket_permissions"] = True
     except Exception as e:
-        try:
-            print(f"⚠️ public_staff_scope could not patch ticket permission staff scope: {repr(e)}")
-        except Exception:
-            pass
+        print(f"❌ public_staff_scope could not patch ticket permission staff scope: {repr(e)}")
 
-    _PATCHED = bool(patched_any)
-    if _PATCHED:
-        try:
-            print("✅ public_staff_scope: per-guild staff permission isolation active")
-        except Exception:
-            pass
+    missing = sorted(name for name, ok in installed.items() if not ok)
+    _PATCHED = not missing
+    if missing:
+        raise RuntimeError(
+            "Per-guild ticket staff scope failed closed; missing patches: "
+            + ", ".join(missing)
+        )
+
+    print("✅ public_staff_scope: per-guild staff permission isolation active")
 
 
 def register_public_staff_scope(bot, tree) -> None:
     _ = bot, tree
     _patch_staff_helpers()
+    if not _PATCHED:
+        raise RuntimeError("Per-guild ticket staff scope is not active.")
 
 
 __all__ = [
