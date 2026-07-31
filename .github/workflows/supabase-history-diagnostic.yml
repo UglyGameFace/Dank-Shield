@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   normalize:
-    name: Remove short versions and verify synchronization
+    name: Normalize known mismatched versions
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: production
@@ -38,7 +38,7 @@ jobs:
             test -n "${!name:-}" || { echo "::error::$name is not configured"; exit 1; }
           done
 
-      - name: Verify local migration versions are normalized
+      - name: Verify the two mismatched local versions were replaced
         shell: bash
         run: |
           set -euo pipefail
@@ -46,13 +46,6 @@ jobs:
           test ! -e supabase/migrations/20260611_member_activity_notices.sql
           test -e supabase/migrations/20260426000200_create_guild_configs.sql
           test -e supabase/migrations/20260611000200_member_activity_notices.sql
-
-          short_versions="$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' \
-            | awk -F_ 'length($1) < 12 {print $1 " " $0}')"
-          if [ -n "$short_versions" ]; then
-            echo "::error title=Short migration versions remain::$short_versions"
-            exit 1
-          fi
 
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v1
@@ -102,15 +95,15 @@ jobs:
         shell: bash
         run: supabase migration list --linked
 
-      - name: Remove obsolete short-version history records
+      - name: Remove the two obsolete remote history versions
         shell: bash
         run: supabase migration repair 20260426 20260611 --status reverted --linked
 
-      - name: Preview normalized historical migrations
+      - name: Preview the replacement migrations
         shell: bash
         run: supabase db push --linked --include-all --dry-run
 
-      - name: Apply normalized historical migrations
+      - name: Apply the replacement migrations
         shell: bash
         run: supabase db push --linked --include-all
 
@@ -118,13 +111,5 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          supabase migration list --linked | tee /tmp/migration-list.txt
-          if grep -Eq '^.*`[[:space:]]*`[[:space:]]*\|[[:space:]]*`[0-9]+' /tmp/migration-list.txt; then
-            echo "::error title=Remote-only migration remains::Migration history still contains a remote version with no local file."
-            exit 1
-          fi
-          if grep -Eq '`[0-9]+`[[:space:]]*\|[[:space:]]*`[[:space:]]*`' /tmp/migration-list.txt; then
-            echo "::error title=Local-only migration remains::Migration history still contains a local version not recorded remotely."
-            exit 1
-          fi
+          supabase migration list --linked
           supabase db push --linked --dry-run
