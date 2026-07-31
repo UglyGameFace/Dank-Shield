@@ -76,12 +76,17 @@ def install_ticket_admin_claim_guard(
 
     if not hasattr(ticket_transcripts, "authorize_ticket_action"):
         raise RuntimeError("Transcript module does not expose authorize_ticket_action.")
-    if not hasattr(ticket_transcripts, "send_tickettool_style_transcript"):
+    if not callable(getattr(ticket_transcripts, "send_tickettool_style_transcript", None)):
         raise RuntimeError("Transcript module does not expose guarded transcript sender.")
 
     original_context = ticket_admin._ensure_ticket_context
     original_delete = ticket_admin.transcript_staff_delete_closed_ticket
     original_direct_transcript = getattr(ticket_admin, "transcript_post_to_channel", None)
+
+    if not callable(original_context):
+        raise RuntimeError("Legacy ticket context resolver is unavailable.")
+    if not callable(original_delete):
+        raise RuntimeError("Legacy ticket delete service is unavailable.")
 
     async def guarded_context(
         interaction: discord.Interaction,
