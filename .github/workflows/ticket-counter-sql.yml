@@ -5,16 +5,20 @@ on:
     paths:
       - "supabase/migrations/**ticket_counter**.sql"
       - ".github/workflows/ticket-counter-sql.yml"
+      - "stoney_verify/startup_guards/auto_schema_bootstrap.py"
       - "stoney_verify/tickets_new/counter_allocator.py"
       - "tests/test_ticket_counter_migration.py"
+      - "tools/test_persistent_ticket_counter_static.py"
   push:
     branches:
       - main
     paths:
       - "supabase/migrations/**ticket_counter**.sql"
       - ".github/workflows/ticket-counter-sql.yml"
+      - "stoney_verify/startup_guards/auto_schema_bootstrap.py"
       - "stoney_verify/tickets_new/counter_allocator.py"
       - "tests/test_ticket_counter_migration.py"
+      - "tools/test_persistent_ticket_counter_static.py"
 
 permissions:
   contents: read
@@ -28,6 +32,8 @@ jobs:
     services:
       postgres:
         image: postgres:16
+        # These names are the official postgres image contract, not Dank Shield
+        # runtime configuration. Test commands use DANK_TEST_DATABASE_URL below.
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: postgres
@@ -40,11 +46,7 @@ jobs:
           --health-retries 10
 
     env:
-      PGHOST: localhost
-      PGPORT: 5432
-      PGUSER: postgres
-      PGPASSWORD: postgres
-      PGDATABASE: postgres
+      DANK_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
 
     steps:
       - name: Check out repository
@@ -58,10 +60,28 @@ jobs:
             sudo apt-get install -y -qq postgresql-client
           fi
 
+      - name: Run focused static counter guards
+        shell: bash
+        run: |
+          python tools/test_persistent_ticket_counter_static.py
+          python - <<'PY'
+          import runpy
+
+          namespace = runpy.run_path("tests/test_ticket_counter_migration.py")
+          tests = sorted(
+              (name, value)
+              for name, value in namespace.items()
+              if name.startswith("test_") and callable(value)
+          )
+          for name, test in tests:
+              test()
+              print(f"PASS {name}")
+          PY
+
       - name: Prepare Supabase-compatible roles and ticket history
         shell: bash
         run: |
-          psql -v ON_ERROR_STOP=1 <<'SQL'
+          psql "$DANK_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
           do $$
           begin
               if not exists (select 1 from pg_roles where rolname = 'anon') then
@@ -88,24 +108,37 @@ jobs:
               ('other-guild', 3);
           SQL
 
-      - name: Apply durable counter migration twice
+      - name: Apply every ticket-counter migration twice in order
         shell: bash
         run: |
           set -euo pipefail
+          mapfile -t migration_files < <(
+            find supabase/migrations -maxdepth 1 -type f -name '*ticket_counter*.sql' -print | sort
+          )
+          if [ "${#migration_files[@]}" -eq 0 ]; then
+            echo "::error::No ticket-counter migrations were found."
+            exit 1
+          fi
           for pass in 1 2; do
-            echo "Applying ticket counter migration, pass ${pass}"
-            psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260731141000_ticket_counter_durability.sql
+            echo "Applying complete ticket-counter migration chain, pass ${pass}"
+            for migration_file in "${migration_files[@]}"; do
+              echo "Applying ${migration_file}"
+              psql "$DANK_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration_file"
+            done
           done
 
-      - name: Prove history backfill and atomic reservation
+      - name: Prove history backfill, normalization, and atomic reservation
         shell: bash
         run: |
-          psql -v ON_ERROR_STOP=1 <<'SQL'
+          psql "$DANK_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
           do $$
           declare
               first_number integer;
               second_number integer;
               fresh_number integer;
+              spaced_first integer;
+              spaced_second integer;
+              spaced_rows integer;
               legacy_floor integer;
           begin
               select last_ticket_number into legacy_floor
@@ -119,6 +152,12 @@ jobs:
               select public.reserve_ticket_number('legacy-guild') into first_number;
               select public.reserve_ticket_number('legacy-guild') into second_number;
               select public.reserve_ticket_number('fresh-guild') into fresh_number;
+              select public.reserve_ticket_number('  spaced-guild  ') into spaced_first;
+              select public.reserve_ticket_number('spaced-guild') into spaced_second;
+
+              select count(*) into spaced_rows
+              from public.ticket_counters
+              where guild_id in ('spaced-guild', '  spaced-guild  ');
 
               if first_number <> 219 then
                   raise exception 'expected first reserved number 219, got %', first_number;
@@ -129,21 +168,29 @@ jobs:
               if fresh_number <> 1 then
                   raise exception 'expected fresh guild number 1, got %', fresh_number;
               end if;
+              if spaced_first <> 1 or spaced_second <> 2 or spaced_rows <> 1 then
+                  raise exception 'guild-id normalization failed: first %, second %, rows %', spaced_first, spaced_second, spaced_rows;
+              end if;
           end;
           $$;
           SQL
 
-      - name: Prove reruns never lower counters
+      - name: Prove complete migration-chain reruns never lower counters
         shell: bash
         run: |
-          psql -v ON_ERROR_STOP=1 <<'SQL'
+          psql "$DANK_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
           insert into public.tickets(guild_id, ticket_number)
           values ('legacy-guild', 100);
           SQL
 
-          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260731141000_ticket_counter_durability.sql
+          mapfile -t migration_files < <(
+            find supabase/migrations -maxdepth 1 -type f -name '*ticket_counter*.sql' -print | sort
+          )
+          for migration_file in "${migration_files[@]}"; do
+            psql "$DANK_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration_file"
+          done
 
-          psql -v ON_ERROR_STOP=1 <<'SQL'
+          psql "$DANK_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
           do $$
           declare
               current_floor integer;
@@ -162,7 +209,7 @@ jobs:
       - name: Verify service-role-only access
         shell: bash
         run: |
-          psql -v ON_ERROR_STOP=1 <<'SQL'
+          psql "$DANK_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
           do $$
           begin
               if has_function_privilege('anon', 'public.reserve_ticket_number(text)', 'EXECUTE') then
