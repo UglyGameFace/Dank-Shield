@@ -103,3 +103,139 @@ jobs:
 
       - name: Audit event boundary ownership
         run: python tools/audit_event_boundary.py
+
+  managed-category-sql:
+    name: Managed category SQL smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Ensure PostgreSQL client is available
+        shell: bash
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+
+      - name: Prepare Supabase-compatible roles and guild table
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+              if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon; end if;
+              if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated; end if;
+              if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role; end if;
+          end;
+          $$;
+          create table public.guild_configs (guild_id text primary key);
+          insert into public.guild_configs(guild_id) values ('smoke-guild-1');
+          SQL
+
+      - name: Apply managed category migrations twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pass in 1 2; do
+            echo "Applying managed category migrations, pass ${pass}"
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/202607310001_managed_ticket_category_catalog.sql
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/202607310002_managed_ticket_category_auto_sync.sql
+          done
+
+      - name: Verify catalog, trigger, duplicates, and custom preservation
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+              category_count integer;
+          begin
+              select count(*) into category_count
+              from public.ticket_categories
+              where guild_id = 'smoke-guild-1' and managed_by_dank = true;
+              if category_count <> 15 then
+                  raise exception 'expected 15 managed categories for smoke-guild-1, got %', category_count;
+              end if;
+          end;
+          $$;
+
+          insert into public.ticket_categories(
+              guild_id, slug, name, description, intake_type, match_keywords,
+              sort_order, is_default, is_enabled
+          ) values (
+              'smoke-guild-1', 'my-technical-art', 'My Technical Art',
+              'Owner-created custom category containing a formerly dangerous substring.',
+              'custom', '[]'::jsonb, 500, false, true
+          );
+
+          insert into public.ticket_categories(
+              guild_id, slug, name, description, intake_type, match_keywords,
+              sort_order, is_default, is_enabled
+          ) values (
+              'smoke-guild-1', 'bug-report', 'Bug Report',
+              'Legacy alias duplicate.', 'bug', '[]'::jsonb, 501, false, true
+          );
+
+          select * from public.reconcile_dank_ticket_categories('smoke-guild-1');
+
+          do $$
+          begin
+              if not exists (
+                  select 1 from public.ticket_categories
+                  where guild_id = 'smoke-guild-1'
+                    and slug = 'my-technical-art'
+                    and managed_by_dank = false
+                    and managed_category_key is null
+              ) then
+                  raise exception 'custom substring category was modified or deleted';
+              end if;
+
+              if exists (
+                  select 1 from public.ticket_categories
+                  where guild_id = 'smoke-guild-1' and slug = 'bug-report'
+              ) then
+                  raise exception 'legacy managed alias duplicate was not removed';
+              end if;
+          end;
+          $$;
+
+          insert into public.guild_configs(guild_id) values ('smoke-guild-2');
+
+          do $$
+          declare
+              category_count integer;
+          begin
+              select count(*) into category_count
+              from public.ticket_categories
+              where guild_id = 'smoke-guild-2' and managed_by_dank = true;
+              if category_count <> 15 then
+                  raise exception 'new-guild trigger expected 15 managed categories, got %', category_count;
+              end if;
+          end;
+          $$;
+          SQL
