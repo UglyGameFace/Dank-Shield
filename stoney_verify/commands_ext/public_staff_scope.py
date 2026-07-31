@@ -15,6 +15,7 @@ import it. The result is intentionally simple:
 - VC staff role also counts when configured.
 - Unconfigured guilds do NOT use beta env role IDs; only admins can run setup.
 - Ticket panel and transcript controls use the same per-guild staff truth.
+- Ticket channel permission synchronization targets configured guild roles.
 
 No hardcoded guild IDs or role IDs live here. The resolver decides whether env
 fallback is allowed for a guild.
@@ -37,6 +38,20 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
+def _config_value(config: Any, key: str) -> Any:
+    try:
+        if isinstance(config, dict):
+            return config.get(key)
+        getter = getattr(config, "get", None)
+        if callable(getter):
+            value = getter(key)
+            if value is not None:
+                return value
+        return getattr(config, key, None)
+    except Exception:
+        return None
+
+
 def _member_role_ids(member: discord.Member) -> set[int]:
     ids: set[int] = set()
     try:
@@ -49,20 +64,30 @@ def _member_role_ids(member: discord.Member) -> set[int]:
     return ids
 
 
-def _configured_staff_role_ids(member: discord.Member) -> set[int]:
+def configured_ticket_staff_role_ids(guild_id: int) -> list[int]:
+    """Return only staff roles configured for this Discord guild."""
     try:
         from ..guild_config import get_cached_guild_config
 
-        guild_id = _safe_int(getattr(getattr(member, "guild", None), "id", 0), 0)
-        cfg = get_cached_guild_config(guild_id)
-        ids = {
-            _safe_int(getattr(cfg, "staff_role_id", 0), 0),
-            _safe_int(getattr(cfg, "vc_staff_role_id", 0), 0),
-            _safe_int(getattr(cfg, "effective_vc_staff_role_id", 0), 0),
-        }
-        return {rid for rid in ids if rid > 0}
+        config = get_cached_guild_config(_safe_int(guild_id, 0))
     except Exception:
-        return set()
+        config = None
+
+    ids: list[int] = []
+    for key in (
+        "staff_role_id",
+        "vc_staff_role_id",
+        "effective_vc_staff_role_id",
+    ):
+        role_id = _safe_int(_config_value(config, key), 0)
+        if role_id > 0 and role_id not in ids:
+            ids.append(role_id)
+    return ids
+
+
+def _configured_staff_role_ids(member: discord.Member) -> set[int]:
+    guild_id = _safe_int(getattr(getattr(member, "guild", None), "id", 0), 0)
+    return set(configured_ticket_staff_role_ids(guild_id))
 
 
 def scoped_is_staff(member: discord.Member) -> bool:
@@ -136,6 +161,17 @@ def _patch_staff_helpers() -> None:
         except Exception:
             pass
 
+    try:
+        from ..tickets_new import service as ticket_service
+
+        ticket_service._default_staff_role_ids = configured_ticket_staff_role_ids  # type: ignore[assignment]
+        patched_any = True
+    except Exception as e:
+        try:
+            print(f"⚠️ public_staff_scope could not patch ticket permission staff scope: {repr(e)}")
+        except Exception:
+            pass
+
     _PATCHED = bool(patched_any)
     if _PATCHED:
         try:
@@ -149,4 +185,8 @@ def register_public_staff_scope(bot, tree) -> None:
     _patch_staff_helpers()
 
 
-__all__ = ["register_public_staff_scope", "scoped_is_staff"]
+__all__ = [
+    "configured_ticket_staff_role_ids",
+    "register_public_staff_scope",
+    "scoped_is_staff",
+]
