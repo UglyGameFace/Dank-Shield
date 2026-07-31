@@ -33,7 +33,8 @@ CHECKS = {
         "_handle_once",
         "_remove_redundant_fallback",
         "persistent view owns Create Ticket",
-        "native categories and durable ticket allocator remain untouched",
+        "single-interaction owner active",
+        "ticket allocator remain untouched",
     ],
     "supabase/migrations/202607310001_managed_ticket_category_catalog.sql": [
         "dank_ticket_category_catalog",
