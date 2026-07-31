@@ -71,3 +71,20 @@ def test_ticket_staff_scope_fails_closed_when_a_critical_patch_is_missing() -> N
     assert "missing = sorted" in source
     assert "failed closed; missing patches" in source
     assert 'if not _PATCHED:' in source
+
+
+def test_commands_bootstrap_cannot_swallow_ticket_security_failure() -> None:
+    source = (ROOT / "stoney_verify/commands.py").read_text(encoding="utf-8")
+
+    strict_call = "_register_public_ticket_security_scope_strict(bot.tree)"
+    general_try = "try:\n    register_all_commands(bot, bot.tree)"
+    assert strict_call in source
+    assert general_try in source
+    assert source.index(strict_call) < source.index(general_try)
+
+    assert "raise RuntimeError(\n            \"Dank Shield ticket security bootstrap failed closed" in source
+
+    extra_start = source.index("def register_extra_commands(tree) -> None:")
+    extra_strict = source.index("_register_public_ticket_security_scope_strict(tree)", extra_start)
+    extra_general = source.index("register_all_commands(bot, tree)", extra_start)
+    assert extra_start < extra_strict < extra_general
