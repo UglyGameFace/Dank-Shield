@@ -178,6 +178,7 @@ def test_static_claim_first_enforcement_covers_all_runtime_surfaces() -> None:
     events = (ROOT / "stoney_verify/ticket_events.py").read_text(encoding="utf-8")
     transcripts = (ROOT / "stoney_verify/transcripts.py").read_text(encoding="utf-8")
     public_group = (ROOT / "stoney_verify/commands_ext/public_ticket_group.py").read_text(encoding="utf-8")
+    staff_scope = (ROOT / "stoney_verify/commands_ext/public_staff_scope.py").read_text(encoding="utf-8")
 
     assert "Claim is the only staff action allowed" in policy
     assert "Fail closed" in policy
@@ -212,4 +213,6 @@ def test_static_claim_first_enforcement_covers_all_runtime_surfaces() -> None:
     assert '"owner": "view_info"' in public_group
     assert '"access": "view_info"' in public_group
 
+    assert "ticket_panel._is_staff_member = scoped_is_staff" in staff_scope
+    assert "ticket_transcripts._is_staff_member = scoped_is_staff" in staff_scope
     assert "send_messages=False" in service
