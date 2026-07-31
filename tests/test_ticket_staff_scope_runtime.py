@@ -43,3 +43,14 @@ def test_ticket_ui_and_permission_sync_use_per_guild_staff_truth() -> None:
     assert 'globals().get("STAFF_ROLE_ID")' not in source
     assert 'globals().get("MOD_ROLE_ID")' not in source
     assert 'globals().get("ADMIN_ROLE_ID")' not in source
+
+
+def test_ticket_staff_scope_fails_closed_when_a_critical_patch_is_missing() -> None:
+    source = (ROOT / "stoney_verify/commands_ext/public_staff_scope.py").read_text(encoding="utf-8")
+    assert 'installed = {' in source
+    assert '"ticket_panel": False' in source
+    assert '"ticket_transcripts": False' in source
+    assert '"ticket_permissions": False' in source
+    assert "missing = sorted" in source
+    assert "failed closed; missing patches" in source
+    assert 'if not _PATCHED:' in source
