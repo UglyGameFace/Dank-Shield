@@ -144,6 +144,24 @@ def install_explicit_system_action_guards(
                 + ", ".join(sorted(missing_timer))
             )
 
+    ticket_admin_aliases = {
+        "send_tickettool_style_transcript": getattr(ticket_admin, "send_tickettool_style_transcript", None),
+        "transcript_post_to_channel": getattr(ticket_admin, "transcript_post_to_channel", None),
+        "transcript_staff_delete_closed_ticket": getattr(
+            ticket_admin,
+            "transcript_staff_delete_closed_ticket",
+            None,
+        ),
+    }
+    unavailable_admin_aliases = sorted(
+        name for name, value in ticket_admin_aliases.items() if not callable(value)
+    )
+    if unavailable_admin_aliases:
+        raise RuntimeError(
+            "Cannot install explicit system ticket guards; protected ticket admin aliases unavailable: "
+            + ", ".join(unavailable_admin_aliases)
+        )
+
     original_close = service_module.mark_ticket_closed
     original_delete = service_module.mark_ticket_deleted
     original_attach = service_module.attach_transcript_to_ticket
@@ -244,13 +262,39 @@ def install_explicit_system_action_guards(
     transcript_service.delete_ticket_with_optional_transcript = guarded_transcript_delete
     transcript_views.send_tickettool_style_transcript = guarded_view_transcript
 
-    # Refresh stale imported aliases used by legacy command modules.
-    if hasattr(ticket_admin, "send_tickettool_style_transcript"):
-        ticket_admin.send_tickettool_style_transcript = guarded_view_transcript
-    if hasattr(ticket_admin, "transcript_post_to_channel"):
-        ticket_admin.transcript_post_to_channel = guarded_transcript_post
-    if hasattr(ticket_admin, "transcript_staff_delete_closed_ticket"):
-        ticket_admin.transcript_staff_delete_closed_ticket = guarded_transcript_delete
+    # Preserve the already-installed claimant guards on legacy command aliases,
+    # then add the actorless/system-scope requirement outside them.
+    original_ticket_admin_view = ticket_admin_aliases["send_tickettool_style_transcript"]
+    original_ticket_admin_post = ticket_admin_aliases["transcript_post_to_channel"]
+    original_ticket_admin_delete = ticket_admin_aliases["transcript_staff_delete_closed_ticket"]
+
+    async def guarded_ticket_admin_view(*args: Any, **kwargs: Any) -> Any:
+        actor = _actor_value(args, kwargs, key="closed_by", position=3)
+        if actor is None and _deny_implicit_system("legacy_ticket_transcript"):
+            return False
+        return await original_ticket_admin_view(*args, **kwargs)
+
+    async def guarded_ticket_admin_post(*args: Any, **kwargs: Any) -> Any:
+        actor = _actor_value(args, kwargs, key="deleted_by")
+        if actor is None and _deny_implicit_system("legacy_ticket_transcript_post"):
+            return None, None
+        return await original_ticket_admin_post(*args, **kwargs)
+
+    async def guarded_ticket_admin_delete(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        actor = kwargs.get("staff_member") or kwargs.get("deleted_by")
+        if actor is None and _deny_implicit_system("legacy_ticket_delete"):
+            return {
+                "ok": False,
+                "deleted": False,
+                "reason": "Explicit system scope or human actor required.",
+                "authorization_code": "actor_required",
+            }
+        result = await original_ticket_admin_delete(*args, **kwargs)
+        return dict(result or {})
+
+    ticket_admin.send_tickettool_style_transcript = guarded_ticket_admin_view
+    ticket_admin.transcript_post_to_channel = guarded_ticket_admin_post
+    ticket_admin.transcript_staff_delete_closed_ticket = guarded_ticket_admin_delete
 
     original_automation_close = automation_worker.service_mark_ticket_closed
     original_automation_transcript = automation_worker.transcript_post_to_channel
