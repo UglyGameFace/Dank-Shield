@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from stoney_verify.tickets_new.claim_policy import evaluate_ticket_action
+from stoney_verify.tickets_new.claim_policy import evaluate_ticket_action, is_staff_member
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -121,6 +121,33 @@ def test_internal_system_operations_are_explicit() -> None:
     assert allowed.code == "system_action"
 
 
+def test_every_non_bot_non_requester_participant_is_claim_gated() -> None:
+    no_management_permissions = SimpleNamespace(
+        administrator=False,
+        manage_channels=False,
+        manage_guild=False,
+    )
+    role_only_or_renamed_staff = SimpleNamespace(
+        bot=False,
+        guild_permissions=no_management_permissions,
+        roles=[SimpleNamespace(id=987654321)],
+    )
+    accidentally_added_participant = SimpleNamespace(
+        bot=False,
+        guild_permissions=no_management_permissions,
+        roles=[],
+    )
+    bot_actor = SimpleNamespace(
+        bot=True,
+        guild_permissions=no_management_permissions,
+        roles=[],
+    )
+
+    assert is_staff_member(role_only_or_renamed_staff, staff_role_ids=()) is True
+    assert is_staff_member(accidentally_added_participant, staff_role_ids=()) is True
+    assert is_staff_member(bot_actor, staff_role_ids=()) is False
+
+
 def test_service_blocks_unclaimed_human_close_before_repository_write(monkeypatch: pytest.MonkeyPatch) -> None:
     from stoney_verify.tickets_new import service
 
@@ -153,6 +180,7 @@ def test_static_claim_first_enforcement_covers_all_runtime_surfaces() -> None:
     public_group = (ROOT / "stoney_verify/commands_ext/public_ticket_group.py").read_text(encoding="utf-8")
 
     assert "Claim is the only staff action allowed" in policy
+    assert "Fail closed" in policy
     assert "async def authorize_ticket_action(" in service
     assert 'action="close"' in service
     assert 'action="delete"' in service
