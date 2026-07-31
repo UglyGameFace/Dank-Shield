@@ -51,7 +51,7 @@ def _interaction_key(interaction: discord.Interaction) -> int:
 def _prune_interactions() -> None:
     now = time.monotonic()
     expired = [key for key, until in _INTERACTION_DONE_UNTIL.items() if until <= now]
-    for key in expired[:250]:
+    for key in expired:
         _INTERACTION_DONE_UNTIL.pop(key, None)
         lock = _INTERACTION_LOCKS.get(key)
         if lock is None or not lock.locked():
@@ -59,7 +59,13 @@ def _prune_interactions() -> None:
 
 
 async def _handle_once(original_handler: Any, interaction: discord.Interaction) -> None:
-    """Run the canonical handler once for one Discord interaction ID."""
+    """Run the canonical handler once for one Discord interaction ID.
+
+    Completion is recorded in ``finally`` so a handler exception or task
+    cancellation cannot leave an immortal lock-map entry. The same interaction
+    remains deduplicated for the short TTL even after failure, while a genuinely
+    new button press receives a new interaction ID and can run immediately.
+    """
     _prune_interactions()
     key = _interaction_key(interaction)
     now = time.monotonic()
@@ -82,8 +88,15 @@ async def _handle_once(original_handler: Any, interaction: discord.Interaction) 
         now = time.monotonic()
         if _INTERACTION_DONE_UNTIL.get(key, 0.0) > now:
             return
-        await original_handler(interaction)
-        _INTERACTION_DONE_UNTIL[key] = time.monotonic() + _INTERACTION_TTL_SECONDS
+        try:
+            await original_handler(interaction)
+        finally:
+            # asyncio.Lock releases automatically when this block exits. Marking
+            # completion here makes the unlocked entry eligible for TTL pruning
+            # even when the handler raises or the task is cancelled.
+            _INTERACTION_DONE_UNTIL[key] = (
+                time.monotonic() + _INTERACTION_TTL_SECONDS
+            )
 
 
 def _remove_redundant_fallback(panel_mod: Any, bot: Any) -> bool:
