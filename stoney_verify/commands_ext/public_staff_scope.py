@@ -18,6 +18,8 @@ import it. The result is intentionally simple:
 - Ticket channel permission synchronization targets configured guild roles.
 - Legacy persistent controls, top-level commands, dashboard API mutations, and
   dashboard command queues receive central claim-first wrappers.
+- Actorless ticket mutations require a named internal system scope; only the
+  automation worker and departed-member cleanup receive those scopes.
 - Startup fails closed if any critical ticket security patch is missing.
 
 No hardcoded guild IDs or role IDs live here. The resolver decides whether env
@@ -126,6 +128,7 @@ def _patch_staff_helpers() -> None:
         "ticket_api_claim_runtime": False,
         "ticket_tasks_queue_claim_runtime": False,
         "ticket_bot_worker_claim_runtime": False,
+        "ticket_explicit_system_runtime": False,
     }
 
     try:
@@ -215,6 +218,29 @@ def _patch_staff_helpers() -> None:
         installed["ticket_permissions"] = True
     except Exception as e:
         print(f"❌ public_staff_scope could not patch ticket permission staff scope: {repr(e)}")
+
+    try:
+        from . import ticket_admin
+        from .. import transcripts as ticket_transcript_views
+        from ..tickets_new import departed_member_cleanup_service
+        from ..tickets_new import service as ticket_service
+        from ..tickets_new import transcript_service
+        from ..tickets_new.explicit_system_action_guard import (
+            install_explicit_system_action_guards,
+        )
+        from ..workers import ticket_automation_worker
+
+        install_explicit_system_action_guards(
+            service_module=ticket_service,
+            transcript_service=transcript_service,
+            transcript_views=ticket_transcript_views,
+            automation_worker=ticket_automation_worker,
+            departed_cleanup=departed_member_cleanup_service,
+            ticket_admin=ticket_admin,
+        )
+        installed["ticket_explicit_system_runtime"] = True
+    except Exception as e:
+        print(f"❌ public_staff_scope could not install explicit system ticket guards: {repr(e)}")
 
     missing = sorted(name for name, ok in installed.items() if not ok)
     _PATCHED = not missing
