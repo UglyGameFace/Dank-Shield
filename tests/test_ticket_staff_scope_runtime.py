@@ -40,4 +40,6 @@ def test_ticket_ui_and_permission_sync_use_per_guild_staff_truth() -> None:
     assert "ticket_panel._is_staff_member = scoped_is_staff" in source
     assert "ticket_transcripts._is_staff_member = scoped_is_staff" in source
     assert "ticket_service._default_staff_role_ids = configured_ticket_staff_role_ids" in source
-    assert "STAFF_ROLE_ID" not in source
+    assert 'globals().get("STAFF_ROLE_ID")' not in source
+    assert 'globals().get("MOD_ROLE_ID")' not in source
+    assert 'globals().get("ADMIN_ROLE_ID")' not in source
