@@ -117,8 +117,8 @@ def test_hardening_does_not_override_categories_or_ticket_numbers() -> None:
         "panel_mod._rows =",
         "panel_mod._load_rows =",
         "panel_mod._ticket_num =",
-        "ticket_counters").
-    
+        "ticket_counters",
+    )
     for marker in forbidden_runtime_overrides:
         assert marker not in hardening, f"stale clean-panel override returned: {marker}"
 
