@@ -226,3 +226,52 @@ def test_only_named_maintenance_wrappers_gain_actorless_authority() -> None:
         assert await departed_cleanup.mark_ticket_closed(channel_id=1) is False
 
     asyncio.run(scenario())
+
+
+def test_legacy_ticket_admin_aliases_keep_claimant_layer_under_system_guard() -> None:
+    async def scenario() -> None:
+        fake_modules = _fake_modules()
+        calls = fake_modules[0]
+        ticket_admin = fake_modules[6]
+        _install(fake_modules)
+
+        assert await ticket_admin.send_tickettool_style_transcript(
+            object(),
+            object(),
+            closed_by=None,
+        ) is False
+        assert await ticket_admin.transcript_post_to_channel(
+            ticket_channel=object(),
+            deleted_by=None,
+        ) == (None, None)
+        denied_delete = await ticket_admin.transcript_staff_delete_closed_ticket(
+            channel=object(),
+            staff_member=None,
+            is_ghost=False,
+            reason="test",
+        )
+        assert denied_delete.get("authorization_code") == "actor_required"
+        assert calls == []
+
+        actor = object()
+        assert await ticket_admin.send_tickettool_style_transcript(
+            object(),
+            object(),
+            closed_by=actor,
+        ) is True
+        assert await ticket_admin.transcript_post_to_channel(
+            ticket_channel=object(),
+            deleted_by=actor,
+        ) == (None, "https://example.invalid/transcript")
+        allowed_delete = await ticket_admin.transcript_staff_delete_closed_ticket(
+            channel=object(),
+            staff_member=actor,
+            is_ghost=False,
+            reason="test",
+        )
+        assert allowed_delete.get("ok") is True
+        assert "view_transcript" in calls
+        assert "transcript_post" in calls
+        assert "transcript_delete" in calls
+
+    asyncio.run(scenario())
