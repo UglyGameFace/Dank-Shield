@@ -62,7 +62,9 @@ def test_distinct_interactions_from_same_member_are_not_user_rate_limited() -> N
 
 
 def test_persistent_view_removes_redundant_fallback_listener() -> None:
-    listener = object()
+    async def listener(_interaction) -> None:
+        return None
+
     panel = SimpleNamespace(
         _PANEL_VIEW_REGISTERED=False,
         _PANEL_FALLBACK_LISTENER_REGISTERED=False,
@@ -90,7 +92,9 @@ def test_persistent_view_removes_redundant_fallback_listener() -> None:
 
 
 def test_fallback_remains_when_persistent_view_registration_failed() -> None:
-    listener = object()
+    async def listener(_interaction) -> None:
+        return None
+
     panel = SimpleNamespace(
         _PANEL_VIEW_REGISTERED=False,
         _PANEL_FALLBACK_LISTENER_REGISTERED=True,
