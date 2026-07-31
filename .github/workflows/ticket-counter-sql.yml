@@ -8,6 +8,7 @@ on:
       - "stoney_verify/startup_guards/auto_schema_bootstrap.py"
       - "stoney_verify/tickets_new/counter_allocator.py"
       - "tests/test_ticket_counter_migration.py"
+      - "tools/test_persistent_ticket_counter_static.py"
   push:
     branches:
       - main
@@ -17,6 +18,7 @@ on:
       - "stoney_verify/startup_guards/auto_schema_bootstrap.py"
       - "stoney_verify/tickets_new/counter_allocator.py"
       - "tests/test_ticket_counter_migration.py"
+      - "tools/test_persistent_ticket_counter_static.py"
 
 permissions:
   contents: read
@@ -58,6 +60,24 @@ jobs:
             sudo apt-get install -y -qq postgresql-client
           fi
 
+      - name: Run focused static counter guards
+        shell: bash
+        run: |
+          python tools/test_persistent_ticket_counter_static.py
+          python - <<'PY'
+          import runpy
+
+          namespace = runpy.run_path("tests/test_ticket_counter_migration.py")
+          tests = sorted(
+              (name, value)
+              for name, value in namespace.items()
+              if name.startswith("test_") and callable(value)
+          )
+          for name, test in tests:
+              test()
+              print(f"PASS {name}")
+          PY
+
       - name: Prepare Supabase-compatible roles and ticket history
         shell: bash
         run: |
@@ -88,7 +108,7 @@ jobs:
               ('other-guild', 3);
           SQL
 
-      - name: Apply every ticket-counter migration in order
+      - name: Apply every ticket-counter migration twice in order
         shell: bash
         run: |
           set -euo pipefail
@@ -99,16 +119,13 @@ jobs:
             echo "::error::No ticket-counter migrations were found."
             exit 1
           fi
-          for migration_file in "${migration_files[@]}"; do
-            echo "Applying ${migration_file}"
-            psql "$DANK_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration_file"
+          for pass in 1 2; do
+            echo "Applying complete ticket-counter migration chain, pass ${pass}"
+            for migration_file in "${migration_files[@]}"; do
+              echo "Applying ${migration_file}"
+              psql "$DANK_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration_file"
+            done
           done
-
-      - name: Prove base durability migration replay safety
-        shell: bash
-        run: |
-          psql "$DANK_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 \
-            -f supabase/migrations/20260731141000_ticket_counter_durability.sql
 
       - name: Prove history backfill, normalization, and atomic reservation
         shell: bash
@@ -158,7 +175,7 @@ jobs:
           $$;
           SQL
 
-      - name: Prove reruns never lower counters
+      - name: Prove complete migration-chain reruns never lower counters
         shell: bash
         run: |
           psql "$DANK_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
@@ -166,8 +183,12 @@ jobs:
           values ('legacy-guild', 100);
           SQL
 
-          psql "$DANK_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 \
-            -f supabase/migrations/20260731141000_ticket_counter_durability.sql
+          mapfile -t migration_files < <(
+            find supabase/migrations -maxdepth 1 -type f -name '*ticket_counter*.sql' -print | sort
+          )
+          for migration_file in "${migration_files[@]}"; do
+            psql "$DANK_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration_file"
+          done
 
           psql "$DANK_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
           do $$
