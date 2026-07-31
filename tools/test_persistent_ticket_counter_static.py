@@ -37,11 +37,20 @@ def test_legacy_sequence_guard_no_longer_overrides_native_numbering() -> None:
     assert "external_ticket_history_sequence_guard" not in text
 
 
-def test_schema_bootstrap_exposes_atomic_rpc() -> None:
-    text = read("stoney_verify/startup_guards/auto_schema_bootstrap.py")
-    assert "create or replace function public.reserve_ticket_number" in text
-    assert "update public.ticket_counters" in text
-    assert "return v_next" in text
+def test_schema_bootstrap_executes_atomic_rpc_migration() -> None:
+    bootstrap = read("stoney_verify/startup_guards/auto_schema_bootstrap.py")
+    migration = read("supabase/migrations/20260731141000_ticket_counter_durability.sql")
+    schema_sql = bootstrap.split('SCHEMA_SQL = r"""', 1)[1].split('"""', 1)[0]
+
+    assert "create or replace function public.reserve_ticket_number" not in schema_sql
+    assert "create table if not exists public.ticket_counters" not in schema_sql
+    assert '"20260731141000_ticket_counter_durability.sql"' in bootstrap
+    assert "for migration_name in _BOOTSTRAP_MIGRATIONS" in bootstrap
+
+    assert "create or replace function public.reserve_ticket_number" in migration
+    assert "update public.ticket_counters" in migration
+    assert "return v_next" in migration
+    assert "grant execute on function public.reserve_ticket_number(text) to service_role" in migration
 
 
 def test_counter_allocator_is_db_authoritative() -> None:
@@ -57,10 +66,9 @@ if __name__ == "__main__":
         test_public_panel_uses_persistent_allocator,
         test_ticket_service_uses_persistent_allocator,
         test_legacy_sequence_guard_no_longer_overrides_native_numbering,
-        test_schema_bootstrap_exposes_atomic_rpc,
+        test_schema_bootstrap_executes_atomic_rpc_migration,
         test_counter_allocator_is_db_authoritative,
     ]
     for test in tests:
         test()
         print(f"PASS {test.__name__}")
-
