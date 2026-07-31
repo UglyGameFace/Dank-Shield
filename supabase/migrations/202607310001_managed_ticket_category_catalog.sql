@@ -220,7 +220,7 @@ begin
                 get diagnostics affected = row_count;
                 deleted_n := deleted_n + affected;
 
-                update public.ticket_categories
+                update public.ticket_categories tc
                    set slug = c.slug,
                        name = c.name,
                        description = c.description,
@@ -233,10 +233,10 @@ begin
                        managed_catalog_version = c.catalog_version,
                        managed_category_key = c.category_key,
                        updated_at = now()
-                 where id::text = winner_id
-                   and (slug, name, description, intake_type, match_keywords, sort_order,
-                        is_default, is_enabled, managed_by_dank, managed_catalog_version,
-                        managed_category_key)
+                 where tc.id::text = winner_id
+                   and (tc.slug, tc.name, tc.description, tc.intake_type, tc.match_keywords,
+                        tc.sort_order, tc.is_default, tc.is_enabled, tc.managed_by_dank,
+                        tc.managed_catalog_version, tc.managed_category_key)
                        is distinct from
                        (c.slug, c.name, c.description, c.intake_type, c.match_keywords,
                         c.sort_order, c.is_default, true, true, c.catalog_version,
@@ -257,11 +257,11 @@ begin
             end if;
         end loop;
 
-        update public.ticket_categories
-           set is_default = (managed_category_key = 'support')
-         where guild_id::text = g.guild_id
-           and managed_by_dank = true
-           and is_default is distinct from (managed_category_key = 'support');
+        update public.ticket_categories tc
+           set is_default = (tc.managed_category_key = 'support')
+         where tc.guild_id::text = g.guild_id
+           and tc.managed_by_dank = true
+           and tc.is_default is distinct from (tc.managed_category_key = 'support');
 
         guild_id := g.guild_id;
         inserted_count := inserted_n;
