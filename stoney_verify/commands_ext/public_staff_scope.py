@@ -14,6 +14,8 @@ import it. The result is intentionally simple:
 - Configured staff role from guild_configs counts as staff for that guild only.
 - VC staff role also counts when configured.
 - Unconfigured guilds do NOT use beta env role IDs; only admins can run setup.
+- Synchronous permission checks read the real guild-config memory cache and
+  never block Discord's event loop on a database request.
 - Ticket panel and transcript controls use the same per-guild staff truth.
 - Ticket channel permission synchronization targets configured guild roles.
 - Legacy persistent controls, top-level commands, dashboard API mutations, and
@@ -23,8 +25,7 @@ import it. The result is intentionally simple:
   receive those scopes.
 - Startup fails closed if any critical ticket security patch is missing.
 
-No hardcoded guild IDs or role IDs live here. The resolver decides whether env
-fallback is allowed for a guild.
+No hardcoded guild IDs or role IDs live here.
 """
 
 from typing import Any
@@ -58,6 +59,38 @@ def _config_value(config: Any, key: str) -> Any:
         return None
 
 
+def _cached_runtime_config(guild_id: int) -> Any:
+    """Return cached config without performing synchronous network I/O.
+
+    The authoritative async resolver warms ``guild_config._CONFIG_CACHE``.
+    Security-sensitive synchronous checks may use the most recent cached row.
+    On a cold isolated public-server cache, return an empty config so access
+    fails safely to administrator-only instead of inheriting another guild's
+    deployment environment IDs.
+    """
+    gid = _safe_int(guild_id, 0)
+    if gid <= 0:
+        return {}
+
+    try:
+        from .. import guild_config as guild_config_module
+
+        cache = getattr(guild_config_module, "_CONFIG_CACHE", {})
+        if isinstance(cache, dict):
+            cached = cache.get(str(gid))
+            if cached:
+                return cached
+
+        allow_env = getattr(guild_config_module, "_allow_env_fallback_for_guild", None)
+        fallback = getattr(guild_config_module, "env_fallback_guild_config", None)
+        if callable(allow_env) and callable(fallback) and bool(allow_env(gid)):
+            return fallback(gid)
+    except Exception:
+        pass
+
+    return {}
+
+
 def _member_role_ids(member: discord.Member) -> set[int]:
     ids: set[int] = set()
     try:
@@ -72,12 +105,7 @@ def _member_role_ids(member: discord.Member) -> set[int]:
 
 def configured_ticket_staff_role_ids(guild_id: int) -> list[int]:
     """Return only staff roles configured for this Discord guild."""
-    try:
-        from ..guild_config import get_cached_guild_config
-
-        config = get_cached_guild_config(_safe_int(guild_id, 0))
-    except Exception:
-        config = None
+    config = _cached_runtime_config(_safe_int(guild_id, 0))
 
     ids: list[int] = []
     for key in (
