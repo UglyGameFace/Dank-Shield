@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "supabase" / "migrations" / "20260731141000_ticket_counter_durability.sql"
 ALLOCATOR = ROOT / "stoney_verify" / "tickets_new" / "counter_allocator.py"
+BOOTSTRAP = ROOT / "stoney_verify" / "startup_guards" / "auto_schema_bootstrap.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "ticket-counter-sql.yml"
 
 
@@ -57,12 +58,26 @@ def test_runtime_allocator_uses_the_persistent_counter() -> None:
     assert "_db_max_ticket_number_sync" in allocator
 
 
+def test_bootstrap_executes_the_real_counter_migration_without_redefining_it() -> None:
+    bootstrap = _text(BOOTSTRAP)
+    schema_sql = bootstrap.split('SCHEMA_SQL = r"""', 1)[1].split('"""', 1)[0]
+
+    assert "reserve_ticket_number" not in schema_sql
+    assert "create table if not exists public.ticket_counters" not in schema_sql
+    assert '"20260731141000_ticket_counter_durability.sql"' in bootstrap
+    assert "for migration_name in _BOOTSTRAP_MIGRATIONS" in bootstrap
+    assert "Required bootstrap migration is missing" in bootstrap
+
+
 def test_postgres_smoke_proves_legacy_218_continues_at_219() -> None:
     workflow = _text(WORKFLOW)
 
     assert "('legacy-guild', 218)" in workflow
+    assert "find supabase/migrations" in workflow
+    assert "-name '*ticket_counter*.sql'" in workflow
     assert "expected first reserved number 219" in workflow
     assert "expected second reserved number 220" in workflow
     assert "expected fresh guild number 1" in workflow
+    assert "guild-id normalization failed" in workflow
     assert "migration lowered or changed reserved floor" in workflow
     assert "service_role is missing reserve_ticket_number execute access" in workflow
