@@ -14,6 +14,7 @@ import it. The result is intentionally simple:
 - Configured staff role from guild_configs counts as staff for that guild only.
 - VC staff role also counts when configured.
 - Unconfigured guilds do NOT use beta env role IDs; only admins can run setup.
+- Ticket panel and transcript controls use the same per-guild staff truth.
 
 No hardcoded guild IDs or role IDs live here. The resolver decides whether env
 fallback is allowed for a guild.
@@ -107,6 +108,31 @@ def _patch_staff_helpers() -> None:
     except Exception as e:
         try:
             print(f"⚠️ public_staff_scope could not patch common._staff_check: {repr(e)}")
+        except Exception:
+            pass
+
+    # These modules historically kept local copies of the legacy helper. Patch
+    # them to the same per-guild resolver so configured public-server staff can
+    # use the ticket UI and are still subject to claim-first authorization.
+    try:
+        from ..tickets_new import panel as ticket_panel
+
+        ticket_panel._is_staff_member = scoped_is_staff  # type: ignore[assignment]
+        patched_any = True
+    except Exception as e:
+        try:
+            print(f"⚠️ public_staff_scope could not patch ticket panel staff scope: {repr(e)}")
+        except Exception:
+            pass
+
+    try:
+        from .. import transcripts as ticket_transcripts
+
+        ticket_transcripts._is_staff_member = scoped_is_staff  # type: ignore[assignment]
+        patched_any = True
+    except Exception as e:
+        try:
+            print(f"⚠️ public_staff_scope could not patch transcript staff scope: {repr(e)}")
         except Exception:
             pass
 
