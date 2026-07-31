@@ -16,8 +16,8 @@ import it. The result is intentionally simple:
 - Unconfigured guilds do NOT use beta env role IDs; only admins can run setup.
 - Ticket panel and transcript controls use the same per-guild staff truth.
 - Ticket channel permission synchronization targets configured guild roles.
-- Legacy persistent controls and top-level ticket commands receive central
-  claim-first wrappers.
+- Legacy persistent controls, top-level commands, and dashboard API mutations
+  receive central claim-first wrappers.
 - Startup fails closed if any critical ticket security patch is missing.
 
 No hardcoded guild IDs or role IDs live here. The resolver decides whether env
@@ -123,6 +123,7 @@ def _patch_staff_helpers() -> None:
         "ticket_permissions": False,
         "ticket_claim_runtime": False,
         "ticket_admin_claim_runtime": False,
+        "ticket_api_claim_runtime": False,
     }
 
     try:
@@ -179,6 +180,15 @@ def _patch_staff_helpers() -> None:
             installed["ticket_admin_claim_runtime"] = True
         except Exception as e:
             print(f"❌ public_staff_scope could not install legacy ticket command guards: {repr(e)}")
+
+    try:
+        from ..api_new import server as ticket_api_server
+        from ..tickets_new.api_claim_runtime_guard import install_api_claim_runtime_guards
+
+        install_api_claim_runtime_guards(ticket_api_server)
+        installed["ticket_api_claim_runtime"] = True
+    except Exception as e:
+        print(f"❌ public_staff_scope could not install dashboard ticket claim guards: {repr(e)}")
 
     try:
         from ..tickets_new import service as ticket_service
