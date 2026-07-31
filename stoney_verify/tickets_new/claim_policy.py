@@ -49,9 +49,24 @@ def ticket_claimed_by_id(row: Optional[Mapping[str, Any]]) -> int:
 
 
 def is_staff_member(member: Any, *, staff_role_ids: tuple[int, ...] = ()) -> bool:
-    """Resolve ticket staff without granting any lifecycle bypass."""
+    """Return whether a human is subject to claim-first ticket enforcement.
+
+    The ticket requester is excluded by the caller before this helper runs.
+    Every other human who can reach a private ticket must therefore fail closed
+    as a staff/participant actor, even when a server uses a renamed or
+    server-specific support role that is not present in legacy environment
+    configuration. This also prevents accidentally-added participants from
+    bypassing the claimant lock. Bots remain excluded from message enforcement.
+    """
     if member is None:
         return False
+
+    try:
+        if bool(getattr(member, "bot", False)):
+            return False
+    except Exception:
+        pass
+
     try:
         permissions = member.guild_permissions
         if bool(permissions.administrator or permissions.manage_channels or permissions.manage_guild):
@@ -60,12 +75,16 @@ def is_staff_member(member: Any, *, staff_role_ids: tuple[int, ...] = ()) -> boo
         pass
 
     configured = {int(role_id) for role_id in staff_role_ids if _safe_int(role_id, 0) > 0}
-    if not configured:
-        return False
-    try:
-        return any(int(role.id) in configured for role in (member.roles or []))
-    except Exception:
-        return False
+    if configured:
+        try:
+            if any(int(role.id) in configured for role in (member.roles or [])):
+                return True
+        except Exception:
+            pass
+
+    # Fail closed. A non-requester human present in a private ticket may not
+    # interact until they are the recorded claimant, regardless of role naming.
+    return True
 
 
 def evaluate_ticket_action(
