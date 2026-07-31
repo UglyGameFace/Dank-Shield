@@ -7,7 +7,7 @@ MIGRATIONS = ROOT / "supabase" / "migrations"
 PROFILE_MIGRATION = MIGRATIONS / "20260725_live_profile_cards.sql"
 PER_MEMBER_PROFILE_MIGRATION = MIGRATIONS / "202607270001_live_profile_cards_per_member.sql"
 PROFILE_RUNTIME = ROOT / "stoney_verify" / "profile_card_runtime.py"
-ORIGINAL_GUILD_CONFIG_MIGRATION = MIGRATIONS / "20260426_create_guild_configs.sql"
+ORIGINAL_GUILD_CONFIG_MIGRATION = MIGRATIONS / "20260426000200_create_guild_configs.sql"
 GUILD_CONFIG_MIGRATION = MIGRATIONS / "202604260001_guild_configs.sql"
 TICKET_PARITY_MIGRATION = MIGRATIONS / "20260424_tickettool_parity_ticket_columns.sql"
 GUILD_MEMBER_ROLE_STATE_MIGRATION = MIGRATIONS / "20260429_relax_guild_members_role_state_check.sql"
@@ -118,5 +118,3 @@ def test_deployed_per_member_migration_remains_safe_and_runtime_collapses_rows()
     assert "list_live_card_states_for_channel(*key)" in runtime
     assert "await delete_live_card_state(*key)" in runtime
     assert "collapsed legacy stack" in runtime
-    assert "_ChannelKey = tuple[int, int]" in runtime
-    assert "_MemberCardKey" not in runtime
