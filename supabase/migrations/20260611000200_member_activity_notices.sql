@@ -1,5 +1,10 @@
--- Dank Shield member activity notice persistence
+-- ============================================================
+-- 20260611000200_member_activity_notices.sql
+-- ------------------------------------------------------------
+-- Dank Shield member activity notice persistence.
 -- Stores scheduled/delivered DM notice state for /dank members activity review.
+-- Safe to replay against a database where the table already exists.
+-- ============================================================
 
 create table if not exists public.member_activity_notices (
     notice_id text primary key,

@@ -134,6 +134,22 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Audit Supabase migration versions
+        shell: bash
+        run: |
+          python - <<'PY'
+          import runpy
+
+          namespace = runpy.run_path("tests/test_supabase_migration_versions.py")
+          for name in (
+              "test_migration_versions_are_unique",
+              "test_new_migrations_use_supabase_cli_timestamp_format",
+              "test_known_broken_short_versions_do_not_return",
+          ):
+              namespace[name]()
+              print(f"PASS {name}")
+          PY
+
       - name: Ensure PostgreSQL client is available
         shell: bash
         run: |

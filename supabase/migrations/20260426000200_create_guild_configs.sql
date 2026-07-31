@@ -1,5 +1,5 @@
 -- ============================================================
--- 20260426_create_guild_configs.sql
+-- 20260426000200_create_guild_configs.sql
 -- ------------------------------------------------------------
 -- Per-guild public/beta configuration for Stoney Verify.
 --
