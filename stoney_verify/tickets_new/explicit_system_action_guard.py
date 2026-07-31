@@ -63,13 +63,15 @@ def install_explicit_system_action_guards(
     automation_worker: Any,
     departed_cleanup: Any,
     ticket_admin: Any,
+    legacy_timer_module: Any,
+    modern_timer_module: Any,
 ) -> None:
     """Remove the historical ``actor=None`` implicit-system convention.
 
     Human-facing code must provide an actor. Only the inactivity automation
-    worker and departed-member cleanup are granted short, named system scopes.
-    The scope is carried with ``ContextVar`` so concurrent ticket work cannot
-    leak authority between tasks.
+    worker, departed-member cleanup, and verification expiry timers are granted
+    short, named system scopes. The scope is carried with ``ContextVar`` so
+    concurrent ticket work cannot leak authority between tasks.
     """
     if bool(getattr(service_module, _INSTALLED_MARKER, False)):
         return
@@ -126,6 +128,21 @@ def install_explicit_system_action_guards(
             "Cannot install explicit system ticket guards; departed cleanup functions unavailable: "
             + ", ".join(sorted(missing_departed))
         )
+
+    for label, timer_module in (
+        ("legacy verification timer", legacy_timer_module),
+        ("public verification timer", modern_timer_module),
+    ):
+        missing_timer = [
+            name
+            for name in ("_kick_after_timer", "send_tickettool_style_transcript")
+            if not callable(getattr(timer_module, name, None))
+        ]
+        if missing_timer:
+            raise RuntimeError(
+                f"Cannot install explicit system ticket guards; {label} missing: "
+                + ", ".join(sorted(missing_timer))
+            )
 
     original_close = service_module.mark_ticket_closed
     original_delete = service_module.mark_ticket_deleted
@@ -272,12 +289,38 @@ def install_explicit_system_action_guards(
 
     async def departed_reconcile(*args: Any, **kwargs: Any) -> int:
         async with explicit_ticket_system_action("departed-member-startup-reconciliation"):
-            return int(await original_departed_reconcile(*args, **kwargs))
+            return int((await original_departed_reconcile(*args, **kwargs)) or 0)
 
     departed_cleanup.mark_ticket_closed = departed_repo_close
     departed_cleanup.mark_ticket_deleted = departed_repo_delete
     departed_cleanup.close_verification_ticket_for_departed_member = departed_close
     departed_cleanup.reconcile_stale_open_verification_tickets = departed_reconcile
+
+    def install_timer_scope(timer_module: Any, *, scope_reason: str) -> None:
+        original_timer_job = timer_module._kick_after_timer
+
+        async def system_transcript(*args: Any, **kwargs: Any) -> Any:
+            # The timer starter is audit metadata, not a claimant. Force system
+            # attribution so claim-first cannot mistake that staff member for
+            # the actor authorizing transcript/delete behavior.
+            kwargs["closed_by"] = None
+            return await transcript_views.send_tickettool_style_transcript(*args, **kwargs)
+
+        async def system_timer_job(*args: Any, **kwargs: Any) -> Any:
+            async with explicit_ticket_system_action(scope_reason):
+                return await original_timer_job(*args, **kwargs)
+
+        timer_module.send_tickettool_style_transcript = system_transcript
+        timer_module._kick_after_timer = system_timer_job
+
+    install_timer_scope(
+        legacy_timer_module,
+        scope_reason="legacy-verification-no-response-timer",
+    )
+    install_timer_scope(
+        modern_timer_module,
+        scope_reason="verification-no-response-timer",
+    )
 
     setattr(service_module, _INSTALLED_MARKER, True)
 
