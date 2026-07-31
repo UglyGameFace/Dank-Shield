@@ -43,6 +43,8 @@ def test_ticket_ui_and_permission_sync_use_per_guild_staff_truth() -> None:
     assert "install_transcript_claim_runtime_guards(ticket_transcripts)" in source
     assert "install_ticket_admin_claim_guard(" in source
     assert "install_api_claim_runtime_guards(ticket_api_server)" in source
+    assert "install_tasks_command_queue_claim_guard(ticket_tasks_queue)" in source
+    assert "install_bot_command_worker_claim_guard(ticket_bot_worker)" in source
     assert 'globals().get("STAFF_ROLE_ID")' not in source
     assert 'globals().get("MOD_ROLE_ID")' not in source
     assert 'globals().get("ADMIN_ROLE_ID")' not in source
@@ -57,6 +59,8 @@ def test_ticket_staff_scope_fails_closed_when_a_critical_patch_is_missing() -> N
     assert '"ticket_claim_runtime": False' in source
     assert '"ticket_admin_claim_runtime": False' in source
     assert '"ticket_api_claim_runtime": False' in source
+    assert '"ticket_tasks_queue_claim_runtime": False' in source
+    assert '"ticket_bot_worker_claim_runtime": False' in source
     assert "missing = sorted" in source
     assert "failed closed; missing patches" in source
     assert 'if not _PATCHED:' in source
