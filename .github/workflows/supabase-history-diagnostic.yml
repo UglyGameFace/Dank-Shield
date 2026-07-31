@@ -82,3 +82,9 @@ jobs:
               echo "MISSING guild_configs.${column}"
             fi
           done
+
+      - name: Expose diagnostic run
+        shell: bash
+        run: |
+          echo "::error title=Read-only diagnostic complete::This intentional failure exposes the run ID and logs. No database changes were made."
+          exit 1
