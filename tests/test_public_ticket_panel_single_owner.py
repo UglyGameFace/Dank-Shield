@@ -4,6 +4,8 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from stoney_verify.startup_guards import public_ticket_panel_clean_hardening as guard
 
 
@@ -15,6 +17,13 @@ PANEL = ROOT / "stoney_verify" / "commands_ext" / "public_ticket_panel_clean.py"
 def _reset_guard_state() -> None:
     guard._INTERACTION_LOCKS.clear()
     guard._INTERACTION_DONE_UNTIL.clear()
+
+
+def _expire_and_prune(interaction_id: int) -> None:
+    guard._INTERACTION_DONE_UNTIL[interaction_id] = 0.0
+    guard._prune_interactions()
+    assert interaction_id not in guard._INTERACTION_DONE_UNTIL
+    assert interaction_id not in guard._INTERACTION_LOCKS
 
 
 def test_same_discord_interaction_runs_the_menu_handler_once() -> None:
@@ -57,6 +66,63 @@ def test_distinct_interactions_from_same_member_are_not_user_rate_limited() -> N
         await guard._handle_once(original, SimpleNamespace(id=101))
         await guard._handle_once(original, SimpleNamespace(id=102))
         assert calls == [101, 102]
+
+    asyncio.run(scenario())
+
+
+def test_handler_exception_is_finalized_and_prunable() -> None:
+    async def scenario() -> None:
+        _reset_guard_state()
+        interaction_id = 7001
+
+        async def broken(_interaction) -> None:
+            raise RuntimeError("simulated menu failure")
+
+        with pytest.raises(RuntimeError, match="simulated menu failure"):
+            await guard._handle_once(broken, SimpleNamespace(id=interaction_id))
+
+        assert interaction_id in guard._INTERACTION_DONE_UNTIL
+        assert interaction_id in guard._INTERACTION_LOCKS
+        assert guard._INTERACTION_LOCKS[interaction_id].locked() is False
+
+        # Duplicate delivery of the failed interaction is still ignored rather
+        # than retrying potentially partial side effects.
+        calls = 0
+
+        async def duplicate(_interaction) -> None:
+            nonlocal calls
+            calls += 1
+
+        await guard._handle_once(duplicate, SimpleNamespace(id=interaction_id))
+        assert calls == 0
+        _expire_and_prune(interaction_id)
+
+    asyncio.run(scenario())
+
+
+def test_handler_cancellation_is_finalized_and_prunable() -> None:
+    async def scenario() -> None:
+        _reset_guard_state()
+        interaction_id = 7002
+        started = asyncio.Event()
+
+        async def blocked(_interaction) -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+        task = asyncio.create_task(
+            guard._handle_once(blocked, SimpleNamespace(id=interaction_id))
+        )
+        await started.wait()
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert interaction_id in guard._INTERACTION_DONE_UNTIL
+        assert interaction_id in guard._INTERACTION_LOCKS
+        assert guard._INTERACTION_LOCKS[interaction_id].locked() is False
+        _expire_and_prune(interaction_id)
 
     asyncio.run(scenario())
 
@@ -128,6 +194,7 @@ def test_hardening_does_not_override_categories_or_ticket_numbers() -> None:
 
     assert "reserve_persistent_ticket_number" in panel
     assert "return await reserve_persistent_ticket_number" in panel
+    assert "finally:" in hardening
     assert "_INTERACTION_TTL_SECONDS" in hardening
     assert "_MENU_SESSION_SECONDS" not in hardening
     assert "int(member.id)" not in hardening
