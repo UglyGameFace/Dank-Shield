@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py"
+      - "stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py"
       - "stoney_verify/startup_guards/ticket_category_setup_guard.py"
       - "stoney_verify/startup_guards/ticket_form_default_templates_guard.py"
       - "stoney_verify/startup_guards/external_ticket_history_sequence_guard.py"
@@ -18,6 +19,7 @@ on:
   push:
     paths:
       - "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py"
+      - "stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py"
       - "stoney_verify/startup_guards/ticket_category_setup_guard.py"
       - "stoney_verify/startup_guards/ticket_form_default_templates_guard.py"
       - "stoney_verify/startup_guards/external_ticket_history_sequence_guard.py"
