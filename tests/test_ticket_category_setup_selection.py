@@ -136,4 +136,4 @@ def test_migration_forces_bad_existing_setups_and_preserves_explicit_selection()
     assert "managed_row.managed_category_key = any(selected_keys)" in sql
     assert "managed_by_dank = false" in sql
     assert "Your custom ticket choices were preserved" in sql
-    assert "custom choices only" in sql
+    assert "custom-only selection" in sql
