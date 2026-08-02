@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MIGRATION = ROOT / "supabase" / "migrations" / "202608020001_durable_invite_stats.sql"
+MIGRATION = ROOT / "supabase" / "migrations" / "20260802225500_durable_invite_stats.sql"
 POLICY = ROOT / "stoney_verify" / "invite_policy_engine.py"
 BOOTSTRAP = ROOT / "stoney_verify" / "startup_guards" / "auto_schema_bootstrap.py"
 
@@ -27,7 +27,7 @@ def test_migration_has_atomic_event_ledger_and_service_role_boundary() -> None:
 
 def test_auto_schema_bootstrap_owns_the_committed_migration() -> None:
     source = BOOTSTRAP.read_text(encoding="utf-8")
-    assert '"202608020001_durable_invite_stats.sql"' in source
+    assert '"20260802225500_durable_invite_stats.sql"' in source
 
 
 def test_central_invite_policy_uses_durable_service_not_fixed_one_increment() -> None:
