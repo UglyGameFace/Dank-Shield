@@ -21,10 +21,8 @@ def test_exact_alias_duplicates_collapse_without_cross_category_collisions() -> 
         {"slug": "service_request", "name": "Service Requests", "sort_order": 100, "is_enabled": True},
         {"slug": "staff_complaint", "name": "Staff Complaint", "sort_order": 60, "is_enabled": True},
     ]
-
     deduped = categories.dedupe_category_rows(rows, enabled_only=True)
     keys = _keys(deduped)
-
     assert keys.count("support") == 1
     assert keys.count("report") == 1
     assert keys.count("service-request") == 1
@@ -35,7 +33,6 @@ def test_exact_alias_duplicates_collapse_without_cross_category_collisions() -> 
 def test_disabled_catalog_rows_never_reach_member_visible_results() -> None:
     rows = categories.catalog_category_rows()
     visible = categories.dedupe_category_rows(rows, enabled_only=True)
-
     assert set(_keys(visible)) == set(categories.SAFE_STARTER_KEYS)
     assert "cod-services" not in _keys(visible)
     assert "game-services" not in _keys(visible)
@@ -43,7 +40,6 @@ def test_disabled_catalog_rows_never_reach_member_visible_results() -> None:
 
 def test_safe_starter_is_small_and_has_one_default() -> None:
     rows = categories.starter_category_rows()
-
     assert set(_keys(rows)) == {"report", "appeal", "support"}
     defaults = [row for row in rows if row.get("is_default")]
     assert len(defaults) == 1
@@ -54,9 +50,7 @@ def test_old_everything_enabled_shape_requires_reset() -> None:
     rows = categories.catalog_category_rows()
     for row in rows:
         row["is_enabled"] = True
-
     reason, reset = categories._shape_problem(rows, {})
-
     assert "old setup" in reason.lower()
     assert reset is True
 
@@ -65,9 +59,7 @@ def test_smaller_managed_only_shape_requires_confirmation_without_reset() -> Non
     rows = categories.catalog_category_rows()[:5]
     for row in rows:
         row["is_enabled"] = True
-
     reason, reset = categories._shape_problem(rows, {})
-
     assert "confirmation" in reason.lower()
     assert reset is False
 
@@ -78,14 +70,28 @@ def test_unknown_custom_rows_are_preserved_as_distinct_choices() -> None:
         {"slug": "clan_application", "name": "Clan Application", "is_enabled": True},
         {"slug": "creator_portfolio", "name": "Creator Portfolio", "is_enabled": True},
     ]
-
-    deduped = categories.dedupe_category_rows(rows, enabled_only=True)
-    keys = _keys(deduped)
-
+    keys = _keys(categories.dedupe_category_rows(rows, enabled_only=True))
     assert "support" in keys
     assert "custom:clan-application" in keys
     assert "custom:creator-portfolio" in keys
     assert len(keys) == 3
+
+
+def test_current_catalog_stays_on_read_only_path() -> None:
+    rows = categories.catalog_category_rows()
+    assert categories._catalog_reconcile_needed(rows) is False
+    assert categories._catalog_reconcile_needed(rows[:-1]) is True
+    legacy_alias = dict(rows[0])
+    legacy_alias["managed_by_dank"] = False
+    assert categories._catalog_reconcile_needed([legacy_alias, *rows[1:]]) is True
+
+
+def test_reconcile_window_debounces_repeated_menu_opens() -> None:
+    categories._RECONCILE_NOT_BEFORE.clear()
+    assert categories._claim_reconcile_window(1234, now=100.0) is True
+    assert categories._claim_reconcile_window(1234, now=101.0) is False
+    assert categories._claim_reconcile_window(1234, now=401.0) is True
+    categories._RECONCILE_NOT_BEFORE.clear()
 
 
 def test_custom_only_selection_is_exposed_when_custom_rows_exist() -> None:
@@ -105,10 +111,8 @@ def test_custom_only_selection_is_exposed_when_custom_rows_exist() -> None:
         reason="Confirm choices.",
         version=0,
     )
-
     view = setup_guard.CategorySetupManagerView(state=state)
     custom_ids = {str(getattr(child, "custom_id", "")) for child in view.children}
-
     assert "dank_ticket_category_setup:custom_only" in custom_ids
     assert categories._normalize_selected_keys((), allow_empty=True) == ()
 
@@ -123,10 +127,8 @@ def test_managed_multi_select_defaults_match_saved_selection() -> None:
         reason="",
         version=categories.CATEGORY_SETUP_VERSION,
     )
-
     select = setup_guard.ManagedCategorySelection(state)
     defaults = {option.value for option in select.options if option.default}
-
     assert defaults == {"report", "support"}
     assert select.min_values == 1
     assert select.max_values == len(categories.CATEGORY_CATALOG)
