@@ -1,0 +1,321 @@
+name: Ticket Category Selection SQL
+
+on:
+  pull_request:
+    paths:
+      - "supabase/migrations/202607310001_managed_ticket_category_catalog.sql"
+      - "supabase/migrations/202607310002_managed_ticket_category_auto_sync.sql"
+      - "supabase/migrations/202608020001_ticket_category_setup_selection.sql"
+      - "supabase/migrations/202608020002_ticket_category_setup_completion_compat.sql"
+      - "supabase/migrations/202608020003_ticket_category_custom_preservation.sql"
+      - ".github/workflows/ticket-category-selection-sql.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "supabase/migrations/202607310001_managed_ticket_category_catalog.sql"
+      - "supabase/migrations/202607310002_managed_ticket_category_auto_sync.sql"
+      - "supabase/migrations/202608020001_ticket_category_setup_selection.sql"
+      - "supabase/migrations/202608020002_ticket_category_setup_completion_compat.sql"
+      - "supabase/migrations/202608020003_ticket_category_custom_preservation.sql"
+      - ".github/workflows/ticket-category-selection-sql.yml"
+  workflow_dispatch:
+
+jobs:
+  selection-sql:
+    name: Existing and new guild migration safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure PostgreSQL client is available
+        shell: bash
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+
+      - name: Prepare old-schema guilds
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          create extension if not exists pgcrypto;
+
+          do $$
+          begin
+              if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon; end if;
+              if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated; end if;
+              if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role; end if;
+          end;
+          $$;
+
+          create table public.guild_configs (
+              guild_id text primary key,
+              updated_at timestamptz not null default now()
+          );
+
+          create table public.ticket_categories (
+              id uuid primary key default gen_random_uuid(),
+              guild_id text not null,
+              slug text not null,
+              name text not null,
+              description text,
+              intake_type text not null default 'general',
+              match_keywords jsonb not null default '[]'::jsonb,
+              button_label text,
+              sort_order integer not null default 999,
+              is_default boolean not null default false,
+              is_enabled boolean not null default true,
+              created_at timestamptz not null default now(),
+              updated_at timestamptz not null default now()
+          );
+
+          insert into public.guild_configs(guild_id)
+          values ('bad-old-guild'), ('custom-old-guild');
+
+          insert into public.ticket_categories(
+              guild_id, slug, name, description, intake_type,
+              sort_order, is_default, is_enabled
+          ) values (
+              'custom-old-guild', 'clan_application', 'Clan Application',
+              'Owner-created custom category.', 'custom', 5, false, true
+          );
+          SQL
+
+      - name: Reproduce old all-enabled catalog
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/202607310001_managed_ticket_category_catalog.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/202607310002_managed_ticket_category_auto_sync.sql
+
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+              bad_enabled integer;
+              custom_enabled integer;
+          begin
+              select count(*) into bad_enabled
+              from public.ticket_categories
+              where guild_id = 'bad-old-guild'
+                and managed_by_dank = true
+                and is_enabled = true;
+
+              select count(*) into custom_enabled
+              from public.ticket_categories
+              where guild_id = 'custom-old-guild'
+                and managed_by_dank = true
+                and is_enabled = true;
+
+              if bad_enabled <> 15 or custom_enabled <> 15 then
+                  raise exception 'old catalog reproduction failed: bad %, custom %', bad_enabled, custom_enabled;
+              end if;
+          end;
+          $$;
+          SQL
+
+      - name: Apply category selection migrations twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pass in 1 2; do
+            echo "Applying category selection migrations, pass ${pass}"
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/202608020001_ticket_category_setup_selection.sql
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/202608020002_ticket_category_setup_completion_compat.sql
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/202608020003_ticket_category_custom_preservation.sql
+          done
+
+      - name: Verify forced repair and custom preservation
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+              managed_total integer;
+              managed_enabled integer;
+              enabled_keys text[];
+              setup_required boolean;
+              custom_default boolean;
+          begin
+              select count(*), count(*) filter (where is_enabled = true),
+                     array_agg(managed_category_key order by managed_category_key)
+                         filter (where is_enabled = true)
+                into managed_total, managed_enabled, enabled_keys
+                from public.ticket_categories
+               where guild_id = 'bad-old-guild'
+                 and managed_by_dank = true;
+
+              if managed_total <> 16 then
+                  raise exception 'bad guild expected 16 managed rows, got %', managed_total;
+              end if;
+              if managed_enabled <> 3 or enabled_keys <> array['appeal','report','support']::text[] then
+                  raise exception 'bad guild starter mismatch: count %, keys %', managed_enabled, enabled_keys;
+              end if;
+
+              select ticket_category_setup_required into setup_required
+                from public.guild_configs where guild_id = 'bad-old-guild';
+              if setup_required is not true then
+                  raise exception 'bad guild was not forced into ticket category setup';
+              end if;
+
+              select count(*) filter (where managed_by_dank = true and is_enabled = true)
+                into managed_enabled
+                from public.ticket_categories
+               where guild_id = 'custom-old-guild';
+              if managed_enabled <> 0 then
+                  raise exception 'custom guild received managed menu pollution: % enabled', managed_enabled;
+              end if;
+
+              select is_default into custom_default
+                from public.ticket_categories
+               where guild_id = 'custom-old-guild'
+                 and slug = 'clan_application';
+              if custom_default is not true then
+                  raise exception 'custom guild did not retain a deterministic custom default';
+              end if;
+
+              select ticket_category_setup_required into setup_required
+                from public.guild_configs where guild_id = 'custom-old-guild';
+              if setup_required is not true then
+                  raise exception 'custom guild was not asked to confirm built-ins';
+              end if;
+          end;
+          $$;
+          SQL
+
+      - name: Verify explicit selection and no duplicate canonical keys
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          select * from public.save_dank_ticket_category_selection(
+              'bad-old-guild',
+              array['verification','report','support']::text[],
+              'actor-1',
+              'Setup Admin'
+          );
+
+          select * from public.save_dank_ticket_category_selection(
+              'custom-old-guild',
+              array['account-access']::text[],
+              'actor-2',
+              'Custom Admin'
+          );
+
+          do $$
+          declare
+              enabled_keys text[];
+              default_keys text[];
+              setup_required boolean;
+              setup_version integer;
+              duplicate_keys integer;
+              custom_alive boolean;
+          begin
+              select array_agg(managed_category_key order by managed_category_key)
+                         filter (where is_enabled = true),
+                     array_agg(managed_category_key order by managed_category_key)
+                         filter (where is_default = true)
+                into enabled_keys, default_keys
+                from public.ticket_categories
+               where guild_id = 'bad-old-guild'
+                 and managed_by_dank = true;
+
+              if enabled_keys <> array['report','support','verification']::text[] then
+                  raise exception 'explicit selection mismatch: %', enabled_keys;
+              end if;
+              if default_keys <> array['support']::text[] then
+                  raise exception 'support was not the single default: %', default_keys;
+              end if;
+
+              select ticket_category_setup_required, ticket_category_setup_version
+                into setup_required, setup_version
+                from public.guild_configs
+               where guild_id = 'bad-old-guild';
+              if setup_required is true or setup_version <> 2 then
+                  raise exception 'bad guild setup completion mismatch: required %, version %', setup_required, setup_version;
+              end if;
+
+              select count(*) into duplicate_keys
+              from (
+                  select managed_category_key
+                  from public.ticket_categories
+                  where guild_id = 'bad-old-guild'
+                    and managed_by_dank = true
+                  group by managed_category_key
+                  having count(*) > 1
+              ) duplicates;
+              if duplicate_keys <> 0 then
+                  raise exception 'duplicate managed canonical keys remain: %', duplicate_keys;
+              end if;
+
+              select exists (
+                  select 1 from public.ticket_categories
+                  where guild_id = 'custom-old-guild'
+                    and slug = 'clan_application'
+                    and managed_by_dank = false
+                    and is_enabled = true
+              ) into custom_alive;
+              if custom_alive is not true then
+                  raise exception 'custom category was modified or deleted';
+              end if;
+          end;
+          $$;
+          SQL
+
+      - name: Verify new guild defaults
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          insert into public.guild_configs(guild_id) values ('brand-new-guild');
+
+          do $$
+          declare
+              managed_total integer;
+              enabled_keys text[];
+              setup_required boolean;
+          begin
+              select count(*),
+                     array_agg(managed_category_key order by managed_category_key)
+                         filter (where is_enabled = true)
+                into managed_total, enabled_keys
+                from public.ticket_categories
+               where guild_id = 'brand-new-guild'
+                 and managed_by_dank = true;
+
+              if managed_total <> 16 then
+                  raise exception 'new guild expected 16 managed rows, got %', managed_total;
+              end if;
+              if enabled_keys <> array['appeal','report','support']::text[] then
+                  raise exception 'new guild safe starter mismatch: %', enabled_keys;
+              end if;
+
+              select ticket_category_setup_required into setup_required
+                from public.guild_configs where guild_id = 'brand-new-guild';
+              if setup_required is not true then
+                  raise exception 'new guild category setup should be required';
+              end if;
+          end;
+          $$;
+          SQL
