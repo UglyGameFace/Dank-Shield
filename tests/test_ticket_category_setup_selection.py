@@ -10,8 +10,6 @@ ROOT = Path(__file__).resolve().parents[1]
 STARTUP = ROOT / "stoney_verify" / "startup_guards" / "__init__.py"
 GUARD = ROOT / "stoney_verify" / "startup_guards" / "ticket_category_setup_guard.py"
 MIGRATION = ROOT / "supabase" / "migrations" / "202608020001_ticket_category_setup_selection.sql"
-CUSTOM_MIGRATION = ROOT / "supabase" / "migrations" / "202608020003_ticket_category_custom_preservation.sql"
-CUSTOM_ONLY_MIGRATION = ROOT / "supabase" / "migrations" / "202608020004_ticket_category_selection_custom_only.sql"
 
 
 def _keys(rows):
@@ -97,7 +95,7 @@ def test_unknown_custom_rows_are_preserved_as_distinct_choices() -> None:
 def test_custom_only_selection_is_explicitly_supported() -> None:
     assert categories._normalize_selected_keys((), allow_empty=True) == ()
     guard = GUARD.read_text(encoding="utf-8")
-    sql = CUSTOM_ONLY_MIGRATION.read_text(encoding="utf-8")
+    sql = MIGRATION.read_text(encoding="utf-8")
 
     assert "Use Custom Choices Only" in guard
     assert "_save_selection(interaction, ())" in guard
@@ -129,17 +127,13 @@ def test_single_startup_owner_replaces_old_category_patch_stack() -> None:
 
 def test_migration_forces_bad_existing_setups_and_preserves_explicit_selection() -> None:
     sql = MIGRATION.read_text(encoding="utf-8")
-    custom_sql = CUSTOM_MIGRATION.read_text(encoding="utf-8")
-    custom_only_sql = CUSTOM_ONLY_MIGRATION.read_text(encoding="utf-8")
 
     assert "managed_enabled >= 10" in sql
     assert "p_reset_to_starter" in sql
     assert "ticket_category_setup_required = true" in sql
     assert "ticket_category_setup_required = false" in sql
     assert "save_dank_ticket_category_selection" in sql
-    assert "is_enabled = managed_category_key = any(selected_keys)" in sql
+    assert "managed_row.managed_category_key = any(selected_keys)" in sql
     assert "managed_by_dank = false" in sql
-    assert "Your custom ticket choices were preserved" in custom_sql
-    assert "set is_enabled = false" in custom_sql
-    assert "managed_row.managed_category_key = any(selected_keys)" in custom_only_sql
-    assert "custom choices only" in custom_only_sql
+    assert "Your custom ticket choices were preserved" in sql
+    assert "custom choices only" in sql
