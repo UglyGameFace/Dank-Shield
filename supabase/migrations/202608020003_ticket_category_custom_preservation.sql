@@ -1,20 +1,17 @@
 -- Preserve existing owner-built ticket menus when the v2 catalog is installed.
 --
--- The v2 catalog must be globally available, but a guild that already had only
+-- The v2 catalog must be globally available, but a guild that already had
 -- unknown/custom categories must not suddenly show the temporary managed
 -- Report/Appeal/Support starter set. Keep those custom choices live, disable the
--- newly inserted managed starter rows, and require the owner to explicitly pick
--- any built-in categories they want.
+-- managed starter rows, and require the owner to explicitly pick any built-ins.
 
 with custom_existing_guilds as (
     select tc.guild_id::text as guild_id
     from public.ticket_categories tc
     join public.guild_configs gc
       on gc.guild_id::text = tc.guild_id::text
-    group by tc.guild_id::text, gc.ticket_category_setup_version,
-             gc.ticket_category_setup_required
+    group by tc.guild_id::text, gc.ticket_category_setup_version
     having coalesce(gc.ticket_category_setup_version, 0) < 2
-       and coalesce(gc.ticket_category_setup_required, false) = false
        and count(*) filter (where tc.managed_by_dank = false) > 0
        and count(*) filter (where tc.managed_by_dank = true and tc.is_enabled = true) = 3
        and count(*) filter (
@@ -38,10 +35,8 @@ with needs_custom_default as (
     from public.ticket_categories tc
     join public.guild_configs gc
       on gc.guild_id::text = tc.guild_id::text
-    group by tc.guild_id::text, gc.ticket_category_setup_version,
-             gc.ticket_category_setup_required
+    group by tc.guild_id::text, gc.ticket_category_setup_version
     having coalesce(gc.ticket_category_setup_version, 0) < 2
-       and coalesce(gc.ticket_category_setup_required, false) = false
        and count(*) filter (where tc.managed_by_dank = false and tc.is_enabled = true) > 0
        and count(*) filter (where tc.is_enabled = true and tc.is_default = true) = 0
 ), chosen as (
@@ -68,12 +63,12 @@ update public.guild_configs gc
        ticket_category_setup_version = 0,
        updated_at = now()
  where coalesce(gc.ticket_category_setup_version, 0) < 2
-   and coalesce(gc.ticket_category_setup_required, false) = false
    and exists (
        select 1
        from public.ticket_categories custom_row
        where custom_row.guild_id::text = gc.guild_id::text
          and custom_row.managed_by_dank = false
+         and custom_row.is_enabled = true
    )
    and not exists (
        select 1
