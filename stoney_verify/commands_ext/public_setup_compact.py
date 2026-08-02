@@ -2,8 +2,9 @@ from __future__ import annotations
 
 """Compact presentation layer for the canonical public ``/dank setup`` flow.
 
-No new slash command is registered. Existing setup callbacks keep their owner;
-this module replaces only oversized navigation, summaries, and test UI.
+This module registers no command. It replaces oversized presentation callbacks
+only after the canonical setup owner has loaded, preserving every existing
+feature service and callback owner underneath it.
 """
 
 from collections.abc import Awaitable, Callable
@@ -33,44 +34,51 @@ FEATURE_AREAS = (
 )
 
 TEST_SPECS = {
-    "tickets": ("Tickets", "🎫", "Create a test ticket. Confirm staff can claim, close, reopen, save a transcript, and delete it."),
-    "simple_verify": ("Simple Verify", "✅", "Post or refresh the Verify panel, then use a second account. Confirm it receives the correct role and channel access."),
-    "verification": ("Verification", "✅", "Use a second account to complete the configured flow and confirm its final role and access."),
-    "voice_verify": ("Voice Verify", "🎙️", "Request Voice Verify from a second account. Confirm staff can receive, claim, and complete it privately."),
-    "id_verify": ("ID / Web Verify", "🪪", "Use an approved test account. Confirm review stays private and the final decision updates access."),
-    "spam_guard": ("SpamGuard", "🛡️", "Use a private test channel. Confirm the intended protection and log appear without blocking normal messages."),
-    "logs": ("Logs", "🧾", "Confirm the other test actions appear once in the correct configured log channels."),
+    "tickets": (
+        "Tickets", "🎫",
+        "Create a test ticket. Confirm staff can claim, close, reopen, save a transcript, and delete it.",
+    ),
+    "simple_verify": (
+        "Simple Verify", "✅",
+        "Post or refresh the Verify panel, then use a second account. Confirm its role and channel access.",
+    ),
+    "verification": (
+        "Verification", "✅",
+        "Use a second account to complete the configured flow and confirm its final role and access.",
+    ),
+    "voice_verify": (
+        "Voice Verify", "🎙️",
+        "Request Voice Verify from a second account. Confirm staff can receive, claim, and complete it privately.",
+    ),
+    "id_verify": (
+        "ID / Web Verify", "🪪",
+        "Use an approved test account. Confirm review stays private and the final decision updates access.",
+    ),
+    "spam_guard": (
+        "SpamGuard", "🛡️",
+        "Use a private test channel. Confirm the intended protection and log appear without blocking normal messages.",
+    ),
+    "logs": (
+        "Logs", "🧾",
+        "Confirm the other test actions appear once in the correct configured log channels.",
+    ),
 }
 
-
-def _enabled_text(state: Any) -> str:
-    try:
-        labels = [str(item) for item in state.enabled_labels() if str(item).strip()]
-    except Exception:
-        labels = []
-    return " · ".join(labels) if labels else "None selected yet"
+ButtonCallback = Callable[[discord.Interaction], Awaitable[None]]
 
 
-def _lines(value: Any, limit: int, fallback: str = "") -> str:
-    source = [line.strip() for line in str(value or "").splitlines() if line.strip()]
-    kept = source[:limit]
-    if len(source) > len(kept):
-        kept.append(f"…and {len(source) - len(kept)} more")
-    return "\n".join(kept) or fallback
-
-
-def _add_button(
+def _add(
     view: discord.ui.View,
-    *,
     label: str,
     emoji: str,
     style: discord.ButtonStyle,
     custom_id: str,
-    callback: Callable[[discord.Interaction], Awaitable[None]],
+    callback: ButtonCallback,
     row: int,
+    *,
     disabled: bool = False,
 ) -> discord.ui.Button:
-    button = discord.ui.Button(
+    item = discord.ui.Button(
         label=label,
         emoji=emoji,
         style=style,
@@ -78,9 +86,45 @@ def _add_button(
         row=row,
         disabled=disabled,
     )
-    button.callback = callback
-    view.add_item(button)
-    return button
+    item.callback = callback
+    view.add_item(item)
+    return item
+
+
+def _enabled_text(state: Any) -> str:
+    try:
+        labels = [str(value) for value in state.enabled_labels() if str(value).strip()]
+    except Exception:
+        labels = []
+    return " · ".join(labels) if labels else "None selected yet"
+
+
+def _trim_lines(value: Any, limit: int, fallback: str = "") -> str:
+    lines = [line.strip() for line in str(value or "").splitlines() if line.strip()]
+    kept = lines[:limit]
+    if len(lines) > limit:
+        kept.append(f"…and {len(lines) - limit} more")
+    return "\n".join(kept) or fallback
+
+
+async def _require_guild(interaction: discord.Interaction) -> Optional[discord.Guild]:
+    if not await setup.solid._require_setup_permission(interaction):
+        return None
+    if interaction.guild is not None:
+        return interaction.guild
+    await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+    return None
+
+
+async def _action_error(interaction: discord.Interaction, label: str, exc: Exception) -> None:
+    message = f"❌ {label}: `{type(exc).__name__}: {str(exc)[:220]}`"
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.send_message(message, ephemeral=True)
+        else:
+            await interaction.followup.send(message, ephemeral=True)
+    except Exception:
+        pass
 
 
 async def _route_area(interaction: discord.Interaction, area: str) -> None:
@@ -99,11 +143,9 @@ async def _route_area(interaction: discord.Interaction, area: str) -> None:
         await routes[area](interaction)
     elif area == "welcome":
         from stoney_verify import welcome_setup_ui
-
         await welcome_setup_ui.open_welcome_setup(interaction)
     elif area == "profiles":
         from stoney_verify import profile_card_setup_ui
-
         await profile_card_setup_ui.open_profile_card_setup(interaction)
     else:
         await _open_manager(interaction)
@@ -129,83 +171,33 @@ class FeatureAreaSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await _route_area(
-            interaction,
-            str(self.values[0]) if self.values else "",
-        )
+        await _route_area(interaction, str(self.values[0]) if self.values else "")
 
 
 class CompactSetupHomeView(discord.ui.View):
-    def __init__(
-        self,
-        *,
-        ready: bool = False,
-        started: bool = False,
-        completed: bool = False,
-    ) -> None:
+    def __init__(self, *, ready: bool = False, started: bool = False, completed: bool = False) -> None:
         super().__init__(timeout=900)
         self.ready = bool(ready)
         self.started = bool(started)
         self.completed = bool(completed)
-
         if self.started:
             self.add_item(FeatureAreaSelect())
 
         if self.completed:
-            label, emoji = "View Setup Summary", "✅"
+            primary = ("View Setup Summary", "✅")
         elif self.ready:
-            label, emoji = "Test Features", "🧪"
+            primary = ("Test Features", "🧪")
         elif self.started:
-            label, emoji = "Continue Setup", "➡️"
+            primary = ("Continue Setup", "➡️")
         else:
-            label, emoji = "Start Setup", "⚡"
+            primary = ("Start Setup", "⚡")
+        _add(self, *primary, discord.ButtonStyle.success, "dank_setup_home:continue", self._primary, 1)
 
-        _add_button(
-            self,
-            label=label,
-            emoji=emoji,
-            style=discord.ButtonStyle.success,
-            custom_id="dank_setup_home:continue",
-            callback=self._primary,
-            row=1,
-        )
         if self.started:
-            _add_button(
-                self,
-                label="Change Plan",
-                emoji="🧭",
-                style=discord.ButtonStyle.secondary,
-                custom_id="dank_setup_home:plan",
-                callback=self._plan,
-                row=1,
-            )
-            _add_button(
-                self,
-                label="Check Configuration",
-                emoji="🩺",
-                style=discord.ButtonStyle.secondary,
-                custom_id="dank_setup_home:check",
-                callback=self._check,
-                row=2,
-            )
-            _add_button(
-                self,
-                label="Advanced",
-                emoji="⚙️",
-                style=discord.ButtonStyle.secondary,
-                custom_id="dank_setup_home:advanced",
-                callback=self._advanced,
-                row=2,
-            )
-        _add_button(
-            self,
-            label="Close",
-            emoji="✖️",
-            style=discord.ButtonStyle.danger,
-            custom_id="dank_setup_home:close",
-            callback=self._close,
-            row=2,
-        )
+            _add(self, "Change Plan", "🧭", discord.ButtonStyle.secondary, "dank_setup_home:plan", self._plan, 1)
+            _add(self, "Check Configuration", "🩺", discord.ButtonStyle.secondary, "dank_setup_home:check", self._check, 2)
+            _add(self, "Advanced", "⚙️", discord.ButtonStyle.secondary, "dank_setup_home:advanced", self._advanced, 2)
+        _add(self, "Close", "✖️", discord.ButtonStyle.danger, "dank_setup_home:close", self._close, 2)
 
     async def _primary(self, interaction: discord.Interaction) -> None:
         if self.completed:
@@ -234,51 +226,11 @@ class CompactManagerView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=900)
         self.add_item(FeatureAreaSelect())
-        _add_button(
-            self,
-            label="Change Plan",
-            emoji="🧭",
-            style=discord.ButtonStyle.primary,
-            custom_id="dank_setup_compact:plan",
-            callback=self._plan,
-            row=1,
-        )
-        _add_button(
-            self,
-            label="Check Configuration",
-            emoji="🩺",
-            style=discord.ButtonStyle.secondary,
-            custom_id="dank_setup_compact:check",
-            callback=self._check,
-            row=1,
-        )
-        _add_button(
-            self,
-            label="Advanced",
-            emoji="⚙️",
-            style=discord.ButtonStyle.secondary,
-            custom_id="dank_setup_compact:advanced",
-            callback=self._advanced,
-            row=2,
-        )
-        _add_button(
-            self,
-            label="Setup Home",
-            emoji="🏠",
-            style=discord.ButtonStyle.secondary,
-            custom_id="dank_setup_compact:home",
-            callback=self._home,
-            row=2,
-        )
-        _add_button(
-            self,
-            label="Close",
-            emoji="✖️",
-            style=discord.ButtonStyle.danger,
-            custom_id="dank_setup_compact:close",
-            callback=self._close,
-            row=2,
-        )
+        _add(self, "Change Plan", "🧭", discord.ButtonStyle.primary, "dank_setup_compact:plan", self._plan, 1)
+        _add(self, "Check Configuration", "🩺", discord.ButtonStyle.secondary, "dank_setup_compact:check", self._check, 1)
+        _add(self, "Advanced", "⚙️", discord.ButtonStyle.secondary, "dank_setup_compact:advanced", self._advanced, 2)
+        _add(self, "Setup Home", "🏠", discord.ButtonStyle.secondary, "dank_setup_compact:home", self._home, 2)
+        _add(self, "Close", "✖️", discord.ButtonStyle.danger, "dank_setup_compact:close", self._close, 2)
 
     async def _plan(self, interaction: discord.Interaction) -> None:
         await _open_plan(interaction)
@@ -299,62 +251,18 @@ class CompactManagerView(discord.ui.View):
 class CompactAdvancedView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=900)
-        _add_button(
-            self,
-            label="Repair / Restart",
-            emoji="🧯",
-            style=discord.ButtonStyle.danger,
-            custom_id="dank_setup_advanced:repair",
-            callback=self._repair,
-            row=0,
-        )
-        _add_button(
-            self,
-            label="Help",
-            emoji="❓",
-            style=discord.ButtonStyle.secondary,
-            custom_id="dank_setup_advanced:help",
-            callback=self._help,
-            row=0,
-        )
-        _add_button(
-            self,
-            label="Manage Features",
-            emoji="🧰",
-            style=discord.ButtonStyle.primary,
-            custom_id="dank_setup_advanced:features",
-            callback=self._features,
-            row=1,
-        )
-        _add_button(
-            self,
-            label="Setup Home",
-            emoji="🏠",
-            style=discord.ButtonStyle.secondary,
-            custom_id="dank_setup_advanced:home",
-            callback=self._home,
-            row=1,
-        )
-        _add_button(
-            self,
-            label="Close",
-            emoji="✖️",
-            style=discord.ButtonStyle.danger,
-            custom_id="dank_setup_advanced:close",
-            callback=self._close,
-            row=1,
-        )
+        _add(self, "Repair / Restart", "🧯", discord.ButtonStyle.danger, "dank_setup_advanced:repair", self._repair, 0)
+        _add(self, "Help", "❓", discord.ButtonStyle.secondary, "dank_setup_advanced:help", self._help, 0)
+        _add(self, "Manage Features", "🧰", discord.ButtonStyle.primary, "dank_setup_advanced:features", self._features, 1)
+        _add(self, "Setup Home", "🏠", discord.ButtonStyle.secondary, "dank_setup_advanced:home", self._home, 1)
+        _add(self, "Close", "✖️", discord.ButtonStyle.danger, "dank_setup_advanced:close", self._close, 1)
 
     async def _repair(self, interaction: discord.Interaction) -> None:
         await setup._open_advanced_danger_zone(interaction)
 
     async def _help(self, interaction: discord.Interaction) -> None:
         if await setup.solid._require_setup_permission(interaction):
-            await setup.solid._edit_or_followup(
-                interaction,
-                embed=_help_embed(),
-                view=CompactAdvancedView(),
-            )
+            await setup.solid._edit_or_followup(interaction, embed=_help_embed(), view=CompactAdvancedView())
 
     async def _features(self, interaction: discord.Interaction) -> None:
         await _open_manager(interaction)
@@ -370,33 +278,17 @@ class CompactReviewView(discord.ui.View):
     def __init__(self, *, ready: bool) -> None:
         super().__init__(timeout=900)
         self.ready = bool(ready)
-        _add_button(
+        _add(
             self,
-            label="Test Features" if ready else "Fix Next Required Item",
-            emoji="🧪" if ready else "➡️",
-            style=discord.ButtonStyle.success,
-            custom_id="dank_setup_review:next",
-            callback=self._next,
-            row=0,
+            "Test Features" if ready else "Fix Next Required Item",
+            "🧪" if ready else "➡️",
+            discord.ButtonStyle.success,
+            "dank_setup_review:next",
+            self._next,
+            0,
         )
-        _add_button(
-            self,
-            label="Setup Home",
-            emoji="🏠",
-            style=discord.ButtonStyle.secondary,
-            custom_id="dank_setup_review:home",
-            callback=self._home,
-            row=1,
-        )
-        _add_button(
-            self,
-            label="Close",
-            emoji="✖️",
-            style=discord.ButtonStyle.danger,
-            custom_id="dank_setup_review:close",
-            callback=self._close,
-            row=1,
-        )
+        _add(self, "Setup Home", "🏠", discord.ButtonStyle.secondary, "dank_setup_review:home", self._home, 1)
+        _add(self, "Close", "✖️", discord.ButtonStyle.danger, "dank_setup_review:close", self._close, 1)
 
     async def _next(self, interaction: discord.Interaction) -> None:
         if not await setup.solid._require_setup_permission(interaction):
@@ -406,10 +298,7 @@ class CompactReviewView(discord.ui.View):
             return
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message(
-                "❌ This must be used inside a server.",
-                ephemeral=True,
-            )
+            await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
             return
         target, _title, _explanation, key = await setup._guided_setup_target(guild)
         await setup._open_guided_target(interaction, target, key)
@@ -428,20 +317,16 @@ def _help_embed() -> discord.Embed:
             "**Start / Continue Setup** handles one required item at a time.\n"
             "**Choose a feature area** changes one part of Dank Shield.\n"
             "**Check Configuration** automatically validates saved roles, channels, and permissions.\n"
-            "**Test Features** walks you through real member and staff behavior."
+            "**Test Features** walks through real member and staff behavior."
         ),
         color=discord.Color.blurple(),
     )
 
 
-async def _main_payload(
-    guild: discord.Guild,
-) -> tuple[discord.Embed, discord.ui.View]:
+async def _main_payload(guild: discord.Guild) -> tuple[discord.Embed, discord.ui.View]:
     progress, done, total, next_step = await _ORIGINAL_PROGRESS(guild)
     try:
-        state = service_state_from_config(
-            await get_guild_config(guild.id, refresh=True)
-        )
+        state = service_state_from_config(await get_guild_config(guild.id, refresh=True))
     except Exception:
         state = service_state_from_config(None)
 
@@ -449,11 +334,7 @@ async def _main_payload(
     ready = bool(total and done >= total)
     completed = bool(ready and state.completed)
     remaining = max(0, total - done)
-    issues = [
-        line
-        for line in str(progress).splitlines()
-        if line.startswith(("⚠️", "🚫", "❌"))
-    ]
+    issues = [line for line in str(progress).splitlines() if line.startswith(("⚠️", "🚫", "❌"))]
 
     if not started:
         status = "Not started"
@@ -472,32 +353,22 @@ async def _main_payload(
         title="🚀 Dank Shield Setup",
         description=(
             f"**{status}** · `{done}/{total}` required\n"
-            f"Plan: **{state.setup_label}**\n"
-            f"Enabled: {_enabled_text(state)}"
+            f"Plan: **{state.setup_label}**\nEnabled: {_enabled_text(state)}"
         ),
         color=discord.Color.green() if ready else discord.Color.blurple(),
     )
     embed.add_field(name="Next", value=next_text, inline=False)
     if issues:
-        embed.add_field(
-            name="Needs attention",
-            value=_lines(issues, 2),
-            inline=False,
-        )
-    return embed, CompactSetupHomeView(
-        ready=ready,
-        started=started,
-        completed=completed,
-    )
+        embed.add_field(name="Needs attention", value=_trim_lines(issues, 2), inline=False)
+    return embed, CompactSetupHomeView(ready=ready, started=started, completed=completed)
 
 
 async def _health_embed(guild: discord.Guild) -> discord.Embed:
     original = await _ORIGINAL_HEALTH(guild)
     fields = {str(field.name): str(field.value) for field in original.fields}
     target, _title, _explanation, _key = await setup._guided_setup_target(guild)
-    ready = target == "ready"
 
-    if ready:
+    if target == "ready":
         embed = discord.Embed(
             title="✅ Configuration Check Passed",
             description=(
@@ -512,43 +383,24 @@ async def _health_embed(guild: discord.Guild) -> discord.Embed:
             inline=False,
         )
     else:
-        blockers = (
-            fields.get("Fix These First")
-            or fields.get("Try this")
-            or original.description
-        )
+        blockers = fields.get("Fix These First") or fields.get("Try this") or original.description
         embed = discord.Embed(
             title="🚫 Configuration Needs Attention",
             description="Fix this before testing features.",
             color=discord.Color.red(),
         )
-        embed.add_field(
-            name="Fix next",
-            value=_lines(blockers, 3, "Return to guided setup."),
-            inline=False,
-        )
+        embed.add_field(name="Fix next", value=_trim_lines(blockers, 3, "Return to guided setup."), inline=False)
 
     warnings = fields.get("Optional Later", "")
     if warnings and not warnings.lstrip().startswith("✅"):
-        embed.add_field(
-            name="Optional later",
-            value=_lines(warnings, 2),
-            inline=False,
-        )
+        embed.add_field(name="Optional later", value=_trim_lines(warnings, 2), inline=False)
     return embed
 
 
 async def _open_plan(interaction: discord.Interaction) -> None:
-    if not await setup.solid._require_setup_permission(interaction):
-        return
-    guild = interaction.guild
+    guild = await _require_guild(interaction)
     if guild is None:
-        await interaction.response.send_message(
-            "❌ This must be used inside a server.",
-            ephemeral=True,
-        )
         return
-
     await setup.solid._safe_defer_update(interaction)
     from . import public_setup_fresh_choice as fresh
 
@@ -559,43 +411,21 @@ async def _open_plan(interaction: discord.Interaction) -> None:
     )
     embed = discord.Embed(
         title="⚡ Choose a Setup Plan",
-        description=(
-            "Pick the closest goal. You can change individual features later."
-            + hidden
-        ),
+        description="Pick the closest goal. You can change individual features later." + hidden,
         color=discord.Color.blurple(),
     )
     embed.set_footer(text="Changing plans does not delete server items.")
-    await setup.solid._edit_or_followup(
-        interaction,
-        embed=embed,
-        view=fresh.SetupTypeChoiceView(guild=guild),
-    )
+    await setup.solid._edit_or_followup(interaction, embed=embed, view=fresh.SetupTypeChoiceView(guild=guild))
 
 
-async def _open_guided(
-    interaction: discord.Interaction,
-    *,
-    saved_message: str = "",
-) -> None:
-    if not await setup.solid._require_setup_permission(interaction):
-        return
-    guild = interaction.guild
+async def _open_guided(interaction: discord.Interaction, *, saved_message: str = "") -> None:
+    guild = await _require_guild(interaction)
     if guild is None:
-        await interaction.response.send_message(
-            "❌ This must be used inside a server.",
-            ephemeral=True,
-        )
         return
-
     await setup.solid._safe_defer_update(interaction)
     target, title, explanation, key = await setup._guided_setup_target(guild)
     if target == "ready":
-        await setup._open_health_check(
-            interaction,
-            saved_message=saved_message,
-            already_deferred=True,
-        )
+        await setup._open_health_check(interaction, saved_message=saved_message, already_deferred=True)
         return
 
     _progress, done, total, _next = await _ORIGINAL_PROGRESS(guild)
@@ -605,47 +435,25 @@ async def _open_guided(
         description=f"{saved}**Next: {title}**\n{explanation}",
         color=discord.Color.blurple(),
     )
-    await setup.solid._edit_or_followup(
-        interaction,
-        embed=embed,
-        view=setup.ContinueSetupView(
-            target=target,
-            requirement_key=key,
-            ready=False,
-        ),
-    )
+    view = setup.ContinueSetupView(target=target, requirement_key=key, ready=False)
+    await setup.solid._edit_or_followup(interaction, embed=embed, view=view)
 
 
 async def _open_manager(interaction: discord.Interaction) -> None:
-    if not await setup.solid._require_setup_permission(interaction):
-        return
-    guild = interaction.guild
+    guild = await _require_guild(interaction)
     if guild is None:
-        await interaction.response.send_message(
-            "❌ This must be used inside a server.",
-            ephemeral=True,
-        )
         return
-
     try:
-        enabled = _enabled_text(
-            service_state_from_config(
-                await get_guild_config(guild.id, refresh=True)
-            )
-        )
+        state = service_state_from_config(await get_guild_config(guild.id, refresh=True))
+        enabled = _enabled_text(state)
     except Exception:
         enabled = "Could not load right now"
-
     embed = discord.Embed(
         title="🧰 Manage Dank Shield",
         description=f"Choose one feature area below.\nEnabled: **{enabled}**",
         color=discord.Color.blurple(),
     )
-    await setup.solid._edit_or_followup(
-        interaction,
-        embed=embed,
-        view=CompactManagerView(),
-    )
+    await setup.solid._edit_or_followup(interaction, embed=embed, view=CompactManagerView())
 
 
 async def _open_advanced(interaction: discord.Interaction) -> None:
@@ -653,16 +461,10 @@ async def _open_advanced(interaction: discord.Interaction) -> None:
         return
     embed = discord.Embed(
         title="⚙️ Advanced Setup",
-        description=(
-            "Troubleshooting and recovery stay here so they do not crowd normal setup."
-        ),
+        description="Troubleshooting and recovery stay here so they do not crowd normal setup.",
         color=discord.Color.blurple(),
     )
-    await setup.solid._edit_or_followup(
-        interaction,
-        embed=embed,
-        view=CompactAdvancedView(),
-    )
+    await setup.solid._edit_or_followup(interaction, embed=embed, view=CompactAdvancedView())
 
 
 async def _category_payload(
@@ -671,35 +473,20 @@ async def _category_payload(
     title: str = "🎫 Ticket Menu",
 ) -> tuple[discord.Embed, Any]:
     _old, view = await _ORIGINAL_CATEGORY_PAYLOAD(guild, title=title)
-    load_error = str(getattr(view, "db_error", "") or "")
+    error = str(getattr(view, "db_error", "") or "")
     loaded_rows = list(getattr(view, "rows", []) or [])
-
-    if load_error:
-        embed = discord.Embed(
-            title=title,
-            description="Ticket choices could not be loaded.",
-            color=discord.Color.red(),
-        )
-        embed.add_field(
-            name="Error",
-            value=load_error[:1024],
-            inline=False,
-        )
+    if error:
+        embed = discord.Embed(title=title, description="Ticket choices could not be loaded.", color=discord.Color.red())
+        embed.add_field(name="Error", value=error[:1024], inline=False)
         return embed, view
 
     rows = [
         row
         for row in loaded_rows
         if isinstance(row, dict)
-        and setup._plain_bool(
-            row.get("is_enabled", row.get("enabled", True)),
-            default=True,
-        )
+        and setup._plain_bool(row.get("is_enabled", row.get("enabled", True)), default=True)
     ]
-    default = next(
-        (row for row in rows if bool(row.get("is_default"))),
-        {},
-    )
+    default = next((row for row in rows if bool(row.get("is_default"))), {})
     embed = discord.Embed(
         title=title,
         description=(
@@ -711,11 +498,7 @@ async def _category_payload(
     )
     warning = setup.solid._category_governance_text(rows)
     if not str(warning).lstrip().startswith("✅"):
-        embed.add_field(
-            name="Needs attention",
-            value=str(warning)[:1024],
-            inline=False,
-        )
+        embed.add_field(name="Needs attention", value=str(warning)[:1024], inline=False)
     return embed, view
 
 
@@ -747,7 +530,6 @@ def required_test_keys(state: dict[str, Any]) -> tuple[str, ...]:
         if state.get(source):
             keys.append(key)
             specific = True
-
     if state.get("verification") and not specific:
         keys.append("verification")
     if state.get("spam_guard"):
@@ -761,17 +543,11 @@ def _confirmed(
     state: dict[str, Any],
     values: Optional[set[str] | frozenset[str]],
 ) -> frozenset[str]:
-    return frozenset(
-        set(required_test_keys(state)).intersection(set(values or set()))
-    )
+    return frozenset(set(required_test_keys(state)).intersection(set(values or set())))
 
 
 class TestAreaSelect(discord.ui.Select):
-    def __init__(
-        self,
-        state: dict[str, Any],
-        confirmed: frozenset[str],
-    ) -> None:
+    def __init__(self, state: dict[str, Any], confirmed: frozenset[str]) -> None:
         self.state = dict(state)
         self.confirmed = frozenset(confirmed)
         super().__init__(
@@ -785,10 +561,7 @@ class TestAreaSelect(discord.ui.Select):
                     label=TEST_SPECS[key][0],
                     value=key,
                     emoji="✅" if key in confirmed else TEST_SPECS[key][1],
-                    description=(
-                        ("Tested" if key in confirmed else "Not tested")
-                        + " · open instructions"
-                    ),
+                    description=("Tested" if key in confirmed else "Not tested") + " · open instructions",
                 )
                 for key in required_test_keys(state)
             ],
@@ -814,47 +587,22 @@ class CompactTestView(discord.ui.View):
         self.state = dict(state or {})
         self.confirmed = _confirmed(self.state, confirmed)
         required = set(required_test_keys(self.state))
-
         if required:
             self.add_item(TestAreaSelect(self.state, self.confirmed))
         if not self.state.get("completed"):
-            _add_button(
+            _add(
                 self,
-                label="Finish Setup",
-                emoji="🏁",
-                style=discord.ButtonStyle.success,
-                custom_id="dank_setup_test:finish",
-                callback=self._finish,
-                row=1,
+                "Finish Setup",
+                "🏁",
+                discord.ButtonStyle.success,
+                "dank_setup_test:finish",
+                self._finish,
+                1,
                 disabled=not required.issubset(self.confirmed),
             )
-        _add_button(
-            self,
-            label="Recheck Configuration",
-            emoji="🩺",
-            style=discord.ButtonStyle.secondary,
-            custom_id="dank_setup_test:check",
-            callback=self._check,
-            row=1,
-        )
-        _add_button(
-            self,
-            label="Setup Home",
-            emoji="🏠",
-            style=discord.ButtonStyle.secondary,
-            custom_id="dank_setup_test:home",
-            callback=self._home,
-            row=2,
-        )
-        _add_button(
-            self,
-            label="Close",
-            emoji="✖️",
-            style=discord.ButtonStyle.danger,
-            custom_id="dank_setup_test:close",
-            callback=self._close,
-            row=2,
-        )
+        _add(self, "Recheck Configuration", "🩺", discord.ButtonStyle.secondary, "dank_setup_test:check", self._check, 1)
+        _add(self, "Setup Home", "🏠", discord.ButtonStyle.secondary, "dank_setup_test:home", self._home, 2)
+        _add(self, "Close", "✖️", discord.ButtonStyle.danger, "dank_setup_test:close", self._close, 2)
 
     async def _finish(self, interaction: discord.Interaction) -> None:
         await _finish(interaction, self.confirmed)
@@ -870,87 +618,36 @@ class CompactTestView(discord.ui.View):
 
 
 class FeatureTestView(discord.ui.View):
-    def __init__(
-        self,
-        state: dict[str, Any],
-        confirmed: frozenset[str],
-        key: str,
-    ) -> None:
+    def __init__(self, state: dict[str, Any], confirmed: frozenset[str], key: str) -> None:
         super().__init__(timeout=900)
         self.state = dict(state)
         self.confirmed = frozenset(confirmed)
         self.key = key
 
         if key == "tickets":
-            _add_button(
-                self,
-                label="Post / Refresh Ticket Panel",
-                emoji="🎫",
-                style=discord.ButtonStyle.primary,
-                custom_id="dank_setup_test:ticket_panel",
-                callback=self._ticket_panel,
-                row=0,
-            )
-            _add_button(
-                self,
-                label="Create Test Ticket",
-                emoji="🧪",
-                style=discord.ButtonStyle.primary,
-                custom_id="dank_setup_test:create_ticket",
-                callback=self._ticket,
-                row=0,
-            )
+            _add(self, "Post / Refresh Ticket Panel", "🎫", discord.ButtonStyle.primary, "dank_setup_test:ticket_panel", self._ticket_panel, 0)
+            _add(self, "Create Test Ticket", "🧪", discord.ButtonStyle.primary, "dank_setup_test:create_ticket", self._ticket, 0)
         elif key == "simple_verify":
-            _add_button(
-                self,
-                label="Post / Refresh Verify Panel",
-                emoji="✅",
-                style=discord.ButtonStyle.primary,
-                custom_id="dank_setup_test:verify_panel",
-                callback=self._verify_panel,
-                row=0,
-            )
+            _add(self, "Post / Refresh Verify Panel", "✅", discord.ButtonStyle.primary, "dank_setup_test:verify_panel", self._verify_panel, 0)
 
-        _add_button(
+        _add(
             self,
-            label="Tested" if key in confirmed else "Mark Tested",
-            emoji="✅",
-            style=discord.ButtonStyle.success,
-            custom_id="dank_setup_test:mark",
-            callback=self._mark,
-            row=1,
+            "Tested" if key in confirmed else "Mark Tested",
+            "✅",
+            discord.ButtonStyle.success,
+            "dank_setup_test:mark",
+            self._mark,
+            1,
         )
-        _add_button(
-            self,
-            label="Back to Checklist",
-            emoji="↩️",
-            style=discord.ButtonStyle.secondary,
-            custom_id="dank_setup_test:back",
-            callback=self._back,
-            row=1,
-        )
-        _add_button(
-            self,
-            label="Close",
-            emoji="✖️",
-            style=discord.ButtonStyle.danger,
-            custom_id="dank_setup_test:close_feature",
-            callback=self._close,
-            row=1,
-        )
+        _add(self, "Back to Checklist", "↩️", discord.ButtonStyle.secondary, "dank_setup_test:back", self._back, 1)
+        _add(self, "Close", "✖️", discord.ButtonStyle.danger, "dank_setup_test:close_feature", self._close, 1)
 
     async def _ticket_panel(self, interaction: discord.Interaction) -> None:
         try:
             from .public_ticket_panel_commands import post_ticket_panel_callback
-
             await post_ticket_panel_callback(interaction)
         except Exception as exc:
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "❌ Could not post the ticket panel: "
-                    f"`{type(exc).__name__}: {str(exc)[:220]}`",
-                    ephemeral=True,
-                )
+            await _action_error(interaction, "Could not post the ticket panel", exc)
 
     async def _ticket(self, interaction: discord.Interaction) -> None:
         await setup._create_setup_test_ticket(interaction)
@@ -958,25 +655,15 @@ class FeatureTestView(discord.ui.View):
     async def _verify_panel(self, interaction: discord.Interaction) -> None:
         try:
             from .public_verify_basic_panel import verify_panel
-
             await verify_panel(interaction)
         except Exception as exc:
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "❌ Could not post the Verify panel: "
-                    f"`{type(exc).__name__}: {str(exc)[:220]}`",
-                    ephemeral=True,
-                )
+            await _action_error(interaction, "Could not post the Verify panel", exc)
 
     async def _mark(self, interaction: discord.Interaction) -> None:
         if not await setup.solid._require_setup_permission(interaction):
             return
         await setup.solid._safe_defer_update(interaction)
-        await _render_tests(
-            interaction,
-            self.state,
-            frozenset(set(self.confirmed) | {self.key}),
-        )
+        await _render_tests(interaction, self.state, frozenset(set(self.confirmed) | {self.key}))
 
     async def _back(self, interaction: discord.Interaction) -> None:
         await setup.solid._safe_defer_update(interaction)
@@ -997,11 +684,9 @@ async def _render_tests(
         f"{'✅' if key in checked else '⬜'} **{TEST_SPECS[key][0]}**"
         for key in required_test_keys(state)
     ]
-    unlocked = required.issubset(checked)
-
     if state.get("completed"):
         finish = "Setup is already finished. Select any area to test it again."
-    elif unlocked:
+    elif required.issubset(checked):
         finish = "Every enabled feature is marked tested. **Finish Setup** is unlocked."
     else:
         finish = "Finish Setup unlocks after every enabled feature is marked tested."
@@ -1012,7 +697,7 @@ async def _render_tests(
             "The automatic configuration check passed. Now verify real Discord "
             "behavior one feature at a time."
         ),
-        color=discord.Color.green() if unlocked else discord.Color.blurple(),
+        color=discord.Color.green() if required.issubset(checked) else discord.Color.blurple(),
     )
     embed.add_field(
         name=f"Progress · {len(checked)}/{len(required)}",
@@ -1032,24 +717,15 @@ async def _open_tests(
     *,
     confirmed: Optional[set[str] | frozenset[str]] = None,
 ) -> None:
-    if not await setup.solid._require_setup_permission(interaction):
-        return
-    guild = interaction.guild
+    guild = await _require_guild(interaction)
     if guild is None:
-        await interaction.response.send_message(
-            "❌ This must be used inside a server.",
-            ephemeral=True,
-        )
         return
-
     await setup.solid._safe_defer_update(interaction)
     target, _title, _explanation, _key = await setup._guided_setup_target(guild)
     if target != "ready":
         await setup._open_health_check(interaction, already_deferred=True)
         return
-
-    state = await _launch_state(guild)
-    await _render_tests(interaction, state, confirmed)
+    await _render_tests(interaction, await _launch_state(guild), confirmed)
 
 
 async def _open_feature_test(
@@ -1065,20 +741,17 @@ async def _open_feature_test(
         return
 
     label, emoji, instructions = TEST_SPECS[key]
+    tested = key in confirmed
     embed = discord.Embed(
         title=f"{emoji} Test {label}",
         description=instructions,
-        color=(
-            discord.Color.green()
-            if key in confirmed
-            else discord.Color.blurple()
-        ),
+        color=discord.Color.green() if tested else discord.Color.blurple(),
     )
     embed.add_field(
         name="Status",
         value=(
             "✅ Marked tested. Run it again whenever needed."
-            if key in confirmed
+            if tested
             else "⬜ Check the real result first, then press **Mark Tested**."
         ),
         inline=False,
@@ -1094,16 +767,9 @@ async def _finish(
     interaction: discord.Interaction,
     confirmed: Optional[set[str] | frozenset[str]] = None,
 ) -> None:
-    if not await setup.solid._require_setup_permission(interaction):
-        return
-    guild = interaction.guild
+    guild = await _require_guild(interaction)
     if guild is None:
-        await interaction.response.send_message(
-            "❌ This must be used inside a server.",
-            ephemeral=True,
-        )
         return
-
     await setup.solid._safe_defer_update(interaction)
     target, _title, _explanation, _key = await setup._guided_setup_target(guild)
     if target != "ready":
@@ -1117,10 +783,7 @@ async def _finish(
         await _render_tests(interaction, state, checked)
         return
 
-    completed = await mark_setup_completed(
-        guild.id,
-        actor=interaction.user,
-    )
+    completed = await mark_setup_completed(guild.id, actor=interaction.user)
     embed = discord.Embed(
         title="✅ Setup Finished",
         description=(
@@ -1129,23 +792,14 @@ async def _finish(
         ),
         color=discord.Color.green(),
     )
-    embed.add_field(
-        name="Enabled",
-        value=_enabled_text(completed),
-        inline=False,
-    )
-    await setup.solid._edit_or_followup(
-        interaction,
-        embed=embed,
-        view=setup.FinishedSetupView(),
-    )
+    embed.add_field(name="Enabled", value=_enabled_text(completed), inline=False)
+    await setup.solid._edit_or_followup(interaction, embed=embed, view=setup.FinishedSetupView())
 
 
 def apply_compact_setup_patch() -> None:
     global _PATCHED
     if _PATCHED:
         return
-
     setup._build_plain_setup_health_embed = _health_embed
     setup._build_setup_help_embed = _help_embed
     setup._product_main_setup_payload = _main_payload
@@ -1167,9 +821,7 @@ def apply_compact_setup_patch() -> None:
 def register_public_setup_compact_commands(bot: Any, tree: Any) -> None:
     _ = bot, tree
     apply_compact_setup_patch()
-    print(
-        "✅ public_setup_compact: compact navigation and explicit feature testing active"
-    )
+    print("✅ public_setup_compact: compact navigation and explicit feature testing active")
 
 
 __all__ = [
