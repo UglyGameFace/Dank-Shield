@@ -8,6 +8,7 @@ on:
       - "supabase/migrations/202608020001_ticket_category_setup_selection.sql"
       - "supabase/migrations/202608020002_ticket_category_setup_completion_compat.sql"
       - "supabase/migrations/202608020003_ticket_category_custom_preservation.sql"
+      - "supabase/migrations/202608020004_ticket_category_selection_custom_only.sql"
       - ".github/workflows/ticket-category-selection-sql.yml"
   push:
     branches:
@@ -18,6 +19,7 @@ on:
       - "supabase/migrations/202608020001_ticket_category_setup_selection.sql"
       - "supabase/migrations/202608020002_ticket_category_setup_completion_compat.sql"
       - "supabase/migrations/202608020003_ticket_category_custom_preservation.sql"
+      - "supabase/migrations/202608020004_ticket_category_selection_custom_only.sql"
       - ".github/workflows/ticket-category-selection-sql.yml"
   workflow_dispatch:
 
@@ -146,6 +148,7 @@ jobs:
             psql -v ON_ERROR_STOP=1 -f supabase/migrations/202608020001_ticket_category_setup_selection.sql
             psql -v ON_ERROR_STOP=1 -f supabase/migrations/202608020002_ticket_category_setup_completion_compat.sql
             psql -v ON_ERROR_STOP=1 -f supabase/migrations/202608020003_ticket_category_custom_preservation.sql
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/202608020004_ticket_category_selection_custom_only.sql
           done
 
       - name: Verify forced repair and custom preservation
@@ -206,7 +209,7 @@ jobs:
           $$;
           SQL
 
-      - name: Verify explicit selection and no duplicate canonical keys
+      - name: Verify explicit and custom-only selections
         shell: bash
         run: |
           psql -v ON_ERROR_STOP=1 <<'SQL'
@@ -219,7 +222,7 @@ jobs:
 
           select * from public.save_dank_ticket_category_selection(
               'custom-old-guild',
-              array['account-access']::text[],
+              array[]::text[],
               'actor-2',
               'Custom Admin'
           );
@@ -232,15 +235,17 @@ jobs:
               setup_version integer;
               duplicate_keys integer;
               custom_alive boolean;
+              custom_default boolean;
+              custom_managed_enabled integer;
           begin
-              select array_agg(managed_category_key order by managed_category_key)
-                         filter (where is_enabled = true),
-                     array_agg(managed_category_key order by managed_category_key)
-                         filter (where is_default = true)
+              select array_agg(managed_row.managed_category_key order by managed_row.managed_category_key)
+                         filter (where managed_row.is_enabled = true),
+                     array_agg(managed_row.managed_category_key order by managed_row.managed_category_key)
+                         filter (where managed_row.is_default = true)
                 into enabled_keys, default_keys
-                from public.ticket_categories
-               where guild_id = 'bad-old-guild'
-                 and managed_by_dank = true;
+                from public.ticket_categories managed_row
+               where managed_row.guild_id = 'bad-old-guild'
+                 and managed_row.managed_by_dank = true;
 
               if enabled_keys <> array['report','support','verification']::text[] then
                   raise exception 'explicit selection mismatch: %', enabled_keys;
@@ -249,21 +254,21 @@ jobs:
                   raise exception 'support was not the single default: %', default_keys;
               end if;
 
-              select ticket_category_setup_required, ticket_category_setup_version
+              select gc.ticket_category_setup_required, gc.ticket_category_setup_version
                 into setup_required, setup_version
-                from public.guild_configs
-               where guild_id = 'bad-old-guild';
+                from public.guild_configs gc
+               where gc.guild_id = 'bad-old-guild';
               if setup_required is true or setup_version <> 2 then
                   raise exception 'bad guild setup completion mismatch: required %, version %', setup_required, setup_version;
               end if;
 
               select count(*) into duplicate_keys
               from (
-                  select managed_category_key
-                  from public.ticket_categories
-                  where guild_id = 'bad-old-guild'
-                    and managed_by_dank = true
-                  group by managed_category_key
+                  select managed_row.managed_category_key
+                  from public.ticket_categories managed_row
+                  where managed_row.guild_id = 'bad-old-guild'
+                    and managed_row.managed_by_dank = true
+                  group by managed_row.managed_category_key
                   having count(*) > 1
               ) duplicates;
               if duplicate_keys <> 0 then
@@ -271,14 +276,37 @@ jobs:
               end if;
 
               select exists (
-                  select 1 from public.ticket_categories
-                  where guild_id = 'custom-old-guild'
-                    and slug = 'clan_application'
-                    and managed_by_dank = false
-                    and is_enabled = true
-              ) into custom_alive;
-              if custom_alive is not true then
-                  raise exception 'custom category was modified or deleted';
+                  select 1 from public.ticket_categories custom_row
+                  where custom_row.guild_id = 'custom-old-guild'
+                    and custom_row.slug = 'clan_application'
+                    and custom_row.managed_by_dank = false
+                    and custom_row.is_enabled = true
+              ), exists (
+                  select 1 from public.ticket_categories custom_row
+                  where custom_row.guild_id = 'custom-old-guild'
+                    and custom_row.slug = 'clan_application'
+                    and custom_row.is_default = true
+              ), count(*) filter (
+                  where custom_rows.managed_by_dank = true
+                    and custom_rows.is_enabled = true
+              )
+                into custom_alive, custom_default, custom_managed_enabled
+                from public.ticket_categories custom_rows
+               where custom_rows.guild_id = 'custom-old-guild';
+
+              if custom_alive is not true or custom_default is not true then
+                  raise exception 'custom-only category/default was not preserved';
+              end if;
+              if custom_managed_enabled <> 0 then
+                  raise exception 'custom-only save left % managed choices enabled', custom_managed_enabled;
+              end if;
+
+              select gc.ticket_category_setup_required, gc.ticket_category_setup_version
+                into setup_required, setup_version
+                from public.guild_configs gc
+               where gc.guild_id = 'custom-old-guild';
+              if setup_required is true or setup_version <> 2 then
+                  raise exception 'custom-only setup completion mismatch: required %, version %', setup_required, setup_version;
               end if;
           end;
           $$;
@@ -297,12 +325,12 @@ jobs:
               setup_required boolean;
           begin
               select count(*),
-                     array_agg(managed_category_key order by managed_category_key)
-                         filter (where is_enabled = true)
+                     array_agg(managed_row.managed_category_key order by managed_row.managed_category_key)
+                         filter (where managed_row.is_enabled = true)
                 into managed_total, enabled_keys
-                from public.ticket_categories
-               where guild_id = 'brand-new-guild'
-                 and managed_by_dank = true;
+                from public.ticket_categories managed_row
+               where managed_row.guild_id = 'brand-new-guild'
+                 and managed_row.managed_by_dank = true;
 
               if managed_total <> 16 then
                   raise exception 'new guild expected 16 managed rows, got %', managed_total;
@@ -311,8 +339,8 @@ jobs:
                   raise exception 'new guild safe starter mismatch: %', enabled_keys;
               end if;
 
-              select ticket_category_setup_required into setup_required
-                from public.guild_configs where guild_id = 'brand-new-guild';
+              select gc.ticket_category_setup_required into setup_required
+                from public.guild_configs gc where gc.guild_id = 'brand-new-guild';
               if setup_required is not true then
                   raise exception 'new guild category setup should be required';
               end if;
