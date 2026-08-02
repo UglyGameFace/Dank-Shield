@@ -508,6 +508,28 @@ def _read_durable_count_sync(guild_id: int) -> Optional[int]:
     return max(0, _safe_int(rows[0].get("invites_blocked"), 0))
 
 
+async def read_invites_blocked(guild_id: int) -> Optional[int]:
+    """Read the dedicated durable total for the visible stats display."""
+
+    gid = int(guild_id)
+    if gid <= 0:
+        return None
+    try:
+        return await asyncio.to_thread(
+            _execute_with_retry,
+            "read durable invite count",
+            lambda: _read_durable_count_sync(gid),
+            3,
+        )
+    except Exception as exc:
+        if not _rpc_or_table_missing(exc):
+            _warn(
+                f"durable count read failed guild={gid} "
+                f"error={type(exc).__name__}: {str(exc)[:180]}"
+            )
+        return None
+
+
 async def _legacy_invite_count(guild_id: int) -> int:
     try:
         config = await get_guild_config(guild_id, refresh=True)
@@ -769,6 +791,7 @@ __all__ = [
     "blocked_invite_count",
     "event_hash_for_message",
     "install",
+    "read_invites_blocked",
     "reconcile_guild",
     "record_deleted_invite_decision",
 ]
