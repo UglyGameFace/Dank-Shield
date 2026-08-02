@@ -10,14 +10,14 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = [
     "stoney_verify/commands_ext/public_ticket_panel_clean.py",
     "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py",
-    "stoney_verify/startup_guards/ticket_category_cod_services_guard.py",
-    "stoney_verify/startup_guards/ticket_category_game_services_guard.py",
+    "stoney_verify/startup_guards/ticket_category_setup_guard.py",
     "stoney_verify/startup_guards/ticket_form_default_templates_guard.py",
     "stoney_verify/startup_guards/__init__.py",
-    "stoney_verify/commands_ext/ticket_category_admin.py",
+    "stoney_verify/tickets_new/managed_category_service.py",
     "stoney_verify/tickets_new/intake_service.py",
     "stoney_verify/tickets_new/panel.py",
     "supabase/migrations/202607310001_managed_ticket_category_catalog.sql",
+    "supabase/migrations/202608020001_ticket_category_setup_selection.sql",
 ]
 
 CHECKS = {
@@ -36,73 +36,48 @@ CHECKS = {
         "single-interaction owner active",
         "ticket allocator remain untouched",
     ],
-    "supabase/migrations/202607310001_managed_ticket_category_catalog.sql": [
-        "dank_ticket_category_catalog",
-        "cod-services",
-        "cod_services",
-        "COD Services",
-        "Call of Duty lobbies",
-        "managed_by_dank",
-        "managed_category_key",
+    "stoney_verify/tickets_new/managed_category_service.py": [
+        "CATEGORY_SETUP_VERSION = 2",
+        "SAFE_STARTER_KEYS",
+        "CATEGORY_CATALOG",
+        "canonical_category_key",
+        "dedupe_category_rows",
+        "ensure_category_setup_state_sync",
+        "save_category_selection_sync",
+        "save_dank_ticket_category_selection",
+        "require_dank_ticket_category_setup",
     ],
-    "stoney_verify/startup_guards/ticket_category_cod_services_guard.py": [
-        "cod_services",
-        "Call of Duty Services",
-        "legacy and modern",
-        "Warzone",
-        "BO6",
-        "BO7",
-        "MWIII",
-        "Server owners control exact rules",
-        "_install_public_panel_wording",
-        "_install_ticket_panel_bootstrap_category",
-        "_install_setup_category",
-        "_install_category_admin_type",
-        "_install_intake_service_type",
-        "Which COD game?",
-        "Platform / account type",
+    "stoney_verify/startup_guards/ticket_category_setup_guard.py": [
+        "Single owner for ticket category catalog",
+        "ManagedCategorySelection",
+        "Choose every ticket option this server should show",
+        "_setup_category_load",
+        "_seed_catalog_without_enabling_everything",
+        "_clean_panel_load_rows",
+        "_install_live_loaders",
+        "_install_setup_owner",
+        "explicit setup selection",
     ],
-    "stoney_verify/startup_guards/ticket_category_game_services_guard.py": [
-        "Game Services",
-        "server-owner-defined game service categories",
-        "Server owners control the exact services and rules",
-        "_install_public_menu_support",
-        "_install_setup_category",
-        "_install_category_admin_type",
-        "_install_intake_service_type",
-        "_install_form_template_support",
-        "Which game is this for?",
-        "Server owners are responsible for their own rules and services.",
-    ],
-    "stoney_verify/startup_guards/ticket_form_default_templates_guard.py": [
-        "custom COD/modded-lobby categories are recognized",
-        '"cod"',
-        "Which COD game?",
-        "Platform / console",
+    "supabase/migrations/202608020001_ticket_category_setup_selection.sql": [
+        "ticket_category_setup_required",
+        "ticket_category_setup_selected_keys",
+        "game-services",
+        "require_dank_ticket_category_setup",
+        "save_dank_ticket_category_selection",
+        "p_reset_to_starter",
+        "managed_enabled >= 10",
+        "alter column ticket_category_setup_required set default true",
     ],
     "stoney_verify/startup_guards/__init__.py": [
         "public_ticket_panel_clean_hardening",
-        "ticket_category_cod_services_guard",
-        "ticket_category_game_services_guard",
-    ],
-    "stoney_verify/commands_ext/ticket_category_admin.py": [
-        "_ALLOWED_INTAKE_TYPES",
-        "_governance_warnings",
-        "_duplicate_slugs",
-        "_verification_like_categories",
-    ],
-    "stoney_verify/tickets_new/intake_service.py": [
-        "_reason_has_cod_legacy_signals",
-        "_default_questions_for_intake_type",
-        "score_reason_against_category",
-    ],
-    "stoney_verify/tickets_new/panel.py": [
-        "_DEFAULT_BOOTSTRAP_CATEGORIES",
-        "COD Services",
-        "bo6",
-        "warzone",
+        "ticket_category_setup_guard",
     ],
 }
+
+FORBIDDEN_STARTUP_GUARDS = (
+    "ticket_category_cod_services_guard",
+    "ticket_category_game_services_guard",
+)
 
 FORBIDDEN_HARDENING_OVERRIDES = (
     "panel_mod._next_number =",
@@ -116,8 +91,7 @@ FORBIDDEN_HARDENING_OVERRIDES = (
 
 ORDERED_STARTUP_SNIPPETS = [
     "public_ticket_panel_clean_hardening",
-    "ticket_category_cod_services_guard",
-    "ticket_category_game_services_guard",
+    "ticket_category_setup_guard",
 ]
 
 
@@ -154,9 +128,14 @@ def main() -> int:
             return 1
 
     startup_text = (ROOT / "stoney_verify/startup_guards/__init__.py").read_text(encoding="utf-8")
+    for snippet in FORBIDDEN_STARTUP_GUARDS:
+        if snippet in startup_text:
+            print(f"obsolete category guard still loaded: {snippet}", file=sys.stderr)
+            return 1
+
     positions = [startup_text.find(snippet) for snippet in ORDERED_STARTUP_SNIPPETS]
     if any(pos < 0 for pos in positions) or positions != sorted(positions):
-        print("startup guard order is wrong for ticket category hardening", file=sys.stderr)
+        print("startup guard order is wrong for ticket category setup", file=sys.stderr)
         return 1
 
     print("Ticket category menu audit passed")
