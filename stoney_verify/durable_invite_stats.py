@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import random
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +39,7 @@ _RECENT_EVENT_TTL_SECONDS = 30 * 60
 _REFRESH_COALESCE_SECONDS = 12.0
 _RETRY_BASE_SECONDS = 5.0
 _RETRY_MAX_SECONDS = 60.0
+_RECONCILE_CONCURRENCY = 8
 
 _GUILD_LOCKS: dict[int, asyncio.Lock] = {}
 _RECENT_EVENTS: dict[str, tuple[float, int]] = {}
@@ -45,6 +47,8 @@ _PENDING: dict[str, "PendingInviteEvent"] = {}
 _REFRESH_TASKS: dict[int, asyncio.Task[Any]] = {}
 _LAST_REFRESH_AT: dict[int, float] = {}
 _RETRY_TASK: Optional[asyncio.Task[Any]] = None
+_RECOVERY_TASK: Optional[asyncio.Task[Any]] = None
+_OUTBOX_FILE_LOCK = threading.Lock()
 _INSTALLED = False
 
 
@@ -214,16 +218,29 @@ def _outbox_path() -> Path:
     return Path(root) / "invite_stats_outbox.json"
 
 
-def _persist_outbox() -> None:
+def _persist_outbox(payload: Optional[list[dict[str, Any]]] = None) -> None:
     path = _outbox_path()
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = [event.to_json() for event in _PENDING.values()]
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-        temporary.replace(path)
+        with _OUTBOX_FILE_LOCK:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot = payload if payload is not None else [
+                event.to_json() for event in _PENDING.values()
+            ]
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(snapshot, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            temporary.replace(path)
     except Exception as exc:
         _warn(f"could not persist retry outbox: {type(exc).__name__}: {exc}")
+
+
+async def _persist_outbox_async() -> None:
+    """Persist an immutable pending-event snapshot without blocking Discord."""
+
+    snapshot = [event.to_json() for event in list(_PENDING.values())]
+    await asyncio.to_thread(_persist_outbox, snapshot)
 
 
 def _load_outbox() -> None:
@@ -603,11 +620,11 @@ def _schedule_display_refresh(guild_id: int) -> None:
         _warn(f"could not schedule display refresh guild={gid}: {type(exc).__name__}: {exc}")
 
 
-def _queue_pending(event: PendingInviteEvent) -> None:
+async def _queue_pending(event: PendingInviteEvent) -> None:
     existing = _PENDING.get(event.event_hash)
     if existing is None or event.blocked_count > existing.blocked_count:
         _PENDING[event.event_hash] = event
-    _persist_outbox()
+    await _persist_outbox_async()
     _ensure_retry_task()
 
 
@@ -621,7 +638,7 @@ async def _retry_pending_loop() -> None:
                     result = await asyncio.to_thread(_write_event_sync, event)
                     _PENDING.pop(event_hash, None)
                     _RECENT_EVENTS[event_hash] = (time.monotonic(), result.invites_blocked)
-                    _persist_outbox()
+                    await _persist_outbox_async()
                     await _sync_compatibility_count(event.guild_id, result.invites_blocked)
                     _log(
                         f"retry persisted guild={event.guild_id} event={event_hash[:12]} "
@@ -699,7 +716,7 @@ async def record_deleted_invite_decision(message: Any, decision: Any) -> InviteS
         try:
             result = await asyncio.to_thread(_write_event_sync, event)
         except Exception as exc:
-            _queue_pending(event)
+            await _queue_pending(event)
             _warn(
                 f"write queued guild={guild_id} event={event_hash[:12]} blocked={blocked_count} "
                 f"error={type(exc).__name__}: {str(exc)[:220]}"
@@ -716,7 +733,7 @@ async def record_deleted_invite_decision(message: Any, decision: Any) -> InviteS
 
         _RECENT_EVENTS[event_hash] = (time.monotonic(), result.invites_blocked)
         _PENDING.pop(event_hash, None)
-        _persist_outbox()
+        await _persist_outbox_async()
         await _sync_compatibility_count(guild_id, result.invites_blocked)
         _log(
             f"recorded guild={guild_id} event={event_hash[:12]} blocked={blocked_count} "
@@ -749,17 +766,71 @@ async def reconcile_guild(guild_id: int) -> Optional[int]:
     return count
 
 
-async def _on_ready() -> None:
+async def _run_startup_recovery() -> None:
+    """Drain restored events and reconcile guild totals with bounded concurrency."""
+
     _ensure_retry_task()
     guilds = list(getattr(bot, "guilds", []) or [])
-    for guild in guilds:
+    if not guilds:
+        return
+
+    semaphore = asyncio.Semaphore(max(1, int(_RECONCILE_CONCURRENCY)))
+
+    async def reconcile_one(guild: Any) -> None:
+        async with semaphore:
+            try:
+                await reconcile_guild(int(guild.id))
+            except Exception as exc:
+                _warn(
+                    f"startup reconcile failed guild={getattr(guild, 'id', 0)} "
+                    f"error={type(exc).__name__}: {str(exc)[:180]}"
+                )
+
+    await asyncio.gather(*(reconcile_one(guild) for guild in guilds))
+
+
+def _schedule_startup_recovery() -> bool:
+    global _RECOVERY_TASK
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = getattr(bot, "loop", None)
+        if loop is None or not bool(getattr(loop, "is_running", lambda: False)()):
+            return False
         try:
-            await reconcile_guild(int(guild.id))
-        except Exception as exc:
+            loop.call_soon_threadsafe(_schedule_startup_recovery)
+            return True
+        except Exception:
+            return False
+
+    if _RECOVERY_TASK is not None and not _RECOVERY_TASK.done():
+        return True
+
+    task = loop.create_task(_run_startup_recovery())
+    _RECOVERY_TASK = task
+
+    def clear_finished(completed: asyncio.Task[Any]) -> None:
+        global _RECOVERY_TASK
+        if _RECOVERY_TASK is completed:
+            _RECOVERY_TASK = None
+        try:
+            error = completed.exception()
+        except asyncio.CancelledError:
+            return
+        if error is not None:
             _warn(
-                f"startup reconcile failed guild={getattr(guild, 'id', 0)} "
-                f"error={type(exc).__name__}: {str(exc)[:180]}"
+                f"startup recovery task failed error={type(error).__name__}: "
+                f"{str(error)[:180]}"
             )
+
+    task.add_done_callback(clear_finished)
+    return True
+
+
+async def _on_ready() -> None:
+    # Return quickly; repeated ready events share one recovery task.
+    _schedule_startup_recovery()
 
 
 def install() -> bool:
@@ -776,7 +847,17 @@ def install() -> bool:
         ):
             bot.add_listener(_on_ready, "on_ready")
         _INSTALLED = True
-        _log("active; atomic event ledger, retry outbox, and display reconciliation enabled")
+        already_ready = False
+        try:
+            already_ready = bool(bot.is_ready())
+        except Exception:
+            already_ready = False
+        if already_ready and not _schedule_startup_recovery():
+            _warn("bot is already ready but startup recovery could not be scheduled")
+        _log(
+            "active; atomic event ledger, async retry outbox, and bounded "
+            "display reconciliation enabled"
+        )
         return True
     except Exception as exc:
         _warn(f"listener install failed: {type(exc).__name__}: {exc}")

@@ -12,7 +12,11 @@ def _clear_runtime_state(monkeypatch) -> None:
     durable_invite_stats._GUILD_LOCKS.clear()
     durable_invite_stats._REFRESH_TASKS.clear()
     durable_invite_stats._LAST_REFRESH_AT.clear()
-    monkeypatch.setattr(durable_invite_stats, "_persist_outbox", lambda: None)
+
+    async def no_persist() -> None:
+        return None
+
+    monkeypatch.setattr(durable_invite_stats, "_persist_outbox_async", no_persist)
     monkeypatch.setattr(durable_invite_stats, "_ensure_retry_task", lambda: None)
 
 
@@ -143,7 +147,7 @@ def test_failed_write_is_queued_and_never_silently_claimed_persisted(monkeypatch
     def fail_write(_event):
         raise RuntimeError("database unavailable")
 
-    def fake_queue(event):
+    async def fake_queue(event):
         queued.append(event)
         durable_invite_stats._PENDING[event.event_hash] = event
 
@@ -303,3 +307,91 @@ def test_central_delete_remains_successful_when_stats_are_queued(monkeypatch) ->
 
     assert asyncio.run(invite_policy_engine.delete_message_if_allowed(message, decision)) is True
     assert decision.delete_succeeded is True
+
+
+def test_outbox_persistence_moves_file_work_off_event_loop(monkeypatch) -> None:
+    durable_invite_stats._PENDING.clear()
+    event = durable_invite_stats.PendingInviteEvent(
+        event_hash="d" * 64,
+        guild_id=1,
+        blocked_count=2,
+        seed_count=3,
+        source="test",
+    )
+    durable_invite_stats._PENDING[event.event_hash] = event
+    calls = []
+
+    def fake_persist(payload):
+        calls.append(payload)
+
+    async def fake_to_thread(function, *args):
+        calls.append("to_thread")
+        return function(*args)
+
+    monkeypatch.setattr(durable_invite_stats, "_persist_outbox", fake_persist)
+    monkeypatch.setattr(durable_invite_stats.asyncio, "to_thread", fake_to_thread)
+
+    asyncio.run(durable_invite_stats._persist_outbox_async())
+
+    assert calls[0] == "to_thread"
+    assert calls[1] == [event.to_json()]
+
+
+def test_install_schedules_recovery_when_loaded_after_ready(monkeypatch) -> None:
+    listeners = []
+    scheduled = []
+
+    class FakeBot:
+        extra_events = {}
+
+        @staticmethod
+        def is_ready():
+            return True
+
+        @staticmethod
+        def add_listener(listener, event_name):
+            listeners.append((listener, event_name))
+
+    monkeypatch.setattr(durable_invite_stats, "_INSTALLED", False)
+    monkeypatch.setattr(durable_invite_stats, "bot", FakeBot())
+    monkeypatch.setattr(durable_invite_stats, "_load_outbox", lambda: None)
+    monkeypatch.setattr(
+        durable_invite_stats,
+        "_schedule_startup_recovery",
+        lambda: scheduled.append(True) or True,
+    )
+
+    assert durable_invite_stats.install() is True
+    assert listeners == [(durable_invite_stats._on_ready, "on_ready")]
+    assert scheduled == [True]
+
+
+def test_startup_recovery_is_bounded_and_concurrent(monkeypatch) -> None:
+    guilds = [SimpleNamespace(id=index) for index in range(1, 25)]
+    active = 0
+    maximum_active = 0
+    completed = []
+    retry_started = []
+
+    async def fake_reconcile(guild_id: int):
+        nonlocal active, maximum_active
+        active += 1
+        maximum_active = max(maximum_active, active)
+        await asyncio.sleep(0.005)
+        completed.append(guild_id)
+        active -= 1
+        return guild_id
+
+    monkeypatch.setattr(durable_invite_stats, "bot", SimpleNamespace(guilds=guilds))
+    monkeypatch.setattr(durable_invite_stats, "reconcile_guild", fake_reconcile)
+    monkeypatch.setattr(
+        durable_invite_stats,
+        "_ensure_retry_task",
+        lambda: retry_started.append(True),
+    )
+
+    asyncio.run(durable_invite_stats._run_startup_recovery())
+
+    assert retry_started == [True]
+    assert set(completed) == set(range(1, 25))
+    assert 1 < maximum_active <= durable_invite_stats._RECONCILE_CONCURRENCY
