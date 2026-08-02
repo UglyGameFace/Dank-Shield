@@ -2,8 +2,9 @@
 
 ## DS-STATS-019 — Durable Dank Stats invite-block counting
 
-**Status:** ACTIVE — IMPLEMENTATION / REGRESSION VALIDATION
+**Status:** ACTIVE — FINAL REGRESSION VALIDATION
 **Branch:** `fix/dank-stats-invite-block-counting`
+**Pull request:** `#166`
 
 ## Why this task is active
 
@@ -27,13 +28,22 @@ The old central invite-delete path incremented `invites_blocked` by exactly one 
 - [x] Coalesce prompt Discord channel refreshes to avoid rename spam.
 - [x] Reconcile durable totals for all connected guilds after startup.
 - [x] Retain a bounded guild-config CAS fallback during rolling migration visibility.
+- [x] Use the required unique 14-digit Supabase migration timestamp.
 
-## Definition of Done
+## Validation completed
 
-- [ ] Focused durable invite stats tests pass.
-- [ ] PostgreSQL migration applies twice successfully.
-- [ ] SQL smoke test proves first event increments by its actual count.
-- [ ] SQL smoke test proves replaying the same event does not increment again.
+- [x] PostgreSQL migration applies twice successfully.
+- [x] SQL smoke test proves seed `5` plus three blocked codes produces total `8`.
+- [x] SQL smoke test proves replaying the same event remains total `8` with `applied=false`.
+- [x] SQL smoke test proves a second two-code event produces total `10`.
+- [x] SQL smoke test proves exactly two unique ledger rows exist.
+- [x] SQL permission test proves anon/authenticated cannot read the tables.
+- [x] SQL permission test proves only the service role receives RPC execution.
+- [x] Migration-version audit issue was corrected with `20260802225500_durable_invite_stats.sql`.
+
+## Remaining Definition of Done gates
+
+- [ ] Focused durable invite stats tests pass on the final head.
 - [ ] Central policy test proves successful deletion calls the durable recorder.
 - [ ] Failure test proves a write is queued rather than silently discarded.
 - [ ] Full unit suite passes.
@@ -42,7 +52,7 @@ The old central invite-delete path incremented `invites_blocked` by exactly one 
 - [ ] Command-size and profile-runtime diagnostics pass.
 - [ ] Branch is current with `main` and has no unresolved review threads.
 - [ ] PR is merged.
-- [ ] Discloud rebuild completes and live invite test increments the visible counter by the actual blocked-code count.
+- [ ] Discloud rebuild completes and a live invite test increments the visible counter by the actual blocked-code count.
 
 ## Previous completed implementation
 
