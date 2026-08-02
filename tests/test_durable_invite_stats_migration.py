@@ -17,7 +17,7 @@ def test_migration_has_atomic_event_ledger_and_service_role_boundary() -> None:
     assert "event_hash text primary key" in sql
     assert "create or replace function public.record_dank_invite_block_event" in sql
     assert "on conflict (event_hash) do nothing" in sql
-    assert "invites_blocked = invites_blocked + p_blocked_count" in sql
+    assert "invites_blocked = stats.invites_blocked + p_blocked_count" in sql
     assert "return query select false" in sql
     assert "enable row level security" in sql
     assert "grant execute on function public.record_dank_invite_block_event" in sql
