@@ -99,11 +99,11 @@ begin
     returning event_hash into inserted_event;
 
     if inserted_event is not null then
-        update public.dank_invite_block_stats
-        set invites_blocked = invites_blocked + p_blocked_count,
+        update public.dank_invite_block_stats as stats
+        set invites_blocked = stats.invites_blocked + p_blocked_count,
             updated_at = now()
-        where guild_id = btrim(p_guild_id)
-        returning public.dank_invite_block_stats.invites_blocked
+        where stats.guild_id = btrim(p_guild_id)
+        returning stats.invites_blocked
         into current_count;
 
         return query select true, current_count;
