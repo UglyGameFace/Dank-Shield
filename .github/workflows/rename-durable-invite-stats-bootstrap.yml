@@ -1,0 +1,35 @@
+name: Rename Durable Invite Stats Bootstrap Reference
+
+on:
+  push:
+    branches:
+      - fix/dank-stats-invite-block-counting
+    paths:
+      - tools/rename_durable_invite_stats_bootstrap.py
+      - .github/workflows/rename-durable-invite-stats-bootstrap.yml
+
+permissions:
+  contents: write
+
+jobs:
+  rename:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/dank-stats-invite-block-counting
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Rename bootstrap migration reference
+        run: python tools/rename_durable_invite_stats_bootstrap.py
+      - name: Commit exact rename and remove one-shot workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Use timestamped durable invite stats migration"
+          git push origin HEAD:fix/dank-stats-invite-block-counting
