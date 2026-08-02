@@ -17,7 +17,7 @@ FILES = [
     "stoney_verify/tickets_new/intake_service.py",
     "stoney_verify/tickets_new/panel.py",
     "supabase/migrations/202607310001_managed_ticket_category_catalog.sql",
-    "supabase/migrations/202608020001_ticket_category_setup_selection.sql",
+    "supabase/migrations/20260802042000_ticket_category_setup_selection.sql",
 ]
 
 CHECKS = {
@@ -69,7 +69,7 @@ CHECKS = {
         '"game_services": [',
         "Which game is this for?",
     ],
-    "supabase/migrations/202608020001_ticket_category_setup_selection.sql": [
+    "supabase/migrations/20260802042000_ticket_category_setup_selection.sql": [
         "ticket_category_setup_required",
         "ticket_category_setup_selected_keys",
         "game-services",
