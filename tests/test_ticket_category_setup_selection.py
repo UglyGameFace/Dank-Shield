@@ -10,6 +10,8 @@ from stoney_verify.commands_ext import public_setup_recommend as recommend
 from stoney_verify.commands_ext import public_setup_solid as solid
 from stoney_verify.commands_ext import public_ticket_panel_clean as clean_panel
 from stoney_verify.startup_guards import _STARTUP_GUARDS
+from stoney_verify.startup_guards import auto_schema_bootstrap
+from stoney_verify.startup_guards import ticket_category_schema_bootstrap_guard as schema_guard
 from stoney_verify.startup_guards import ticket_category_setup_guard as setup_guard
 from stoney_verify.startup_guards import ticket_form_default_templates_guard as forms
 from stoney_verify.tickets_new import managed_category_service as categories
@@ -201,6 +203,14 @@ def test_guided_ticket_choice_step_opens_the_category_selector(
     )
 
     assert events == ["ticket_menu"]
+
+
+def test_category_migration_is_registered_for_direct_dsn_startup() -> None:
+    assert schema_guard.MIGRATION_FILE in auto_schema_bootstrap._BOOTSTRAP_MIGRATION_FILES
+    assert "stoney_verify.startup_guards.ticket_category_schema_bootstrap_guard" in _STARTUP_GUARDS
+    assert _STARTUP_GUARDS.index("stoney_verify.startup_guards.auto_schema_bootstrap") < _STARTUP_GUARDS.index(
+        "stoney_verify.startup_guards.ticket_category_schema_bootstrap_guard"
+    )
 
 
 def test_cod_and_game_services_keep_distinct_native_forms() -> None:
