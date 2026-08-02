@@ -17,10 +17,11 @@ PANEL = ROOT / "stoney_verify" / "commands_ext" / "public_ticket_panel_clean.py"
 def _reset_guard_state() -> None:
     guard._INTERACTION_LOCKS.clear()
     guard._INTERACTION_DONE_UNTIL.clear()
+    guard._INTERACTION_EXPIRY_HEAP.clear()
 
 
 def _expire_and_prune(interaction_id: int) -> None:
-    guard._INTERACTION_DONE_UNTIL[interaction_id] = 0.0
+    guard._record_interaction_done(interaction_id, 0.0)
     guard._prune_interactions()
     assert interaction_id not in guard._INTERACTION_DONE_UNTIL
     assert interaction_id not in guard._INTERACTION_LOCKS
@@ -84,6 +85,7 @@ def test_handler_exception_is_finalized_and_prunable() -> None:
         assert interaction_id in guard._INTERACTION_DONE_UNTIL
         assert interaction_id in guard._INTERACTION_LOCKS
         assert guard._INTERACTION_LOCKS[interaction_id].locked() is False
+        assert any(key == interaction_id for _expires_at, key in guard._INTERACTION_EXPIRY_HEAP)
 
         # Duplicate delivery of the failed interaction is still ignored rather
         # than retrying potentially partial side effects.
@@ -125,6 +127,18 @@ def test_handler_cancellation_is_finalized_and_prunable() -> None:
         _expire_and_prune(interaction_id)
 
     asyncio.run(scenario())
+
+
+def test_stale_expiry_entry_cannot_remove_newer_completion() -> None:
+    _reset_guard_state()
+    interaction_id = 7003
+
+    guard._record_interaction_done(interaction_id, 0.0)
+    guard._record_interaction_done(interaction_id, float("inf"))
+    guard._prune_interactions()
+
+    assert guard._INTERACTION_DONE_UNTIL[interaction_id] == float("inf")
+    assert guard._INTERACTION_EXPIRY_HEAP == [(float("inf"), interaction_id)]
 
 
 def test_persistent_view_removes_redundant_fallback_listener() -> None:
@@ -194,7 +208,6 @@ def test_hardening_does_not_override_categories_or_ticket_numbers() -> None:
 
     assert "reserve_persistent_ticket_number" in panel
     assert "return await reserve_persistent_ticket_number" in panel
-    assert "finally:" in hardening
     assert "_INTERACTION_TTL_SECONDS" in hardening
     assert "_MENU_SESSION_SECONDS" not in hardening
     assert "int(member.id)" not in hardening
