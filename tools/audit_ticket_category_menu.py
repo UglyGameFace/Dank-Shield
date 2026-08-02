@@ -18,6 +18,9 @@ FILES = [
     "stoney_verify/tickets_new/panel.py",
     "supabase/migrations/202607310001_managed_ticket_category_catalog.sql",
     "supabase/migrations/202608020001_ticket_category_setup_selection.sql",
+    "supabase/migrations/202608020002_ticket_category_setup_completion_compat.sql",
+    "supabase/migrations/202608020003_ticket_category_custom_preservation.sql",
+    "supabase/migrations/202608020004_ticket_category_selection_custom_only.sql",
 ]
 
 CHECKS = {
@@ -44,19 +47,27 @@ CHECKS = {
         "dedupe_category_rows",
         "ensure_category_setup_state_sync",
         "save_category_selection_sync",
-        "save_dank_ticket_category_selection",
+        "allow_empty",
+        "_set_custom_default_fallback_sync",
         "require_dank_ticket_category_setup",
     ],
     "stoney_verify/startup_guards/ticket_category_setup_guard.py": [
         "Single owner for ticket category catalog",
         "ManagedCategorySelection",
-        "Choose every ticket option this server should show",
+        "Choose every built-in ticket option this server should show",
+        "Use Custom Choices Only",
         "_setup_category_load",
         "_seed_catalog_without_enabling_everything",
         "_clean_panel_load_rows",
         "_install_live_loaders",
         "_install_setup_owner",
-        "explicit setup selection",
+        "custom-only support",
+    ],
+    "stoney_verify/startup_guards/ticket_form_default_templates_guard.py": [
+        '"cod-services": "cod"',
+        '"game-services": "game_services"',
+        '"game_services": [',
+        "Which game is this for?",
     ],
     "supabase/migrations/202608020001_ticket_category_setup_selection.sql": [
         "ticket_category_setup_required",
@@ -68,11 +79,27 @@ CHECKS = {
         "managed_enabled >= 10",
         "alter column ticket_category_setup_required set default true",
     ],
+    "supabase/migrations/202608020003_ticket_category_custom_preservation.sql": [
+        "Your custom ticket choices were preserved",
+        "set is_enabled = false",
+        "managed_by_dank = false",
+    ],
+    "supabase/migrations/202608020004_ticket_category_selection_custom_only.sql": [
+        "custom choices only",
+        "custom_row.is_default = true",
+        "managed_row.managed_category_key = any(selected_keys)",
+        "managed_row.is_enabled = true",
+    ],
     "stoney_verify/startup_guards/__init__.py": [
         "public_ticket_panel_clean_hardening",
         "ticket_category_setup_guard",
     ],
 }
+
+OBSOLETE_FILES = (
+    "stoney_verify/startup_guards/ticket_category_cod_services_guard.py",
+    "stoney_verify/startup_guards/ticket_category_game_services_guard.py",
+)
 
 FORBIDDEN_STARTUP_GUARDS = (
     "ticket_category_cod_services_guard",
@@ -107,6 +134,11 @@ def main() -> int:
             except py_compile.PyCompileError as exc:
                 print(f"compile failed {path}: {exc}", file=sys.stderr)
                 return 1
+
+    for path in OBSOLETE_FILES:
+        if (ROOT / path).exists():
+            print(f"obsolete category owner still exists: {path}", file=sys.stderr)
+            return 1
 
     for path, snippets in CHECKS.items():
         text = (ROOT / path).read_text(encoding="utf-8")
