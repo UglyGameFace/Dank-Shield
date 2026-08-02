@@ -2,9 +2,9 @@
 
 ## DS-TICKETS-017 — Explicit ticket category setup and existing-guild repair
 
-**Status:** IMPLEMENTED — FINAL EXACT-HEAD CI PENDING
-**Branch:** `fix/ticket-category-setup-selection`
-**Pull request:** `#163`
+**Status:** MERGED — PRODUCTION DEPLOYMENT/LIVE VERIFICATION PENDING
+**Merged pull request:** `#163`
+**Merge commit:** `51b3663734c578066444107395d9b57fc936dbc8`
 
 ## Scope
 
@@ -54,18 +54,23 @@ Repair the user-facing Create Ticket category menu and setup lifecycle so:
 - Folded intermediate SQL drafts into one final timestamped migration.
 - Removed invalid/duplicate migration filenames.
 - Kept ticket-number allocation and the Create Ticket single-owner guard untouched.
-- PR changed files are limited to ticket category setup, migration, tests, audits, and this task record.
-- Branch is 0 commits behind `main`.
-- PR is mergeable with no unresolved review threads.
+- Branch was 0 commits behind `main` before merge.
+- All review threads were resolved before merge.
+- PR #163 was squash-merged from the exact tested head `f040a59f24558589425004d37030783e83094a4f`.
 
 ## Validation
 
-- [x] Ticket Category Menu Sanity passed on implementation head `22b5568e190aadc9691a93edf84c9d87d5b4d0cb`.
-- [x] Ticket Category Selection SQL passed on implementation head, including idempotent double application.
-- [x] Application Command Size Diagnostics passed on implementation head.
-- [x] Managed category SQL smoke test passed inside Dank Shield CI.
-- [x] Claim-first ticket security regression suite passed inside Dank Shield CI.
-- [x] Python compilation and committed-diff whitespace checks passed inside Dank Shield CI.
+- [x] Exact-head Ticket Category Menu Sanity passed.
+- [x] Exact-head Ticket Category Selection SQL passed, including idempotent double application.
+- [x] Exact-head Application Command Size Diagnostics passed.
+- [x] Exact-head Profile Runtime Diagnostics passed.
+- [x] Exact-head Dank Shield CI passed.
+- [x] Full unit suite passed: **886 tests**, 9 warnings.
+- [x] Python compilation and committed-diff whitespace checks passed.
+- [x] Managed category SQL smoke test passed.
+- [x] Claim-first ticket security regression suite passed.
+- [x] All standalone tool checks passed.
+- [x] Public setup, command surface, command friction, invite permission, setup safety, design auto-detect, role truth, and event-boundary audits passed.
 - [x] Existing all-enabled guild repair is covered by PostgreSQL smoke tests.
 - [x] Existing custom-menu preservation and custom-only confirmation are covered by PostgreSQL smoke tests.
 - [x] New-guild safe starter and setup-required trigger are covered by PostgreSQL smoke tests.
@@ -73,17 +78,14 @@ Repair the user-facing Create Ticket category menu and setup lifecycle so:
 - [x] Member-visible exact deduplication and enabled-only filtering are behavior-tested.
 - [x] Automatic migration registration is behavior-tested.
 - [x] COD/Game Services form separation is behavior-tested.
-- [x] Review feedback is fully resolved on the implementation head.
-- [ ] Final exact-head full Dank Shield CI passes after this task-record-only commit.
-- [ ] Final exact-head Profile Runtime Diagnostics passes after this task-record-only commit.
-- [ ] PR merges using the exact tested head SHA.
+- [x] PR merged using the exact tested head SHA.
 - [ ] Production deployment/restart applies the migration.
 - [ ] Live setup and Create Ticket menu are verified after deployment.
 
 ## Current blockers
 
-- The final exact-head GitHub Actions run must finish after this task-record-only commit.
-- Production/live verification cannot occur until the tested PR is merged and the Discloud process deploys or restarts.
+- Production/live verification requires the merged build to deploy or the Discloud app to restart.
+- The connected tools do not expose Dank Shield's Discloud deployment state or live logs, so deployment cannot be asserted from GitHub alone.
 
 ## Backlog
 
@@ -91,7 +93,7 @@ Repair the user-facing Create Ticket category menu and setup lifecycle so:
 
 After DS-TICKETS-017 reaches its Definition of Done, inspect the existing message-event ownership path and add one moderation-safe listener that recognizes verified `klipy.com` page URLs, resolves the page's direct GIF asset without arbitrary-host fetching, and replies with the direct media or a rich embed. Include bounded requests, redirect/host validation, caching, bot-loop prevention, permission/error handling, and focused listener/parser/security regressions.
 
-No unrelated implementation work is active. DS-MEDIA-001 remains queued until DS-TICKETS-017 is merged, deployed, and live-verified, unless the user explicitly uses the documented force-switch instruction.
+No unrelated implementation work is active. DS-MEDIA-001 remains queued until DS-TICKETS-017 is deployed and live-verified, unless the user explicitly uses the documented force-switch instruction.
 
 ## Previous completed task
 
@@ -99,4 +101,4 @@ DS-TICKETS-016 made the Create Ticket interaction single-owner, preserved native
 
 ## Single Active Task Lock
 
-Do not begin another unrelated repair until DS-TICKETS-017 is merged, deployed, and live-verified.
+Do not begin another unrelated repair until DS-TICKETS-017 is deployed and live-verified.
