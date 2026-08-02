@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
@@ -11,32 +13,165 @@ from ..globals import get_supabase
 
 CATEGORY_SETUP_VERSION = 2
 SAFE_STARTER_KEYS: tuple[str, ...] = ("report", "appeal", "support")
+_RECONCILE_DEBOUNCE_SECONDS = 300.0
+_RECONCILE_RETRY_SECONDS = 30.0
+_RECONCILE_LOCK = threading.Lock()
+_RECONCILE_NOT_BEFORE: Dict[int, float] = {}
 
 # One catalog owns database reconciliation, setup selection, and every live
 # ticket picker. Rows stay available globally, but only rows with is_enabled=true
 # are shown to members.
 CATEGORY_CATALOG: tuple[Dict[str, Any], ...] = (
-    {"category_key": "verification", "slug": "verification_issue", "name": "Verification", "description": "Help with verification or approval issues.", "intake_type": "verification", "sort_order": 10, "is_default": False},
-    {"category_key": "account-access", "slug": "account_access", "name": "Account / Access", "description": "Account access, login, hacked account, email, password, and 2FA issues.", "intake_type": "account", "sort_order": 20, "is_default": False},
-    {"category_key": "payments-refunds", "slug": "payments_refunds", "name": "Payments / Refunds", "description": "Payments, orders, receipts, invoices, refunds, and chargebacks.", "intake_type": "purchase", "sort_order": 30, "is_default": False},
-    {"category_key": "appeal", "slug": "appeal", "name": "Appeal", "description": "Appeal a moderation action or access restriction.", "intake_type": "appeal", "sort_order": 40, "is_default": False},
-    {"category_key": "report", "slug": "report", "name": "Report a Member", "description": "Report a member or server issue.", "intake_type": "report", "sort_order": 50, "is_default": False},
-    {"category_key": "staff-complaint", "slug": "staff_complaint", "name": "Staff Complaint", "description": "Complaints or escalation requests involving staff or moderator behavior.", "intake_type": "report", "sort_order": 60, "is_default": False},
-    {"category_key": "bug", "slug": "technical_support", "name": "Bug / Technical Support", "description": "Site bugs, panel problems, bot issues, broken flows, and technical failures.", "intake_type": "bug", "sort_order": 70, "is_default": False},
-    {"category_key": "cod-services", "slug": "cod_services", "name": "COD Services", "description": "Call of Duty, Warzone, Zombies, lobby, account, unlock, or service questions.", "intake_type": "cod_services", "sort_order": 80, "is_default": False},
-    {"category_key": "game-services", "slug": "game_services", "name": "Game Services", "description": "Route game-related service questions to the right staff.", "intake_type": "game_services", "sort_order": 90, "is_default": False},
-    {"category_key": "service-request", "slug": "service_request", "name": "Service Requests", "description": "General service requests, carries, boosts, recoveries, and fulfillment questions.", "intake_type": "custom", "sort_order": 100, "is_default": False},
-    {"category_key": "vouch-referral", "slug": "vouch_referral", "name": "Vouch / Invite / Referral", "description": "Invite credit, referral rewards, vouch issues, and who-invited-who questions.", "intake_type": "custom", "sort_order": 110, "is_default": False},
-    {"category_key": "giveaway-reward", "slug": "giveaway_reward", "name": "Giveaway / Reward Issues", "description": "Giveaway prizes, missing rewards, winner disputes, and reward claims.", "intake_type": "custom", "sort_order": 120, "is_default": False},
-    {"category_key": "content-media", "slug": "content_media", "name": "Content / Media Requests", "description": "Graphics, thumbnails, banners, content requests, media edits, and promo assets.", "intake_type": "custom", "sort_order": 130, "is_default": False},
-    {"category_key": "partnership", "slug": "partnership", "name": "Partnerships", "description": "Partnerships, sponsorships, collaborations, and promotions.", "intake_type": "partnership", "sort_order": 140, "is_default": False},
-    {"category_key": "question", "slug": "question", "name": "Other Question", "description": "Ask something that does not fit the other options.", "intake_type": "question", "sort_order": 150, "is_default": False},
-    {"category_key": "support", "slug": "support", "name": "Support", "description": "General help from staff.", "intake_type": "general", "sort_order": 999, "is_default": True},
+    {
+        "category_key": "verification",
+        "slug": "verification_issue",
+        "name": "Verification",
+        "description": "Help with verification or approval issues.",
+        "intake_type": "verification",
+        "sort_order": 10,
+        "is_default": False,
+    },
+    {
+        "category_key": "account-access",
+        "slug": "account_access",
+        "name": "Account / Access",
+        "description": "Account access, login, hacked account, email, password, and 2FA issues.",
+        "intake_type": "account",
+        "sort_order": 20,
+        "is_default": False,
+    },
+    {
+        "category_key": "payments-refunds",
+        "slug": "payments_refunds",
+        "name": "Payments / Refunds",
+        "description": "Payments, orders, receipts, invoices, refunds, and chargebacks.",
+        "intake_type": "purchase",
+        "sort_order": 30,
+        "is_default": False,
+    },
+    {
+        "category_key": "appeal",
+        "slug": "appeal",
+        "name": "Appeal",
+        "description": "Appeal a moderation action or access restriction.",
+        "intake_type": "appeal",
+        "sort_order": 40,
+        "is_default": False,
+    },
+    {
+        "category_key": "report",
+        "slug": "report",
+        "name": "Report a Member",
+        "description": "Report a member or server issue.",
+        "intake_type": "report",
+        "sort_order": 50,
+        "is_default": False,
+    },
+    {
+        "category_key": "staff-complaint",
+        "slug": "staff_complaint",
+        "name": "Staff Complaint",
+        "description": "Complaints or escalation requests involving staff or moderator behavior.",
+        "intake_type": "report",
+        "sort_order": 60,
+        "is_default": False,
+    },
+    {
+        "category_key": "bug",
+        "slug": "technical_support",
+        "name": "Bug / Technical Support",
+        "description": "Site bugs, panel problems, bot issues, broken flows, and technical failures.",
+        "intake_type": "bug",
+        "sort_order": 70,
+        "is_default": False,
+    },
+    {
+        "category_key": "cod-services",
+        "slug": "cod_services",
+        "name": "COD Services",
+        "description": "Call of Duty, Warzone, Zombies, lobby, account, unlock, or service questions.",
+        "intake_type": "cod_services",
+        "sort_order": 80,
+        "is_default": False,
+    },
+    {
+        "category_key": "game-services",
+        "slug": "game_services",
+        "name": "Game Services",
+        "description": "Route game-related service questions to the right staff.",
+        "intake_type": "game_services",
+        "sort_order": 90,
+        "is_default": False,
+    },
+    {
+        "category_key": "service-request",
+        "slug": "service_request",
+        "name": "Service Requests",
+        "description": "General service requests, carries, boosts, recoveries, and fulfillment questions.",
+        "intake_type": "custom",
+        "sort_order": 100,
+        "is_default": False,
+    },
+    {
+        "category_key": "vouch-referral",
+        "slug": "vouch_referral",
+        "name": "Vouch / Invite / Referral",
+        "description": "Invite credit, referral rewards, vouch issues, and who-invited-who questions.",
+        "intake_type": "custom",
+        "sort_order": 110,
+        "is_default": False,
+    },
+    {
+        "category_key": "giveaway-reward",
+        "slug": "giveaway_reward",
+        "name": "Giveaway / Reward Issues",
+        "description": "Giveaway prizes, missing rewards, winner disputes, and reward claims.",
+        "intake_type": "custom",
+        "sort_order": 120,
+        "is_default": False,
+    },
+    {
+        "category_key": "content-media",
+        "slug": "content_media",
+        "name": "Content / Media Requests",
+        "description": "Graphics, thumbnails, banners, content requests, media edits, and promo assets.",
+        "intake_type": "custom",
+        "sort_order": 130,
+        "is_default": False,
+    },
+    {
+        "category_key": "partnership",
+        "slug": "partnership",
+        "name": "Partnerships",
+        "description": "Partnerships, sponsorships, collaborations, and promotions.",
+        "intake_type": "partnership",
+        "sort_order": 140,
+        "is_default": False,
+    },
+    {
+        "category_key": "question",
+        "slug": "question",
+        "name": "Other Question",
+        "description": "Ask something that does not fit the other options.",
+        "intake_type": "question",
+        "sort_order": 150,
+        "is_default": False,
+    },
+    {
+        "category_key": "support",
+        "slug": "support",
+        "name": "Support",
+        "description": "General help from staff.",
+        "intake_type": "general",
+        "sort_order": 999,
+        "is_default": True,
+    },
 )
 
 _CATALOG_BY_KEY: Dict[str, Dict[str, Any]] = {
     str(row["category_key"]): dict(row) for row in CATEGORY_CATALOG
 }
+_CATALOG_KEYS = frozenset(_CATALOG_BY_KEY)
 
 _ALIAS_TO_KEY: Dict[str, str] = {
     "verification": "verification",
@@ -274,7 +409,8 @@ def catalog_category_rows() -> List[Dict[str, Any]]:
 
 def starter_category_rows() -> List[Dict[str, Any]]:
     rows = [
-        row for row in catalog_category_rows()
+        row
+        for row in catalog_category_rows()
         if str(row.get("category_key")) in SAFE_STARTER_KEYS
     ]
     for row in rows:
@@ -338,7 +474,45 @@ def _sync_managed_categories_sync(guild_id: int) -> List[Dict[str, Any]]:
     return [dict(row) for row in rows if isinstance(row, Mapping)]
 
 
-def _shape_problem(rows: Sequence[Mapping[str, Any]], cfg: Mapping[str, Any]) -> tuple[str, bool]:
+def _catalog_reconcile_needed(rows: Sequence[Mapping[str, Any]]) -> bool:
+    """Return True only when catalog repair is actually needed."""
+    managed_keys: List[str] = []
+    for row in rows:
+        key = canonical_category_key(row)
+        if key not in _CATALOG_KEYS:
+            continue
+        managed_keys.append(key)
+        if not _safe_bool(row.get("managed_by_dank"), False):
+            return True
+        if _safe_int(row.get("managed_catalog_version"), 0) < CATEGORY_SETUP_VERSION:
+            return True
+
+    if set(managed_keys) != _CATALOG_KEYS:
+        return True
+    return len(managed_keys) != len(set(managed_keys))
+
+
+def _claim_reconcile_window(guild_id: int, *, now: float | None = None) -> bool:
+    """Debounce repair RPCs so bursty menu opens stay read-mostly."""
+    current = time.monotonic() if now is None else float(now)
+    key = int(guild_id)
+    with _RECONCILE_LOCK:
+        if _RECONCILE_NOT_BEFORE.get(key, 0.0) > current:
+            return False
+        _RECONCILE_NOT_BEFORE[key] = current + _RECONCILE_DEBOUNCE_SECONDS
+        return True
+
+
+def _schedule_reconcile_retry(guild_id: int, *, now: float | None = None) -> None:
+    current = time.monotonic() if now is None else float(now)
+    with _RECONCILE_LOCK:
+        _RECONCILE_NOT_BEFORE[int(guild_id)] = current + _RECONCILE_RETRY_SECONDS
+
+
+def _shape_problem(
+    rows: Sequence[Mapping[str, Any]],
+    cfg: Mapping[str, Any],
+) -> tuple[str, bool]:
     version = _safe_int(_row_value(cfg, "ticket_category_setup_version", 0), 0)
     selected_raw = _row_value(cfg, "ticket_category_setup_selected_keys", [])
     selected_exists = bool(selected_raw)
@@ -386,13 +560,22 @@ def _enabled_custom_rows(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, An
     ]
 
 
-def _set_custom_default_fallback_sync(sb: Any, rows: Sequence[Mapping[str, Any]]) -> None:
+def _set_custom_default_fallback_sync(
+    sb: Any,
+    rows: Sequence[Mapping[str, Any]],
+) -> None:
     custom_rows = _enabled_custom_rows(rows)
     if not custom_rows:
         return
-    preferred = next((row for row in custom_rows if _safe_bool(row.get("is_default"), False)), None)
+    preferred = next(
+        (row for row in custom_rows if _safe_bool(row.get("is_default"), False)),
+        None,
+    )
     if preferred is None:
-        preferred = sorted(custom_rows, key=lambda row: (_row_sort(row), str(row.get("id") or "")))[0]
+        preferred = sorted(
+            custom_rows,
+            key=lambda row: (_row_sort(row), str(row.get("id") or "")),
+        )[0]
     preferred_id = str(preferred.get("id") or "")
     for row in rows:
         key = canonical_category_key(row)
@@ -406,7 +589,12 @@ def _set_custom_default_fallback_sync(sb: Any, rows: Sequence[Mapping[str, Any]]
         ).eq("id", row_id).execute()
 
 
-def _mark_required_fallback_sync(guild_id: int, reason: str, *, reset_to_starter: bool) -> None:
+def _mark_required_fallback_sync(
+    guild_id: int,
+    reason: str,
+    *,
+    reset_to_starter: bool,
+) -> None:
     sb = _supabase()
     rows = _fetch_rows_sync(guild_id)
     custom_active = bool(_enabled_custom_rows(rows))
@@ -468,32 +656,10 @@ def require_category_setup_sync(
         )
 
 
-def ensure_category_setup_state_sync(guild_id: int) -> CategorySetupState:
-    try:
-        _sync_managed_categories_sync(guild_id)
-    except ManagedCategorySyncError:
-        # Migration deployment is authoritative. Existing rows still work if the
-        # RPC is temporarily unavailable, and the member menu keeps a safe fallback.
-        pass
-
-    cfg = _fetch_config_sync(guild_id)
-    rows = _fetch_rows_sync(guild_id)
-    required = _config_required(cfg)
-    reason = _config_reason(cfg)
-
-    if not required:
-        detected_reason, reset = _shape_problem(rows, cfg)
-        if detected_reason:
-            require_category_setup_sync(
-                guild_id,
-                detected_reason,
-                reset_to_starter=reset,
-            )
-            cfg = _fetch_config_sync(guild_id)
-            rows = _fetch_rows_sync(guild_id)
-            required = True
-            reason = detected_reason
-
+def _state_from_rows(
+    cfg: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+) -> CategorySetupState:
     active = dedupe_category_rows(rows, enabled_only=True, fallback=True)
     selected = tuple(
         key
@@ -504,10 +670,40 @@ def ensure_category_setup_state_sync(guild_id: int) -> CategorySetupState:
         rows=dedupe_category_rows(rows, enabled_only=False, fallback=False),
         active_rows=active,
         selected_keys=tuple(dict.fromkeys(selected)),
-        required=required,
-        reason=reason,
+        required=_config_required(cfg),
+        reason=_config_reason(cfg),
         version=_safe_int(_row_value(cfg, "ticket_category_setup_version", 0), 0),
     )
+
+
+def ensure_category_setup_state_sync(guild_id: int) -> CategorySetupState:
+    """Read category state, reconciling only stale/missing catalog shapes."""
+    guild_id = int(guild_id)
+    cfg = _fetch_config_sync(guild_id)
+    rows = _fetch_rows_sync(guild_id)
+
+    if _catalog_reconcile_needed(rows) and _claim_reconcile_window(guild_id):
+        try:
+            _sync_managed_categories_sync(guild_id)
+        except ManagedCategorySyncError:
+            _schedule_reconcile_retry(guild_id)
+        else:
+            cfg = _fetch_config_sync(guild_id)
+            rows = _fetch_rows_sync(guild_id)
+
+    required = _config_required(cfg)
+    if not required:
+        detected_reason, reset = _shape_problem(rows, cfg)
+        if detected_reason:
+            require_category_setup_sync(
+                guild_id,
+                detected_reason,
+                reset_to_starter=reset,
+            )
+            cfg = _fetch_config_sync(guild_id)
+            rows = _fetch_rows_sync(guild_id)
+
+    return _state_from_rows(cfg, rows)
 
 
 def load_visible_categories_sync(guild_id: int) -> List[Dict[str, Any]]:
@@ -546,7 +742,11 @@ def _save_selection_fallback_sync(
     if not selected_keys and not custom_rows:
         raise CategorySelectionError("Choose at least one ticket option.")
 
-    default_key = "support" if "support" in selected_keys else (selected_keys[0] if selected_keys else "")
+    default_key = (
+        "support"
+        if "support" in selected_keys
+        else (selected_keys[0] if selected_keys else "")
+    )
     for row in rows:
         key = canonical_category_key(row)
         row_id = str(row.get("id") or "")
@@ -560,7 +760,10 @@ def _save_selection_fallback_sync(
                 }
             ).eq("id", row_id).execute()
         elif selected_keys and _safe_bool(row.get("is_default"), False):
-            sb.table("ticket_categories").update({"is_default": False}).eq("id", row_id).execute()
+            # Match the RPC path: a managed selection owns the one fallback.
+            sb.table("ticket_categories").update(
+                {"is_default": False}
+            ).eq("id", row_id).execute()
 
     if not selected_keys:
         _set_custom_default_fallback_sync(sb, rows)
