@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from stoney_verify.commands_ext import public_setup_recommend as recommend
 from stoney_verify.commands_ext import public_setup_solid as solid
 from stoney_verify.commands_ext import public_ticket_panel_clean as clean_panel
 from stoney_verify.startup_guards import _STARTUP_GUARDS
@@ -132,6 +139,68 @@ def test_managed_multi_select_defaults_match_saved_selection() -> None:
     assert defaults == {"report", "support"}
     assert select.min_values == 1
     assert select.max_values == len(categories.CATEGORY_CATALOG)
+
+
+def test_guided_ticket_setup_routes_required_selection_into_original_flow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guild = SimpleNamespace(id=777, me=SimpleNamespace(guild_permissions=SimpleNamespace()))
+    cfg = {"setup_choice": "help_desk"}
+
+    async def get_config(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return cfg
+
+    async def required_categories(*args: Any, **kwargs: Any) -> solid.CategoryLoad:
+        return solid.CategoryLoad([], "Ticket Menu Setup Required")
+
+    monkeypatch.setattr(recommend, "get_guild_config", get_config)
+    monkeypatch.setattr(
+        recommend,
+        "_selected_setup_services",
+        lambda _cfg: {
+            "tickets": True,
+            "verify": False,
+            "basic_verify": False,
+            "voice": False,
+            "id": False,
+            "spam_guard": False,
+            "logs": False,
+        },
+    )
+    monkeypatch.setattr(recommend, "_missing_setup_permissions", lambda *args, **kwargs: [])
+    monkeypatch.setattr(recommend, "_has_role", lambda *args, **kwargs: True)
+    monkeypatch.setattr(recommend, "_has_channel", lambda *args, **kwargs: True)
+    monkeypatch.setattr(recommend.solid, "_category_load", required_categories)
+
+    target = asyncio.run(recommend._guided_setup_target(guild))
+
+    assert target == (
+        "ticket_choices",
+        "Create Ticket Choices",
+        "Choose what members can request when they open a ticket.",
+        "ticket_choices",
+    )
+
+
+def test_guided_ticket_choice_step_opens_the_category_selector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    async def open_ticket_menu(*args: Any, **kwargs: Any) -> None:
+        events.append("ticket_menu")
+
+    monkeypatch.setattr(recommend, "_open_ticket_menu", open_ticket_menu)
+
+    asyncio.run(
+        recommend._open_guided_target(
+            SimpleNamespace(),
+            "ticket_choices",
+            "ticket_choices",
+        )
+    )
+
+    assert events == ["ticket_menu"]
 
 
 def test_cod_and_game_services_keep_distinct_native_forms() -> None:
