@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
@@ -282,6 +283,10 @@ def starter_category_rows() -> List[Dict[str, Any]]:
     return rows
 
 
+def _config_table_name() -> str:
+    return (os.getenv("DANK_GUILD_CONFIG_TABLE") or "guild_configs").strip() or "guild_configs"
+
+
 def _supabase() -> Any:
     try:
         client = get_supabase()
@@ -295,7 +300,7 @@ def _supabase() -> Any:
 def _fetch_config_sync(guild_id: int) -> Dict[str, Any]:
     sb = _supabase()
     response = (
-        sb.table("guild_configs")
+        sb.table(_config_table_name())
         .select("*")
         .eq("guild_id", str(int(guild_id)))
         .limit(1)
@@ -373,24 +378,56 @@ def _config_reason(cfg: Mapping[str, Any]) -> str:
     return str(_row_value(cfg, "ticket_category_setup_required_reason", "") or "").strip()
 
 
+def _enabled_custom_rows(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    return [
+        dict(row)
+        for row in rows
+        if canonical_category_key(row) not in _CATALOG_BY_KEY and _row_enabled(row)
+    ]
+
+
+def _set_custom_default_fallback_sync(sb: Any, rows: Sequence[Mapping[str, Any]]) -> None:
+    custom_rows = _enabled_custom_rows(rows)
+    if not custom_rows:
+        return
+    preferred = next((row for row in custom_rows if _safe_bool(row.get("is_default"), False)), None)
+    if preferred is None:
+        preferred = sorted(custom_rows, key=lambda row: (_row_sort(row), str(row.get("id") or "")))[0]
+    preferred_id = str(preferred.get("id") or "")
+    for row in rows:
+        key = canonical_category_key(row)
+        if key in _CATALOG_BY_KEY:
+            continue
+        row_id = str(row.get("id") or "")
+        if not row_id:
+            continue
+        sb.table("ticket_categories").update(
+            {"is_default": row_id == preferred_id}
+        ).eq("id", row_id).execute()
+
+
 def _mark_required_fallback_sync(guild_id: int, reason: str, *, reset_to_starter: bool) -> None:
     sb = _supabase()
-    gid = str(int(guild_id))
     rows = _fetch_rows_sync(guild_id)
+    custom_active = bool(_enabled_custom_rows(rows))
 
     if reset_to_starter:
         for row in rows:
             key = canonical_category_key(row)
             if key not in _CATALOG_BY_KEY:
                 continue
-            row_id = row.get("id")
+            row_id = str(row.get("id") or "")
             if not row_id:
                 continue
-            patch = {
-                "is_enabled": key in SAFE_STARTER_KEYS,
-                "is_default": key == "support",
-            }
-            sb.table("ticket_categories").update(patch).eq("id", str(row_id)).execute()
+            enable = (not custom_active) and key in SAFE_STARTER_KEYS
+            sb.table("ticket_categories").update(
+                {
+                    "is_enabled": enable,
+                    "is_default": enable and key == "support",
+                }
+            ).eq("id", row_id).execute()
+        if custom_active:
+            _set_custom_default_fallback_sync(sb, rows)
 
     from ..commands_ext.public_setup_config_writer import upsert_guild_config_sync
 
@@ -435,8 +472,8 @@ def ensure_category_setup_state_sync(guild_id: int) -> CategorySetupState:
     try:
         _sync_managed_categories_sync(guild_id)
     except ManagedCategorySyncError:
-        # Older deployments may not have the RPC yet. Existing rows are still
-        # usable, and the safe in-memory fallback remains available.
+        # Migration deployment is authoritative. Existing rows still work if the
+        # RPC is temporarily unavailable, and the member menu keeps a safe fallback.
         pass
 
     cfg = _fetch_config_sync(guild_id)
@@ -459,9 +496,9 @@ def ensure_category_setup_state_sync(guild_id: int) -> CategorySetupState:
 
     active = dedupe_category_rows(rows, enabled_only=True, fallback=True)
     selected = tuple(
-        canonical_category_key(row)
-        for row in active
-        if canonical_category_key(row) in _CATALOG_BY_KEY
+        key
+        for key in (canonical_category_key(row) for row in active)
+        if key in _CATALOG_BY_KEY
     )
     return CategorySetupState(
         rows=dedupe_category_rows(rows, enabled_only=False, fallback=False),
@@ -480,14 +517,18 @@ def load_visible_categories_sync(guild_id: int) -> List[Dict[str, Any]]:
         return starter_category_rows()
 
 
-def _normalize_selected_keys(selected_keys: Iterable[Any]) -> tuple[str, ...]:
+def _normalize_selected_keys(
+    selected_keys: Iterable[Any],
+    *,
+    allow_empty: bool = False,
+) -> tuple[str, ...]:
     selected: List[str] = []
     for raw in selected_keys:
         key = _slug(raw)
         key = _ALIAS_TO_KEY.get(key, key)
         if key in _CATALOG_BY_KEY and key not in selected:
             selected.append(key)
-    if not selected:
+    if not selected and not allow_empty:
         raise CategorySelectionError("Choose at least one ticket option.")
     return tuple(selected[:25])
 
@@ -501,21 +542,28 @@ def _save_selection_fallback_sync(
 ) -> None:
     sb = _supabase()
     rows = _fetch_rows_sync(guild_id)
-    default_key = "support" if "support" in selected_keys else selected_keys[0]
+    custom_rows = _enabled_custom_rows(rows)
+    if not selected_keys and not custom_rows:
+        raise CategorySelectionError("Choose at least one ticket option.")
 
+    default_key = "support" if "support" in selected_keys else (selected_keys[0] if selected_keys else "")
     for row in rows:
         key = canonical_category_key(row)
-        if key not in _CATALOG_BY_KEY:
-            continue
-        row_id = row.get("id")
+        row_id = str(row.get("id") or "")
         if not row_id:
             continue
-        sb.table("ticket_categories").update(
-            {
-                "is_enabled": key in selected_keys,
-                "is_default": key == default_key,
-            }
-        ).eq("id", str(row_id)).execute()
+        if key in _CATALOG_BY_KEY:
+            sb.table("ticket_categories").update(
+                {
+                    "is_enabled": key in selected_keys,
+                    "is_default": bool(default_key) and key == default_key,
+                }
+            ).eq("id", row_id).execute()
+        elif selected_keys and _safe_bool(row.get("is_default"), False):
+            sb.table("ticket_categories").update({"is_default": False}).eq("id", row_id).execute()
+
+    if not selected_keys:
+        _set_custom_default_fallback_sync(sb, rows)
 
     from ..commands_ext.public_setup_config_writer import upsert_guild_config_sync
 
@@ -523,7 +571,6 @@ def _save_selection_fallback_sync(
         int(guild_id),
         {
             "ticket_category_setup_required": False,
-            "ticket_category_setup_required_reason": "",
             "ticket_category_setup_version": CATEGORY_SETUP_VERSION,
             "ticket_category_setup_selected_keys": list(selected_keys),
             "ticket_category_setup_completed_by_id": actor_id,
@@ -541,7 +588,9 @@ def save_category_selection_sync(
     actor_id: Any = "",
     actor_name: Any = "",
 ) -> CategorySetupState:
-    selected = _normalize_selected_keys(selected_keys)
+    rows_before = _fetch_rows_sync(guild_id)
+    allow_empty = bool(_enabled_custom_rows(rows_before))
+    selected = _normalize_selected_keys(selected_keys, allow_empty=allow_empty)
     sb = _supabase()
     try:
         sb.rpc(
