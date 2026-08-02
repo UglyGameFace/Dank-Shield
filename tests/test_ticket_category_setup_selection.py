@@ -11,6 +11,7 @@ STARTUP = ROOT / "stoney_verify" / "startup_guards" / "__init__.py"
 GUARD = ROOT / "stoney_verify" / "startup_guards" / "ticket_category_setup_guard.py"
 MIGRATION = ROOT / "supabase" / "migrations" / "202608020001_ticket_category_setup_selection.sql"
 CUSTOM_MIGRATION = ROOT / "supabase" / "migrations" / "202608020003_ticket_category_custom_preservation.sql"
+CUSTOM_ONLY_MIGRATION = ROOT / "supabase" / "migrations" / "202608020004_ticket_category_selection_custom_only.sql"
 
 
 def _keys(rows):
@@ -93,6 +94,17 @@ def test_unknown_custom_rows_are_preserved_as_distinct_choices() -> None:
     assert len(keys) == 3
 
 
+def test_custom_only_selection_is_explicitly_supported() -> None:
+    assert categories._normalize_selected_keys((), allow_empty=True) == ()
+    guard = GUARD.read_text(encoding="utf-8")
+    sql = CUSTOM_ONLY_MIGRATION.read_text(encoding="utf-8")
+
+    assert "Use Custom Choices Only" in guard
+    assert "_save_selection(interaction, ())" in guard
+    assert "array_length(selected_keys, 1), 0) = 0" in sql
+    assert "custom_row.is_default = true" in sql
+
+
 def test_cod_and_game_services_keep_distinct_native_forms() -> None:
     assert forms._template_key({"managed_category_key": "cod-services"}) == "cod"
     assert forms._template_key({"managed_category_key": "game-services"}) == "game_services"
@@ -107,6 +119,8 @@ def test_single_startup_owner_replaces_old_category_patch_stack() -> None:
     assert "ticket_category_setup_guard" in startup
     assert "ticket_category_cod_services_guard" not in startup
     assert "ticket_category_game_services_guard" not in startup
+    assert not (ROOT / "stoney_verify/startup_guards/ticket_category_cod_services_guard.py").exists()
+    assert not (ROOT / "stoney_verify/startup_guards/ticket_category_game_services_guard.py").exists()
     assert "ManagedCategorySelection" in guard
     assert "_seed_catalog_without_enabling_everything" in guard
     assert "clean._load_rows = _clean_panel_load_rows" in guard
@@ -116,6 +130,7 @@ def test_single_startup_owner_replaces_old_category_patch_stack() -> None:
 def test_migration_forces_bad_existing_setups_and_preserves_explicit_selection() -> None:
     sql = MIGRATION.read_text(encoding="utf-8")
     custom_sql = CUSTOM_MIGRATION.read_text(encoding="utf-8")
+    custom_only_sql = CUSTOM_ONLY_MIGRATION.read_text(encoding="utf-8")
 
     assert "managed_enabled >= 10" in sql
     assert "p_reset_to_starter" in sql
@@ -126,3 +141,5 @@ def test_migration_forces_bad_existing_setups_and_preserves_explicit_selection()
     assert "managed_by_dank = false" in sql
     assert "Your custom ticket choices were preserved" in custom_sql
     assert "set is_enabled = false" in custom_sql
+    assert "managed_row.managed_category_key = any(selected_keys)" in custom_only_sql
+    assert "custom choices only" in custom_only_sql
