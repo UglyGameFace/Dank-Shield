@@ -35,6 +35,11 @@ jobs:
             tests/test_durable_invite_stats_migration.py
       - name: Commit source fixes and remove temporary machinery
         run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tests/test_durable_invite_stats.py')
+          path.write_text(path.read_text(encoding='utf-8').rstrip() + '\n', encoding='utf-8')
+          PY
           rm -f .github/workflows/apply-durable-review-fixes-v3.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
