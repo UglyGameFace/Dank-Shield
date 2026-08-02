@@ -9,7 +9,7 @@ feel product-ready without requiring server owners to hand-edit Supabase rows:
 - recognized categories get sensible built-in form templates
 - verification stays one-click after category confirmation by default
 - dashboard can opt out with form_config.disable_default_template=true
-- custom COD/modded-lobby categories are recognized by name/slug
+- managed COD and Game Services categories use dedicated neutral forms
 """
 
 import json
@@ -78,10 +78,39 @@ def _slug_text(row: Dict[str, Any]) -> str:
 
 
 def _template_key(row: Dict[str, Any]) -> str:
+    try:
+        from ..tickets_new.managed_category_service import canonical_category_key
+
+        managed_key = canonical_category_key(row)
+        managed_templates = {
+            "verification": "verification",
+            "appeal": "appeal",
+            "report": "report",
+            "staff-complaint": "report",
+            "bug": "bug",
+            "question": "question",
+            "cod-services": "cod",
+            "game-services": "game_services",
+            "account-access": "support",
+            "payments-refunds": "support",
+            "service-request": "support",
+            "vouch-referral": "support",
+            "giveaway-reward": "support",
+            "content-media": "support",
+            "partnership": "support",
+            "support": "support",
+        }
+        if managed_key in managed_templates:
+            return managed_templates[managed_key]
+    except Exception:
+        pass
+
     text = _slug_text(row)
     compact = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
 
-    if any(token in compact for token in ("cod", "call-of-duty", "black-ops", "bo3", "bo2", "mw2", "mw3", "modded-lobby", "modded-lobbies", "lobby")):
+    if any(token in compact for token in ("game-services", "game-service", "gaming-services")):
+        return "game_services"
+    if any(token in compact for token in ("cod", "call-of-duty", "black-ops", "bo3", "bo2", "mw2", "mw3", "modded-lobby", "modded-lobbies")):
         return "cod"
     if "verify" in compact or "verification" in compact:
         return "verification"
@@ -117,10 +146,6 @@ DEFAULT_TEMPLATES: Dict[str, List[Dict[str, Any]]] = {
             "max_length": 1000,
         },
     ],
-    # Verification tickets intentionally have no default pre-ticket modal.
-    # Members already confirm the category; the verification panel inside the
-    # private ticket is the actual next action. This keeps verification from
-    # becoming a category confirm -> intake form -> verify panel three-step flow.
     "verification": [],
     "report": [
         {
@@ -198,34 +223,52 @@ DEFAULT_TEMPLATES: Dict[str, List[Dict[str, Any]]] = {
         {
             "key": "game",
             "label": "Which COD game?",
-            "placeholder": "Example: BO2, BO3, MW2, MW3, Ghosts, etc.",
+            "placeholder": "BO2, BO3, MWIII, BO6, BO7, Warzone, Zombies, etc.",
             "required": True,
             "style": "short",
-            "max_length": 120,
+            "max_length": 180,
         },
         {
             "key": "service",
-            "label": "What do you need done?",
-            "placeholder": "Rank, unlocks, modded lobby info, recovery question, etc.",
+            "label": "What COD question or service do you need help with?",
+            "placeholder": "Describe what you need. Do not include passwords or private credentials.",
             "required": True,
             "style": "paragraph",
             "max_length": 1000,
         },
         {
             "key": "platform",
-            "label": "Platform / console",
-            "placeholder": "Xbox, PlayStation, PC, etc.",
+            "label": "Platform / account type",
+            "placeholder": "Xbox, PlayStation, PC, Steam, Battle.net, Activision, etc.",
             "required": True,
             "style": "short",
-            "max_length": 120,
+            "max_length": 180,
+        },
+    ],
+    "game_services": [
+        {
+            "key": "game_title",
+            "label": "Which game is this for?",
+            "placeholder": "COD, Fortnite, Apex, Valorant, Minecraft, GTA, etc.",
+            "required": True,
+            "style": "short",
+            "max_length": 180,
         },
         {
-            "key": "availability",
-            "label": "Best time to reach you?",
-            "placeholder": "Timezone and when you are usually available.",
+            "key": "service_question",
+            "label": "What game-related question do you need help with?",
+            "placeholder": "Describe what you need. Do not include passwords or private credentials.",
+            "required": True,
+            "style": "paragraph",
+            "max_length": 1000,
+        },
+        {
+            "key": "platform_or_account_type",
+            "label": "Platform / account type",
+            "placeholder": "Xbox, PlayStation, PC, mobile, Steam, Epic, etc.",
             "required": False,
             "style": "short",
-            "max_length": 200,
+            "max_length": 180,
         },
     ],
 }
@@ -301,7 +344,7 @@ def apply() -> bool:
         forms_mod._category_questions = category_questions
         forms_mod._form_enabled = form_enabled
         setattr(forms_mod, "_DEFAULT_TICKET_FORM_TEMPLATES_APPLIED", True)
-        _log("installed default ticket form templates with one-step verification default and dashboard override support")
+        _log("installed managed category form templates with one-step verification and dashboard overrides")
         return True
     except Exception as e:
         _warn(f"patch failed: {e!r}")
