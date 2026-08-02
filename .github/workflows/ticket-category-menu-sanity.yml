@@ -4,25 +4,29 @@ on:
   pull_request:
     paths:
       - "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py"
-      - "stoney_verify/startup_guards/ticket_category_cod_services_guard.py"
-      - "stoney_verify/startup_guards/ticket_category_game_services_guard.py"
+      - "stoney_verify/startup_guards/ticket_category_setup_guard.py"
       - "stoney_verify/startup_guards/ticket_form_default_templates_guard.py"
       - "stoney_verify/startup_guards/external_ticket_history_sequence_guard.py"
       - "stoney_verify/startup_guards/__init__.py"
       - "stoney_verify/commands_ext/ticket_category_admin.py"
+      - "stoney_verify/tickets_new/managed_category_service.py"
       - "stoney_verify/tickets_new/intake_service.py"
+      - "supabase/migrations/202608020001_ticket_category_setup_selection.sql"
+      - "tests/test_ticket_category_setup_selection.py"
       - "tools/audit_ticket_category_menu.py"
       - ".github/workflows/ticket-category-menu-sanity.yml"
   push:
     paths:
       - "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py"
-      - "stoney_verify/startup_guards/ticket_category_cod_services_guard.py"
-      - "stoney_verify/startup_guards/ticket_category_game_services_guard.py"
+      - "stoney_verify/startup_guards/ticket_category_setup_guard.py"
       - "stoney_verify/startup_guards/ticket_form_default_templates_guard.py"
       - "stoney_verify/startup_guards/external_ticket_history_sequence_guard.py"
       - "stoney_verify/startup_guards/__init__.py"
       - "stoney_verify/commands_ext/ticket_category_admin.py"
+      - "stoney_verify/tickets_new/managed_category_service.py"
       - "stoney_verify/tickets_new/intake_service.py"
+      - "supabase/migrations/202608020001_ticket_category_setup_selection.sql"
+      - "tests/test_ticket_category_setup_selection.py"
       - "tools/audit_ticket_category_menu.py"
       - ".github/workflows/ticket-category-menu-sanity.yml"
   workflow_dispatch:
@@ -35,5 +39,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Audit ticket category menu guards
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+      - name: Audit ticket category setup owner
         run: python tools/audit_ticket_category_menu.py
+      - name: Run category selection regressions
+        run: python -m pytest -q --tb=short tests/test_ticket_category_setup_selection.py
