@@ -24,6 +24,7 @@ from . import ticket_category_admin as legacy
 from . import ticket_admin as legacy_ticket_admin
 from . import public_ticket_category_group as category_group_module
 from .public_ticket_category_group import ticket_category_group, _add_governance_warnings
+from ..tickets_new.managed_category_service import canonical_category_key as _managed_category_key
 
 _ATTACHED = False
 _CHECKER_PATCHED = False
@@ -32,18 +33,6 @@ _PANEL_GROUP_REGISTERED = False
 
 PANEL_BUTTON_CUSTOM_ID = "sv:ticket:panel:create:v6"
 
-_DUPLICATE_CATEGORY_CANONICALS: Dict[str, str] = {
-    "verification-help": "verification",
-    "verification-issue": "verification",
-    "verify": "verification",
-    "bug-report": "bug",
-    "bug-technical-support": "bug",
-    "technical-support": "bug",
-    "other": "support",
-    "general": "support",
-    "general-support": "support",
-}
-
 _CANONICAL_PRIORITY: Tuple[str, ...] = (
     "verification",
     "account-access",
@@ -51,14 +40,15 @@ _CANONICAL_PRIORITY: Tuple[str, ...] = (
     "appeal",
     "report",
     "staff-complaint",
+    "bug",
     "cod-services",
+    "game-services",
     "service-request",
     "vouch-referral",
     "giveaway-reward",
     "content-media",
     "partnership",
     "question",
-    "bug",
     "support",
 )
 
@@ -391,43 +381,10 @@ def _row_sort(row: Dict[str, Any]) -> int:
 
 
 def _canonical_category_key(row: Dict[str, Any]) -> str:
-    slug = _row_slug(row).replace("_", "-")
-    name = _slugify(_row_name(row)).replace("_", "-")
-    text = f"{slug} {name}".lower()
-
-    if slug in _DUPLICATE_CATEGORY_CANONICALS:
-        return _DUPLICATE_CATEGORY_CANONICALS[slug]
-    if "verification" in text or text.startswith("verify"):
-        return "verification"
-    if "staff" in text and "complaint" in text:
-        return "staff-complaint"
-    if "cod" in text or "call-of-duty" in text:
-        return "cod-services"
-    if "vouch" in text or "referral" in text or "invite" in text:
-        return "vouch-referral"
-    if "giveaway" in text or "reward" in text:
-        return "giveaway-reward"
-    if "content" in text or "media" in text:
-        return "content-media"
-    if "partner" in text:
-        return "partnership"
-    if "appeal" in text:
-        return "appeal"
-    if "report" in text:
-        return "report"
-    if "account" in text or "access" in text:
-        return "account-access"
-    if "payment" in text or "refund" in text:
-        return "payments-refunds"
-    if "service" in text:
-        return "service-request"
-    if "question" in text:
-        return "question"
-    if "bug" in text or "technical" in text:
-        return "bug"
-    if "other" in text or "support" in text or "general" in text:
-        return "support"
-    return slug
+    key = _managed_category_key(row)
+    if key.startswith("custom:"):
+        return key.removeprefix("custom:")
+    return key
 
 
 def _canonical_rank(key: str) -> int:
