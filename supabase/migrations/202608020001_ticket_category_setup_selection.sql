@@ -1,14 +1,16 @@
 -- ============================================================
 -- Ticket category setup selection v2
 --
--- Goals:
--- - Keep the full Dank Shield category catalog available globally.
--- - Show members only categories explicitly enabled for their guild.
--- - Collapse exact managed/legacy duplicates without touching unknown custom rows.
--- - Repair the old deployment that enabled nearly every category everywhere.
--- - Require existing managed-only guilds to confirm their category selection.
--- - Give new guilds a small usable starter menu until setup is completed.
--- - Safe to run more than once.
+-- One durable migration owns the final behavior:
+-- - keep the full Dank Shield category catalog available globally,
+-- - show members only categories enabled for their guild,
+-- - collapse exact managed/legacy duplicates without touching unknown custom rows,
+-- - repair the old deployment that enabled nearly every category everywhere,
+-- - preserve custom owner-built menus,
+-- - require existing guilds to confirm their category selection,
+-- - give new/empty guilds a small usable starter menu,
+-- - allow an explicit custom-only selection,
+-- - remain safe to run more than once.
 -- ============================================================
 
 alter table public.ticket_categories
@@ -24,7 +26,10 @@ alter table public.guild_configs
     add column if not exists ticket_category_setup_selected_keys jsonb not null default '[]'::jsonb,
     add column if not exists ticket_category_setup_completed_at timestamptz,
     add column if not exists ticket_category_setup_completed_by_id text,
-    add column if not exists ticket_category_setup_completed_by_name text;
+    add column if not exists ticket_category_setup_completed_by_name text,
+    add column if not exists setup_completed boolean not null default false,
+    add column if not exists setup_completion_invalidated_at timestamptz,
+    add column if not exists setup_completion_invalidated_reason text;
 
 create or replace function public.dank_ticket_category_key(p_slug text, p_name text default null)
 returns text
@@ -131,6 +136,7 @@ declare
     inserted_n integer;
     updated_n integer;
     deleted_n integer;
+    guild_had_rows boolean;
     starter_enabled boolean;
     make_default boolean;
 begin
@@ -162,9 +168,14 @@ begin
         updated_n := 0;
         deleted_n := 0;
 
+        select exists (
+            select 1
+            from public.ticket_categories existing_row
+            where existing_row.guild_id::text = g.guild_id
+        ) into guild_had_rows;
+
         for c in select * from public.dank_ticket_category_catalog() loop
             winner_id := null;
-            starter_enabled := c.category_key in ('report', 'appeal', 'support');
 
             select tc.id::text
               into winner_id
@@ -185,21 +196,23 @@ begin
              limit 1;
 
             if winner_id is not null then
-                delete from public.ticket_categories tc
-                 where tc.guild_id::text = g.guild_id
-                   and tc.id::text <> winner_id
+                delete from public.ticket_categories duplicate_row
+                 where duplicate_row.guild_id::text = g.guild_id
+                   and duplicate_row.id::text <> winner_id
                    and (
-                        (tc.managed_by_dank = true and tc.managed_category_key = c.category_key)
+                        (duplicate_row.managed_by_dank = true
+                         and duplicate_row.managed_category_key = c.category_key)
                         or
-                        (tc.managed_by_dank = false
-                         and public.dank_ticket_category_key(tc.slug, tc.name) = c.category_key)
+                        (duplicate_row.managed_by_dank = false
+                         and public.dank_ticket_category_key(duplicate_row.slug, duplicate_row.name) = c.category_key)
                    );
                 get diagnostics affected = row_count;
                 deleted_n := deleted_n + affected;
 
-                update public.ticket_categories tc
+                update public.ticket_categories managed_row
                    set slug = c.slug,
                        name = c.name,
+                       button_label = c.name,
                        description = c.description,
                        intake_type = c.intake_type,
                        match_keywords = c.match_keywords,
@@ -208,33 +221,40 @@ begin
                        managed_catalog_version = c.catalog_version,
                        managed_category_key = c.category_key,
                        updated_at = now()
-                 where tc.id::text = winner_id
-                   and (tc.slug, tc.name, tc.description, tc.intake_type, tc.match_keywords,
-                        tc.sort_order, tc.managed_by_dank,
-                        tc.managed_catalog_version, tc.managed_category_key)
+                 where managed_row.id::text = winner_id
+                   and (managed_row.slug, managed_row.name, managed_row.button_label,
+                        managed_row.description, managed_row.intake_type,
+                        managed_row.match_keywords, managed_row.sort_order,
+                        managed_row.managed_by_dank, managed_row.managed_catalog_version,
+                        managed_row.managed_category_key)
                        is distinct from
-                       (c.slug, c.name, c.description, c.intake_type, c.match_keywords,
-                        c.sort_order, true, c.catalog_version, c.category_key);
+                       (c.slug, c.name, c.name, c.description, c.intake_type,
+                        c.match_keywords, c.sort_order, true, c.catalog_version,
+                        c.category_key);
                 get diagnostics affected = row_count;
                 updated_n := updated_n + affected;
             else
+                starter_enabled := (not guild_had_rows)
+                    and c.category_key in ('report', 'appeal', 'support');
+
                 select starter_enabled
                    and c.category_key = 'support'
                    and not exists (
-                       select 1 from public.ticket_categories existing_default
-                        where existing_default.guild_id::text = g.guild_id
-                          and existing_default.is_default = true
+                       select 1
+                       from public.ticket_categories existing_default
+                       where existing_default.guild_id::text = g.guild_id
+                         and existing_default.is_default = true
                    )
                   into make_default;
 
                 insert into public.ticket_categories(
-                    guild_id, slug, name, description, intake_type, match_keywords,
-                    sort_order, is_default, is_enabled, managed_by_dank,
-                    managed_catalog_version, managed_category_key
+                    guild_id, slug, name, button_label, description, intake_type,
+                    match_keywords, sort_order, is_default, is_enabled,
+                    managed_by_dank, managed_catalog_version, managed_category_key
                 ) values (
-                    g.guild_id, c.slug, c.name, c.description, c.intake_type,
-                    c.match_keywords, c.sort_order, make_default, starter_enabled,
-                    true, c.catalog_version, c.category_key
+                    g.guild_id, c.slug, c.name, c.name, c.description,
+                    c.intake_type, c.match_keywords, c.sort_order, make_default,
+                    starter_enabled, true, c.catalog_version, c.category_key
                 );
                 inserted_n := inserted_n + 1;
             end if;
@@ -259,6 +279,9 @@ language plpgsql
 security definer
 set search_path = public, pg_temp
 as $$
+declare
+    custom_exists boolean;
+    custom_default_id text;
 begin
     if nullif(btrim(p_guild_id), '') is null then
         raise exception 'guild id is required';
@@ -267,35 +290,69 @@ begin
     perform * from public.reconcile_dank_ticket_categories(btrim(p_guild_id));
 
     if p_reset_to_starter then
-        update public.ticket_categories
-           set is_enabled = managed_category_key in ('report', 'appeal', 'support'),
-               is_default = false,
-               updated_at = now()
-         where guild_id::text = btrim(p_guild_id)
-           and managed_by_dank = true;
+        select exists (
+            select 1
+            from public.ticket_categories custom_row
+            where custom_row.guild_id::text = btrim(p_guild_id)
+              and custom_row.managed_by_dank = false
+              and custom_row.is_enabled = true
+        ) into custom_exists;
 
-        if not exists (
-            select 1 from public.ticket_categories
-             where guild_id::text = btrim(p_guild_id)
-               and managed_by_dank = false
-               and is_enabled = true
-               and is_default = true
-        ) then
-            update public.ticket_categories
-               set is_default = true,
+        update public.ticket_categories managed_row
+           set is_enabled = (not custom_exists)
+                            and managed_row.managed_category_key in ('report', 'appeal', 'support'),
+               is_default = (not custom_exists)
+                            and managed_row.managed_category_key = 'support',
+               updated_at = now()
+         where managed_row.guild_id::text = btrim(p_guild_id)
+           and managed_row.managed_by_dank = true;
+
+        if custom_exists then
+            select custom_row.id::text
+              into custom_default_id
+              from public.ticket_categories custom_row
+             where custom_row.guild_id::text = btrim(p_guild_id)
+               and custom_row.managed_by_dank = false
+               and custom_row.is_enabled = true
+             order by
+               case when custom_row.is_default then 0 else 1 end,
+               coalesce(custom_row.sort_order, 9999),
+               custom_row.created_at,
+               custom_row.id
+             limit 1;
+
+            update public.ticket_categories custom_row
+               set is_default = custom_row.id::text = custom_default_id,
                    updated_at = now()
-             where guild_id::text = btrim(p_guild_id)
-               and managed_by_dank = true
-               and managed_category_key = 'support';
+             where custom_row.guild_id::text = btrim(p_guild_id)
+               and custom_row.managed_by_dank = false;
+        else
+            update public.ticket_categories custom_row
+               set is_default = false,
+                   updated_at = now()
+             where custom_row.guild_id::text = btrim(p_guild_id)
+               and custom_row.managed_by_dank = false
+               and custom_row.is_default = true;
         end if;
     end if;
 
-    update public.guild_configs
+    update public.guild_configs gc
        set ticket_category_setup_required = true,
-           ticket_category_setup_required_reason = left(coalesce(nullif(btrim(p_reason), ''), 'Choose the ticket options this server actually uses.'), 500),
+           ticket_category_setup_required_reason = left(
+               coalesce(nullif(btrim(p_reason), ''),
+                        'Choose the ticket options this server actually uses.'),
+               500
+           ),
            ticket_category_setup_version = 0,
+           ticket_category_setup_selected_keys = case
+               when p_reset_to_starter then '[]'::jsonb
+               else gc.ticket_category_setup_selected_keys
+           end,
+           setup_completed = false,
+           setup_completion_invalidated_at = now(),
+           setup_completion_invalidated_reason = 'Ticket menu setup requires confirmation.',
            updated_at = now()
-     where guild_id::text = btrim(p_guild_id);
+     where gc.guild_id::text = btrim(p_guild_id);
 end;
 $$;
 
@@ -314,25 +371,34 @@ declare
     selected_keys text[];
     invalid_keys text[];
     default_key text;
+    custom_default_id text;
 begin
     if nullif(btrim(p_guild_id), '') is null then
         raise exception 'guild id is required';
     end if;
 
-    select coalesce(array_agg(distinct btrim(value)), array[]::text[])
+    select coalesce(array_agg(distinct btrim(chosen.value)), array[]::text[])
       into selected_keys
-      from unnest(coalesce(p_selected_keys, array[]::text[])) as selected(value)
-     where nullif(btrim(value), '') is not null;
+      from unnest(coalesce(p_selected_keys, array[]::text[])) as chosen(value)
+     where nullif(btrim(chosen.value), '') is not null;
 
-    if coalesce(array_length(selected_keys, 1), 0) < 1 then
+    if coalesce(array_length(selected_keys, 1), 0) = 0
+       and not exists (
+           select 1
+             from public.ticket_categories custom_row
+            where custom_row.guild_id::text = btrim(p_guild_id)
+              and custom_row.managed_by_dank = false
+              and custom_row.is_enabled = true
+       ) then
         raise exception 'choose at least one ticket category';
     end if;
 
-    select coalesce(array_agg(value), array[]::text[])
+    select coalesce(array_agg(chosen.value), array[]::text[])
       into invalid_keys
       from unnest(selected_keys) as chosen(value)
      where not exists (
-        select 1 from public.dank_ticket_category_catalog() catalog
+        select 1
+          from public.dank_ticket_category_catalog() catalog
          where catalog.category_key = chosen.value
      );
 
@@ -342,39 +408,60 @@ begin
 
     perform * from public.reconcile_dank_ticket_categories(btrim(p_guild_id));
 
-    update public.ticket_categories
-       set is_enabled = managed_category_key = any(selected_keys),
+    update public.ticket_categories managed_row
+       set is_enabled = managed_row.managed_category_key = any(selected_keys),
            is_default = false,
            updated_at = now()
-     where guild_id::text = btrim(p_guild_id)
-       and managed_by_dank = true;
+     where managed_row.guild_id::text = btrim(p_guild_id)
+       and managed_row.managed_by_dank = true;
 
-    if 'support' = any(selected_keys) then
-        default_key := 'support';
+    default_key := null;
+    if coalesce(array_length(selected_keys, 1), 0) > 0 then
+        if 'support' = any(selected_keys) then
+            default_key := 'support';
+        else
+            select catalog.category_key
+              into default_key
+              from public.dank_ticket_category_catalog() catalog
+             where catalog.category_key = any(selected_keys)
+             order by catalog.sort_order, catalog.category_key
+             limit 1;
+        end if;
+
+        update public.ticket_categories managed_row
+           set is_default = managed_row.managed_category_key = default_key,
+               updated_at = now()
+         where managed_row.guild_id::text = btrim(p_guild_id)
+           and managed_row.managed_by_dank = true;
+
+        update public.ticket_categories custom_row
+           set is_default = false,
+               updated_at = now()
+         where custom_row.guild_id::text = btrim(p_guild_id)
+           and custom_row.managed_by_dank = false
+           and custom_row.is_default = true;
     else
-        select catalog.category_key
-          into default_key
-          from public.dank_ticket_category_catalog() catalog
-         where catalog.category_key = any(selected_keys)
-         order by catalog.sort_order, catalog.category_key
+        select custom_row.id::text
+          into custom_default_id
+          from public.ticket_categories custom_row
+         where custom_row.guild_id::text = btrim(p_guild_id)
+           and custom_row.managed_by_dank = false
+           and custom_row.is_enabled = true
+         order by
+           case when custom_row.is_default then 0 else 1 end,
+           coalesce(custom_row.sort_order, 9999),
+           custom_row.created_at,
+           custom_row.id
          limit 1;
+
+        update public.ticket_categories custom_row
+           set is_default = custom_row.id::text = custom_default_id,
+               updated_at = now()
+         where custom_row.guild_id::text = btrim(p_guild_id)
+           and custom_row.managed_by_dank = false;
     end if;
 
-    update public.ticket_categories
-       set is_default = managed_category_key = default_key,
-           updated_at = now()
-     where guild_id::text = btrim(p_guild_id)
-       and managed_by_dank = true;
-
-    -- One deterministic fallback prevents ambiguous ticket routing.
-    update public.ticket_categories
-       set is_default = false,
-           updated_at = now()
-     where guild_id::text = btrim(p_guild_id)
-       and managed_by_dank = false
-       and is_default = true;
-
-    update public.guild_configs
+    update public.guild_configs gc
        set ticket_category_setup_required = false,
            ticket_category_setup_required_reason = null,
            ticket_category_setup_version = 2,
@@ -386,63 +473,68 @@ begin
            setup_completion_invalidated_at = now(),
            setup_completion_invalidated_reason = 'Ticket menu choices changed.',
            updated_at = now()
-     where guild_id::text = btrim(p_guild_id);
+     where gc.guild_id::text = btrim(p_guild_id);
 
     return query
-    select tc.managed_category_key, tc.slug, tc.name, tc.is_enabled, tc.is_default
-      from public.ticket_categories tc
-     where tc.guild_id::text = btrim(p_guild_id)
-       and tc.managed_by_dank = true
-       and tc.is_enabled = true
-     order by tc.sort_order, tc.name;
+    select managed_row.managed_category_key,
+           managed_row.slug,
+           managed_row.name,
+           managed_row.is_enabled,
+           managed_row.is_default
+      from public.ticket_categories managed_row
+     where managed_row.guild_id::text = btrim(p_guild_id)
+       and managed_row.managed_by_dank = true
+       and managed_row.is_enabled = true
+     order by managed_row.sort_order, managed_row.name;
 end;
 $$;
 
--- Install/update the full catalog first. Existing enablement is preserved by the
--- v2 reconciler; new rows use only the safe starter set.
+-- Install/update the full catalog first. Existing enablement is preserved; rows
+-- added to an already configured/custom guild start disabled.
 select * from public.reconcile_dank_ticket_categories(null);
 
--- Reset only objectively broken old shapes. Managed-only guilds with a smaller
--- set keep their live choices but must confirm them in setup.
+-- Existing guilds must confirm the v2 menu. Objectively broken all-enabled
+-- managed menus are reduced to the small starter set. Custom menus are kept live
+-- by disabling managed choices until the owner explicitly selects any.
 do $$
 declare
     g record;
     managed_total integer;
     managed_enabled integer;
     custom_total integer;
-    duplicate_count integer;
     current_version integer;
 begin
-    for g in select guild_id::text as guild_id from public.guild_configs loop
+    for g in select gc.guild_id::text as guild_id from public.guild_configs gc loop
         select
             count(*) filter (where tc.managed_by_dank = true),
             count(*) filter (where tc.managed_by_dank = true and tc.is_enabled = true),
-            count(*) filter (where tc.managed_by_dank = false),
-            coalesce(sum(case when grouped.row_count > 1 then 1 else 0 end), 0)
-          into managed_total, managed_enabled, custom_total, duplicate_count
+            count(*) filter (where tc.managed_by_dank = false)
+          into managed_total, managed_enabled, custom_total
           from public.ticket_categories tc
-          left join lateral (
-              select count(*) as row_count
-              from public.ticket_categories same_key
-              where same_key.guild_id::text = g.guild_id
-                and public.dank_ticket_category_key(same_key.slug, same_key.name)
-                    = public.dank_ticket_category_key(tc.slug, tc.name)
-                and public.dank_ticket_category_key(tc.slug, tc.name) is not null
-          ) grouped on true
          where tc.guild_id::text = g.guild_id;
 
-        select coalesce(ticket_category_setup_version, 0)
+        select coalesce(gc.ticket_category_setup_version, 0)
           into current_version
-          from public.guild_configs
-         where guild_id::text = g.guild_id;
+          from public.guild_configs gc
+         where gc.guild_id::text = g.guild_id;
 
-        if duplicate_count > 0 or (current_version < 2 and managed_enabled >= 10) then
+        if current_version >= 2 then
+            continue;
+        end if;
+
+        if custom_total > 0 then
+            perform public.require_dank_ticket_category_setup(
+                g.guild_id,
+                'Your custom ticket choices were preserved. Confirm whether this server also wants any built-in Dank Shield choices.',
+                true
+            );
+        elsif managed_enabled >= 10 then
             perform public.require_dank_ticket_category_setup(
                 g.guild_id,
                 'The previous setup enabled duplicate or excessive built-in ticket choices. Choose only what this server needs.',
                 true
             );
-        elsif current_version < 2 and managed_total > 0 and custom_total = 0 then
+        elsif managed_total > 0 then
             perform public.require_dank_ticket_category_setup(
                 g.guild_id,
                 'Confirm which built-in ticket choices this server should show.',
@@ -461,31 +553,39 @@ set search_path = public
 as $$
 begin
     perform * from public.reconcile_dank_ticket_categories(new.guild_id::text);
-    update public.guild_configs
+    update public.guild_configs gc
        set ticket_category_setup_required = true,
            ticket_category_setup_required_reason = coalesce(
-               nullif(ticket_category_setup_required_reason, ''),
+               nullif(gc.ticket_category_setup_required_reason, ''),
                'Choose the ticket options this server should show.'
            ),
-           ticket_category_setup_version = 0
-     where guild_id::text = new.guild_id::text;
+           ticket_category_setup_version = 0,
+           setup_completed = false,
+           setup_completion_invalidated_at = now(),
+           setup_completion_invalidated_reason = 'Ticket menu setup is required.'
+     where gc.guild_id::text = new.guild_id::text;
     return new;
 end;
 $$;
 
--- Existing rows started false above and were selectively marked. New guilds
--- should begin in the required-selection state.
+drop trigger if exists guild_configs_sync_dank_ticket_categories
+    on public.guild_configs;
+create trigger guild_configs_sync_dank_ticket_categories
+after insert on public.guild_configs
+for each row
+execute function public.sync_dank_ticket_categories_for_new_guild();
+
 alter table public.guild_configs
     alter column ticket_category_setup_required set default true;
 
--- Managed rows are unique by canonical catalog key. Unknown custom rows stay
--- outside this index and are preserved.
 drop index if exists public.ticket_categories_guild_managed_key_uidx;
 create unique index ticket_categories_guild_managed_key_uidx
 on public.ticket_categories(guild_id, managed_category_key)
 where managed_by_dank = true and managed_category_key is not null;
 
+revoke all on function public.reconcile_dank_ticket_categories(text) from public, anon, authenticated;
 revoke all on function public.require_dank_ticket_category_setup(text, text, boolean) from public, anon, authenticated;
 revoke all on function public.save_dank_ticket_category_selection(text, text[], text, text) from public, anon, authenticated;
+grant execute on function public.reconcile_dank_ticket_categories(text) to service_role;
 grant execute on function public.require_dank_ticket_category_setup(text, text, boolean) to service_role;
 grant execute on function public.save_dank_ticket_category_selection(text, text[], text, text) to service_role;
