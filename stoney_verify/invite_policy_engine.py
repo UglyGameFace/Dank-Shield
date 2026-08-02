@@ -21,6 +21,8 @@ from typing import Any, Iterable, Mapping
 
 import discord
 
+from . import durable_invite_stats
+
 INVITE_RE = re.compile(
     # Do not match discord.gg inside another URL path/query like:
     # https://example.com/redirect/discord.gg/code
@@ -760,13 +762,24 @@ async def delete_message_if_allowed(message: discord.Message, decision: InviteDe
         decision.delete_succeeded = True
         decision.delete_error = ""
         try:
-            from stoney_verify.security_stats import record_security_event
-
-            if message.guild is not None:
-                await record_security_event(int(message.guild.id), invites_blocked=1)
-        except Exception:
-            # Statistics must never turn a successful moderation delete into a failure.
-            pass
+            stats_result = await durable_invite_stats.record_deleted_invite_decision(
+                message,
+                decision,
+            )
+            if stats_result.queued:
+                print(
+                    "⚠️ invite_policy stats event queued for durable retry "
+                    f"guild={decision.guild_id} event={stats_result.event_hash[:12]} "
+                    f"blocked={stats_result.blocked_count}"
+                )
+        except Exception as exc:
+            # A successful moderation delete stays successful, but stats failures
+            # are never silent and the durable service owns retry/reconciliation.
+            print(
+                "⚠️ invite_policy durable stats recording failed "
+                f"guild={decision.guild_id} message={getattr(message, 'id', 0)} "
+                f"error={type(exc).__name__}: {str(exc)[:220]}"
+            )
         record_invite_decision(message, decision)
         return True
     except discord.NotFound:
