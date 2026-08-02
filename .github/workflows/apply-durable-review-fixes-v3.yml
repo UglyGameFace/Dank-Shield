@@ -19,6 +19,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Install focused test dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
       - name: Apply reliability fixes
         run: python tools/apply_durable_review_fixes_v2.py
       - name: Run focused compile and regressions
