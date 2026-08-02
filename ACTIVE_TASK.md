@@ -24,7 +24,9 @@ The old central invite-delete path incremented `invites_blocked` by exactly one 
 - [x] Route every successful central-policy deletion through the durable service.
 - [x] Remove silent stats failure handling and emit actionable warnings.
 - [x] Queue failed writes with an on-disk retry outbox.
-- [x] Reconcile durable totals back into the existing visible Dank Stats compatibility counter.
+- [x] Reconcile durable totals back into the existing Dank Stats compatibility counter.
+- [x] Read the dedicated durable ledger directly when rendering the visible Discord counter.
+- [x] Preserve the larger durable total when legacy or mixed config JSON contains an older value.
 - [x] Coalesce prompt Discord channel refreshes to avoid rename spam.
 - [x] Reconcile durable totals for all connected guilds after startup.
 - [x] Retain a bounded guild-config CAS fallback during rolling migration visibility.
@@ -40,6 +42,7 @@ The old central invite-delete path incremented `invites_blocked` by exactly one 
 - [x] SQL permission test proves anon/authenticated cannot read the tables.
 - [x] SQL permission test proves only the service role receives RPC execution.
 - [x] Migration-version audit issue was corrected with `20260802225500_durable_invite_stats.sql`.
+- [x] Dedicated visible-counter overlay regression was added.
 
 ## Remaining Definition of Done gates
 
