@@ -70,9 +70,13 @@ def test_compact_home_uses_one_status_field_and_one_direct_area_picker(
     assert embed.title == "🚀 Dank Shield Setup"
     assert field_names(embed) == ["Next"]
     assert embed.footer.text is None
-    assert len([child for child in view.children if isinstance(child, discord.ui.Select)]) == 1
-    assert "Open Test Checklist" in [
-        child.label for child in view.children if isinstance(child, discord.ui.Button)
+    assert len(
+        [child for child in view.children if isinstance(child, discord.ui.Select)]
+    ) == 1
+    assert "Test Features" in [
+        child.label
+        for child in view.children
+        if isinstance(child, discord.ui.Button)
     ]
 
 
@@ -82,9 +86,23 @@ def test_health_check_hides_passing_wall_and_shows_only_next_problem(
     async def old_health(guild: Any) -> discord.Embed:
         _ = guild
         embed = discord.Embed(title="Old")
-        embed.add_field(name="Fix These First", value="🚫 Missing role\n🚫 Missing channel\n🚫 Missing permission\n🚫 Another blocker")
-        embed.add_field(name="Already Good", value="✅ One\n✅ Two\n✅ Three")
-        embed.add_field(name="Optional Later", value="⚠️ Optional style")
+        embed.add_field(
+            name="Fix These First",
+            value=(
+                "🚫 Missing role\n"
+                "🚫 Missing channel\n"
+                "🚫 Missing permission\n"
+                "🚫 Another blocker"
+            ),
+        )
+        embed.add_field(
+            name="Already Good",
+            value="✅ One\n✅ Two\n✅ Three",
+        )
+        embed.add_field(
+            name="Optional Later",
+            value="⚠️ Optional style",
+        )
         return embed
 
     async def target(guild: Any) -> tuple[str, str, str, str]:
@@ -96,38 +114,63 @@ def test_health_check_hides_passing_wall_and_shows_only_next_problem(
 
     embed = run(compact._health_embed(object()))
 
-    assert embed.title == "🚫 Setup Needs Attention"
+    assert embed.title == "🚫 Configuration Needs Attention"
     assert field_names(embed) == ["Fix next", "Optional later"]
     assert "Already Good" not in field_names(embed)
     assert "…and 1 more" in str(embed.fields[0].value)
 
 
+def test_ready_configuration_check_does_not_claim_features_were_tested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def old_health(guild: Any) -> discord.Embed:
+        _ = guild
+        return discord.Embed(title="Old")
+
+    async def target(guild: Any) -> tuple[str, str, str, str]:
+        _ = guild
+        return "ready", "Ready", "Ready", ""
+
+    monkeypatch.setattr(compact, "_ORIGINAL_HEALTH", old_health)
+    monkeypatch.setattr(compact.setup, "_guided_setup_target", target)
+
+    embed = run(compact._health_embed(object()))
+
+    assert embed.title == "✅ Configuration Check Passed"
+    assert "does **not** claim" in str(embed.description)
+    assert "Test Features" in str(embed.fields[0].value)
+
+
 def test_ticket_menu_keeps_controls_but_removes_member_and_mapping_walls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original_view = discord.ui.View(timeout=30)
+    rows = [
+        {"name": "Verification", "is_default": False, "is_enabled": True},
+        {"name": "General Support", "is_default": True, "is_enabled": True},
+    ]
+    original_view = SimpleNamespace(rows=rows, db_error="")
 
-    async def old_payload(guild: Any, *, title: str) -> tuple[discord.Embed, discord.ui.View]:
+    async def old_payload(
+        guild: Any,
+        *,
+        title: str,
+    ) -> tuple[discord.Embed, Any]:
         _ = guild
         old = discord.Embed(title=title)
         old.add_field(name="Member Preview", value="very long")
         old.add_field(name="Saved Ticket Choices", value="very long")
         return old, original_view
 
-    rows = [
-        {"name": "Verification", "is_default": False, "is_enabled": True},
-        {"name": "General Support", "is_default": True, "is_enabled": True},
-    ]
-
-    async def load(guild: Any) -> Any:
-        _ = guild
-        return SimpleNamespace(rows=rows, error="")
-
     monkeypatch.setattr(compact, "_ORIGINAL_CATEGORY_PAYLOAD", old_payload)
-    monkeypatch.setattr(compact.setup.solid, "_category_load", load)
-    monkeypatch.setattr(compact.setup.solid, "_category_governance_text", lambda values: "✅ safe")
+    monkeypatch.setattr(
+        compact.setup.solid,
+        "_category_governance_text",
+        lambda values: "✅ safe",
+    )
 
-    embed, view = run(compact._category_payload(object(), title="🎫 Ticket Menu"))
+    embed, view = run(
+        compact._category_payload(object(), title="🎫 Ticket Menu")
+    )
 
     assert view is original_view
     assert field_names(embed) == []
@@ -141,7 +184,11 @@ def test_setup_gate_activates_compact_patch_without_registering_another_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
-    monkeypatch.setattr(compact, "apply_compact_setup_patch", lambda: calls.append("compact"))
+    monkeypatch.setattr(
+        compact,
+        "apply_compact_setup_patch",
+        lambda: calls.append("compact"),
+    )
     monkeypatch.setattr(gate, "_patch_all", lambda: 4)
 
     gate.register_public_setup_gate(None, None)
@@ -183,26 +230,44 @@ def test_finish_refuses_to_complete_until_all_enabled_tests_are_confirmed(
             "completed": False,
         }
 
-    async def render(value: Any, state_value: Any, confirmed_value: Any) -> None:
+    async def render(
+        value: Any,
+        state_value: Any,
+        confirmed_value: Any,
+    ) -> None:
         _ = value, state_value, confirmed_value
         events.append("render")
 
     async def completed(guild_id: int, actor: Any) -> Any:
         _ = guild_id, actor
         events.append("complete")
-        return SimpleNamespace(enabled_labels=lambda: ["Tickets", "Logs"])
+        return SimpleNamespace(
+            enabled_labels=lambda: ["Tickets", "Logs"]
+        )
 
     async def edit(*args: Any, **kwargs: Any) -> None:
         _ = args, kwargs
         events.append("edit")
 
-    monkeypatch.setattr(compact.setup.solid, "_require_setup_permission", allowed)
-    monkeypatch.setattr(compact.setup.solid, "_safe_defer_update", defer)
+    monkeypatch.setattr(
+        compact.setup.solid,
+        "_require_setup_permission",
+        allowed,
+    )
+    monkeypatch.setattr(
+        compact.setup.solid,
+        "_safe_defer_update",
+        defer,
+    )
     monkeypatch.setattr(compact.setup, "_guided_setup_target", ready)
     monkeypatch.setattr(compact, "_launch_state", state)
     monkeypatch.setattr(compact, "_render_tests", render)
     monkeypatch.setattr(compact, "mark_setup_completed", completed)
-    monkeypatch.setattr(compact.setup.solid, "_edit_or_followup", edit)
+    monkeypatch.setattr(
+        compact.setup.solid,
+        "_edit_or_followup",
+        edit,
+    )
 
     run(compact._finish(interaction, {"tickets"}))
     assert events == ["render"]
