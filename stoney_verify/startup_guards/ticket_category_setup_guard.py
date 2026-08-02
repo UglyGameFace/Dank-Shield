@@ -2,12 +2,11 @@ from __future__ import annotations
 
 """Single owner for ticket category catalog, setup selection, and live menus.
 
-This replaces the older COD/Game category patch stack. The database keeps every
-managed template, setup owners explicitly choose which ones are enabled, and all
-member-facing loaders use the same exact canonical deduplication path.
+The database keeps every managed template available. Setup owners explicitly
+choose which templates are enabled, custom rows remain authoritative, and every
+member-facing loader uses the same exact canonical deduplication path.
 """
 
-import asyncio
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 import discord
@@ -105,6 +104,52 @@ def _active_line(rows: Iterable[Mapping[str, Any]], *, empty: str) -> str:
     return "\n".join(f"• **{_short(name, 70)}**" for name in names[:16])[:1024]
 
 
+async def _save_selection(
+    interaction: discord.Interaction,
+    selected_keys: Iterable[str],
+) -> Optional[service.CategorySetupState]:
+    from ..commands_ext import public_setup_solid as solid
+
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message(
+            "❌ This must be used inside a server.",
+            ephemeral=True,
+        )
+        return None
+
+    await solid._safe_defer_update(interaction)
+    try:
+        state = await service.save_category_selection(
+            guild.id,
+            tuple(selected_keys),
+            actor_id=getattr(interaction.user, "id", ""),
+            actor_name=str(interaction.user),
+        )
+        try:
+            from ..guild_config import invalidate_guild_config
+
+            invalidate_guild_config(guild.id)
+        except Exception:
+            pass
+        return state
+    except Exception as exc:
+        embed = discord.Embed(
+            title="🚫 Ticket Choices Were Not Saved",
+            description=(
+                f"`{type(exc).__name__}: {_short(exc, 350)}`\n\n"
+                "Nothing was partially enabled. Refresh and try again."
+            ),
+            color=discord.Color.red(),
+        )
+        await solid._edit_or_followup(
+            interaction,
+            embed=embed,
+            view=solid.SetupNavView(),
+        )
+        return None
+
+
 class ManagedCategorySelection(discord.ui.Select):
     def __init__(self, state: service.CategorySetupState) -> None:
         options: List[discord.SelectOption] = []
@@ -123,7 +168,7 @@ class ManagedCategorySelection(discord.ui.Select):
             )
 
         super().__init__(
-            placeholder="Choose every ticket option this server should show",
+            placeholder="Choose every built-in ticket option this server should show",
             min_values=1,
             max_values=max(1, min(25, len(options))),
             options=options[:25],
@@ -136,44 +181,12 @@ class ManagedCategorySelection(discord.ui.Select):
 
         if not await solid._require_setup_permission(interaction):
             return
-        guild = interaction.guild
-        if guild is None:
-            return await interaction.response.send_message(
-                "❌ This must be used inside a server.",
-                ephemeral=True,
-            )
-
-        await solid._safe_defer_update(interaction)
-        try:
-            state = await service.save_category_selection(
-                guild.id,
-                self.values,
-                actor_id=getattr(interaction.user, "id", ""),
-                actor_name=str(interaction.user),
-            )
-            try:
-                from ..guild_config import invalidate_guild_config
-
-                invalidate_guild_config(guild.id)
-            except Exception:
-                pass
-        except Exception as exc:
-            embed = discord.Embed(
-                title="🚫 Ticket Choices Were Not Saved",
-                description=(
-                    f"`{type(exc).__name__}: {_short(exc, 350)}`\n\n"
-                    "Nothing was partially enabled. Refresh and try again."
-                ),
-                color=discord.Color.red(),
-            )
-            return await solid._edit_or_followup(
-                interaction,
-                embed=embed,
-                view=solid.SetupNavView(),
-            )
+        state = await _save_selection(interaction, self.values)
+        if state is None or interaction.guild is None:
+            return
 
         embed, view = await _build_category_manager_payload(
-            guild,
+            interaction.guild,
             title="✅ Ticket Choices Saved",
             state=state,
         )
@@ -202,6 +215,7 @@ class CategorySetupManagerView(discord.ui.View):
         super().__init__(timeout=900)
         self.state = state
         self.db_error = db_error
+        custom_rows: List[Dict[str, Any]] = []
 
         if state is not None and not db_error:
             self.add_item(ManagedCategorySelection(state))
@@ -215,6 +229,16 @@ class CategorySetupManagerView(discord.ui.View):
                         row=1,
                     )
                 )
+
+                custom_only = discord.ui.Button(
+                    label="Use Custom Choices Only",
+                    emoji="🧩",
+                    style=discord.ButtonStyle.secondary,
+                    custom_id="dank_ticket_category_setup:custom_only",
+                    row=2,
+                )
+                custom_only.callback = self._use_custom_only
+                self.add_item(custom_only)
 
         add = discord.ui.Button(
             label="Add Custom Ticket Choice",
@@ -260,6 +284,26 @@ class CategorySetupManagerView(discord.ui.View):
         from ..commands_ext import public_setup_solid as solid
 
         return await solid._require_setup_permission(interaction)
+
+    async def _use_custom_only(self, interaction: discord.Interaction) -> None:
+        from ..commands_ext import public_setup_solid as solid
+
+        if not await self._allowed(interaction):
+            return
+        state = await _save_selection(interaction, ())
+        if state is None or interaction.guild is None:
+            return
+        embed, view = await _build_category_manager_payload(
+            interaction.guild,
+            title="✅ Custom Ticket Choices Confirmed",
+            state=state,
+        )
+        embed.add_field(
+            name="Built-in Choices",
+            value="All built-in choices are OFF. Your enabled custom choices remain available.",
+            inline=False,
+        )
+        await solid._edit_or_followup(interaction, embed=embed, view=view)
 
     async def _add_custom(self, interaction: discord.Interaction) -> None:
         from ..commands_ext import public_setup_solid as solid
@@ -330,9 +374,7 @@ async def _build_category_manager_payload(
         )
         return embed, CategorySetupManagerView(state=None, db_error=error)
 
-    managed_active = [
-        row for row in state.active_rows if _catalog_key(row)
-    ]
+    managed_active = [row for row in state.active_rows if _catalog_key(row)]
     custom_active = _custom_rows_from_state(state)
 
     if state.required:
@@ -342,14 +384,14 @@ async def _build_category_manager_payload(
             value=(
                 f"{state.reason or 'Confirm this server’s ticket choices.'}\n\n"
                 "A small temporary menu is active so support is not completely "
-                "blocked. Setup will remain unfinished until an admin saves the selection."
+                "blocked. Setup remains unfinished until an admin saves a selection."
             )[:1024],
             inline=False,
         )
 
     embed.add_field(
         name="Currently Shown to Members",
-        value=_active_line(managed_active, empty="No managed choices selected."),
+        value=_active_line(managed_active, empty="No built-in choices selected."),
         inline=False,
     )
     if custom_active:
@@ -361,8 +403,9 @@ async def _build_category_manager_payload(
     embed.add_field(
         name="How to Save",
         value=(
-            "Open the dropdown, check every option you want, uncheck everything "
-            "you do not want, then submit the selection. At least one is required."
+            "Use the multi-select to choose every built-in option you want. "
+            "Servers with custom choices can press **Use Custom Choices Only** "
+            "to keep every built-in option off."
         ),
         inline=False,
     )
@@ -374,9 +417,7 @@ async def _build_category_manager_payload(
         ),
         inline=False,
     )
-    embed.set_footer(
-        text=f"Guild {guild.id} • category setup v{service.CATEGORY_SETUP_VERSION}"
-    )
+    embed.set_footer(text=f"Guild {guild.id} • category setup v{service.CATEGORY_SETUP_VERSION}")
     return embed, CategorySetupManagerView(state=state)
 
 
@@ -455,18 +496,14 @@ def _install_intake_and_form_support() -> None:
     try:
         from ..commands_ext import ticket_category_admin
 
-        ticket_category_admin._ALLOWED_INTAKE_TYPES.update(
-            _COD_INTAKE_TYPES | _GAME_INTAKE_TYPES
-        )
+        ticket_category_admin._ALLOWED_INTAKE_TYPES.update(_COD_INTAKE_TYPES | _GAME_INTAKE_TYPES)
     except Exception as exc:
         _warn(f"category admin intake types unavailable: {exc!r}")
 
     try:
         from ..tickets_new import intake_service
 
-        intake_service._VALID_INTAKE_TYPES.update(
-            _COD_INTAKE_TYPES | _GAME_INTAKE_TYPES
-        )
+        intake_service._VALID_INTAKE_TYPES.update(_COD_INTAKE_TYPES | _GAME_INTAKE_TYPES)
         original = intake_service._default_questions_for_intake_type
         if not getattr(intake_service, "_CATEGORY_SETUP_V2_QUESTIONS", False):
             def default_questions_for_intake_type(intake_type: str):
@@ -485,25 +522,16 @@ def _install_intake_and_form_support() -> None:
     try:
         from . import ticket_form_default_templates_guard as forms
 
-        templates = getattr(forms, "DEFAULT_TEMPLATES", None)
-        if isinstance(templates, dict):
-            templates.setdefault("cod_services", _cod_questions(forms))
-            templates.setdefault("game_services", _game_questions(forms))
-    except Exception:
-        # The form guard uses a different internal question representation in
-        # some deployments. Intake support above remains the source of truth.
-        pass
+        forms.apply()
+    except Exception as exc:
+        _warn(f"default category form support unavailable: {exc!r}")
 
 
 def _install_live_loaders() -> None:
     from ..commands_ext import public_ticket_panel_clean as clean
 
     clean.DEFAULT_ROWS = tuple(service.starter_category_rows())
-    clean._rows = lambda raw: service.dedupe_category_rows(
-        raw,
-        enabled_only=True,
-        fallback=True,
-    )
+    clean._rows = lambda raw: service.dedupe_category_rows(raw, enabled_only=True, fallback=True)
     clean._load_rows = _clean_panel_load_rows
 
     try:
@@ -526,20 +554,27 @@ def _install_live_loaders() -> None:
     try:
         from ..tickets_new import panel
 
+        def bootstrap_payload(guild_id: int) -> List[Dict[str, Any]]:
+            return [
+                {**row, "guild_id": str(int(guild_id))}
+                for row in service.catalog_category_rows()
+            ]
+
+        def seed_categories(guild_id: int) -> List[Dict[str, Any]]:
+            try:
+                service._sync_managed_categories_sync(int(guild_id))
+            except Exception:
+                pass
+            return service.load_visible_categories_sync(int(guild_id))
+
+        def fetch_categories(guild_id: int, *, allow_bootstrap: bool = True) -> List[Dict[str, Any]]:
+            _ = allow_bootstrap
+            return service.load_visible_categories_sync(int(guild_id))
+
         panel._DEFAULT_BOOTSTRAP_CATEGORIES = tuple(service.catalog_category_rows())
-        panel._bootstrap_categories_payload_for_guild = lambda guild_id: [
-            {**row, "guild_id": str(int(guild_id))}
-            for row in service.catalog_category_rows()
-        ]
-        panel._seed_dashboard_ticket_categories_sync = (
-            lambda guild_id: (
-                service._sync_managed_categories_sync(int(guild_id)),
-                service.load_visible_categories_sync(int(guild_id)),
-            )[1]
-        )
-        panel._fetch_dashboard_ticket_categories_sync = (
-            lambda guild_id, allow_bootstrap=True: service.load_visible_categories_sync(int(guild_id))
-        )
+        panel._bootstrap_categories_payload_for_guild = bootstrap_payload
+        panel._seed_dashboard_ticket_categories_sync = seed_categories
+        panel._fetch_dashboard_ticket_categories_sync = fetch_categories
     except Exception as exc:
         _warn(f"native ticket routing compatibility unavailable: {exc!r}")
 
@@ -580,7 +615,7 @@ def apply() -> bool:
         _APPLIED = True
         _log(
             "single category owner active; explicit setup selection, exact dedupe, "
-            "safe starter fallback, and existing-server migration enabled"
+            "safe starter fallback, custom-only support, and existing-server migration enabled"
         )
         return True
     except Exception as exc:
