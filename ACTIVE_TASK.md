@@ -1,81 +1,76 @@
 # ACTIVE TASK
 
-## DS-SETUP-018 — Easiest possible `/dank setup` flow
+## DS-STATS-019 — Durable Dank Stats invite-block counting
 
-**Status:** MERGED — PRODUCTION DEPLOYMENT / LIVE MOBILE VERIFICATION PENDING
-**Pull request:** `#165`
-**Merge commit:** `52afa3ce60ab51ff6726d298bb08822db43e1f84`
+**Status:** ACTIVE — EXACT-HEAD REGRESSION VALIDATION
+**Branch:** `fix/dank-stats-invite-block-counting`
+**Pull request:** `#166`
 
-## Completed implementation
+## Production defect
 
-- One compact Setup Home with one obvious primary action.
-- One direct feature-area picker; no normal Manage Setup → All Features maze.
-- Short plan, guided-step, configuration-check, help, and ticket-menu cards.
-- Repair and restart tools remain under Advanced.
-- **Check Configuration** only reports automatic saved-role/channel/permission readiness.
-- **Start Guided Test** begins real Discord behavior testing.
-- The next unfinished enabled test opens automatically.
-- **Mark Passed & Continue** saves the result and advances automatically.
-- The test dropdown is optional and only used to jump to a specific test.
-- **Finish Setup** appears only after every enabled test passes.
-- Test confirmations persist inside the active setup session and invalidate when enabled features change.
+The old central invite-delete path incremented `invites_blocked` by exactly one deleted message, silently ignored failed stats writes, and relied on a delayed stats-channel refresh. It did not prove create/edit/fallback dedupe or restart persistence.
 
-## Safety / ownership
+## Implementation complete
 
-- Reuses the compact setup session cache and canonical completion owner.
-- Reuses existing ticket-panel, test-ticket, and Verify-panel actions.
-- Adds no slash command, competing setup owner, schema migration, role deletion, or channel deletion.
-- Presentation code remains under `stoney_verify/setup_ui/`.
+- [x] Count the actual unique blocked invite codes approved by central invite policy.
+- [x] Give each deleted Discord message a stable SHA-256 event identity.
+- [x] Add a dedicated guild total and replay-safe event ledger.
+- [x] Add one transactional RPC that seeds legacy history, inserts the event once, and increments atomically.
+- [x] Keep tables and RPC service-role-only with RLS enabled.
+- [x] Route every successful central-policy deletion through the durable service.
+- [x] Remove silent stats failure handling and emit actionable warnings.
+- [x] Queue failed writes with an on-disk retry outbox.
+- [x] Move outbox serialization and filesystem writes off the Discord event loop.
+- [x] Protect concurrent outbox replacements with a file lock.
+- [x] Recover restored pending events even when the module loads after Discord is already ready.
+- [x] Reconcile guilds with bounded concurrency rather than serial startup reads.
+- [x] Reconcile durable totals back into the existing Dank Stats compatibility counter.
+- [x] Read the dedicated durable ledger directly when rendering the visible Discord counter.
+- [x] Preserve the larger durable total when legacy or mixed config JSON contains an older value.
+- [x] Coalesce prompt Discord channel refreshes to avoid rename spam.
+- [x] Retain a bounded guild-config CAS fallback during rolling migration visibility.
+- [x] Use the required unique 14-digit Supabase migration timestamp.
 
-## Validation
+## Validation completed
 
-- [x] Focused guided-test behavior tests passed.
-- [x] Full unit suite: `907 passed, 9 warnings in 633.51s`.
-- [x] Python compilation passed.
-- [x] Committed whitespace check passed.
-- [x] Managed ticket-category SQL smoke test passed.
-- [x] Claim-first ticket security suite passed.
-- [x] Application command-size diagnostics passed.
-- [x] Profile runtime diagnostics passed.
-- [x] Public setup audit passed.
-- [x] Canonical public command-surface audit passed.
-- [x] Public command/friction audit passed.
-- [x] Public invite/permissions audit passed.
-- [x] Setup safety audit passed.
-- [x] Dank Design Smart Auto-Detect audit passed.
-- [x] Role-truth ownership audit passed.
-- [x] Event-boundary ownership audit passed.
-- [x] `/dank` payload remained `1675/8000` with nine canonical global commands.
-- [x] Branch was zero commits behind `main` with no unresolved review threads.
-- [x] PR #165 squash-merged into `main`.
+- [x] Focused review suite: `16 passed`.
+- [x] Central policy deletion calls the durable recorder with the full decision.
+- [x] Failed writes are queued rather than silently discarded.
+- [x] Late-import recovery scheduling regression passes.
+- [x] Bounded concurrent startup reconciliation regression passes.
+- [x] Async outbox persistence regression passes.
+- [x] PostgreSQL migration applies twice successfully.
+- [x] SQL smoke test proves seed `5` plus three blocked codes produces total `8`.
+- [x] SQL smoke test proves replaying the same event remains total `8` with `applied=false`.
+- [x] SQL smoke test proves a second two-code event produces total `10`.
+- [x] SQL smoke test proves exactly two unique ledger rows exist.
+- [x] SQL permission test proves anon/authenticated cannot read the tables.
+- [x] SQL permission test proves only the service role receives RPC execution.
+- [x] Dedicated visible-counter overlay regression passes.
 
-## Remaining Definition of Done gate
+## Remaining Definition of Done gates
 
-- [ ] Deploy/restart Dank Shield on Discloud.
-- [ ] Live mobile check: Setup Home shows **Start Guided Test** when configuration is ready.
-- [ ] Live mobile check: green test button opens the next enabled feature automatically.
-- [ ] Live mobile check: **Mark Passed & Continue** advances without returning to the list.
-- [ ] Live mobile check: optional jump menu still works.
-- [ ] Live mobile check: **Finish Setup** appears only after all enabled tests pass.
+- [ ] Full unit suite passes on the exact owner-authored head.
+- [ ] Python compilation and whitespace checks pass on the exact head.
+- [ ] Public setup, command surface, invite permissions, setup safety, role ownership, and event ownership audits pass.
+- [ ] Command-size and profile-runtime diagnostics pass.
+- [ ] Branch is current with `main` and has no unresolved review threads.
+- [ ] PR is merged.
+- [ ] Discloud rebuild completes and a live invite test increments the visible counter by the actual blocked-code count.
 
-## Next task — start immediately after setup is live-verified
+## Previous completed implementation
 
-### DS-STATS-019 — Durable Dank Stats invite-block counting
+### DS-SETUP-018 — Easiest possible `/dank setup` flow
 
-- count actual blocked invite codes, not merely one deleted message;
-- use durable atomic guild-scoped increments;
-- never silently swallow failed stats writes;
-- safely retry or reconcile failed writes;
-- refresh the visible counter promptly without Discord rename spam;
-- deduplicate create/edit/fallback processing;
-- test real policy delete → durable increment → display refresh → restart persistence.
+- PR #165 merged at `52afa3ce60ab51ff6726d298bb08822db43e1f84`.
+- Full validation passed with `907 passed, 9 warnings`.
 
 ## Later backlog
 
 ### DS-MEDIA-001 — Klipy direct GIF unfurl listener
 
-After setup and stats are complete, add one moderation-safe listener with strict host validation, bounded requests, redirect validation, caching, bot-loop prevention, permission/error handling, and parser/listener/security regressions.
+After Stats is complete, add one moderation-safe listener with strict host validation, bounded requests, redirect validation, caching, bot-loop prevention, permission/error handling, and parser/listener/security regressions.
 
 ## Single Active Task Lock
 
-Do not begin DS-STATS-019 or another unrelated task until DS-SETUP-018 reaches its live Definition of Done.
+Do not begin another unrelated repair until DS-STATS-019 reaches its Definition of Done.

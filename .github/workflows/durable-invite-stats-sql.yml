@@ -1,0 +1,123 @@
+name: Durable Invite Stats SQL
+
+on:
+  pull_request:
+    paths:
+      - supabase/migrations/20260802225500_durable_invite_stats.sql
+      - .github/workflows/durable-invite-stats-sql.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  migration-smoke-test:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGPASSWORD: postgres
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGDATABASE: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare Supabase-compatible roles
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+            if not exists (select 1 from pg_roles where rolname = 'anon') then
+              create role anon nologin;
+            end if;
+            if not exists (select 1 from pg_roles where rolname = 'authenticated') then
+              create role authenticated nologin;
+            end if;
+            if not exists (select 1 from pg_roles where rolname = 'service_role') then
+              create role service_role nologin bypassrls;
+            end if;
+          end
+          $$;
+          SQL
+      - name: Apply migration twice
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260802225500_durable_invite_stats.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260802225500_durable_invite_stats.sql
+      - name: Verify atomic increment and durable dedupe
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            was_applied boolean;
+            total bigint;
+          begin
+            select applied, invites_blocked
+              into was_applied, total
+              from public.record_dank_invite_block_event(
+                repeat('a', 64), '123', 3, 5, 'create:test'
+              );
+            if was_applied is distinct from true or total <> 8 then
+              raise exception 'first event expected applied=true total=8, got applied=% total=%', was_applied, total;
+            end if;
+
+            select applied, invites_blocked
+              into was_applied, total
+              from public.record_dank_invite_block_event(
+                repeat('a', 64), '123', 3, 5, 'edit:test'
+              );
+            if was_applied is distinct from false or total <> 8 then
+              raise exception 'replay expected applied=false total=8, got applied=% total=%', was_applied, total;
+            end if;
+
+            select applied, invites_blocked
+              into was_applied, total
+              from public.record_dank_invite_block_event(
+                repeat('b', 64), '123', 2, 0, 'fallback:test'
+              );
+            if was_applied is distinct from true or total <> 10 then
+              raise exception 'second event expected applied=true total=10, got applied=% total=%', was_applied, total;
+            end if;
+
+            if (select invites_blocked from public.dank_invite_block_stats where guild_id = '123') <> 10 then
+              raise exception 'durable guild total is not 10';
+            end if;
+            if (select count(*) from public.dank_invite_block_events where guild_id = '123') <> 2 then
+              raise exception 'event ledger should contain exactly two unique events';
+            end if;
+          end
+          $$;
+          SQL
+      - name: Verify public roles have no access
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+            if has_table_privilege('anon', 'public.dank_invite_block_stats', 'select') then
+              raise exception 'anon unexpectedly has stats table access';
+            end if;
+            if has_table_privilege('authenticated', 'public.dank_invite_block_events', 'select') then
+              raise exception 'authenticated unexpectedly has event table access';
+            end if;
+            if not has_function_privilege(
+              'service_role',
+              'public.record_dank_invite_block_event(text,text,integer,bigint,text)',
+              'execute'
+            ) then
+              raise exception 'service_role is missing RPC execute permission';
+            end if;
+          end
+          $$;
+          SQL

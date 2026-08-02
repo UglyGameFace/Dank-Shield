@@ -438,9 +438,25 @@ async def _display_names_for_guild(
                 f"db_open={db_open} live_channels={live_open}; using live floor"
             )
 
+    display_counts = normalize_security_stats(counts)
+    try:
+        from .durable_invite_stats import read_invites_blocked
+
+        durable_invites = await read_invites_blocked(gid)
+        if durable_invites is not None:
+            display_counts["invites_blocked"] = max(
+                int(display_counts["invites_blocked"]),
+                int(durable_invites),
+            )
+    except Exception as exc:
+        print(
+            f"⚠️ security_stats durable invite count read failed guild={gid} "
+            f"error={type(exc).__name__}"
+        )
+
     return _display_names(
         spam_guard_enabled=spam_enabled,
-        counts=counts,
+        counts=display_counts,
         member_count=_guild_member_count(guild),
         ticket_counts=tickets,
     )
