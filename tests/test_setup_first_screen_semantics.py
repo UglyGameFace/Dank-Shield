@@ -8,8 +8,8 @@ import discord
 import pytest
 
 from stoney_verify.commands_ext import (
+    public_setup_compact as compact,
     public_setup_fresh_choice as fresh,
-    public_setup_recommend as recommend,
 )
 
 
@@ -66,17 +66,17 @@ def test_new_server_opens_setup_type_before_guided_setup(
         events.append("guided")
 
     monkeypatch.setattr(
-        recommend,
-        "_open_choose_setup_type",
+        compact,
+        "_open_plan",
         choose,
     )
     monkeypatch.setattr(
-        recommend,
-        "_open_guided_setup",
+        compact,
+        "_open_guided",
         guided,
     )
 
-    view = recommend.ProductSetupHomeView(
+    view = compact.CompactSetupHomeView(
         started=False,
     )
 
@@ -106,17 +106,17 @@ def test_started_server_continues_guided_setup(
         events.append("guided")
 
     monkeypatch.setattr(
-        recommend,
-        "_open_choose_setup_type",
+        compact,
+        "_open_plan",
         choose,
     )
     monkeypatch.setattr(
-        recommend,
-        "_open_guided_setup",
+        compact,
+        "_open_guided",
         guided,
     )
 
-    view = recommend.ProductSetupHomeView(
+    view = compact.CompactSetupHomeView(
         started=True,
     )
 

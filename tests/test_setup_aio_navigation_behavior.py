@@ -4,8 +4,8 @@ from typing import Any
 
 import discord
 
+from stoney_verify.commands_ext import public_setup_compact as compact
 from stoney_verify.commands_ext import public_setup_fresh_choice as fresh
-from stoney_verify.commands_ext import public_setup_recommend as recommend
 from stoney_verify.setup_new.templates import build_setup_template_embed
 
 
@@ -17,39 +17,68 @@ def labels(view: discord.ui.View) -> list[str]:
     ]
 
 
+def select_labels(view: discord.ui.View) -> list[str]:
+    result: list[str] = []
+    for child in view.children:
+        if isinstance(child, discord.ui.Select):
+            result.extend(str(option.label) for option in child.options)
+    return result
+
+
 def field_names(embed: discord.Embed) -> list[str]:
     return [str(field.name) for field in embed.fields]
 
 
-def test_home_has_one_quick_path_management_and_close() -> None:
-    view = recommend.ProductSetupHomeView(
+def test_new_server_home_has_one_quick_path_and_close() -> None:
+    view = compact.CompactSetupHomeView(
         ready=False,
         started=False,
         completed=False,
     )
     assert labels(view) == [
         "Start Setup",
-        "Manage Setup",
         "Close",
     ]
+    assert select_labels(view) == []
 
 
-def test_manage_setup_is_task_based() -> None:
-    view = recommend.ManageSetupView()
+def test_started_home_exposes_direct_area_picker_without_manage_hop() -> None:
+    view = compact.CompactSetupHomeView(
+        ready=False,
+        started=True,
+        completed=False,
+    )
     assert labels(view) == [
-        "Change Setup Plan",
-        "All Features & Settings",
-        "Review Setup",
-        "Repair or Restart Setup",
-        "Help",
+        "Continue Setup",
+        "Change Plan",
+        "Check Configuration",
+        "Advanced",
+        "Close",
+    ]
+    assert "Manage Setup" not in labels(view)
+    assert len(select_labels(view)) == 9
+
+
+def test_ready_home_calls_real_feature_testing_by_name() -> None:
+    view = compact.CompactSetupHomeView(
+        ready=True,
+        started=True,
+        completed=False,
+    )
+    assert labels(view)[0] == "Test Features"
+    assert "Check Configuration" in labels(view)
+
+
+def test_manage_screen_is_one_compact_feature_picker() -> None:
+    view = compact.CompactManagerView()
+    assert labels(view) == [
+        "Change Plan",
+        "Check Configuration",
+        "Advanced",
         "Setup Home",
         "Close",
     ]
-
-
-def test_aio_feature_hub_exposes_all_major_categories() -> None:
-    view = recommend.AdvancedSettingsHubView()
-    assert labels(view) == [
+    assert select_labels(view) == [
         "Setup Plan & Server Items",
         "Tickets",
         "Verification",
@@ -59,42 +88,79 @@ def test_aio_feature_hub_exposes_all_major_categories() -> None:
         "Welcome & Join",
         "Profile Signatures",
         "Backups & History",
-        "Back to Manage Setup",
-        "Setup Home",
-        "Close",
     ]
 
 
-def test_each_major_subsection_has_back_home_and_close() -> None:
-    views = (
-        recommend.AdvancedCoreSetupView(),
-        recommend.AdvancedMemberExperienceView(),
-        recommend.AdvancedVerificationView(),
-        recommend.AdvancedSecurityView(),
-        recommend.AdvancedLogsActivityView(),
-        recommend.AdvancedAppearanceView(),
-        recommend.AdvancedDangerZoneView(),
-    )
-    for view in views:
-        view_labels = labels(view)
-        assert any(label.startswith("Back to ") for label in view_labels)
-        assert "Setup Home" in view_labels
-        assert "Close" in view_labels
+def test_feature_picker_does_not_repeat_areas_as_buttons() -> None:
+    view = compact.CompactManagerView()
+    assert not set(select_labels(view)).intersection(labels(view))
+    assert len(
+        [child for child in view.children if isinstance(child, discord.ui.Select)]
+    ) == 1
 
 
-def test_test_screen_still_hides_disabled_feature_actions() -> None:
-    view = recommend.LaunchTestView(
+def test_test_screen_hides_disabled_features_and_explains_finish_gate() -> None:
+    view = compact.CompactTestView(
         {
             "tickets": False,
+            "verification": True,
             "basic_verify": True,
+            "voice_verify": False,
+            "id_verify": False,
+            "spam_guard": False,
+            "logs": False,
             "completed": False,
         }
     )
     assert labels(view) == [
-        "Post Simple Verify Panel",
         "Finish Setup",
-        "Review Setup",
+        "Recheck Configuration",
         "Setup Home",
+        "Close",
+    ]
+    assert select_labels(view) == ["Simple Verify"]
+    finish = next(
+        child
+        for child in view.children
+        if isinstance(child, discord.ui.Button)
+        and child.label == "Finish Setup"
+    )
+    assert finish.disabled is True
+
+
+def test_feature_test_pages_expose_only_relevant_direct_actions() -> None:
+    tickets = compact.FeatureTestView(
+        {"tickets": True},
+        frozenset(),
+        "tickets",
+    )
+    verify = compact.FeatureTestView(
+        {"basic_verify": True},
+        frozenset(),
+        "simple_verify",
+    )
+    logs = compact.FeatureTestView(
+        {"logs": True},
+        frozenset(),
+        "logs",
+    )
+
+    assert labels(tickets) == [
+        "Post / Refresh Ticket Panel",
+        "Create Test Ticket",
+        "Mark Tested",
+        "Back to Checklist",
+        "Close",
+    ]
+    assert labels(verify) == [
+        "Post / Refresh Verify Panel",
+        "Mark Tested",
+        "Back to Checklist",
+        "Close",
+    ]
+    assert labels(logs) == [
+        "Mark Tested",
+        "Back to Checklist",
         "Close",
     ]
 
