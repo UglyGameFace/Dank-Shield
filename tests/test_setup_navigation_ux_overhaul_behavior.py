@@ -7,6 +7,7 @@ from typing import Any
 import discord
 import pytest
 
+from stoney_verify.commands_ext import public_setup_compact as compact
 from stoney_verify.commands_ext import public_setup_config_writer as writer
 from stoney_verify.commands_ext import public_setup_recommend as recommend
 from stoney_verify.commands_ext import public_setup_solid as solid
@@ -30,6 +31,14 @@ def button(view: discord.ui.View, custom_id: str) -> discord.ui.Button:
     return matches[0]
 
 
+def select_labels(view: discord.ui.View) -> list[str]:
+    result: list[str] = []
+    for child in view.children:
+        if isinstance(child, discord.ui.Select):
+            result.extend(str(option.label) for option in child.options)
+    return result
+
+
 def test_custom_setup_does_not_invent_tickets() -> None:
     services = recommend._selected_setup_services({
         "setup_choice": "custom_setup",
@@ -40,9 +49,10 @@ def test_custom_setup_does_not_invent_tickets() -> None:
     assert services["basic_verify"] is True
 
 
-def test_launch_hides_actions_for_features_that_are_off() -> None:
-    view = recommend.LaunchTestView({
+def test_test_checklist_hides_features_that_are_off_and_locks_finish() -> None:
+    view = compact.CompactTestView({
         "tickets": False,
+        "verification": True,
         "basic_verify": True,
         "voice_verify": False,
         "id_verify": False,
@@ -51,23 +61,44 @@ def test_launch_hides_actions_for_features_that_are_off() -> None:
         "completed": False,
     })
     assert labels(view) == [
-        "Post Simple Verify Panel",
         "Finish Setup",
-        "Review Setup",
+        "Setup Check",
         "Setup Home",
         "Close",
     ]
+    assert select_labels(view) == ["Simple Verify"]
+    assert button(view, "dank_setup_test:finish").disabled is True
 
 
-def test_finished_launch_does_not_offer_finish_again() -> None:
-    view = recommend.LaunchTestView({
+def test_finish_unlocks_only_after_every_enabled_test_is_confirmed() -> None:
+    state = {
         "tickets": True,
+        "verification": True,
+        "basic_verify": True,
+        "voice_verify": False,
+        "id_verify": False,
+        "spam_guard": True,
+        "logs": True,
+        "completed": False,
+    }
+    required = set(compact.required_test_keys(state))
+    view = compact.CompactTestView(state, confirmed=required)
+    assert button(view, "dank_setup_test:finish").disabled is False
+
+
+def test_finished_checklist_does_not_offer_finish_again() -> None:
+    view = compact.CompactTestView({
+        "tickets": True,
+        "verification": False,
         "basic_verify": False,
+        "voice_verify": False,
+        "id_verify": False,
+        "spam_guard": False,
+        "logs": False,
         "completed": True,
     })
     assert "Finish Setup" not in labels(view)
-    assert "Post Simple Verify Panel" not in labels(view)
-    assert "Post Ticket Panel" in labels(view)
+    assert select_labels(view) == ["Tickets"]
 
 
 def test_launch_summary_lists_only_enabled_features() -> None:
@@ -86,7 +117,7 @@ def test_launch_summary_lists_only_enabled_features() -> None:
     assert "OFF" not in rendered
 
 
-def test_finished_home_opens_summary_instead_of_launch(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_finished_home_opens_summary_instead_of_test_checklist(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[str] = []
 
     async def summary(interaction: Any) -> None:
@@ -96,8 +127,8 @@ def test_finished_home_opens_summary_instead_of_launch(monkeypatch: pytest.Monke
         events.append("launch")
 
     monkeypatch.setattr(recommend, "_open_completed_summary", summary)
-    monkeypatch.setattr(recommend, "_open_test_launch", launch)
-    view = recommend.ProductSetupHomeView(started=True, ready=True, completed=True)
+    monkeypatch.setattr(compact, "_open_tests", launch)
+    view = compact.CompactSetupHomeView(started=True, ready=True, completed=True)
     assert button(view, "dank_setup_home:continue").label == "View Setup Summary"
     run(button(view, "dank_setup_home:continue").callback(SimpleNamespace()))
     assert events == ["summary"]
