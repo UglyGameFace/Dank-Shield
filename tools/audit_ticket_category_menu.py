@@ -18,9 +18,6 @@ FILES = [
     "stoney_verify/tickets_new/panel.py",
     "supabase/migrations/202607310001_managed_ticket_category_catalog.sql",
     "supabase/migrations/202608020001_ticket_category_setup_selection.sql",
-    "supabase/migrations/202608020002_ticket_category_setup_completion_compat.sql",
-    "supabase/migrations/202608020003_ticket_category_custom_preservation.sql",
-    "supabase/migrations/202608020004_ticket_category_selection_custom_only.sql",
 ]
 
 CHECKS = {
@@ -78,15 +75,8 @@ CHECKS = {
         "p_reset_to_starter",
         "managed_enabled >= 10",
         "alter column ticket_category_setup_required set default true",
-    ],
-    "supabase/migrations/202608020003_ticket_category_custom_preservation.sql": [
         "Your custom ticket choices were preserved",
-        "set is_enabled = false",
-        "managed_by_dank = false",
-    ],
-    "supabase/migrations/202608020004_ticket_category_selection_custom_only.sql": [
-        "custom choices only",
-        "custom_row.is_default = true",
+        "custom-only selection",
         "managed_row.managed_category_key = any(selected_keys)",
         "managed_row.is_enabled = true",
     ],
@@ -99,6 +89,9 @@ CHECKS = {
 OBSOLETE_FILES = (
     "stoney_verify/startup_guards/ticket_category_cod_services_guard.py",
     "stoney_verify/startup_guards/ticket_category_game_services_guard.py",
+    "supabase/migrations/202608020002_ticket_category_setup_completion_compat.sql",
+    "supabase/migrations/202608020003_ticket_category_custom_preservation.sql",
+    "supabase/migrations/202608020004_ticket_category_selection_custom_only.sql",
 )
 
 FORBIDDEN_STARTUP_GUARDS = (
@@ -137,7 +130,7 @@ def main() -> int:
 
     for path in OBSOLETE_FILES:
         if (ROOT / path).exists():
-            print(f"obsolete category owner still exists: {path}", file=sys.stderr)
+            print(f"obsolete category owner/migration still exists: {path}", file=sys.stderr)
             return 1
 
     for path, snippets in CHECKS.items():
