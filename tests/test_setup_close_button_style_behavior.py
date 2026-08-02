@@ -7,6 +7,7 @@ import discord
 
 from stoney_verify import config_history_ui
 from stoney_verify.commands_ext import public_setup_cleanup
+from stoney_verify.commands_ext import public_setup_compact as compact
 from stoney_verify.commands_ext import public_setup_recommend as recommend
 from stoney_verify.commands_ext import public_setup_solid as solid
 
@@ -34,6 +35,12 @@ def test_active_setup_close_buttons_are_visually_distinct() -> None:
     views = (
         solid.SetupNavView(),
         solid.SolidSetupView(),
+        compact.CompactSetupHomeView(),
+        compact.CompactManagerView(),
+        compact.CompactAdvancedView(),
+        compact.CompactReviewView(ready=False),
+        compact.CompactTestView({}),
+        compact.FeatureTestView({"tickets": True}, frozenset(), "tickets"),
         recommend.ProductSetupHomeView(),
         __import__(
             "stoney_verify.commands_ext.public_setup_fresh_choice",
@@ -67,6 +74,7 @@ def test_active_setup_close_buttons_are_visually_distinct() -> None:
 
 def test_setup_sources_do_not_define_gray_close_controls() -> None:
     paths = (
+        ROOT / "stoney_verify/commands_ext/public_setup_compact.py",
         ROOT / "stoney_verify/commands_ext/public_setup_recommend.py",
         ROOT / "stoney_verify/commands_ext/public_setup_fresh_choice.py",
         ROOT / "stoney_verify/commands_ext/public_setup_solid.py",
