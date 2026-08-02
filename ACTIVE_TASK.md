@@ -1,81 +1,79 @@
 # ACTIVE TASK
 
-## DS-SETUP-018 — Compact `/dank setup` navigation and clear testing flow
+## DS-SETUP-018 — Easiest possible `/dank setup` flow
 
-**Status:** MERGED — PRODUCTION DEPLOYMENT / LIVE VERIFICATION PENDING
-**Pull request:** `#164`
-**Merge commit:** `bcc06b9cb6348061026372c0b7e08195670c45e3`
+**Status:** ACTIVE — FINAL GUIDED-TEST REFINEMENT
+**Branch:** `fix/setup-guided-test-finish`
+**Previous merge:** PR `#164` / `bcc06b9cb6348061026372c0b7e08195670c45e3`
 
-## Scope completed
+## Goal
 
-- Replaced the redundant Manage Setup → All Features & Settings path with one direct feature-area picker.
-- Kept Setup Home compact and mobile-friendly with one obvious next action.
-- Shortened plan, guided-step, configuration-check, help, and ticket-menu cards.
-- Moved repair, restart, and troubleshooting behind Advanced.
-- Preserved the canonical `/dank setup` command and all existing feature-service owners.
-- Separated setup into four clear stages:
-  - Continue Setup — finish required configuration one item at a time.
-  - Check Configuration — automatically validate saved roles, channels, choices, and permissions.
-  - Test Features — verify actual member and staff behavior in Discord.
-  - Finish Setup — unlock only after every enabled feature is explicitly marked tested.
-- Added direct ticket-panel, test-ticket, and Verify-panel actions to relevant feature tests.
-- Hid disabled tests instead of displaying unnecessary OFF states.
-- Kept test confirmations while navigating inside the same ephemeral setup session.
+Finish `/dank setup` as one seamless mobile-first path before starting any other repair.
 
-## Test-session safety
+## Completed foundation
 
-- Cache key: guild, setup owner, and ephemeral setup message.
-- Expires after 30 minutes.
-- Bounded to 512 sessions.
-- Invalidates confirmations when the enabled test set changes.
-- Clears on successful finish and test-flow close.
+- One compact Setup Home.
+- One direct feature-area picker.
+- No normal Manage Setup → All Features & Settings maze.
+- Short plan, health, ticket-menu, and guided-step cards.
+- Repair and restart tools live under Advanced.
+- Check Configuration clearly means automatic saved-role/channel/permission validation.
+- Real feature testing remains separate from configuration readiness.
+- Test confirmations persist inside the current setup session and invalidate when enabled features change.
 
-## Implementation ownership
+## Final refinement in progress
 
-- Presentation-only implementation lives under `stoney_verify/setup_ui/`.
-- `commands_ext` retains only a compatibility entry point and the existing canonical setup gate.
-- No second slash command, setup owner, event listener, schema migration, role deletion, or channel deletion was added.
+The checklist is being converted into a linear guided test:
 
-## Final validation
+1. Press **Start Guided Test**.
+2. Dank Shield opens the next enabled feature automatically.
+3. Perform the shown real Discord test.
+4. Press **Mark Passed & Continue**.
+5. Dank Shield automatically opens the next unfinished test.
+6. **Finish Setup** appears only after every enabled test passes.
 
-- [x] Full unit suite: `902 passed, 9 warnings in 647.24s`.
-- [x] Python compilation passed.
-- [x] Committed whitespace check passed.
-- [x] Managed ticket-category SQL smoke test passed.
-- [x] Claim-first ticket security suite passed.
-- [x] Application command-size diagnostics passed.
-- [x] Profile runtime diagnostics passed.
-- [x] Public setup audit passed.
-- [x] Canonical public command-surface audit passed.
-- [x] Public command/friction audit passed.
-- [x] Public invite/permissions audit passed.
-- [x] Setup safety audit passed.
-- [x] Dank Design Smart Auto-Detect audit passed.
-- [x] Role-truth ownership audit passed.
-- [x] Event-boundary ownership audit passed.
-- [x] `/dank` payload remained `1675/8000` with nine canonical global commands.
-- [x] Review concern about test confirmations resetting was fixed, covered by focused tests, and resolved.
-- [x] Exact final head was zero commits behind `main` with no unresolved review threads.
-- [x] PR #164 squash-merged into `main`.
+The test dropdown remains only as an optional jump control. It is no longer required for the normal path.
 
-## Remaining gate
+## Safety / ownership
 
-- [ ] Deploy/restart Dank Shield on Discloud.
-- [ ] Live-verify compact Setup Home and direct feature picker on mobile.
-- [ ] Confirm Check Configuration clearly reports automatic configuration readiness only.
-- [ ] Confirm Test Features retains marked tests while navigating in the same setup message.
-- [ ] Confirm Finish Setup remains locked until every enabled feature is marked tested.
+- Reuses the compact setup session cache and canonical finish owner.
+- Reuses existing ticket-panel, test-ticket, and Verify-panel actions.
+- Adds no slash command, competing setup owner, schema migration, role deletion, or channel deletion.
+- Presentation refinement remains under `stoney_verify/setup_ui/`.
 
-## Backlog
+## Definition of Done
+
+- [x] Normal configuration has one obvious next action.
+- [x] Configuration checks and real feature tests have distinct names and behavior.
+- [x] Guided testing automatically advances to the next unfinished enabled feature.
+- [x] Dropdown is optional rather than required.
+- [x] Finish Setup remains gated by all enabled tests.
+- [ ] Focused guided-test tests pass.
+- [ ] Full unit suite, compile, command-size, profile-runtime, setup-safety, ownership, and whitespace gates pass.
+- [ ] PR merged to `main`.
+- [ ] Discloud deploy/restart completed.
+- [ ] Live mobile verification confirms the full path is effortless.
+
+## Next task — do immediately after setup is complete
+
+### DS-STATS-019 — Durable Dank Stats invite-block counting
+
+Fix Invites Blocked end to end:
+
+- count the actual blocked invite codes, not merely one deleted message;
+- use durable atomic guild-scoped increments;
+- never silently swallow failed stats writes;
+- retry or reconcile failed writes safely;
+- refresh the visible counter promptly without Discord rename spam;
+- deduplicate create/edit/fallback processing;
+- test real policy delete → durable increment → display refresh → restart persistence.
+
+## Later backlog
 
 ### DS-MEDIA-001 — Klipy direct GIF unfurl listener
 
-After DS-SETUP-018 is deployed and live-verified, inspect the existing message-event ownership path and add one moderation-safe listener that recognizes verified `klipy.com` page URLs, resolves the direct GIF asset without arbitrary-host fetching, and replies with the direct media or a rich embed. Include bounded requests, redirect/host validation, caching, bot-loop prevention, permission/error handling, and focused listener/parser/security regressions.
-
-## Previous completed task
-
-DS-TICKETS-017 was deployed and live-verified from the user-provided `/dank setup` and ticket-choice screenshots.
+After setup and stats are complete, add one moderation-safe listener with strict host validation, bounded requests, redirect validation, caching, bot-loop prevention, permission/error handling, and parser/listener/security regressions.
 
 ## Single Active Task Lock
 
-Do not begin another unrelated repair until DS-SETUP-018 reaches its Definition of Done.
+Do not begin DS-STATS-019 or another unrelated task until DS-SETUP-018 reaches its Definition of Done.
