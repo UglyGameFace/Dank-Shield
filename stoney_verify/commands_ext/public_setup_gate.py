@@ -9,6 +9,8 @@ This keeps the production command surface friendly and safe:
 - Ticket/staff workflow commands refuse to run until the guild has its own
   usable runtime config.
 - Missing setup never falls through into beta env IDs.
+- The canonical setup owner receives the compact mobile presentation patch
+  after every setup module has registered.
 
 The module patches the public grouped command modules through their shared
 `_staff_only` helper. The callbacks resolve that helper at runtime, so this is a
@@ -121,7 +123,7 @@ async def require_setup_ready(
                 "content": (
                     f"🚧 **{action_label} is not available yet.**\n"
                     "This server has not completed Dank Shield setup, so I will not use another server's channels/roles.\n\n"
-                    "Start with `/dank setup-picker`, then run `/dank permission-check`."
+                    "Start with `/dank setup`, then complete the required setup items."
                 ),
                 "ephemeral": True,
             },
@@ -137,7 +139,7 @@ async def require_setup_ready(
                 "content": (
                     f"🚧 **{action_label} is not ready yet.**\n"
                     f"Missing or invalid setup: **{rendered}**.\n\n"
-                    "Use `/dank setup-picker` or the specific `/dank setup-*` commands, then run `/dank permission-check`."
+                    "Open `/dank setup`, fix the required item, then run **Setup Check**."
                 ),
                 "ephemeral": True,
             },
@@ -194,10 +196,16 @@ def _patch_all() -> int:
 def register_public_setup_gate(bot, tree) -> None:
     _ = bot, tree
     global _PATCHED
+
+    # This module registers after the setup owners. Apply the presentation patch
+    # here so there is still exactly one /dank setup command and one callback graph.
+    from .public_setup_compact import apply_compact_setup_patch
+
+    apply_compact_setup_patch()
     count = _patch_all()
     _PATCHED = count > 0
     try:
-        print(f"✅ public_setup_gate: setup readiness gate active patched_modules={count}")
+        print(f"✅ public_setup_gate: setup readiness gate active patched_modules={count} compact_setup=true")
     except Exception:
         pass
 
