@@ -16,6 +16,7 @@ from producing two private category-menu responses for one button press.
 """
 
 import asyncio
+import heapq
 import time
 from typing import Any, Dict
 
@@ -23,6 +24,7 @@ import discord
 
 _INTERACTION_LOCKS: Dict[int, asyncio.Lock] = {}
 _INTERACTION_DONE_UNTIL: Dict[int, float] = {}
+_INTERACTION_EXPIRY_HEAP: list[tuple[float, int]] = []
 _INTERACTION_TTL_SECONDS = 90.0
 
 
@@ -48,10 +50,23 @@ def _interaction_key(interaction: discord.Interaction) -> int:
     return interaction_id if interaction_id > 0 else id(interaction)
 
 
+def _record_interaction_done(key: int, expires_at: float) -> None:
+    """Record one completion and index it for proportional expiry cleanup."""
+    _INTERACTION_DONE_UNTIL[key] = expires_at
+    heapq.heappush(_INTERACTION_EXPIRY_HEAP, (expires_at, key))
+
+
 def _prune_interactions() -> None:
+    """Remove expired completions without scanning every live interaction."""
     now = time.monotonic()
-    expired = [key for key, until in _INTERACTION_DONE_UNTIL.items() if until <= now]
-    for key in expired[:250]:
+    while _INTERACTION_EXPIRY_HEAP and _INTERACTION_EXPIRY_HEAP[0][0] <= now:
+        expires_at, key = heapq.heappop(_INTERACTION_EXPIRY_HEAP)
+
+        # A newer completion for the same key leaves an older heap entry behind.
+        # Ignore that stale entry so it cannot remove the renewed TTL.
+        if _INTERACTION_DONE_UNTIL.get(key) != expires_at:
+            continue
+
         _INTERACTION_DONE_UNTIL.pop(key, None)
         lock = _INTERACTION_LOCKS.get(key)
         if lock is None or not lock.locked():
@@ -59,7 +74,13 @@ def _prune_interactions() -> None:
 
 
 async def _handle_once(original_handler: Any, interaction: discord.Interaction) -> None:
-    """Run the canonical handler once for one Discord interaction ID."""
+    """Run the canonical handler once for one Discord interaction ID.
+
+    Completion is recorded on every exit so a handler exception or task
+    cancellation cannot leave an immortal lock-map entry. The same interaction
+    remains deduplicated for the short TTL even after failure, while a genuinely
+    new button press receives a new interaction ID and can run immediately.
+    """
     _prune_interactions()
     key = _interaction_key(interaction)
     now = time.monotonic()
@@ -82,8 +103,16 @@ async def _handle_once(original_handler: Any, interaction: discord.Interaction) 
         now = time.monotonic()
         if _INTERACTION_DONE_UNTIL.get(key, 0.0) > now:
             return
-        await original_handler(interaction)
-        _INTERACTION_DONE_UNTIL[key] = time.monotonic() + _INTERACTION_TTL_SECONDS
+        try:
+            await original_handler(interaction)
+        finally:
+            # asyncio.Lock releases automatically when this block exits. Recording
+            # completion here makes the unlocked entry eligible for TTL pruning
+            # even when the handler raises or the task is cancelled.
+            _record_interaction_done(
+                key,
+                time.monotonic() + _INTERACTION_TTL_SECONDS,
+            )
 
 
 def _remove_redundant_fallback(panel_mod: Any, bot: Any) -> bool:
@@ -165,7 +194,4 @@ apply()
 
 __all__ = [
     "apply",
-    "_handle_once",
-    "_remove_redundant_fallback",
-    "_register_single_owner",
 ]
