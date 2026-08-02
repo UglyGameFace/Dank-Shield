@@ -3,7 +3,7 @@ name: Durable Invite Stats SQL
 on:
   pull_request:
     paths:
-      - supabase/migrations/202608020001_durable_invite_stats.sql
+      - supabase/migrations/20260802225500_durable_invite_stats.sql
       - .github/workflows/durable-invite-stats-sql.yml
   workflow_dispatch:
 
@@ -54,8 +54,8 @@ jobs:
           SQL
       - name: Apply migration twice
         run: |
-          psql -v ON_ERROR_STOP=1 -f supabase/migrations/202608020001_durable_invite_stats.sql
-          psql -v ON_ERROR_STOP=1 -f supabase/migrations/202608020001_durable_invite_stats.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260802225500_durable_invite_stats.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260802225500_durable_invite_stats.sql
       - name: Verify atomic increment and durable dedupe
         run: |
           psql -v ON_ERROR_STOP=1 <<'SQL'
