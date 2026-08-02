@@ -51,7 +51,7 @@ def test_started_home_exposes_direct_area_picker_without_manage_hop() -> None:
     assert labels(view) == [
         "Continue Setup",
         "Change Plan",
-        "Setup Check",
+        "Check Configuration",
         "Advanced",
         "Close",
     ]
@@ -59,11 +59,21 @@ def test_started_home_exposes_direct_area_picker_without_manage_hop() -> None:
     assert len(select_labels(view)) == 9
 
 
+def test_ready_home_calls_real_feature_testing_by_name() -> None:
+    view = compact.CompactSetupHomeView(
+        ready=True,
+        started=True,
+        completed=False,
+    )
+    assert labels(view)[0] == "Test Features"
+    assert "Check Configuration" in labels(view)
+
+
 def test_manage_screen_is_one_compact_feature_picker() -> None:
     view = compact.CompactManagerView()
     assert labels(view) == [
         "Change Plan",
-        "Setup Check",
+        "Check Configuration",
         "Advanced",
         "Setup Home",
         "Close",
@@ -84,7 +94,9 @@ def test_manage_screen_is_one_compact_feature_picker() -> None:
 def test_feature_picker_does_not_repeat_areas_as_buttons() -> None:
     view = compact.CompactManagerView()
     assert not set(select_labels(view)).intersection(labels(view))
-    assert len([child for child in view.children if isinstance(child, discord.ui.Select)]) == 1
+    assert len(
+        [child for child in view.children if isinstance(child, discord.ui.Select)]
+    ) == 1
 
 
 def test_test_screen_hides_disabled_features_and_explains_finish_gate() -> None:
@@ -102,13 +114,55 @@ def test_test_screen_hides_disabled_features_and_explains_finish_gate() -> None:
     )
     assert labels(view) == [
         "Finish Setup",
-        "Setup Check",
+        "Recheck Configuration",
         "Setup Home",
         "Close",
     ]
     assert select_labels(view) == ["Simple Verify"]
-    finish = next(child for child in view.children if isinstance(child, discord.ui.Button) and child.label == "Finish Setup")
+    finish = next(
+        child
+        for child in view.children
+        if isinstance(child, discord.ui.Button)
+        and child.label == "Finish Setup"
+    )
     assert finish.disabled is True
+
+
+def test_feature_test_pages_expose_only_relevant_direct_actions() -> None:
+    tickets = compact.FeatureTestView(
+        {"tickets": True},
+        frozenset(),
+        "tickets",
+    )
+    verify = compact.FeatureTestView(
+        {"basic_verify": True},
+        frozenset(),
+        "simple_verify",
+    )
+    logs = compact.FeatureTestView(
+        {"logs": True},
+        frozenset(),
+        "logs",
+    )
+
+    assert labels(tickets) == [
+        "Post / Refresh Ticket Panel",
+        "Create Test Ticket",
+        "Mark Tested",
+        "Back to Checklist",
+        "Close",
+    ]
+    assert labels(verify) == [
+        "Post / Refresh Verify Panel",
+        "Mark Tested",
+        "Back to Checklist",
+        "Close",
+    ]
+    assert labels(logs) == [
+        "Mark Tested",
+        "Back to Checklist",
+        "Close",
+    ]
 
 
 def test_custom_core_picker_has_predictable_navigation() -> None:
