@@ -29,7 +29,7 @@ _TASK: Optional[asyncio.Task] = None
 
 _BOOTSTRAP_MIGRATION_FILES = (
     "20260711_member_activity_truth_ledger.sql",
-    "202608020001_durable_invite_stats.sql",
+    "20260802225500_durable_invite_stats.sql",
 )
 _BOOTSTRAP_MIGRATION_PATTERNS = (
     "*ticket_counter*.sql",
