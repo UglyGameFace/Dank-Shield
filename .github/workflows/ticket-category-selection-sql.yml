@@ -5,7 +5,7 @@ on:
     paths:
       - "supabase/migrations/202607310001_managed_ticket_category_catalog.sql"
       - "supabase/migrations/202607310002_managed_ticket_category_auto_sync.sql"
-      - "supabase/migrations/202608020001_ticket_category_setup_selection.sql"
+      - "supabase/migrations/20260802042000_ticket_category_setup_selection.sql"
       - ".github/workflows/ticket-category-selection-sql.yml"
   push:
     branches:
@@ -13,7 +13,7 @@ on:
     paths:
       - "supabase/migrations/202607310001_managed_ticket_category_catalog.sql"
       - "supabase/migrations/202607310002_managed_ticket_category_auto_sync.sql"
-      - "supabase/migrations/202608020001_ticket_category_setup_selection.sql"
+      - "supabase/migrations/20260802042000_ticket_category_setup_selection.sql"
       - ".github/workflows/ticket-category-selection-sql.yml"
   workflow_dispatch:
 
@@ -139,7 +139,7 @@ jobs:
           set -euo pipefail
           for pass in 1 2; do
             echo "Applying final category selection migration, pass ${pass}"
-            psql -v ON_ERROR_STOP=1 -f supabase/migrations/202608020001_ticket_category_setup_selection.sql
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260802042000_ticket_category_setup_selection.sql
           done
 
       - name: Verify forced repair and custom preservation
