@@ -6,6 +6,7 @@ on:
       - fix/dank-stats-invite-block-counting
     paths:
       - tools/apply_durable_invite_stats_review_fixes.py
+      - tools/fix_durable_review_patch_test.py
       - .github/workflows/apply-durable-invite-stats-review-fixes.yml
 
 permissions:
@@ -23,6 +24,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Correct focused test harness
+        run: python tools/fix_durable_review_patch_test.py
       - name: Apply exact reliability fixes
         run: python tools/apply_durable_invite_stats_review_fixes.py
       - name: Run focused compile and tests
