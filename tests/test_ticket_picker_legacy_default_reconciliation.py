@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from stoney_verify.commands_ext import public_setup_solid as setup
 from stoney_verify.commands_ext import public_tickettool_parity_polish as ticket_menu
+from stoney_verify.tickets_new import managed_category_service as categories
 from stoney_verify.tickets_new import panel
 
 
@@ -60,29 +61,31 @@ def _legacy_managed_rows():
     ]
 
 
-def test_legacy_managed_starter_set_is_recognized() -> None:
+def test_legacy_managed_starter_set_is_still_recognized_for_migration() -> None:
     assert ticket_menu._looks_like_legacy_managed_default_rows(_legacy_managed_rows()) is True
 
 
-def test_legacy_managed_picker_regains_richer_builtin_categories() -> None:
+def test_legacy_managed_picker_does_not_auto_enable_richer_builtin_categories() -> None:
     rows = ticket_menu._effective_ticket_rows(
         _legacy_managed_rows(),
         panel._DEFAULT_BOOTSTRAP_CATEGORIES,
     )
     keys = [ticket_menu._canonical_category_key(row) for row in rows]
 
-    assert "partnership" in keys
-    assert "cod-services" in keys
-    assert "account-access" in keys
-    assert "payments-refunds" in keys
-    assert "staff-complaint" in keys
-    assert "vouch-referral" in keys
-    assert "giveaway-reward" in keys
-    assert "content-media" in keys
+    # The full catalog remains available in setup, but the live member picker
+    # must never silently add every built-in option to an existing guild.
+    assert "partnership" not in keys
+    assert "cod-services" not in keys
+    assert "account-access" not in keys
+    assert "payments-refunds" not in keys
+    assert "staff-complaint" not in keys
+    assert "vouch-referral" not in keys
+    assert "giveaway-reward" not in keys
+    assert "content-media" not in keys
     assert len(keys) == len(set(keys))
 
 
-def test_setup_recommended_categories_share_the_rich_ticket_catalog() -> None:
+def test_setup_catalog_still_contains_every_available_builtin_choice() -> None:
     keys = [ticket_menu._canonical_category_key(row) for row in setup.RECOMMENDED_CATEGORIES]
 
     assert "partnership" in keys
@@ -120,7 +123,7 @@ def test_custom_owner_category_set_remains_authoritative() -> None:
     assert "cod-services" not in keys
 
 
-def test_ticket_select_exposes_partnership_for_legacy_managed_set() -> None:
+def test_ticket_select_shows_only_the_legacy_guilds_current_enabled_set() -> None:
     rows = ticket_menu._effective_ticket_rows(
         _legacy_managed_rows(),
         panel._DEFAULT_BOOTSTRAP_CATEGORIES,
@@ -128,31 +131,26 @@ def test_ticket_select_exposes_partnership_for_legacy_managed_set() -> None:
     select = ticket_menu.TicketCategorySelect(rows)
     labels = [option.label for option in select.options]
 
-    assert "Partnership" in labels
-    assert "COD Services" in labels
-    assert "Account / Access" in labels
-    assert "Payments / Refunds" in labels
+    assert "Partnership" not in labels
+    assert "COD Services" not in labels
+    assert "Account / Access" not in labels
+    assert "Payments / Refunds" not in labels
+    assert "Support" in labels
 
 
-def test_category_manager_button_uses_canonical_completeness() -> None:
-    # Simulate the database after recommended seeding starts from the legacy
-    # managed set. Canonical duplicates such as verification/verification_issue
-    # and bug/technical_support are intentionally not inserted twice.
-    rows = [dict(row) for row in _legacy_managed_rows()]
-    existing_keys = {ticket_menu._canonical_category_key(row) for row in rows}
-
-    for item in setup.RECOMMENDED_CATEGORIES:
-        key = ticket_menu._canonical_category_key(item)
-        if key in existing_keys:
-            continue
-        rows.append(dict(item))
-        existing_keys.add(key)
-
-    view = setup.CategoryManagerView(rows=rows)
-    seed_button = next(
-        child
-        for child in view.children
-        if getattr(child, "custom_id", "") == "stoney_solid:cat_seed"
+def test_category_manager_requires_explicit_selection_instead_of_seed_all() -> None:
+    rows = categories.catalog_category_rows()
+    state = categories.CategorySetupState(
+        rows=rows,
+        active_rows=[row for row in rows if row["category_key"] in {"report", "support"}],
+        selected_keys=("report", "support"),
+        required=True,
+        reason="Confirm which built-in choices this server should show.",
+        version=0,
     )
 
-    assert seed_button.label == "Check Recommended Options"
+    view = setup.CategoryManagerView(state=state)
+    custom_ids = {str(getattr(child, "custom_id", "")) for child in view.children}
+
+    assert "dank_ticket_category_setup:managed_selection" in custom_ids
+    assert "stoney_solid:cat_seed" not in custom_ids
