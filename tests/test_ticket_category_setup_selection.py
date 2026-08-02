@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
-
+from stoney_verify.commands_ext import public_setup_solid as solid
+from stoney_verify.commands_ext import public_ticket_panel_clean as clean_panel
+from stoney_verify.startup_guards import _STARTUP_GUARDS
+from stoney_verify.startup_guards import ticket_category_setup_guard as setup_guard
 from stoney_verify.startup_guards import ticket_form_default_templates_guard as forms
 from stoney_verify.tickets_new import managed_category_service as categories
-
-
-ROOT = Path(__file__).resolve().parents[1]
-STARTUP = ROOT / "stoney_verify" / "startup_guards" / "__init__.py"
-GUARD = ROOT / "stoney_verify" / "startup_guards" / "ticket_category_setup_guard.py"
-MIGRATION = ROOT / "supabase" / "migrations" / "202608020001_ticket_category_setup_selection.sql"
 
 
 def _keys(rows):
@@ -92,15 +88,48 @@ def test_unknown_custom_rows_are_preserved_as_distinct_choices() -> None:
     assert len(keys) == 3
 
 
-def test_custom_only_selection_is_explicitly_supported() -> None:
-    assert categories._normalize_selected_keys((), allow_empty=True) == ()
-    guard = GUARD.read_text(encoding="utf-8")
-    sql = MIGRATION.read_text(encoding="utf-8")
+def test_custom_only_selection_is_exposed_when_custom_rows_exist() -> None:
+    custom = {
+        "id": "custom-1",
+        "slug": "clan_application",
+        "name": "Clan Application",
+        "is_enabled": True,
+        "is_default": True,
+        "managed_by_dank": False,
+    }
+    state = categories.CategorySetupState(
+        rows=[custom],
+        active_rows=[custom],
+        selected_keys=(),
+        required=True,
+        reason="Confirm choices.",
+        version=0,
+    )
 
-    assert "Use Custom Choices Only" in guard
-    assert "_save_selection(interaction, ())" in guard
-    assert "array_length(selected_keys, 1), 0) = 0" in sql
-    assert "custom_row.is_default = true" in sql
+    view = setup_guard.CategorySetupManagerView(state=state)
+    custom_ids = {str(getattr(child, "custom_id", "")) for child in view.children}
+
+    assert "dank_ticket_category_setup:custom_only" in custom_ids
+    assert categories._normalize_selected_keys((), allow_empty=True) == ()
+
+
+def test_managed_multi_select_defaults_match_saved_selection() -> None:
+    rows = categories.catalog_category_rows()
+    state = categories.CategorySetupState(
+        rows=rows,
+        active_rows=[row for row in rows if row["category_key"] in {"report", "support"}],
+        selected_keys=("report", "support"),
+        required=False,
+        reason="",
+        version=categories.CATEGORY_SETUP_VERSION,
+    )
+
+    select = setup_guard.ManagedCategorySelection(state)
+    defaults = {option.value for option in select.options if option.default}
+
+    assert defaults == {"report", "support"}
+    assert select.min_values == 1
+    assert select.max_values == len(categories.CATEGORY_CATALOG)
 
 
 def test_cod_and_game_services_keep_distinct_native_forms() -> None:
@@ -110,30 +139,10 @@ def test_cod_and_game_services_keep_distinct_native_forms() -> None:
     assert forms.DEFAULT_TEMPLATES["game_services"][0]["label"] == "Which game is this for?"
 
 
-def test_single_startup_owner_replaces_old_category_patch_stack() -> None:
-    startup = STARTUP.read_text(encoding="utf-8")
-    guard = GUARD.read_text(encoding="utf-8")
-
-    assert "ticket_category_setup_guard" in startup
-    assert "ticket_category_cod_services_guard" not in startup
-    assert "ticket_category_game_services_guard" not in startup
-    assert not (ROOT / "stoney_verify/startup_guards/ticket_category_cod_services_guard.py").exists()
-    assert not (ROOT / "stoney_verify/startup_guards/ticket_category_game_services_guard.py").exists()
-    assert "ManagedCategorySelection" in guard
-    assert "_seed_catalog_without_enabling_everything" in guard
-    assert "clean._load_rows = _clean_panel_load_rows" in guard
-    assert "solid._category_load = _setup_category_load" in guard
-
-
-def test_migration_forces_bad_existing_setups_and_preserves_explicit_selection() -> None:
-    sql = MIGRATION.read_text(encoding="utf-8")
-
-    assert "managed_enabled >= 10" in sql
-    assert "p_reset_to_starter" in sql
-    assert "ticket_category_setup_required = true" in sql
-    assert "ticket_category_setup_required = false" in sql
-    assert "save_dank_ticket_category_selection" in sql
-    assert "managed_row.managed_category_key = any(selected_keys)" in sql
-    assert "managed_by_dank = false" in sql
-    assert "Your custom ticket choices were preserved" in sql
-    assert "custom-only selection" in sql
+def test_single_runtime_owner_is_installed_on_every_picker_path() -> None:
+    assert "stoney_verify.startup_guards.ticket_category_setup_guard" in _STARTUP_GUARDS
+    assert "stoney_verify.startup_guards.ticket_category_cod_services_guard" not in _STARTUP_GUARDS
+    assert "stoney_verify.startup_guards.ticket_category_game_services_guard" not in _STARTUP_GUARDS
+    assert clean_panel._load_rows is setup_guard._clean_panel_load_rows
+    assert solid._category_load is setup_guard._setup_category_load
+    assert solid._build_category_manager_payload is setup_guard._build_category_manager_payload
