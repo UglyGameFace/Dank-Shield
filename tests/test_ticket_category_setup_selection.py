@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from stoney_verify.startup_guards import ticket_form_default_templates_guard as forms
 from stoney_verify.tickets_new import managed_category_service as categories
 
 
@@ -9,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STARTUP = ROOT / "stoney_verify" / "startup_guards" / "__init__.py"
 GUARD = ROOT / "stoney_verify" / "startup_guards" / "ticket_category_setup_guard.py"
 MIGRATION = ROOT / "supabase" / "migrations" / "202608020001_ticket_category_setup_selection.sql"
+CUSTOM_MIGRATION = ROOT / "supabase" / "migrations" / "202608020003_ticket_category_custom_preservation.sql"
 
 
 def _keys(rows):
@@ -91,6 +93,13 @@ def test_unknown_custom_rows_are_preserved_as_distinct_choices() -> None:
     assert len(keys) == 3
 
 
+def test_cod_and_game_services_keep_distinct_native_forms() -> None:
+    assert forms._template_key({"managed_category_key": "cod-services"}) == "cod"
+    assert forms._template_key({"managed_category_key": "game-services"}) == "game_services"
+    assert forms.DEFAULT_TEMPLATES["cod"][0]["label"] == "Which COD game?"
+    assert forms.DEFAULT_TEMPLATES["game_services"][0]["label"] == "Which game is this for?"
+
+
 def test_single_startup_owner_replaces_old_category_patch_stack() -> None:
     startup = STARTUP.read_text(encoding="utf-8")
     guard = GUARD.read_text(encoding="utf-8")
@@ -106,6 +115,7 @@ def test_single_startup_owner_replaces_old_category_patch_stack() -> None:
 
 def test_migration_forces_bad_existing_setups_and_preserves_explicit_selection() -> None:
     sql = MIGRATION.read_text(encoding="utf-8")
+    custom_sql = CUSTOM_MIGRATION.read_text(encoding="utf-8")
 
     assert "managed_enabled >= 10" in sql
     assert "p_reset_to_starter" in sql
@@ -114,3 +124,5 @@ def test_migration_forces_bad_existing_setups_and_preserves_explicit_selection()
     assert "save_dank_ticket_category_selection" in sql
     assert "is_enabled = managed_category_key = any(selected_keys)" in sql
     assert "managed_by_dank = false" in sql
+    assert "Your custom ticket choices were preserved" in custom_sql
+    assert "set is_enabled = false" in custom_sql
