@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = [
     "stoney_verify/commands_ext/public_ticket_panel_clean.py",
     "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py",
+    "stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py",
     "stoney_verify/startup_guards/ticket_category_setup_guard.py",
     "stoney_verify/startup_guards/ticket_form_default_templates_guard.py",
     "stoney_verify/startup_guards/__init__.py",
@@ -35,6 +36,11 @@ CHECKS = {
         "persistent view owns Create Ticket",
         "single-interaction owner active",
         "ticket allocator remain untouched",
+    ],
+    "stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py": [
+        'MIGRATION_FILE = "20260802042000_ticket_category_setup_selection.sql"',
+        "_BOOTSTRAP_MIGRATION_FILES",
+        "direct-DSN startup",
     ],
     "stoney_verify/tickets_new/managed_category_service.py": [
         "CATEGORY_SETUP_VERSION = 2",
@@ -84,6 +90,8 @@ CHECKS = {
         "managed_row.is_enabled = true",
     ],
     "stoney_verify/startup_guards/__init__.py": [
+        "auto_schema_bootstrap",
+        "ticket_category_schema_bootstrap_guard",
         "public_ticket_panel_clean_hardening",
         "ticket_category_setup_guard",
     ],
@@ -113,6 +121,8 @@ FORBIDDEN_HARDENING_OVERRIDES = (
 )
 
 ORDERED_STARTUP_SNIPPETS = [
+    "auto_schema_bootstrap",
+    "ticket_category_schema_bootstrap_guard",
     "public_ticket_panel_clean_hardening",
     "ticket_category_setup_guard",
 ]
