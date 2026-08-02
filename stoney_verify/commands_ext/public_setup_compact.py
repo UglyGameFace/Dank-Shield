@@ -8,6 +8,7 @@ feature service and callback owner underneath it.
 """
 
 from collections.abc import Awaitable, Callable
+from time import monotonic
 from typing import Any, Optional
 
 import discord
@@ -63,6 +64,13 @@ TEST_SPECS = {
         "Confirm the other test actions appear once in the correct configured log channels.",
     ),
 }
+
+_TEST_SESSION_TTL_SECONDS = 30 * 60
+_TEST_SESSION_LIMIT = 512
+_TEST_SESSIONS: dict[
+    tuple[int, int, int],
+    tuple[float, tuple[str, ...], frozenset[str]],
+] = {}
 
 ButtonCallback = Callable[[discord.Interaction], Awaitable[None]]
 
@@ -546,6 +554,65 @@ def _confirmed(
     return frozenset(set(required_test_keys(state)).intersection(set(values or set())))
 
 
+def _test_session_key(interaction: discord.Interaction) -> tuple[int, int, int]:
+    guild_id = int(getattr(getattr(interaction, "guild", None), "id", 0) or 0)
+    user_id = int(getattr(getattr(interaction, "user", None), "id", 0) or 0)
+    message_id = int(getattr(getattr(interaction, "message", None), "id", 0) or 0)
+    return guild_id, user_id, message_id
+
+
+def _purge_test_sessions(now: Optional[float] = None) -> None:
+    current = monotonic() if now is None else float(now)
+    expired = [
+        key
+        for key, (saved_at, _signature, _confirmed_values) in _TEST_SESSIONS.items()
+        if current - saved_at > _TEST_SESSION_TTL_SECONDS
+    ]
+    for key in expired:
+        _TEST_SESSIONS.pop(key, None)
+    if len(_TEST_SESSIONS) > _TEST_SESSION_LIMIT:
+        oldest = sorted(_TEST_SESSIONS, key=lambda key: _TEST_SESSIONS[key][0])
+        for key in oldest[: len(_TEST_SESSIONS) - _TEST_SESSION_LIMIT]:
+            _TEST_SESSIONS.pop(key, None)
+
+
+def _load_test_session(
+    interaction: discord.Interaction,
+    state: dict[str, Any],
+) -> frozenset[str]:
+    _purge_test_sessions()
+    key = _test_session_key(interaction)
+    saved = _TEST_SESSIONS.get(key)
+    if saved is None:
+        return frozenset()
+    _saved_at, signature, values = saved
+    current_signature = required_test_keys(state)
+    if signature != current_signature:
+        _TEST_SESSIONS.pop(key, None)
+        return frozenset()
+    return _confirmed(state, values)
+
+
+def _save_test_session(
+    interaction: discord.Interaction,
+    state: dict[str, Any],
+    values: Optional[set[str] | frozenset[str]],
+) -> frozenset[str]:
+    _purge_test_sessions()
+    confirmed = _confirmed(state, values)
+    _TEST_SESSIONS[_test_session_key(interaction)] = (
+        monotonic(),
+        required_test_keys(state),
+        confirmed,
+    )
+    _purge_test_sessions()
+    return confirmed
+
+
+def _clear_test_session(interaction: discord.Interaction) -> None:
+    _TEST_SESSIONS.pop(_test_session_key(interaction), None)
+
+
 class TestAreaSelect(discord.ui.Select):
     def __init__(self, state: dict[str, Any], confirmed: frozenset[str]) -> None:
         self.state = dict(state)
@@ -614,6 +681,7 @@ class CompactTestView(discord.ui.View):
         await setup._home_edit(interaction)
 
     async def _close(self, interaction: discord.Interaction) -> None:
+        _clear_test_session(interaction)
         await setup._close_setup(interaction)
 
 
@@ -670,6 +738,7 @@ class FeatureTestView(discord.ui.View):
         await _render_tests(interaction, self.state, self.confirmed)
 
     async def _close(self, interaction: discord.Interaction) -> None:
+        _clear_test_session(interaction)
         await setup._close_setup(interaction)
 
 
@@ -678,7 +747,7 @@ async def _render_tests(
     state: dict[str, Any],
     confirmed: Optional[set[str] | frozenset[str]] = None,
 ) -> None:
-    checked = _confirmed(state, confirmed)
+    checked = _save_test_session(interaction, state, confirmed)
     required = set(required_test_keys(state))
     lines = [
         f"{'✅' if key in checked else '⬜'} **{TEST_SPECS[key][0]}**"
@@ -725,7 +794,10 @@ async def _open_tests(
     if target != "ready":
         await setup._open_health_check(interaction, already_deferred=True)
         return
-    await _render_tests(interaction, await _launch_state(guild), confirmed)
+    state = await _launch_state(guild)
+    if confirmed is None:
+        confirmed = _load_test_session(interaction, state)
+    await _render_tests(interaction, state, confirmed)
 
 
 async def _open_feature_test(
@@ -784,6 +856,7 @@ async def _finish(
         return
 
     completed = await mark_setup_completed(guild.id, actor=interaction.user)
+    _clear_test_session(interaction)
     embed = discord.Embed(
         title="✅ Setup Finished",
         description=(
