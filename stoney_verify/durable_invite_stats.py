@@ -349,10 +349,16 @@ def _record_with_rpc_sync(event: PendingInviteEvent) -> InviteStatWriteResult:
     )
 
 
+_CONFIG_JSON_BUCKETS = ("settings", "config", "metadata", "meta")
+_CONFIG_JSON_PRECEDENCE = ("meta", "metadata", "config", "settings")
+
+
 def _fetch_config_row_sync(sb: Any, table_name: str, guild_id: int) -> Optional[dict[str, Any]]:
+    """Fetch every config bucket so compatibility precedence is visible."""
+
     response = (
         sb.table(table_name)
-        .select("guild_id,settings,updated_at")
+        .select("*")
         .eq("guild_id", str(guild_id))
         .limit(1)
         .execute()
@@ -372,12 +378,131 @@ def _fallback_event_hashes(settings: Mapping[str, Any]) -> list[str]:
     return result[-_MAX_FALLBACK_EVENT_HASHES:]
 
 
-def _record_with_config_cas_sync(event: PendingInviteEvent, max_attempts: int = 24) -> InviteStatWriteResult:
-    """Migration-safe fallback using a conditional guild-config JSON update.
+def _merged_config_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Mirror guild_config's JSON-bucket precedence for reliable readback."""
 
-    The dedicated RPC remains the production source of truth.  This path avoids
-    losing counts during a rolling deployment before PostgREST sees the new RPC.
+    merged: dict[str, Any] = {}
+    raw = _mapping(row)
+    for bucket_name in _CONFIG_JSON_BUCKETS:
+        bucket = _mapping(raw.get(bucket_name))
+        if bucket:
+            merged.update(bucket)
+    return merged
+
+
+def _preferred_config_bucket(row: Mapping[str, Any]) -> str:
+    """Write to the bucket that currently owns the counter/event ledger.
+
+    guild_config merges settings -> config -> metadata -> meta. Writing a new
+    value only to settings can therefore be hidden by an older value in a
+    higher-precedence compatibility bucket. Prefer the highest-precedence bucket
+    already carrying either stats key, then the highest-precedence non-empty
+    bucket, and finally settings for a clean modern row.
     """
+
+    raw = _mapping(row)
+    for bucket_name in _CONFIG_JSON_PRECEDENCE:
+        bucket = _mapping(raw.get(bucket_name))
+        if COUNTS_KEY in bucket or FALLBACK_EVENTS_KEY in bucket:
+            return bucket_name
+    # When no bucket owns either stats key, start in the canonical modern
+    # settings bucket rather than promoting unrelated metadata/config values.
+    if "settings" in raw:
+        return "settings"
+    for bucket_name in _CONFIG_JSON_BUCKETS:
+        if bucket_name in raw:
+            return bucket_name
+    return "settings"
+
+
+def _config_column_missing(error: BaseException) -> bool:
+    text = repr(error).lower()
+    return (
+        "pgrst204" in text
+        or "undefinedcolumn" in text
+        or ("column" in text and "does not exist" in text)
+        or ("could not find" in text and "column" in text)
+    )
+
+
+def _config_result_from_row(
+    event: PendingInviteEvent,
+    row: Mapping[str, Any],
+    *,
+    applied: bool,
+) -> Optional[InviteStatWriteResult]:
+    merged = _merged_config_payload(row)
+    hashes = _fallback_event_hashes(merged)
+    if event.event_hash not in hashes:
+        return None
+    counts = _normalize_counts(merged.get(COUNTS_KEY))
+    return InviteStatWriteResult(
+        event_hash=event.event_hash,
+        blocked_count=event.blocked_count,
+        invites_blocked=counts["invites_blocked"],
+        applied=bool(applied),
+        persisted=True,
+        queued=False,
+        backend="guild_config_cas",
+    )
+
+
+def _new_config_payload(event: PendingInviteEvent) -> dict[str, Any]:
+    return {
+        COUNTS_KEY: {
+            "spam_blocked": 0,
+            "invites_blocked": int(event.seed_count) + int(event.blocked_count),
+            "timeouts_issued": 0,
+            "quarantines": 0,
+        },
+        FALLBACK_EVENTS_KEY: [event.event_hash],
+    }
+
+
+def _insert_new_config_event_sync(
+    sb: Any,
+    table_name: str,
+    event: PendingInviteEvent,
+) -> Optional[InviteStatWriteResult]:
+    settings = _new_config_payload(event)
+    last_error: Optional[BaseException] = None
+    for bucket_name in _CONFIG_JSON_BUCKETS:
+        payload = {
+            "guild_id": str(event.guild_id),
+            bucket_name: settings,
+        }
+        try:
+            try:
+                response = (
+                    sb.table(table_name)
+                    .upsert(payload, on_conflict="guild_id")
+                    .select("*")
+                    .execute()
+                )
+            except TypeError:
+                response = sb.table(table_name).upsert(payload).select("*").execute()
+            rows = _rows(response)
+            verified = rows[0] if rows else _fetch_config_row_sync(
+                sb,
+                table_name,
+                event.guild_id,
+            )
+            if verified:
+                result = _config_result_from_row(event, verified, applied=True)
+                if result is not None:
+                    return result
+        except Exception as exc:
+            last_error = exc
+            if _config_column_missing(exc):
+                continue
+            raise
+    if last_error is not None and not _config_column_missing(last_error):
+        raise last_error
+    return None
+
+
+def _record_with_config_cas_sync(event: PendingInviteEvent, max_attempts: int = 24) -> InviteStatWriteResult:
+    """Migration-safe fallback that respects legacy config-bucket precedence."""
 
     sb = get_supabase()
     if sb is None:
@@ -389,45 +514,15 @@ def _record_with_config_cas_sync(event: PendingInviteEvent, max_attempts: int = 
             try:
                 row = _fetch_config_row_sync(sb, table_name, event.guild_id)
                 if row is None:
-                    settings = {
-                        COUNTS_KEY: {
-                            "spam_blocked": 0,
-                            "invites_blocked": int(event.seed_count) + int(event.blocked_count),
-                            "timeouts_issued": 0,
-                            "quarantines": 0,
-                        },
-                        FALLBACK_EVENTS_KEY: [event.event_hash],
-                    }
-                    try:
-                        response = sb.table(table_name).upsert(
-                            {"guild_id": str(event.guild_id), "settings": settings},
-                            on_conflict="guild_id",
-                        ).execute()
-                    except TypeError:
-                        response = sb.table(table_name).upsert(
-                            {"guild_id": str(event.guild_id), "settings": settings}
-                        ).execute()
-                    verified = _fetch_config_row_sync(sb, table_name, event.guild_id)
-                    verified_settings = _mapping((verified or {}).get("settings"))
-                    hashes = _fallback_event_hashes(verified_settings)
-                    counts = _normalize_counts(verified_settings.get(COUNTS_KEY))
-                    if event.event_hash in hashes:
-                        return InviteStatWriteResult(
-                            event_hash=event.event_hash,
-                            blocked_count=event.blocked_count,
-                            invites_blocked=counts["invites_blocked"],
-                            applied=True,
-                            persisted=True,
-                            queued=False,
-                            backend="guild_config_cas",
-                        )
-                    _ = response
+                    inserted = _insert_new_config_event_sync(sb, table_name, event)
+                    if inserted is not None:
+                        return inserted
                     time.sleep(min(0.04 * attempt, 0.5))
                     continue
 
-                settings = _mapping(row.get("settings"))
-                hashes = _fallback_event_hashes(settings)
-                counts = _normalize_counts(settings.get(COUNTS_KEY))
+                merged = _merged_config_payload(row)
+                hashes = _fallback_event_hashes(merged)
+                counts = _normalize_counts(merged.get(COUNTS_KEY))
                 counts["invites_blocked"] = max(
                     counts["invites_blocked"],
                     int(event.seed_count),
@@ -445,33 +540,30 @@ def _record_with_config_cas_sync(event: PendingInviteEvent, max_attempts: int = 
 
                 counts["invites_blocked"] += int(event.blocked_count)
                 hashes.append(event.event_hash)
-                settings[COUNTS_KEY] = counts
-                settings[FALLBACK_EVENTS_KEY] = hashes[-_MAX_FALLBACK_EVENT_HASHES:]
+                bucket_name = _preferred_config_bucket(row)
+                target_bucket = _mapping(row.get(bucket_name))
+                target_bucket[COUNTS_KEY] = counts
+                target_bucket[FALLBACK_EVENTS_KEY] = hashes[-_MAX_FALLBACK_EVENT_HASHES:]
 
                 query = (
                     sb.table(table_name)
-                    .update({"settings": settings})
+                    .update({bucket_name: target_bucket})
                     .eq("guild_id", str(event.guild_id))
                 )
                 updated_at = row.get("updated_at")
                 if updated_at is not None:
                     query = query.eq("updated_at", updated_at)
-                response = query.select("settings,updated_at").execute()
+                response = query.select("*").execute()
                 rows = _rows(response)
-                if rows:
-                    saved_settings = _mapping(rows[0].get("settings"))
-                    saved_hashes = _fallback_event_hashes(saved_settings)
-                    saved_counts = _normalize_counts(saved_settings.get(COUNTS_KEY))
-                    if event.event_hash in saved_hashes:
-                        return InviteStatWriteResult(
-                            event_hash=event.event_hash,
-                            blocked_count=event.blocked_count,
-                            invites_blocked=saved_counts["invites_blocked"],
-                            applied=True,
-                            persisted=True,
-                            queued=False,
-                            backend="guild_config_cas",
-                        )
+                verified = rows[0] if rows else _fetch_config_row_sync(
+                    sb,
+                    table_name,
+                    event.guild_id,
+                )
+                if verified:
+                    result = _config_result_from_row(event, verified, applied=True)
+                    if result is not None:
+                        return result
                 time.sleep(min((0.04 * attempt) + random.uniform(0.01, 0.08), 0.75))
             except Exception as exc:
                 last_error = exc
@@ -485,7 +577,6 @@ def _record_with_config_cas_sync(event: PendingInviteEvent, max_attempts: int = 
     if last_error is not None:
         raise last_error
     raise RuntimeError("No compatible guild-config table accepted invite stats CAS")
-
 
 def _write_event_sync(event: PendingInviteEvent) -> InviteStatWriteResult:
     try:

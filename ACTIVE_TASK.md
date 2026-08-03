@@ -2,13 +2,21 @@
 
 ## DS-STATS-019 — Durable Dank Stats invite-block counting
 
-**Status:** MERGED — PRODUCTION DEPLOYMENT / LIVE VERIFICATION PENDING
-**Pull request:** `#166`
-**Merge commit:** `2e89fd84b6c9c8e503c06782e4592a723a4c7c49`
+**Status:** ACTIVE — PR #167 FINAL CLEAN HEAD VALIDATION
+**Branch:** `fix/dank-stats-live-recovery`
+**Pull request:** `#167`
+**Current source repair head:** `3fd5ca6a9c5c63d5a45f3fbc2f7e14ec01f9cf2b`
+**Previous merged pull request:** `#166`
+**Previous merge commit:** `2e89fd84b6c9c8e503c06782e4592a723a4c7c49`
 
-## Production defect repaired
+## Live production failure
 
-The old central invite-delete path incremented `invites_blocked` by exactly one deleted message, silently ignored failed stats writes, and relied on a delayed stats-channel refresh. It did not prove create/edit/fallback dedupe or restart persistence.
+The user rebuilt Dank Shield after PR #166 and performed the required live test. The visible `🔗 Invites Blocked` counter did not update, so the task remained incomplete despite the prior green CI result.
+
+## Root causes repaired
+
+1. The migration-safe fallback always wrote the count into `settings`, while Dank Shield merges `settings → config → metadata → meta`. An older value in a later bucket could hide a successful write.
+2. The first compatibility repair wrote the fully merged config into one selected bucket, which could move unrelated keys across compatibility layers.
 
 ## Implementation complete
 
@@ -18,55 +26,45 @@ The old central invite-delete path incremented `invites_blocked` by exactly one 
 - [x] Add one transactional RPC that seeds legacy history, inserts the event once, and increments atomically.
 - [x] Keep tables and RPC service-role-only with RLS enabled.
 - [x] Route every successful central-policy deletion through the durable service.
-- [x] Remove silent stats failure handling and emit actionable warnings.
-- [x] Queue failed writes with an on-disk retry outbox.
+- [x] Queue failed writes with an on-disk retry outbox instead of silently discarding them.
 - [x] Move outbox serialization and filesystem writes off the Discord event loop.
-- [x] Protect concurrent outbox replacements with a file lock.
-- [x] Recover restored pending events even when the module loads after Discord is already ready.
-- [x] Reconcile guilds with bounded concurrency rather than serial startup reads.
-- [x] Reconcile durable totals back into the existing Dank Stats compatibility counter.
-- [x] Read the dedicated durable ledger directly when rendering the visible Discord counter.
-- [x] Preserve the larger durable total when legacy or mixed config JSON contains an older value.
-- [x] Coalesce prompt Discord channel refreshes to avoid rename spam.
-- [x] Retain a bounded guild-config CAS fallback during rolling migration visibility.
-- [x] Use the required unique 14-digit Supabase migration timestamp.
+- [x] Recover pending events after restarts and late imports.
+- [x] Reconcile guild totals with bounded startup concurrency.
+- [x] Read the dedicated durable total for the visible Discord counter.
+- [x] Coalesce prompt channel refreshes to avoid rename spam.
+- [x] Fetch every compatible guild-config JSON bucket during fallback writes.
+- [x] Mirror runtime bucket precedence when reading and verifying the visible count.
+- [x] Update the bucket that actually owns the stats/event keys.
+- [x] Use `updated_at` optimistic concurrency for fallback writes.
+- [x] Verify merged readback contains the event hash and incremented count before reporting persistence.
+- [x] Restrict the selected-bucket update to `security_stats_counts` and the fallback event ledger.
+- [x] Preserve unrelated values in `settings`, `config`, `metadata`, and `meta` without promoting them.
+- [x] Prefer canonical `settings` when no existing bucket owns the stats keys.
+- [x] Remove all temporary patch scripts and privileged one-shot workflows from the final branch.
 
-## Final validation
+## Validation completed
 
-- [x] Exact final head: `06f56ddae19f915e98a3cb367c6ac407ad428ae9`.
-- [x] Full suite: `923 passed, 9 warnings in 489.51s`.
-- [x] Focused review suite: `16 passed`.
-- [x] Python compilation and committed-whitespace checks passed.
-- [x] Central policy deletion calls the durable recorder with the full decision.
-- [x] Failed writes are queued rather than silently discarded.
-- [x] Late-import recovery scheduling regression passed.
-- [x] Bounded concurrent startup reconciliation regression passed.
-- [x] Async outbox persistence regression passed.
-- [x] PostgreSQL migration applies twice successfully.
-- [x] SQL smoke test proved seed `5` plus three blocked codes produces total `8`.
-- [x] SQL smoke test proved replaying the same event remains total `8` with `applied=false`.
-- [x] SQL smoke test proved a second two-code event produces total `10`.
-- [x] SQL smoke test proved exactly two unique ledger rows exist.
-- [x] SQL permission test proved anon/authenticated cannot read the tables.
-- [x] SQL permission test proved only the service role receives RPC execution.
-- [x] Dedicated visible-counter overlay regression passed.
-- [x] Claim-first ticket security passed.
-- [x] Managed category and ticket-counter SQL checks passed.
-- [x] Public setup, command surface, command friction, invite permissions, setup safety, Dank Design, role truth, and event-boundary audits passed.
-- [x] Application command-size and profile-runtime diagnostics passed.
-- [x] `/dank` payload remained `1675/8000`.
-- [x] Branch was zero commits behind `main`.
-- [x] All review threads were resolved.
-- [x] PR #166 squash-merged into `main`.
+- [x] Original durable implementation suite: `923 passed, 9 warnings`.
+- [x] First live-recovery full suite: `925 passed, 9 warnings`.
+- [x] Initial focused live-recovery suite: `18 passed`.
+- [x] Bucket-isolation focused suite: `20 passed`.
+- [x] Regression reproduces `settings.invites_blocked=2`, authoritative `config.invites_blocked=5`, and a two-code event yielding visible total `7`.
+- [x] Regression proves unrelated `settings`, `metadata`, and `meta` values are not copied into `config`.
+- [x] Regression proves the selected bucket's unrelated values remain intact.
+- [x] Python compile and committed-whitespace checks passed on the first recovery head.
+- [x] Public setup, command surface, command friction, invite permissions, setup safety, role truth, and event-boundary audits passed on the first recovery head.
+- [x] Profile runtime and application command-size diagnostics passed on the first recovery head.
 
-## Remaining live gate
+## Remaining Definition of Done gates
 
-- [ ] Rebuild Dank Shield Helper on Discloud so the migration and runtime code start.
-- [ ] Confirm startup completes without durable-invite-stats or migration errors.
-- [ ] Record the current visible `🔗 Invites Blocked` value.
-- [ ] Post one test message containing two different external Discord invite links in a private channel protected by Invite Shield.
-- [ ] Confirm the message is removed and the visible counter increases by exactly `2` after the coalesced refresh.
-- [ ] Confirm replay/edit/fallback processing does not add a duplicate count.
+- [ ] Full unit suite and every audit pass on the final clean owner-authored head.
+- [ ] Profile runtime and command-size diagnostics pass on the final clean head.
+- [ ] Branch is current with `main` and has no unresolved review threads.
+- [ ] PR #167 is merged.
+- [ ] Dank Shield is rebuilt on Discloud from the repaired `main`.
+- [ ] One message containing two unique blocked external invites is deleted once.
+- [ ] The visible `Invites Blocked` counter increases by exactly `2`.
+- [ ] Replay/edit/fallback handling does not increment that same message again.
 
 ## Previous completed implementation
 
@@ -76,6 +74,10 @@ The old central invite-delete path incremented `invites_blocked` by exactly one 
 - Full validation passed with `907 passed, 9 warnings`.
 
 ## Later backlog
+
+### DS-SETUP-019 — Cleanup confirmation modal crashes
+
+The live `Confirm Discord Cleanup` modal accepts `DELETE SETUP` but then throws `AttributeError` because `public_setup_cleanup.ConfirmDeleteModal.on_submit()` calls `public_setup_solid._safe_defer_modal`, which does not exist. Inspect the canonical modal defer/follow-up path, all cleanup modal callers, interaction-response guards, and setup cleanup regressions before implementing the repair. The submitted cleanup did not run after this exception.
 
 ### DS-MEDIA-001 — Klipy direct GIF unfurl listener
 
