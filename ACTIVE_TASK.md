@@ -2,10 +2,10 @@
 
 ## DS-STATS-019 — Durable Dank Stats invite-block counting
 
-**Status:** ACTIVE — PR #167 REPAIR IMPLEMENTED; CI / LIVE VERIFICATION PENDING
+**Status:** ACTIVE — PR #167 REPAIR IMPLEMENTED; FINAL CI RUNNING
 **Branch:** `fix/dank-stats-live-recovery`
 **Pull request:** `#167`
-**Current repair head:** `1da80a363fc57cb9f32d1d383e7113b5379ba4fd`
+**Current repair code head:** `1da80a363fc57cb9f32d1d383e7113b5379ba4fd`
 **Previous merged pull request:** `#166`
 **Previous merge commit:** `2e89fd84b6c9c8e503c06782e4592a723a4c7c49`
 
@@ -71,9 +71,10 @@ The first merged repair still had one live compatibility defect: its migration-s
 ## Current repair validation
 
 - [x] The failed one-shot workflow was traced to deleting `_fallback_event_hashes` from the replacement span.
-- [x] The clean source repair now retains the helper and contains the bucket-precedence implementation.
-- [x] Focused regression produced the intended `config` bucket write and visible total `7` in the patch workflow before the clean commit.
-- [ ] Run normal repository CI on the current PR #167 head.
+- [x] The clean source repair retains the helper and contains the bucket-precedence implementation.
+- [x] Focused repair suite passed: `18 passed`.
+- [x] Regression produced the intended `config` bucket write and visible total `7`.
+- [ ] Run normal repository CI on the owner-authored PR #167 head.
 - [ ] Run the full regression suite and conflict/cleanup inspection.
 - [ ] Merge PR #167 only after all checks pass.
 - [ ] Rebuild Dank Shield Helper on Discloud from the merged `main`.
