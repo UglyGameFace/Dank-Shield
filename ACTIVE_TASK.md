@@ -2,10 +2,11 @@
 
 ## DS-STATS-019 — Durable Dank Stats invite-block counting
 
-**Status:** ACTIVE — PR #167 FINAL CLEAN HEAD VALIDATION
-**Branch:** `fix/dank-stats-live-recovery`
-**Pull request:** `#167`
-**Current source repair head:** `3fd5ca6a9c5c63d5a45f3fbc2f7e14ec01f9cf2b`
+**Status:** MERGED — PRODUCTION DEPLOYMENT / LIVE VERIFICATION PENDING
+**Merged pull request:** `#167`
+**Merge commit:** `e6e2ffaef9e75008d422f349a82b3b67ea22b673`
+**Final clean owner head:** `5ab92f4fe1bdd8bc28cc6aa8add890d87aaa3013`
+**Source repair head:** `3fd5ca6a9c5c63d5a45f3fbc2f7e14ec01f9cf2b`
 **Previous merged pull request:** `#166`
 **Previous merge commit:** `2e89fd84b6c9c8e503c06782e4592a723a4c7c49`
 
@@ -48,23 +49,28 @@ The user rebuilt Dank Shield after PR #166 and performed the required live test.
 - [x] First live-recovery full suite: `925 passed, 9 warnings`.
 - [x] Initial focused live-recovery suite: `18 passed`.
 - [x] Bucket-isolation focused suite: `20 passed`.
+- [x] Final clean full suite: `927 passed, 9 warnings in 660.68s`.
 - [x] Regression reproduces `settings.invites_blocked=2`, authoritative `config.invites_blocked=5`, and a two-code event yielding visible total `7`.
 - [x] Regression proves unrelated `settings`, `metadata`, and `meta` values are not copied into `config`.
 - [x] Regression proves the selected bucket's unrelated values remain intact.
-- [x] Python compile and committed-whitespace checks passed on the first recovery head.
-- [x] Public setup, command surface, command friction, invite permissions, setup safety, role truth, and event-boundary audits passed on the first recovery head.
-- [x] Profile runtime and application command-size diagnostics passed on the first recovery head.
+- [x] Python compilation and committed-whitespace checks passed on the final clean head.
+- [x] All standalone regression tools passed on the final clean head.
+- [x] Public setup, command surface, command friction, invite permissions, setup safety, Dank Design, role truth, and event-boundary audits passed on the final clean head.
+- [x] Claim-first ticket security and managed-category SQL smoke tests passed.
+- [x] Profile runtime and application command-size diagnostics passed on the final clean head.
+- [x] `/dank` payload remained `1675/8000`.
+- [x] Branch was zero commits behind `main` before merge.
+- [x] All review threads were resolved.
+- [x] PR #167 squash-merged into `main`.
 
 ## Remaining Definition of Done gates
 
-- [ ] Full unit suite and every audit pass on the final clean owner-authored head.
-- [ ] Profile runtime and command-size diagnostics pass on the final clean head.
-- [ ] Branch is current with `main` and has no unresolved review threads.
-- [ ] PR #167 is merged.
-- [ ] Dank Shield is rebuilt on Discloud from the repaired `main`.
-- [ ] One message containing two unique blocked external invites is deleted once.
-- [ ] The visible `Invites Blocked` counter increases by exactly `2`.
-- [ ] Replay/edit/fallback handling does not increment that same message again.
+- [ ] Rebuild Dank Shield on Discloud from repaired `main`.
+- [ ] Confirm startup completes without durable-invite-stats or migration errors.
+- [ ] Record the current visible `🔗 Invites Blocked` value.
+- [ ] Post one message containing two different external Discord invite links in a private channel protected by Invite Shield.
+- [ ] Confirm the message is deleted once and the visible counter increases by exactly `2` after the coalesced refresh.
+- [ ] Confirm replay/edit/fallback handling does not increment that same message again.
 
 ## Previous completed implementation
 
