@@ -490,3 +490,87 @@ def test_config_bucket_precedence_matches_visible_guild_config_merge() -> None:
     merged = durable_invite_stats._merged_config_payload(row)
     assert merged[durable_invite_stats.COUNTS_KEY]["invites_blocked"] == 5
     assert durable_invite_stats._preferred_config_bucket(row) == "config"
+
+
+
+def test_fallback_updates_only_stats_keys_in_authoritative_bucket(monkeypatch) -> None:
+    state = {
+        "row": {
+            "guild_id": "321",
+            "settings": {
+                "settings_only": "must-not-move",
+                durable_invite_stats.COUNTS_KEY: {"invites_blocked": 1},
+            },
+            "config": {
+                "config_only": "must-stay",
+                durable_invite_stats.COUNTS_KEY: {"invites_blocked": 4},
+            },
+            "metadata": {"metadata_only": "must-not-move"},
+            "meta": {"meta_only": "must-not-move"},
+            "updated_at": "2026-08-03T02:00:00+00:00",
+        }
+    }
+    updates = []
+
+    class FakeQuery:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def eq(self, *_args):
+            return self
+
+        def select(self, columns):
+            assert columns == "*"
+            return self
+
+        def execute(self):
+            updates.append(self.payload)
+            state["row"].update(self.payload)
+            return SimpleNamespace(data=[dict(state["row"])])
+
+    class FakeTable:
+        def update(self, payload):
+            return FakeQuery(dict(payload))
+
+    class FakeSupabase:
+        def table(self, name):
+            assert name == "guild_configs"
+            return FakeTable()
+
+    monkeypatch.setattr(durable_invite_stats, "get_supabase", lambda: FakeSupabase())
+    monkeypatch.setattr(durable_invite_stats, "GUILD_CONFIG_TABLE_FALLBACKS", ("guild_configs",))
+    monkeypatch.setattr(
+        durable_invite_stats,
+        "_fetch_config_row_sync",
+        lambda _sb, _table, _guild_id: dict(state["row"]),
+    )
+
+    event = durable_invite_stats.PendingInviteEvent(
+        event_hash="f" * 64,
+        guild_id=321,
+        blocked_count=2,
+        seed_count=4,
+        source="bucket-scope-test",
+    )
+    result = durable_invite_stats._record_with_config_cas_sync(event, max_attempts=1)
+
+    assert result.invites_blocked == 6
+    assert len(updates) == 1
+    assert set(updates[0]) == {"config"}
+    target = updates[0]["config"]
+    assert target["config_only"] == "must-stay"
+    assert target[durable_invite_stats.COUNTS_KEY]["invites_blocked"] == 6
+    assert event.event_hash in target[durable_invite_stats.FALLBACK_EVENTS_KEY]
+    assert "settings_only" not in target
+    assert "metadata_only" not in target
+    assert "meta_only" not in target
+
+
+def test_new_stats_without_existing_owner_prefer_settings_bucket() -> None:
+    row = {
+        "settings": {},
+        "config": {"config_only": True},
+        "metadata": {"metadata_only": True},
+        "meta": {"meta_only": True},
+    }
+    assert durable_invite_stats._preferred_config_bucket(row) == "settings"

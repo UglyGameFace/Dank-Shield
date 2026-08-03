@@ -405,9 +405,10 @@ def _preferred_config_bucket(row: Mapping[str, Any]) -> str:
         bucket = _mapping(raw.get(bucket_name))
         if COUNTS_KEY in bucket or FALLBACK_EVENTS_KEY in bucket:
             return bucket_name
-    for bucket_name in _CONFIG_JSON_PRECEDENCE:
-        if _mapping(raw.get(bucket_name)):
-            return bucket_name
+    # When no bucket owns either stats key, start in the canonical modern
+    # settings bucket rather than promoting unrelated metadata/config values.
+    if "settings" in raw:
+        return "settings"
     for bucket_name in _CONFIG_JSON_BUCKETS:
         if bucket_name in raw:
             return bucket_name
@@ -539,13 +540,14 @@ def _record_with_config_cas_sync(event: PendingInviteEvent, max_attempts: int = 
 
                 counts["invites_blocked"] += int(event.blocked_count)
                 hashes.append(event.event_hash)
-                merged[COUNTS_KEY] = counts
-                merged[FALLBACK_EVENTS_KEY] = hashes[-_MAX_FALLBACK_EVENT_HASHES:]
                 bucket_name = _preferred_config_bucket(row)
+                target_bucket = _mapping(row.get(bucket_name))
+                target_bucket[COUNTS_KEY] = counts
+                target_bucket[FALLBACK_EVENTS_KEY] = hashes[-_MAX_FALLBACK_EVENT_HASHES:]
 
                 query = (
                     sb.table(table_name)
-                    .update({bucket_name: merged})
+                    .update({bucket_name: target_bucket})
                     .eq("guild_id", str(event.guild_id))
                 )
                 updated_at = row.get("updated_at")

@@ -41,6 +41,8 @@ The first merged repair still had one live compatibility defect: its migration-s
 - [x] Verify merged readback before reporting the fallback event as persisted.
 - [x] Preserve `_fallback_event_hashes` after the one-shot patch replacement.
 - [x] Add a regression reproducing stale `settings` versus authoritative `config`.
+- [x] Restrict fallback writes to the selected bucket's stats/event keys instead of copying the fully merged config.
+- [x] Preserve unrelated values in every JSON compatibility bucket.
 
 ## Previous full validation
 
@@ -72,7 +74,8 @@ The first merged repair still had one live compatibility defect: its migration-s
 
 - [x] The failed one-shot workflow was traced to deleting `_fallback_event_hashes` from the replacement span.
 - [x] The clean source repair retains the helper and contains the bucket-precedence implementation.
-- [x] Focused repair suite passed: `18 passed`.
+- [x] Initial focused repair suite passed: `18 passed`.
+- [ ] Bucket-scoped focused repair suite passes.
 - [x] Regression produced the intended `config` bucket write and visible total `7`.
 - [ ] Run normal repository CI on the owner-authored PR #167 head.
 - [ ] Run the full regression suite and conflict/cleanup inspection.
