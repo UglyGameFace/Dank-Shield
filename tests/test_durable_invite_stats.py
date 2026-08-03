@@ -395,3 +395,98 @@ def test_startup_recovery_is_bounded_and_concurrent(monkeypatch) -> None:
     assert retry_started == [True]
     assert set(completed) == set(range(1, 25))
     assert 1 < maximum_active <= durable_invite_stats._RECONCILE_CONCURRENCY
+
+
+
+def test_fallback_uses_bucket_that_owns_visible_invite_count(monkeypatch) -> None:
+    state = {
+        "row": {
+            "guild_id": "123",
+            "settings": {
+                durable_invite_stats.COUNTS_KEY: {
+                    "spam_blocked": 1,
+                    "invites_blocked": 2,
+                    "timeouts_issued": 0,
+                    "quarantines": 0,
+                }
+            },
+            "config": {
+                durable_invite_stats.COUNTS_KEY: {
+                    "spam_blocked": 1,
+                    "invites_blocked": 5,
+                    "timeouts_issued": 0,
+                    "quarantines": 0,
+                }
+            },
+            "metadata": {},
+            "meta": {},
+            "updated_at": "2026-08-02T23:00:00+00:00",
+        }
+    }
+    updates = []
+
+    class FakeQuery:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def eq(self, *_args):
+            return self
+
+        def select(self, columns):
+            assert columns == "*"
+            return self
+
+        def execute(self):
+            updates.append(self.payload)
+            state["row"].update(self.payload)
+            return SimpleNamespace(data=[dict(state["row"])])
+
+    class FakeTable:
+        def update(self, payload):
+            return FakeQuery(dict(payload))
+
+    class FakeSupabase:
+        def table(self, name):
+            assert name == "guild_configs"
+            return FakeTable()
+
+    monkeypatch.setattr(durable_invite_stats, "get_supabase", lambda: FakeSupabase())
+    monkeypatch.setattr(
+        durable_invite_stats,
+        "GUILD_CONFIG_TABLE_FALLBACKS",
+        ("guild_configs",),
+    )
+    monkeypatch.setattr(
+        durable_invite_stats,
+        "_fetch_config_row_sync",
+        lambda _sb, _table, _guild_id: dict(state["row"]),
+    )
+
+    event = durable_invite_stats.PendingInviteEvent(
+        event_hash="e" * 64,
+        guild_id=123,
+        blocked_count=2,
+        seed_count=5,
+        source="live-test",
+    )
+    result = durable_invite_stats._record_with_config_cas_sync(event, max_attempts=1)
+
+    assert result.applied is True
+    assert result.invites_blocked == 7
+    assert result.backend == "guild_config_cas"
+    assert len(updates) == 1
+    assert set(updates[0]) == {"config"}
+    assert updates[0]["config"][durable_invite_stats.COUNTS_KEY]["invites_blocked"] == 7
+    assert event.event_hash in updates[0]["config"][durable_invite_stats.FALLBACK_EVENTS_KEY]
+
+
+def test_config_bucket_precedence_matches_visible_guild_config_merge() -> None:
+    row = {
+        "settings": {durable_invite_stats.COUNTS_KEY: {"invites_blocked": 2}},
+        "config": {durable_invite_stats.COUNTS_KEY: {"invites_blocked": 5}},
+        "metadata": {},
+        "meta": {},
+    }
+    merged = durable_invite_stats._merged_config_payload(row)
+    assert merged[durable_invite_stats.COUNTS_KEY]["invites_blocked"] == 5
+    assert durable_invite_stats._preferred_config_bucket(row) == "config"
