@@ -69,17 +69,126 @@ def test_current_claimant_is_authorized_and_other_admin_is_not() -> None:
     assert "Transfer" in decision.message
 
 
-def test_guild_owner_must_use_confirmed_emergency_close_without_stealing_claim() -> None:
+def test_guild_owner_can_use_normal_controls_without_stealing_claim() -> None:
     ticket = row(status="claimed", claimant=200)
 
-    normal = evaluate_ticket_action(
+    for action in (
+        "message",
+        "close",
+        "transfer",
+        "unclaim",
+        "priority",
+        "note",
+        "view_notes",
+        "view_info",
+        "macro",
+        "transcript",
+        "verification_review",
+        "access",
+        "rename",
+        "lock",
+        "unlock",
+    ):
+        decision = evaluate_ticket_action(
+            ticket,
+            actor_id=999,
+            action=action,
+            guild_owner_id=999,
+        )
+        assert decision.allowed is True, action
+        assert decision.code == "guild_owner_allowed", action
+        assert decision.claimed_by_id == 200, action
+
+
+def test_guild_owner_normal_controls_keep_lifecycle_safety() -> None:
+    open_ticket = row(status="claimed", claimant=200)
+    closed_ticket = row(status="closed", claimant=200)
+
+    delete_open = evaluate_ticket_action(
+        open_ticket,
+        actor_id=999,
+        action="delete",
+        guild_owner_id=999,
+    )
+    assert delete_open.allowed is False
+    assert delete_open.code == "close_before_delete"
+
+    reopen_open = evaluate_ticket_action(
+        open_ticket,
+        actor_id=999,
+        action="reopen",
+        guild_owner_id=999,
+    )
+    assert reopen_open.allowed is False
+    assert reopen_open.code == "reopen_requires_closed"
+
+    delete_closed = evaluate_ticket_action(
+        closed_ticket,
+        actor_id=999,
+        action="delete",
+        guild_owner_id=999,
+    )
+    assert delete_closed.allowed is True
+    assert delete_closed.code == "guild_owner_allowed"
+
+    reopen_closed = evaluate_ticket_action(
+        closed_ticket,
+        actor_id=999,
+        action="reopen",
+        guild_owner_id=999,
+    )
+    assert reopen_closed.allowed is True
+    assert reopen_closed.code == "guild_owner_allowed"
+
+    close_closed = evaluate_ticket_action(
+        closed_ticket,
+        actor_id=999,
+        action="close",
+        guild_owner_id=999,
+    )
+    assert close_closed.allowed is False
+    assert close_closed.code == "ticket_closed"
+
+
+def test_guild_owner_who_opened_ticket_still_has_server_owner_authority() -> None:
+    ticket = row(status="claimed", owner=999, claimant=200)
+
+    decision = evaluate_ticket_action(
         ticket,
         actor_id=999,
         action="close",
         guild_owner_id=999,
     )
-    assert normal.allowed is False
-    assert normal.code == "claimant_required"
+
+    assert decision.allowed is True
+    assert decision.code == "guild_owner_allowed"
+    assert decision.claimed_by_id == 200
+
+
+def test_other_administrators_remain_claimant_only() -> None:
+    ticket = row(status="claimed", claimant=200)
+
+    for action in (
+        "close",
+        "transfer",
+        "unclaim",
+        "priority",
+        "note",
+        "macro",
+        "verification_review",
+    ):
+        decision = evaluate_ticket_action(
+            ticket,
+            actor_id=998,
+            action=action,
+            guild_owner_id=999,
+        )
+        assert decision.allowed is False, action
+        assert decision.code == "claimant_required", action
+
+
+def test_emergency_override_still_exists_without_replacing_normal_owner_authority() -> None:
+    ticket = row(status="claimed", claimant=200)
 
     emergency = evaluate_ticket_action(
         ticket,
@@ -92,30 +201,6 @@ def test_guild_owner_must_use_confirmed_emergency_close_without_stealing_claim()
     assert emergency.claimed_by_id == 200
 
 
-def test_normal_guild_owner_actions_remain_claimant_only() -> None:
-    ticket = row(status="claimed", claimant=200)
-
-    for action in (
-        "close",
-        "delete",
-        "transfer",
-        "unclaim",
-        "priority",
-        "note",
-        "macro",
-        "verification_review",
-        "reopen",
-    ):
-        decision = evaluate_ticket_action(
-            ticket,
-            actor_id=999,
-            action=action,
-            guild_owner_id=999,
-        )
-        assert decision.allowed is False, action
-        assert decision.code == "claimant_required", action
-
-
 def test_guild_owner_is_resolved_from_the_registered_ticket_guild(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -124,11 +209,11 @@ def test_guild_owner_is_resolved_from_the_registered_ticket_guild(
     decision = evaluate_ticket_action(
         row(status="claimed", claimant=200, guild_id=55),
         actor_id=999,
-        action="owner_emergency_close",
+        action="close",
     )
 
     assert decision.allowed is True
-    assert decision.code == "owner_emergency_close_allowed"
+    assert decision.code == "guild_owner_allowed"
 
 
 def test_requester_can_only_cancel_an_unclaimed_ticket() -> None:
@@ -253,9 +338,10 @@ def test_static_claim_first_enforcement_covers_all_runtime_surfaces() -> None:
     public_group = (ROOT / "stoney_verify/commands_ext/public_ticket_group.py").read_text(encoding="utf-8")
     staff_scope = (ROOT / "stoney_verify/commands_ext/public_staff_scope.py").read_text(encoding="utf-8")
 
-    assert "Claimant ownership still controls every normal staff mutation" in policy
+    assert "Claimant ownership controls normal staff mutations" in policy
+    assert "guild_owner_allowed" in policy
+    assert "without claiming or replacing the recorded claimant" in policy
     assert "owner_emergency_close_allowed" in policy
-    assert "Normal close" in policy
     assert "Fail closed" in policy
     assert "async def authorize_ticket_action(" in service
     assert 'action="close"' in service
