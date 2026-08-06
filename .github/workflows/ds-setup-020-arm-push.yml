@@ -1,11 +1,7 @@
 name: DS Setup 020 ARM Apply
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/ds-setup-020-arm-push.yml
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -79,6 +75,7 @@ jobs:
 
       - name: Clean temporary main workflows
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MAIN: main
         run: |
           git clone --depth 1 --branch main "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" launcher-cleanup
@@ -90,6 +87,3 @@ jobs:
           git add -A
           git commit -m "chore: remove DS-SETUP-020 one-shot workflows"
           git push origin HEAD:${MAIN}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MAIN: main
