@@ -56,6 +56,22 @@ def ticket_guild_id(row: Optional[Mapping[str, Any]]) -> int:
     return 0
 
 
+def ticket_has_transcript(row: Optional[Mapping[str, Any]]) -> bool:
+    if not isinstance(row, Mapping):
+        return False
+    for key in (
+        "transcript_url",
+        "transcript_message_id",
+        "transcript_channel_id",
+    ):
+        try:
+            if str(row.get(key) or "").strip():
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _cached_guild_owner_id(row: Optional[Mapping[str, Any]]) -> int:
     """Resolve the real Discord guild owner for a registered ticket.
 
@@ -134,11 +150,11 @@ def evaluate_ticket_action(
     """Return the authoritative claim-first decision for one ticket action.
 
     Claimant ownership still controls every normal staff mutation. The actual
-    Discord guild owner has one narrowly-scoped emergency override: they may
-    close an open or claimed ticket without taking the claim away from the
-    assigned staff member. Administrators and other elevated roles do not get
-    that override, and the guild owner receives no bypass for delete, transfer,
-    reopen, notes, macros, verification decisions, or other staff actions.
+    Discord guild owner may use the separately confirmed ``owner_emergency_*``
+    namespace for a narrow, audited lifecycle override. Normal transfer,
+    unclaim, delete, reopen, notes, macros, and verification actions do not gain
+    an owner/admin bypass. Safe emergency delete additionally requires a closed
+    ticket with preserved transcript metadata.
     """
     clean_action = str(action or "action").strip().lower().replace(" ", "_")
     aid = _safe_int(actor_id, 0)
@@ -170,6 +186,43 @@ def evaluate_ticket_action(
 
     if status == "deleted":
         return decision(False, "ticket_deleted", "This ticket is deleted and cannot be changed.")
+
+    if clean_action.startswith("owner_emergency_"):
+        if resolved_guild_owner_id <= 0 or aid != resolved_guild_owner_id:
+            return decision(
+                False,
+                "guild_owner_required",
+                "Only the actual Discord server owner can use Emergency Override.",
+            )
+
+        if clean_action == "owner_emergency_transfer":
+            if status not in {"open", "claimed"}:
+                return decision(False, "owner_emergency_transfer_not_open", "Only an open or claimed ticket can be force-transferred.")
+            return decision(True, "owner_emergency_transfer_allowed", "Confirmed server-owner emergency transfer is allowed.")
+
+        if clean_action == "owner_emergency_unclaim":
+            if status not in {"open", "claimed"}:
+                return decision(False, "owner_emergency_unclaim_not_open", "Only an open or claimed ticket can be force-unclaimed.")
+            return decision(True, "owner_emergency_unclaim_allowed", "Confirmed server-owner emergency unclaim is allowed.")
+
+        if clean_action == "owner_emergency_close":
+            if status not in {"open", "claimed"}:
+                return decision(False, "owner_emergency_close_not_open", "Only an open or claimed ticket can be emergency-closed.")
+            return decision(True, "owner_emergency_close_allowed", "Confirmed server-owner emergency close is allowed.")
+
+        if clean_action == "owner_emergency_delete_prepare":
+            if status != "closed":
+                return decision(False, "owner_emergency_delete_requires_closed", "Close the ticket before starting a safe emergency delete.")
+            return decision(True, "owner_emergency_delete_prepare_allowed", "Safe emergency delete may prepare and verify a transcript.")
+
+        if clean_action == "owner_emergency_delete":
+            if status != "closed":
+                return decision(False, "owner_emergency_delete_requires_closed", "Only a closed ticket can be emergency-deleted.")
+            if not ticket_has_transcript(row):
+                return decision(False, "owner_emergency_delete_requires_transcript", "A preserved transcript is required before emergency deletion.")
+            return decision(True, "owner_emergency_delete_allowed", "Confirmed safe emergency delete is allowed.")
+
+        return decision(False, "unknown_owner_emergency_action", "That Emergency Override action is not supported.")
 
     if clean_action == "claim":
         if status not in {"open", "claimed"}:
@@ -254,5 +307,6 @@ __all__ = [
     "is_staff_member",
     "ticket_claimed_by_id",
     "ticket_guild_id",
+    "ticket_has_transcript",
     "ticket_owner_id",
 ]
