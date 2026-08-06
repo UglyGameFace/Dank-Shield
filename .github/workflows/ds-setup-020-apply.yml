@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   apply:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -24,11 +24,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Decode and apply patch
+      - name: Apply direct source migration
         run: |
-          base64 -d tools/.ds_setup_020_apply.py.gz.b64 | gzip -d > tools/ds_setup_020_apply.py
-          python -m py_compile tools/ds_setup_020_apply.py
-          python tools/ds_setup_020_apply.py
+          python -m py_compile tools/ds_setup_020_direct_apply.py
+          python tools/ds_setup_020_direct_apply.py
 
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
@@ -60,8 +59,7 @@ jobs:
         env:
           BRANCH: fix/ds-setup-020-id-verification-selection
         run: |
-          rm -f tools/.ds_setup_020_apply.py.gz.b64
-          rm -f tools/ds_setup_020_apply.py
+          rm -f tools/ds_setup_020_direct_apply.py
           rm -f .github/workflows/ds-setup-020-apply.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
