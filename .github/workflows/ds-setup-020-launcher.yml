@@ -13,8 +13,8 @@ jobs:
     if: >-
       github.event.issue.number == 171 &&
       github.event.issue.pull_request &&
-      github.event.comment.body == '/run-ds-setup-020-macos'
-    runs-on: macos-14
+      github.event.comment.body == '/run-ds-setup-020-arm'
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     steps:
       - name: Check out implementation branch
