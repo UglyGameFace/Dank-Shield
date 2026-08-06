@@ -1,4 +1,4 @@
-name: DS Setup 020 Apply
+name: DS Setup 020 Final Integration
 
 on:
   push:
@@ -24,27 +24,36 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Apply direct source migration
+      - name: Apply final direct source integration
+        shell: bash
         run: |
-          python -m py_compile tools/ds_setup_020_direct_apply.py
-          python tools/ds_setup_020_direct_apply.py
+          base64 -d tools/.ds_setup_020_apply.py.gz.b64 | gzip -d > tools/ds_setup_020_apply.py
+          python -m py_compile tools/ds_setup_020_apply.py
+          python tools/ds_setup_020_apply.py
 
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
       - name: Compile changed modules
+        shell: bash
         run: |
           python -m py_compile \
             stoney_verify/setup_service_state.py \
+            stoney_verify/setup_new/templates.py \
+            stoney_verify/setup_doctor_canonical.py \
             stoney_verify/services/setup_permission_policy.py \
             stoney_verify/services/vc_verification_permissions.py \
             stoney_verify/startup_guards/vc_setup_one_press_fix.py \
             stoney_verify/startup_guards/vc_per_guild_access_fix.py \
+            stoney_verify/startup_guards/full_setup_health_autofix.py \
+            stoney_verify/startup_guards/setup_permission_repair_guard.py \
+            stoney_verify/setup_permission_repair_services.py \
             stoney_verify/commands_ext/public_setup_defaults.py \
             stoney_verify/commands_ext/public_setup_fresh_choice.py \
             stoney_verify/commands_ext/public_setup_recommend.py
 
-      - name: Run DS-SETUP-020 tests
+      - name: Run DS-SETUP-020 targeted tests
+        shell: bash
         run: |
           pytest -q \
             tests/test_setup_service_state_behavior.py \
@@ -52,14 +61,20 @@ jobs:
             tests/test_setup_020_entitled_id_behavior.py \
             tests/test_setup_020_vc_permission_contract.py \
             tests/test_setup_020_no_forced_simple_channel_static.py \
+            tests/test_setup_020_permission_scope_static.py \
             tests/test_setup_guided_one_item_behavior.py \
             tests/test_setup_create_missing_enabled_features_static.py
 
       - name: Commit implementation and remove one-shot files
         env:
           BRANCH: fix/ds-setup-020-id-verification-selection
+        shell: bash
         run: |
+          rm -f tools/ds_setup_020_apply.py
           rm -f tools/ds_setup_020_direct_apply.py
+          rm -f tools/.ds_setup_020_apply.py.gz.b64
+          rm -f tools/ds_setup_020_finalize.py
+          rm -f tools/ds_setup_020_finalize.py.gz.b64
           rm -f .github/workflows/ds-setup-020-apply.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
