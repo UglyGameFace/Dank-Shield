@@ -1,22 +1,18 @@
 from __future__ import annotations
 
-"""Route confirmed owner emergency close through the full ticket lifecycle.
+"""Authorize confirmed owner emergency close without widening normal close.
 
-The canonical close service intentionally authorizes ordinary ``close`` as a
-claimant action. This bridge issues a short-lived ContextVar capability only
-while the real guild owner submits the dedicated confirmation modal. A matching
-owner, channel, action, and reason prefix are all required before the lifecycle
-can run with internal authority, so typing the prefix into another command can
-never imitate Emergency Override.
-
-The service's original close event is also rewritten inside that same context to
-attribute the action to the real guild owner. This avoids a second duplicate
-close event while preserving the canonical archive, permission, and UI flow.
+A short-lived ContextVar capability exists only while the actual Discord guild
+owner submits the dedicated confirmation modal. The canonical ticket service
+keeps the real owner as ``closed_by``, so both the database row and the single
+lifecycle event retain the owner's Discord identity. Outside that exact context,
+ordinary close remains claimant-only and a copied reason prefix grants nothing.
 """
 
 from contextvars import ContextVar
 from typing import Any, Optional
 
+from ..tickets_new.claim_policy import evaluate_ticket_action
 from ..tickets_new.owner_emergency_override import is_actual_guild_owner
 
 _PATCHED = False
@@ -26,6 +22,7 @@ _CONFIRMED_CLOSE: ContextVar[Optional[tuple[int, int, str]]] = ContextVar(
     default=None,
 )
 _EXECUTOR_MARKER = "_owner_emergency_close_confirmation_context"
+_AUTHORIZER_MARKER = "_owner_emergency_close_authorizer"
 _LOGGER_MARKER = "_owner_emergency_close_logger"
 
 
@@ -100,7 +97,50 @@ def _patch_confirmed_ui_executor() -> bool:
     return True
 
 
+def _patch_close_authorizer(service: Any) -> bool:
+    """Translate only the confirmed close call into the emergency policy action."""
+    original_authorizer = getattr(service, "authorize_ticket_action", None)
+    if not callable(original_authorizer):
+        return False
+    if bool(getattr(original_authorizer, _AUTHORIZER_MARKER, False)):
+        return True
+
+    async def owner_emergency_authorizer(*args: Any, **kwargs: Any) -> Any:
+        capability = _confirmed_close_context()
+        channel_id = _safe_int(kwargs.get("channel_id"), 0)
+        actor = kwargs.get("actor")
+        action = str(kwargs.get("action") or "").strip().lower().replace(" ", "_")
+        actor_id = _safe_int(getattr(actor, "id", 0), 0)
+
+        if (
+            capability is None
+            or action != "close"
+            or channel_id != capability[0]
+            or actor_id != capability[1]
+        ):
+            return await original_authorizer(*args, **kwargs)
+
+        row = kwargs.get("row")
+        if not isinstance(row, dict):
+            try:
+                row = await service._ticket_row_for_channel_id(channel_id)
+            except Exception:
+                row = None
+
+        return evaluate_ticket_action(
+            row,
+            actor_id=actor_id,
+            action="owner_emergency_close",
+            guild_owner_id=capability[1],
+        )
+
+    setattr(owner_emergency_authorizer, _AUTHORIZER_MARKER, True)
+    service.authorize_ticket_action = owner_emergency_authorizer
+    return True
+
+
 def _patch_close_logger(service: Any) -> bool:
+    """Enrich the service's one canonical close event; never add a duplicate."""
     original_logger = getattr(service, "log_ticket_closed", None)
     if not callable(original_logger):
         return False
@@ -113,10 +153,9 @@ def _patch_close_logger(service: Any) -> bool:
         if capability is None or channel_id != capability[0]:
             return await original_logger(*args, **kwargs)
 
-        owner_id, owner_name = capability[1], capability[2]
         updated = dict(kwargs)
-        updated["actor_user_id"] = owner_id
-        updated["actor_name"] = owner_name
+        updated["actor_user_id"] = capability[1]
+        updated["actor_name"] = capability[2]
         updated["source"] = "tickets_new_owner_emergency_close"
 
         reason = str(updated.get("reason") or "").strip()
@@ -142,58 +181,13 @@ def _patch_close_logger(service: Any) -> bool:
 def _patch_close_lifecycle() -> bool:
     try:
         from ..tickets_new import service
-        from ..tickets_new.explicit_system_action_guard import (
-            explicit_ticket_system_action,
-        )
     except Exception as exc:
         print(f"⚠️ owner_emergency_close_bridge lifecycle import failed: {exc!r}")
         return False
 
+    authorizer_ready = _patch_close_authorizer(service)
     logger_ready = _patch_close_logger(service)
-
-    original = getattr(service, "mark_ticket_closed", None)
-    if not callable(original):
-        return False
-    if bool(getattr(original, "_owner_emergency_close_bridge", False)):
-        return logger_ready
-
-    async def wrapped_mark_ticket_closed(*args: Any, **kwargs: Any) -> bool:
-        channel = kwargs.get("channel")
-        actor = kwargs.get("closed_by")
-        reason = str(kwargs.get("reason") or "").strip()
-        guild = getattr(channel, "guild", None)
-
-        is_confirmed_owner_override = bool(
-            channel is not None
-            and actor is not None
-            and reason.startswith(_PREFIX)
-            and is_actual_guild_owner(guild, actor)
-            and _confirmed_close_matches(channel, actor)
-        )
-        if not is_confirmed_owner_override:
-            return bool(await original(*args, **kwargs))
-
-        system_kwargs = dict(kwargs)
-        system_kwargs["closed_by"] = None
-        async with explicit_ticket_system_action("confirmed-owner-emergency-close"):
-            closed = bool(await original(*args, **system_kwargs))
-
-        if not closed:
-            return False
-
-        try:
-            await service._freeze_open_ticket_controls_safe(channel, closed_by=actor)
-        except Exception:
-            pass
-        try:
-            await service._post_staff_closed_message_safe(channel, closed_by=actor)
-        except Exception:
-            pass
-        return True
-
-    setattr(wrapped_mark_ticket_closed, "_owner_emergency_close_bridge", True)
-    service.mark_ticket_closed = wrapped_mark_ticket_closed
-    return logger_ready
+    return bool(authorizer_ready and logger_ready)
 
 
 def apply() -> bool:
@@ -207,7 +201,8 @@ def apply() -> bool:
     if _PATCHED:
         print(
             "✅ owner_emergency_close_bridge: confirmed owner close lifecycle active "
-            "context_bound=True canonical_event_attribution=True"
+            "context_bound=True database_owner_attribution=True "
+            "canonical_event_attribution=True"
         )
     return _PATCHED
 
