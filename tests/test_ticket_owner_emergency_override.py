@@ -137,7 +137,7 @@ def owner() -> SimpleNamespace:
 
 
 @pytest.mark.parametrize("action", ["transfer", "unclaim"])
-def test_owner_emergency_assignment_changes_are_audited(
+def test_owner_emergency_assignment_changes_emit_one_canonical_event(
     monkeypatch: pytest.MonkeyPatch,
     action: str,
 ) -> None:
@@ -150,7 +150,7 @@ def test_owner_emergency_assignment_changes_are_audited(
         mention="<@300>",
         guild=channel.guild,
     )
-    audits: list[dict[str, object]] = []
+    events: list[dict[str, object]] = []
 
     async def fake_row(_channel_id: int):
         return dict(state)
@@ -167,8 +167,9 @@ def test_owner_emergency_assignment_changes_are_audited(
         state["assigned_to"] = None
         return True
 
-    async def fake_audit(**kwargs):
-        audits.append(kwargs)
+    async def fake_event(**kwargs):
+        events.append(kwargs)
+        return True
 
     async def noop(*_args, **_kwargs):
         return None
@@ -178,8 +179,7 @@ def test_owner_emergency_assignment_changes_are_audited(
     monkeypatch.setattr(emergency, "repo_unclaim", fake_unclaim)
     monkeypatch.setattr(emergency, "_target_is_staff", lambda _target: True)
     monkeypatch.setattr(emergency, "_sync_claimant_permissions", noop)
-    monkeypatch.setattr(emergency, "_log_assignment_event", noop)
-    monkeypatch.setattr(emergency, "_log_override", fake_audit)
+    monkeypatch.setattr(emergency, "_log_assignment_event", fake_event)
     monkeypatch.setattr(emergency, "_send", noop)
 
     result = asyncio.run(
@@ -193,11 +193,12 @@ def test_owner_emergency_assignment_changes_are_audited(
     )
 
     assert result.ok is True
-    assert audits
-    assert audits[-1]["previous_claimed_by"] == 200
-    assert audits[-1]["reason"] == "Claimant is unavailable during an urgent incident."
+    assert len(events) == 1
+    assert events[0]["previous_claimed_by"] == 200
+    assert events[0]["reason"] == "Claimant is unavailable during an urgent incident."
     if action == "transfer":
         assert state["claimed_by"] == "300"
+        assert events[0]["target"] is target
     else:
         assert state["claimed_by"] is None
 
@@ -208,7 +209,6 @@ def test_safe_delete_stops_when_transcript_cannot_be_verified(
     state = ticket_row(status="closed", claimant=200)
     channel = FakeChannel(state)
     actor = owner()
-    audits: list[dict[str, object]] = []
 
     async def fake_row(_channel_id: int):
         return dict(state)
@@ -216,12 +216,8 @@ def test_safe_delete_stops_when_transcript_cannot_be_verified(
     async def fake_transcript(*_args, **_kwargs):
         return False, dict(state), {"transcript_error": "missing transcript channel"}
 
-    async def fake_audit(**kwargs):
-        audits.append(kwargs)
-
     monkeypatch.setattr(emergency, "_row", fake_row)
     monkeypatch.setattr(emergency, "_ensure_transcript", fake_transcript)
-    monkeypatch.setattr(emergency, "_log_override", fake_audit)
 
     result = asyncio.run(
         emergency.execute_owner_emergency_override(
@@ -234,17 +230,18 @@ def test_safe_delete_stops_when_transcript_cannot_be_verified(
 
     assert result.ok is False
     assert result.code == "transcript_required"
+    assert result.metadata["mutation_started"] is False
+    assert result.metadata["previous_claimed_by"] == 200
     assert channel.deleted is False
-    assert audits[-1]["success"] is False
 
 
-def test_safe_delete_removes_channel_only_after_transcript_and_marks_database(
+def test_safe_delete_removes_channel_then_marks_database_and_logs_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state = ticket_row(status="closed", claimant=200, transcript=True)
     channel = FakeChannel(state)
     actor = owner()
-    audits: list[dict[str, object]] = []
+    delete_events: list[dict[str, object]] = []
 
     async def fake_row(_channel_id: int):
         return dict(state)
@@ -256,20 +253,14 @@ def test_safe_delete_removes_channel_only_after_transcript_and_marks_database(
         state["status"] = "deleted"
         return True
 
-    async def fake_audit(**kwargs):
-        audits.append(kwargs)
-
-    async def fake_normal_delete(**_kwargs):
+    async def fake_delete_event(**kwargs):
+        delete_events.append(kwargs)
         return True
 
     monkeypatch.setattr(emergency, "_row", fake_row)
     monkeypatch.setattr(emergency, "_ensure_transcript", fake_transcript)
     monkeypatch.setattr(emergency, "repo_mark_deleted", fake_mark_deleted)
-    monkeypatch.setattr(emergency, "_log_override", fake_audit)
-
-    from stoney_verify.tickets_new import event_service
-
-    monkeypatch.setattr(event_service, "log_ticket_deleted", fake_normal_delete)
+    monkeypatch.setattr(emergency, "_log_delete_event", fake_delete_event)
 
     result = asyncio.run(
         emergency.execute_owner_emergency_override(
@@ -283,5 +274,6 @@ def test_safe_delete_removes_channel_only_after_transcript_and_marks_database(
     assert result.ok is True
     assert channel.deleted is True
     assert state["status"] == "deleted"
-    assert audits[-1]["success"] is True
-    assert audits[-1]["previous_claimed_by"] == 200
+    assert len(delete_events) == 1
+    assert delete_events[0]["previous_claimed_by"] == 200
+    assert delete_events[0]["transcript_metadata"]["transcript_already_existed"] is True
