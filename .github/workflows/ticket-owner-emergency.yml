@@ -38,6 +38,7 @@ jobs:
             stoney_verify/tickets_new/owner_emergency_override.py \
             stoney_verify/startup_guards/owner_emergency_override_guard.py \
             stoney_verify/startup_guards/owner_emergency_close_bridge.py \
+            stoney_verify/startup_guards/owner_emergency_audit_gate.py \
             stoney_verify/startup_guards/ticket_action_lock_guard.py
 
       - name: Run focused owner emergency regression suite
@@ -46,6 +47,7 @@ jobs:
             tests/test_ticket_owner_emergency_override.py \
             tests/test_owner_emergency_override_guard.py \
             tests/test_owner_emergency_close_context.py \
+            tests/test_owner_emergency_audit_gate.py \
             tests/test_ticket_claim_first_policy.py
         env:
           DANK_STARTUP_LOG_STYLE: quiet
