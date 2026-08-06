@@ -1,11 +1,11 @@
-name: DS Setup 020 Launcher
+name: DS Setup 020 macOS Launcher
 
 on:
   pull_request:
     branches:
       - main
     types:
-      - reopened
+      - opened
 
 permissions:
   contents: write
@@ -13,9 +13,8 @@ permissions:
 jobs:
   apply-and-test:
     if: >-
-      github.event.pull_request.number == 171 &&
-      github.event.pull_request.head.ref == 'fix/ds-setup-020-id-verification-selection'
-    runs-on: ubuntu-24.04
+      github.event.pull_request.head.ref == 'ci/ds-setup-020-macos-trigger'
+    runs-on: macos-14
     timeout-minutes: 45
     steps:
       - name: Check out implementation branch
@@ -32,7 +31,26 @@ jobs:
 
       - name: Apply direct source migration
         working-directory: target
+        shell: bash
         run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("tools/ds_setup_020_direct_apply.py")
+          text = path.read_text(encoding="utf-8")
+          start = text.index("def replace_assignment_block")
+          end = text.index("\ndef replace_between_in_node", start)
+          segment = text[start:end]
+          old = '    clean = textwrap.dedent(replacement).strip("\\n") + "\\n\\n"\n'
+          if segment.count(old) != 1:
+              raise RuntimeError("replace_assignment_block helper shape changed")
+          segment = segment.replace(
+              old,
+              '    clean = textwrap.dedent(replacement).strip("\\n")\n',
+              1,
+          )
+          path.write_text(text[:start] + segment + text[end:], encoding="utf-8")
+          PY
           python -m py_compile tools/ds_setup_020_direct_apply.py
           python tools/ds_setup_020_direct_apply.py
 
@@ -42,6 +60,7 @@ jobs:
 
       - name: Compile changed modules
         working-directory: target
+        shell: bash
         run: |
           python -m py_compile \
             stoney_verify/setup_service_state.py \
@@ -55,6 +74,7 @@ jobs:
 
       - name: Run DS-SETUP-020 tests
         working-directory: target
+        shell: bash
         run: |
           pytest -q \
             tests/test_setup_service_state_behavior.py \
@@ -67,31 +87,15 @@ jobs:
 
       - name: Commit implementation branch and remove one-shot files
         working-directory: target
+        shell: bash
         env:
           BRANCH: fix/ds-setup-020-id-verification-selection
         run: |
           rm -f tools/ds_setup_020_direct_apply.py
+          rm -f tools/.ds_setup_020_apply.py.gz.b64
           rm -f .github/workflows/ds-setup-020-apply.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "fix: honor entitled ID verification setup choices"
           git push origin "HEAD:${BRANCH}"
-
-      - name: Check out main for launcher cleanup
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-          path: launcher-cleanup
-
-      - name: Remove temporary launchers from main
-        working-directory: launcher-cleanup
-        run: |
-          rm -f .github/workflows/ds-setup-020-launcher.yml
-          rm -f .github/workflows/ds-setup-020-arm-push.yml
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "chore: remove DS-SETUP-020 one-shot workflows"
-          git push origin HEAD:main
