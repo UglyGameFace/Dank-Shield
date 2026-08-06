@@ -68,8 +68,8 @@ def test_custom_voice_dependencies_are_normalized() -> None:
     )
 
     assert patch["voice_verification_enabled"] is True
-    assert patch["verification_enabled"] is True
-    assert patch["basic_verify_enabled"] is True
+    assert patch["verification_enabled"] is False
+    assert patch["basic_verify_enabled"] is False
     assert patch["tickets_enabled"] is True
     assert patch["moderation_enabled"] is True
     assert patch["setup_completed"] is False
@@ -127,6 +127,7 @@ def test_custom_service_save_uses_normalized_aliases_and_invalidates_completion(
                 "tickets_enabled": False,
                 "verification_enabled": True,
                 "voice_verification_enabled": False,
+                "id_verify_enabled": False,
                 "spam_guard_enabled": False,
                 "moderation_enabled": False,
             },

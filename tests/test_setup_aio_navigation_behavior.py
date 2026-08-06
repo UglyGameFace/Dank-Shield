@@ -173,12 +173,14 @@ def test_custom_core_picker_has_predictable_navigation() -> None:
             "tickets": True,
             "verification": False,
             "voice": False,
+            "id_verify": False,
             "spamguard": True,
             "moderation": True,
             "as_payload": lambda self: {
                 "tickets_enabled": True,
                 "verification_enabled": False,
                 "voice_verification_enabled": False,
+                "id_verify_enabled": False,
                 "spam_guard_enabled": True,
                 "moderation_enabled": True,
             },
@@ -200,12 +202,14 @@ def test_custom_picker_explains_core_modules_and_aio_tools() -> None:
             "tickets": True,
             "verification": False,
             "voice": False,
+            "id_verify": False,
             "spamguard": True,
             "moderation": True,
             "as_payload": lambda self: {
                 "tickets_enabled": True,
                 "verification_enabled": False,
                 "voice_verification_enabled": False,
+                "id_verify_enabled": False,
                 "spam_guard_enabled": True,
                 "moderation_enabled": True,
             },
@@ -224,6 +228,7 @@ def test_custom_voice_toggle_applies_and_explains_dependencies() -> None:
             "tickets_enabled": False,
             "verification_enabled": False,
             "voice_verification_enabled": False,
+            "id_verify_enabled": False,
             "spam_guard_enabled": False,
             "moderation_enabled": False,
         },
@@ -233,10 +238,10 @@ def test_custom_voice_toggle_applies_and_explains_dependencies() -> None:
     assert changed is True
     assert effective is True
     assert payload["voice_verification_enabled"] is True
-    assert payload["verification_enabled"] is True
+    assert payload["verification_enabled"] is False
     assert payload["tickets_enabled"] is True
     assert payload["moderation_enabled"] is True
-    assert "needs Simple Verify, Tickets, and Essential Logs" in note
+    assert "needs Tickets and Essential Logs" in note
     assert "turned on" in note
 
 
@@ -244,8 +249,9 @@ def test_custom_dependency_cannot_be_silently_disabled() -> None:
     payload, effective, changed, note = fresh._apply_custom_service_toggle(
         {
             "tickets_enabled": True,
-            "verification_enabled": True,
+            "verification_enabled": False,
             "voice_verification_enabled": True,
+            "id_verify_enabled": False,
             "spam_guard_enabled": False,
             "moderation_enabled": True,
         },
@@ -266,6 +272,7 @@ def test_custom_spamguard_toggle_explains_log_dependency() -> None:
             "tickets_enabled": False,
             "verification_enabled": False,
             "voice_verification_enabled": False,
+            "id_verify_enabled": False,
             "spam_guard_enabled": False,
             "moderation_enabled": False,
         },
