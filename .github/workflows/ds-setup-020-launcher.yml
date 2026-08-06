@@ -1,9 +1,11 @@
 name: DS Setup 020 Launcher
 
 on:
-  issue_comment:
+  pull_request:
+    branches:
+      - main
     types:
-      - created
+      - reopened
 
 permissions:
   contents: write
@@ -11,9 +13,8 @@ permissions:
 jobs:
   apply-and-test:
     if: >-
-      github.event.issue.number == 171 &&
-      github.event.issue.pull_request &&
-      github.event.comment.body == '/run-ds-setup-020-direct'
+      github.event.pull_request.number == 171 &&
+      github.event.pull_request.head.ref == 'fix/ds-setup-020-id-verification-selection'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
