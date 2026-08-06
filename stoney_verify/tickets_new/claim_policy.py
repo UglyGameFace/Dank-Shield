@@ -151,7 +151,7 @@ def evaluate_ticket_action(
 
     Claimant ownership still controls every normal staff mutation. The actual
     Discord guild owner may use the separately confirmed ``owner_emergency_*``
-    namespace for a narrow, audited lifecycle override. Normal transfer,
+    namespace for a narrow, audited lifecycle override. Normal close, transfer,
     unclaim, delete, reopen, notes, macros, and verification actions do not gain
     an owner/admin bypass. Safe emergency delete additionally requires a closed
     ticket with preserved transcript metadata.
@@ -238,15 +238,6 @@ def evaluate_ticket_action(
             "claimed_by_other",
             f"This ticket is already claimed by <@{claimed_by_id}>. It must be transferred first.",
         )
-
-    if clean_action == "close" and resolved_guild_owner_id > 0 and aid == resolved_guild_owner_id:
-        if status in {"open", "claimed"}:
-            return decision(
-                True,
-                "guild_owner_close_override",
-                "The Discord server owner may close this ticket as an emergency lifecycle override.",
-            )
-        return decision(False, "guild_owner_close_not_open", "Only an open or claimed ticket can be closed.")
 
     if clean_action in {"close", "cancel"} and allow_requester_cancel and aid == owner_id:
         if status == "open" and claimed_by_id <= 0:
