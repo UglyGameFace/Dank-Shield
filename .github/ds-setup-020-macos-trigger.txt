@@ -1,0 +1,1 @@
+Temporary trigger for DS-SETUP-020 macOS validation. Delete after the validation run completes.
