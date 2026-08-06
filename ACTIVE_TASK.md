@@ -2,76 +2,93 @@
 
 ## DS-SETUP-020 — Entitled ID-verification setup selection and VC permissions regression
 
-**Status:** ACTIVE — root-cause inspection in progress
-**Branch:** `fix/ds-setup-020-id-verification-selection`
+**Status:** MERGED — live Discloud/Discord verification pending
+**Merged PR:** `#171`
+**Main commit:** `c81a4b5d27c1aacdbfcc44b576ffbfee6931861e`
 **Started:** 2026-08-06
-**Forced switch:** User supplied the exact required `FORCE SWITCH` instruction because this blocks setup for the explicitly entitled partner server.
 
 ## Scope
 
-Reported from guild `1357215261001912320`, which has explicit access to the ID Verification feature.
+Reported from guild `1357215261001912320`, which has explicit access to ID/Web Verification.
 
-1. The setup module picker must let the server owner select exactly the modules they want.
-2. `Voice Verify` must not hard-force `Simple Verify` when entitled `ID Verification` is selected and can satisfy the verification dependency.
-3. Toggle actions must be independent, deterministic, repeat-safe, and protected against stale interaction state.
-4. Continue Setup must request, create, and reconcile only the roles, channels, and permissions needed by the final selected modules.
-5. No Simple Verify channel may be required or created when Simple Verify is OFF.
-6. The VC verification channel must give the Unverified role the intended view/connect/speak/video-stream permissions and remove stale or contradictory managed overwrites without granting unrelated permissions.
-7. Entitled and ordinary guild behavior must remain correctly separated.
+1. Let the owner independently select Simple Verify, Voice Verify, and entitled ID/Web Verify.
+2. Never force Simple Verify merely because Voice Verify or ID/Web Verify is enabled.
+3. Protect setup toggles from stale interaction snapshots and concurrent writes.
+4. Require/create only the roles, channels, and permissions needed by enabled modules.
+5. Never require or create a Simple Verify channel while Simple Verify is OFF.
+6. Enforce a session-locked Voice Verify channel baseline while granting active participants voice and video/screenshare access.
+7. Preserve strict entitlement separation for ordinary guilds.
 
-## Required inspection before editing
+## Root causes and findings
 
-- [ ] Canonical setup state model and saved-draft schema
-- [ ] Preset selection and every custom toggle callback
-- [ ] Dependency normalization and setup-plan rendering
-- [ ] Entitlement source of truth and compatibility fallbacks
-- [ ] Resume, Back, Setup Home, and repeated/stale interaction paths
-- [ ] Continue Setup validation and question planner
-- [ ] Channel creation/update and permission-reconciliation paths
-- [ ] Voice verification runtime permission expectations
-- [ ] Existing tests, audits, callers, guards, and related configuration
-- [ ] Prior implementation from DS-SETUP-018 / PR #165 for regressions or conflicting compatibility code
+- Setup dependency logic treated Simple Verify as the verification master switch and forced it ON for specialized verification modes.
+- Several callbacks saved stale whole-state snapshots, allowing rapid or old interactions to overwrite newer choices.
+- Guided/default setup used the aggregate verification flag when deciding whether a Simple Verify channel was required.
+- Voice Verify permission repair had multiple writers and did not consistently recover uncached channels.
+- Old configured-role overwrites could retain `connect`, `speak`, or `stream` grants after role/config changes.
+- The per-guild setup lock cache held strong references indefinitely.
 
-## Findings
+## Implemented changes
 
-- The live UI explicitly reports `Voice Verify needs Simple Verify. Kept Simple Verify ON.`, proving the current dependency normalization forces Simple Verify before considering this guild's entitled ID-verification path.
-- The live report also shows custom toggles can affect several modules at once or fail to preserve the owner's intended selection.
-- Prior setup-safety evidence shows the voice-verification channel has previously allowed Unverified users to connect without the intended staff-controlled setup, so exact overwrite reconciliation must be tested rather than inferred.
+- [x] Added canonical setup state for independent Simple, Voice, and ID/Web verification modules.
+- [x] Kept ID/Web Verify entitlement-gated for approved guilds.
+- [x] Serialized per-guild setup edits and rejected stale interaction state without overwriting saved choices.
+- [x] Limited the Simple Verify channel requirement to Simple Verify only.
+- [x] Consolidated Voice Verify baseline permission reconciliation.
+- [x] Added uncached configured-channel recovery with `fetch_channel` fallback.
+- [x] Removed stale role-level voice/video grants while preserving active per-member session grants.
+- [x] Granted active Voice Verify participants Discord video/screenshare permission.
+- [x] Replaced the unbounded strong lock cache with weakly held locks.
 
-## Changes
+## Validation completed
 
-- [ ] No runtime code edited yet; inspection must identify the real execution path and root cause first.
+- [x] Entitled ID-only and ID+Voice state normalization.
+- [x] Ordinary guilds cannot self-enable ID/Web Verify.
+- [x] Voice Verify dependencies enable Tickets/Logs without enabling Simple Verify.
+- [x] Stale setup interactions refresh instead of overwriting newer state.
+- [x] ID/Voice-only setup does not request a Simple Verify channel.
+- [x] Baseline Voice Verify roles cannot connect, speak, or stream outside an active session.
+- [x] Active requester/assigned staff session grants include voice and video/screenshare.
+- [x] Uncached Voice Verify channel recovery regression.
+- [x] Stale role-overwrite cleanup regression with active member overwrite preservation.
+- [x] Setup lock-cache release regression.
+- [x] Temporary workflows, encoded payloads, migration tools, and validation PRs removed/closed.
+- [x] Every PR review thread resolved.
+- [x] PR `#171` squash-merged into `main`.
 
-## Validation plan
+## Remaining live gate
 
-- [ ] Focused state/dependency unit tests
-- [ ] Every toggle independently and repeated clicks
-- [ ] Entitled ID-only, ID+Voice, Simple-only, Simple+Voice, no-verification, and ordinary-guild cases
-- [ ] Resume/back and stale-interaction regressions
-- [ ] No-Simple-Verify setup completion
-- [ ] Exact VC overwrite reconciliation and stale-overwrite repair
-- [ ] Targeted setup/audit suites
-- [ ] Full Python compilation/static validation
-- [ ] Full regression suite
-- [ ] Conflict and duplicate implementation inspection
+- [ ] Pull current `main` and deploy to Discloud.
+- [ ] In guild `1357215261001912320`, confirm ID/Web Verify and Voice Verify can be selected while Simple Verify remains OFF.
+- [ ] Confirm Continue Setup does not ask for or create a Simple Verify channel in that configuration.
+- [ ] Confirm an active Voice Verify session grants requester/assigned staff connect, speak, and video/screenshare access, then removes those member grants when the session ends.
+- [ ] Confirm unrelated/stale roles cannot connect, speak, or stream.
+
+## CI note
+
+GitHub did not emit a fresh repository Actions run for the connector-created final head or squash merge. The final review findings were fixed and focused functional regressions were added, but post-merge repository Actions are still an external validation gap. Do not call DS-SETUP-020 fully complete until the live deployment checks above pass.
 
 ## Cleanup status
 
-- [ ] Remove or integrate redundant dependency code, compatibility shims, temporary diagnostics, and duplicate permission writers only after references are verified.
+- [x] Removed one-shot workflows and encoded migration payloads.
+- [x] Removed temporary direct/finalizer tools.
+- [x] Closed temporary PRs `#172` and `#173` without merging.
+- [x] Removed the conflicting/stale Voice Verify permission paths identified by review.
+- [x] Confirmed PR `#171` contains only runtime code, tests, and this task record.
 
 ## Blockers
 
-- None currently known.
+- Requires the user environment to pull/deploy `main` to Discloud and perform the live Discord flow.
 
 ## Backlog preserved by the Single Active Task Lock
 
 ### DS-STATS-019 — Durable Dank Stats invite-block counting
 
-Merged and code-revalidated, but live Discloud/Discord verification remains pending. It was explicitly paused by the user's force switch; no additional DS-STATS-019 implementation may start during DS-SETUP-020.
+Merged and code-revalidated, but live Discloud/Discord verification remains pending. It stays paused until DS-SETUP-020 passes live verification.
 
 ### DS-SETUP-019 — Cleanup confirmation modal crashes
 
-Backlog only. Do not begin without another exact force switch after DS-SETUP-020 reaches its Definition of Done.
+Backlog only. Do not begin before DS-SETUP-020 reaches its Definition of Done unless the user issues the exact force-switch instruction.
 
 ### DS-TICKET-020 — Guild owner final override for ticket actions
 
@@ -83,8 +100,4 @@ Backlog only.
 
 ## Definition of Done
 
-This task is not complete until root cause, implementation, targeted tests, regression checks, compilation/static validation, cleanup, conflict inspection, and branch/PR validation all pass. Live behavior must then show that guild `1357215261001912320` can select its entitled ID-verification setup without Simple Verify being forced and that the Unverified-role VC permissions match the intended verification flow.
-
-## Single Active Task Lock
-
-Do not begin another bug, feature, redesign, audit, or cleanup request until DS-SETUP-020 satisfies its Definition of Done, unless the user writes the exact required `FORCE SWITCH` instruction.
+DS-SETUP-020 is complete only after implementation, tests, regression checks, syntax/static validation, cleanup, conflict inspection, merge, deployment, and live guild verification all pass.
