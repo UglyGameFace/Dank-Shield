@@ -52,6 +52,44 @@ def test_owner_reason_prefix_without_confirmed_ui_context_cannot_bypass_claim(
     assert calls == []
 
 
+def test_confirmed_close_reuses_one_canonical_owner_attributed_event() -> None:
+    captured: list[dict[str, object]] = []
+
+    async def original_logger(**kwargs):
+        captured.append(kwargs)
+        return True
+
+    fake_service = SimpleNamespace(log_ticket_closed=original_logger)
+    assert owner_emergency_close_bridge._patch_close_logger(fake_service) is True
+
+    token = owner_emergency_close_bridge._CONFIRMED_CLOSE.set(
+        (55, 999, "Server Owner")
+    )
+    try:
+        result = asyncio.run(
+            fake_service.log_ticket_closed(
+                guild_id=1,
+                actor_user_id=None,
+                actor_name=None,
+                channel_id=55,
+                reason="Owner emergency override: claimant vanished",
+                metadata={"moved_to_archive": True},
+            )
+        )
+    finally:
+        owner_emergency_close_bridge._CONFIRMED_CLOSE.reset(token)
+
+    assert result is True
+    assert len(captured) == 1
+    event = captured[0]
+    assert event["actor_user_id"] == 999
+    assert event["actor_name"] == "Server Owner"
+    assert event["reason"] == "claimant vanished"
+    assert event["source"] == "tickets_new_owner_emergency_close"
+    assert event["metadata"]["owner_emergency_override"] is True
+    assert event["metadata"]["moved_to_archive"] is True
+
+
 def test_safe_delete_requires_a_url_or_complete_discord_message_location() -> None:
     assert ticket_has_transcript({"transcript_url": "https://discord.test/transcript"}) is True
     assert ticket_has_transcript(
