@@ -37,10 +37,11 @@ def test_owner_emergency_override_ui_is_loaded_and_fail_closed() -> None:
     assert "owner_emergency_close_bridge" in action_guard
     assert "owner_emergency_audit_gate" in action_guard
 
-    assert "confirmed-owner-emergency-close" in close_bridge_source
     assert "_confirmed_close_matches" in close_bridge_source
     assert "confirmed_ui_context" in close_bridge_source
     assert "canonical_event_attribution" in close_bridge_source
+    assert "database_owner_attribution" in close_bridge_source
+    assert "owner_emergency_authorizer" in close_bridge_source
     assert "owner_attributed_close_logger" in close_bridge_source
 
     assert "audit_unavailable" in audit_gate
