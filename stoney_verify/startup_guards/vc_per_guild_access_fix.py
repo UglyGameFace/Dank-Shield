@@ -373,6 +373,7 @@ async def _grant(
         ow.view_channel = True
         ow.connect = True
         ow.speak = True
+        ow.stream = True
         ow.use_voice_activation = True
         await vc.set_permissions(member, overwrite=ow, reason=f"VC verify access key={key}")  # type: ignore[union-attr]
     except discord.Forbidden:
