@@ -271,7 +271,8 @@ def test_static_claim_first_enforcement_covers_all_runtime_surfaces() -> None:
     assert "ticket_has_transcript" in emergency
     assert 'upper() != "OVERRIDE"' in emergency_guard
     assert "actual Discord server owner" in emergency_guard
-    assert "confirmed-owner-emergency-close" in emergency_close_bridge
+    assert "_patch_close_authorizer" in emergency_close_bridge
+    assert "database_owner_attribution=True" in emergency_close_bridge
 
     assert "authorize_ticket_action" in panel
     assert 'label != "claim ticket"' in panel
