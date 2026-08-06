@@ -191,4 +191,9 @@ try:
 except Exception as e:
     _warn(f"server-owner emergency override guard could not load from ticket guard: {e!r}")
 
+try:
+    from . import owner_emergency_close_bridge as _owner_emergency_close_bridge  # noqa: F401
+except Exception as e:
+    _warn(f"server-owner emergency close bridge could not load from ticket guard: {e!r}")
+
 __all__ = ["apply"]
