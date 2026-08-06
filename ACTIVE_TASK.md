@@ -28,15 +28,17 @@
 6. Record each attempted member action in the activity feed without exposing private reminder contents.
 7. Never allow bulk action against the guild owner, Dank Shield itself, or protected staff/control targets unless the existing canonical policy explicitly allows it.
 
-### C. Canonical live join-card runtime
+### C. Welcome Card Studio and canonical live join-card runtime
 
-1. Welcome Card Studio settings must control the actual live join image card.
-2. Establish one authoritative `on_member_join` owner for public join output.
-3. Remove/disable the legacy plain `dank_shield:join_leave_event:v3` public join-card path.
-4. Preserve separate staff audit and leave-announcement routes.
-5. Ensure theme, font, colors, custom background, shuffle settings, title/body, channel, and enabled state are read from fresh guild config.
-6. Prevent duplicate public joins and remove competing legacy listeners deterministically.
-7. A render or permission failure must be logged clearly and use one intentional fallback, never an unrelated legacy card.
+1. Repair the entire Welcome Card Studio flow: command registration, opening the studio, navigation, saving, preview, uploads, enable/disable, channel selection, and error feedback.
+2. Welcome Card Studio settings must control the actual live join image card.
+3. Establish one authoritative `on_member_join` owner for public join output.
+4. Remove/disable the legacy plain `dank_shield:join_leave_event:v3` public join-card path.
+5. Preserve separate staff audit and leave-announcement routes.
+6. Ensure theme, font, colors, custom background, shuffle settings, title/body, channel, and enabled state are read from fresh guild config.
+7. Prevent duplicate public joins and remove competing legacy listeners deterministically.
+8. A render or permission failure must be logged clearly and use one intentional fallback, never an unrelated legacy card.
+9. Validate saved Studio values against the renderer/service contract so stale or malformed config cannot silently break the whole studio.
 
 ## Confirmed root causes before editing
 
@@ -44,14 +46,16 @@
 - `tickets_new/claim_policy.py` explicitly denies the guild owner all normal claimant-controlled actions and only allows `owner_emergency_*` actions.
 - `member_lifecycle_router_guard.py` emits the plain `dank_shield:join_leave_event:v3` card and removes the listener that invokes `welcome_card_file()`.
 - `welcome_member_events_guard.py` already contains the image-card send path, but it is not the authoritative listener.
+- User reports the entire Welcome Card Studio is also nonfunctional; registration, interaction callbacks, persistence, preview/upload, and live-consumption paths must be traced before the join-card work is considered fixed.
 
 ## Work plan
 
-- [ ] Inspect every ticket-policy caller and test before changing owner semantics.
-- [ ] Inspect member-browser permissions, target guards, action locks, activity logging, and existing individual action implementations.
-- [ ] Inspect startup-guard import order and all member join/remove listeners.
-- [ ] Implement canonical owner bypass without requester/owner-ID ambiguity.
-- [ ] Implement reusable bulk-action executor and confirmation UI.
+- [x] Inspect every ticket-policy caller and test before changing owner semantics.
+- [x] Inspect member-browser permissions, target guards, action locks, activity logging, and existing individual action implementations.
+- [ ] Inspect Welcome Card Studio registration, UI callbacks, config writes, renderer inputs, startup-guard import order, and every member join/remove listener.
+- [x] Implement canonical owner bypass without requester/owner-ID ambiguity.
+- [x] Implement reusable bulk-action executor and confirmation UI.
+- [ ] Repair Welcome Card Studio end to end.
 - [ ] Consolidate public join handling into one listener/runtime service.
 - [ ] Add targeted functional and regression tests for all three areas.
 - [ ] Run syntax/static validation and focused test suite.
@@ -74,4 +78,4 @@ Merged in PR `#171`; only its live Discloud/Discord verification gate remains. I
 
 ## Definition of Done
 
-DS-OPS-021 is complete only after root-cause inspection, implementation, targeted and regression tests, syntax/static validation, cleanup, conflict inspection, one reviewed PR, merge, deployment, and live verification of all three production paths.
+DS-OPS-021 is complete only after root-cause inspection, implementation, targeted and regression tests, syntax/static validation, cleanup, conflict inspection, one reviewed PR, merge, deployment, and live verification of owner ticket authority, all bulk moderation actions, the full Welcome Card Studio, and the canonical live join-card path.
