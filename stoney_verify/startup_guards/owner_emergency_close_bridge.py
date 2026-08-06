@@ -8,6 +8,10 @@ while the real guild owner submits the dedicated confirmation modal. A matching
 owner, channel, action, and reason prefix are all required before the lifecycle
 can run with internal authority, so typing the prefix into another command can
 never imitate Emergency Override.
+
+The service's original close event is also rewritten inside that same context to
+attribute the action to the real guild owner. This avoids a second duplicate
+close event while preserving the canonical archive, permission, and UI flow.
 """
 
 from contextvars import ContextVar
@@ -17,11 +21,12 @@ from ..tickets_new.owner_emergency_override import is_actual_guild_owner
 
 _PATCHED = False
 _PREFIX = "Owner emergency override:"
-_CONFIRMED_CLOSE: ContextVar[Optional[tuple[int, int]]] = ContextVar(
+_CONFIRMED_CLOSE: ContextVar[Optional[tuple[int, int, str]]] = ContextVar(
     "dank_confirmed_owner_emergency_close",
     default=None,
 )
 _EXECUTOR_MARKER = "_owner_emergency_close_confirmation_context"
+_LOGGER_MARKER = "_owner_emergency_close_logger"
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -40,11 +45,15 @@ def _name(actor: Any) -> str:
         return "Discord guild owner"
 
 
+def _confirmed_close_context() -> Optional[tuple[int, int, str]]:
+    return _CONFIRMED_CLOSE.get()
+
+
 def _confirmed_close_matches(channel: Any, actor: Any) -> bool:
-    capability = _CONFIRMED_CLOSE.get()
+    capability = _confirmed_close_context()
     if capability is None:
         return False
-    return capability == (
+    return capability[:2] == (
         _safe_int(getattr(channel, "id", 0), 0),
         _safe_int(getattr(actor, "id", 0), 0),
     )
@@ -80,7 +89,7 @@ def _patch_confirmed_ui_executor() -> bool:
         if channel_id <= 0 or owner_id <= 0:
             return await original(*args, **kwargs)
 
-        token = _CONFIRMED_CLOSE.set((channel_id, owner_id))
+        token = _CONFIRMED_CLOSE.set((channel_id, owner_id, _name(actor)))
         try:
             return await original(*args, **kwargs)
         finally:
@@ -88,6 +97,45 @@ def _patch_confirmed_ui_executor() -> bool:
 
     setattr(confirmed_ui_execute, _EXECUTOR_MARKER, True)
     ui_guard.execute_owner_emergency_override = confirmed_ui_execute
+    return True
+
+
+def _patch_close_logger(service: Any) -> bool:
+    original_logger = getattr(service, "log_ticket_closed", None)
+    if not callable(original_logger):
+        return False
+    if bool(getattr(original_logger, _LOGGER_MARKER, False)):
+        return True
+
+    async def owner_attributed_close_logger(*args: Any, **kwargs: Any) -> Any:
+        capability = _confirmed_close_context()
+        channel_id = _safe_int(kwargs.get("channel_id"), 0)
+        if capability is None or channel_id != capability[0]:
+            return await original_logger(*args, **kwargs)
+
+        owner_id, owner_name = capability[1], capability[2]
+        updated = dict(kwargs)
+        updated["actor_user_id"] = owner_id
+        updated["actor_name"] = owner_name
+        updated["source"] = "tickets_new_owner_emergency_close"
+
+        reason = str(updated.get("reason") or "").strip()
+        if reason.startswith(_PREFIX):
+            updated["reason"] = reason.removeprefix(_PREFIX).strip()
+
+        metadata = dict(updated.get("metadata") or {})
+        metadata.update(
+            {
+                "owner_emergency_override": True,
+                "confirmed_ui_context": True,
+                "allow_duplicate_event": True,
+            }
+        )
+        updated["metadata"] = metadata
+        return await original_logger(*args, **updated)
+
+    setattr(owner_attributed_close_logger, _LOGGER_MARKER, True)
+    service.log_ticket_closed = owner_attributed_close_logger
     return True
 
 
@@ -101,11 +149,13 @@ def _patch_close_lifecycle() -> bool:
         print(f"⚠️ owner_emergency_close_bridge lifecycle import failed: {exc!r}")
         return False
 
+    logger_ready = _patch_close_logger(service)
+
     original = getattr(service, "mark_ticket_closed", None)
     if not callable(original):
         return False
     if bool(getattr(original, "_owner_emergency_close_bridge", False)):
-        return True
+        return logger_ready
 
     async def wrapped_mark_ticket_closed(*args: Any, **kwargs: Any) -> bool:
         channel = kwargs.get("channel")
@@ -139,33 +189,11 @@ def _patch_close_lifecycle() -> bool:
             await service._post_staff_closed_message_safe(channel, closed_by=actor)
         except Exception:
             pass
-
-        try:
-            row = await service._ticket_row_for_channel_id(channel.id)
-            from ..tickets_new.event_service import log_ticket_closed
-
-            await log_ticket_closed(
-                guild_id=channel.guild.id,
-                actor_user_id=actor.id,
-                actor_name=_name(actor),
-                channel_id=channel.id,
-                reason=reason.removeprefix(_PREFIX).strip(),
-                ticket_row=row,
-                source="tickets_new_owner_emergency_close",
-                metadata={
-                    "owner_emergency_override": True,
-                    "confirmed_ui_context": True,
-                    "allow_duplicate_event": True,
-                },
-            )
-        except Exception:
-            pass
-
         return True
 
     setattr(wrapped_mark_ticket_closed, "_owner_emergency_close_bridge", True)
-    setattr(service, "mark_ticket_closed", wrapped_mark_ticket_closed)
-    return True
+    service.mark_ticket_closed = wrapped_mark_ticket_closed
+    return logger_ready
 
 
 def apply() -> bool:
@@ -179,7 +207,7 @@ def apply() -> bool:
     if _PATCHED:
         print(
             "✅ owner_emergency_close_bridge: confirmed owner close lifecycle active "
-            "context_bound=True"
+            "context_bound=True canonical_event_attribution=True"
         )
     return _PATCHED
 
