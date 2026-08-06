@@ -13,8 +13,8 @@ jobs:
     if: >-
       github.event.issue.number == 171 &&
       github.event.issue.pull_request &&
-      github.event.comment.body == '/run-ds-setup-020-arm'
-    runs-on: ubuntu-24.04-arm
+      github.event.comment.body == '/run-ds-setup-020-direct'
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - name: Check out implementation branch
@@ -29,12 +29,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Decode and apply patch in repository root
+      - name: Apply direct source migration
         working-directory: target
         run: |
-          base64 -d tools/.ds_setup_020_apply.py.gz.b64 | gzip -d > tools/ds_setup_020_apply.py
-          python -m py_compile tools/ds_setup_020_apply.py
-          python tools/ds_setup_020_apply.py
+          python -m py_compile tools/ds_setup_020_direct_apply.py
+          python tools/ds_setup_020_direct_apply.py
 
       - name: Install dependencies
         working-directory: target
@@ -70,8 +69,7 @@ jobs:
         env:
           BRANCH: fix/ds-setup-020-id-verification-selection
         run: |
-          rm -f tools/.ds_setup_020_apply.py.gz.b64
-          rm -f tools/ds_setup_020_apply.py
+          rm -f tools/ds_setup_020_direct_apply.py
           rm -f .github/workflows/ds-setup-020-apply.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -86,12 +84,13 @@ jobs:
           fetch-depth: 0
           path: launcher-cleanup
 
-      - name: Remove launcher from main
+      - name: Remove temporary launchers from main
         working-directory: launcher-cleanup
         run: |
           rm -f .github/workflows/ds-setup-020-launcher.yml
+          rm -f .github/workflows/ds-setup-020-arm-push.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "chore: remove DS-SETUP-020 launcher"
+          git commit -m "chore: remove DS-SETUP-020 one-shot workflows"
           git push origin HEAD:main
