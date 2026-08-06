@@ -52,6 +52,65 @@ def test_owner_reason_prefix_without_confirmed_ui_context_cannot_bypass_claim(
     assert calls == []
 
 
+def test_confirmed_close_authorizer_keeps_real_owner_as_actor() -> None:
+    original_calls: list[dict[str, object]] = []
+    ticket = {
+        "guild_id": "1",
+        "status": "claimed",
+        "user_id": "100",
+        "claimed_by": "200",
+        "assigned_to": "200",
+    }
+
+    async def original_authorizer(**kwargs):
+        original_calls.append(kwargs)
+        return SimpleNamespace(allowed=False, code="claimant_required")
+
+    async def fake_row(_channel_id: int):
+        return dict(ticket)
+
+    fake_service = SimpleNamespace(
+        authorize_ticket_action=original_authorizer,
+        _ticket_row_for_channel_id=fake_row,
+    )
+    assert owner_emergency_close_bridge._patch_close_authorizer(fake_service) is True
+
+    actor = SimpleNamespace(id=999, bot=False)
+    outside = asyncio.run(
+        fake_service.authorize_ticket_action(
+            channel_id=55,
+            actor=actor,
+            action="close",
+            row=ticket,
+        )
+    )
+    assert outside.allowed is False
+    assert outside.code == "claimant_required"
+    assert len(original_calls) == 1
+    assert original_calls[0]["actor"] is actor
+
+    token = owner_emergency_close_bridge._CONFIRMED_CLOSE.set(
+        (55, 999, "Server Owner")
+    )
+    try:
+        confirmed = asyncio.run(
+            fake_service.authorize_ticket_action(
+                channel_id=55,
+                actor=actor,
+                action="close",
+                row=ticket,
+            )
+        )
+    finally:
+        owner_emergency_close_bridge._CONFIRMED_CLOSE.reset(token)
+
+    assert confirmed.allowed is True
+    assert confirmed.code == "owner_emergency_close_allowed"
+    assert confirmed.actor_id == 999
+    assert confirmed.claimed_by_id == 200
+    assert len(original_calls) == 1
+
+
 def test_confirmed_close_reuses_one_canonical_owner_attributed_event() -> None:
     captured: list[dict[str, object]] = []
 
