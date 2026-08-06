@@ -186,4 +186,9 @@ try:
 except Exception as e:
     _warn(f"verification operation queue guard could not load from ticket guard: {e!r}")
 
+try:
+    from . import owner_emergency_override_guard as _owner_emergency_override_guard  # noqa: F401
+except Exception as e:
+    _warn(f"server-owner emergency override guard could not load from ticket guard: {e!r}")
+
 __all__ = ["apply"]
