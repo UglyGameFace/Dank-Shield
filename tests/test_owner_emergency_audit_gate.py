@@ -97,3 +97,43 @@ def test_audit_writer_records_owner_reason_previous_claimant_and_phase(
     assert metadata["override_phase"] == "authorized"
     assert metadata["override_owner_id"] == "999"
     assert metadata["previous_claimed_by"] == "200"
+
+
+def test_failed_result_event_contains_outcome_without_replacing_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict[str, object]] = []
+
+    async def fake_log_ticket_event(**kwargs):
+        captured.append(kwargs)
+        return True
+
+    from stoney_verify.tickets_new import event_service
+
+    monkeypatch.setattr(event_service, "log_ticket_event", fake_log_ticket_event)
+
+    result = OwnerEmergencyResult(
+        False,
+        "delete",
+        "transcript_required",
+        "A transcript could not be verified.",
+        {"mutation_started": False},
+    )
+    ok = asyncio.run(
+        audit_gate._write_audit_event(
+            phase="failed",
+            channel=_channel(),
+            actor=_owner(),
+            action="delete",
+            reason="Remove prohibited content after preserving evidence.",
+            row=_ticket_row(),
+            result=result,
+        )
+    )
+
+    assert ok is True
+    assert captured[0]["event_type"] == "ticket_owner_emergency_override_failed"
+    metadata = captured[0]["metadata"]
+    assert metadata["override_success"] is False
+    assert metadata["override_result_code"] == "transcript_required"
+    assert metadata["mutation_started"] is False
