@@ -19,6 +19,24 @@ DEFAULT_ID_VERIFY_ALLOWED_GUILD_NAMES: frozenset[str] = frozenset()
 BASIC_VERIFY_CUSTOM_ID = "dank:basic_verify:v1"
 BASIC_VERIFY_FOOTER = "dank_shield:basic_verify:v1"
 
+_ID_MODE_VALUES: frozenset[str] = frozenset(
+    {
+        "id",
+        "id_check",
+        "id_verify",
+        "identity",
+        "identity_verify",
+        "website",
+        "web",
+        "web_verify",
+        "upload_id",
+        "id_web",
+        "id_web_verify",
+        "id_voice_check",
+        "id_voice",
+    }
+)
+
 
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
@@ -91,14 +109,32 @@ def _env_name_set(name: str) -> set[str]:
     return out
 
 
+def _normalized_mode(value: Any) -> str:
+    mode = _safe_str(value).lower()
+    for separator in ("-", " ", "/", "+"):
+        mode = mode.replace(separator, "_")
+    while "__" in mode:
+        mode = mode.replace("__", "_")
+    return mode.strip("_")
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return _safe_str(value).lower() in {"1", "true", "yes", "y", "on", "enabled"}
+
+
 def id_verify_allowed_guild_ids() -> set[int]:
-    configured = _env_id_set("DANK_ID_VERIFY_ALLOWED_GUILD_IDS") | _env_id_set("DANK_ID_VERIFY_ALLOWED_GUILD_IDS")
+    configured = _env_id_set("DANK_ID_VERIFY_ALLOWED_GUILD_IDS")
+    configured |= _env_id_set("ID_VERIFY_ALLOWED_GUILD_IDS")
     return set(DEFAULT_ID_VERIFY_ALLOWED_GUILD_IDS) | configured
 
 
 def id_verify_allowed_guild_names() -> set[str]:
     # Name matching is opt-in only through env. The built-in safety policy is ID-only.
-    return _env_name_set("DANK_ID_VERIFY_ALLOWED_GUILD_NAMES") | _env_name_set("DANK_ID_VERIFY_ALLOWED_GUILD_NAMES")
+    configured = _env_name_set("DANK_ID_VERIFY_ALLOWED_GUILD_NAMES")
+    configured |= _env_name_set("ID_VERIFY_ALLOWED_GUILD_NAMES")
+    return set(DEFAULT_ID_VERIFY_ALLOWED_GUILD_NAMES) | configured
 
 
 def guild_id(guild: Any) -> int:
@@ -125,17 +161,34 @@ def id_verify_allowed_for_guild(guild: Any, cfg: Any = None) -> bool:
 
 
 def config_requests_id_verify(cfg: Any) -> bool:
-    mode = _safe_str(
-        _cfg_value(cfg, "verification_mode")
-        or _cfg_value(cfg, "verify_mode")
-        or _cfg_value(cfg, "verification_flow")
-        or _cfg_value(cfg, "setup_type")
-    ).lower().replace("-", "_").replace(" ", "_")
-    if mode in {"id", "id_verify", "identity", "identity_verify", "website", "web_verify", "upload_id"}:
-        return True
-    for key in ("id_verify_enabled", "identity_verify_enabled", "website_verify_enabled", "require_id_verify"):
-        raw = _cfg_value(cfg, key, None)
-        if str(raw).strip().lower() in {"1", "true", "yes", "on"}:
+    """Recognize every canonical and persisted setup representation of ID mode.
+
+    The setup templates persist ``setup_choice=id_check`` or
+    ``setup_choice=id_voice_check`` plus ``verification_requires_id=true``.
+    Older policy code only inspected ``verification_mode`` and omitted the real
+    template fields, which made an approved ID server look like Basic Verify.
+    """
+    for key in (
+        "verification_mode",
+        "verify_mode",
+        "verification_flow",
+        "setup_type",
+        "setup_choice",
+        "setup_mode",
+        "verification_panel_style",
+    ):
+        if _normalized_mode(_cfg_value(cfg, key)) in _ID_MODE_VALUES:
+            return True
+
+    for key in (
+        "id_verify_enabled",
+        "id_web_verify_enabled",
+        "identity_verify_enabled",
+        "website_verify_enabled",
+        "require_id_verify",
+        "verification_requires_id",
+    ):
+        if _truthy(_cfg_value(cfg, key, None)):
             return True
     return False
 
@@ -161,8 +214,8 @@ __all__ = [
     "BASIC_VERIFY_CUSTOM_ID",
     "BASIC_VERIFY_FOOTER",
     "DEFAULT_ID_VERIFY_ALLOWED_GUILD_IDS",
-    "effective_verification_mode",
     "config_requests_id_verify",
+    "effective_verification_mode",
     "id_verify_allowed_for_guild",
     "id_verify_disabled_reason",
 ]

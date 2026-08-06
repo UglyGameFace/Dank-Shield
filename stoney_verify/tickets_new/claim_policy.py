@@ -48,6 +48,41 @@ def ticket_claimed_by_id(row: Optional[Mapping[str, Any]]) -> int:
     return 0
 
 
+def ticket_guild_id(row: Optional[Mapping[str, Any]]) -> int:
+    for key in ("guild_id", "server_id"):
+        value = _safe_int((row or {}).get(key), 0)
+        if value > 0:
+            return value
+    return 0
+
+
+def _cached_guild_owner_id(row: Optional[Mapping[str, Any]]) -> int:
+    """Resolve the real Discord guild owner for a registered ticket.
+
+    Ticket actions run while the bot is connected to the guild, so the guild is
+    expected to be present in the bot cache. Failure to resolve the guild owner
+    fails closed and preserves normal claimant enforcement.
+    """
+    gid = ticket_guild_id(row)
+    if gid <= 0:
+        return 0
+
+    try:
+        from stoney_verify.globals import bot
+
+        guild = bot.get_guild(int(gid))
+        if guild is None:
+            return 0
+
+        owner_id = _safe_int(getattr(guild, "owner_id", 0), 0)
+        if owner_id > 0:
+            return owner_id
+
+        return _safe_int(getattr(getattr(guild, "owner", None), "id", 0), 0)
+    except Exception:
+        return 0
+
+
 def is_staff_member(member: Any, *, staff_role_ids: tuple[int, ...] = ()) -> bool:
     """Return whether a human is subject to claim-first ticket enforcement.
 
@@ -94,18 +129,23 @@ def evaluate_ticket_action(
     action: str,
     system_action: bool = False,
     allow_requester_cancel: bool = False,
+    guild_owner_id: Any = 0,
 ) -> TicketActionDecision:
     """Return the authoritative claim-first decision for one ticket action.
 
-    Human staff receive no administrator/server-owner bypass. The only human
-    staff action allowed before claim is ``claim``. Requesters may cancel their
-    own unclaimed ticket, but can never delete ticket history.
+    Claimant ownership still controls every normal staff mutation. The actual
+    Discord guild owner has one narrowly-scoped emergency override: they may
+    close an open or claimed ticket without taking the claim away from the
+    assigned staff member. Administrators and other elevated roles do not get
+    that override, and the guild owner receives no bypass for delete, transfer,
+    reopen, notes, macros, verification decisions, or other staff actions.
     """
     clean_action = str(action or "action").strip().lower().replace(" ", "_")
     aid = _safe_int(actor_id, 0)
     owner_id = ticket_owner_id(row)
     claimed_by_id = ticket_claimed_by_id(row)
     status = _status(row)
+    resolved_guild_owner_id = _safe_int(guild_owner_id, 0) or _cached_guild_owner_id(row)
 
     def decision(allowed: bool, code: str, message: str) -> TicketActionDecision:
         return TicketActionDecision(
@@ -145,6 +185,15 @@ def evaluate_ticket_action(
             "claimed_by_other",
             f"This ticket is already claimed by <@{claimed_by_id}>. It must be transferred first.",
         )
+
+    if clean_action == "close" and resolved_guild_owner_id > 0 and aid == resolved_guild_owner_id:
+        if status in {"open", "claimed"}:
+            return decision(
+                True,
+                "guild_owner_close_override",
+                "The Discord server owner may close this ticket as an emergency lifecycle override.",
+            )
+        return decision(False, "guild_owner_close_not_open", "Only an open or claimed ticket can be closed.")
 
     if clean_action in {"close", "cancel"} and allow_requester_cancel and aid == owner_id:
         if status == "open" and claimed_by_id <= 0:
@@ -204,5 +253,6 @@ __all__ = [
     "evaluate_ticket_action",
     "is_staff_member",
     "ticket_claimed_by_id",
+    "ticket_guild_id",
     "ticket_owner_id",
 ]

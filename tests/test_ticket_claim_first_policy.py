@@ -6,14 +6,22 @@ from types import SimpleNamespace
 
 import pytest
 
+from stoney_verify.tickets_new import claim_policy
 from stoney_verify.tickets_new.claim_policy import evaluate_ticket_action, is_staff_member
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def row(*, status: str = "open", owner: int = 100, claimant: int = 0) -> dict[str, object]:
+def row(
+    *,
+    status: str = "open",
+    owner: int = 100,
+    claimant: int = 0,
+    guild_id: int = 1,
+) -> dict[str, object]:
     return {
+        "guild_id": str(guild_id),
         "status": status,
         "user_id": str(owner),
         "claimed_by": str(claimant) if claimant else None,
@@ -59,6 +67,59 @@ def test_current_claimant_is_authorized_and_other_admin_is_not() -> None:
     assert decision.allowed is False
     assert decision.code == "claimant_required"
     assert "Transfer" in decision.message
+
+
+def test_guild_owner_can_close_without_stealing_the_claim() -> None:
+    ticket = row(status="claimed", claimant=200)
+
+    decision = evaluate_ticket_action(
+        ticket,
+        actor_id=999,
+        action="close",
+        guild_owner_id=999,
+    )
+
+    assert decision.allowed is True
+    assert decision.code == "guild_owner_close_override"
+    assert decision.claimed_by_id == 200
+
+
+def test_guild_owner_override_is_close_only() -> None:
+    ticket = row(status="claimed", claimant=200)
+
+    for action in (
+        "delete",
+        "transfer",
+        "unclaim",
+        "priority",
+        "note",
+        "macro",
+        "verification_review",
+        "reopen",
+    ):
+        decision = evaluate_ticket_action(
+            ticket,
+            actor_id=999,
+            action=action,
+            guild_owner_id=999,
+        )
+        assert decision.allowed is False, action
+        assert decision.code == "claimant_required", action
+
+
+def test_guild_owner_is_resolved_from_the_registered_ticket_guild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(claim_policy, "_cached_guild_owner_id", lambda _row: 999)
+
+    decision = evaluate_ticket_action(
+        row(status="claimed", claimant=200, guild_id=55),
+        actor_id=999,
+        action="close",
+    )
+
+    assert decision.allowed is True
+    assert decision.code == "guild_owner_close_override"
 
 
 def test_requester_can_only_cancel_an_unclaimed_ticket() -> None:
@@ -180,7 +241,8 @@ def test_static_claim_first_enforcement_covers_all_runtime_surfaces() -> None:
     public_group = (ROOT / "stoney_verify/commands_ext/public_ticket_group.py").read_text(encoding="utf-8")
     staff_scope = (ROOT / "stoney_verify/commands_ext/public_staff_scope.py").read_text(encoding="utf-8")
 
-    assert "Claim is the only staff action allowed" in policy
+    assert "Claimant ownership still controls every normal staff mutation" in policy
+    assert "guild_owner_close_override" in policy
     assert "Fail closed" in policy
     assert "async def authorize_ticket_action(" in service
     assert 'action="close"' in service
