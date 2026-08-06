@@ -1,6 +1,11 @@
 name: DS Setup 020 ARM Apply
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/ds-setup-020-arm-push.yml
   workflow_dispatch:
 
 permissions:
