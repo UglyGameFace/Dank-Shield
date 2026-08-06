@@ -7,6 +7,7 @@ import pytest
 
 from stoney_verify.startup_guards import owner_emergency_close_bridge
 from stoney_verify.tickets_new import service
+from stoney_verify.tickets_new.claim_policy import ticket_has_transcript
 
 
 def test_owner_reason_prefix_without_confirmed_ui_context_cannot_bypass_claim(
@@ -49,3 +50,17 @@ def test_owner_reason_prefix_without_confirmed_ui_context_cannot_bypass_claim(
 
     assert result is False
     assert calls == []
+
+
+def test_safe_delete_requires_a_url_or_complete_discord_message_location() -> None:
+    assert ticket_has_transcript({"transcript_url": "https://discord.test/transcript"}) is True
+    assert ticket_has_transcript(
+        {
+            "transcript_message_id": "123456789012345678",
+            "transcript_channel_id": "223456789012345678",
+        }
+    ) is True
+
+    assert ticket_has_transcript({"transcript_channel_id": "223456789012345678"}) is False
+    assert ticket_has_transcript({"transcript_message_id": "123456789012345678"}) is False
+    assert ticket_has_transcript({"transcript_url": "   "}) is False
