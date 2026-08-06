@@ -74,7 +74,7 @@ def patch_setup_nav_with_vc_fix_button() -> bool:
 patch_setup_nav_with_vc_fix_button()
 
 try:
-    from stoney_verify.startup_guards.setup_020_entitled_id_guard import install as _install_ds_setup_020
+    from stoney_verify.setup_020_entitled_id_guard import install as _install_ds_setup_020
 
     _install_ds_setup_020()
 except Exception as exc:
