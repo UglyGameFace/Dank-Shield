@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   integrate-and-test:
+    # Second push intentionally starts this workflow after GitHub registers it.
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
