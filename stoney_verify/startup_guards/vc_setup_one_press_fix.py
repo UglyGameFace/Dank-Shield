@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-"""Compatibility entry point for the retired standalone VC repair button.
+"""Compatibility entry point for Voice Verify setup permission repair.
 
-All baseline Voice Verify permission writes now go through the canonical
-``vc_verification_permissions`` service. This module intentionally contains
-no second permission policy.
+All baseline Voice Verify permission writes go through the canonical
+``vc_verification_permissions`` service. DS-SETUP-020 is installed here after
+legacy setup guards so the owner-facing picker and guided setup share the same
+canonical service state and permission policy.
 """
 
 from typing import Any
@@ -71,5 +72,16 @@ def patch_setup_nav_with_vc_fix_button() -> bool:
 
 
 patch_setup_nav_with_vc_fix_button()
+
+try:
+    from stoney_verify.startup_guards.setup_020_entitled_id_guard import install as _install_ds_setup_020
+
+    _install_ds_setup_020()
+except Exception as exc:
+    try:
+        print(f"⚠️ DS-SETUP-020 setup integration failed to install: {type(exc).__name__}: {exc}")
+    except Exception:
+        pass
+
 
 __all__ = ["patch_setup_nav_with_vc_fix_button", "_run_vc_permission_fix"]
