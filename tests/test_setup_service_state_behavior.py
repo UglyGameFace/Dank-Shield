@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import gc
+import weakref
 from types import SimpleNamespace
 from typing import Any
 
@@ -102,6 +104,21 @@ def test_completion_is_read_from_the_same_canonical_state() -> None:
 
     assert state.completed is True
     assert state.completed_at == "2026-07-21T02:50:02+00:00"
+
+
+def test_service_state_lock_cache_releases_unused_locks() -> None:
+    async def create_lock():
+        loop = asyncio.get_running_loop()
+        key = (id(loop), 987654321)
+        lock = service_state._service_state_lock(key[1])
+        assert service_state._SERVICE_STATE_LOCKS[key] is lock
+        return weakref.ref(lock), key
+
+    lock_ref, key = run(create_lock())
+    gc.collect()
+
+    assert lock_ref() is None
+    assert key not in service_state._SERVICE_STATE_LOCKS
 
 
 def test_custom_service_save_uses_normalized_aliases_and_invalidates_completion(
