@@ -2,9 +2,10 @@ from __future__ import annotations
 
 """Require a durable audit intent before any owner emergency mutation.
 
-The action service also writes detailed outcome events. This guard is the
-fail-closed boundary: if the confirmed owner action cannot first be recorded in
-the activity feed, no transfer, unclaim, close, or delete is allowed to start.
+This is the fail-closed boundary: if the confirmed owner action cannot first be
+recorded in the activity feed, no transfer, unclaim, close, or delete is allowed
+to start. Successful operations then emit their one canonical lifecycle event;
+a separate result event is written only when the mutation fails.
 """
 
 from datetime import datetime, timezone
@@ -106,7 +107,7 @@ async def _write_audit_event(
                 event_type=(
                     "ticket_owner_emergency_override_authorized"
                     if phase == "authorized"
-                    else "ticket_owner_emergency_override_result"
+                    else "ticket_owner_emergency_override_failed"
                 ),
                 actor_user_id=actor.id,
                 actor_name=_name(actor),
@@ -214,30 +215,39 @@ def apply() -> bool:
                 action,
                 "override_exception",
                 "Emergency Override stopped because the action raised an internal error.",
-                {"error_type": type(exc).__name__},
+                {
+                    "mutation_started": True,
+                    "error_type": type(exc).__name__,
+                },
             )
 
-        try:
-            refreshed = await _ticket_row(_safe_int(getattr(channel, "id", 0), 0))
-            await _write_audit_event(
-                phase="result",
-                channel=channel,
-                actor=actor,
-                action=action,
-                reason=reason,
-                row=refreshed or row,
-                target=target,
-                result=result,
-            )
-        except Exception:
-            pass
+        if not result.ok:
+            try:
+                refreshed = await _ticket_row(
+                    _safe_int(getattr(channel, "id", 0), 0)
+                )
+                await _write_audit_event(
+                    phase="failed",
+                    channel=channel,
+                    actor=actor,
+                    action=action,
+                    reason=reason,
+                    row=refreshed or row,
+                    target=target,
+                    result=result,
+                )
+            except Exception:
+                pass
 
         return result
 
     setattr(audited_execute, _MARKER, True)
     ui_guard.execute_owner_emergency_override = audited_execute
     _PATCHED = True
-    print("✅ owner_emergency_audit_gate: durable pre-mutation audit required")
+    print(
+        "✅ owner_emergency_audit_gate: durable pre-mutation audit required "
+        "success_events=canonical failure_events=explicit"
+    )
     return True
 
 
