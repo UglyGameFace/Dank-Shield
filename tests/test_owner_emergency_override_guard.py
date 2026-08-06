@@ -36,19 +36,29 @@ def test_owner_emergency_override_ui_is_loaded_and_fail_closed() -> None:
     assert "owner_emergency_override_guard" in action_guard
     assert "owner_emergency_close_bridge" in action_guard
     assert "owner_emergency_audit_gate" in action_guard
+
     assert "confirmed-owner-emergency-close" in close_bridge_source
     assert "_confirmed_close_matches" in close_bridge_source
     assert "confirmed_ui_context" in close_bridge_source
+    assert "canonical_event_attribution" in close_bridge_source
+    assert "owner_attributed_close_logger" in close_bridge_source
+
     assert "audit_unavailable" in audit_gate
     assert "mutation_started" in audit_gate
     assert "ticket_owner_emergency_override_authorized" in audit_gate
+    assert "ticket_owner_emergency_override_failed" in audit_gate
+    assert "if not result.ok" in audit_gate
+    assert "override_reason" in audit_gate
+    assert "override_timestamp" in audit_gate
 
     assert "owner_emergency_delete_prepare" in service
     assert "owner_emergency_delete" in service
     assert "ticket_has_transcript" in service
     assert "previous_claimed_by" in service
-    assert "override_reason" in service
-    assert "override_timestamp" in service
+    assert "WeakValueDictionary" in service
+    assert "_log_override" not in service
+    assert "_log_assignment_event" in service
+    assert "_log_delete_event" in service
     assert "repo_transfer" in service
     assert "repo_unclaim" in service
     assert "await channel.delete" in service
@@ -60,7 +70,7 @@ def test_emergency_close_capability_is_bound_to_exact_channel_and_owner() -> Non
 
     assert close_bridge._confirmed_close_matches(channel, owner) is False
 
-    token = close_bridge._CONFIRMED_CLOSE.set((55, 999))
+    token = close_bridge._CONFIRMED_CLOSE.set((55, 999, "Server Owner"))
     try:
         assert close_bridge._confirmed_close_matches(channel, owner) is True
         assert close_bridge._confirmed_close_matches(SimpleNamespace(id=56), owner) is False
