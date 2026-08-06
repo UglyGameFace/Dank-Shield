@@ -97,6 +97,20 @@ The user rebuilt Dank Shield after PR #166 and performed the required live test.
 
 ## Later backlog
 
+### DS-SETUP-020 — Entitled ID-verification setup selection and VC permissions regression
+
+Reported from guild `1357215261001912320`, which has explicit access to the ID Verification feature.
+
+- The core-module picker incorrectly forces `Simple Verify` ON because `Voice Verify` is hard-wired to depend on it, even when this guild's intended verification path is ID Verification and no Simple Verify channel belongs in the setup.
+- Custom module buttons are not independent or deterministic: selecting or deselecting one option can fail to apply or unexpectedly toggle several other options.
+- The entitled setup flow must expose and persist the exact verification choice the owner makes, with ID Verification able to satisfy the verification dependency instead of silently enabling Simple Verify.
+- Continue Setup must request only the roles, channels, and permissions required by the final selected modules; it must never create or require a Simple Verify channel when Simple Verify is OFF.
+- The VC verification channel must apply the correct Unverified-member voice/video permission overwrites, including the intended view/connect/speak/video-stream behavior, without granting unrelated permissions or relying on stale role overwrites.
+- Inspect the canonical setup state model, all preset/custom toggle callbacks, dependency normalization, saved-draft serialization, resume/back navigation, entitlement gates, setup plan rendering, channel creation/update path, permission reconciliation, callers, compatibility layers, and focused/regression tests before implementation.
+- Add regressions for entitled and non-entitled guilds, every toggle independently, dependency transitions, repeated clicks, stale interaction state, resume/back, no-Simple-Verify setup completion, and exact VC overwrite reconciliation.
+
+**Status:** BACKLOG — blocked by the Single Active Task Lock until DS-STATS-019 reaches its live Definition of Done or the user supplies the exact required `FORCE SWITCH` instruction.
+
 ### DS-SETUP-019 — Cleanup confirmation modal crashes
 
 The live `Confirm Discord Cleanup` modal accepts `DELETE SETUP` but then throws `AttributeError` because `public_setup_cleanup.ConfirmDeleteModal.on_submit()` calls `public_setup_solid._safe_defer_modal`, which does not exist. Inspect the canonical modal defer/follow-up path, all cleanup modal callers, interaction-response guards, and setup cleanup regressions before implementing the repair. The submitted cleanup did not run after this exception.
