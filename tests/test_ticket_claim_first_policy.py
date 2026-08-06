@@ -69,25 +69,34 @@ def test_current_claimant_is_authorized_and_other_admin_is_not() -> None:
     assert "Transfer" in decision.message
 
 
-def test_guild_owner_can_close_without_stealing_the_claim() -> None:
+def test_guild_owner_must_use_confirmed_emergency_close_without_stealing_claim() -> None:
     ticket = row(status="claimed", claimant=200)
 
-    decision = evaluate_ticket_action(
+    normal = evaluate_ticket_action(
         ticket,
         actor_id=999,
         action="close",
         guild_owner_id=999,
     )
+    assert normal.allowed is False
+    assert normal.code == "claimant_required"
 
-    assert decision.allowed is True
-    assert decision.code == "guild_owner_close_override"
-    assert decision.claimed_by_id == 200
+    emergency = evaluate_ticket_action(
+        ticket,
+        actor_id=999,
+        action="owner_emergency_close",
+        guild_owner_id=999,
+    )
+    assert emergency.allowed is True
+    assert emergency.code == "owner_emergency_close_allowed"
+    assert emergency.claimed_by_id == 200
 
 
-def test_guild_owner_override_is_close_only() -> None:
+def test_normal_guild_owner_actions_remain_claimant_only() -> None:
     ticket = row(status="claimed", claimant=200)
 
     for action in (
+        "close",
         "delete",
         "transfer",
         "unclaim",
@@ -115,11 +124,11 @@ def test_guild_owner_is_resolved_from_the_registered_ticket_guild(
     decision = evaluate_ticket_action(
         row(status="claimed", claimant=200, guild_id=55),
         actor_id=999,
-        action="close",
+        action="owner_emergency_close",
     )
 
     assert decision.allowed is True
-    assert decision.code == "guild_owner_close_override"
+    assert decision.code == "owner_emergency_close_allowed"
 
 
 def test_requester_can_only_cancel_an_unclaimed_ticket() -> None:
@@ -234,6 +243,9 @@ def test_service_blocks_unclaimed_human_close_before_repository_write(monkeypatc
 def test_static_claim_first_enforcement_covers_all_runtime_surfaces() -> None:
     policy = (ROOT / "stoney_verify/tickets_new/claim_policy.py").read_text(encoding="utf-8")
     service = (ROOT / "stoney_verify/tickets_new/service.py").read_text(encoding="utf-8")
+    emergency = (ROOT / "stoney_verify/tickets_new/owner_emergency_override.py").read_text(encoding="utf-8")
+    emergency_guard = (ROOT / "stoney_verify/startup_guards/owner_emergency_override_guard.py").read_text(encoding="utf-8")
+    emergency_close_bridge = (ROOT / "stoney_verify/startup_guards/owner_emergency_close_bridge.py").read_text(encoding="utf-8")
     panel = (ROOT / "stoney_verify/tickets_new/panel.py").read_text(encoding="utf-8")
     macros = (ROOT / "stoney_verify/tickets_new/macros_service.py").read_text(encoding="utf-8")
     events = (ROOT / "stoney_verify/ticket_events.py").read_text(encoding="utf-8")
@@ -242,7 +254,8 @@ def test_static_claim_first_enforcement_covers_all_runtime_surfaces() -> None:
     staff_scope = (ROOT / "stoney_verify/commands_ext/public_staff_scope.py").read_text(encoding="utf-8")
 
     assert "Claimant ownership still controls every normal staff mutation" in policy
-    assert "guild_owner_close_override" in policy
+    assert "owner_emergency_close_allowed" in policy
+    assert "Normal close" in policy
     assert "Fail closed" in policy
     assert "async def authorize_ticket_action(" in service
     assert 'action="close"' in service
@@ -252,6 +265,13 @@ def test_static_claim_first_enforcement_covers_all_runtime_surfaces() -> None:
     assert 'action="note"' in service
     assert 'action="reopen"' in service
     assert "actor_is_elevated" not in service
+
+    assert "execute_owner_emergency_override" in emergency
+    assert "owner_emergency_delete_prepare" in emergency
+    assert "ticket_has_transcript" in emergency
+    assert 'upper() != "OVERRIDE"' in emergency_guard
+    assert "actual Discord server owner" in emergency_guard
+    assert "confirmed-owner-emergency-close" in emergency_close_bridge
 
     assert "authorize_ticket_action" in panel
     assert 'label != "claim ticket"' in panel
