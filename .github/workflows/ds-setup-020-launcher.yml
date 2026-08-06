@@ -6,12 +6,21 @@ on:
       - main
     paths:
       - .github/workflows/ds-setup-020-launcher.yml
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
 
 permissions:
   contents: write
 
 jobs:
   apply-and-test:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.ref == 'fix/ds-setup-020-id-verification-selection'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
