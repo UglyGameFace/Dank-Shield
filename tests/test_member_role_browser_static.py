@@ -143,24 +143,43 @@ def test_verify_reuses_owned_basic_verification_service_without_bypassing_protec
     assert "ok, message = await apply_basic_verification(target)" in source
 
 
-def test_bulk_tools_exclude_mass_punishment() -> None:
+def test_bulk_tools_include_confirmed_per_target_moderation() -> None:
     source = _source(BULK)
     bulk_start = source.index("class BulkActionView")
-    bulk_end = source.index("class BulkReminderModal")
+    bulk_end = source.index("class BulkVerifyModal")
     bulk = source[bulk_start:bulk_end]
-    assert 'label="Send Reminder"' in bulk
-    assert 'label="Add Role"' in bulk
-    assert 'label="Remove Role"' in bulk
-    assert 'label="Kick"' not in bulk
-    assert 'label="Ban"' not in bulk
-    assert 'label="Timeout"' not in bulk
-    assert "if not await require_review(interaction):" in source
-    assert '"bulk_dm"' in source
-    assert "member.id" in source
-    assert 'f"bulk_{self.parent_view.action}"' in source
-    assert "async with action_lock(" in source
+
+    for label in (
+        'label="Verify"',
+        'label="Timeout"',
+        'label="Clear Timeout"',
+        'label="Kick"',
+        'label="Ban"',
+        'label="Send Reminder"',
+        'label="Add Role"',
+        'label="Remove Role"',
+    ):
+        assert label in bulk
+
+    assert "def bulk_confirmation_phrase" in source
+    assert "def _confirmation_matches" in source
+    assert "class BulkDestructiveActionModal" in source
+    assert "class BulkTimeoutModal" in source
+    assert "class BulkClearTimeoutModal" in source
+    assert "class BulkVerifyModal" in source
+    assert "_fresh_member" in source
+    assert "action_blockers(" in source
     assert "protected_role_ids = await load_protected_role_ids" in source
-    assert "blockers = await role_action_blockers(" in source
+    assert "role_action_blockers(" in source
+    assert "async with action_lock(" in source
+    assert "operation_lock.locked()" in source
+    assert "record_member_action" in source
+    assert "await target.kick(" in source
+    assert "await guild.ban(" in source
+    assert "await target.timeout(" in source
+    assert "apply_staff_basic_verification" in source
+    assert 'action="bulk_dm"' in source
+    assert "Every target was re-fetched" in source
 
 
 def test_setup_center_links_to_role_browser_without_command_slot() -> None:
