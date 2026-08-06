@@ -16,6 +16,9 @@ def test_owner_emergency_override_ui_is_loaded_and_fail_closed() -> None:
     close_bridge_source = (
         ROOT / "stoney_verify/startup_guards/owner_emergency_close_bridge.py"
     ).read_text(encoding="utf-8")
+    audit_gate = (
+        ROOT / "stoney_verify/startup_guards/owner_emergency_audit_gate.py"
+    ).read_text(encoding="utf-8")
     action_guard = (
         ROOT / "stoney_verify/startup_guards/ticket_action_lock_guard.py"
     ).read_text(encoding="utf-8")
@@ -32,9 +35,13 @@ def test_owner_emergency_override_ui_is_loaded_and_fail_closed() -> None:
     assert "_refresh_existing_control_messages" in guard
     assert "owner_emergency_override_guard" in action_guard
     assert "owner_emergency_close_bridge" in action_guard
+    assert "owner_emergency_audit_gate" in action_guard
     assert "confirmed-owner-emergency-close" in close_bridge_source
     assert "_confirmed_close_matches" in close_bridge_source
     assert "confirmed_ui_context" in close_bridge_source
+    assert "audit_unavailable" in audit_gate
+    assert "mutation_started" in audit_gate
+    assert "ticket_owner_emergency_override_authorized" in audit_gate
 
     assert "owner_emergency_delete_prepare" in service
     assert "owner_emergency_delete" in service
