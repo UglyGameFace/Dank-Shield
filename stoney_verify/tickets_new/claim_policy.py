@@ -57,19 +57,19 @@ def ticket_guild_id(row: Optional[Mapping[str, Any]]) -> int:
 
 
 def ticket_has_transcript(row: Optional[Mapping[str, Any]]) -> bool:
+    """Require a usable transcript URL or a concrete Discord message location."""
     if not isinstance(row, Mapping):
         return False
-    for key in (
-        "transcript_url",
-        "transcript_message_id",
-        "transcript_channel_id",
-    ):
-        try:
-            if str(row.get(key) or "").strip():
-                return True
-        except Exception:
-            continue
-    return False
+    try:
+        transcript_url = str(row.get("transcript_url") or "").strip()
+        transcript_message_id = _safe_int(row.get("transcript_message_id"), 0)
+        transcript_channel_id = _safe_int(row.get("transcript_channel_id"), 0)
+    except Exception:
+        return False
+    return bool(
+        transcript_url
+        or (transcript_message_id > 0 and transcript_channel_id > 0)
+    )
 
 
 def _cached_guild_owner_id(row: Optional[Mapping[str, Any]]) -> int:
