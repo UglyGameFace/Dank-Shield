@@ -1,17 +1,9 @@
 name: DS Setup 020 Launcher
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/ds-setup-020-launcher.yml
-  pull_request:
-    branches:
-      - main
+  issue_comment:
     types:
-      - opened
-      - reopened
+      - created
 
 permissions:
   contents: write
@@ -19,8 +11,9 @@ permissions:
 jobs:
   apply-and-test:
     if: >-
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.head.ref == 'fix/ds-setup-020-id-verification-selection'
+      github.event.issue.number == 171 &&
+      github.event.issue.pull_request &&
+      github.event.comment.body == '/run-ds-setup-020'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
