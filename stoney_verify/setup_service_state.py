@@ -11,6 +11,7 @@ Discord interactions cannot overwrite one another with stale state.
 import asyncio
 from dataclasses import dataclass
 from typing import Any, Mapping
+from weakref import WeakValueDictionary
 
 from .globals import now_utc
 from .guild_config import get_guild_config, invalidate_guild_config
@@ -24,7 +25,9 @@ _SERVICE_KEYS = (
     "spam_guard_enabled",
     "moderation_enabled",
 )
-_SERVICE_STATE_LOCKS: dict[tuple[int, int], asyncio.Lock] = {}
+_SERVICE_STATE_LOCKS: WeakValueDictionary[tuple[int, int], asyncio.Lock] = (
+    WeakValueDictionary()
+)
 
 
 def _service_state_lock(guild_id: int) -> asyncio.Lock:
@@ -145,7 +148,11 @@ def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
         pass
     for bucket in ("settings", "config", "metadata", "meta"):
         try:
-            nested = cfg.get(bucket) if hasattr(cfg, "get") else getattr(cfg, bucket, None)
+            nested = (
+                cfg.get(bucket)
+                if hasattr(cfg, "get")
+                else getattr(cfg, bucket, None)
+            )
             if isinstance(nested, Mapping) and nested.get(key) is not None:
                 return nested.get(key)
         except Exception:
@@ -266,7 +273,10 @@ def service_state_from_config(cfg: Any) -> SetupServiceState:
         logs=bool(logs),
         completed=_safe_bool(_cfg_value(cfg, "setup_completed", False), False),
         completed_at=str(_cfg_value(cfg, "setup_completed_at", "") or "").strip(),
-        source=str(_cfg_value(cfg, "config_last_write_source", "guild_config") or "guild_config"),
+        source=str(
+            _cfg_value(cfg, "config_last_write_source", "guild_config")
+            or "guild_config"
+        ),
     )
 
 
@@ -275,7 +285,9 @@ async def load_setup_service_state(guild_id: int) -> SetupServiceState:
     return service_state_from_config(cfg)
 
 
-def _verification_mode(*, simple: bool, voice: bool, id_verify: bool) -> tuple[str, str]:
+def _verification_mode(
+    *, simple: bool, voice: bool, id_verify: bool
+) -> tuple[str, str]:
     if id_verify and voice:
         return "id_voice_check", "id_voice_check"
     if id_verify:
@@ -296,8 +308,7 @@ def normalize_custom_service_patch(
     simple = _safe_bool(payload.get("verification_enabled"), False)
     voice = _safe_bool(payload.get("voice_verification_enabled"), False)
     id_verify = bool(
-        allow_id_verify
-        and _safe_bool(payload.get("id_verify_enabled"), False)
+        allow_id_verify and _safe_bool(payload.get("id_verify_enabled"), False)
     )
     spam_guard = _safe_bool(payload.get("spam_guard_enabled"), False)
     logs = _safe_bool(payload.get("moderation_enabled"), False)
@@ -321,7 +332,9 @@ def normalize_custom_service_patch(
         enabled.append("SpamGuard")
     if logs:
         enabled.append("Logs")
-    label = "Your features: " + (", ".join(enabled) if enabled else "No features selected")
+    label = "Your features: " + (
+        ", ".join(enabled) if enabled else "No features selected"
+    )
     panel_style, mode = _verification_mode(
         simple=simple,
         voice=voice,
@@ -368,8 +381,15 @@ def apply_custom_service_toggle(
     }
     if not allow_id_verify:
         clean["id_verify_enabled"] = False
-    if key not in clean or (key == "id_verify_enabled" and not allow_id_verify):
-        return clean, False, False, "That core feature is not available for this server."
+    if key not in clean or (
+        key == "id_verify_enabled" and not allow_id_verify
+    ):
+        return (
+            clean,
+            False,
+            False,
+            "That core feature is not available for this server.",
+        )
 
     next_value = not clean[key]
     if not next_value:
@@ -396,13 +416,17 @@ def apply_custom_service_toggle(
                 clean,
                 True,
                 False,
-                f"**{dependency}** needs **{label}**. Turn the dependent feature off first.",
+                f"**{dependency}** needs **{label}**. "
+                "Turn the dependent feature off first.",
             )
 
     clean[key] = next_value
     dependency_note = ""
     enabled_for_dependency: list[str] = []
-    if key in {"voice_verification_enabled", "id_verify_enabled"} and next_value:
+    if key in {
+        "voice_verification_enabled",
+        "id_verify_enabled",
+    } and next_value:
         for dependency_key, label in (
             ("tickets_enabled", "Tickets"),
             ("moderation_enabled", "Essential Logs"),
@@ -417,11 +441,16 @@ def apply_custom_service_toggle(
                 else "ID/Web Verify"
             )
             dependency_note = (
-                f"{feature_label} needs Tickets and Essential Logs, so Dank Shield also turned on: **"
+                f"{feature_label} needs Tickets and Essential Logs, so Dank Shield "
+                "also turned on: **"
                 + "**, **".join(enabled_for_dependency)
                 + "**."
             )
-    elif key == "spam_guard_enabled" and next_value and not clean["moderation_enabled"]:
+    elif (
+        key == "spam_guard_enabled"
+        and next_value
+        and not clean["moderation_enabled"]
+    ):
         clean["moderation_enabled"] = True
         dependency_note = (
             "SpamGuard needs Essential Logs, so Dank Shield also turned on "
@@ -489,14 +518,22 @@ async def toggle_custom_service_state(
         current = await load_setup_service_state(int(guild_id))
         current_payload = current.as_payload()
         if str(key) not in current_payload:
-            return current, False, False, "That core feature is not available for this server."
+            return (
+                current,
+                False,
+                False,
+                "That core feature is not available for this server.",
+            )
         current_value = bool(current_payload[str(key)])
-        if expected_current is not None and current_value is not bool(expected_current):
+        if expected_current is not None and current_value is not bool(
+            expected_current
+        ):
             return (
                 current,
                 current_value,
                 False,
-                "This setup screen was out of date, so Dank Shield refreshed it without changing your saved choices.",
+                "This setup screen was out of date, so Dank Shield refreshed it "
+                "without changing your saved choices.",
             )
         payload, effective, changed, note = apply_custom_service_toggle(
             current_payload,
@@ -534,7 +571,11 @@ async def invalidate_setup_completion(
     invalidate_guild_config(int(guild_id))
 
 
-async def mark_setup_completed(guild_id: int, *, actor: Any = None) -> SetupServiceState:
+async def mark_setup_completed(
+    guild_id: int,
+    *,
+    actor: Any = None,
+) -> SetupServiceState:
     from .commands_ext.public_setup_config_writer import upsert_guild_config
 
     timestamp = now_utc().isoformat()
