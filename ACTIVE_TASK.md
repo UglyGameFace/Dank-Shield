@@ -98,6 +98,27 @@ GitHub issue `#168`. Backlog only.
 
 Backlog only.
 
+### DS-RESET-001 — Owner-authorized Emergency Reset and bulk cleanup console
+
+Backlog only. This must be designed as a defensive server-administration and recovery system, not an unrestricted one-click server destruction tool.
+
+Requested behavior:
+
+1. Only the Discord guild owner can enable the module and open its authorization settings.
+2. Administrators may request a destructive bulk action, but execution requires explicit owner approval unless the owner has granted a standing operator authorization.
+3. A separate owner-only menu manages authorized operators, exact permitted action scopes, protected resources, limits, expiration, and revocation.
+4. Standing authorization must never mean unlimited destructive access. It must be constrained to owner-selected actions, categories/channels/roles, maximum counts, cooldowns, and optional time windows.
+5. Every operation must show a dry-run preview with exact affected resources and require typed confirmation plus a second interaction confirmation.
+6. High-impact operations require a delay/cancel window, durable audit record, owner notification, and idempotent execution.
+7. The guild owner, bot role, server-control roles, protected roles/channels/categories, verification/ticket infrastructure, logs, and configured allowlists must be undeletable unless the owner temporarily removes protection through a separate confirmation flow.
+8. Prefer recoverable operations: archive/lock/quarantine first; permanent deletion must be a separate final mode.
+9. Capture a pre-operation configuration snapshot sufficient to reconstruct channels, categories, roles, permission overwrites, and Dank Shield configuration where Discord APIs permit.
+10. No command may ban/kick all members, mass-DM, create spam, create webhook floods, evade Discord limits, or target a guild without its owner's explicit authorization.
+11. Add emergency owner cancellation, automatic halt on errors/rate limits, per-step progress, and a post-operation report.
+12. Add tests for owner-only setup, admin request/approval, standing authorization scopes, expiry/revocation, protected resources, stale approvals, replay prevention, concurrency, partial failure, cancellation, audit logs, and snapshot/restore behavior.
+
+Do not begin DS-RESET-001 until DS-SETUP-020 passes its live Definition of Done unless the user issues the exact force-switch instruction.
+
 ## Definition of Done
 
 DS-SETUP-020 is complete only after implementation, tests, regression checks, syntax/static validation, cleanup, conflict inspection, merge, deployment, and live guild verification all pass.
