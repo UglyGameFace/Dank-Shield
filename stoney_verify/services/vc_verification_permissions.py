@@ -69,7 +69,18 @@ def _target_label(target: Any) -> str:
             return "@everyone"
     except Exception:
         pass
-    return str(getattr(target, "mention", None) or getattr(target, "name", None) or getattr(target, "id", "target"))
+    return str(
+        getattr(target, "mention", None)
+        or getattr(target, "name", None)
+        or getattr(target, "id", "target")
+    )
+
+
+def _has_conflicting_voice_grant(overwrite: discord.PermissionOverwrite) -> bool:
+    return any(
+        getattr(overwrite, permission, None) is True
+        for permission in ("connect", "speak", "stream")
+    )
 
 
 async def reconcile_vc_verification_channel(
@@ -83,6 +94,12 @@ async def reconcile_vc_verification_channel(
 
     if cfg is None:
         cfg = await get_guild_config(int(guild.id), refresh=True)
+
+    voice_types: tuple[type, ...] = tuple(
+        item
+        for item in (discord.VoiceChannel, getattr(discord, "StageChannel", None))
+        if isinstance(item, type)
+    )
     if channel is None:
         channel_id = _cfg_int(
             cfg,
@@ -92,17 +109,44 @@ async def reconcile_vc_verification_channel(
             "voice_verification_channel_id",
         )
         channel = guild.get_channel(channel_id) if channel_id > 0 else None
-    voice_types: tuple[type, ...] = tuple(
-        item
-        for item in (discord.VoiceChannel, getattr(discord, "StageChannel", None))
-        if isinstance(item, type)
-    )
-    if not isinstance(channel, voice_types):
-        return VcPermissionReconcileResult((), (), ("Saved Voice Verify channel is missing or is not a voice/stage channel.",))
+        if channel is None and channel_id > 0:
+            try:
+                fetched = await guild.fetch_channel(channel_id)
+            except Exception:
+                fetched = None
+            if isinstance(fetched, voice_types):
+                channel = fetched
 
-    staff_role = _role(guild, cfg, "staff_role_id", "ticket_staff_role_id", "support_role_id", "vc_staff_role_id")
-    control_role = _role(guild, cfg, "server_control_role_id", "control_role_id", "perm_role_id", "bot_manager_role_id")
-    unverified_role = _role(guild, cfg, "unverified_role_id", "waiting_role_id", "pending_role_id")
+    if not isinstance(channel, voice_types):
+        return VcPermissionReconcileResult(
+            (),
+            (),
+            ("Saved Voice Verify channel is missing or is not a voice/stage channel.",),
+        )
+
+    staff_role = _role(
+        guild,
+        cfg,
+        "staff_role_id",
+        "ticket_staff_role_id",
+        "support_role_id",
+        "vc_staff_role_id",
+    )
+    control_role = _role(
+        guild,
+        cfg,
+        "server_control_role_id",
+        "control_role_id",
+        "perm_role_id",
+        "bot_manager_role_id",
+    )
+    unverified_role = _role(
+        guild,
+        cfg,
+        "unverified_role_id",
+        "waiting_role_id",
+        "pending_role_id",
+    )
     verified_role = _role(guild, cfg, "verified_role_id", "approved_role_id")
     resident_role = _role(guild, cfg, "resident_role_id", "member_role_id")
     expected = vc_verification_overwrites(
@@ -128,7 +172,31 @@ async def reconcile_vc_verification_channel(
             changed.append(label)
         except Exception as exc:
             failed.append(f"{label}: {type(exc).__name__}: {str(exc)[:180]}")
-    return VcPermissionReconcileResult(tuple(changed), tuple(unchanged), tuple(failed))
+
+    # Old role mappings must not retain a connect/speak/video grant after the
+    # configured staff/member roles change. Per-member overwrites are deliberate
+    # live-session grants, so this cleanup intentionally never touches them.
+    try:
+        existing_overwrites = dict(getattr(channel, "overwrites", {}) or {})
+    except Exception:
+        existing_overwrites = {}
+    for target, overwrite in existing_overwrites.items():
+        if target in expected or not isinstance(target, discord.Role):
+            continue
+        if not _has_conflicting_voice_grant(overwrite):
+            continue
+        label = _target_label(target)
+        try:
+            await channel.set_permissions(target, overwrite=None, reason=reason)
+            changed.append(f"{label} (stale role grant removed)")
+        except Exception as exc:
+            failed.append(f"{label}: {type(exc).__name__}: {str(exc)[:180]}")
+
+    return VcPermissionReconcileResult(
+        tuple(changed),
+        tuple(unchanged),
+        tuple(failed),
+    )
 
 
 __all__ = ["VcPermissionReconcileResult", "reconcile_vc_verification_channel"]
