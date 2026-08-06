@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-"""Dedicated setup home for static welcomes, join cards, and join/leave logs.
-
-This area is intentionally separate from member profile signatures.
-"""
+"""Dedicated setup home for static welcomes, live join cards, and leave logs."""
 
 from typing import Any, Mapping, Optional
 
@@ -21,7 +18,6 @@ from .commands_ext.public_welcome_group import (
     save_welcome_template_service,
     welcome_card_preview,
 )
-from .commands_ext.public_welcome_card_studio import welcome_card_style
 from .guild_config import get_guild_config
 from .welcome_card_service import (
     configured_color_mode,
@@ -30,6 +26,7 @@ from .welcome_card_service import (
     configured_shuffle_mode,
     configured_theme_key,
 )
+from .welcome_card_studio_ui import open_welcome_card_studio
 from .welcome_card_typography_engine import BUILTIN_THEMES, FONT_STYLES
 from .welcome_message import welcome_channel_for
 
@@ -76,21 +73,44 @@ async def _welcome_embed(guild: discord.Guild, config: Any) -> discord.Embed:
     font_label = (
         custom_font_name
         if custom_font and custom_font_name
-        else getattr(FONT_STYLES.get(font_key), "label", font_key.replace("_", " ").title())
+        else getattr(
+            FONT_STYLES.get(font_key),
+            "label",
+            font_key.replace("_", " ").title(),
+        )
     )
     join_cards = _cfg_bool(config, "welcome_card_enabled")
-    join_enabled = _cfg_bool(config, "welcome_join_enabled", "join_welcome_enabled")
-    leave_enabled = _cfg_bool(config, "welcome_leave_enabled", "goodbye_enabled", "leave_message_enabled")
-    join_channel_id = _cfg_int(config, "join_welcome_channel_id", "welcome_channel_id")
-    leave_channel_id = _cfg_int(config, "goodbye_channel_id", "leave_channel_id", "welcome_channel_id")
+    join_enabled = _cfg_bool(
+        config,
+        "welcome_join_enabled",
+        "join_welcome_enabled",
+    )
+    leave_enabled = _cfg_bool(
+        config,
+        "welcome_leave_enabled",
+        "goodbye_enabled",
+        "leave_message_enabled",
+    )
+    join_channel_id = _cfg_int(
+        config,
+        "join_welcome_channel_id",
+        "welcome_channel_id",
+    )
+    leave_channel_id = _cfg_int(
+        config,
+        "goodbye_channel_id",
+        "leave_channel_id",
+        "welcome_channel_id",
+    )
     join_channel = guild.get_channel(join_channel_id)
     leave_channel = guild.get_channel(leave_channel_id)
 
     embed = discord.Embed(
         title="👋 Welcome & Join",
         description=(
-            "Everything a new member sees is managed here. This area controls the static welcome/start-here message, "
-            "the image sent when someone joins, and separate join/leave announcements. It never changes profile signatures."
+            "Everything a new member sees is managed here. Welcome Card Studio "
+            "now owns the live join card; the static welcome message and leave "
+            "announcements remain separate."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
@@ -105,9 +125,10 @@ async def _welcome_embed(guild: discord.Guild, config: Any) -> discord.Embed:
         inline=False,
     )
     embed.add_field(
-        name="🖼️ Join-only image card",
+        name="🖼️ Canonical live join card",
         value=(
             f"**Status:** {'On' if join_cards else 'Off'}\n"
+            f"**Channel:** {join_channel.mention if isinstance(join_channel, discord.TextChannel) else 'Not selected'}\n"
             f"**Theme:** {getattr(theme, 'label', theme_key)}\n"
             f"**Font:** {font_label}\n"
             f"**Colors:** {configured_color_mode(config).replace('_', ' ').title()}\n"
@@ -116,12 +137,20 @@ async def _welcome_embed(guild: discord.Guild, config: Any) -> discord.Embed:
         inline=True,
     )
     embed.add_field(
-        name="📣 Join & leave announcements",
+        name="📣 Optional text announcements",
         value=(
-            f"**Join:** {'On' if join_enabled else 'Off'}"
-            + (f" in {join_channel.mention}" if isinstance(join_channel, discord.TextChannel) else "")
+            f"**Join text:** {'On' if join_enabled else 'Off'}"
+            + (
+                f" in {join_channel.mention}"
+                if isinstance(join_channel, discord.TextChannel)
+                else ""
+            )
             + f"\n**Leave:** {'On' if leave_enabled else 'Off'}"
-            + (f" in {leave_channel.mention}" if isinstance(leave_channel, discord.TextChannel) else "")
+            + (
+                f" in {leave_channel.mention}"
+                if isinstance(leave_channel, discord.TextChannel)
+                else ""
+            )
         ),
         inline=True,
     )
@@ -130,12 +159,12 @@ async def _welcome_embed(guild: discord.Guild, config: Any) -> discord.Embed:
         value=(
             "1. Pick the static welcome channel.\n"
             "2. Edit and preview the static message.\n"
-            "3. Style and preview the join card.\n"
-            "4. Turn join/leave announcements on only where wanted."
+            "3. Open Join Card Studio and pick its live channel/design.\n"
+            "4. Configure optional leave announcements separately."
         ),
         inline=False,
     )
-    embed.set_footer(text="Welcome & Join • separate from Profile Signatures")
+    embed.set_footer(text="Welcome & Join • Studio-owned live join cards")
     return embed
 
 
@@ -163,7 +192,10 @@ class WelcomeTemplateModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if int(interaction.user.id) != self.author_id:
-            return await _send_private(interaction, content="❌ Only the person who opened this editor can submit it.")
+            return await _send_private(
+                interaction,
+                content="❌ Only the person who opened this editor can submit it.",
+            )
         await save_welcome_template_service(
             interaction,
             title=str(self.title_input.value or "").strip() or None,
@@ -184,13 +216,22 @@ class WelcomeChannelSelect(discord.ui.ChannelSelect):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         view = self.view
-        if not isinstance(view, WelcomeSetupView) or not await view.interaction_check(interaction):
+        if not isinstance(view, WelcomeSetupView) or not await view.interaction_check(
+            interaction
+        ):
             return
         guild = interaction.guild
         selected = self.values[0] if self.values else None
-        channel = guild.get_channel(int(selected.id)) if guild is not None and selected is not None else None
+        channel = (
+            guild.get_channel(int(selected.id))
+            if guild is not None and selected is not None
+            else None
+        )
         if not isinstance(channel, discord.TextChannel):
-            return await _send_private(interaction, content="❌ Choose a text channel from this server.")
+            return await _send_private(
+                interaction,
+                content="❌ Choose a text channel from this server.",
+            )
         await save_welcome_channel(interaction, channel)
 
 
@@ -203,50 +244,117 @@ class WelcomeSetupView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.owner_id:
-            await _send_private(interaction, content="❌ Only the manager who opened this setup can use it.")
+            await _send_private(
+                interaction,
+                content="❌ Only the manager who opened this setup can use it.",
+            )
             return False
         return True
 
-    @discord.ui.button(label="Edit Welcome Text", emoji="✏️", style=discord.ButtonStyle.primary, row=1)
-    async def edit_text(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(
+        label="Edit Welcome Text",
+        emoji="✏️",
+        style=discord.ButtonStyle.primary,
+        row=1,
+    )
+    async def edit_text(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         await interaction.response.send_modal(
             WelcomeTemplateModal(author_id=self.owner_id, config=self.config)
         )
 
-    @discord.ui.button(label="Preview Static Message", emoji="👀", style=discord.ButtonStyle.secondary, row=1)
-    async def preview_static(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(
+        label="Preview Static Message",
+        emoji="👀",
+        style=discord.ButtonStyle.secondary,
+        row=1,
+    )
+    async def preview_static(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         await open_welcome_preview(interaction)
 
-    @discord.ui.button(label="Post / Update Static", emoji="📌", style=discord.ButtonStyle.success, row=1)
-    async def post_static(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(
+        label="Post / Update Static",
+        emoji="📌",
+        style=discord.ButtonStyle.success,
+        row=1,
+    )
+    async def post_static(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         await post_welcome_message(interaction)
 
-    @discord.ui.button(label="Join Card Studio", emoji="🪄", style=discord.ButtonStyle.primary, row=2)
-    async def card_studio(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(
+        label="Join Card Studio",
+        emoji="🪄",
+        style=discord.ButtonStyle.primary,
+        row=2,
+    )
+    async def card_studio(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
-        await welcome_card_style(interaction)
+        await open_welcome_card_studio(interaction)
 
-    @discord.ui.button(label="Preview Join Card", emoji="🖼️", style=discord.ButtonStyle.secondary, row=2)
-    async def preview_card(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(
+        label="Preview Join Card",
+        emoji="🖼️",
+        style=discord.ButtonStyle.secondary,
+        row=2,
+    )
+    async def preview_card(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         await welcome_card_preview(interaction)
 
-    @discord.ui.button(label="Join & Leave Announcements", emoji="📣", style=discord.ButtonStyle.primary, row=2)
-    async def events(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(
+        label="Join & Leave Announcements",
+        emoji="📣",
+        style=discord.ButtonStyle.primary,
+        row=2,
+    )
+    async def events(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         await open_join_leave_announcements(interaction)
 
-    @discord.ui.button(label="Uploads & Advanced", emoji="📎", style=discord.ButtonStyle.secondary, row=3)
-    async def uploads(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(
+        label="Uploads & Advanced",
+        emoji="📎",
+        style=discord.ButtonStyle.secondary,
+        row=3,
+    )
+    async def uploads(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         embed = discord.Embed(
             title="📎 Join Card Uploads & Advanced Tools",
             description=(
-                "Discord buttons cannot open a file picker, so uploads use the two attachment commands below. "
-                "Everything else stays inside the button-first Join Card Studio."
+                "Discord buttons cannot open a file picker, so uploads use the "
+                "attachment commands below. All other controls stay inside the "
+                "button-first Studio."
             ),
             color=discord.Color.blurple(),
         )
@@ -267,17 +375,38 @@ class WelcomeSetupView(discord.ui.View):
         )
         await _send_private(interaction, embed=embed)
 
-    @discord.ui.button(label="Welcome Health", emoji="🩺", style=discord.ButtonStyle.secondary, row=3)
-    async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(
+        label="Welcome Health",
+        emoji="🩺",
+        style=discord.ButtonStyle.secondary,
+        row=3,
+    )
+    async def health(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         await open_welcome_health(interaction)
 
-    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=3)
-    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(
+        label="Refresh",
+        emoji="🔄",
+        style=discord.ButtonStyle.secondary,
+        row=3,
+    )
+    async def refresh(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         guild = interaction.guild
         if guild is None:
-            return await _send_private(interaction, content="❌ Use this inside a server.")
+            return await _send_private(
+                interaction,
+                content="❌ Use this inside a server.",
+            )
         config = await get_guild_config(guild.id, refresh=True)
         await interaction.response.edit_message(
             embed=await _welcome_embed(guild, config),
@@ -285,24 +414,55 @@ class WelcomeSetupView(discord.ui.View):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @discord.ui.button(label="Back to All Features", emoji="↩️", style=discord.ButtonStyle.secondary, row=4)
-    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(
+        label="Back to All Features",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        row=4,
+    )
+    async def back(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         from .commands_ext.public_setup_recommend import _open_advanced_settings
 
         await _open_advanced_settings(interaction)
 
-    @discord.ui.button(label="Setup Home", emoji="🏠", style=discord.ButtonStyle.secondary, row=4)
-    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(
+        label="Setup Home",
+        emoji="🏠",
+        style=discord.ButtonStyle.secondary,
+        row=4,
+    )
+    async def home(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
         from .commands_ext.public_setup_recommend import _home_edit
 
         await _home_edit(interaction)
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, row=4)
-    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(
+        label="Close",
+        emoji="✖️",
+        style=discord.ButtonStyle.danger,
+        row=4,
+    )
+    async def close(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
         _ = button
-        await interaction.response.edit_message(content="Welcome & Join setup closed.", embed=None, view=None)
+        await interaction.response.edit_message(
+            content="Welcome & Join setup closed.",
+            embed=None,
+            view=None,
+        )
 
 
 async def open_welcome_setup(interaction: discord.Interaction) -> None:
@@ -310,19 +470,26 @@ async def open_welcome_setup(interaction: discord.Interaction) -> None:
         return
     guild = interaction.guild
     if guild is None:
-        return await _send_private(interaction, content="❌ Use this inside a server.")
+        return await _send_private(
+            interaction,
+            content="❌ Use this inside a server.",
+        )
     if not interaction.response.is_done():
-        await interaction.response.defer()
-    config = await get_guild_config(guild.id, refresh=True)
-    payload = {
-        "embed": await _welcome_embed(guild, config),
-        "view": WelcomeSetupView(owner_id=interaction.user.id, config=config),
-        "allowed_mentions": discord.AllowedMentions.none(),
-    }
+        await interaction.response.defer(ephemeral=True, thinking=True)
     try:
-        await interaction.edit_original_response(**payload)
-    except Exception:
-        await interaction.followup.send(**payload, ephemeral=True)
+        config = await get_guild_config(guild.id, refresh=True)
+        await interaction.followup.send(
+            embed=await _welcome_embed(guild, config),
+            view=WelcomeSetupView(owner_id=interaction.user.id, config=config),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    except Exception as exc:
+        await interaction.followup.send(
+            f"❌ Could not open Welcome & Join: `{type(exc).__name__}: {exc}`",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 __all__ = ["WelcomeSetupView", "open_welcome_setup"]
