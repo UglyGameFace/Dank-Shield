@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+
+from stoney_verify.startup_guards import owner_emergency_close_bridge as close_bridge
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -10,7 +13,7 @@ def test_owner_emergency_override_ui_is_loaded_and_fail_closed() -> None:
     guard = (
         ROOT / "stoney_verify/startup_guards/owner_emergency_override_guard.py"
     ).read_text(encoding="utf-8")
-    close_bridge = (
+    close_bridge_source = (
         ROOT / "stoney_verify/startup_guards/owner_emergency_close_bridge.py"
     ).read_text(encoding="utf-8")
     action_guard = (
@@ -29,7 +32,9 @@ def test_owner_emergency_override_ui_is_loaded_and_fail_closed() -> None:
     assert "_refresh_existing_control_messages" in guard
     assert "owner_emergency_override_guard" in action_guard
     assert "owner_emergency_close_bridge" in action_guard
-    assert "confirmed-owner-emergency-close" in close_bridge
+    assert "confirmed-owner-emergency-close" in close_bridge_source
+    assert "_confirmed_close_matches" in close_bridge_source
+    assert "confirmed_ui_context" in close_bridge_source
 
     assert "owner_emergency_delete_prepare" in service
     assert "owner_emergency_delete" in service
@@ -40,6 +45,23 @@ def test_owner_emergency_override_ui_is_loaded_and_fail_closed() -> None:
     assert "repo_transfer" in service
     assert "repo_unclaim" in service
     assert "await channel.delete" in service
+
+
+def test_emergency_close_capability_is_bound_to_exact_channel_and_owner() -> None:
+    channel = SimpleNamespace(id=55)
+    owner = SimpleNamespace(id=999)
+
+    assert close_bridge._confirmed_close_matches(channel, owner) is False
+
+    token = close_bridge._CONFIRMED_CLOSE.set((55, 999))
+    try:
+        assert close_bridge._confirmed_close_matches(channel, owner) is True
+        assert close_bridge._confirmed_close_matches(SimpleNamespace(id=56), owner) is False
+        assert close_bridge._confirmed_close_matches(channel, SimpleNamespace(id=998)) is False
+    finally:
+        close_bridge._CONFIRMED_CLOSE.reset(token)
+
+    assert close_bridge._confirmed_close_matches(channel, owner) is False
 
 
 def test_normal_actions_are_not_relabelled_as_owner_overrides() -> None:
