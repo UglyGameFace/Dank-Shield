@@ -1,16 +1,18 @@
 from __future__ import annotations
 
-"""Audited emergency ticket actions reserved for the real Discord guild owner.
+"""Confirmed emergency ticket actions reserved for the real Discord guild owner.
 
-Normal ticket controls remain claimant-only. This module handles only explicit
-``owner_emergency_*`` decisions after the owner submits a reason and confirms
-through the dedicated Discord UI.
+Normal controls remain claimant-only. The startup audit gate records a durable
+pre-mutation authorization event, while this module performs the requested
+lifecycle mutation and emits only the normal lifecycle event for successful
+operations. That keeps the audit trail complete without duplicating every owner
+action several times in the activity feed.
 """
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from weakref import WeakValueDictionary
 
 import discord
 
@@ -28,7 +30,7 @@ from .repository import (
     unclaim_ticket as repo_unclaim,
 )
 
-_LOCKS: Dict[int, asyncio.Lock] = {}
+_LOCKS: WeakValueDictionary[int, asyncio.Lock] = WeakValueDictionary()
 _VALID_ACTIONS = frozenset({"transfer", "unclaim", "close", "delete"})
 
 
@@ -52,10 +54,6 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 def _clean_reason(value: Any) -> str:
     return " ".join(str(value or "").strip().split())[:500]
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _name(user: Any) -> str:
@@ -98,13 +96,23 @@ def available_owner_emergency_actions(row: Optional[Dict[str, Any]]) -> tuple[st
     return ()
 
 
-def _result(ok: bool, action: str, code: str, message: str, **metadata: Any) -> OwnerEmergencyResult:
+def _result(
+    ok: bool,
+    action: str,
+    code: str,
+    message: str,
+    **metadata: Any,
+) -> OwnerEmergencyResult:
     return OwnerEmergencyResult(bool(ok), action, code, message, dict(metadata))
 
 
 def _lock(channel_id: int) -> asyncio.Lock:
     cid = int(channel_id)
-    return _LOCKS.setdefault(cid, asyncio.Lock())
+    lock = _LOCKS.get(cid)
+    if lock is None:
+        lock = asyncio.Lock()
+        _LOCKS[cid] = lock
+    return lock
 
 
 async def _row(channel_id: int) -> Optional[Dict[str, Any]]:
@@ -151,86 +159,12 @@ async def _sync_claimant_permissions(
 
 async def _send(channel: discord.TextChannel, content: str) -> None:
     try:
-        await channel.send(content, allowed_mentions=discord.AllowedMentions.none())
+        await channel.send(
+            content,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
     except Exception:
         pass
-
-
-def _audit_metadata(
-    *,
-    actor: Any,
-    action: str,
-    reason: str,
-    previous_claimed_by: int,
-    success: bool,
-    code: str,
-    target: Any = None,
-    extra: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    meta: Dict[str, Any] = {
-        "owner_emergency_override": True,
-        "override_action": action,
-        "override_reason": reason,
-        "override_owner_id": str(getattr(actor, "id", 0)),
-        "override_owner_name": _name(actor),
-        "override_timestamp": _now_iso(),
-        "previous_claimed_by": str(previous_claimed_by) if previous_claimed_by else None,
-        "override_success": bool(success),
-        "override_result_code": code,
-        "allow_duplicate_event": True,
-    }
-    if target is not None:
-        meta["transfer_target_user_id"] = str(getattr(target, "id", 0))
-        meta["transfer_target_name"] = _name(target)
-    if extra:
-        meta.update(dict(extra))
-    return meta
-
-
-async def _log_override(
-    *,
-    channel: discord.TextChannel,
-    actor: Any,
-    action: str,
-    reason: str,
-    previous_claimed_by: int,
-    success: bool,
-    code: str,
-    row: Optional[Dict[str, Any]],
-    target: Any = None,
-    extra: Optional[Dict[str, Any]] = None,
-) -> None:
-    try:
-        from .event_service import log_ticket_event
-
-        await log_ticket_event(
-            guild_id=channel.guild.id,
-            event_type="ticket_owner_emergency_override",
-            actor_user_id=actor.id,
-            actor_name=_name(actor),
-            target_user_id=getattr(target, "id", None),
-            target_name=_name(target) if target is not None else None,
-            channel_id=channel.id,
-            channel_name=channel.name,
-            reason=reason,
-            source="tickets_new_owner_emergency_override",
-            metadata=_audit_metadata(
-                actor=actor,
-                action=action,
-                reason=reason,
-                previous_claimed_by=previous_claimed_by,
-                success=success,
-                code=code,
-                target=target,
-                extra=extra,
-            ),
-            ticket_row=row,
-        )
-    except Exception as exc:
-        print(
-            "⚠️ owner emergency audit event failed "
-            f"channel={channel.id} action={action} error={exc!r}"
-        )
 
 
 async def _log_assignment_event(
@@ -242,7 +176,8 @@ async def _log_assignment_event(
     previous_claimed_by: int,
     row: Optional[Dict[str, Any]],
     target: Any = None,
-) -> None:
+) -> bool:
+    """Emit one normal lifecycle event with emergency context attached."""
     try:
         from . import event_service
 
@@ -250,21 +185,25 @@ async def _log_assignment_event(
             "owner_emergency_override": True,
             "override_reason": reason,
             "previous_claimed_by": previous_claimed_by or None,
+            "allow_duplicate_event": True,
         }
         if action == "transfer":
-            await event_service.log_ticket_transferred(
-                guild_id=channel.guild.id,
-                actor_user_id=actor.id,
-                actor_name=_name(actor),
-                target_user_id=target.id,
-                target_name=_name(target),
-                channel_id=channel.id,
-                reason=reason,
-                ticket_row=row,
-                source="tickets_new_owner_emergency_transfer",
-                metadata=metadata,
+            return bool(
+                await event_service.log_ticket_transferred(
+                    guild_id=channel.guild.id,
+                    actor_user_id=actor.id,
+                    actor_name=_name(actor),
+                    target_user_id=target.id,
+                    target_name=_name(target),
+                    channel_id=channel.id,
+                    reason=reason,
+                    ticket_row=row,
+                    source="tickets_new_owner_emergency_transfer",
+                    metadata=metadata,
+                )
             )
-        else:
+
+        return bool(
             await event_service.log_ticket_unclaimed(
                 guild_id=channel.guild.id,
                 actor_user_id=actor.id,
@@ -274,8 +213,13 @@ async def _log_assignment_event(
                 source="tickets_new_owner_emergency_unclaim",
                 metadata=metadata,
             )
-    except Exception:
-        pass
+        )
+    except Exception as exc:
+        print(
+            "⚠️ owner emergency assignment event failed "
+            f"channel={channel.id} action={action} error={exc!r}"
+        )
+        return False
 
 
 async def _ensure_transcript(
@@ -283,6 +227,7 @@ async def _ensure_transcript(
     actor: Any,
     reason: str,
 ) -> tuple[bool, Optional[Dict[str, Any]], Dict[str, Any]]:
+    """Create and persist transcript evidence before Discord channel deletion."""
     current = await _row(channel.id)
     if ticket_has_transcript(current):
         return True, current, {
@@ -301,10 +246,18 @@ async def _ensure_transcript(
     except Exception as exc:
         return False, current, {"transcript_error": repr(exc)}
 
+    transcript_url = url
+    message_id = None
+    transcript_channel_id = None
+
     if posted is not None:
         transcript_url = url or getattr(posted, "jump_url", None)
         message_id = getattr(posted, "id", None)
-        transcript_channel_id = getattr(getattr(posted, "channel", None), "id", None)
+        transcript_channel_id = getattr(
+            getattr(posted, "channel", None),
+            "id",
+            None,
+        )
         try:
             attached = await repo_attach_transcript(
                 channel_id=channel.id,
@@ -315,6 +268,7 @@ async def _ensure_transcript(
             )
         except Exception:
             attached = False
+
         if attached:
             try:
                 from .event_service import log_ticket_transcript_attached
@@ -328,23 +282,59 @@ async def _ensure_transcript(
                     transcript_message_id=message_id,
                     transcript_channel_id=transcript_channel_id,
                     source="tickets_new_owner_emergency_transcript",
-                    metadata={"owner_emergency_override": True},
+                    metadata={
+                        "owner_emergency_override": True,
+                        "allow_duplicate_event": True,
+                    },
                 )
             except Exception:
                 pass
-    else:
-        transcript_url = url
-        message_id = None
-        transcript_channel_id = None
 
     refreshed = await _row(channel.id)
-    meta = {
+    metadata = {
         "transcript_created": posted is not None,
         "transcript_url": transcript_url,
         "transcript_message_id": message_id,
         "transcript_channel_id": transcript_channel_id,
     }
-    return ticket_has_transcript(refreshed), refreshed, meta
+    return ticket_has_transcript(refreshed), refreshed, metadata
+
+
+async def _log_delete_event(
+    *,
+    channel: discord.TextChannel,
+    actor: Any,
+    reason: str,
+    previous_claimed_by: int,
+    row: Optional[Dict[str, Any]],
+    transcript_metadata: Dict[str, Any],
+) -> bool:
+    try:
+        from .event_service import log_ticket_deleted
+
+        return bool(
+            await log_ticket_deleted(
+                guild_id=channel.guild.id,
+                actor_user_id=actor.id,
+                actor_name=_name(actor),
+                channel_id=channel.id,
+                reason=reason,
+                ticket_row=row,
+                source="tickets_new_owner_emergency_delete",
+                metadata={
+                    "owner_emergency_override": True,
+                    "previous_claimed_by": previous_claimed_by or None,
+                    "allow_duplicate_event": True,
+                    **transcript_metadata,
+                },
+            )
+        )
+    except Exception as exc:
+        print(
+            "⚠️ owner emergency delete event failed "
+            f"channel={channel.id} error={exc!r}"
+        )
+        return False
 
 
 async def execute_owner_emergency_override(
@@ -359,15 +349,32 @@ async def execute_owner_emergency_override(
     clean_reason = _clean_reason(reason)
 
     if clean_action not in _VALID_ACTIONS:
-        return _result(False, clean_action, "invalid_action", "That emergency action is not supported.")
-    if channel is None or getattr(channel, "guild", None) is None or _safe_int(getattr(channel, "id", 0), 0) <= 0:
-        return _result(False, clean_action, "invalid_channel", "Use this inside a registered ticket channel.")
+        return _result(
+            False,
+            clean_action,
+            "invalid_action",
+            "That emergency action is not supported.",
+            mutation_started=False,
+        )
+    if (
+        channel is None
+        or getattr(channel, "guild", None) is None
+        or _safe_int(getattr(channel, "id", 0), 0) <= 0
+    ):
+        return _result(
+            False,
+            clean_action,
+            "invalid_channel",
+            "Use this inside a registered ticket channel.",
+            mutation_started=False,
+        )
     if not is_actual_guild_owner(channel.guild, actor):
         return _result(
             False,
             clean_action,
             "guild_owner_required",
             "Only the actual Discord server owner can use Emergency Override.",
+            mutation_started=False,
         )
     if len(clean_reason) < 8:
         return _result(
@@ -375,6 +382,7 @@ async def execute_owner_emergency_override(
             clean_action,
             "reason_required",
             "Give a clear emergency reason of at least 8 characters.",
+            mutation_started=False,
         )
 
     lock = _lock(channel.id)
@@ -384,6 +392,7 @@ async def execute_owner_emergency_override(
             clean_action,
             "override_in_progress",
             "Another emergency action is already running for this ticket.",
+            mutation_started=False,
         )
 
     async with lock:
@@ -394,6 +403,7 @@ async def execute_owner_emergency_override(
                 clean_action,
                 "ticket_not_found",
                 "This ticket is not registered. Nothing was changed.",
+                mutation_started=False,
             )
 
         previous = ticket_claimed_by_id(before)
@@ -409,34 +419,78 @@ async def execute_owner_emergency_override(
             guild_owner_id=_guild_owner_id(channel.guild),
         )
         if not decision.allowed:
-            return _result(False, clean_action, decision.code, decision.message)
+            return _result(
+                False,
+                clean_action,
+                decision.code,
+                decision.message,
+                mutation_started=False,
+                previous_claimed_by=previous,
+            )
 
         if clean_action == "transfer":
-            if target_member is None or _safe_int(getattr(target_member, "id", 0), 0) <= 0:
-                return _result(False, clean_action, "target_required", "Choose a staff member to receive this ticket.")
-            if _safe_int(getattr(getattr(target_member, "guild", None), "id", 0), 0) != int(channel.guild.id):
-                return _result(False, clean_action, "target_wrong_guild", "That member is not in this server.")
+            if (
+                target_member is None
+                or _safe_int(getattr(target_member, "id", 0), 0) <= 0
+            ):
+                return _result(
+                    False,
+                    clean_action,
+                    "target_required",
+                    "Choose a staff member to receive this ticket.",
+                    mutation_started=False,
+                    previous_claimed_by=previous,
+                )
+            if _safe_int(
+                getattr(getattr(target_member, "guild", None), "id", 0),
+                0,
+            ) != int(channel.guild.id):
+                return _result(
+                    False,
+                    clean_action,
+                    "target_wrong_guild",
+                    "That member is not in this server.",
+                    mutation_started=False,
+                    previous_claimed_by=previous,
+                )
             if ticket_owner_id(before) == int(target_member.id):
-                return _result(False, clean_action, "target_is_requester", "The requester cannot become the staff claimant.")
+                return _result(
+                    False,
+                    clean_action,
+                    "target_is_requester",
+                    "The requester cannot become the staff claimant.",
+                    mutation_started=False,
+                    previous_claimed_by=previous,
+                )
             if not _target_is_staff(target_member):
                 return _result(
                     False,
                     clean_action,
                     "target_not_staff",
                     "Choose configured ticket staff or the actual server owner.",
+                    mutation_started=False,
+                    previous_claimed_by=previous,
                 )
             if previous == int(target_member.id):
-                return _result(True, clean_action, "already_assigned", f"Already assigned to {target_member.mention}.")
+                return _result(
+                    True,
+                    clean_action,
+                    "already_assigned",
+                    f"Already assigned to {target_member.mention}.",
+                    mutation_started=False,
+                    previous_claimed_by=previous,
+                    target_user_id=target_member.id,
+                )
 
             try:
-                persisted = await repo_transfer(
+                await repo_transfer(
                     channel_id=channel.id,
                     to_staff_member=target_member,
                 )
             except Exception:
-                persisted = False
+                pass
             after = await _row(channel.id)
-            ok = bool(persisted and ticket_claimed_by_id(after) == int(target_member.id))
+            ok = ticket_claimed_by_id(after) == int(target_member.id)
             if ok:
                 await _sync_claimant_permissions(channel, after, previous)
                 await _log_assignment_event(
@@ -453,35 +507,38 @@ async def execute_owner_emergency_override(
                     "🚨 Server-owner emergency override transferred this ticket "
                     f"to {target_member.mention}. Reason: {clean_reason}",
                 )
-            await _log_override(
-                channel=channel,
-                actor=actor,
-                action=clean_action,
-                reason=clean_reason,
-                previous_claimed_by=previous,
-                success=ok,
-                code="owner_emergency_transfer_applied" if ok else "transfer_failed",
-                row=after or before,
-                target=target_member,
-            )
+
             return _result(
                 ok,
                 clean_action,
                 "owner_emergency_transfer_applied" if ok else "transfer_failed",
-                f"Emergency transfer completed to {target_member.mention}." if ok else "The emergency transfer did not persist.",
+                (
+                    f"Emergency transfer completed to {target_member.mention}."
+                    if ok
+                    else "The emergency transfer did not persist."
+                ),
+                mutation_started=True,
                 previous_claimed_by=previous,
                 target_user_id=target_member.id,
             )
 
         if clean_action == "unclaim":
             if previous <= 0:
-                return _result(True, clean_action, "already_unclaimed", "This ticket is already unclaimed.")
+                return _result(
+                    True,
+                    clean_action,
+                    "already_unclaimed",
+                    "This ticket is already unclaimed.",
+                    mutation_started=False,
+                    previous_claimed_by=0,
+                )
+
             try:
-                persisted = await repo_unclaim(channel_id=channel.id)
+                await repo_unclaim(channel_id=channel.id)
             except Exception:
-                persisted = False
+                pass
             after = await _row(channel.id)
-            ok = bool(persisted and ticket_claimed_by_id(after) <= 0)
+            ok = ticket_claimed_by_id(after) <= 0
             if ok:
                 await _sync_claimant_permissions(channel, after, previous)
                 await _log_assignment_event(
@@ -497,21 +554,17 @@ async def execute_owner_emergency_override(
                     "🚨 Server-owner emergency override removed the claimant. "
                     f"Reason: {clean_reason}",
                 )
-            await _log_override(
-                channel=channel,
-                actor=actor,
-                action=clean_action,
-                reason=clean_reason,
-                previous_claimed_by=previous,
-                success=ok,
-                code="owner_emergency_unclaim_applied" if ok else "unclaim_failed",
-                row=after or before,
-            )
+
             return _result(
                 ok,
                 clean_action,
                 "owner_emergency_unclaim_applied" if ok else "unclaim_failed",
-                "Emergency unclaim completed." if ok else "The emergency unclaim did not persist.",
+                (
+                    "Emergency unclaim completed."
+                    if ok
+                    else "The emergency unclaim did not persist."
+                ),
+                mutation_started=True,
                 previous_claimed_by=previous,
             )
 
@@ -519,25 +572,15 @@ async def execute_owner_emergency_override(
             try:
                 from . import service
 
-                persisted = await service.mark_ticket_closed(
+                await service.mark_ticket_closed(
                     channel=channel,
                     closed_by=actor,
                     reason=f"Owner emergency override: {clean_reason}",
                 )
             except Exception:
-                persisted = False
+                pass
             after = await _row(channel.id)
-            ok = bool(persisted or str((after or {}).get("status") or "").lower() == "closed")
-            await _log_override(
-                channel=channel,
-                actor=actor,
-                action=clean_action,
-                reason=clean_reason,
-                previous_claimed_by=previous,
-                success=ok,
-                code="owner_emergency_close_applied" if ok else "close_failed",
-                row=after or before,
-            )
+            ok = str((after or {}).get("status") or "").lower() == "closed"
             return _result(
                 ok,
                 clean_action,
@@ -547,32 +590,24 @@ async def execute_owner_emergency_override(
                     if ok
                     else "The emergency close did not complete."
                 ),
+                mutation_started=True,
                 previous_claimed_by=previous,
             )
 
-        transcript_ok, with_transcript, transcript_meta = await _ensure_transcript(
+        transcript_ok, with_transcript, transcript_metadata = await _ensure_transcript(
             channel,
             actor,
             clean_reason,
         )
         if not transcript_ok:
-            await _log_override(
-                channel=channel,
-                actor=actor,
-                action=clean_action,
-                reason=clean_reason,
-                previous_claimed_by=previous,
-                success=False,
-                code="transcript_required",
-                row=with_transcript or before,
-                extra=transcript_meta,
-            )
             return _result(
                 False,
                 clean_action,
                 "transcript_required",
                 "Safe delete stopped because a preserved transcript could not be verified.",
-                **transcript_meta,
+                mutation_started=False,
+                previous_claimed_by=previous,
+                **transcript_metadata,
             )
 
         final = evaluate_ticket_action(
@@ -582,107 +617,84 @@ async def execute_owner_emergency_override(
             guild_owner_id=_guild_owner_id(channel.guild),
         )
         if not final.allowed:
-            return _result(False, clean_action, final.code, final.message)
+            return _result(
+                False,
+                clean_action,
+                final.code,
+                final.message,
+                mutation_started=False,
+                previous_claimed_by=previous,
+                **transcript_metadata,
+            )
 
         try:
             await channel.delete(
-                reason=(f"Owner emergency override by {_name(actor)}: {clean_reason}")[:512]
+                reason=(
+                    f"Owner emergency override by {_name(actor)}: {clean_reason}"
+                )[:512]
             )
             discord_deleted = True
         except discord.NotFound:
             discord_deleted = True
         except Exception as exc:
-            await _log_override(
-                channel=channel,
-                actor=actor,
-                action=clean_action,
-                reason=clean_reason,
-                previous_claimed_by=previous,
-                success=False,
-                code="discord_delete_failed",
-                row=with_transcript,
-                extra={**transcript_meta, "discord_error": repr(exc)},
-            )
             return _result(
                 False,
                 clean_action,
                 "discord_delete_failed",
                 "Discord refused to delete the channel. The closed ticket and transcript were kept.",
-                **transcript_meta,
+                mutation_started=True,
+                previous_claimed_by=previous,
+                discord_error=repr(exc),
+                **transcript_metadata,
             )
 
         database_deleted = False
         after: Optional[Dict[str, Any]] = None
         for attempt in range(1, 4):
             try:
-                database_deleted = await repo_mark_deleted(
+                await repo_mark_deleted(
                     channel_id=channel.id,
                     deleted_by=actor.id,
                     deleted_by_name=_name(actor),
                     reason=f"Owner emergency override: {clean_reason}",
                 )
             except Exception:
-                database_deleted = False
+                pass
             after = await _row(channel.id)
-            if database_deleted or str((after or {}).get("status") or "").lower() == "deleted":
+            if str((after or {}).get("status") or "").lower() == "deleted":
                 database_deleted = True
                 break
             if attempt < 3:
                 await asyncio.sleep(0.35 * attempt)
 
         if database_deleted:
-            try:
-                from .event_service import log_ticket_deleted
+            await _log_delete_event(
+                channel=channel,
+                actor=actor,
+                reason=clean_reason,
+                previous_claimed_by=previous,
+                row=after or with_transcript,
+                transcript_metadata=transcript_metadata,
+            )
 
-                await log_ticket_deleted(
-                    guild_id=channel.guild.id,
-                    actor_user_id=actor.id,
-                    actor_name=_name(actor),
-                    channel_id=channel.id,
-                    reason=clean_reason,
-                    ticket_row=after or with_transcript,
-                    source="tickets_new_owner_emergency_delete",
-                    metadata={
-                        "owner_emergency_override": True,
-                        "previous_claimed_by": previous or None,
-                        **transcript_meta,
-                    },
-                )
-            except Exception:
-                pass
-
-        code = (
-            "owner_emergency_delete_applied"
-            if database_deleted
-            else "discord_deleted_db_update_failed"
-        )
-        await _log_override(
-            channel=channel,
-            actor=actor,
-            action=clean_action,
-            reason=clean_reason,
-            previous_claimed_by=previous,
-            success=bool(discord_deleted and database_deleted),
-            code=code,
-            row=after or with_transcript,
-            extra={
-                **transcript_meta,
-                "discord_deleted": discord_deleted,
-                "db_marked_deleted": database_deleted,
-            },
-        )
         return _result(
             database_deleted,
             clean_action,
-            code,
+            (
+                "owner_emergency_delete_applied"
+                if database_deleted
+                else "discord_deleted_db_update_failed"
+            ),
             (
                 "Safe emergency delete completed after the transcript was verified."
                 if database_deleted
                 else "The channel was removed and transcript preserved, but the database status update failed."
             ),
-            discord_deleted=True,
+            mutation_started=True,
+            previous_claimed_by=previous,
+            discord_deleted=discord_deleted,
             db_marked_deleted=database_deleted,
-            **transcript_meta,
+            **transcript_metadata,
         )
 
 
