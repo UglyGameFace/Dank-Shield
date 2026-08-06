@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from stoney_verify.setup_engine import verification_modes
 from stoney_verify.verification_new import id_ticket_runtime
 
 
@@ -29,7 +30,7 @@ def permissions(
 
 
 def runtime_objects(*, guild_id: int = ALLOWED_GUILD_ID):
-    guild = SimpleNamespace(id=guild_id, me=None)
+    guild = SimpleNamespace(id=guild_id, name="Approved ID Server", me=None)
     member = SimpleNamespace(id=100)
     bot_member = SimpleNamespace(id=200)
     owner_perms = permissions()
@@ -47,11 +48,39 @@ def runtime_objects(*, guild_id: int = ALLOWED_GUILD_ID):
         guild=guild,
         permissions_for=permissions_for,
     )
+    # Match the actual values saved by the ID / Web + Voice setup template.
+    # That template does not need to persist verification_mode=id_verify.
     cfg = SimpleNamespace(
-        verification_mode="id_verify",
-        id_verify_enabled=True,
+        setup_choice="id_voice_check",
+        verification_panel_style="id_voice_check",
+        verification_requires_id=True,
+        verification_allows_voice=True,
     )
     return guild, channel, member, bot_member, owner_perms, bot_perms, cfg
+
+
+def test_persisted_setup_values_are_recognized_as_id_verification() -> None:
+    guild = SimpleNamespace(id=ALLOWED_GUILD_ID, name="Approved ID Server")
+
+    for cfg in (
+        SimpleNamespace(setup_choice="id_check"),
+        SimpleNamespace(setup_choice="id_voice_check"),
+        SimpleNamespace(verification_panel_style="id_check"),
+        SimpleNamespace(verification_requires_id=True),
+    ):
+        assert verification_modes.config_requests_id_verify(cfg) is True
+        assert verification_modes.effective_verification_mode(guild, cfg) == "id_verify"
+
+
+def test_persisted_id_setup_still_cannot_enable_a_non_allowlisted_guild() -> None:
+    guild = SimpleNamespace(id=999, name="Public Server")
+    cfg = SimpleNamespace(
+        setup_choice="id_voice_check",
+        verification_requires_id=True,
+    )
+
+    assert verification_modes.config_requests_id_verify(cfg) is True
+    assert verification_modes.effective_verification_mode(guild, cfg) == "basic_button"
 
 
 def test_allowlisted_ticket_uses_valid_inherited_access_without_rewriting_permissions(
@@ -202,6 +231,9 @@ def test_existing_allowlist_guard_owns_the_canonical_ticket_runtime_wiring() -> 
     clean_panel = (
         ROOT / "stoney_verify/commands_ext/public_ticket_panel_clean.py"
     ).read_text(encoding="utf-8")
+    modes = (
+        ROOT / "stoney_verify/setup_engine/verification_modes.py"
+    ).read_text(encoding="utf-8")
 
     assert "def _patch_verification_ticket_flow" in guard
     assert "post_allowlisted_id_ticket_panel" in guard
@@ -209,3 +241,6 @@ def test_existing_allowlist_guard_owns_the_canonical_ticket_runtime_wiring() -> 
     assert "flow._post_verify_ui = post_verify_ui_canonical" in guard
     assert "_maybe_post_verification_panel" in clean_panel
     assert "verify_flow._post_verify_ui" in clean_panel
+    assert '"setup_choice"' in modes
+    assert '"verification_panel_style"' in modes
+    assert '"verification_requires_id"' in modes
