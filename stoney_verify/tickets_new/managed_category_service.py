@@ -11,7 +11,10 @@ from typing import Any, Dict, Iterable, List, Mapping, Sequence
 from ..globals import get_supabase
 
 
+# Setup selection and managed catalog repair are intentionally versioned
+# separately. A catalog repair must never force a valid owner through setup again.
 CATEGORY_SETUP_VERSION = 2
+MANAGED_CATALOG_VERSION = 3
 SAFE_STARTER_KEYS: tuple[str, ...] = ("report", "appeal", "support")
 _RECONCILE_DEBOUNCE_SECONDS = 300.0
 _RECONCILE_RETRY_SECONDS = 30.0
@@ -285,11 +288,32 @@ def _row_value(row: Mapping[str, Any] | None, key: str, default: Any = None) -> 
     return default
 
 
-def canonical_category_key(row: Mapping[str, Any]) -> str:
-    managed = _slug(row.get("managed_category_key"))
-    if managed in _CATALOG_BY_KEY:
-        return managed
+def _managed(row: Mapping[str, Any]) -> bool:
+    return _safe_bool(row.get("managed_by_dank"), False)
 
+
+def _stored_managed_key(row: Mapping[str, Any]) -> str:
+    key = _slug(row.get("managed_category_key"))
+    return key if key in _CATALOG_BY_KEY else ""
+
+
+def _display_name(row: Mapping[str, Any]) -> str:
+    return str(
+        row.get("button_label")
+        or row.get("name")
+        or row.get("display_name")
+        or row.get("title")
+        or row.get("slug")
+        or "Ticket choice"
+    ).strip()
+
+
+def _exact_reserved_slug_key(row: Mapping[str, Any]) -> str:
+    slug = _slug(row.get("slug") or row.get("category_slug"))
+    return _ALIAS_TO_KEY.get(slug, "")
+
+
+def _managed_inferred_key(row: Mapping[str, Any]) -> str:
     slug = _slug(row.get("slug") or row.get("category_slug"))
     name = _slug(
         row.get("button_label")
@@ -302,8 +326,8 @@ def canonical_category_key(row: Mapping[str, Any]) -> str:
         if key:
             return key
 
-    # Narrow compatibility rules only. Broad substring tests caused Support,
-    # Reports, and service rows to collapse into the wrong option.
+    # Narrow compatibility rules are allowed only for rows already owned by
+    # Dank Shield. Unknown owner-created custom slugs never enter this path.
     combined = f"{slug} {name}".strip()
     if combined.startswith("verification-") or combined.startswith("verify-"):
         return "verification"
@@ -323,7 +347,31 @@ def canonical_category_key(row: Mapping[str, Any]) -> str:
         return "content-media"
     if combined.startswith("giveaway-reward"):
         return "giveaway-reward"
+    return ""
 
+
+def canonical_category_key(row: Mapping[str, Any]) -> str:
+    stored = _stored_managed_key(row)
+    reserved_slug = _exact_reserved_slug_key(row)
+
+    if _managed(row):
+        # A reserved slug is stronger evidence than a stale stored key. A row
+        # with the correct canonical slug keeps its stored key even when its old
+        # visible name/button label drifted.
+        if stored:
+            if reserved_slug and reserved_slug != stored:
+                return reserved_slug
+            return stored
+        inferred = _managed_inferred_key(row)
+        if inferred:
+            return inferred
+    elif reserved_slug:
+        # Historical pre-managed built-ins used reserved slugs. Display name
+        # alone is never enough to claim an owner-created custom row.
+        return reserved_slug
+
+    slug = _slug(row.get("slug") or row.get("category_slug"))
+    name = _slug(_display_name(row))
     return f"custom:{slug or name or 'ticket-choice'}"
 
 
@@ -339,6 +387,29 @@ def _row_sort(row: Mapping[str, Any]) -> int:
     return _safe_int(row.get("sort_order", row.get("position", 999)), 999)
 
 
+def _managed_row_shape_matches(row: Mapping[str, Any], key: str) -> bool:
+    catalog = _CATALOG_BY_KEY.get(key)
+    if not catalog or not _managed(row):
+        return False
+    if _stored_managed_key(row) != key:
+        return False
+    if _safe_int(row.get("managed_catalog_version"), 0) < MANAGED_CATALOG_VERSION:
+        return False
+    if _slug(row.get("slug")) != _slug(catalog.get("slug")):
+        return False
+    if str(row.get("name") or "").strip() != str(catalog.get("name") or "").strip():
+        return False
+    if str(row.get("button_label") or "").strip() != str(catalog.get("name") or "").strip():
+        return False
+    if str(row.get("description") or "").strip() != str(catalog.get("description") or "").strip():
+        return False
+    if _slug(row.get("intake_type")) != _slug(catalog.get("intake_type")):
+        return False
+    if _row_sort(row) != _safe_int(catalog.get("sort_order"), 999):
+        return False
+    return True
+
+
 def _preferred_row(left: Dict[str, Any], right: Dict[str, Any], key: str) -> Dict[str, Any]:
     catalog = _CATALOG_BY_KEY.get(key)
     if catalog:
@@ -348,8 +419,30 @@ def _preferred_row(left: Dict[str, Any], right: Dict[str, Any], key: str) -> Dic
         if left_exact != right_exact:
             return left if left_exact else right
 
-    left_managed = _safe_bool(left.get("managed_by_dank"), False)
-    right_managed = _safe_bool(right.get("managed_by_dank"), False)
+    left_managed = _managed(left)
+    right_managed = _managed(right)
+    if left_managed != right_managed:
+        return left if left_managed else right
+
+    if _row_sort(right) < _row_sort(left):
+        return right
+    return left
+
+
+def _visible_label_key(row: Mapping[str, Any]) -> str:
+    return _slug(_display_name(row)) or _slug(row.get("slug")) or "ticket-choice"
+
+
+def _preferred_visible_row(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
+    left_key = canonical_category_key(left)
+    right_key = canonical_category_key(right)
+    left_canonical = left_key in _CATALOG_BY_KEY and _managed_row_shape_matches(left, left_key)
+    right_canonical = right_key in _CATALOG_BY_KEY and _managed_row_shape_matches(right, right_key)
+    if left_canonical != right_canonical:
+        return left if left_canonical else right
+
+    left_managed = _managed(left)
+    right_managed = _managed(right)
     if left_managed != right_managed:
         return left if left_managed else right
 
@@ -364,6 +457,7 @@ def dedupe_category_rows(
     enabled_only: bool = True,
     fallback: bool = False,
 ) -> List[Dict[str, Any]]:
+    # First collapse rows that resolve to the same canonical category key.
     by_key: Dict[str, Dict[str, Any]] = {}
     for raw in raw_rows or []:
         if not isinstance(raw, Mapping):
@@ -378,10 +472,25 @@ def dedupe_category_rows(
             by_key[key] = row
 
     rows = list(by_key.values())
+
+    if enabled_only:
+        # Member-facing Discord components require a second invariant: two
+        # different internal keys may never render the same visible label. The
+        # setup/editor inventory deliberately skips this phase so an owner can
+        # still see and rename a preserved custom row that shares a label.
+        by_label: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            label_key = _visible_label_key(row)
+            if label_key in by_label:
+                by_label[label_key] = _preferred_visible_row(by_label[label_key], row)
+            else:
+                by_label[label_key] = row
+        rows = list(by_label.values())
+
     rows.sort(
         key=lambda row: (
             _row_sort(row),
-            str(row.get("name") or row.get("button_label") or row.get("slug") or "").lower(),
+            _display_name(row).lower(),
             canonical_category_key(row),
         )
     )
@@ -397,9 +506,10 @@ def catalog_category_rows() -> List[Dict[str, Any]]:
         key = str(item["category_key"])
         row.update(
             {
+                "button_label": str(item["name"]),
                 "managed_by_dank": True,
                 "managed_category_key": key,
-                "managed_catalog_version": CATEGORY_SETUP_VERSION,
+                "managed_catalog_version": MANAGED_CATALOG_VERSION,
                 "is_enabled": key in SAFE_STARTER_KEYS,
             }
         )
@@ -460,6 +570,17 @@ def _fetch_rows_sync(guild_id: int) -> List[Dict[str, Any]]:
 
 def _sync_managed_categories_sync(guild_id: int) -> List[Dict[str, Any]]:
     sb = _supabase()
+    # v3 databases expose a preflight that releases only provably stale managed
+    # keys before reconciliation. Older databases may not have it yet; failure is
+    # intentionally non-fatal so the legacy RPC/fallback behavior still works.
+    try:
+        sb.rpc(
+            "prepare_dank_ticket_category_repair",
+            {"p_guild_id": str(int(guild_id))},
+        ).execute()
+    except Exception:
+        pass
+
     try:
         response = sb.rpc(
             "reconcile_dank_ticket_categories",
@@ -475,16 +596,21 @@ def _sync_managed_categories_sync(guild_id: int) -> List[Dict[str, Any]]:
 
 
 def _catalog_reconcile_needed(rows: Sequence[Mapping[str, Any]]) -> bool:
-    """Return True only when catalog repair is actually needed."""
+    """Return True when any managed catalog row is missing, duplicate, or stale."""
     managed_keys: List[str] = []
     for row in rows:
-        key = canonical_category_key(row)
-        if key not in _CATALOG_KEYS:
+        if _managed(row):
+            key = canonical_category_key(row)
+            if key not in _CATALOG_KEYS:
+                return True
+            managed_keys.append(key)
+            if not _managed_row_shape_matches(row, key):
+                return True
             continue
-        managed_keys.append(key)
-        if not _safe_bool(row.get("managed_by_dank"), False):
-            return True
-        if _safe_int(row.get("managed_catalog_version"), 0) < CATEGORY_SETUP_VERSION:
+
+        # Exact reserved legacy slugs are the only non-managed rows eligible for
+        # adoption. Unknown custom slugs are intentionally ignored here.
+        if _exact_reserved_slug_key(row) in _CATALOG_KEYS:
             return True
 
     if set(managed_keys) != _CATALOG_KEYS:
@@ -522,9 +648,9 @@ def _shape_problem(
     managed_total = 0
     custom_total = 0
     for row in rows:
-        key = canonical_category_key(row)
-        canonical_counts[key] = canonical_counts.get(key, 0) + 1
-        if _safe_bool(row.get("managed_by_dank"), False) or key in _CATALOG_BY_KEY:
+        if _managed(row):
+            key = canonical_category_key(row)
+            canonical_counts[key] = canonical_counts.get(key, 0) + 1
             managed_total += 1
             if _row_enabled(row):
                 managed_enabled += 1
@@ -532,7 +658,7 @@ def _shape_problem(
             custom_total += 1
 
     duplicates = sorted(key for key, count in canonical_counts.items() if count > 1)
-    if duplicates:
+    if version < CATEGORY_SETUP_VERSION and duplicates:
         return "Duplicate ticket choices were detected and must be reviewed.", True
 
     if version < CATEGORY_SETUP_VERSION and managed_enabled >= 10:
@@ -556,7 +682,7 @@ def _enabled_custom_rows(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, An
     return [
         dict(row)
         for row in rows
-        if canonical_category_key(row) not in _CATALOG_BY_KEY and _row_enabled(row)
+        if not _managed(row) and _row_enabled(row)
     ]
 
 
@@ -578,8 +704,7 @@ def _set_custom_default_fallback_sync(
         )[0]
     preferred_id = str(preferred.get("id") or "")
     for row in rows:
-        key = canonical_category_key(row)
-        if key in _CATALOG_BY_KEY:
+        if _managed(row):
             continue
         row_id = str(row.get("id") or "")
         if not row_id:
@@ -601,6 +726,8 @@ def _mark_required_fallback_sync(
 
     if reset_to_starter:
         for row in rows:
+            if not _managed(row):
+                continue
             key = canonical_category_key(row)
             if key not in _CATALOG_BY_KEY:
                 continue
@@ -662,9 +789,9 @@ def _state_from_rows(
 ) -> CategorySetupState:
     active = dedupe_category_rows(rows, enabled_only=True, fallback=True)
     selected = tuple(
-        key
-        for key in (canonical_category_key(row) for row in active)
-        if key in _CATALOG_BY_KEY
+        canonical_category_key(row)
+        for row in active
+        if _managed(row) and canonical_category_key(row) in _CATALOG_BY_KEY
     )
     return CategorySetupState(
         rows=dedupe_category_rows(rows, enabled_only=False, fallback=False),
@@ -677,7 +804,7 @@ def _state_from_rows(
 
 
 def ensure_category_setup_state_sync(guild_id: int) -> CategorySetupState:
-    """Read category state, reconciling only stale/missing catalog shapes."""
+    """Read category state, repairing stale managed catalog shapes when possible."""
     guild_id = int(guild_id)
     cfg = _fetch_config_sync(guild_id)
     rows = _fetch_rows_sync(guild_id)
@@ -690,6 +817,11 @@ def ensure_category_setup_state_sync(guild_id: int) -> CategorySetupState:
         else:
             cfg = _fetch_config_sync(guild_id)
             rows = _fetch_rows_sync(guild_id)
+            if _catalog_reconcile_needed(rows):
+                # The deployed RPC may still be an older migration. Keep the
+                # member-facing dedupe active and retry soon instead of treating
+                # an incomplete repair as success.
+                _schedule_reconcile_retry(guild_id)
 
     required = _config_required(cfg)
     if not required:
@@ -748,11 +880,13 @@ def _save_selection_fallback_sync(
         else (selected_keys[0] if selected_keys else "")
     )
     for row in rows:
-        key = canonical_category_key(row)
         row_id = str(row.get("id") or "")
         if not row_id:
             continue
-        if key in _CATALOG_BY_KEY:
+        if _managed(row):
+            key = canonical_category_key(row)
+            if key not in _CATALOG_BY_KEY:
+                continue
             sb.table("ticket_categories").update(
                 {
                     "is_enabled": key in selected_keys,
@@ -862,6 +996,7 @@ def summarize_sync(rows: List[Dict[str, Any]]) -> Dict[str, int]:
 __all__ = [
     "CATEGORY_CATALOG",
     "CATEGORY_SETUP_VERSION",
+    "MANAGED_CATALOG_VERSION",
     "SAFE_STARTER_KEYS",
     "CategorySelectionError",
     "CategorySetupState",
