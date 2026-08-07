@@ -31,26 +31,28 @@ def _child_names(group: Any) -> set[str]:
     }
 
 
-def test_final_compacted_tree_keeps_the_complete_studio_entry_surface() -> None:
-    commands_module.register_commands()
-    size = compact_public_dank_surface(
+def _compact_imported_tree() -> int:
+    # commands.py performs canonical registration and compaction during import.
+    # Re-running the idempotent compactor validates the actual production tree
+    # rather than calling a nonexistent legacy registration helper.
+    return compact_public_dank_surface(
         commands_module.bot,
-        commands_module.tree,
+        commands_module.bot.tree,
     )
+
+
+def test_final_compacted_tree_keeps_the_complete_studio_entry_surface() -> None:
+    size = _compact_imported_tree()
 
     attached = dank_group.get_command("welcome")
     assert isinstance(attached, app_commands.Group)
     assert _child_names(attached) == EXPECTED_COMPACT_WELCOME_COMMANDS
-    assert size == dank_payload_size(commands_module.tree)
+    assert size == dank_payload_size(commands_module.bot.tree)
     assert size <= DANK_PAYLOAD_SAFETY_LIMIT
 
 
 def test_compacted_studio_commands_use_canonical_callbacks() -> None:
-    commands_module.register_commands()
-    compact_public_dank_surface(
-        commands_module.bot,
-        commands_module.tree,
-    )
+    _compact_imported_tree()
     attached = dank_group.get_command("welcome")
     assert isinstance(attached, app_commands.Group)
 
