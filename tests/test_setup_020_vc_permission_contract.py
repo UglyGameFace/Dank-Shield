@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
 import discord
-import pytest
 
 from stoney_verify.services import vc_verification_permissions as vc_permissions
 from stoney_verify.services.setup_permission_policy import vc_verification_overwrites
@@ -86,8 +86,7 @@ def test_runtime_session_grant_enables_video_and_voice():
     assert "ow.use_voice_activation = True" in grant
 
 
-@pytest.mark.asyncio
-async def test_reconciler_fetches_configured_voice_channel_when_cache_misses(
+def test_reconciler_fetches_configured_voice_channel_when_cache_misses(
     monkeypatch,
 ):
     monkeypatch.setattr(vc_permissions.discord, "Role", FakeRole)
@@ -109,18 +108,21 @@ async def test_reconciler_fetches_configured_voice_channel_when_cache_misses(
         fetch_channel=fetch_channel,
         get_role=lambda _role_id: None,
     )
-    result = await vc_permissions.reconcile_vc_verification_channel(
-        guild,
-        cfg={"vc_verify_channel_id": 99},
-    )
+
+    async def scenario():
+        return await vc_permissions.reconcile_vc_verification_channel(
+            guild,
+            cfg={"vc_verify_channel_id": 99},
+        )
+
+    result = asyncio.run(scenario())
 
     assert result.ok is True
     assert fetched_ids == [99]
     assert everyone in channel.overwrites
 
 
-@pytest.mark.asyncio
-async def test_reconciler_removes_stale_role_grants_but_keeps_member_sessions(
+def test_reconciler_removes_stale_role_grants_but_keeps_member_sessions(
     monkeypatch,
 ):
     monkeypatch.setattr(vc_permissions.discord, "Role", FakeRole)
@@ -155,10 +157,13 @@ async def test_reconciler_removes_stale_role_grants_but_keeps_member_sessions(
         get_role=lambda _role_id: None,
     )
 
-    result = await vc_permissions.reconcile_vc_verification_channel(
-        guild,
-        cfg={"vc_verify_channel_id": 99},
-    )
+    async def scenario():
+        return await vc_permissions.reconcile_vc_verification_channel(
+            guild,
+            cfg={"vc_verify_channel_id": 99},
+        )
+
+    result = asyncio.run(scenario())
 
     assert result.ok is True
     assert stale_role not in channel.overwrites
