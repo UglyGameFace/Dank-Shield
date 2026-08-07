@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-"""Canonical `/dank welcome` styling commands.
+"""Reliable direct-entry commands for the canonical Welcome Card Studio.
 
-The full button-first panel lives in ``welcome_card_studio_ui``. These commands
-provide reliable upload and direct-entry surfaces after `/dank` compaction.
-Every save is acknowledged even when the optional preview render fails.
+The complete button-first panel lives in :mod:`stoney_verify.welcome_card_studio_ui`.
+These commands preserve upload and direct picker entry points after final `/dank`
+compaction. Saving and rendering are separate outcomes: a render failure never
+rolls back a valid setting and never sends ``file=None`` to Discord.
 """
 
 import asyncio
@@ -106,10 +107,10 @@ async def _private(
         payload["view"] = view
     if file is not None:
         payload["file"] = file
-    if not interaction.response.is_done():
-        await interaction.response.send_message(**payload)
-    else:
+    if interaction.response.is_done():
         await interaction.followup.send(**payload)
+    else:
+        await interaction.response.send_message(**payload)
 
 
 async def _defer(interaction: discord.Interaction) -> None:
@@ -157,10 +158,9 @@ async def _save_and_preview(
     try:
         cfg = await _save_cfg(interaction, updates)
     except Exception as exc:
-        return await interaction.followup.send(
-            f"❌ Nothing was saved: `{type(exc).__name__}: {exc}`",
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
+        return await _private(
+            interaction,
+            content=f"❌ Nothing was saved: `{type(exc).__name__}: {exc}`",
         )
 
     preview, preview_error = await _optional_preview(interaction.user, cfg)
@@ -170,21 +170,7 @@ async def _save_and_preview(
             "\n⚠️ Settings **were saved**, but the preview could not render: "
             f"`{preview_error}`. Open `/dank welcome card-studio` to repair the active asset."
         )
-    await interaction.followup.send(
-        content,
-        file=preview,
-        ephemeral=True,
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
-
-
-def _font_label(cfg: Any) -> str:
-    key = configured_font_style_key(cfg)
-    custom_font, custom_name = configured_custom_font(cfg)
-    if key == CUSTOM_FONT_STYLE_KEY and custom_font:
-        return custom_name
-    style = FONT_STYLES.get(key)
-    return getattr(style, "label", key.replace("_", " ").title())
+    await _private(interaction, content=content, file=preview)
 
 
 async def _send_font_picker(
@@ -248,7 +234,7 @@ async def _send_font_picker(
         interaction,
         content=(
             "## 🔤 Welcome Card Fonts\nChoose the font used by the live Studio runtime. "
-            "Uploads remain available through `/dank welcome card-font-upload`."
+            "Only upload fonts you are licensed to use."
         ),
         view=DankPickerView(
             author_id=int(interaction.user.id),
@@ -338,7 +324,7 @@ async def _send_palette_picker(interaction: discord.Interaction) -> None:
 
     await _private(
         interaction,
-        content="## 🎨 Ready-Made Welcome Palettes",
+        content="## 🎨 Ready-Made Palettes",
         view=DankPickerView(
             author_id=int(interaction.user.id),
             choices=[
@@ -444,7 +430,7 @@ async def _send_color_picker(
                 make_choice(
                     "Advanced Hex Colors",
                     "advanced",
-                    description="Enter two exact hex colors.",
+                    description="Open the custom color picker for two exact hex values.",
                     emoji="⌨️",
                     default=current_mode == "custom",
                 ),
@@ -507,14 +493,14 @@ async def _send_shuffle_picker(
                 make_choice(
                     "Shuffle Fonts",
                     "fonts",
-                    description="Rotate fonts while preserving theme/colors.",
+                    description="Rotate fonts while preserving theme and colors.",
                     emoji="🔤",
                     default=current == "fonts",
                 ),
                 make_choice(
                     "Shuffle Themes",
                     "themes",
-                    description="Rotate built-in themes while preserving font/colors.",
+                    description="Rotate built-in themes while preserving font and colors.",
                     emoji="🖼️",
                     default=current == "themes",
                 ),
@@ -528,7 +514,7 @@ async def _send_shuffle_picker(
                 make_choice(
                     "Shuffle Everything",
                     "everything",
-                    description="Rotate font, theme, and safe palette.",
+                    description="Rotate font, theme, and a safe palette.",
                     emoji="🌈",
                     default=current == "everything",
                 ),
@@ -545,10 +531,7 @@ async def welcome_card_font(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return
     if interaction.guild is None:
-        return await _private(
-            interaction,
-            content="❌ This must be used inside a server.",
-        )
+        return await _private(interaction, content="❌ This must be used inside a server.")
     await _send_font_picker(
         interaction,
         cfg=await get_guild_config(int(interaction.guild.id), refresh=True),
@@ -559,10 +542,7 @@ async def welcome_card_colors(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return
     if interaction.guild is None:
-        return await _private(
-            interaction,
-            content="❌ This must be used inside a server.",
-        )
+        return await _private(interaction, content="❌ This must be used inside a server.")
     await _send_color_picker(
         interaction,
         cfg=await get_guild_config(int(interaction.guild.id), refresh=True),
@@ -573,10 +553,7 @@ async def welcome_card_shuffle(interaction: discord.Interaction) -> None:
     if not await _require_setup_permission(interaction):
         return
     if interaction.guild is None:
-        return await _private(
-            interaction,
-            content="❌ This must be used inside a server.",
-        )
+        return await _private(interaction, content="❌ This must be used inside a server.")
     await _send_shuffle_picker(
         interaction,
         cfg=await get_guild_config(int(interaction.guild.id), refresh=True),
@@ -614,14 +591,11 @@ async def welcome_card_font_upload(
             str(font_file.filename or "uploaded-font"),
         )
     except ValueError as exc:
-        return await interaction.followup.send(
-            f"❌ {exc}",
-            ephemeral=True,
-        )
+        return await _private(interaction, content=f"❌ {exc}")
     except Exception as exc:
-        return await interaction.followup.send(
-            f"❌ Font upload failed safely: `{type(exc).__name__}`. Nothing was saved.",
-            ephemeral=True,
+        return await _private(
+            interaction,
+            content=f"❌ Font upload failed safely: `{type(exc).__name__}`. Nothing was saved.",
         )
 
     try:
@@ -637,9 +611,9 @@ async def welcome_card_font_upload(
             },
         )
     except Exception as exc:
-        return await interaction.followup.send(
-            f"❌ Valid font, but nothing was saved: `{type(exc).__name__}: {exc}`",
-            ephemeral=True,
+        return await _private(
+            interaction,
+            content=f"❌ Valid font, but nothing was saved: `{type(exc).__name__}: {exc}`",
         )
 
     preview, preview_error = await _optional_preview(interaction.user, cfg)
@@ -649,12 +623,7 @@ async def welcome_card_font_upload(
     )
     if preview_error:
         content += f"\n⚠️ Saved, but preview failed: `{preview_error}`."
-    await interaction.followup.send(
-        content,
-        file=preview,
-        ephemeral=True,
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
+    await _private(interaction, content=content, file=preview)
 
 
 async def welcome_card_font_clear(interaction: discord.Interaction) -> None:
@@ -705,11 +674,7 @@ def register_public_welcome_card_studio_commands(bot: Any, tree: Any) -> None:
     if _REGISTERED:
         return
     register_public_welcome_group_commands(bot, tree)
-    _add_command(
-        "card-font",
-        "Choose the live welcome-card font.",
-        welcome_card_font,
-    )
+    _add_command("card-font", "Choose the live welcome-card font.", welcome_card_font)
     _add_command(
         "card-colors",
         "Choose automatic colors or a palette.",
@@ -717,7 +682,7 @@ def register_public_welcome_card_studio_commands(bot: Any, tree: Any) -> None:
     )
     _add_command(
         "card-font-upload",
-        "Upload a TTF, OTF, TTC, OTC, WOFF, or WOFF2 font.",
+        "Upload a licensed TTF, OTF, TTC, OTC, WOFF, or WOFF2 font.",
         welcome_card_font_upload,
     )
     _add_command(
@@ -753,6 +718,7 @@ def register_public_welcome_card_studio_commands(bot: Any, tree: Any) -> None:
 
 
 __all__ = [
+    "AdvancedWelcomeColorsModal",
     "register_public_welcome_card_studio_commands",
     "welcome_card_colors",
     "welcome_card_font",
