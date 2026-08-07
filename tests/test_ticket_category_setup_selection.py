@@ -9,6 +9,7 @@ import pytest
 from stoney_verify.commands_ext import public_setup_recommend as recommend
 from stoney_verify.commands_ext import public_setup_solid as solid
 from stoney_verify.commands_ext import public_ticket_panel_clean as clean_panel
+from stoney_verify.setup_ui import public_setup_compact as compact_setup
 from stoney_verify.startup_guards import _STARTUP_GUARDS
 from stoney_verify.startup_guards import auto_schema_bootstrap
 from stoney_verify.startup_guards import ticket_category_schema_bootstrap_guard as schema_guard
@@ -226,4 +227,4 @@ def test_single_runtime_owner_is_installed_on_every_picker_path() -> None:
     assert "stoney_verify.startup_guards.ticket_category_game_services_guard" not in _STARTUP_GUARDS
     assert clean_panel._load_rows is setup_guard._clean_panel_load_rows
     assert solid._category_load is setup_guard._setup_category_load
-    assert solid._build_category_manager_payload is setup_guard._build_category_manager_payload
+    assert solid._build_category_manager_payload is compact_setup._category_payload
