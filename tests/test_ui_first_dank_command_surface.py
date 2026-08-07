@@ -25,6 +25,8 @@ def test_ui_first_surface_has_small_explicit_entry_set() -> None:
         '"status"',
         '"diagnostics"',
         '"welcome"',
+        '"card-studio"',
+        '"card-preview"',
     ):
         assert required in source
     assert "DANK_PAYLOAD_SAFETY_LIMIT = 7600" in source
@@ -35,10 +37,13 @@ def test_welcome_and_profiles_are_separate_ui_destinations() -> None:
     setup_source = (ROOT / "stoney_verify/commands_ext/public_setup_recommend.py").read_text(encoding="utf-8")
     profile_source = (ROOT / "stoney_verify/profile_card_setup_ui.py").read_text(encoding="utf-8")
     welcome_source = (ROOT / "stoney_verify/welcome_setup_ui.py").read_text(encoding="utf-8")
+    studio_source = (ROOT / "stoney_verify/welcome_card_studio_ui.py").read_text(encoding="utf-8")
     assert 'label="Welcome & Join"' in setup_source
     assert 'label="Profile Signatures"' in setup_source
     assert "Add Welcome Channel" not in profile_source
-    assert "Welcome & Join • separate from Profile Signatures" in welcome_source
+    assert "Welcome Card Studio" in welcome_source
+    assert 'label="Join Card Studio"' in welcome_source
+    assert "canonical live runtime" in studio_source
     assert "Profile Signatures" in profile_source
 
 
