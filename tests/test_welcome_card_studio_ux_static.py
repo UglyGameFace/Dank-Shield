@@ -30,7 +30,6 @@ def test_save_and_preview_are_separate_failure_domains() -> None:
     assert "async def _save_and_preview(" in COMMANDS
     assert "Settings **were saved**, but the preview could not render" in COMMANDS
     assert "if file is not None:" in COMMANDS
-    assert "file=preview" not in COMMANDS
     assert "await _private(interaction, content=content, file=preview)" in COMMANDS
 
 
