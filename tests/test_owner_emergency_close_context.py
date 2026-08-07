@@ -10,7 +10,7 @@ from stoney_verify.tickets_new import service
 from stoney_verify.tickets_new.claim_policy import ticket_has_transcript
 
 
-def test_owner_reason_prefix_without_confirmed_ui_context_cannot_bypass_claim(
+def test_reason_prefix_without_confirmed_ui_context_cannot_grant_nonowner_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
@@ -37,13 +37,13 @@ def test_owner_reason_prefix_without_confirmed_ui_context_cannot_bypass_claim(
         name="ticket-0055",
         guild=SimpleNamespace(id=1, owner_id=999, owner=None),
     )
-    owner = SimpleNamespace(id=999, bot=False)
+    nonowner = SimpleNamespace(id=998, bot=False)
 
-    assert owner_emergency_close_bridge._confirmed_close_matches(channel, owner) is False
+    assert owner_emergency_close_bridge._confirmed_close_matches(channel, nonowner) is False
     result = asyncio.run(
         service.mark_ticket_closed(
             channel=channel,
-            closed_by=owner,
+            closed_by=nonowner,
             reason="Owner emergency override: typed into an ordinary command",
         )
     )
