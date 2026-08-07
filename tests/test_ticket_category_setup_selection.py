@@ -319,11 +319,12 @@ def test_guided_ticket_choice_step_opens_the_category_selector(
 
 
 def test_category_migrations_are_registered_for_direct_dsn_startup() -> None:
-    assert schema_guard.MIGRATION_FILE in auto_schema_bootstrap._BOOTSTRAP_MIGRATION_FILES
-    assert schema_guard.REPAIR_MIGRATION_FILE in auto_schema_bootstrap._BOOTSTRAP_MIGRATION_FILES
-    assert auto_schema_bootstrap._BOOTSTRAP_MIGRATION_FILES.index(schema_guard.MIGRATION_FILE) < auto_schema_bootstrap._BOOTSTRAP_MIGRATION_FILES.index(
-        schema_guard.REPAIR_MIGRATION_FILE
-    )
+    files = auto_schema_bootstrap._BOOTSTRAP_MIGRATION_FILES
+    assert schema_guard.MIGRATION_FILE in files
+    assert schema_guard.REPAIR_PREP_MIGRATION_FILE in files
+    assert schema_guard.REPAIR_MIGRATION_FILE in files
+    assert files.index(schema_guard.MIGRATION_FILE) < files.index(schema_guard.REPAIR_PREP_MIGRATION_FILE)
+    assert files.index(schema_guard.REPAIR_PREP_MIGRATION_FILE) < files.index(schema_guard.REPAIR_MIGRATION_FILE)
     assert "stoney_verify.startup_guards.ticket_category_schema_bootstrap_guard" in _STARTUP_GUARDS
     assert _STARTUP_GUARDS.index("stoney_verify.startup_guards.auto_schema_bootstrap") < _STARTUP_GUARDS.index(
         "stoney_verify.startup_guards.ticket_category_schema_bootstrap_guard"
@@ -331,8 +332,8 @@ def test_category_migrations_are_registered_for_direct_dsn_startup() -> None:
 
 
 def test_cod_and_game_services_keep_distinct_native_forms() -> None:
-    assert forms._template_key({"managed_category_key": "cod-services"}) == "cod"
-    assert forms._template_key({"managed_category_key": "game-services"}) == "game_services"
+    assert forms._template_key({"managed_by_dank": True, "managed_category_key": "cod-services"}) == "cod"
+    assert forms._template_key({"managed_by_dank": True, "managed_category_key": "game-services"}) == "game_services"
     assert forms.DEFAULT_TEMPLATES["cod"][0]["label"] == "Which COD game?"
     assert forms.DEFAULT_TEMPLATES["game_services"][0]["label"] == "Which game is this for?"
 
