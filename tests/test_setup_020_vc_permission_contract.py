@@ -47,7 +47,7 @@ def _value(overwrite: discord.PermissionOverwrite, key: str):
     return getattr(overwrite, key)
 
 
-def test_unverified_baseline_denies_voice_and_video_until_session_grant():
+def test_unverified_baseline_is_hidden_and_denied_until_session_grant():
     everyone = FakeRole(1, "@everyone", default=True)
     unverified = FakeRole(2, "Unverified")
     verified = FakeRole(3, "Verified")
@@ -61,15 +61,13 @@ def test_unverified_baseline_denies_voice_and_video_until_session_grant():
         verified_role=verified,
         resident_role=None,
     )
-    waiting = overwrites[unverified]
-    assert _value(waiting, "view_channel") is True
-    assert _value(waiting, "connect") is False
-    assert _value(waiting, "speak") is False
-    assert _value(waiting, "stream") is False
-    assert _value(waiting, "use_voice_activation") is False
-    staff_base = overwrites[staff]
-    assert _value(staff_base, "connect") is False
-    assert _value(staff_base, "stream") is False
+    for role in (everyone, unverified, verified, staff):
+        baseline = overwrites[role]
+        assert _value(baseline, "view_channel") is False
+        assert _value(baseline, "connect") is False
+        assert _value(baseline, "speak") is False
+        assert _value(baseline, "stream") is False
+        assert _value(baseline, "use_voice_activation") is False
 
 
 def test_runtime_session_grant_enables_video_and_voice():
@@ -120,6 +118,7 @@ def test_reconciler_fetches_configured_voice_channel_when_cache_misses(
     assert result.ok is True
     assert fetched_ids == [99]
     assert everyone in channel.overwrites
+    assert channel.overwrites[everyone].view_channel is False
 
 
 def test_reconciler_removes_stale_role_grants_but_keeps_member_sessions(
