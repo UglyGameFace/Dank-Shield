@@ -471,18 +471,22 @@ def dedupe_category_rows(
         else:
             by_key[key] = row
 
-    # Then enforce the actual Discord invariant: two different internal keys may
-    # never render the same visible label. This is the final safety net for old
-    # corrupt rows while database reconciliation is pending or unavailable.
-    by_label: Dict[str, Dict[str, Any]] = {}
-    for row in by_key.values():
-        label_key = _visible_label_key(row)
-        if label_key in by_label:
-            by_label[label_key] = _preferred_visible_row(by_label[label_key], row)
-        else:
-            by_label[label_key] = row
+    rows = list(by_key.values())
 
-    rows = list(by_label.values())
+    if enabled_only:
+        # Member-facing Discord components require a second invariant: two
+        # different internal keys may never render the same visible label. The
+        # setup/editor inventory deliberately skips this phase so an owner can
+        # still see and rename a preserved custom row that shares a label.
+        by_label: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            label_key = _visible_label_key(row)
+            if label_key in by_label:
+                by_label[label_key] = _preferred_visible_row(by_label[label_key], row)
+            else:
+                by_label[label_key] = row
+        rows = list(by_label.values())
+
     rows.sort(
         key=lambda row: (
             _row_sort(row),
@@ -566,6 +570,17 @@ def _fetch_rows_sync(guild_id: int) -> List[Dict[str, Any]]:
 
 def _sync_managed_categories_sync(guild_id: int) -> List[Dict[str, Any]]:
     sb = _supabase()
+    # v3 databases expose a preflight that releases only provably stale managed
+    # keys before reconciliation. Older databases may not have it yet; failure is
+    # intentionally non-fatal so the legacy RPC/fallback behavior still works.
+    try:
+        sb.rpc(
+            "prepare_dank_ticket_category_repair",
+            {"p_guild_id": str(int(guild_id))},
+        ).execute()
+    except Exception:
+        pass
+
     try:
         response = sb.rpc(
             "reconcile_dank_ticket_categories",
