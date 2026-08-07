@@ -22,6 +22,20 @@ def _keys(rows):
     return [categories.canonical_category_key(row) for row in rows]
 
 
+def _visible_labels(rows):
+    return [
+        str(
+            row.get("button_label")
+            or row.get("name")
+            or row.get("display_name")
+            or row.get("title")
+            or row.get("slug")
+            or ""
+        ).strip().lower()
+        for row in rows
+    ]
+
+
 def test_exact_alias_duplicates_collapse_without_cross_category_collisions() -> None:
     rows = [
         {"slug": "support", "name": "Support", "sort_order": 999, "is_enabled": True},
@@ -87,6 +101,96 @@ def test_unknown_custom_rows_are_preserved_as_distinct_choices() -> None:
     assert len(keys) == 3
 
 
+def test_custom_unknown_slug_is_not_claimed_only_because_visible_name_is_support() -> None:
+    row = {
+        "slug": "vip_support_portal",
+        "name": "Support",
+        "button_label": "Support",
+        "is_enabled": True,
+        "managed_by_dank": False,
+    }
+    assert categories.canonical_category_key(row) == "custom:vip-support-portal"
+    assert categories._enabled_custom_rows([row]) == [row]
+
+
+def test_setup_and_catalog_versions_are_independent() -> None:
+    assert categories.CATEGORY_SETUP_VERSION == 2
+    assert categories.MANAGED_CATALOG_VERSION == 3
+    rows = categories.catalog_category_rows()
+    assert {row["managed_catalog_version"] for row in rows} == {3}
+    assert all(row["button_label"] == row["name"] for row in rows)
+
+
+def test_right_managed_key_with_wrong_visible_label_keeps_key_and_requires_repair() -> None:
+    rows = categories.catalog_category_rows()
+    bug = next(row for row in rows if row["managed_category_key"] == "bug")
+    bug["name"] = "Support"
+    bug["button_label"] = "Support"
+
+    assert categories.canonical_category_key(bug) == "bug"
+    assert categories._catalog_reconcile_needed(rows) is True
+
+
+def test_wrong_managed_key_with_right_reserved_slug_resolves_from_slug() -> None:
+    row = next(
+        row for row in categories.catalog_category_rows()
+        if row["managed_category_key"] == "support"
+    )
+    row["managed_category_key"] = "question"
+
+    assert row["slug"] == "support"
+    assert categories.canonical_category_key(row) == "support"
+    assert categories._managed_row_shape_matches(row, "support") is False
+
+
+def test_missing_managed_key_recovers_from_reserved_slug() -> None:
+    row = next(
+        row for row in categories.catalog_category_rows()
+        if row["managed_category_key"] == "report"
+    )
+    row["managed_category_key"] = None
+    assert categories.canonical_category_key(row) == "report"
+
+
+def test_member_visible_dedupe_removes_support_and_report_label_collisions() -> None:
+    rows = categories.catalog_category_rows()
+    for row in rows:
+        row["is_enabled"] = True
+
+    bug = next(row for row in rows if row["managed_category_key"] == "bug")
+    bug["name"] = "Support"
+    bug["button_label"] = "Support"
+
+    question = next(row for row in rows if row["managed_category_key"] == "question")
+    question["name"] = "Report a Member"
+    question["button_label"] = "Report a Member"
+
+    rows.extend(
+        [
+            {
+                "slug": "general-support",
+                "name": "Support",
+                "button_label": "Support",
+                "is_enabled": True,
+                "managed_by_dank": False,
+            },
+            {
+                "slug": "user-report",
+                "name": "Report a Member",
+                "button_label": "Report a Member",
+                "is_enabled": True,
+                "managed_by_dank": False,
+            },
+        ]
+    )
+
+    visible = categories.dedupe_category_rows(rows, enabled_only=True)
+    labels = _visible_labels(visible)
+    assert labels.count("support") == 1
+    assert labels.count("report a member") == 1
+    assert len(labels) == len(set(labels))
+
+
 def test_current_catalog_stays_on_read_only_path() -> None:
     rows = categories.catalog_category_rows()
     assert categories._catalog_reconcile_needed(rows) is False
@@ -94,6 +198,14 @@ def test_current_catalog_stays_on_read_only_path() -> None:
     legacy_alias = dict(rows[0])
     legacy_alias["managed_by_dank"] = False
     assert categories._catalog_reconcile_needed([legacy_alias, *rows[1:]]) is True
+
+
+def test_catalog_shape_drift_is_not_hidden_by_current_version() -> None:
+    rows = categories.catalog_category_rows()
+    report = next(row for row in rows if row["managed_category_key"] == "report")
+    report["description"] = "Old stale report description."
+    report["managed_catalog_version"] = categories.MANAGED_CATALOG_VERSION
+    assert categories._catalog_reconcile_needed(rows) is True
 
 
 def test_reconcile_window_debounces_repeated_menu_opens() -> None:
@@ -206,8 +318,12 @@ def test_guided_ticket_choice_step_opens_the_category_selector(
     assert events == ["ticket_menu"]
 
 
-def test_category_migration_is_registered_for_direct_dsn_startup() -> None:
+def test_category_migrations_are_registered_for_direct_dsn_startup() -> None:
     assert schema_guard.MIGRATION_FILE in auto_schema_bootstrap._BOOTSTRAP_MIGRATION_FILES
+    assert schema_guard.REPAIR_MIGRATION_FILE in auto_schema_bootstrap._BOOTSTRAP_MIGRATION_FILES
+    assert auto_schema_bootstrap._BOOTSTRAP_MIGRATION_FILES.index(schema_guard.MIGRATION_FILE) < auto_schema_bootstrap._BOOTSTRAP_MIGRATION_FILES.index(
+        schema_guard.REPAIR_MIGRATION_FILE
+    )
     assert "stoney_verify.startup_guards.ticket_category_schema_bootstrap_guard" in _STARTUP_GUARDS
     assert _STARTUP_GUARDS.index("stoney_verify.startup_guards.auto_schema_bootstrap") < _STARTUP_GUARDS.index(
         "stoney_verify.startup_guards.ticket_category_schema_bootstrap_guard"
