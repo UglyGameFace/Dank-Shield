@@ -19,6 +19,7 @@ FILES = [
     "stoney_verify/tickets_new/panel.py",
     "supabase/migrations/202607310001_managed_ticket_category_catalog.sql",
     "supabase/migrations/20260802042000_ticket_category_setup_selection.sql",
+    "supabase/migrations/20260807215900_prepare_managed_ticket_category_repair.sql",
     "supabase/migrations/20260807220000_repair_managed_ticket_category_duplicates.sql",
 ]
 
@@ -40,9 +41,10 @@ CHECKS = {
     ],
     "stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py": [
         'MIGRATION_FILE = "20260802042000_ticket_category_setup_selection.sql"',
+        'REPAIR_PREP_MIGRATION_FILE = "20260807215900_prepare_managed_ticket_category_repair.sql"',
         'REPAIR_MIGRATION_FILE = "20260807220000_repair_managed_ticket_category_duplicates.sql"',
         "MIGRATION_FILES",
-        "selection v2 + managed catalog repair v3",
+        "stale-key preflight + managed catalog repair v3",
     ],
     "stoney_verify/tickets_new/managed_category_service.py": [
         "CATEGORY_SETUP_VERSION = 2",
@@ -94,6 +96,14 @@ CHECKS = {
         "custom-only selection",
         "managed_row.managed_category_key = any(selected_keys)",
         "managed_row.is_enabled = true",
+    ],
+    "supabase/migrations/20260807215900_prepare_managed_ticket_category_repair.sql": [
+        "prepare_dank_ticket_category_repair",
+        "managed_category_key = null",
+        "managed_catalog_version = null",
+        "dank_ticket_category_key(tc.slug, null)",
+        "deletes nothing",
+        "service_role",
     ],
     "supabase/migrations/20260807220000_repair_managed_ticket_category_duplicates.sql": [
         "catalog_version integer",
