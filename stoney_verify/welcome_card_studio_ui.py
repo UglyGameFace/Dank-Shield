@@ -267,7 +267,7 @@ class WelcomeCardStudioView(discord.ui.View):
 
     @discord.ui.button(
         label="Enable / Disable",
-        emoji="⏻",
+        emoji="🔌",
         style=discord.ButtonStyle.success,
         row=1,
     )

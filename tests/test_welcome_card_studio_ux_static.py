@@ -60,3 +60,8 @@ def test_shuffle_controls_are_canonical_and_visual() -> None:
     assert 'label="Shuffle"' in STUDIO
     assert "configured_shuffle_mode" in SERVICE
     assert "_resolve_effective_welcome_style" in SERVICE
+
+
+def test_studio_toggle_uses_a_discord_valid_component_emoji() -> None:
+    assert 'label="Enable / Disable",\n        emoji="🔌"' in STUDIO
+    assert 'emoji="⏻"' not in STUDIO
