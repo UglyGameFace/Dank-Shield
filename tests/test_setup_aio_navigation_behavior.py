@@ -4,9 +4,13 @@ from typing import Any
 
 import discord
 
+from stoney_verify import setup_020_entitled_id_guard
 from stoney_verify.commands_ext import public_setup_compact as compact
 from stoney_verify.commands_ext import public_setup_fresh_choice as fresh
 from stoney_verify.setup_new.templates import build_setup_template_embed
+
+
+assert setup_020_entitled_id_guard.install() is True
 
 
 def labels(view: discord.ui.View) -> list[str]:
