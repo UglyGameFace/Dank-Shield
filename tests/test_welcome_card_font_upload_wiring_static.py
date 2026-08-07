@@ -45,7 +45,6 @@ def test_upload_save_survives_preview_failure() -> None:
     assert "preview, preview_error = await _optional_preview" in COMMANDS
     assert "Saved, but preview failed" in COMMANDS
     assert "await _private(interaction, content=content, file=preview)" in COMMANDS
-    assert "file=preview" not in COMMANDS
 
 
 def test_live_service_passes_custom_font_to_authoritative_renderer() -> None:
