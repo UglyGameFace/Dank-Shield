@@ -11,8 +11,15 @@ from .member_role_browser_common import (
     reply_ephemeral,
     require_review,
 )
+from .member_role_browser_bulk_role_confirmation import (
+    install_confirmed_bulk_role_actions,
+)
 
 _REGISTERED = False
+
+# Bulk role changes are selected in the existing browser, but execution is
+# replaced with an exact typed-confirmation flow before the browser can open.
+install_confirmed_bulk_role_actions()
 
 
 async def _load_quick_roles(guild: discord.Guild) -> list[discord.Role]:
@@ -106,6 +113,8 @@ def register_public_member_role_browser_commands(bot: Any, tree: Any) -> None:
     _ = bot, tree
     if _REGISTERED:
         return
+
+    install_confirmed_bulk_role_actions()
 
     existing = dank_group.get_command("members")
     if isinstance(existing, app_commands.Group):
