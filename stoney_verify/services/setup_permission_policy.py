@@ -33,14 +33,14 @@ def role_label(role: Any) -> str:
 
 def _locked_voice_member_overwrite(*, can_chat: bool = False) -> discord.PermissionOverwrite:
     return discord.PermissionOverwrite(
-        view_channel=True,
+        view_channel=False,
         connect=False,
         speak=False,
         stream=False,
         use_voice_activation=False,
         move_members=False,
         send_messages=can_chat,
-        read_message_history=True,
+        read_message_history=can_chat,
     )
 
 
@@ -55,9 +55,9 @@ def vc_verification_overwrites(
 ) -> dict[object, discord.PermissionOverwrite]:
     """Expected session-locked Voice Verify room overwrites.
 
-    Roles may see the room, but no member role can connect, speak, or stream.
-    The runtime grants an exact per-member overwrite to only the active
-    requester and assigned staff member, then removes it when the session ends.
+    No broad member, staff, or control role can see or enter the room. The
+    runtime grants an exact per-member overwrite only to the active requester
+    and assigned staff member, then removes it when the session ends.
     """
 
     ow: dict[object, discord.PermissionOverwrite] = {
