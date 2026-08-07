@@ -3,8 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-import pytest
-
+from stoney_verify import setup_020_entitled_id_guard
 from stoney_verify import setup_service_state as service_state
 from stoney_verify.commands_ext import public_setup_defaults as defaults
 from stoney_verify.commands_ext import public_setup_fresh_choice as fresh
@@ -13,6 +12,11 @@ from stoney_verify.setup_engine.verification_modes import id_verify_allowed_for_
 
 
 ENTITLED_GUILD_ID = 1357215261001912320
+
+# Production installs this compatibility layer from vc_setup_one_press_fix after
+# legacy setup modules load. These focused unit tests import the modules directly,
+# so install the same runtime integration explicitly.
+assert setup_020_entitled_id_guard.install() is True
 
 
 def test_partner_guild_has_builtin_id_entitlement():
@@ -50,7 +54,7 @@ def test_non_entitled_custom_save_cannot_self_enable_id_verify():
     assert patch["verification_requires_id"] is False
 
 
-def test_id_toggle_is_visible_only_for_entitled_guild(monkeypatch):
+def test_id_toggle_is_visible_only_for_entitled_guild():
     state = service_state.SetupServiceState(
         setup_choice="custom_setup",
         setup_label="Custom",
@@ -71,8 +75,7 @@ def test_id_toggle_is_visible_only_for_entitled_guild(monkeypatch):
     assert "id_verify_enabled" not in normal_ids
 
 
-@pytest.mark.asyncio
-async def test_stale_toggle_refreshes_without_overwriting_newer_state(monkeypatch):
+def test_stale_toggle_refreshes_without_overwriting_newer_state(monkeypatch):
     current = service_state.SetupServiceState(
         setup_choice="custom_setup",
         setup_label="Custom",
@@ -88,12 +91,16 @@ async def test_stale_toggle_refreshes_without_overwriting_newer_state(monkeypatc
         return current
 
     monkeypatch.setattr(service_state, "load_setup_service_state", load_state)
-    saved, effective, changed, note = await service_state.toggle_custom_service_state(
-        ENTITLED_GUILD_ID,
-        "id_verify_enabled",
-        allow_id_verify=True,
-        expected_current=False,
-    )
+
+    async def scenario():
+        return await service_state.toggle_custom_service_state(
+            ENTITLED_GUILD_ID,
+            "id_verify_enabled",
+            allow_id_verify=True,
+            expected_current=False,
+        )
+
+    saved, effective, changed, note = asyncio.run(scenario())
     assert saved is current
     assert effective is True
     assert changed is False
@@ -117,8 +124,7 @@ def test_id_only_service_scope_never_creates_simple_verify_channel():
     assert scope["basic_verify"] is False
 
 
-@pytest.mark.asyncio
-async def test_guided_target_does_not_request_simple_channel_for_id_only(monkeypatch):
+def test_guided_target_does_not_request_simple_channel_for_id_only(monkeypatch):
     cfg = {
         "setup_choice": "custom_setup",
         "tickets_enabled": False,
@@ -153,9 +159,14 @@ async def test_guided_target_does_not_request_simple_channel_for_id_only(monkeyp
         get_role=lambda value: SimpleNamespace(id=value) if value in role_ids else None,
         get_channel=lambda value: SimpleNamespace(id=value) if value in channel_ids else None,
     )
+
     async def get_cfg(*args, **kwargs):
         return cfg
+
+    async def category_load(_guild):
+        return SimpleNamespace(error="", rows=[1])
+
     monkeypatch.setattr(recommend, "get_guild_config", get_cfg)
-    monkeypatch.setattr(recommend.solid, "_category_load", lambda guild: asyncio.sleep(0, result=SimpleNamespace(error="", rows=[1])))
-    target = await recommend._guided_setup_target(guild)
+    monkeypatch.setattr(recommend.solid, "_category_load", category_load)
+    target = asyncio.run(recommend._guided_setup_target(guild))
     assert target[3] != "verification_channel"

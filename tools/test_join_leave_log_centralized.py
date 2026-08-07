@@ -12,11 +12,15 @@ failures: list[str] = []
 
 required_router = [
     "refresh=True",
+    "PUBLIC_WELCOME_KEYS",
     "JOIN_LEAVE_KEYS",
     '"join_leave_log_channel_id"',
     '"join_exit_log_channel_id"',
-    "join log sent guild=",
+    "resolve_join_card_channel",
+    "send_live_welcome_card",
+    "canonical join result guild=",
     "leave log sent guild=",
+    "dank_shield:join_leave_event:v3",
     "embed_links",
     "read_message_history",
 ]
@@ -25,11 +29,20 @@ for marker in required_router:
     if marker not in router:
         failures.append(f"router missing marker: {marker}")
 
-legacy_bad = [
+legacy_bad_router = [
+    "join log sent guild=",
+    "_send_join_leave_join",
+]
+
+for marker in legacy_bad_router:
+    if marker in router:
+        failures.append(f"router still contains retired plain join sender marker: {marker}")
+
+legacy_bad_events = [
     "if JOIN_LOG_CHANNEL_ID and int(JOIN_LOG_CHANNEL_ID) != 0:",
 ]
 
-for marker in legacy_bad:
+for marker in legacy_bad_events:
     if marker in events:
         failures.append(f"legacy events.py still uses global join log route: {marker}")
 

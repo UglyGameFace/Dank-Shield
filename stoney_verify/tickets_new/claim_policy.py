@@ -149,12 +149,15 @@ def evaluate_ticket_action(
 ) -> TicketActionDecision:
     """Return the authoritative claim-first decision for one ticket action.
 
-    Claimant ownership still controls every normal staff mutation. The actual
-    Discord guild owner may use the separately confirmed ``owner_emergency_*``
-    namespace for a narrow, audited lifecycle override. Normal close, transfer,
-    unclaim, delete, reopen, notes, macros, and verification actions do not gain
-    an owner/admin bypass. Safe emergency delete additionally requires a closed
-    ticket with preserved transcript metadata.
+    Claimant ownership controls normal staff mutations. The actual Discord guild
+    owner is the final authority for the guild and may use normal ticket controls
+    without claiming or replacing the recorded claimant. Other administrators
+    and staff remain claimant-bound. The separately confirmed
+    ``owner_emergency_*`` namespace remains available for audited recovery.
+    Lifecycle safety still applies to everyone: deleted tickets are immutable,
+    permanent delete requires a closed ticket, and reopen requires a closed
+    ticket. Safe emergency delete additionally requires preserved transcript
+    metadata.
     """
     clean_action = str(action or "action").strip().lower().replace(" ", "_")
     aid = _safe_int(actor_id, 0)
@@ -237,6 +240,31 @@ def evaluate_ticket_action(
             False,
             "claimed_by_other",
             f"This ticket is already claimed by <@{claimed_by_id}>. It must be transferred first.",
+        )
+
+    is_guild_owner = (
+        resolved_guild_owner_id > 0
+        and aid == resolved_guild_owner_id
+    )
+    if is_guild_owner:
+        if clean_action == "delete" and status != "closed":
+            return decision(False, "close_before_delete", "Close the ticket first, then use Delete as a separate action.")
+        if clean_action == "reopen" and status != "closed":
+            return decision(False, "reopen_requires_closed", "Only a closed ticket can be reopened.")
+        if status == "closed" and clean_action not in {
+            "delete",
+            "reopen",
+            "view_info",
+            "view_notes",
+            "transcript",
+        }:
+            return decision(False, "ticket_closed", "This ticket is closed. Reopen it before using that action.")
+        if status not in {"open", "claimed", "closed"}:
+            return decision(False, "invalid_status", "The ticket lifecycle state is invalid. Nothing was changed.")
+        return decision(
+            True,
+            "guild_owner_allowed",
+            "Authorized Discord server-owner action. The existing ticket claim is unchanged unless this action explicitly transfers or unclaims it.",
         )
 
     if clean_action in {"close", "cancel"} and allow_requester_cancel and aid == owner_id:

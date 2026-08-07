@@ -59,76 +59,64 @@ def test_modlog_semantic_event_key_suppresses_only_duplicates(
     assert len(channel.sent) == 2
 
 
-def test_router_suppresses_public_card_when_route_is_staff_modlog(
+def test_router_delegates_join_to_canonical_welcome_runtime(
     monkeypatch,
 ) -> None:
     guild = SimpleNamespace(id=777)
     member = SimpleNamespace(id=101, guild=guild)
-    public = SimpleNamespace(id=100)
-    join_leave = SimpleNamespace(id=200)
-    staff = SimpleNamespace(id=200)
-    sent: list[int] = []
+    calls: list[int] = []
 
-    async def fake_load(_guild_id):
-        return object()
+    async def fake_send_live_welcome_card(target):
+        calls.append(int(target.id))
+        return SimpleNamespace(
+            sent=True,
+            code="sent",
+            channel_id=200,
+            used_image=True,
+        )
 
-    def fake_resolve(_guild, _cfg, keys):
-        if keys == router.PUBLIC_WELCOME_KEYS:
-            return public
-        if keys == router.JOIN_LEAVE_KEYS:
-            return join_leave
-        return staff
-
-    async def fake_send(_member, channel):
-        sent.append(channel.id)
-
-    monkeypatch.setattr(router, "_load_config", fake_load)
-    monkeypatch.setattr(router, "_resolve_channel", fake_resolve)
     monkeypatch.setattr(
         router,
-        "_same_channel",
-        lambda a, b: bool(a and b and a.id == b.id),
+        "send_live_welcome_card",
+        fake_send_live_welcome_card,
     )
-    monkeypatch.setattr(router, "_send_join_leave_join", fake_send)
 
     asyncio.run(router._join_listener(member))
-    assert sent == []
+    assert calls == [101]
 
 
-def test_router_posts_one_simple_card_when_routes_are_distinct(
+def test_router_join_never_reenters_retired_route_resolution(
     monkeypatch,
 ) -> None:
     guild = SimpleNamespace(id=777)
-    member = SimpleNamespace(id=101, guild=guild)
-    public = SimpleNamespace(id=100)
-    join_leave = SimpleNamespace(id=200)
-    staff = SimpleNamespace(id=300)
-    sent: list[int] = []
+    member = SimpleNamespace(id=202, guild=guild)
+    calls: list[int] = []
 
-    async def fake_load(_guild_id):
-        return object()
+    async def forbidden_load(*_args, **_kwargs):
+        raise AssertionError("join listener read the retired lifecycle route")
 
-    def fake_resolve(_guild, _cfg, keys):
-        if keys == router.PUBLIC_WELCOME_KEYS:
-            return public
-        if keys == router.JOIN_LEAVE_KEYS:
-            return join_leave
-        return staff
+    def forbidden_resolve(*_args, **_kwargs):
+        raise AssertionError("join listener resolved the retired simple join card")
 
-    async def fake_send(_member, channel):
-        sent.append(channel.id)
+    async def fake_send_live_welcome_card(target):
+        calls.append(int(target.id))
+        return SimpleNamespace(
+            sent=False,
+            code="studio_disabled",
+            channel_id=0,
+            used_image=False,
+        )
 
-    monkeypatch.setattr(router, "_load_config", fake_load)
-    monkeypatch.setattr(router, "_resolve_channel", fake_resolve)
+    monkeypatch.setattr(router, "_load_config", forbidden_load)
+    monkeypatch.setattr(router, "_resolve_channel", forbidden_resolve)
     monkeypatch.setattr(
         router,
-        "_same_channel",
-        lambda a, b: bool(a and b and a.id == b.id),
+        "send_live_welcome_card",
+        fake_send_live_welcome_card,
     )
-    monkeypatch.setattr(router, "_send_join_leave_join", fake_send)
 
     asyncio.run(router._join_listener(member))
-    assert sent == [200]
+    assert calls == [202]
 
 
 def test_identical_unkeyed_embeds_are_coalesced_for_short_bursts(

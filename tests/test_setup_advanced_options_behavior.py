@@ -12,6 +12,7 @@ from stoney_verify import config_history_ui
 from stoney_verify.commands_ext import public_protection_center
 from stoney_verify.commands_ext import public_setup_recommend as recommend
 from stoney_verify.commands_ext import public_setup_solid as solid
+from stoney_verify.setup_ui import public_setup_compact as compact
 
 
 def run(coroutine: Any) -> Any:
@@ -24,6 +25,14 @@ def labels(view: discord.ui.View) -> set[str]:
         for child in view.children
         if isinstance(child, discord.ui.Button)
     }
+
+
+def select_labels(view: discord.ui.View) -> list[str]:
+    result: list[str] = []
+    for child in view.children:
+        if isinstance(child, discord.ui.Select):
+            result.extend(str(option.label) for option in child.options)
+    return result
 
 
 def find_button(view: discord.ui.View, label: str) -> discord.ui.Button:
@@ -62,20 +71,16 @@ class FakeInteraction:
         self.response = FakeResponse()
 
 
-def test_manage_setup_is_secondary_and_task_based() -> None:
-    assert labels(recommend.ManageSetupView()) == {
-        "Change Setup Plan",
-        "All Features & Settings",
-        "Review Setup",
-        "Repair or Restart Setup",
-        "Help",
+def test_manage_setup_is_compact_and_task_based() -> None:
+    view = recommend.ManageSetupView()
+    assert labels(view) == {
+        "Change Plan",
+        "Check Configuration",
+        "Advanced",
         "Setup Home",
         "Close",
     }
-
-
-def test_all_features_hub_uses_aio_module_names() -> None:
-    assert labels(recommend.AdvancedSettingsHubView()) == {
+    assert select_labels(view) == [
         "Setup Plan & Server Items",
         "Tickets",
         "Verification",
@@ -85,13 +90,15 @@ def test_all_features_hub_uses_aio_module_names() -> None:
         "Welcome & Join",
         "Profile Signatures",
         "Backups & History",
-        "Back to Manage Setup",
-        "Setup Home",
-        "Close",
-    }
+    ]
 
 
-def test_aio_submenus_keep_existing_tools() -> None:
+def test_advanced_settings_aliases_the_single_compact_manager() -> None:
+    assert recommend.AdvancedSettingsHubView is recommend.ManageSetupView
+    assert recommend.ManageSetupView is compact.CompactManagerView
+
+
+def test_legacy_focused_submenus_keep_existing_tools() -> None:
     assert labels(recommend.AdvancedCoreSetupView()) == {
         "Choose Core Modules",
         "Timers & Rules",
@@ -154,15 +161,12 @@ def test_advanced_section_footer_matches_back_button_label() -> None:
         items=("Test",),
     )
     footer = str(embed.footer.text or "")
-
     assert "Back to All Features" in footer
     assert "Back to All Features & Settings" not in footer
 
 
-
 def test_repair_is_not_mixed_into_normal_feature_sections() -> None:
     normal_views = (
-        recommend.AdvancedSettingsHubView(),
         recommend.AdvancedCoreSetupView(),
         recommend.AdvancedMemberExperienceView(),
         recommend.AdvancedVerificationView(),
@@ -180,7 +184,6 @@ def test_repair_is_not_mixed_into_normal_feature_sections() -> None:
 def test_all_secondary_pages_are_mobile_compact() -> None:
     for view in (
         recommend.ManageSetupView(),
-        recommend.AdvancedSettingsHubView(),
         recommend.AdvancedCoreSetupView(),
         recommend.AdvancedMemberExperienceView(),
         recommend.AdvancedVerificationView(),
@@ -193,115 +196,16 @@ def test_all_secondary_pages_are_mobile_compact() -> None:
 
 
 @pytest.mark.parametrize(
-    ("view_cls", "label", "route_name"),
+    ("label", "route_name"),
     (
-        (
-            recommend.ManageSetupView,
-            "Change Setup Plan",
-            "_open_choose_setup_type",
-        ),
-        (
-            recommend.ManageSetupView,
-            "All Features & Settings",
-            "_open_advanced_settings",
-        ),
-        (
-            recommend.ManageSetupView,
-            "Review Setup",
-            "_open_health_check",
-        ),
-        (
-            recommend.ManageSetupView,
-            "Repair or Restart Setup",
-            "_open_advanced_danger_zone",
-        ),
-        (recommend.ManageSetupView, "Setup Home", "_home_edit"),
-        (recommend.ManageSetupView, "Close", "_close_setup"),
-        (
-            recommend.AdvancedCoreSetupView,
-            "Choose Core Modules",
-            "_open_services",
-        ),
-        (
-            recommend.AdvancedCoreSetupView,
-            "Timers & Rules",
-            "_open_timers_behavior",
-        ),
-        (
-            recommend.AdvancedCoreSetupView,
-            "Choose Roles & Channels",
-            "_open_existing_server",
-        ),
-        (
-            recommend.AdvancedMemberExperienceView,
-            "Ticket Choices",
-            "_open_ticket_menu",
-        ),
-        (
-            recommend.AdvancedMemberExperienceView,
-            "Roles & Channels",
-            "_open_existing_server",
-        ),
-        (
-            recommend.AdvancedMemberExperienceView,
-            "Timers & Rules",
-            "_open_timers_behavior",
-        ),
-        (
-            recommend.AdvancedVerificationView,
-            "Choose Core Modules",
-            "_open_services",
-        ),
-        (
-            recommend.AdvancedVerificationView,
-            "Roles & Channels",
-            "_open_existing_server",
-        ),
-        (
-            recommend.AdvancedVerificationView,
-            "Timers & Rules",
-            "_open_timers_behavior",
-        ),
-        (
-            recommend.AdvancedSecurityView,
-            "Protection Center",
-            "_open_protection_options",
-        ),
-        (
-            recommend.AdvancedSecurityView,
-            "Check Bot Access",
-            "_open_bot_access_check",
-        ),
-        (
-            recommend.AdvancedSecurityView,
-            "Fix Channel Permissions",
-            "_open_permission_repair",
-        ),
-        (
-            recommend.AdvancedLogsActivityView,
-            "Choose What Gets Logged",
-            "_open_modlog_tracking",
-        ),
-        (
-            recommend.AdvancedLogsActivityView,
-            "Check Activity Access",
-            "_open_bot_access_check",
-        ),
-        (
-            recommend.AdvancedLogsActivityView,
-            "Log Channels",
-            "_open_existing_server",
-        ),
-        (
-            recommend.AdvancedDangerZoneView,
-            "Open Repair & Restart Tools",
-            "_open_recovery_center",
-        ),
+        ("Change Plan", "_open_choose_setup_type"),
+        ("Check Configuration", "_open_health_check"),
+        ("Setup Home", "_home_edit"),
+        ("Close", "_close_setup"),
     ),
 )
-def test_buttons_reuse_existing_runtime_routes(
+def test_compact_manager_buttons_reuse_runtime_routes(
     monkeypatch: pytest.MonkeyPatch,
-    view_cls: type[discord.ui.View],
     label: str,
     route_name: str,
 ) -> None:
@@ -311,44 +215,55 @@ def test_buttons_reuse_existing_runtime_routes(
         events.append(route_name)
 
     monkeypatch.setattr(recommend, route_name, route)
-    run(find_button(view_cls(), label).callback(FakeInteraction()))
+    run(find_button(recommend.ManageSetupView(), label).callback(FakeInteraction()))
     assert events == [route_name]
+
+
+def test_compact_advanced_button_opens_troubleshooting_hub(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    async def route(*args: Any, **kwargs: Any) -> None:
+        events.append("advanced")
+
+    monkeypatch.setattr(compact, "_open_advanced", route)
+    run(find_button(recommend.ManageSetupView(), "Advanced").callback(FakeInteraction()))
+    assert events == ["advanced"]
 
 
 @pytest.mark.parametrize(
-    ("label", "route_name"),
+    ("area", "route_name"),
     (
-        ("Setup Plan & Server Items", "_open_advanced_core_setup"),
-        ("Tickets", "_open_advanced_member_experience"),
-        ("Verification", "_open_advanced_verification"),
-        ("Security & SpamGuard", "_open_advanced_security"),
-        ("Logs & Activity", "_open_advanced_logs_activity"),
-        ("Server Design", "_open_advanced_appearance"),
-        ("Backups & History", "_open_config_history"),
-        ("Back to Manage Setup", "_open_manage_setup"),
+        ("core", "_open_advanced_core_setup"),
+        ("tickets", "_open_advanced_member_experience"),
+        ("verification", "_open_advanced_verification"),
+        ("security", "_open_advanced_security"),
+        ("logs", "_open_advanced_logs_activity"),
+        ("design", "_open_advanced_appearance"),
+        ("history", "_open_config_history"),
     ),
 )
-def test_feature_groups_open_focused_submenus(
+def test_feature_picker_routes_to_focused_submenus(
     monkeypatch: pytest.MonkeyPatch,
-    label: str,
+    area: str,
     route_name: str,
 ) -> None:
     events: list[str] = []
 
+    async def allow(*args: Any, **kwargs: Any) -> bool:
+        return True
+
     async def route(*args: Any, **kwargs: Any) -> None:
         events.append(route_name)
 
+    monkeypatch.setattr(recommend.solid, "_require_setup_permission", allow)
     monkeypatch.setattr(recommend, route_name, route)
-    run(
-        find_button(
-            recommend.AdvancedSettingsHubView(),
-            label,
-        ).callback(FakeInteraction())
-    )
+    run(compact._route_area(FakeInteraction(), area))
     assert events == [route_name]
 
 
-def test_manage_setup_screen_uses_canonical_view(
+def test_manage_setup_screen_uses_canonical_compact_view(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     interaction = FakeInteraction()
@@ -356,6 +271,9 @@ def test_manage_setup_screen_uses_canonical_view(
 
     async def allow(*args: Any, **kwargs: Any) -> bool:
         return True
+
+    async def get_cfg(*args: Any, **kwargs: Any):
+        return {}
 
     async def edit(
         interaction_arg: Any,
@@ -368,18 +286,15 @@ def test_manage_setup_screen_uses_canonical_view(
         captured["view"] = view
 
     monkeypatch.setattr(recommend.solid, "_require_setup_permission", allow)
+    monkeypatch.setattr(compact, "get_guild_config", get_cfg)
     monkeypatch.setattr(recommend.solid, "_edit_or_followup", edit)
     run(recommend._open_manage_setup(interaction))
     assert captured["interaction"] is interaction
-    assert captured["embed"].title == "⚙️ Manage Setup"
-    assert isinstance(captured["view"], recommend.ManageSetupView)
-    assert any(
-        "Repair or Restart Setup" in field.name
-        for field in captured["embed"].fields
-    )
+    assert captured["embed"].title == "🧰 Manage Dank Shield"
+    assert isinstance(captured["view"], compact.CompactManagerView)
 
 
-def test_all_features_screen_uses_canonical_hub(
+def test_all_features_entry_uses_same_canonical_manager(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     interaction = FakeInteraction()
@@ -387,6 +302,9 @@ def test_all_features_screen_uses_canonical_hub(
 
     async def allow(*args: Any, **kwargs: Any) -> bool:
         return True
+
+    async def get_cfg(*args: Any, **kwargs: Any):
+        return {}
 
     async def edit(
         interaction_arg: Any,
@@ -398,10 +316,11 @@ def test_all_features_screen_uses_canonical_hub(
         captured["view"] = view
 
     monkeypatch.setattr(recommend.solid, "_require_setup_permission", allow)
+    monkeypatch.setattr(compact, "get_guild_config", get_cfg)
     monkeypatch.setattr(recommend.solid, "_edit_or_followup", edit)
     run(recommend._open_advanced_settings(interaction))
-    assert captured["embed"].title == "🧰 All Features & Settings"
-    assert isinstance(captured["view"], recommend.AdvancedSettingsHubView)
+    assert captured["embed"].title == "🧰 Manage Dank Shield"
+    assert isinstance(captured["view"], compact.CompactManagerView)
 
 
 def test_protection_reuses_protection_center(
@@ -419,11 +338,7 @@ def test_protection_reuses_protection_center(
         events.append("protection")
 
     monkeypatch.setattr(recommend.solid, "_require_setup_permission", allow)
-    monkeypatch.setattr(
-        public_protection_center,
-        "_refresh_panel",
-        refresh,
-    )
+    monkeypatch.setattr(public_protection_center, "_refresh_panel", refresh)
     run(recommend._open_protection_options(interaction))
     assert events == ["protection"]
 
@@ -438,11 +353,7 @@ def test_backups_history_reuses_native_history_ui(
         assert interaction_arg is interaction
         events.append("history")
 
-    monkeypatch.setattr(
-        config_history_ui,
-        "open_config_history",
-        open_history,
-    )
+    monkeypatch.setattr(config_history_ui, "open_config_history", open_history)
     run(recommend._open_config_history(interaction))
     assert events == ["history"]
 
@@ -475,11 +386,7 @@ def test_timers_rules_reuses_native_behavior_view(
         captured["view"] = view
 
     monkeypatch.setattr(recommend.solid, "_require_setup_permission", allow)
-    monkeypatch.setattr(
-        recommend.solid,
-        "_add_saved_setup_section",
-        add_section,
-    )
+    monkeypatch.setattr(recommend.solid, "_add_saved_setup_section", add_section)
     monkeypatch.setattr(recommend.solid, "_edit_or_followup", edit)
     run(recommend._open_timers_behavior(interaction))
     assert captured["section"] == "behavior"
@@ -491,7 +398,6 @@ def test_timers_rules_reuses_native_behavior_view(
 
 def test_native_timers_rules_owns_verification_timer_entry() -> None:
     view = solid.BehaviorSettingsView()
-
     assert "Verification Timers" in labels(view)
     assert "Set Prefix / Ticket Timer Hours" in labels(view)
     assert "Clear Optional Access Roles" in labels(view)

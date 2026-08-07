@@ -74,6 +74,21 @@ def patch_setup_nav_with_vc_fix_button() -> bool:
 patch_setup_nav_with_vc_fix_button()
 
 try:
+    from stoney_verify.setup_020_navigation_compat import (
+        install_custom_service_navigation_compat,
+    )
+
+    install_custom_service_navigation_compat()
+except Exception as exc:
+    try:
+        print(
+            "⚠️ DS-SETUP-020 navigation compatibility failed to install: "
+            f"{type(exc).__name__}: {exc}"
+        )
+    except Exception:
+        pass
+
+try:
     from stoney_verify.setup_020_entitled_id_guard import install as _install_ds_setup_020
 
     _install_ds_setup_020()

@@ -4,6 +4,7 @@ from pathlib import Path
 COMMANDS = Path(
     "stoney_verify/commands_ext/public_welcome_card_studio.py"
 ).read_text(encoding="utf-8")
+STUDIO = Path("stoney_verify/welcome_card_studio_ui.py").read_text(encoding="utf-8")
 ENTRYPOINT = Path("stoney_verify/commands.py").read_text(encoding="utf-8")
 ASSETS = Path("stoney_verify/welcome_card_font_assets.py").read_text(encoding="utf-8")
 ENGINE = Path("stoney_verify/welcome_card_typography_engine.py").read_text(encoding="utf-8")
@@ -15,7 +16,9 @@ def test_upload_and_clear_commands_are_registered() -> None:
     assert '"card-font-upload"' in COMMANDS
     assert '"card-font-clear"' in COMMANDS
     assert "font_file: discord.Attachment" in COMMANDS
-    assert "Only upload fonts you are licensed" in COMMANDS
+    assert "Only upload fonts you are licensed to use" in COMMANDS
+    assert "licensed TTF, OTF, TTC, OTC, WOFF, or WOFF2" in COMMANDS
+    assert "licensed TTF/OTF/TTC/OTC/WOFF/WOFF2" in STUDIO
 
 
 def test_all_supported_font_formats_are_visible_and_validated() -> None:
@@ -36,6 +39,12 @@ def test_studio_loads_through_commands_not_a_startup_guard() -> None:
     assert "register_public_welcome_card_studio_commands" in ENTRYPOINT
     assert "welcome_message_command_guard" not in ENTRYPOINT
     assert "remove_command(" not in COMMANDS
+
+
+def test_upload_save_survives_preview_failure() -> None:
+    assert "preview, preview_error = await _optional_preview" in COMMANDS
+    assert "Saved, but preview failed" in COMMANDS
+    assert "await _private(interaction, content=content, file=preview)" in COMMANDS
 
 
 def test_live_service_passes_custom_font_to_authoritative_renderer() -> None:

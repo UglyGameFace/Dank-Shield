@@ -82,7 +82,7 @@ def test_emergency_close_capability_is_bound_to_exact_channel_and_owner() -> Non
     assert close_bridge._confirmed_close_matches(channel, owner) is False
 
 
-def test_normal_actions_are_not_relabelled_as_owner_overrides() -> None:
+def test_normal_owner_authority_remains_distinct_from_emergency_override() -> None:
     policy = (
         ROOT / "stoney_verify/tickets_new/claim_policy.py"
     ).read_text(encoding="utf-8")
@@ -92,5 +92,6 @@ def test_normal_actions_are_not_relabelled_as_owner_overrides() -> None:
     assert 'clean_action == "owner_emergency_unclaim"' in policy
     assert 'clean_action == "owner_emergency_close"' in policy
     assert 'clean_action == "owner_emergency_delete"' in policy
-    assert 'clean_action == "close" and resolved_guild_owner_id' not in policy
-    assert "Normal close" in policy
+    assert 'return decision(\n            True,\n            "guild_owner_allowed"' in policy
+    assert "without claiming or replacing the recorded claimant" in policy
+    assert "owner_emergency_close_allowed" in policy

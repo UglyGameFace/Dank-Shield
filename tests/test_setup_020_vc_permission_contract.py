@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
 import discord
-import pytest
 
 from stoney_verify.services import vc_verification_permissions as vc_permissions
 from stoney_verify.services.setup_permission_policy import vc_verification_overwrites
@@ -47,7 +47,7 @@ def _value(overwrite: discord.PermissionOverwrite, key: str):
     return getattr(overwrite, key)
 
 
-def test_unverified_baseline_denies_voice_and_video_until_session_grant():
+def test_unverified_baseline_is_hidden_and_denied_until_session_grant():
     everyone = FakeRole(1, "@everyone", default=True)
     unverified = FakeRole(2, "Unverified")
     verified = FakeRole(3, "Verified")
@@ -61,15 +61,13 @@ def test_unverified_baseline_denies_voice_and_video_until_session_grant():
         verified_role=verified,
         resident_role=None,
     )
-    waiting = overwrites[unverified]
-    assert _value(waiting, "view_channel") is True
-    assert _value(waiting, "connect") is False
-    assert _value(waiting, "speak") is False
-    assert _value(waiting, "stream") is False
-    assert _value(waiting, "use_voice_activation") is False
-    staff_base = overwrites[staff]
-    assert _value(staff_base, "connect") is False
-    assert _value(staff_base, "stream") is False
+    for role in (everyone, unverified, verified, staff):
+        baseline = overwrites[role]
+        assert _value(baseline, "view_channel") is False
+        assert _value(baseline, "connect") is False
+        assert _value(baseline, "speak") is False
+        assert _value(baseline, "stream") is False
+        assert _value(baseline, "use_voice_activation") is False
 
 
 def test_runtime_session_grant_enables_video_and_voice():
@@ -86,8 +84,7 @@ def test_runtime_session_grant_enables_video_and_voice():
     assert "ow.use_voice_activation = True" in grant
 
 
-@pytest.mark.asyncio
-async def test_reconciler_fetches_configured_voice_channel_when_cache_misses(
+def test_reconciler_fetches_configured_voice_channel_when_cache_misses(
     monkeypatch,
 ):
     monkeypatch.setattr(vc_permissions.discord, "Role", FakeRole)
@@ -109,18 +106,22 @@ async def test_reconciler_fetches_configured_voice_channel_when_cache_misses(
         fetch_channel=fetch_channel,
         get_role=lambda _role_id: None,
     )
-    result = await vc_permissions.reconcile_vc_verification_channel(
-        guild,
-        cfg={"vc_verify_channel_id": 99},
-    )
+
+    async def scenario():
+        return await vc_permissions.reconcile_vc_verification_channel(
+            guild,
+            cfg={"vc_verify_channel_id": 99},
+        )
+
+    result = asyncio.run(scenario())
 
     assert result.ok is True
     assert fetched_ids == [99]
     assert everyone in channel.overwrites
+    assert channel.overwrites[everyone].view_channel is False
 
 
-@pytest.mark.asyncio
-async def test_reconciler_removes_stale_role_grants_but_keeps_member_sessions(
+def test_reconciler_removes_stale_role_grants_but_keeps_member_sessions(
     monkeypatch,
 ):
     monkeypatch.setattr(vc_permissions.discord, "Role", FakeRole)
@@ -155,10 +156,13 @@ async def test_reconciler_removes_stale_role_grants_but_keeps_member_sessions(
         get_role=lambda _role_id: None,
     )
 
-    result = await vc_permissions.reconcile_vc_verification_channel(
-        guild,
-        cfg={"vc_verify_channel_id": 99},
-    )
+    async def scenario():
+        return await vc_permissions.reconcile_vc_verification_channel(
+            guild,
+            cfg={"vc_verify_channel_id": 99},
+        )
+
+    result = asyncio.run(scenario())
 
     assert result.ok is True
     assert stale_role not in channel.overwrites
