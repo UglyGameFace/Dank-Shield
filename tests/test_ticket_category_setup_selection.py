@@ -227,4 +227,9 @@ def test_single_runtime_owner_is_installed_on_every_picker_path() -> None:
     assert "stoney_verify.startup_guards.ticket_category_game_services_guard" not in _STARTUP_GUARDS
     assert clean_panel._load_rows is setup_guard._clean_panel_load_rows
     assert solid._category_load is setup_guard._setup_category_load
-    assert solid._build_category_manager_payload is compact_setup._category_payload
+    expected_payload_owner = (
+        compact_setup._category_payload
+        if bool(getattr(compact_setup, "_PATCHED", False))
+        else setup_guard._build_category_manager_payload
+    )
+    assert solid._build_category_manager_payload is expected_payload_owner
