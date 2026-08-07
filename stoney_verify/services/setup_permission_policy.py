@@ -7,9 +7,12 @@ from typing import Any, Optional
 import discord
 
 
-def bot_member(guild: discord.Guild) -> Optional[discord.Member]:
+def bot_member(guild: discord.Guild) -> Optional[Any]:
+    """Return the guild's bot member without rejecting compatible proxies."""
+
     try:
-        return guild.me if isinstance(guild.me, discord.Member) else None
+        member = guild.me
+        return member if member is not None else None
     except Exception:
         return None
 
