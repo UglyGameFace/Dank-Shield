@@ -51,18 +51,37 @@ def test_explicit_owner_emergency_actions_are_owner_only() -> None:
         assert denied.code == "guild_owner_required", action
 
 
-def test_normal_owner_actions_stay_claimant_only() -> None:
-    row = ticket_row()
+def test_normal_owner_actions_are_available_without_weakening_lifecycle_safety() -> None:
+    claimed = ticket_row()
 
-    for action in ("transfer", "unclaim", "delete", "note", "macro", "reopen"):
-        denied = evaluate_ticket_action(
-            row,
+    for action in ("transfer", "unclaim", "note", "macro", "close"):
+        allowed = evaluate_ticket_action(
+            claimed,
             actor_id=999,
             action=action,
             guild_owner_id=999,
         )
-        assert denied.allowed is False, action
-        assert denied.code == "claimant_required", action
+        assert allowed.allowed is True, action
+        assert allowed.code == "guild_owner_allowed", action
+        assert allowed.claimed_by_id == 200, action
+
+    delete_open = evaluate_ticket_action(
+        claimed,
+        actor_id=999,
+        action="delete",
+        guild_owner_id=999,
+    )
+    assert delete_open.allowed is False
+    assert delete_open.code == "close_before_delete"
+
+    reopen_open = evaluate_ticket_action(
+        claimed,
+        actor_id=999,
+        action="reopen",
+        guild_owner_id=999,
+    )
+    assert reopen_open.allowed is False
+    assert reopen_open.code == "reopen_requires_closed"
 
 
 def test_owner_safe_delete_requires_closed_ticket_and_transcript() -> None:
