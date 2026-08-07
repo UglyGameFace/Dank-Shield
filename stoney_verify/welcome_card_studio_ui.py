@@ -2,12 +2,10 @@ from __future__ import annotations
 
 """Canonical button-first Welcome Card Studio.
 
-The panel remains usable even when the current card cannot render. Every write
-uses fresh per-guild config and every preview is best-effort with visible error
-feedback instead of an indefinitely spinning interaction.
+The panel remains usable when the current card cannot render. Writes use fresh
+per-guild config and acknowledge the interaction before database or image work.
 """
 
-from io import BytesIO
 from typing import Any, Mapping, Optional
 
 import discord
@@ -24,7 +22,12 @@ from .welcome_card_service import (
     welcome_card_file,
     welcome_cards_enabled,
 )
-from .welcome_card_typography_engine import BUILTIN_THEMES, FONT_STYLES, normalize_theme_key
+from .welcome_card_typography_engine import (
+    BUILTIN_THEMES,
+    CUSTOM_FONT_STYLE_KEY,
+    FONT_STYLES,
+    normalize_theme_key,
+)
 
 
 async def _private(
@@ -51,6 +54,11 @@ async def _private(
         await interaction.response.send_message(**payload)
     else:
         await interaction.followup.send(**payload)
+
+
+async def _defer(interaction: discord.Interaction) -> None:
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=True)
 
 
 def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
@@ -118,7 +126,10 @@ async def _preview_file(
         return None, f"{type(exc).__name__}: {exc}"
 
 
-def _channel_for(guild: discord.Guild, cfg: Any) -> Optional[discord.TextChannel]:
+def _channel_for(
+    guild: discord.Guild,
+    cfg: Any,
+) -> Optional[discord.TextChannel]:
     dedicated = _safe_int(_cfg_value(cfg, "join_welcome_channel_id", None), 0)
     fallback = _safe_int(_cfg_value(cfg, "welcome_channel_id", None), 0)
     channel = guild.get_channel(dedicated or fallback)
@@ -128,7 +139,7 @@ def _channel_for(guild: discord.Guild, cfg: Any) -> Optional[discord.TextChannel
 def _font_label(cfg: Any) -> str:
     key = configured_font_style_key(cfg)
     custom_font, custom_name = configured_custom_font(cfg)
-    if custom_font and custom_name and key == "custom_upload":
+    if custom_font and custom_name and key == CUSTOM_FONT_STYLE_KEY:
         return custom_name
     style = FONT_STYLES.get(key)
     return getattr(style, "label", key.replace("_", " ").title())
@@ -146,9 +157,8 @@ def _studio_embed(
     embed = discord.Embed(
         title="🪄 Welcome Card Studio",
         description=(
-            "This is the authoritative live join-card setup. Changes here are "
-            "read fresh when a member joins; the retired legacy v3 join card is "
-            "not used."
+            "This panel is the authoritative live join-card setup. Changes are "
+            "read fresh when a member joins; the retired legacy v3 card is never used."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
@@ -174,9 +184,9 @@ def _studio_embed(
     embed.add_field(
         name="What posts live",
         value=(
-            "The image card uses the selected theme/font/colors/background and "
-            "the saved join title/body. Missing **Attach Files** uses one matching "
-            "embed fallback instead of the old unrelated join card."
+            "The image uses the selected theme, font, colors, background, shuffle, "
+            "and saved join text. Missing **Attach Files** uses one matching embed "
+            "fallback instead of an unrelated legacy card."
         ),
         inline=False,
     )
@@ -185,7 +195,7 @@ def _studio_embed(
             name="⚠️ Preview needs repair",
             value=(
                 f"`{preview_error[:850]}`\nThe Studio is still usable. Change the "
-                "theme/font/background or clear the uploaded asset, then preview again."
+                "theme, font, or background, then preview again."
             ),
             inline=False,
         )
@@ -218,6 +228,7 @@ class WelcomeCardChannelSelect(discord.ui.ChannelSelect):
                 interaction,
                 content="❌ Choose a text channel from this server.",
             )
+        await _defer(interaction)
         try:
             cfg = await _save(
                 interaction,
@@ -269,9 +280,10 @@ class WelcomeCardStudioView(discord.ui.View):
         guild = interaction.guild
         if guild is None:
             return await _private(interaction, content="❌ Use this inside a server.")
-        cfg = await get_guild_config(int(guild.id), refresh=True)
-        enabled = not welcome_cards_enabled(cfg)
+        await _defer(interaction)
         try:
+            cfg = await get_guild_config(int(guild.id), refresh=True)
+            enabled = not welcome_cards_enabled(cfg)
             fresh = await _save(
                 interaction,
                 {"welcome_card_enabled": enabled},
@@ -378,7 +390,10 @@ class WelcomeCardStudioView(discord.ui.View):
         _ = button
         embed = discord.Embed(
             title="📎 Welcome Card Uploads",
-            description="Uploads remain slash commands because Discord buttons cannot open an attachment picker.",
+            description=(
+                "Discord buttons cannot open an attachment picker, so uploads "
+                "remain slash commands while every other control stays here."
+            ),
             color=discord.Color.blurple(),
         )
         embed.add_field(
@@ -444,7 +459,6 @@ class WelcomeCardStudioView(discord.ui.View):
             content="Welcome Card Studio closed.",
             embed=None,
             view=None,
-            attachments=[],
         )
 
 
@@ -457,8 +471,12 @@ async def open_theme_picker(interaction: discord.Interaction) -> None:
     cfg = await get_guild_config(int(guild.id), refresh=True)
     current = configured_theme_key(cfg)
 
-    async def on_pick(component_interaction: discord.Interaction, value: str) -> None:
+    async def on_pick(
+        component_interaction: discord.Interaction,
+        value: str,
+    ) -> None:
         key = normalize_theme_key(value)
+        await _defer(component_interaction)
         try:
             fresh = await _save(
                 component_interaction,
@@ -475,36 +493,47 @@ async def open_theme_picker(interaction: discord.Interaction) -> None:
                 component_interaction,
                 content=f"❌ Could not save theme: `{type(exc).__name__}: {exc}`",
             )
-        file, preview_error = await _preview_file(component_interaction.user, fresh)
+        file, preview_error = await _preview_file(
+            component_interaction.user,
+            fresh,
+        )
         await _private(
             component_interaction,
             content=f"✅ Theme set to **{BUILTIN_THEMES[key].label}** and cards enabled.",
             embed=_studio_embed(guild, fresh, preview_error=preview_error),
-            view=WelcomeCardStudioView(owner_id=int(component_interaction.user.id)),
+            view=WelcomeCardStudioView(
+                owner_id=int(component_interaction.user.id)
+            ),
             file=file,
         )
 
-    view = DankPickerView(
-        author_id=int(interaction.user.id),
-        choices=[
-            make_choice(
-                theme.label,
-                theme.key,
-                description=getattr(theme, "description", "Built-in welcome-card theme."),
-                emoji="🖼️",
-                default=theme.key == current,
-            )
-            for theme in BUILTIN_THEMES.values()
-        ],
-        on_pick=on_pick,
-        custom_id=f"dank:welcome:theme:studio:v1:{guild.id}",
-        placeholder="Choose the live welcome-card theme…",
-        title="Welcome Card Themes",
-    )
     await _private(
         interaction,
-        content="## 🖼️ Welcome Card Themes\nChoosing a built-in theme clears any uploaded background so the selection is truly live.",
-        view=view,
+        content=(
+            "## 🖼️ Welcome Card Themes\nChoosing a built-in theme clears an "
+            "uploaded background so the selected theme is actually live."
+        ),
+        view=DankPickerView(
+            author_id=int(interaction.user.id),
+            choices=[
+                make_choice(
+                    theme.label,
+                    theme.key,
+                    description=getattr(
+                        theme,
+                        "description",
+                        "Built-in welcome-card theme.",
+                    ),
+                    emoji="🖼️",
+                    default=theme.key == current,
+                )
+                for theme in BUILTIN_THEMES.values()
+            ],
+            on_pick=on_pick,
+            custom_id=f"dank:welcome:theme:studio:v1:{guild.id}",
+            placeholder="Choose the live welcome-card theme…",
+            title="Welcome Card Themes",
+        ),
     )
 
 
@@ -514,25 +543,22 @@ async def send_studio_preview(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     if guild is None or not isinstance(interaction.user, discord.Member):
         return await _private(interaction, content="❌ Use this inside a server.")
-    if not interaction.response.is_done():
-        await interaction.response.defer(ephemeral=True, thinking=True)
+    await _defer(interaction)
     cfg = await get_guild_config(int(guild.id), refresh=True)
     file, error = await _preview_file(interaction.user, cfg)
     if file is None:
-        return await interaction.followup.send(
+        return await _private(
+            interaction,
             content=f"❌ Preview failed, but settings were not changed: `{error}`",
             embed=_studio_embed(guild, cfg, preview_error=error),
             view=WelcomeCardStudioView(owner_id=int(interaction.user.id)),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
         )
-    await interaction.followup.send(
+    await _private(
+        interaction,
         content="✅ This is the current production join-card design.",
         embed=_studio_embed(guild, cfg),
         file=file,
         view=WelcomeCardStudioView(owner_id=int(interaction.user.id)),
-        ephemeral=True,
-        allowed_mentions=discord.AllowedMentions.none(),
     )
 
 
@@ -542,19 +568,21 @@ async def open_welcome_card_studio(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     if guild is None or not isinstance(interaction.user, discord.Member):
         return await _private(interaction, content="❌ Use this inside a server.")
-    if not interaction.response.is_done():
-        await interaction.response.defer(ephemeral=True, thinking=True)
-    cfg = await get_guild_config(int(guild.id), refresh=True)
-    file, preview_error = await _preview_file(interaction.user, cfg)
-    payload: dict[str, Any] = {
-        "embed": _studio_embed(guild, cfg, preview_error=preview_error),
-        "view": WelcomeCardStudioView(owner_id=int(interaction.user.id)),
-        "ephemeral": True,
-        "allowed_mentions": discord.AllowedMentions.none(),
-    }
-    if file is not None:
-        payload["file"] = file
-    await interaction.followup.send(**payload)
+    await _defer(interaction)
+    try:
+        cfg = await get_guild_config(int(guild.id), refresh=True)
+        file, preview_error = await _preview_file(interaction.user, cfg)
+        await _private(
+            interaction,
+            embed=_studio_embed(guild, cfg, preview_error=preview_error),
+            view=WelcomeCardStudioView(owner_id=int(interaction.user.id)),
+            file=file,
+        )
+    except Exception as exc:
+        await _private(
+            interaction,
+            content=f"❌ Could not open Welcome Card Studio: `{type(exc).__name__}: {exc}`",
+        )
 
 
 __all__ = [
