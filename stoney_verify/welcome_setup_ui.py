@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Dedicated setup home for static welcomes, live join cards, and leave logs."""
+"""Dedicated setup home for static welcome content and live join/exit cards."""
 
 from typing import Any, Mapping, Optional
 
@@ -18,6 +18,15 @@ from .commands_ext.public_welcome_group import (
     save_welcome_template_service,
     welcome_card_preview,
 )
+from .exit_card_runtime import resolve_exit_card_channel
+from .exit_card_service import (
+    configured_exit_color_mode,
+    configured_exit_font_style_key,
+    configured_exit_shuffle_mode,
+    configured_exit_theme_key,
+    exit_cards_enabled,
+)
+from .exit_card_studio_ui import open_exit_card_studio, send_exit_studio_preview
 from .guild_config import get_guild_config
 from .welcome_card_service import (
     configured_color_mode,
@@ -39,6 +48,17 @@ def _value(config: Any, key: str, default: Any = None) -> Any:
         return default if value is None else value
     except Exception:
         return default
+
+
+def _font_label(config: Any, key: str) -> str:
+    custom_font, custom_name = configured_custom_font(config)
+    if key == "custom" and custom_font:
+        return custom_name or "Uploaded Font"
+    return getattr(
+        FONT_STYLES.get(key),
+        "label",
+        key.replace("_", " ").title(),
+    )
 
 
 async def _send_private(
@@ -65,52 +85,36 @@ async def _send_private(
 
 
 async def _welcome_embed(guild: discord.Guild, config: Any) -> discord.Embed:
-    channel = welcome_channel_for(guild, config)
-    theme_key = configured_theme_key(config)
-    theme = BUILTIN_THEMES.get(theme_key)
-    font_key = configured_font_style_key(config)
-    custom_font, custom_font_name = configured_custom_font(config)
-    font_label = (
-        custom_font_name
-        if custom_font and custom_font_name
-        else getattr(
-            FONT_STYLES.get(font_key),
-            "label",
-            font_key.replace("_", " ").title(),
-        )
-    )
+    static_channel = welcome_channel_for(guild, config)
+
+    join_theme_key = configured_theme_key(config)
+    join_theme = BUILTIN_THEMES.get(join_theme_key)
+    join_font_key = configured_font_style_key(config)
     join_cards = _cfg_bool(config, "welcome_card_enabled")
-    join_enabled = _cfg_bool(
-        config,
-        "welcome_join_enabled",
-        "join_welcome_enabled",
-    )
-    leave_enabled = _cfg_bool(
-        config,
-        "welcome_leave_enabled",
-        "goodbye_enabled",
-        "leave_message_enabled",
-    )
     join_channel_id = _cfg_int(
         config,
         "join_welcome_channel_id",
         "welcome_channel_id",
     )
-    leave_channel_id = _cfg_int(
-        config,
-        "goodbye_channel_id",
-        "leave_channel_id",
-        "welcome_channel_id",
-    )
     join_channel = guild.get_channel(join_channel_id)
-    leave_channel = guild.get_channel(leave_channel_id)
+
+    exit_enabled = exit_cards_enabled(config)
+    exit_channel, exit_reason = resolve_exit_card_channel(guild, config)
+    exit_theme_key = configured_exit_theme_key(config)
+    exit_theme = BUILTIN_THEMES.get(exit_theme_key)
+    exit_font_key = configured_exit_font_style_key(config)
+
+    join_text_enabled = _cfg_bool(
+        config,
+        "welcome_join_enabled",
+        "join_welcome_enabled",
+    )
 
     embed = discord.Embed(
-        title="👋 Welcome & Join",
+        title="👋 Welcome, Join & Exit",
         description=(
-            "Everything a new member sees is managed here. Welcome Card Studio "
-            "now owns the live join card; the static welcome message and leave "
-            "announcements remain separate."
+            "Static start-here content, the live Welcome Card, and the live Exit "
+            "Card each have one clear owner. Staff audit/modlog events remain separate."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
@@ -118,53 +122,61 @@ async def _welcome_embed(guild: discord.Guild, config: Any) -> discord.Embed:
     embed.add_field(
         name="📌 Static welcome/start-here message",
         value=(
-            f"**Channel:** {channel.mention if isinstance(channel, discord.TextChannel) else 'Not selected'}\n"
+            f"**Channel:** {static_channel.mention if isinstance(static_channel, discord.TextChannel) else 'Not selected'}\n"
             f"**Message:** {'Enabled' if bool(_value(config, 'welcome_message_enabled', False)) else 'Not posted/enabled'}\n"
             "Use the channel picker, edit the text, preview it, then post/update without duplicates."
         ),
         inline=False,
     )
     embed.add_field(
-        name="🖼️ Canonical live join card",
+        name="🖼️ Canonical live Welcome Card",
         value=(
             f"**Status:** {'On' if join_cards else 'Off'}\n"
             f"**Channel:** {join_channel.mention if isinstance(join_channel, discord.TextChannel) else 'Not selected'}\n"
-            f"**Theme:** {getattr(theme, 'label', theme_key)}\n"
-            f"**Font:** {font_label}\n"
+            f"**Theme:** {getattr(join_theme, 'label', join_theme_key)}\n"
+            f"**Font:** {_font_label(config, join_font_key)}\n"
             f"**Colors:** {configured_color_mode(config).replace('_', ' ').title()}\n"
             f"**Shuffle:** {configured_shuffle_mode(config).replace('_', ' ').title()}"
         ),
         inline=True,
     )
     embed.add_field(
-        name="📣 Optional text announcements",
+        name="🚪 Canonical live Exit Card",
         value=(
-            f"**Join text:** {'On' if join_enabled else 'Off'}"
+            f"**Status:** {'On' if exit_enabled else 'Off'}\n"
+            f"**Channel:** {exit_channel.mention if isinstance(exit_channel, discord.TextChannel) else 'Not selected'}\n"
+            f"**Theme:** {getattr(exit_theme, 'label', exit_theme_key)}\n"
+            f"**Font:** {_font_label(config, exit_font_key)}\n"
+            f"**Colors:** {configured_exit_color_mode(config).replace('_', ' ').title()}\n"
+            f"**Shuffle:** {configured_exit_shuffle_mode(config).replace('_', ' ').title()}\n"
+            f"**Route:** {exit_reason}"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="📣 Compatibility text announcement",
+        value=(
+            f"**Separate join text:** {'On' if join_text_enabled else 'Off'}"
             + (
                 f" in {join_channel.mention}"
                 if isinstance(join_channel, discord.TextChannel)
                 else ""
             )
-            + f"\n**Leave:** {'On' if leave_enabled else 'Off'}"
-            + (
-                f" in {leave_channel.mention}"
-                if isinstance(leave_channel, discord.TextChannel)
-                else ""
-            )
+            + "\nThe old leave-event sender is retired; Exit Card Studio owns public leaves."
         ),
-        inline=True,
+        inline=False,
     )
     embed.add_field(
         name="Simple order",
         value=(
-            "1. Pick the static welcome channel.\n"
-            "2. Edit and preview the static message.\n"
-            "3. Open Join Card Studio and pick its live channel/design.\n"
-            "4. Configure optional leave announcements separately."
+            "1. Set your static welcome/start-here message if you use one.\n"
+            "2. Open **Join Card Studio** for live joins.\n"
+            "3. Open **Exit Card Studio** for live leaves.\n"
+            "4. Preview each live card before relying on it."
         ),
         inline=False,
     )
-    embed.set_footer(text="Welcome & Join • Studio-owned live join cards")
+    embed.set_footer(text="Lifecycle setup • one canonical join sender • one canonical exit sender")
     return embed
 
 
@@ -324,9 +336,37 @@ class WelcomeSetupView(discord.ui.View):
         await welcome_card_preview(interaction)
 
     @discord.ui.button(
-        label="Join & Leave Announcements",
-        emoji="📣",
+        label="Exit Card Studio",
+        emoji="🚪",
         style=discord.ButtonStyle.primary,
+        row=2,
+    )
+    async def exit_studio(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await open_exit_card_studio(interaction)
+
+    @discord.ui.button(
+        label="Preview Exit Card",
+        emoji="👋",
+        style=discord.ButtonStyle.secondary,
+        row=2,
+    )
+    async def preview_exit(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await send_exit_studio_preview(interaction)
+
+    @discord.ui.button(
+        label="Text Announcements",
+        emoji="📣",
+        style=discord.ButtonStyle.secondary,
         row=2,
     )
     async def events(
@@ -350,33 +390,35 @@ class WelcomeSetupView(discord.ui.View):
     ) -> None:
         _ = button
         embed = discord.Embed(
-            title="📎 Join Card Uploads & Advanced Tools",
+            title="📎 Lifecycle Card Uploads & Advanced Tools",
             description=(
-                "Discord buttons cannot open a file picker, so uploads use the "
-                "attachment commands below. All other controls stay inside the "
-                "button-first Studio."
+                "Discord buttons cannot open a file picker, so artwork/font uploads "
+                "use the attachment commands below."
             ),
             color=discord.Color.blurple(),
         )
         embed.add_field(
-            name="Custom background",
+            name="Join background",
             value="Use `/dank welcome card-upload` and attach a safe 3:1 image.",
             inline=False,
         )
         embed.add_field(
-            name="Custom font",
-            value="Use `/dank welcome card-font-upload` and attach a font you are allowed to use.",
+            name="Exit background",
+            value="Use `/dank welcome exit-card-upload` and attach a safe 3:1 image.",
             inline=False,
         )
         embed.add_field(
-            name="Remove uploaded font",
-            value="Use `/dank welcome card-font-clear`.",
+            name="Shared custom font",
+            value=(
+                "Use `/dank welcome card-font-upload`, then choose **Uploaded Font** "
+                "inside either Studio. Use `/dank welcome card-font-clear` to remove it."
+            ),
             inline=False,
         )
         await _send_private(interaction, embed=embed)
 
     @discord.ui.button(
-        label="Welcome Health",
+        label="Lifecycle Health",
         emoji="🩺",
         style=discord.ButtonStyle.secondary,
         row=3,
@@ -459,7 +501,7 @@ class WelcomeSetupView(discord.ui.View):
     ) -> None:
         _ = button
         await interaction.response.edit_message(
-            content="Welcome & Join setup closed.",
+            content="Welcome, Join & Exit setup closed.",
             embed=None,
             view=None,
         )
@@ -486,7 +528,7 @@ async def open_welcome_setup(interaction: discord.Interaction) -> None:
         )
     except Exception as exc:
         await interaction.followup.send(
-            f"❌ Could not open Welcome & Join: `{type(exc).__name__}: {exc}`",
+            f"❌ Could not open Welcome, Join & Exit: `{type(exc).__name__}: {exc}`",
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
