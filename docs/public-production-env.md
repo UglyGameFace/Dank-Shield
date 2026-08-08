@@ -1,6 +1,6 @@
 # Dank Shield public production environment
 
-This bot is public multi-server software. Deployment-level Discord server IDs must stay blank. Per-server channels, roles, categories, and panels are saved through `/dank setup` into Supabase `guild_configs`.
+This bot is public multi-server software. Deployment-level Discord server IDs must stay blank. Per-server channels, roles, categories, and panels are saved through the guided **Setup & Settings** flow opened from `/dank home` into Supabase `guild_configs`.
 
 ## Required runtime values
 
@@ -68,28 +68,33 @@ Use the SQL files under `supabase/migrations/` to create or repair tables when d
 
 ## Startup health lines to expect
 
-Healthy public startup should show:
+Healthy public startup should show the normal module-registration line first, then the final UI-first compactor before Discord global sync:
 
 ```text
 public_server_env_id_guard public mode active; deployment-level Discord IDs are disabled
 globals: startup summary: {'guild': 0, ...}
 globals: supabase status: state=ready ... service_role_present=True
-commands_ext registration complete. final_global=9 final_guild=0 profile=public
+commands_ext registration complete. ... profile=public
+public_command_surface_v2 compact UI installed roots=['View Dank Profile', 'dank', 'mod', 'ticket', 'tickets', 'verify'] dank_children=['home', 'upload'] ...
 ```
 
-The intentional public global application-command surface is exactly **9** commands:
+The intentional **final** public global application-command surface is exactly **6** commands/items:
 
-1. `/dank`
-2. `/mod`
-3. `/ticket`
-4. `/tickets`
-5. `/ticket-intake`
-6. `/ticket-category`
-7. `/ticket-panel`
-8. `/verify`
-9. `View Dank Profile` user context menu
+1. `/dank` — app-style Dank Shield entry group
+2. `/mod` — one moderation/member center doorway
+3. `/ticket` — one current-ticket controls doorway
+4. `/tickets` — one ticket queues/setup/routing doorway
+5. `/verify` — one verification status/repair doorway
+6. `View Dank Profile` user context menu
 
-Advanced setup aliases such as direct `/dank setup-review`, `/dank db-check`, and `/dank setup-access` are not part of the normal public profile. Their functionality belongs inside the guided `/dank setup` and diagnostics surfaces unless an explicit admin/development command profile selects the advanced registrar.
+`/dank` intentionally exposes only two direct children:
+
+- `/dank home` — the complete mega menu for Setup, Protection, Tickets, Verification, Welcome/Exit, Members & Moderation, Design, Roles/Profiles, Logs, Status, Diagnostics, Card Assets, Help, and profile access.
+- `/dank upload` — the single attachment command for a Join Card background, Exit Card background, or custom card font. This remains a command because Discord buttons cannot provide an attachment field.
+
+Former roots such as `/ticket-intake`, `/ticket-category`, and `/ticket-panel` are not public autocomplete commands anymore. Their implementation modules remain loaded and their actions are available inside `/tickets`. Likewise, former `/dank` shortcuts such as setup/status/diagnostics/welcome are reached through `/dank home` rather than separate autocomplete entries.
+
+Advanced repair/setup aliases such as direct `/dank setup-review`, `/dank db-check`, and `/dank setup-access` are also not part of the normal public profile. Their functionality belongs inside the guided mega-menu/diagnostics surfaces unless an explicit admin/development profile selects an advanced registrar.
 
 Optional schema health should show either:
 
@@ -104,7 +109,7 @@ or exact migration guidance for missing optional tables.
 For each Discord server:
 
 1. Invite the bot with the required permissions, including Manage Threads for authoritative activity coverage.
-2. Run `/dank setup`.
+2. Run `/dank home`, then press **Setup & Settings**.
 3. Choose a setup plan and follow **Set Up This Step** (or **Continue Setup** for Choose Core Features) until Setup Check runs automatically.
 4. Fix any required blocker, then use **Test Your Setup**. When the enabled features work, press **Finish Setup**.
 5. SpamGuard defaults to ON for new/missing settings rows unless an owner explicitly turns it off.
