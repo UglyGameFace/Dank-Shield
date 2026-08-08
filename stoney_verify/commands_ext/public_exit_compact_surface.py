@@ -22,17 +22,25 @@ def _command(name: str, description: str, callback: Any) -> app_commands.Command
     return app_commands.Command(name=name, description=description, callback=resolved)
 
 
+def _install_final_layers(bot: Any, tree: Any) -> dict[str, Any]:
+    from .public_command_surface_v2 import install_compact_public_surface_v2
+    from .public_lifecycle_menu_compat import install_lifecycle_menu_compat
+
+    result = install_compact_public_surface_v2(bot, tree)
+    install_lifecycle_menu_compat()
+    return result
+
+
 def register_compact_exit_card_commands(bot: Any, tree: Any) -> int:
     from .public_command_hub import DANK_PAYLOAD_SAFETY_LIMIT, dank_payload_size
-    from .public_command_surface_v2 import install_compact_public_surface_v2
 
     group = dank_group.get_command("welcome")
     if not isinstance(group, app_commands.Group):
         # register_extra_commands() can legitimately call this registrar again
-        # after v2 has already removed /dank welcome. The final installer is
-        # idempotent and confirms the compact state instead of resurrecting the
+        # after v2 has already removed /dank welcome. The final installers are
+        # idempotent and confirm the compact state instead of resurrecting the
         # retired subgroup.
-        result = install_compact_public_surface_v2(bot, tree)
+        result = _install_final_layers(bot, tree)
         final_size = int(result.get("dank_payload", 0) or dank_payload_size(tree))
         print(
             "✅ public_exit_compact_surface final UI-first surface already active "
@@ -91,7 +99,7 @@ def register_compact_exit_card_commands(bot: Any, tree: Any) -> int:
     # This is intentionally the final application-command-tree mutation. All
     # underlying modules remain loaded; only redundant autocomplete entry points
     # are removed/replaced by action-complete centers.
-    result = install_compact_public_surface_v2(bot, tree)
+    result = _install_final_layers(bot, tree)
     final_size = int(result.get("dank_payload", precompact_size) or precompact_size)
     print(
         "✅ public_exit_compact_surface final UI-first surface ready "
