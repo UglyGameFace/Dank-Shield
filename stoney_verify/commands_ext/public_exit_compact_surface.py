@@ -23,10 +23,15 @@ def _command(name: str, description: str, callback: Any) -> app_commands.Command
 
 
 def _install_final_layers(bot: Any, tree: Any) -> dict[str, Any]:
-    from .public_command_surface_v2 import install_compact_public_surface_v2
+    # register_extra_commands() may run the additive registrars again after the
+    # initial import. Reassert the final command tree on every pass instead of
+    # trusting a one-time installed flag; otherwise an old group/shortcut could
+    # be rebuilt after the first compaction and survive until Discord sync.
+    from . import public_command_surface_v2 as compact_surface
     from .public_lifecycle_menu_compat import install_lifecycle_menu_compat
 
-    result = install_compact_public_surface_v2(bot, tree)
+    compact_surface._INSTALLED = False
+    result = compact_surface.install_compact_public_surface_v2(bot, tree)
     install_lifecycle_menu_compat()
     return result
 
@@ -37,13 +42,12 @@ def register_compact_exit_card_commands(bot: Any, tree: Any) -> int:
     group = dank_group.get_command("welcome")
     if not isinstance(group, app_commands.Group):
         # register_extra_commands() can legitimately call this registrar again
-        # after v2 has already removed /dank welcome. The final installers are
-        # idempotent and confirm the compact state instead of resurrecting the
-        # retired subgroup.
+        # after v2 has already removed /dank welcome. Reassert the compact tree
+        # rather than resurrecting the retired subgroup.
         result = _install_final_layers(bot, tree)
         final_size = int(result.get("dank_payload", 0) or dank_payload_size(tree))
         print(
-            "✅ public_exit_compact_surface final UI-first surface already active "
+            "✅ public_exit_compact_surface final UI-first surface reasserted "
             f"payload={final_size}/{DANK_PAYLOAD_SAFETY_LIMIT}"
         )
         return final_size
