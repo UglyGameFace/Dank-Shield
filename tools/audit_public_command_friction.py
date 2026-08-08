@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-"""Audit public slash-command surface and default-opening friction.
+"""Audit public command surface and default-opening friction.
 
-The canonical product surface lives in ``stoney_verify.command_surface_contract``.
-This audit checks that stale Discord registrations are still pruned safely, that
-advanced/direct aliases remain classified as hidden cleanup targets, and that
-public production defaults avoid duplicate/guild-scoped command friction.
+The canonical final product surface lives in ``stoney_verify.command_surface_contract``.
+Implementation modules may register broader groups before final compaction, but
+Discord must sync only the compact-v2 doorway commands.
 """
 
 import ast
@@ -38,6 +37,11 @@ REQUIRED_STALE_TOP_LEVEL = {
     "ticket_panel_bootstrap_all",
     "verify_status",
     "repair_verify_ui",
+    # DS-COMMAND-UX-024 retired roots. They must be explicit cleanup targets so
+    # one post-deploy global sync removes stale Discord autocomplete entries.
+    "ticket-intake",
+    "ticket-category",
+    "ticket-panel",
 }
 
 REQUIRED_PRUNED_DANK_CHILDREN = {
@@ -94,6 +98,7 @@ REQUIRED_COMMAND_CLEANUP_EPOCH_MARKERS = {
     "cleanup_epoch",
     'state["cleanup_epoch"] = COMMAND_CLEANUP_EPOCH',
     'and str(state.get("cleanup_epoch", "")) == COMMAND_CLEANUP_EPOCH',
+    "2026-08-08-public-command-contract-v2-mega-menu",
 }
 
 
@@ -129,10 +134,20 @@ def fail_missing(label: str, have: set[str], required: set[str], failures: list[
 def main() -> int:
     failures: list[str] = []
 
-    if PUBLIC_GLOBAL_COMMAND_COUNT != 9 or len(PUBLIC_GLOBAL_COMMAND_NAMES) != 9:
-        failures.append("canonical public global command surface is not exactly 9 commands")
-    if not PUBLIC_DANK_CHILDREN:
-        failures.append("canonical public /dank child contract is empty")
+    expected = (
+        "dank",
+        "mod",
+        "ticket",
+        "tickets",
+        "verify",
+        "View Dank Profile",
+    )
+    if PUBLIC_GLOBAL_COMMAND_COUNT != len(expected) or PUBLIC_GLOBAL_COMMAND_NAMES != expected:
+        failures.append(
+            f"canonical compact-v2 global surface mismatch: count={PUBLIC_GLOBAL_COMMAND_COUNT} names={PUBLIC_GLOBAL_COMMAND_NAMES!r}"
+        )
+    if PUBLIC_DANK_CHILDREN != frozenset({"home", "upload"}):
+        failures.append(f"canonical compact-v2 /dank children mismatch: {sorted(PUBLIC_DANK_CHILDREN)!r}")
 
     for path in (
         SLASH_CLEANUP,
@@ -184,6 +199,7 @@ def main() -> int:
         "DANK_FORCE_COMMAND_SYNC_ON_BOOT",
         "DANK_GUILD_COMMAND_CLEANUP_IDS",
         "DANK_SYNC_BETA_GUILD_COMMANDS",
+        "candidates.update(name for name in before if name not in ALLOWED_DANK_CHILDREN)",
     ]
     cleanup_required_text.extend(sorted(REQUIRED_COMMAND_CLEANUP_EPOCH_MARKERS))
     for marker in cleanup_required_text:
@@ -223,6 +239,7 @@ def main() -> int:
 
     print("Public command/friction audit passed.")
     print(f"Canonical globals: {PUBLIC_GLOBAL_COMMAND_COUNT} -> {', '.join(PUBLIC_GLOBAL_COMMAND_NAMES)}")
+    print("Canonical /dank children: " + ", ".join(sorted(PUBLIC_DANK_CHILDREN)))
     return 0
 
 
