@@ -134,7 +134,8 @@ def test_final_compaction_occurs_after_exit_compatibility_registration() -> None
     exit_source = (ROOT / "stoney_verify/commands_ext/public_exit_compact_surface.py").read_text(encoding="utf-8")
     profile_source = (ROOT / "stoney_verify/commands_ext/__init__.py").read_text(encoding="utf-8")
     assert "register_compact_exit_card_commands(bot, bot.tree)" in commands_source
-    assert "install_compact_public_surface_v2(bot, tree)" in exit_source
+    assert "compact_surface._INSTALLED = False" in exit_source
+    assert "compact_surface.install_compact_public_surface_v2(bot, tree)" in exit_source
     assert "install_lifecycle_menu_compat()" in exit_source
     for module in (
         "public_mod_group",
