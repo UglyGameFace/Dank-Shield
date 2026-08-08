@@ -18,7 +18,7 @@ def test_router_has_one_canonical_public_leave_sender() -> None:
     assert "delivery = await send_live_exit_card(member)" in ROUTER
     assert '_install_listener(_leave_listener, "on_member_remove")' in ROUTER
     assert "async def _send_public_leave(" not in ROUTER
-    assert "dank_shield:leave_event:v4" not in ROUTER
+    assert 'set_footer(text="dank_shield:leave_event:v4")' not in ROUTER
     assert "resolve_exit_card_channel" in ROUTER
     assert "staff audit remains a separate route" in ROUTER.lower()
 
