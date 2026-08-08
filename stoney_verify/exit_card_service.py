@@ -35,6 +35,23 @@ from .welcome_card_typography_engine import (
     validate_custom_background,
 )
 
+_LEGACY_EXIT_CHANNEL_KEYS = (
+    "goodbye_channel_id",
+    "welcome_exit_channel_id",
+    "welcome_exit_log_channel_id",
+    "leave_channel_id",
+    "join_leave_log_channel_id",
+    "join_leave_channel_id",
+    "member_join_leave_log_channel_id",
+    "member_lifecycle_log_channel_id",
+    "member_log_channel_id",
+    "member_logs_channel_id",
+    "leave_log_channel_id",
+    "join_exit_log_channel_id",
+    "joinleave_channel_id",
+    "welcome_leave_channel_id",
+)
+
 
 def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
     try:
@@ -75,15 +92,33 @@ def _cfg_bool_value(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "enabled"}
 
 
+def _positive_id(value: Any) -> bool:
+    try:
+        return int(str(value or "").strip().strip("<#@!&>")) > 0
+    except Exception:
+        return False
+
+
 def exit_cards_enabled(cfg: Any) -> bool:
     explicit = _cfg_value(cfg, "exit_card_enabled", None)
     if explicit is not None:
         return _cfg_bool_value(explicit, False)
+
+    saw_legacy_toggle = False
     for key in ("welcome_leave_enabled", "goodbye_enabled", "leave_message_enabled"):
         value = _cfg_value(cfg, key, None)
-        if value is not None and _cfg_bool_value(value, False):
+        if value is None:
+            continue
+        saw_legacy_toggle = True
+        if _cfg_bool_value(value, False):
             return True
-    return False
+    if saw_legacy_toggle:
+        return False
+
+    # The retired v4 sender historically posted whenever an explicit leave-log
+    # route existed, even on very old guilds that never stored a boolean toggle.
+    # Preserve that behavior only until the owner saves an explicit Exit setting.
+    return any(_positive_id(_cfg_value(cfg, key, None)) for key in _LEGACY_EXIT_CHANNEL_KEYS)
 
 
 def configured_exit_theme_key(cfg: Any) -> str:
