@@ -13,6 +13,7 @@ import discord
 from .commands_ext.public_setup_group import _require_setup_permission, _upsert_config
 from .guild_config import get_guild_config, invalidate_guild_config
 from .ui.picker import DankPickerView, make_choice
+from .welcome_card_runtime import build_join_card_embed
 from .welcome_card_service import (
     configured_color_mode,
     configured_custom_font,
@@ -545,18 +546,30 @@ async def send_studio_preview(interaction: discord.Interaction) -> None:
         return await _private(interaction, content="❌ Use this inside a server.")
     await _defer(interaction)
     cfg = await get_guild_config(int(guild.id), refresh=True)
+    live_embed = build_join_card_embed(interaction.user, cfg)
     file, error = await _preview_file(interaction.user, cfg)
     if file is None:
+        live_embed.set_footer(
+            text="Preview fallback • dank_shield:welcome_card_runtime:v1"
+        )
         return await _private(
             interaction,
-            content=f"❌ Preview failed, but settings were not changed: `{error}`",
-            embed=_studio_embed(guild, cfg, preview_error=error),
+            content=(
+                "⚠️ Image preview failed, but the exact live text fallback is below. "
+                f"Settings were not changed: `{error}`"
+            ),
+            embed=live_embed,
             view=WelcomeCardStudioView(owner_id=int(interaction.user.id)),
         )
+    live_embed.set_image(url=f"attachment://{file.filename}")
+    live_embed.set_footer(text="Preview only • dank_shield:welcome_card_runtime:v1")
     await _private(
         interaction,
-        content="✅ This is the current production join-card design.",
-        embed=_studio_embed(guild, cfg),
+        content=(
+            "✅ Exact live join-card preview — title, body, placeholders, avatar, "
+            "and image use the same canonical runtime paths as a real join."
+        ),
+        embed=live_embed,
         file=file,
         view=WelcomeCardStudioView(owner_id=int(interaction.user.id)),
     )
