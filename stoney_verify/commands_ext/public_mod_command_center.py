@@ -67,15 +67,24 @@ def _center_embed() -> discord.Embed:
         title="🛡️ Moderation Center",
         description=(
             "The full Member Command Center handles current members with fresh hierarchy checks, "
-            "typed confirmations, locks, and audit logging. The two legacy-only utilities remain "
-            "available here too: ban/unban by raw user ID and gateway-intent diagnostics."
+            "typed confirmations, locks, and audit logging. Cleanup has its own guided center, and "
+            "the two legacy-only moderation utilities remain available here too: raw-ID ban/unban "
+            "and gateway-intent diagnostics."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
     )
     embed.add_field(
         name="Current members",
-        value="Verify • Message • Timeout • Kick • Ban • Add/Remove Role • Intelligence • Bulk tools • Cleanup",
+        value="Verify • Message • Timeout • Kick • Ban • Add/Remove Role • Intelligence • Bulk tools • Member cleanup",
+        inline=False,
+    )
+    embed.add_field(
+        name="Cleanup tools",
+        value=(
+            "Channel cleanup • user-message purge with preview/confirmation • blocked-invite history cleanup • "
+            "DM-spam reporting"
+        ),
         inline=False,
     )
     embed.add_field(
@@ -93,6 +102,12 @@ class ModerationCenterView(_OwnedView):
         _ = button
         from .member_command_center import open_member_command_center
         await open_member_command_center(interaction)
+
+    @discord.ui.button(label="Cleanup Tools", emoji="🧹", style=discord.ButtonStyle.primary, row=0)
+    async def cleanup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_cleanup_command_center import open_cleanup_command_center
+        await open_cleanup_command_center(interaction)
 
     @discord.ui.button(label="Ban / Unban by ID", emoji="🔨", style=discord.ButtonStyle.danger, row=0)
     async def ban_unban(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
