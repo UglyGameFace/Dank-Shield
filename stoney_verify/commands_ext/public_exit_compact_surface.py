@@ -4,8 +4,8 @@ from __future__ import annotations
 
 The Exit registrar still runs before the final compactor so existing import/order
 contracts stay intact. DS-COMMAND-UX-024 then removes redundant Discord-visible
-shortcuts while leaving the canonical Exit runtime and Studio implementation
-fully loaded and reachable from the mega menus.
+shortcuts while leaving the canonical Exit runtime, Studio implementation, and
+cleanup implementation fully loaded and reachable from mega menus.
 """
 
 from typing import Any
@@ -28,11 +28,13 @@ def _install_final_layers(bot: Any, tree: Any) -> dict[str, Any]:
     # trusting a one-time installed flag; otherwise an old group/shortcut could
     # be rebuilt after the first compaction and survive until Discord sync.
     from . import public_command_surface_v2 as compact_surface
+    from .public_cleanup_command_center import install_cleanup_menu_compat
     from .public_lifecycle_menu_compat import install_lifecycle_menu_compat
 
     compact_surface._INSTALLED = False
     result = compact_surface.install_compact_public_surface_v2(bot, tree)
     install_lifecycle_menu_compat()
+    install_cleanup_menu_compat()
     return result
 
 
