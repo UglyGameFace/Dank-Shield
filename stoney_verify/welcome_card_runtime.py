@@ -16,6 +16,10 @@ from typing import Any, Mapping, Optional
 import discord
 
 from .guild_config import get_guild_config
+from .lifecycle_template_renderer import (
+    render_lifecycle_template,
+    unresolved_known_placeholders,
+)
 from .welcome_card_service import welcome_card_file, welcome_cards_enabled
 
 
@@ -155,47 +159,6 @@ def _channel_permission_problem(channel: discord.TextChannel) -> str:
     return ", ".join(missing)
 
 
-def _format_template(text: str, member: discord.Member, cfg: Any) -> str:
-    guild = member.guild
-
-    def channel_mention(*keys: str) -> str:
-        for key in keys:
-            channel_id = _safe_int(_cfg_value(cfg, key, None), 0)
-            channel = guild.get_channel(channel_id) if channel_id > 0 else None
-            if isinstance(channel, discord.TextChannel):
-                return channel.mention
-        return "not set"
-
-    replacements = {
-        "server_name": str(getattr(guild, "name", "this server") or "this server"),
-        "member": str(getattr(member, "display_name", "") or member),
-        "member_name": str(getattr(member, "display_name", "") or member),
-        "user": str(getattr(member, "display_name", "") or member),
-        "mention": member.mention,
-        "member_mention": member.mention,
-        "username": str(member),
-        "display_name": str(getattr(member, "display_name", "") or member),
-        "member_count": str(getattr(guild, "member_count", "") or ""),
-        "rules_channel": channel_mention("rules_channel_id", "rules_id"),
-        "verify_channel": channel_mention(
-            "verify_channel_id",
-            "verification_channel_id",
-            "verify_id",
-        ),
-        "support_channel": channel_mention(
-            "support_channel_id",
-            "ticket_channel_id",
-            "tickets_channel_id",
-            "support_id",
-        ),
-        "random_welcome_line": "Welcome in — start with the rules, verify if needed, and enjoy the community.",
-    }
-    output = str(text or "")
-    for key, value in replacements.items():
-        output = output.replace("{" + key + "}", value)
-    return output
-
-
 def build_join_card_embed(member: discord.Member, cfg: Any) -> discord.Embed:
     title_template = _cfg_text(
         cfg,
@@ -207,9 +170,24 @@ def build_join_card_embed(member: discord.Member, cfg: Any) -> discord.Embed:
         "welcome_join_body",
         "{random_welcome_line}\n\nStart here: {rules_channel} • Verify: {verify_channel} • Help: {support_channel}",
     )
+    title = render_lifecycle_template(title_template, member, cfg)
+    body = render_lifecycle_template(body_template, member, cfg)
+
+    # This should be unreachable because the shared renderer scrubs every known
+    # token variant, but keep the live-send invariant explicit and observable.
+    unresolved = unresolved_known_placeholders(f"{title}\n{body}")
+    if unresolved:
+        _log(
+            f"known placeholders survived rendering guild={member.guild.id} "
+            f"member={member.id} keys={list(unresolved)}"
+        )
+        for key in unresolved:
+            title = title.replace("{" + key + "}", "unavailable")
+            body = body.replace("{" + key + "}", "unavailable")
+
     embed = discord.Embed(
-        title=_format_template(title_template, member, cfg)[:256],
-        description=_format_template(body_template, member, cfg)[:4000],
+        title=title[:256],
+        description=body[:4000],
         color=discord.Color.green(),
         timestamp=discord.utils.utcnow(),
     )
