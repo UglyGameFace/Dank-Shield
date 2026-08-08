@@ -8,6 +8,9 @@ from stoney_verify.commands_ext.public_command_surface_v2 import (
     CardAssetView,
     CompactDankHomeView,
 )
+from stoney_verify.commands_ext.public_lifecycle_menu_compat import (
+    build_compact_welcome_setup_view,
+)
 from stoney_verify.commands_ext.public_ticket_command_center import (
     TicketActionCenterView,
     TicketCategoryToolsView,
@@ -114,12 +117,25 @@ def test_asset_center_routes_three_upload_types_and_keeps_clear_font_action() ->
     assert "welcome_card_font_clear(interaction)" in source
 
 
+def test_lifecycle_refresh_keeps_compact_upload_navigation() -> None:
+    view = build_compact_welcome_setup_view(owner_id=1, config={})
+    custom_ids = {
+        str(getattr(item, "custom_id", "") or "")
+        for item in view.children
+    }
+    assert "dank:lifecycle:compact_assets:v1" in custom_ids
+    assert "dank:lifecycle:compact_refresh:v1" in custom_ids
+    assert "Uploads & Advanced" in _labels(view)
+    assert "Refresh" in _labels(view)
+
+
 def test_final_compaction_occurs_after_exit_compatibility_registration() -> None:
     commands_source = (ROOT / "stoney_verify/commands.py").read_text(encoding="utf-8")
     exit_source = (ROOT / "stoney_verify/commands_ext/public_exit_compact_surface.py").read_text(encoding="utf-8")
     profile_source = (ROOT / "stoney_verify/commands_ext/__init__.py").read_text(encoding="utf-8")
     assert "register_compact_exit_card_commands(bot, bot.tree)" in commands_source
     assert "install_compact_public_surface_v2(bot, tree)" in exit_source
+    assert "install_lifecycle_menu_compat()" in exit_source
     for module in (
         "public_mod_group",
         "public_ticket_group_clean",
