@@ -27,8 +27,8 @@ def test_ui_first_surface_has_tiny_explicit_entry_set() -> None:
     tree = ast.parse(source)
     assert tree is not None
     for required in (
-        'name="home"',
-        'name="upload"',
+        '_standalone("home",',
+        'name="upload",',
         'expected_roots = {"dank", "mod", "ticket", "tickets", "verify"}',
         'dank_children != ["home", "upload"]',
         "DANK_PAYLOAD_SAFETY_LIMIT",
