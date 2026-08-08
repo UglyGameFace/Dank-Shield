@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Button-first configuration surface for the canonical Exit Card runtime."""
 
-from typing import Any, Mapping, Optional
+from typing import Any, Awaitable, Callable, Mapping, Optional
 
 import discord
 
@@ -25,6 +25,8 @@ from .welcome_card_typography_engine import (
     COLOR_MODES,
     COLOR_PRESETS,
     CUSTOM_FONT_STYLE_KEY,
+    DEFAULT_FONT_STYLE_KEY,
+    DEFAULT_THEME_KEY,
     FONT_STYLES,
     normalize_color_mode,
     normalize_font_style_key,
@@ -92,10 +94,7 @@ async def _fresh_cfg(guild_id: int) -> Any:
     return await get_guild_config(int(guild_id), refresh=True)
 
 
-async def _save(
-    interaction: discord.Interaction,
-    updates: Mapping[str, Any],
-) -> Any:
+async def _save(interaction: discord.Interaction, updates: Mapping[str, Any]) -> Any:
     if interaction.guild is None:
         raise RuntimeError("This must be used inside a server.")
     await _upsert_config(int(interaction.guild.id), dict(updates))
@@ -186,7 +185,7 @@ def _studio_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
         value=(
             "`{username}` `{display_name}` `{server_name}` `{member_count}` "
             "`{account_age}` `{joined_at}` `{rules_channel}` `{verify_channel}` "
-            "`{support_channel}`. Token names are case-insensitive and tolerate spaces."
+            "`{support_channel}`. Names are case-insensitive and tolerate spaces."
         ),
         inline=False,
     )
@@ -222,11 +221,7 @@ async def send_exit_studio_preview(interaction: discord.Interaction) -> None:
         )
 
 
-async def _refresh(
-    interaction: discord.Interaction,
-    *,
-    notice: str = "",
-) -> None:
+async def _refresh(interaction: discord.Interaction, *, notice: str = "") -> None:
     guild = interaction.guild
     if guild is None:
         return await _private(interaction, content="❌ Use this inside a server.")
@@ -244,16 +239,55 @@ async def _refresh(
         await _private(interaction, embed=embed, view=view)
 
 
-class _OwnedPicker(discord.ui.View):
+class _OwnedView(discord.ui.View):
     def __init__(self, *, owner_id: int, timeout: float = 300) -> None:
         super().__init__(timeout=timeout)
         self.owner_id = int(owner_id)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.owner_id:
-            await _private(interaction, content="❌ Open your own Exit Card Studio to use this picker.")
+            await _private(interaction, content="❌ Open your own Exit Card Studio to use this control.")
             return False
         return await _require_setup_permission(interaction)
+
+
+class _ChoiceSelect(discord.ui.Select):
+    def __init__(
+        self,
+        *,
+        placeholder: str,
+        options: list[discord.SelectOption],
+        on_pick: Callable[[discord.Interaction, str], Awaitable[None]],
+    ) -> None:
+        super().__init__(
+            placeholder=placeholder,
+            options=options[:25],
+            min_values=1,
+            max_values=1,
+        )
+        self._on_pick = on_pick
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_pick(interaction, (self.values or [""])[0])
+
+
+class _ChoiceView(_OwnedView):
+    def __init__(
+        self,
+        *,
+        owner_id: int,
+        placeholder: str,
+        options: list[discord.SelectOption],
+        on_pick: Callable[[discord.Interaction, str], Awaitable[None]],
+    ) -> None:
+        super().__init__(owner_id=owner_id)
+        self.add_item(
+            _ChoiceSelect(
+                placeholder=placeholder,
+                options=options,
+                on_pick=on_pick,
+            )
+        )
 
 
 class ExitCardChannelSelect(discord.ui.ChannelSelect):
@@ -346,7 +380,6 @@ class ExitTextModal(discord.ui.Modal):
             {
                 "exit_card_title": title,
                 "exit_card_body": body,
-                # Keep the old announcement editor and new runtime in sync.
                 "welcome_leave_title": title,
                 "welcome_leave_body": body,
             },
@@ -354,86 +387,21 @@ class ExitTextModal(discord.ui.Modal):
         await _refresh(interaction, notice="✅ Exit-card message text saved.")
 
 
-class ThemeSelect(discord.ui.Select):
-    def __init__(self, *, cfg: Any) -> None:
-        current = configured_exit_theme_key(cfg)
-        options = [
-            discord.SelectOption(
-                label=theme.label[:100],
-                value=theme.key,
-                description=theme.description[:100],
-                default=theme.key == current,
-            )
-            for theme in BUILTIN_THEMES.values()
-        ]
-        super().__init__(placeholder="Choose Exit Card theme…", options=options, min_values=1, max_values=1)
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        theme_key = normalize_theme_key((self.values or [""])[0])
-        await _defer(interaction)
-        await _save(
-            interaction,
-            {
-                "exit_card_theme": theme_key,
-                "exit_card_background_mode": "builtin",
-                "exit_card_background_b64": "",
-                "exit_card_background_type": "",
-                "exit_card_background_name": "",
-            },
-        )
-        await _private(interaction, content=f"✅ Exit theme set to **{BUILTIN_THEMES[theme_key].label}**.")
-
-
-class ThemePicker(_OwnedPicker):
-    def __init__(self, *, owner_id: int, cfg: Any) -> None:
-        super().__init__(owner_id=owner_id)
-        self.add_item(ThemeSelect(cfg=cfg))
-
-
-class FontSelect(discord.ui.Select):
-    def __init__(self, *, cfg: Any) -> None:
-        current = configured_exit_font_style_key(cfg)
-        custom, custom_name = configured_custom_font(cfg)
-        options = [
-            discord.SelectOption(
-                label=style.label[:100],
-                value=style.key,
-                description=style.description[:100],
-                default=style.key == current,
-            )
-            for style in FONT_STYLES.values()
-        ]
-        if custom:
-            options.append(
-                discord.SelectOption(
-                    label=f"Uploaded: {custom_name or 'Custom Font'}"[:100],
-                    value=CUSTOM_FONT_STYLE_KEY,
-                    description="Use the licensed font uploaded through Welcome Card tools.",
-                    default=current == CUSTOM_FONT_STYLE_KEY,
-                )
-            )
-        super().__init__(placeholder="Choose Exit Card font…", options=options, min_values=1, max_values=1)
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        key = normalize_font_style_key((self.values or [""])[0])
-        await _defer(interaction)
-        await _save(interaction, {"exit_card_font_style": key})
-        await _private(interaction, content=f"✅ Exit-card font set to **{_font_label({'exit_card_font_style': key}) if key != CUSTOM_FONT_STYLE_KEY else 'Uploaded Font'}**.")
-
-
-class FontPicker(_OwnedPicker):
-    def __init__(self, *, owner_id: int, cfg: Any) -> None:
-        super().__init__(owner_id=owner_id)
-        self.add_item(FontSelect(cfg=cfg))
-
-
 class ExitAdvancedColorsModal(discord.ui.Modal):
     def __init__(self, *, owner_id: int, cfg: Any) -> None:
         super().__init__(title="Advanced Exit Colors", timeout=900)
         self.owner_id = int(owner_id)
         primary, secondary = configured_exit_custom_colors(cfg)
-        self.primary = discord.ui.TextInput(label="Primary hex", default=primary or "#22DCFF", max_length=7)
-        self.secondary = discord.ui.TextInput(label="Secondary hex", default=secondary or "#BC42FF", max_length=7)
+        self.primary = discord.ui.TextInput(
+            label="Primary hex",
+            default=primary or "#22DCFF",
+            max_length=7,
+        )
+        self.secondary = discord.ui.TextInput(
+            label="Secondary hex",
+            default=secondary or "#BC42FF",
+            max_length=7,
+        )
         self.add_item(self.primary)
         self.add_item(self.secondary)
 
@@ -459,120 +427,18 @@ class ExitAdvancedColorsModal(discord.ui.Modal):
         await _private(interaction, content=f"✅ Exit colors saved: `{primary}` → `{secondary}`.")
 
 
-class ColorSelect(discord.ui.Select):
-    def __init__(self, *, cfg: Any) -> None:
-        current = configured_exit_color_mode(cfg)
-        options = [
-            discord.SelectOption(
-                label=label,
-                value=f"mode:{key}",
-                description={
-                    "auto": "Use profile/card/theme fallbacks intelligently.",
-                    "profile": "Match the departing member's profile visuals.",
-                    "card": "Match the active exit-card background.",
-                    "theme": "Always use the selected theme palette.",
-                }.get(key, "Use this color-resolution mode."),
-                default=key == current,
-            )
-            for key, label in COLOR_MODES.items()
-        ]
-        options.extend(
-            discord.SelectOption(
-                label=preset.label[:100],
-                value=f"preset:{preset.key}",
-                description=preset.description[:100],
-                emoji=preset.emoji,
-            )
-            for preset in COLOR_PRESETS.values()
-        )
-        options.append(
-            discord.SelectOption(
-                label="Advanced Hex Colors",
-                value="advanced",
-                description="Enter two exact #RRGGBB colors.",
-            )
-        )
-        super().__init__(placeholder="Choose Exit Card colors…", options=options[:25], min_values=1, max_values=1)
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        value = (self.values or [""])[0]
-        if value == "advanced":
-            cfg = await get_guild_config(int(interaction.guild.id), refresh=True) if interaction.guild else {}
-            return await interaction.response.send_modal(ExitAdvancedColorsModal(owner_id=int(interaction.user.id), cfg=cfg))
-        await _defer(interaction)
-        if value.startswith("mode:"):
-            mode = normalize_color_mode(value.split(":", 1)[1])
-            await _save(
-                interaction,
-                {
-                    "exit_card_color_mode": mode,
-                    "exit_card_custom_primary": "",
-                    "exit_card_custom_secondary": "",
-                },
-            )
-            return await _private(interaction, content=f"✅ Exit colors set to **{COLOR_MODES[mode]}**.")
-        if value.startswith("preset:"):
-            preset = COLOR_PRESETS.get(value.split(":", 1)[1])
-            if preset is None:
-                return await _private(interaction, content="❌ That palette is no longer available.")
-            await _save(
-                interaction,
-                {
-                    "exit_card_color_mode": "custom",
-                    "exit_card_custom_primary": preset.primary,
-                    "exit_card_custom_secondary": preset.secondary,
-                },
-            )
-            return await _private(interaction, content=f"✅ Exit palette set to **{preset.label}**.")
-
-
-class ColorPicker(_OwnedPicker):
+class ExitCardStudioView(_OwnedView):
     def __init__(self, *, owner_id: int, cfg: Any) -> None:
-        super().__init__(owner_id=owner_id)
-        self.add_item(ColorSelect(cfg=cfg))
-
-
-class ShuffleSelect(discord.ui.Select):
-    def __init__(self, *, cfg: Any) -> None:
-        current = configured_exit_shuffle_mode(cfg)
-        options = [
-            discord.SelectOption(label=label, value=key, default=key == current)
-            for key, label in SHUFFLE_LABELS.items()
-        ]
-        super().__init__(placeholder="Choose Exit Card shuffle mode…", options=options, min_values=1, max_values=1)
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        mode = (self.values or ["off"])[0]
-        await _defer(interaction)
-        await _save(interaction, {"exit_card_shuffle_mode": mode})
-        await _private(interaction, content=f"✅ Exit-card shuffle set to **{SHUFFLE_LABELS.get(mode, 'Off')}**.")
-
-
-class ShufflePicker(_OwnedPicker):
-    def __init__(self, *, owner_id: int, cfg: Any) -> None:
-        super().__init__(owner_id=owner_id)
-        self.add_item(ShuffleSelect(cfg=cfg))
-
-
-class ExitCardStudioView(discord.ui.View):
-    def __init__(self, *, owner_id: int, cfg: Any) -> None:
-        super().__init__(timeout=900)
-        self.owner_id = int(owner_id)
+        super().__init__(owner_id=owner_id, timeout=900)
         self.cfg = cfg
         self.add_item(ExitCardChannelSelect())
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if int(interaction.user.id) != self.owner_id:
-            await _private(interaction, content="❌ Open your own Exit Card Studio to use these controls.")
-            return False
-        return await _require_setup_permission(interaction)
 
     @discord.ui.button(label="Enable / Disable", emoji="🔌", style=discord.ButtonStyle.success, row=1)
     async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        current = exit_cards_enabled(await get_guild_config(int(interaction.guild.id), refresh=True)) if interaction.guild else False
+        current_cfg = await get_guild_config(int(interaction.guild.id), refresh=True) if interaction.guild else {}
+        enabled = not exit_cards_enabled(current_cfg)
         await _defer(interaction)
-        enabled = not current
         await _save(
             interaction,
             {
@@ -594,25 +460,163 @@ class ExitCardStudioView(discord.ui.View):
     async def theme(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         cfg = await get_guild_config(int(interaction.guild.id), refresh=True) if interaction.guild else {}
-        await _private(interaction, content="Choose the live Exit Card theme.", view=ThemePicker(owner_id=self.owner_id, cfg=cfg))
+        current = configured_exit_theme_key(cfg)
+        options = [
+            discord.SelectOption(
+                label=theme.label[:100],
+                value=theme.key,
+                description=f"{theme.motif.replace('_', ' ').title()} card theme"[:100],
+                default=theme.key == current,
+            )
+            for theme in BUILTIN_THEMES.values()
+        ]
+
+        async def pick(target: discord.Interaction, value: str) -> None:
+            key = normalize_theme_key(value)
+            await _defer(target)
+            await _save(
+                target,
+                {
+                    "exit_card_theme": key,
+                    "exit_card_background_mode": "builtin",
+                    "exit_card_background_b64": "",
+                    "exit_card_background_type": "",
+                    "exit_card_background_name": "",
+                },
+            )
+            await _private(target, content=f"✅ Exit theme set to **{BUILTIN_THEMES[key].label}**.")
+
+        await _private(
+            interaction,
+            content="Choose the live Exit Card theme.",
+            view=_ChoiceView(owner_id=self.owner_id, placeholder="Choose Exit Card theme…", options=options, on_pick=pick),
+        )
 
     @discord.ui.button(label="Font", emoji="🔤", style=discord.ButtonStyle.secondary, row=1)
     async def font(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         cfg = await get_guild_config(int(interaction.guild.id), refresh=True) if interaction.guild else {}
-        await _private(interaction, content="Choose the Exit Card font. Uploaded fonts are shared safely with Welcome Studio.", view=FontPicker(owner_id=self.owner_id, cfg=cfg))
+        current = configured_exit_font_style_key(cfg)
+        custom, custom_name = configured_custom_font(cfg)
+        options = [
+            discord.SelectOption(
+                label=style.label[:100],
+                value=style.key,
+                description=style.description[:100],
+                default=style.key == current,
+            )
+            for style in FONT_STYLES.values()
+        ]
+        if custom:
+            options.append(
+                discord.SelectOption(
+                    label=f"Uploaded: {custom_name or 'Custom Font'}"[:100],
+                    value=CUSTOM_FONT_STYLE_KEY,
+                    description="Use the licensed font already uploaded for lifecycle cards.",
+                    default=current == CUSTOM_FONT_STYLE_KEY,
+                )
+            )
+
+        async def pick(target: discord.Interaction, value: str) -> None:
+            key = normalize_font_style_key(value)
+            await _defer(target)
+            await _save(target, {"exit_card_font_style": key})
+            label = "Uploaded Font" if key == CUSTOM_FONT_STYLE_KEY else FONT_STYLES[key].label
+            await _private(target, content=f"✅ Exit-card font set to **{label}**.")
+
+        await _private(
+            interaction,
+            content="Choose the Exit Card font. Uploaded fonts are shared safely with Welcome Studio.",
+            view=_ChoiceView(owner_id=self.owner_id, placeholder="Choose Exit Card font…", options=options, on_pick=pick),
+        )
 
     @discord.ui.button(label="Colors", emoji="🎨", style=discord.ButtonStyle.secondary, row=2)
     async def colors(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         cfg = await get_guild_config(int(interaction.guild.id), refresh=True) if interaction.guild else {}
-        await _private(interaction, content="Choose how Exit Card colors are resolved.", view=ColorPicker(owner_id=self.owner_id, cfg=cfg))
+        current = configured_exit_color_mode(cfg)
+        options = [
+            discord.SelectOption(
+                label=label,
+                value=f"mode:{key}",
+                default=key == current,
+            )
+            for key, label in COLOR_MODES.items()
+            if key != "custom"
+        ]
+        options.extend(
+            discord.SelectOption(
+                label=preset.label[:100],
+                value=f"preset:{preset.key}",
+                description=preset.description[:100],
+                emoji=preset.emoji,
+            )
+            for preset in COLOR_PRESETS.values()
+        )
+        options.append(
+            discord.SelectOption(
+                label="Advanced Hex Colors",
+                value="advanced",
+                description="Enter two exact #RRGGBB colors.",
+            )
+        )
+
+        async def pick(target: discord.Interaction, value: str) -> None:
+            if value == "advanced":
+                live_cfg = await get_guild_config(int(target.guild.id), refresh=True) if target.guild else {}
+                return await target.response.send_modal(ExitAdvancedColorsModal(owner_id=self.owner_id, cfg=live_cfg))
+            await _defer(target)
+            if value.startswith("mode:"):
+                mode = normalize_color_mode(value.split(":", 1)[1])
+                await _save(
+                    target,
+                    {
+                        "exit_card_color_mode": mode,
+                        "exit_card_custom_primary": "",
+                        "exit_card_custom_secondary": "",
+                    },
+                )
+                return await _private(target, content=f"✅ Exit colors set to **{COLOR_MODES[mode]}**.")
+            preset = COLOR_PRESETS.get(value.split(":", 1)[1] if value.startswith("preset:") else "")
+            if preset is None:
+                return await _private(target, content="❌ That palette is no longer available.")
+            await _save(
+                target,
+                {
+                    "exit_card_color_mode": "custom",
+                    "exit_card_custom_primary": preset.primary,
+                    "exit_card_custom_secondary": preset.secondary,
+                },
+            )
+            await _private(target, content=f"✅ Exit palette set to **{preset.label}**.")
+
+        await _private(
+            interaction,
+            content="Choose how Exit Card colors are resolved.",
+            view=_ChoiceView(owner_id=self.owner_id, placeholder="Choose Exit Card colors…", options=options, on_pick=pick),
+        )
 
     @discord.ui.button(label="Shuffle", emoji="🔀", style=discord.ButtonStyle.secondary, row=2)
     async def shuffle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         cfg = await get_guild_config(int(interaction.guild.id), refresh=True) if interaction.guild else {}
-        await _private(interaction, content="Choose deterministic Exit Card shuffle behavior.", view=ShufflePicker(owner_id=self.owner_id, cfg=cfg))
+        current = configured_exit_shuffle_mode(cfg)
+        options = [
+            discord.SelectOption(label=label, value=key, default=key == current)
+            for key, label in SHUFFLE_LABELS.items()
+        ]
+
+        async def pick(target: discord.Interaction, value: str) -> None:
+            mode = value if value in SHUFFLE_LABELS else "off"
+            await _defer(target)
+            await _save(target, {"exit_card_shuffle_mode": mode})
+            await _private(target, content=f"✅ Exit-card shuffle set to **{SHUFFLE_LABELS[mode]}**.")
+
+        await _private(
+            interaction,
+            content="Choose deterministic Exit Card shuffle behavior.",
+            view=_ChoiceView(owner_id=self.owner_id, placeholder="Choose Exit Card shuffle mode…", options=options, on_pick=pick),
+        )
 
     @discord.ui.button(label="Preview", emoji="👁️", style=discord.ButtonStyle.primary, row=2)
     async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -641,8 +645,8 @@ class ExitCardStudioView(discord.ui.View):
         await _save(
             interaction,
             {
-                "exit_card_theme": "classic",
-                "exit_card_font_style": "neon",
+                "exit_card_theme": DEFAULT_THEME_KEY,
+                "exit_card_font_style": DEFAULT_FONT_STYLE_KEY,
                 "exit_card_color_mode": "auto",
                 "exit_card_custom_primary": "",
                 "exit_card_custom_secondary": "",
@@ -663,8 +667,16 @@ class ExitCardStudioView(discord.ui.View):
             description="Discord buttons cannot open an attachment picker, so uploads use the compact slash commands.",
             color=discord.Color.blurple(),
         )
-        embed.add_field(name="Exit background", value="Use `/dank welcome exit-card-upload` with a PNG, JPG, or WEBP image.", inline=False)
-        embed.add_field(name="Shared custom font", value="Use `/dank welcome card-font-upload`, then choose **Uploaded Font** inside Exit Card Studio.", inline=False)
+        embed.add_field(
+            name="Exit background",
+            value="Use `/dank welcome exit-card-upload` with a PNG, JPG, or WEBP image.",
+            inline=False,
+        )
+        embed.add_field(
+            name="Shared custom font",
+            value="Use `/dank welcome card-font-upload`, then choose **Uploaded Font** inside Exit Card Studio.",
+            inline=False,
+        )
         await _private(interaction, embed=embed)
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=3)
@@ -677,6 +689,7 @@ class ExitCardStudioView(discord.ui.View):
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .welcome_setup_ui import open_welcome_setup
+
         await open_welcome_setup(interaction)
 
     @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, row=3)
@@ -700,7 +713,10 @@ async def open_exit_card_studio(interaction: discord.Interaction) -> None:
             view=ExitCardStudioView(owner_id=int(interaction.user.id), cfg=cfg),
         )
     except Exception as exc:
-        await _private(interaction, content=f"❌ Could not open Exit Card Studio: `{type(exc).__name__}: {exc}`")
+        await _private(
+            interaction,
+            content=f"❌ Could not open Exit Card Studio: `{type(exc).__name__}: {exc}`",
+        )
 
 
 __all__ = [
