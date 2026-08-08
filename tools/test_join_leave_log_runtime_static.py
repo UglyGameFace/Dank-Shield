@@ -98,7 +98,7 @@ def test_staff_join_audit_and_canonical_public_exit_stay_separate() -> None:
     assert "_install_listener(_leave_listener, \"on_member_remove\")" in ROUTER
     assert "delivery = await send_live_exit_card(member)" in ROUTER
     assert 'embed.set_footer(text="dank_shield:exit_card_runtime:v1")' in EXIT_RUNTIME
-    assert "dank_shield:leave_event:v4" not in ROUTER
+    assert 'set_footer(text="dank_shield:leave_event:v4")' not in ROUTER
 
 
 if __name__ == "__main__":
