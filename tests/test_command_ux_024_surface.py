@@ -4,6 +4,10 @@ from pathlib import Path
 
 import discord
 
+from stoney_verify.commands_ext.public_cleanup_command_center import (
+    CleanupCenterView,
+    UserPurgeView,
+)
 from stoney_verify.commands_ext.public_command_surface_v2 import (
     CardAssetView,
     CompactDankHomeView,
@@ -11,6 +15,7 @@ from stoney_verify.commands_ext.public_command_surface_v2 import (
 from stoney_verify.commands_ext.public_lifecycle_menu_compat import (
     build_compact_welcome_setup_view,
 )
+from stoney_verify.commands_ext.public_mod_command_center import ModerationCenterView
 from stoney_verify.commands_ext.public_ticket_command_center import (
     TicketActionCenterView,
     TicketCategoryToolsView,
@@ -109,6 +114,38 @@ def test_verification_center_preserves_member_server_and_role_mapping_paths() ->
     } <= _labels(VerifyRoleMappingView(1))
 
 
+def test_moderation_center_preserves_cleanup_and_recovery_paths() -> None:
+    assert {
+        "Member Command Center",
+        "Cleanup Tools",
+        "Ban / Unban by ID",
+        "Gateway Intents",
+        "Dank Shield Home",
+    } <= _labels(ModerationCenterView(1))
+
+    assert {
+        "Cleanup Status",
+        "Run Configured Cleanup",
+        "Channel Purge",
+        "User Message Purge",
+        "Blocked Invite Cleanup",
+        "Report DM Spam",
+        "Moderation Center",
+    } <= _labels(CleanupCenterView(1))
+
+
+def test_user_purge_remains_picker_plus_preview_first_flow() -> None:
+    view = UserPurgeView(1)
+    assert any(isinstance(item, discord.ui.UserSelect) for item in view.children)
+    assert any(isinstance(item, discord.ui.ChannelSelect) for item in view.children)
+    assert "Preview Options" in _labels(view)
+    cleanup_source = (ROOT / "stoney_verify/commands_ext/public_cleanup_command_center.py").read_text(encoding="utf-8")
+    assert "dry_run=True" in cleanup_source
+    assert "CleanupUserPurgeConfirmView" in (
+        ROOT / "stoney_verify/commands_ext/public_cleanup_group.py"
+    ).read_text(encoding="utf-8")
+
+
 def test_asset_center_routes_three_upload_types_and_keeps_clear_font_action() -> None:
     assert {"Welcome / Exit Studio", "Clear Uploaded Font", "Control Center"} <= _labels(CardAssetView(1))
     source = (ROOT / "stoney_verify/commands_ext/public_command_surface_v2.py").read_text(encoding="utf-8")
@@ -137,7 +174,9 @@ def test_final_compaction_occurs_after_exit_compatibility_registration() -> None
     assert "compact_surface._INSTALLED = False" in exit_source
     assert "compact_surface.install_compact_public_surface_v2(bot, tree)" in exit_source
     assert "install_lifecycle_menu_compat()" in exit_source
+    assert "install_cleanup_menu_compat()" in exit_source
     for module in (
+        "public_cleanup_group",
         "public_mod_group",
         "public_ticket_group_clean",
         "public_ticket_delete",
