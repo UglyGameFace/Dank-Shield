@@ -57,8 +57,8 @@ retired_public_sender_markers = [
     "leave log sent guild=",
     "_send_join_leave_join",
     "_send_public_leave",
-    "dank_shield:join_leave_event:v3",
-    "dank_shield:leave_event:v4",
+    'set_footer(text="dank_shield:join_leave_event:v3")',
+    'set_footer(text="dank_shield:leave_event:v4")',
 ]
 for marker in retired_public_sender_markers:
     if marker in router:
