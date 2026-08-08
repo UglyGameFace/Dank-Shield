@@ -15,7 +15,9 @@ import discord
 
 _ZERO_WIDTH_RE = re.compile("[\u200b\u200c\u200d\u2060\ufeff]")
 _TOKEN_RE = re.compile(
-    r"\{\{?\s*([A-Za-z][A-Za-z0-9_\-\s\u200b\u200c\u200d\u2060\ufeff]{0,63}?)\s*\}\}?"
+    r"\{\{?[\s\u200b\u200c\u200d\u2060\ufeff]*"
+    r"([A-Za-z][A-Za-z0-9_\-\s\u200b\u200c\u200d\u2060\ufeff]{0,63}?)"
+    r"[\s\u200b\u200c\u200d\u2060\ufeff]*\}\}?"
 )
 
 KNOWN_PLACEHOLDERS = frozenset(
