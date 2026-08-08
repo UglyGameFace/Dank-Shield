@@ -24,12 +24,14 @@ required_router = [
     "send_live_exit_card",
     "canonical join result guild=",
     "canonical exit result guild=",
-    "staff audit remains a separate route",
 ]
 
 for marker in required_router:
     if marker not in router:
         failures.append(f"router missing marker: {marker}")
+
+if "staff audit remains a separate route" not in router.lower():
+    failures.append("router no longer documents that staff audit remains a separate route")
 
 required_join_runtime = [
     'embed.set_footer(text="dank_shield:welcome_card_runtime:v1")',
