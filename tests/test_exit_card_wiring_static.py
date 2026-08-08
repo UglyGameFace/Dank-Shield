@@ -8,6 +8,8 @@ RUNTIME = (ROOT / "stoney_verify/exit_card_runtime.py").read_text(encoding="utf-
 STUDIO = (ROOT / "stoney_verify/exit_card_studio_ui.py").read_text(encoding="utf-8")
 SERVICE = (ROOT / "stoney_verify/exit_card_service.py").read_text(encoding="utf-8")
 COMMANDS = (ROOT / "stoney_verify/commands.py").read_text(encoding="utf-8")
+COMMAND_MODULES = (ROOT / "stoney_verify/commands_ext/__init__.py").read_text(encoding="utf-8")
+LEGACY_LIFECYCLE = (ROOT / "stoney_verify/commands_ext/public_member_lifecycle_logs.py").read_text(encoding="utf-8")
 COMPACT = (ROOT / "stoney_verify/commands_ext/public_exit_compact_surface.py").read_text(encoding="utf-8")
 UPLOAD = (ROOT / "stoney_verify/commands_ext/public_exit_card_studio.py").read_text(encoding="utf-8")
 
@@ -19,6 +21,15 @@ def test_router_has_one_canonical_public_leave_sender() -> None:
     assert "dank_shield:leave_event:v4" not in ROUTER
     assert "resolve_exit_card_channel" in ROUTER
     assert "staff audit remains a separate route" in ROUTER.lower()
+
+
+def test_legacy_public_lifecycle_module_cannot_be_registered_by_command_profile() -> None:
+    # The historical module still exists for old diagnostic helpers, but its
+    # registrar must stay unreachable from every command profile. Re-adding it
+    # would immediately create a second public join and leave sender.
+    assert "register_public_member_lifecycle_log_listeners" in LEGACY_LIFECYCLE
+    assert '"public_member_lifecycle_logs"' not in COMMAND_MODULES
+    assert "register_public_member_lifecycle_log_listeners" not in COMMAND_MODULES
 
 
 def test_exit_runtime_owns_live_gate_route_image_and_fallback() -> None:
