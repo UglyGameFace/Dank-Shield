@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Permanent drift audit for Dank Shield's normal public command profile."""
+"""Permanent drift audit for Dank Shield's final normal public command profile."""
 
 from pathlib import Path
 import sys
@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from stoney_verify.command_surface_contract import (  # noqa: E402
+    PUBLIC_DANK_CHILDREN,
     PUBLIC_GLOBAL_COMMAND_COUNT,
     PUBLIC_GLOBAL_COMMAND_NAMES,
 )
@@ -22,25 +23,27 @@ def _read(path: str) -> str:
 def main() -> int:
     errors: list[str] = []
 
-    if PUBLIC_GLOBAL_COMMAND_COUNT != 9:
-        errors.append(f"public global count drifted: expected 9, got {PUBLIC_GLOBAL_COMMAND_COUNT}")
-
     expected = (
         "dank",
         "mod",
         "ticket",
         "tickets",
-        "ticket-intake",
-        "ticket-category",
-        "ticket-panel",
         "verify",
         "View Dank Profile",
     )
+    if PUBLIC_GLOBAL_COMMAND_COUNT != len(expected):
+        errors.append(
+            f"public global count drifted: expected {len(expected)}, got {PUBLIC_GLOBAL_COMMAND_COUNT}"
+        )
     if PUBLIC_GLOBAL_COMMAND_NAMES != expected:
         errors.append(f"public global command names drifted: {PUBLIC_GLOBAL_COMMAND_NAMES!r}")
+    if PUBLIC_DANK_CHILDREN != frozenset({"home", "upload"}):
+        errors.append(f"final /dank children drifted: {sorted(PUBLIC_DANK_CHILDREN)!r}")
 
     access = _read("stoney_verify/commands_ext/public_access_control.py")
     review = _read("stoney_verify/commands_ext/public_setup_review.py")
+    surface = _read("stoney_verify/commands_ext/public_command_surface_v2.py")
+    exit_surface = _read("stoney_verify/commands_ext/public_exit_compact_surface.py")
     docs = _read("docs/public-production-env.md")
 
     if "_SETUP_PERMISSION_MODULES" in access:
@@ -64,9 +67,25 @@ def main() -> int:
     if "attach_setup_review_commands()" in tail:
         errors.append("public_setup_review still attaches advanced commands unconditionally at import time")
 
+    required_surface_markers = (
+        "install_compact_public_surface_v2",
+        'for retired_root in ("ticket-intake", "ticket-category", "ticket-panel")',
+        'dank_children != ["home", "upload"]',
+        'expected_roots = {"dank", "mod", "ticket", "tickets", "verify"}',
+    )
+    for marker in required_surface_markers:
+        if marker not in surface:
+            errors.append(f"compact-v2 surface missing marker: {marker}")
+
+    if "install_compact_public_surface_v2(bot, tree)" not in exit_surface:
+        errors.append("final command compactor is not installed after Exit compatibility registration")
+
     for name in expected:
         if name not in docs:
             errors.append(f"public production docs do not list {name!r}")
+    for retired in ("/ticket-intake", "/ticket-category", "/ticket-panel", "/dank welcome"):
+        if f"{retired} —" in docs or f"{retired}` —" in docs:
+            errors.append(f"public production docs still advertise retired command root {retired}")
 
     if errors:
         print("PUBLIC COMMAND SURFACE AUDIT FAILED")
@@ -77,6 +96,7 @@ def main() -> int:
     print("PUBLIC COMMAND SURFACE AUDIT OK")
     print(f"global_count={PUBLIC_GLOBAL_COMMAND_COUNT}")
     print("commands=" + ", ".join(PUBLIC_GLOBAL_COMMAND_NAMES))
+    print("dank_children=" + ", ".join(sorted(PUBLIC_DANK_CHILDREN)))
     return 0
 
 
