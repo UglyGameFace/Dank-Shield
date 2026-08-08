@@ -7,6 +7,8 @@ from typing import Any, Mapping, Optional
 
 import discord
 
+from .lifecycle_template_renderer import render_lifecycle_template
+
 JOIN_TITLE = "Welcome, {username}!"
 JOIN_BODY = "{random_welcome_line}\n\nStart here: {rules_channel} • Verify: {verify_channel} • Help: {support_channel}"
 LEAVE_TITLE = "{username} left"
@@ -85,65 +87,6 @@ def _templates(cfg: Any, *, kind: str) -> tuple[str, str]:
     return _cfg_str(cfg, "welcome_join_title", JOIN_TITLE), _cfg_str(cfg, "welcome_join_body", JOIN_BODY)
 
 
-def _clean_channel_name(value: Any) -> str:
-    return str(value or "").lower().replace("_", "-").replace(" ", "-")
-
-
-def _channel_by_name(guild: discord.Guild, *tokens: str) -> Optional[discord.TextChannel]:
-    wanted = tuple(_clean_channel_name(token) for token in tokens if str(token or "").strip())
-    if not wanted:
-        return None
-    for channel in list(getattr(guild, "text_channels", []) or []):
-        if not isinstance(channel, discord.TextChannel):
-            continue
-        name = _clean_channel_name(getattr(channel, "name", ""))
-        if any(token in name for token in wanted):
-            return channel
-    return None
-
-
-def _channel_mention(guild: discord.Guild, cfg: Any, *, keys: tuple[str, ...], names: tuple[str, ...]) -> str:
-    for key in keys:
-        channel = guild.get_channel(_cfg_int(cfg, key, 0))
-        if isinstance(channel, discord.TextChannel):
-            return channel.mention
-    channel = _channel_by_name(guild, *names)
-    return channel.mention if isinstance(channel, discord.TextChannel) else "not set"
-
-
-def _age_text(dt: Any) -> str:
-    try:
-        if dt is None:
-            return "unknown"
-        now = discord.utils.utcnow()
-        if getattr(dt, "tzinfo", None) is None:
-            dt = dt.replace(tzinfo=now.tzinfo)
-        days = max(0, int((now - dt).total_seconds()) // 86400)
-        if days >= 365:
-            years = days // 365
-            months = (days % 365) // 30
-            return f"{years}y {months}mo" if months else f"{years}y"
-        if days >= 30:
-            months = days // 30
-            rem = days % 30
-            return f"{months}mo {rem}d" if rem else f"{months}mo"
-        if days >= 1:
-            return f"{days}d"
-        return "today"
-    except Exception:
-        return "unknown"
-
-
-def _discord_time(dt: Any) -> str:
-    try:
-        if dt is None:
-            return "unknown"
-        unix = int(dt.timestamp())
-        return f"<t:{unix}:F> (<t:{unix}:R>)"
-    except Exception:
-        return "unknown"
-
-
 def _server_profile(guild: discord.Guild) -> str:
     parts = [str(getattr(guild, "name", "") or "")]
     try:
@@ -167,56 +110,15 @@ def _server_profile(guild: discord.Guild) -> str:
     return "community"
 
 
-def _random_line_preview(guild: discord.Guild) -> str:
-    profile = _server_profile(guild)
-    lines = {
-        "gaming": "Welcome in — get verified, find your channels, and enjoy the games.",
-        "support": "Welcome in — check the getting-started info and open a ticket if you need help.",
-        "education": "Welcome in — start with the rules, then check the learning channels.",
-        "business": "Welcome — please review the rules and start-here information before posting.",
-        "creator": "Welcome in — check the rules, introduce yourself, and explore the creator channels.",
-        "community": "Welcome in — start with the rules, verify if needed, and enjoy the community.",
-    }
-    return lines.get(profile, lines["community"])
-
-
-def _preview_invite_values() -> dict[str, str]:
-    return {
-        "invite_code": "real join only",
-        "invite_link": "real join only",
-        "invite_source": "real join only",
-        "invite_channel": "real join only",
-        "invite_owner": "real join only",
-        "invite_inviter": "real join only",
-        "invite_owner_id": "real join only",
-        "invite_inviter_id": "real join only",
-    }
-
-
 def _format(text: str, member: discord.Member, *, cfg: Any | None = None) -> str:
-    guild = member.guild
-    pairs = {
-        "server_name": str(getattr(guild, "name", "this server") or "this server"),
-        "member": str(getattr(member, "display_name", "") or member),
-        "member_name": str(getattr(member, "display_name", "") or member),
-        "user": str(getattr(member, "display_name", "") or member),
-        "mention": member.mention,
-        "member_mention": member.mention,
-        "username": str(member),
-        "display_name": str(getattr(member, "display_name", "") or member),
-        "member_count": str(getattr(guild, "member_count", "") or ""),
-        "account_age": _age_text(getattr(member, "created_at", None)),
-        "joined_at": _discord_time(getattr(member, "joined_at", None)),
-        "rules_channel": _channel_mention(guild, cfg, keys=("rules_channel_id", "rules_id"), names=("rules",)) if cfg is not None else "not set",
-        "verify_channel": _channel_mention(guild, cfg, keys=("verify_channel_id", "verification_channel_id", "verify_id"), names=("verification", "verify")) if cfg is not None else "not set",
-        "support_channel": _channel_mention(guild, cfg, keys=("support_channel_id", "ticket_channel_id", "tickets_channel_id", "support_id"), names=("support", "ticket", "help")) if cfg is not None else "not set",
-        "random_welcome_line": _random_line_preview(guild),
-    }
-    pairs.update(_preview_invite_values())
-    out = str(text or "")
-    for key, value in pairs.items():
-        out = out.replace("{" + key + "}", value)
-    return out
+    """Preview lifecycle text with the same renderer used by live cards."""
+
+    return render_lifecycle_template(
+        text,
+        member,
+        cfg if cfg is not None else {},
+        preview=True,
+    )
 
 
 def _can_post(channel: discord.TextChannel, me: Optional[discord.Member]) -> list[str]:

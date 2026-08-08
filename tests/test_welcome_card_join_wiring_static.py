@@ -58,6 +58,16 @@ def test_studio_panel_survives_preview_failure_and_controls_live_state() -> None
         assert label in STUDIO
 
 
+def test_studio_preview_uses_exact_live_embed_and_image_fallback_paths() -> None:
+    assert "from .welcome_card_runtime import build_join_card_embed" in STUDIO
+    assert "live_embed = build_join_card_embed(interaction.user, cfg)" in STUDIO
+    assert 'live_embed.set_image(url=f"attachment://{file.filename}")' in STUDIO
+    assert "Exact live join-card preview" in STUDIO
+    assert "the exact live text fallback is below" in STUDIO
+    assert "Preview only • dank_shield:welcome_card_runtime:v1" in STUDIO
+    assert "Preview fallback • dank_shield:welcome_card_runtime:v1" in STUDIO
+
+
 def test_public_card_upload_controls_remain_available() -> None:
     for command in (
         'name="card-preview"',

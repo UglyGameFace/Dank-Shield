@@ -81,6 +81,15 @@ except Exception as e:
         return 0
 
 
+try:
+    from .commands_ext.public_exit_compact_surface import (
+        register_compact_exit_card_commands,
+    )
+except Exception as e:
+    print(f"❌ commands.py failed to import Exit Card compact surface: {repr(e)}")
+    raise RuntimeError("Exit Card Studio command bootstrap failed closed during import.") from e
+
+
 # ============================================================
 # Kick timer bridges
 # events.py imports these from commands.py, so keep them exposed
@@ -159,6 +168,7 @@ except Exception as e:
 
 try:
     compact_public_dank_surface(bot, bot.tree)
+    register_compact_exit_card_commands(bot, bot.tree)
 except Exception as e:
     try:
         print(f"❌ commands.py failed to compact /dank command surface: {repr(e)}")
@@ -203,6 +213,7 @@ def register_extra_commands(tree) -> None:
             pass
 
     compact_public_dank_surface(bot, tree)
+    register_compact_exit_card_commands(bot, tree)
 
 
 # ============================================================

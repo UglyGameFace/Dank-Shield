@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-"""Authoritative member lifecycle router.
+"""Authoritative public member lifecycle router.
 
-Public join output is owned only by Welcome Card Studio through
-``welcome_card_runtime.send_live_welcome_card``. The former plain
-``dank_shield:join_leave_event:v3`` join card is retired. Leave announcements
-remain on the explicit join/leave log route, while staff audit/modlog listeners
-remain separate.
+Welcome Card Studio owns the single member-facing join sender and Exit Card
+Studio owns the single member-facing leave sender. Staff audit/modlog listeners
+remain separate and are never folded into these public lifecycle cards.
 """
 
 from typing import Any, Optional
@@ -14,6 +12,10 @@ from typing import Any, Optional
 import discord
 from discord import app_commands
 
+from stoney_verify.exit_card_runtime import (
+    resolve_exit_card_channel,
+    send_live_exit_card,
+)
 from stoney_verify.welcome_card_runtime import (
     resolve_join_card_channel,
     send_live_welcome_card,
@@ -30,13 +32,6 @@ except Exception:  # pragma: no cover
     dank_group = None  # type: ignore
 
 _INSTALLED = False
-
-PUBLIC_WELCOME_KEYS = (
-    "public_welcome_channel_id",
-    "welcome_channel_id",
-    "welcome_public_channel_id",
-    "member_welcome_channel_id",
-)
 
 JOIN_LEAVE_KEYS = (
     "join_leave_log_channel_id",
@@ -147,44 +142,6 @@ def _resolve_channel(
     return None
 
 
-def _same_channel(a: Any, b: Any) -> bool:
-    try:
-        return (
-            isinstance(a, discord.TextChannel)
-            and isinstance(b, discord.TextChannel)
-            and int(a.id) == int(b.id)
-        )
-    except Exception:
-        return False
-
-
-def _bot_can_send(channel: Optional[discord.TextChannel]) -> bool:
-    try:
-        if channel is None:
-            return False
-        me = channel.guild.me
-        if not isinstance(me, discord.Member):
-            return False
-        perms = channel.permissions_for(me)
-        ok = bool(
-            perms.view_channel
-            and perms.send_messages
-            and perms.embed_links
-            and perms.read_message_history
-        )
-        if not ok:
-            _log(
-                "channel not writable "
-                f"guild={channel.guild.id} channel={channel.id} "
-                f"view={bool(perms.view_channel)} send={bool(perms.send_messages)} "
-                f"embed={bool(perms.embed_links)} history={bool(perms.read_message_history)}"
-            )
-        return ok
-    except Exception as exc:
-        _log(f"channel permission check failed: {type(exc).__name__}: {exc}")
-        return False
-
-
 def _bot_can_read_invites(guild: discord.Guild) -> bool:
     try:
         me = guild.me
@@ -197,43 +154,6 @@ def _bot_can_read_invites(guild: discord.Guild) -> bool:
         )
     except Exception:
         return False
-
-
-def _avatar_url(member: discord.Member) -> str:
-    try:
-        return str(member.display_avatar.url)
-    except Exception:
-        return ""
-
-
-async def _send_public_leave(
-    member: discord.Member,
-    channel: Optional[discord.TextChannel],
-) -> None:
-    if not _bot_can_send(channel):
-        _log(
-            f"leave log skipped guild={member.guild.id} member={member.id}: "
-            "leave target missing or not writable"
-        )
-        return
-    embed = discord.Embed(
-        title=f"👋 {member.display_name} left",
-        description=f"Members now: **{member.guild.member_count or 'unknown'}**.",
-        color=discord.Color.dark_gray(),
-        timestamp=discord.utils.utcnow(),
-    )
-    avatar = _avatar_url(member)
-    if avatar:
-        embed.set_thumbnail(url=avatar)
-    embed.set_footer(text="dank_shield:leave_event:v4")
-    await channel.send(
-        embed=embed,
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
-    _log(
-        f"leave log sent guild={member.guild.id} member={member.id} "
-        f"channel={channel.id}"
-    )
 
 
 async def _join_listener(member: discord.Member) -> None:
@@ -254,30 +174,15 @@ async def _join_listener(member: discord.Member) -> None:
 
 async def _leave_listener(member: discord.Member) -> None:
     try:
-        guild = member.guild
-        cfg = await _load_config(int(guild.id))
-        public_channel = _resolve_channel(guild, cfg, PUBLIC_WELCOME_KEYS)
-        leave_channel = _resolve_channel(guild, cfg, JOIN_LEAVE_KEYS)
-        staff_channel = _resolve_channel(guild, cfg, STAFF_AUDIT_KEYS)
-
-        if _same_channel(public_channel, leave_channel):
-            _log(
-                "leave log suppressed because leave route equals static welcome "
-                f"guild={guild.id} channel={getattr(public_channel, 'id', None)}"
-            )
-            leave_channel = None
-
-        if _same_channel(staff_channel, leave_channel):
-            _log(
-                "leave log suppressed because the staff audit uses the same channel "
-                f"guild={guild.id} channel={getattr(staff_channel, 'id', None)}"
-            )
-            leave_channel = None
-
-        await _send_public_leave(member, leave_channel)
+        delivery = await send_live_exit_card(member)
+        _log(
+            f"canonical exit result guild={member.guild.id} member={member.id} "
+            f"sent={delivery.sent} code={delivery.code} "
+            f"channel={delivery.channel_id or '-'} image={delivery.used_image}"
+        )
     except Exception as exc:
         _log(
-            f"leave failed guild={getattr(member.guild, 'id', 'unknown')} "
+            f"canonical exit failed guild={getattr(member.guild, 'id', 'unknown')} "
             f"member={getattr(member, 'id', 'unknown')}: "
             f"{type(exc).__name__}: {exc}"
         )
@@ -293,15 +198,16 @@ async def _ready_listener() -> None:
         for guild in list(getattr(bot, "guilds", []) or []):
             try:
                 cfg = await _load_config(int(guild.id))
-                join_card_channel, join_reason = resolve_join_card_channel(guild, cfg)
-                leave_channel = _resolve_channel(guild, cfg, JOIN_LEAVE_KEYS)
+                join_channel, join_reason = resolve_join_card_channel(guild, cfg)
+                exit_channel, exit_reason = resolve_exit_card_channel(guild, cfg)
                 staff_channel = _resolve_channel(guild, cfg, STAFF_AUDIT_KEYS)
                 _log(
                     "member lifecycle routes ready "
                     f"guild={guild.id} "
-                    f"join_card={getattr(join_card_channel, 'id', None) or '-'} "
+                    f"join={getattr(join_channel, 'id', None) or '-'} "
                     f"join_reason={join_reason!r} "
-                    f"leave={getattr(leave_channel, 'id', None) or '-'} "
+                    f"exit={getattr(exit_channel, 'id', None) or '-'} "
+                    f"exit_reason={exit_reason!r} "
                     f"staff={getattr(staff_channel, 'id', None) or '-'}"
                 )
             except Exception:
@@ -335,7 +241,7 @@ def _remove_old_welcome_listeners() -> None:
             extra[event_name] = kept
             if removed:
                 _log(
-                    f"removed old/conflicting member lifecycle listeners "
+                    "removed old/conflicting member lifecycle listeners "
                     f"event={event_name} count={removed}"
                 )
     except Exception as exc:
@@ -389,6 +295,10 @@ async def _member_logs_command(
         if join_leave_log is not None:
             for key in JOIN_LEAVE_KEYS:
                 payload[key] = str(join_leave_log.id)
+            # Member Logs remains a compatibility entry point, but Exit Card
+            # Studio is the canonical runtime owner after this write.
+            payload["exit_card_channel_id"] = str(join_leave_log.id)
+            payload["exit_card_enabled"] = True
         if staff_audit_log is not None:
             payload["staff_join_audit_channel_id"] = str(staff_audit_log.id)
             payload["member_audit_log_channel_id"] = str(staff_audit_log.id)
@@ -412,30 +322,34 @@ async def _member_logs_command(
             invalidate_guild_config(int(guild.id))
 
         cfg = await _load_config(int(guild.id))
-        join_card_channel, join_reason = resolve_join_card_channel(guild, cfg)
-        leave_channel = _resolve_channel(guild, cfg, JOIN_LEAVE_KEYS)
+        join_channel, join_reason = resolve_join_card_channel(guild, cfg)
+        exit_channel, exit_reason = resolve_exit_card_channel(guild, cfg)
         staff_channel = _resolve_channel(guild, cfg, STAFF_AUDIT_KEYS)
 
         embed = discord.Embed(
             title="👋 Member Lifecycle Routing",
             description=(
-                "Welcome Card Studio owns live join cards. Leave events and staff "
-                "audit remain separate routes."
+                "Welcome Card Studio owns the live join card. Exit Card Studio "
+                "owns the live leave card. Staff audit remains a separate route."
             ),
             color=discord.Color.blurple(),
         )
         embed.add_field(
             name="Live join card",
             value=(
-                join_card_channel.mention
-                if isinstance(join_card_channel, discord.TextChannel)
+                join_channel.mention
+                if isinstance(join_channel, discord.TextChannel)
                 else f"`Unavailable: {join_reason}`"
             ),
             inline=False,
         )
         embed.add_field(
-            name="Leave event log",
-            value=leave_channel.mention if leave_channel else "`Not set`",
+            name="Live exit card",
+            value=(
+                exit_channel.mention
+                if isinstance(exit_channel, discord.TextChannel)
+                else f"`Unavailable: {exit_reason}`"
+            ),
             inline=False,
         )
         embed.add_field(
@@ -448,8 +362,11 @@ async def _member_logs_command(
             inline=False,
         )
         embed.add_field(
-            name="Legacy join card",
-            value="Removed. `dank_shield:join_leave_event:v3` is no longer emitted.",
+            name="Legacy public lifecycle cards",
+            value=(
+                "Retired. Neither `dank_shield:join_leave_event:v3` nor "
+                "`dank_shield:leave_event:v4` is emitted by the public router."
+            ),
             inline=False,
         )
         invite_status = (
@@ -457,15 +374,11 @@ async def _member_logs_command(
             if _bot_can_read_invites(guild)
             else "Missing Manage Server permission ⚠️ invite source may stay unknown"
         )
-        embed.add_field(
-            name="Invite tracking",
-            value=invite_status,
-            inline=False,
-        )
+        embed.add_field(name="Invite tracking", value=invite_status, inline=False)
         if payload:
             embed.add_field(
                 name="Saved",
-                value="Updated member lifecycle routes.",
+                value="Updated canonical member lifecycle routes.",
                 inline=False,
             )
         await interaction.response.send_message(
@@ -499,7 +412,7 @@ def _install_command() -> bool:
             public_welcome=(
                 "Static welcome/start-here channel and fallback live join-card channel."
             ),
-            join_leave_log="Channel for leave event cards.",
+            join_leave_log="Compatibility route for the canonical Exit Card Studio.",
             staff_audit_log="Staff-only channel for detailed join audit and invite source.",
         )(_member_logs_command)
         try:
@@ -508,7 +421,7 @@ def _install_command() -> bool:
             pass
         dank_group.command(
             name="member-logs",
-            description="Configure join-card, leave-event, and staff-audit routes.",
+            description="Configure join-card, exit-card, and staff-audit routes.",
         )(decorated)
         return True
     except Exception as exc:
@@ -531,7 +444,8 @@ def install() -> bool:
         _install_listener(_ready_listener, "on_ready")
         _INSTALLED = True
         _log(
-            "active; Welcome Card Studio owns joins and the legacy v3 join card is retired"
+            "active; Welcome Card Studio owns joins, Exit Card Studio owns exits, "
+            "and legacy public lifecycle cards are retired"
         )
         return True
     except Exception as exc:

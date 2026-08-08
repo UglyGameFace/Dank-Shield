@@ -46,6 +46,8 @@ class FakeGuild:
         self.member_count = 12
         self.me = None
         self.channels: dict[int, FakeChannel] = {}
+        self.text_channels: list[FakeChannel] = []
+        self.categories: list[object] = []
 
     def get_channel(self, channel_id: int) -> FakeChannel | None:
         return self.channels.get(int(channel_id))
@@ -55,6 +57,7 @@ class FakeMember:
     def __init__(self, guild: FakeGuild, user_id: int = 77) -> None:
         self.guild = guild
         self.id = user_id
+        self.name = "tester"
         self.mention = f"<@{user_id}>"
         self.display_name = "Tester"
         self.display_avatar = SimpleNamespace(url="https://example.invalid/avatar.png")
@@ -77,6 +80,7 @@ def _world() -> tuple[FakeGuild, FakeChannel, FakeMember]:
     guild.me = me
     channel = FakeChannel(123, guild)
     guild.channels[channel.id] = channel
+    guild.text_channels.append(channel)
     return guild, channel, FakeMember(guild)
 
 
@@ -157,7 +161,7 @@ def test_stale_explicit_channel_never_silently_uses_fallback(
     assert "999999" in reason
 
 
-def test_render_failure_uses_one_canonical_embed_fallback(
+def test_render_failure_uses_one_canonical_embed_fallback_and_resolves_username_variants(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _guild, channel, member = _world()
@@ -166,8 +170,10 @@ def test_render_failure_uses_one_canonical_embed_fallback(
         return {
             "welcome_card_enabled": True,
             "join_welcome_channel_id": str(channel.id),
-            "welcome_join_title": "Hello {display_name}",
-            "welcome_join_body": "Welcome to {server_name}.",
+            # Bind the production screenshot bug directly to the canonical live
+            # runtime: known username tokens may never survive public rendering.
+            "welcome_join_title": "Welcome to Paradise {username} / { UserName }",
+            "welcome_join_body": "Welcome {display_name} to {server_name}.",
         }
 
     async def broken_card(_member: object, _cfg: object) -> discord.File:
@@ -184,7 +190,10 @@ def test_render_failure_uses_one_canonical_embed_fallback(
     assert "file" not in channel.sent[0]
     embed = channel.sent[0]["embed"]
     assert isinstance(embed, discord.Embed)
-    assert embed.title == "Hello Tester"
+    assert embed.title == "Welcome to Paradise tester / tester"
+    assert "Welcome Tester to Test Guild." == embed.description
+    assert "{username}" not in (embed.title or "").lower()
+    assert "{ username }" not in (embed.title or "").lower()
     assert embed.footer.text == "dank_shield:welcome_card_runtime:v1"
 
 

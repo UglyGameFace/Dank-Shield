@@ -8,6 +8,7 @@ INIT = (ROOT / "stoney_verify/commands_ext/__init__.py").read_text(encoding="utf
 RUNTIME_BOOTSTRAP = (ROOT / "stoney_verify/commands_ext/public_member_lifecycle_runtime.py").read_text(encoding="utf-8")
 ROUTER = (ROOT / "stoney_verify/startup_guards/member_lifecycle_router_guard.py").read_text(encoding="utf-8")
 CARD_RUNTIME = (ROOT / "stoney_verify/welcome_card_runtime.py").read_text(encoding="utf-8")
+EXIT_RUNTIME = (ROOT / "stoney_verify/exit_card_runtime.py").read_text(encoding="utf-8")
 EVENTS = (ROOT / "stoney_verify/events.py").read_text(encoding="utf-8")
 STARTUP_GUARDS = (ROOT / "stoney_verify/startup_guards/__init__.py").read_text(encoding="utf-8")
 SETUP = (ROOT / "stoney_verify/commands_ext/public_setup_group.py").read_text(encoding="utf-8")
@@ -52,7 +53,8 @@ def test_join_leave_aliases_are_broad_and_consistent() -> None:
 def test_ready_logs_resolved_member_lifecycle_routes() -> None:
     assert "member lifecycle routes ready" in ROUTER
     assert "members intent is disabled in code" in ROUTER
-    assert "join_card=" in ROUTER
+    assert "join_reason=" in ROUTER
+    assert "exit_reason=" in ROUTER
 
 
 def test_member_logs_command_is_allowed_child() -> None:
@@ -89,12 +91,14 @@ def test_canonical_runtime_owns_public_join_output() -> None:
     assert "dank_shield:join_leave_event:v3" not in CARD_RUNTIME
 
 
-def test_staff_join_audit_and_public_leave_stay_separate() -> None:
+def test_staff_join_audit_and_canonical_public_exit_stay_separate() -> None:
     assert "await _post_modlog(" in EVENTS
     assert 'event_key=f"member_join:{member.id}"' in EVENTS
     assert "Public leave routing is owned by member_lifecycle_router_guard" in EVENTS
     assert "_install_listener(_leave_listener, \"on_member_remove\")" in ROUTER
-    assert 'embed.set_footer(text="dank_shield:leave_event:v4")' in ROUTER
+    assert "delivery = await send_live_exit_card(member)" in ROUTER
+    assert 'embed.set_footer(text="dank_shield:exit_card_runtime:v1")' in EXIT_RUNTIME
+    assert 'set_footer(text="dank_shield:leave_event:v4")' not in ROUTER
 
 
 if __name__ == "__main__":
@@ -108,7 +112,7 @@ if __name__ == "__main__":
         test_setup_logs_uses_explicit_leave_route,
         test_runtime_hardening_is_loaded_but_does_not_override_router,
         test_canonical_runtime_owns_public_join_output,
-        test_staff_join_audit_and_public_leave_stay_separate,
+        test_staff_join_audit_and_canonical_public_exit_stay_separate,
     ):
         test()
         print(f"PASS {test.__name__}")
