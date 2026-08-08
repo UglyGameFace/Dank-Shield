@@ -77,8 +77,14 @@ def main() -> int:
         if marker not in surface:
             errors.append(f"compact-v2 surface missing marker: {marker}")
 
-    if "install_compact_public_surface_v2(bot, tree)" not in exit_surface:
-        errors.append("final command compactor is not installed after Exit compatibility registration")
+    required_exit_markers = (
+        "compact_surface._INSTALLED = False",
+        "compact_surface.install_compact_public_surface_v2(bot, tree)",
+        "install_lifecycle_menu_compat()",
+    )
+    for marker in required_exit_markers:
+        if marker not in exit_surface:
+            errors.append(f"final command reassertion missing marker: {marker}")
 
     for name in expected:
         if name not in docs:
