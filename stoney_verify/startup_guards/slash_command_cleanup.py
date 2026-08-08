@@ -8,23 +8,18 @@ def _dank_disable_runtime_command_prune() -> bool:
 """Slash command cleanup guard for Dank Shield.
 
 Why this exists:
-- During the TicketTool-style command consolidation, old top-level commands like
-  /spam_guard, /grant_vr, /ticket_panel_rules_set, and the old /dank root were
-  replaced by grouped public commands such as /dank setup, /dank spam,
-  /verify grant-vr, and /ticket-panel post.
+- Dank Shield implementation modules may temporarily register broad command
+  groups during startup so their listeners/services/persistent views stay loaded.
+- DS-COMMAND-UX-024 performs the final app-style compaction before Discord sync:
+  /dank home + /dank upload, plus standalone /mod, /ticket, /tickets, /verify.
 - Discord keeps previously synced global or guild commands until the next
   successful sync for that scope.
-- This guard strips stale aliases from the local CommandTree right before sync.
-- In public/production mode, it avoids repeating unchanged global syncs on every
-  restart. Re-syncing the same command surface constantly makes Discord clients
-  more likely to show stale "command is outdated" notices.
-- In public/production mode, stale guild-scoped beta command copies are cleared
-  only for explicitly configured cleanup guild IDs. This prevents Discord mobile
-  from showing duplicate global+guild slash suggestions without touching random
-  public/customer guilds.
-- A cleanup epoch is stored with the sync hash. When public command cleanup rules
-  change, the epoch forces one clean global sync so Discord receives the pruned
-  command surface even if the command hash is unchanged.
+- This guard strips stale aliases from the local CommandTree right before sync
+  and forces one clean global sync when the cleanup epoch changes.
+- In public/production mode, future unchanged global syncs may be skipped after
+  the new compact surface has been acknowledged successfully.
+- Guild-scoped beta copies are cleared only for explicitly configured cleanup
+  guild IDs; customer guilds are never swept blindly.
 - A dangerous emergency wipe still exists behind
   DANK_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT=true.
 """
@@ -43,10 +38,10 @@ _PATCHED = False
 _ORIGINAL_SYNC = None
 _ORIGINAL_CLEAR_COMMANDS = None
 
-# Bump this value when public command cleanup rules change and Discord needs one
-# guaranteed global sync after deployment. This avoids stale global /dank or
-# old dev command cache while still allowing future unchanged syncs to be skipped.
-COMMAND_CLEANUP_EPOCH = "2026-07-19-public-command-contract-v1"
+# DS-COMMAND-UX-024 intentionally changes the public command contract. Bumping
+# this epoch guarantees one post-deploy global sync even on hosts that normally
+# skip unchanged command syncs.
+COMMAND_CLEANUP_EPOCH = "2026-08-08-public-command-contract-v2-mega-menu"
 
 STALE_TOP_LEVEL_COMMANDS = {
     "stoney",
@@ -82,8 +77,17 @@ STALE_TOP_LEVEL_COMMANDS = {
     "ticket_panel_bootstrap_start",
     "ticket_panel_bootstrap_once",
     "ticket_panel_bootstrap_stop",
+    # Retired by the compact-v2 Ticket Operations Center. Their implementation
+    # modules remain loaded; only these top-level Discord aliases are stale.
+    "ticket-intake",
+    "ticket-category",
+    "ticket-panel",
 }
 
+# Known confusing aliases retained for explicit audit coverage. The pre-sync
+# pruner below also removes *any* child outside PUBLIC_DANK_CHILDREN, so a newly
+# introduced shortcut cannot bypass the compact-v2 contract just because this
+# list was not updated yet.
 CONFUSING_DANK_CHILDREN = {
     "archive-backfill",
     "cache",
@@ -206,17 +210,10 @@ def _guild_id(guild: Optional[Any]) -> int:
 
 
 def _guild_command_cleanup_allowlist() -> set[int]:
-    """Guilds where stale guild-scoped command copies may be cleared.
-
-    Defaulting to GUILD_ID keeps cleanup limited to the configured beta/home
-    guild instead of touching every public guild the bot is installed in.
-    Additional IDs can be listed in DANK_GUILD_COMMAND_CLEANUP_IDS or
-    DANK_GUILD_COMMAND_CLEANUP_IDS.
-    """
+    """Guilds where stale guild-scoped command copies may be cleared."""
     allowed: set[int] = set()
     allowed |= _env_int_set("DANK_GUILD_COMMAND_CLEANUP_IDS")
-    allowed |= _env_int_set("DANK_GUILD_COMMAND_CLEANUP_IDS")
-    for name in ("GUILD_ID", "DANK_BETA_GUILD_ID", "DANK_BETA_GUILD_ID"):
+    for name in ("GUILD_ID", "DANK_BETA_GUILD_ID"):
         allowed |= _env_int_set(name)
     return {gid for gid in allowed if gid > 0}
 
@@ -249,21 +246,18 @@ def _command_payload(command: Any) -> Any:
             return payload
     except Exception:
         pass
-
     children: list[Any] = []
     try:
         for child in list(getattr(command, "commands", []) or []):
             children.append(_command_payload(child))
     except Exception:
         children = []
-
     params: list[str] = []
     try:
         for param in list(getattr(command, "parameters", []) or []):
             params.append(str(getattr(param, "name", param)))
     except Exception:
         params = []
-
     return {
         "name": str(getattr(command, "name", "")),
         "description": str(getattr(command, "description", "")),
@@ -277,7 +271,6 @@ def _command_surface_hash(tree: app_commands.CommandTree[Any], *, guild: Optiona
         commands = list(tree.get_commands(guild=guild))
     except Exception:
         commands = list(tree.get_commands())
-
     payload = [_command_payload(cmd) for cmd in sorted(commands, key=lambda c: str(getattr(c, "name", "")))]
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest()
@@ -322,7 +315,6 @@ def _should_skip_unchanged_sync(*, guild: Optional[Any], surface_hash: str) -> b
         return False
     if not _env_true("DANK_SKIP_UNCHANGED_GLOBAL_SYNC", True):
         return False
-
     state = _read_sync_state()
     return (
         str(state.get("global", "")) == str(surface_hash)
@@ -346,9 +338,7 @@ def _should_clear_public_guild_command_copy(guild: Optional[Any]) -> bool:
 
 
 def _remember_sync_hash(*, guild: Optional[Any], surface_hash: str) -> None:
-    if guild is not None:
-        return
-    if not _public_scope_enabled():
+    if guild is not None or not _public_scope_enabled():
         return
     state = _read_sync_state()
     state["global"] = str(surface_hash)
@@ -389,14 +379,12 @@ def remove_stale_top_level_commands(
     guild: Optional[Any] = None,
 ) -> list[str]:
     removed: list[str] = []
-
     for name in sorted(STALE_TOP_LEVEL_COMMANDS):
         existing = _get_command(tree, name, guild=guild)
         if existing is None:
             continue
         if _remove_command(tree, name, guild=guild):
             removed.append(name)
-
     if removed:
         try:
             print(
@@ -405,7 +393,6 @@ def remove_stale_top_level_commands(
             )
         except Exception:
             pass
-
     return removed
 
 
@@ -419,11 +406,15 @@ def _prune_public_group_children(
     group = _get_command(tree, group_name, guild=guild)
     if group is None or not hasattr(group, "remove_command"):
         return []
-
     before = _safe_child_names(group)
     removed: list[str] = []
 
-    for name in sorted(CONFUSING_DANK_CHILDREN):
+    # Remove known stale aliases first for readable logs, then fail closed over
+    # every unexpected child. This prevents a newly added shortcut from silently
+    # escaping the app-style home/upload contract.
+    candidates = set(CONFUSING_DANK_CHILDREN)
+    candidates.update(name for name in before if name not in ALLOWED_DANK_CHILDREN)
+    for name in sorted(candidates):
         try:
             existing = group.get_command(name)
         except Exception:
@@ -438,7 +429,6 @@ def _prune_public_group_children(
 
     after = _safe_child_names(group)
     unexpected = [name for name in after if name not in ALLOWED_DANK_CHILDREN]
-
     if removed or unexpected:
         try:
             print(
@@ -448,7 +438,6 @@ def _prune_public_group_children(
             )
         except Exception:
             pass
-
     return removed
 
 
@@ -460,7 +449,6 @@ def prune_public_stoney_children(
 ) -> list[str]:
     if not _public_scope_enabled():
         return []
-
     removed: list[str] = []
     removed.extend(_prune_public_group_children(tree, group_name="dank", reason=reason, guild=guild))
     removed.extend(_prune_public_group_children(tree, group_name="stoney", reason=reason, guild=guild))
@@ -480,16 +468,8 @@ def _should_block_global_clear(guild: Optional[Any]) -> bool:
 
 
 def _install_command_registration_compat() -> None:
-    """Keep registration-time pruning aligned with pre-sync pruning.
-
-    commands_ext has an earlier registration-phase prune pass that runs before
-    CommandTree.sync. The final pre-sync guard is authoritative, but keeping the
-    registration pass aligned prevents noisy unexpected_remaining logs and makes
-    startup errors meaningful.
-    """
     try:
         from stoney_verify import commands_ext
-
         children = tuple(getattr(commands_ext, "_CONFUSING_DANK_CHILDREN", ()) or ())
         if "scoreboard" not in children:
             setattr(commands_ext, "_CONFUSING_DANK_CHILDREN", children + ("scoreboard",))
@@ -501,11 +481,9 @@ def _install_command_registration_compat() -> None:
 
     try:
         from stoney_verify.commands_ext import public_access_control
-
         if not hasattr(public_access_control, "register_public_access_control"):
             def register_public_access_control(bot: Any = None, tree: Any = None) -> bool:
                 return bool(public_access_control.install_public_access_control())
-
             public_access_control.register_public_access_control = register_public_access_control  # type: ignore[attr-defined]
     except Exception as e:
         try:
@@ -516,18 +494,14 @@ def _install_command_registration_compat() -> None:
 
 def install_slash_command_cleanup_guard() -> None:
     global _PATCHED, _ORIGINAL_SYNC, _ORIGINAL_CLEAR_COMMANDS
-
     _install_command_registration_compat()
-
     if _PATCHED:
         return
-
     _ORIGINAL_SYNC = app_commands.CommandTree.sync
     _ORIGINAL_CLEAR_COMMANDS = app_commands.CommandTree.clear_commands
 
     async def _patched_sync(self: app_commands.CommandTree[Any], *args: Any, **kwargs: Any):
         guild = _guild_from_sync_args(args, kwargs)
-
         if _should_clear_public_guild_command_copy(guild):
             try:
                 _ORIGINAL_CLEAR_COMMANDS(self, guild=guild)  # type: ignore[misc]
@@ -545,7 +519,6 @@ def install_slash_command_cleanup_guard() -> None:
         prune_public_stoney_children(self, reason="pre_sync", guild=guild)
         names = _safe_command_names(self, guild=guild)
         surface_hash = _command_surface_hash(self, guild=guild)
-
         try:
             state = _read_sync_state()
             previous_epoch = str(state.get("cleanup_epoch", "")) or "none"
@@ -557,7 +530,6 @@ def install_slash_command_cleanup_guard() -> None:
             )
         except Exception:
             pass
-
         if _should_skip_unchanged_sync(guild=guild, surface_hash=surface_hash):
             try:
                 print(
@@ -568,7 +540,6 @@ def install_slash_command_cleanup_guard() -> None:
             except Exception:
                 pass
             return []
-
         result = await _ORIGINAL_SYNC(self, *args, **kwargs)  # type: ignore[misc]
         _remember_sync_hash(guild=guild, surface_hash=surface_hash)
         return result
@@ -588,11 +559,10 @@ def install_slash_command_cleanup_guard() -> None:
 
     app_commands.CommandTree.sync = _patched_sync  # type: ignore[assignment]
     app_commands.CommandTree.clear_commands = _patched_clear_commands  # type: ignore[assignment]
-
     _PATCHED = True
     try:
         print(
-            "🧹 slash_command_cleanup loaded; stale alias cleanup + public /dank surface pruning active "
+            "🧹 slash_command_cleanup loaded; stale alias cleanup + compact-v2 /dank pruning active "
             f"cleanup_epoch={COMMAND_CLEANUP_EPOCH}"
         )
     except Exception:
@@ -604,9 +574,7 @@ install_slash_command_cleanup_guard()
 
 __all__ = [
     "ALLOWED_DANK_CHILDREN",
-    "ALLOWED_DANK_CHILDREN",
     "COMMAND_CLEANUP_EPOCH",
-    "CONFUSING_DANK_CHILDREN",
     "CONFUSING_DANK_CHILDREN",
     "STALE_TOP_LEVEL_COMMANDS",
     "install_slash_command_cleanup_guard",
