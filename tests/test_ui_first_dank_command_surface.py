@@ -6,31 +6,59 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_commands_compact_dank_after_all_additive_registrars() -> None:
+def test_commands_install_final_compactor_after_all_additive_registrars() -> None:
     source = (ROOT / "stoney_verify/commands.py").read_text(encoding="utf-8")
     assert source.index("register_public_profile_cards(bot, bot.tree)") < source.index(
         "compact_public_dank_surface(bot, bot.tree)"
     )
+    assert source.index("compact_public_dank_surface(bot, bot.tree)") < source.index(
+        "register_compact_exit_card_commands(bot, bot.tree)"
+    )
+    exit_surface = (ROOT / "stoney_verify/commands_ext/public_exit_compact_surface.py").read_text(
+        encoding="utf-8"
+    )
+    assert "install_compact_public_surface_v2(bot, tree)" in exit_surface
 
 
-def test_ui_first_surface_has_small_explicit_entry_set() -> None:
-    source = (ROOT / "stoney_verify/commands_ext/public_command_hub.py").read_text(encoding="utf-8")
+def test_ui_first_surface_has_tiny_explicit_entry_set() -> None:
+    source = (ROOT / "stoney_verify/commands_ext/public_command_surface_v2.py").read_text(
+        encoding="utf-8"
+    )
     tree = ast.parse(source)
     assert tree is not None
     for required in (
-        '"home"',
-        '"profile"',
-        '"help"',
-        '"setup"',
-        '"status"',
-        '"diagnostics"',
-        '"welcome"',
-        '"card-studio"',
-        '"card-preview"',
+        '_standalone("home",',
+        'name="upload",',
+        'expected_roots = {"dank", "mod", "ticket", "tickets", "verify"}',
+        'dank_children != ["home", "upload"]',
+        "DANK_PAYLOAD_SAFETY_LIMIT",
+        "dank_payload_size(tree)",
     ):
         assert required in source
-    assert "DANK_PAYLOAD_SAFETY_LIMIT = 7600" in source
-    assert "dank_payload_size(tree)" in source
+
+
+def test_home_mega_menu_preserves_all_previous_ui_destinations() -> None:
+    surface = (ROOT / "stoney_verify/commands_ext/public_command_surface_v2.py").read_text(
+        encoding="utf-8"
+    )
+    for label in (
+        "Setup & Settings",
+        "Protection",
+        "Tickets",
+        "Verification",
+        "Welcome, Join & Exit",
+        "Members & Moderation",
+        "Server Design",
+        "Roles & Profiles",
+        "Logs & Activity",
+        "My Profile",
+        "Status",
+        "Diagnostics",
+        "Card Assets",
+        "Help",
+    ):
+        assert f'label="{label}"' in surface
+    assert "consolidated_asset_upload" in surface
 
 
 def test_welcome_and_profiles_are_separate_ui_destinations() -> None:

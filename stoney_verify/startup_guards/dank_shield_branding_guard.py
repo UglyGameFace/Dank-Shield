@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-"""Normalize remaining public-facing Dank Shield branding to Dank Shield.
+"""Normalize remaining public-facing Dank Shield branding and command hints.
 
 This guard is intentionally text-only. It does not rename the Python package,
 Supabase tables, legacy env vars, or internal module names because that would be
 a risky product rename. It only cleans content that users/staff can see.
+
+DS-COMMAND-UX-024 also uses this boundary to translate exact backticked legacy
+command hints into the new menu-first routes. The implementation callbacks stay
+loaded and canonical; users are never instructed to type a command that the
+final Discord surface intentionally retired.
 
 Important: the bot name shown beside Discord messages is controlled by the
 Discord application/bot profile, not by these embed/text patches.
@@ -15,9 +20,64 @@ from typing import Any, Iterable
 _PATCHED = False
 _DISCORD_PATCHED = False
 
-_REPLACEMENTS: tuple[tuple[str, str], ...] = (
+# Longest/exact command hints first. These only match complete backticked command
+# references, so a token such as `/dank setup-status` is not accidentally
+# rewritten by the `/dank setup` mapping.
+_COMMAND_HINT_REPLACEMENTS: tuple[tuple[str, str], ...] = (
+    ("`/dank welcome exit-card-upload`", "`/dank upload` → **Exit Card Background**"),
+    ("`/dank welcome card-font-upload`", "`/dank upload` → **Custom Card Font**"),
+    ("`/dank welcome card-font-clear`", "`/dank home` → **Card Assets** → **Clear Uploaded Font**"),
+    ("`/dank welcome card-upload`", "`/dank upload` → **Join Card Background**"),
+    ("`/dank welcome exit-card-studio`", "`/dank home` → **Welcome, Join & Exit** → **Exit Card Studio**"),
+    ("`/dank welcome exit-card-preview`", "`/dank home` → **Welcome, Join & Exit** → **Preview Exit Card**"),
+    ("`/dank welcome card-style`", "`/dank home` → **Welcome, Join & Exit** → **Join Card Studio**"),
+    ("`/dank welcome card-colors`", "`/dank home` → **Welcome, Join & Exit** → **Join Card Studio**"),
+    ("`/dank welcome card-shuffle`", "`/dank home` → **Welcome, Join & Exit** → **Join Card Studio**"),
+    ("`/dank welcome card-font`", "`/dank home` → **Welcome, Join & Exit** → **Join Card Studio**"),
+    ("`/dank welcome`", "`/dank home` → **Welcome, Join & Exit**"),
+    ("`/dank diagnostics`", "`/dank home` → **Diagnostics**"),
+    ("`/dank status`", "`/dank home` → **Status**"),
+    ("`/dank setup`", "`/dank home` → **Setup & Settings**"),
+    ("`/verify repair-unverified`", "`/verify` → **Repair Pending Roles**"),
+    ("`/verify fix-member`", "`/verify` → choose a member → **Restore Pending**"),
+    ("`/verify grant-vr`", "`/verify` → choose a member → **Verify + Member**"),
+    ("`/verify set-verified`", "`/verify` → choose a member → **Verified Role**"),
+    ("`/verify set-resident`", "`/verify` → choose a member → **Resident Role**"),
+    ("`/verify diagnose`", "`/verify` → choose a member → **Diagnose**"),
+    ("`/verify status`", "`/verify` → choose a member → **Status**"),
+    ("`/verify panel`", "`/verify` → **Post / Refresh Verify Panel**"),
+    ("`/ticket transcript`", "`/ticket` → **Post Transcript**"),
+    ("`/ticket priority`", "`/ticket` → **Set Priority**"),
+    ("`/ticket transfer`", "`/ticket` → **Transfer**"),
+    ("`/ticket unclaim`", "`/ticket` → **Unclaim**"),
+    ("`/ticket reopen`", "`/ticket` → **Reopen**"),
+    ("`/ticket delete`", "`/ticket` → **Delete Ticket**"),
+    ("`/ticket remove`", "`/ticket` → **Remove Member Access**"),
+    ("`/ticket rename`", "`/ticket` → **Rename**"),
+    ("`/ticket unlock`", "`/ticket` → **Unlock Owner Replies**"),
+    ("`/ticket owner`", "`/ticket` → **Show Owner**"),
+    ("`/ticket access`", "`/ticket` → **Show Access**"),
+    ("`/ticket claim`", "`/ticket` → **Claim**"),
+    ("`/ticket close`", "`/ticket` → **Close**"),
+    ("`/ticket lock`", "`/ticket` → **Lock Owner Replies**"),
+    ("`/ticket info`", "`/ticket` → **Ticket Info**"),
+    ("`/ticket add`", "`/ticket` → **Add Member Access**"),
+    ("`/tickets recent-closed`", "`/tickets` → **Recent Closed**"),
+    ("`/tickets unassigned`", "`/tickets` → **Unassigned**"),
+    ("`/tickets for-user`", "`/tickets` → **User ticket history**"),
+    ("`/tickets overdue`", "`/tickets` → **Overdue**"),
+    ("`/tickets history`", "`/ticket` → **Owner History**"),
+    ("`/tickets activity`", "`/ticket` → **Activity**"),
+    ("`/tickets find`", "`/tickets` → **Find Ticket**"),
+    ("`/tickets open`", "`/tickets` → **Active**"),
+    ("`/tickets mine`", "`/tickets` → **Mine**"),
+    ("`/ticket-intake`", "`/tickets` → **Intake & Routing**"),
+    ("`/ticket-category`", "`/tickets` → **Categories**"),
+    ("`/ticket-panel`", "`/tickets` → **Public Panel**"),
+)
+
+_REPLACEMENTS: tuple[tuple[str, str], ...] = _COMMAND_HINT_REPLACEMENTS + (
     ("/dank setup", "/dank setup"),
-    ("`/dank setup`", "`/dank setup`"),
     ("/dank", "/dank"),
     ("`/dank`", "`/dank`"),
     ("Dank Shield", "Dank Shield"),

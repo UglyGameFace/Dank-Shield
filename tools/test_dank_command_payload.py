@@ -18,8 +18,24 @@ from stoney_verify.commands_ext.public_setup_group import dank_group
 
 size = dank_payload_size(bot.tree)
 children = sorted(str(getattr(command, "name", "")) for command in dank_group.commands)
-print(json.dumps({"dank_payload_size": size, "limit": DANK_PAYLOAD_SAFETY_LIMIT, "children": children}))
+roots = sorted(
+    str(getattr(command, "name", ""))
+    for command in bot.tree.get_commands(guild=None)
+    if str(getattr(command, "name", "")) != "View Dank Profile"
+)
+print(
+    json.dumps(
+        {
+            "dank_payload_size": size,
+            "limit": DANK_PAYLOAD_SAFETY_LIMIT,
+            "children": children,
+            "roots": roots,
+        }
+    )
+)
 if size > DANK_PAYLOAD_SAFETY_LIMIT:
     raise SystemExit(f"/dank payload is too large: {size}/{DANK_PAYLOAD_SAFETY_LIMIT}")
-if children != ["diagnostics", "help", "home", "members", "profile", "setup", "status", "welcome"]:
-    raise SystemExit(f"unexpected UI-first /dank children: {children}")
+if children != ["home", "upload"]:
+    raise SystemExit(f"unexpected compact-v2 /dank children: {children}")
+if roots != ["dank", "mod", "ticket", "tickets", "verify"]:
+    raise SystemExit(f"unexpected compact-v2 global roots: {roots}")

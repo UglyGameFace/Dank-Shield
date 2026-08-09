@@ -15,17 +15,8 @@ from stoney_verify.commands_ext.public_exit_compact_surface import (
 from stoney_verify.commands_ext.public_setup_group import dank_group
 
 
-EXPECTED_COMPACT_WELCOME_COMMANDS = {
-    "open",
-    "card-studio",
-    "card-preview",
-    "card-upload",
-    "card-font-upload",
-    "card-font-clear",
-    "exit-card-studio",
-    "exit-card-preview",
-    "exit-card-upload",
-}
+EXPECTED_DANK_CHILDREN = {"home", "upload"}
+EXPECTED_GLOBAL_ROOTS = {"dank", "mod", "ticket", "tickets", "verify"}
 
 
 def _child_names(group: Any) -> set[str]:
@@ -37,41 +28,60 @@ def _child_names(group: Any) -> set[str]:
 
 
 def _final_imported_tree() -> int:
-    # commands.py performs canonical registration, compaction, then the guarded
-    # Exit Studio extension during import. Re-running the Exit registrar proves
-    # that the final production surface is idempotent and still under the same
-    # payload safety ceiling.
+    # commands.py performs canonical registration, the legacy compact pass, Exit
+    # compatibility registration, and finally DS-COMMAND-UX-024 compaction.
+    # Re-running the Exit registrar proves the final surface is idempotent and
+    # cannot resurrect /dank welcome after it has been intentionally retired.
     return register_compact_exit_card_commands(
         commands_module.bot,
         commands_module.bot.tree,
     )
 
 
-def test_final_compacted_tree_keeps_both_lifecycle_studios() -> None:
+def test_final_compacted_tree_is_small_and_idempotent() -> None:
     size = _final_imported_tree()
 
-    attached = dank_group.get_command("welcome")
-    assert isinstance(attached, app_commands.Group)
-    assert _child_names(attached) == EXPECTED_COMPACT_WELCOME_COMMANDS
+    assert dank_group.get_command("welcome") is None
+    assert _child_names(dank_group) == EXPECTED_DANK_CHILDREN
     assert size == dank_payload_size(commands_module.bot.tree)
     assert size <= DANK_PAYLOAD_SAFETY_LIMIT
 
-
-def test_compacted_lifecycle_commands_use_canonical_callbacks() -> None:
-    _final_imported_tree()
-    attached = dank_group.get_command("welcome")
-    assert isinstance(attached, app_commands.Group)
-
-    callbacks = {
-        command.name: getattr(command.callback, "__module__", "")
-        for command in attached.commands
+    roots = {
+        str(getattr(command, "name", ""))
+        for command in commands_module.bot.tree.get_commands(guild=None)
+        if getattr(command, "name", "") != "View Dank Profile"
     }
-    assert callbacks["open"] == "stoney_verify.welcome_setup_ui"
-    assert callbacks["card-studio"] == "stoney_verify.welcome_card_studio_ui"
-    assert callbacks["card-preview"] == "stoney_verify.welcome_card_studio_ui"
-    assert callbacks["card-upload"] == "stoney_verify.commands_ext.public_welcome_group"
-    assert callbacks["card-font-upload"] == "stoney_verify.commands_ext.public_welcome_card_studio"
-    assert callbacks["card-font-clear"] == "stoney_verify.commands_ext.public_welcome_card_studio"
-    assert callbacks["exit-card-studio"] == "stoney_verify.exit_card_studio_ui"
-    assert callbacks["exit-card-preview"] == "stoney_verify.exit_card_studio_ui"
-    assert callbacks["exit-card-upload"] == "stoney_verify.commands_ext.public_exit_card_studio"
+    assert roots == EXPECTED_GLOBAL_ROOTS
+
+
+def test_final_fast_doorways_are_commands_not_subcommand_groups() -> None:
+    _final_imported_tree()
+    for name in ("mod", "ticket", "tickets", "verify"):
+        command = commands_module.bot.tree.get_command(name, guild=None)
+        assert isinstance(command, app_commands.Command)
+        assert not isinstance(command, app_commands.Group)
+
+    assert commands_module.bot.tree.get_command("ticket-intake", guild=None) is None
+    assert commands_module.bot.tree.get_command("ticket-category", guild=None) is None
+    assert commands_module.bot.tree.get_command("ticket-panel", guild=None) is None
+
+
+def test_dank_upload_is_the_only_attachment_command_doorway() -> None:
+    _final_imported_tree()
+    upload = dank_group.get_command("upload")
+    assert isinstance(upload, app_commands.Command)
+    assert getattr(upload.callback, "__module__", "") == (
+        "stoney_verify.commands_ext.public_command_surface_v2"
+    )
+    params = getattr(upload, "_params", {})
+    assert set(params) == {"asset", "file"}
+
+
+def test_lifecycle_studios_remain_reachable_from_home_not_subcommands() -> None:
+    _final_imported_tree()
+    home = dank_group.get_command("home")
+    assert isinstance(home, app_commands.Command)
+    assert getattr(home.callback, "__module__", "") == (
+        "stoney_verify.commands_ext.public_command_surface_v2"
+    )
+    assert dank_group.get_command("welcome") is None

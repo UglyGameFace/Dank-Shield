@@ -10,23 +10,26 @@ COMMANDS = Path("stoney_verify/commands_ext/__init__.py").read_text(encoding="ut
 
 
 def test_public_production_docs_match_current_command_surface():
-    assert PUBLIC_GLOBAL_COMMAND_COUNT == 9
+    assert PUBLIC_GLOBAL_COMMAND_COUNT == 6
     assert PUBLIC_GLOBAL_COMMAND_NAMES == (
         "dank",
         "mod",
         "ticket",
         "tickets",
-        "ticket-intake",
-        "ticket-category",
-        "ticket-panel",
         "verify",
         "View Dank Profile",
     )
-    assert "final_global=9 final_guild=0 profile=public" in DOC
-    assert "final_global=7" not in DOC
+    assert "exactly **6** commands/items" in DOC
+    assert "final_global=9 final_guild=0 profile=public" not in DOC
+    assert "public_command_surface_v2 compact UI installed" in DOC
     for command_name in PUBLIC_GLOBAL_COMMAND_NAMES:
         assert command_name in DOC
 
+    for retired_root in ("/ticket-intake", "/ticket-category", "/ticket-panel"):
+        assert f"{retired_root}` —" not in DOC
+
+    # The implementation modules stay loaded even though their redundant Discord
+    # roots are compacted away after registration.
     for module in (
         "public_setup_group",
         "public_mod_group",
