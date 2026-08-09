@@ -5,7 +5,9 @@ from __future__ import annotations
 The Exit registrar still runs before the final compactor so existing import/order
 contracts stay intact. DS-COMMAND-UX-024 then removes redundant Discord-visible
 shortcuts while leaving the canonical Exit runtime, Studio implementation, and
-cleanup implementation fully loaded and reachable from mega menus.
+cleanup implementation fully loaded and reachable from mega menus. DS-PURGE-025
+adds one intentional direct purge family after compaction so staff do not have
+to dig through menus for destructive cleanup tools.
 """
 
 from typing import Any
@@ -29,12 +31,40 @@ def _install_final_layers(bot: Any, tree: Any) -> dict[str, Any]:
     # be rebuilt after the first compaction and survive until Discord sync.
     from . import public_command_surface_v2 as compact_surface
     from .public_cleanup_command_center import install_cleanup_menu_compat
+    from .public_command_hub import DANK_PAYLOAD_SAFETY_LIMIT, dank_payload_size
+    from .public_direct_purge import install_direct_purge_group
     from .public_lifecycle_menu_compat import install_lifecycle_menu_compat
 
     compact_surface._INSTALLED = False
     result = compact_surface.install_compact_public_surface_v2(bot, tree)
     install_lifecycle_menu_compat()
     install_cleanup_menu_compat()
+
+    # The compact-v2 installer intentionally strips all optional /dank children.
+    # Restore the one approved direct destructive-action doorway *after* that
+    # cleanup, using thin wrappers that delegate to the canonical purge engines.
+    install_direct_purge_group()
+
+    final_size = int(dank_payload_size(tree))
+    if final_size > DANK_PAYLOAD_SAFETY_LIMIT:
+        try:
+            dank_group.remove_command("purge")
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"direct purge surface grew /dank payload to {final_size}; "
+            f"safety limit is {DANK_PAYLOAD_SAFETY_LIMIT}"
+        )
+
+    children = sorted(str(getattr(item, "name", "")) for item in dank_group.commands)
+    expected_children = ["home", "purge", "upload"]
+    if children != expected_children:
+        raise RuntimeError(
+            f"final /dank children mismatch expected={expected_children} actual={children}"
+        )
+
+    result["dank_payload"] = final_size
+    result["dank_children"] = children
     return result
 
 
@@ -104,7 +134,8 @@ def register_compact_exit_card_commands(bot: Any, tree: Any) -> int:
 
     # This is intentionally the final application-command-tree mutation. All
     # underlying modules remain loaded; only redundant autocomplete entry points
-    # are removed/replaced by action-complete centers.
+    # are removed/replaced by action-complete centers, plus the approved direct
+    # purge family restored by _install_final_layers().
     result = _install_final_layers(bot, tree)
     final_size = int(result.get("dank_payload", precompact_size) or precompact_size)
     print(
