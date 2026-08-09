@@ -37,13 +37,14 @@ def main() -> int:
         )
     if PUBLIC_GLOBAL_COMMAND_NAMES != expected:
         errors.append(f"public global command names drifted: {PUBLIC_GLOBAL_COMMAND_NAMES!r}")
-    if PUBLIC_DANK_CHILDREN != frozenset({"home", "upload"}):
+    if PUBLIC_DANK_CHILDREN != frozenset({"home", "purge", "upload"}):
         errors.append(f"final /dank children drifted: {sorted(PUBLIC_DANK_CHILDREN)!r}")
 
     access = _read("stoney_verify/commands_ext/public_access_control.py")
     review = _read("stoney_verify/commands_ext/public_setup_review.py")
     surface = _read("stoney_verify/commands_ext/public_command_surface_v2.py")
     exit_surface = _read("stoney_verify/commands_ext/public_exit_compact_surface.py")
+    purge_surface = _read("stoney_verify/commands_ext/public_direct_purge.py")
     docs = _read("docs/public-production-env.md")
 
     if "_SETUP_PERMISSION_MODULES" in access:
@@ -81,10 +82,21 @@ def main() -> int:
         "compact_surface._INSTALLED = False",
         "compact_surface.install_compact_public_surface_v2(bot, tree)",
         "install_lifecycle_menu_compat()",
+        "install_direct_purge_group()",
+        'expected_children = ["home", "purge", "upload"]',
     )
     for marker in required_exit_markers:
         if marker not in exit_surface:
             errors.append(f"final command reassertion missing marker: {marker}")
+
+    for marker in (
+        "from .public_cleanup_group import cleanup_purge",
+        "from .public_members_cleanup_group import members_purge_all",
+        'name="messages"',
+        'name="members"',
+    ):
+        if marker not in purge_surface:
+            errors.append(f"direct purge facade missing marker: {marker}")
 
     for name in expected:
         if name not in docs:
