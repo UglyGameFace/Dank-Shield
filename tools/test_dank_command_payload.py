@@ -35,7 +35,7 @@ print(
 )
 if size > DANK_PAYLOAD_SAFETY_LIMIT:
     raise SystemExit(f"/dank payload is too large: {size}/{DANK_PAYLOAD_SAFETY_LIMIT}")
-if children != ["home", "upload"]:
-    raise SystemExit(f"unexpected compact-v2 /dank children: {children}")
+if children != ["home", "purge", "upload"]:
+    raise SystemExit(f"unexpected final /dank children: {children}")
 if roots != ["dank", "mod", "ticket", "tickets", "verify"]:
     raise SystemExit(f"unexpected compact-v2 global roots: {roots}")
