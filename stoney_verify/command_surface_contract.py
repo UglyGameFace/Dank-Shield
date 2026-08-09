@@ -4,8 +4,8 @@ from __future__ import annotations
 
 Implementation modules may temporarily register broader command groups during
 startup so their services/listeners/persistent views remain loaded. The final
-DS-COMMAND-UX-024 compactor reduces only the Discord-visible application-command
-tree to this contract before global sync.
+public compactor reduces only the Discord-visible application-command tree to
+this contract before global sync.
 """
 
 # Top-level global application commands intentionally exposed by the normal
@@ -22,9 +22,11 @@ PUBLIC_GLOBAL_COMMAND_NAMES: tuple[str, ...] = (
 PUBLIC_GLOBAL_COMMAND_COUNT = len(PUBLIC_GLOBAL_COMMAND_NAMES)
 
 # Direct /dank children in the final public product surface. Normal feature
-# work is reached from the Home mega menu; Upload is retained only because a
-# Discord button cannot provide an attachment input field.
-PUBLIC_DANK_CHILDREN: frozenset[str] = frozenset({"home", "upload"})
+# work is reached from the Home mega menu; Upload is retained because a Discord
+# button cannot provide an attachment field. Purge is the intentional direct
+# destructive-action exception so staff can reach both message purge and
+# inactive-member purge without digging through nested menus.
+PUBLIC_DANK_CHILDREN: frozenset[str] = frozenset({"home", "purge", "upload"})
 
 # Advanced, migration, repair, legacy, and redundant direct aliases that must
 # not be exposed as direct /dank children after final public compaction. Their
