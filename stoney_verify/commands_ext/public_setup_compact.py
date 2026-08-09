@@ -26,16 +26,34 @@ install_custom_service_navigation_compat()
 
 # ``importlib.reload(public_setup_solid)`` is used by a few compatibility and
 # registration tests. Reloading that module can restore its original function
-# objects while this presentation module legitimately remains loaded with
-# ``_PATCHED=True``. The old installer then returned early and left an impossible
-# half-patched runtime. Re-run the deterministic compact assignments whenever the
-# installer is requested so startup/recovery passes always reclaim their owners.
+# objects while this presentation module legitimately remains loaded. The old
+# installer trusted a stale ``_PATCHED=True`` flag and could leave an impossible
+# half-patched runtime. Re-run the deterministic assignments whenever requested,
+# and make the patch-state truth check repair ownership before reporting True.
 if not getattr(_implementation, "_REASSERTING_APPLY_WRAPPED", False):
     _original_apply_compact_setup_patch = _implementation.apply_compact_setup_patch
 
+    class _ReassertingPatchState:
+        def __bool__(self) -> bool:
+            try:
+                if (
+                    _implementation.setup.solid._build_category_manager_payload
+                    is not _implementation._category_payload
+                ):
+                    _reasserting_apply_compact_setup_patch()
+            except Exception:
+                pass
+            return True
+
+    _patch_state = _ReassertingPatchState()
+
     def _reasserting_apply_compact_setup_patch() -> None:
+        # Force the original deterministic installer through its one-time guard.
+        # It only rebinds callbacks/classes; it does not create Discord resources
+        # or mutate guild configuration, so repeating it is safe.
         _implementation._PATCHED = False
         _original_apply_compact_setup_patch()
+        _implementation._PATCHED = _patch_state
 
     _implementation.apply_compact_setup_patch = _reasserting_apply_compact_setup_patch
     _implementation._REASSERTING_APPLY_WRAPPED = True
