@@ -1,83 +1,70 @@
 # ACTIVE TASK
 
-## DS-COMMAND-UX-024 — Consolidate Dank Shield into action-complete mega menus
+## DS-PURGE-025 — Restore direct Dank Shield purge commands
 
-**Status:** IN PROGRESS — ROOT-CAUSE / PARITY AUDIT
-**Branch:** `fix/ds-command-ux-024-mega-menu-consolidation`
-**Base:** merged `main` at `f6d732f1f03eb5e2219351cd0e468ada281e1978`
-**Started:** 2026-08-08
-**Force-switch reason:** Dank Shield exposes too many redundant slash subcommands that duplicate actions already available through its UI. Consolidate the entire public command surface into a small stable set of entry commands and comprehensive mega menus while preserving every existing action, permission check, upload capability, moderation/ticket/setup function, recovery path, and existing-server compatibility.
+**Status:** IN PROGRESS — IMPLEMENTED, VALIDATING
+**Branch:** `fix/ds-purge-025-restore-direct-purge`
+**Base:** `main` at `7c30736e941bf2fd9a9390d9719acfa59990e0fa`
+**Started:** 2026-08-09
 
-## Confirmed root causes before editing
+## Scope
 
-1. `public_command_hub.compact_public_dank_surface()` creates the intended button-first `/dank` Control Center, but then deliberately re-adds several direct shortcut commands and a `/dank welcome` subgroup.
-2. `public_exit_compact_surface` runs after that compaction and adds three more direct Exit Card commands, so the final Discord autocomplete surface becomes noisier again even though the mega menu already owns those actions.
-3. The normal public command profile still registers separate global families for `/mod`, `/ticket`, `/tickets`, `/ticket-intake`, `/ticket-category`, `/ticket-panel`, and `/verify` before the final compaction layer.
-4. Existing implementation modules contain important services, listeners, permission checks, claim/owner authorization, setup compatibility, and safety logic. Removing those modules would risk deleting functionality; the correct fix is to compact only the final Discord-visible command tree after all implementation modules are loaded.
-5. Moderation already has a complete private `Member Command Center` with member selection, verification, timeout, kick, ban, role actions, intelligence, cleanup, locks, notices, and bulk tools.
-6. The persistent ticket panel covers common current-ticket actions but does not cover every `/ticket` action. The replacement ticket center must preserve the missing reopen/transcript/access/rename/lock/unlock/delete and lookup/history paths before the old grouped commands are hidden.
-7. Ticket intake/category/panel roots are setup/administration surfaces and belong in a Ticket System mega menu rather than separate autocomplete command families.
-8. `/verify` contains useful repair/status actions that must remain reachable through a verification center even after its subcommands are removed.
-9. File attachment uploads are the legitimate exception: Discord buttons cannot open a native attachment option, so a minimal upload command must remain available.
+Restore obvious Discord slash-command access to Dank Shield's two existing purge systems without reintroducing the large legacy command tree or creating duplicate destructive logic.
 
-## Target public command surface
+Target direct surface:
 
-- `/dank home` — primary all-features control center.
-- `/dank upload` — one attachment command with an asset selector for Join background, Exit background, or custom font.
-- `/mod` — standalone staff doorway to the canonical Member Command Center; no moderation subcommands.
-- `/ticket` — standalone current-ticket controls center; no ticket action subcommands.
-- `/tickets` — standalone ticket operations/setup center; no queue/setup subcommands.
-- `/verify` — standalone verification center; no verification subcommands.
-- `View Dank Profile` context menu remains available.
+- `/dank purge messages` — channel purge plus preview/confirmed user-message purge, including raw user IDs and whole-server scope.
+- `/dank purge members` — strict inactive verified/resident member purge with fresh evidence scan and final confirmation.
 
-Every removed command action must still be reachable through buttons, selects, modals, or the consolidated upload command.
+The newer menu paths remain available and must use the same canonical engines.
 
-## Work plan
+## Root cause findings
 
-- [x] Force-switch task and create isolated branch from merged `main`.
-- [x] Inspect final command registration/compaction order.
-- [x] Audit current `/dank` mega menu and Welcome/Exit command re-expansion.
-- [x] Audit `/mod` action surface and canonical Member Command Center safety path.
-- [x] Audit `/ticket` persistent panel and grouped action gaps.
-- [x] Audit `/tickets`, `/ticket-intake`, `/ticket-category`, and `/ticket-panel` action families.
-- [x] Audit `/verify` grouped repair/status/panel actions.
-- [ ] Implement one final public command-surface compactor after all existing registrars run.
-- [ ] Consolidate Welcome/Exit attachments into one `/dank upload` command and move non-attachment shortcuts fully into the existing mega menu.
-- [ ] Add Tickets and Verification as first-class mega-menu destinations.
-- [ ] Add standalone `/mod` doorway to the canonical Member Command Center.
-- [ ] Add action-complete current-ticket center and ticket operations/setup center.
-- [ ] Add action-complete verification center.
-- [ ] Update help/setup copy so hidden command names are not advertised as the normal workflow.
-- [ ] Add exact final-command-tree regression tests and action-reachability tests.
-- [ ] Run compile/static/full suite, standalone audits, command-size diagnostics, conflict/diff cleanup, and review.
-- [ ] Merge only after every repository gate is green.
-- [ ] Deploy merged `main` to Discloud and live-check final Discord autocomplete + representative actions from every center.
+1. Inactive-member purge was originally exposed as `/dank members purge-all`; the implementation still exists in `public_members_cleanup_group.py`.
+2. Message/user purge still exists in `public_cleanup_group.py` as the canonical `cleanup_purge` handler.
+3. PR #144 intentionally replaced visible `/dank members ...` children with the Member Command Center, burying `purge-all` behind Activity & Cleanup → Purge Eligible.
+4. PR #178 intentionally reduced final `/dank` children to only `home` and `upload`; startup compaction therefore removes `/dank cleanup`, including its visible purge command.
+5. The pre-sync cleanup guard consumes `PUBLIC_DANK_CHILDREN`, so adding an unapproved shortcut anywhere else would be deleted before Discord sync.
+6. The correct repair is one approved compact `/dank purge` facade, installed after final compaction and delegated to the existing canonical purge handlers.
 
-## Paused tasks
+## Changes
 
-### DS-WELCOME-EXIT-023 — Welcome placeholder rendering and canonical Exit Card Studio
+- [x] Add `public_direct_purge.py` with only two thin routes: `messages` and `members`.
+- [x] Delegate message purge to canonical `public_cleanup_group.cleanup_purge`.
+- [x] Delegate inactive-member purge to canonical `public_members_cleanup_group.members_purge_all`.
+- [x] Reinstall `/dank purge` after every final command-surface compaction/reassertion.
+- [x] Re-check final `/dank` payload and fail closed if the restored family exceeds the existing safety limit.
+- [x] Update canonical `/dank` child contract to `home`, `purge`, `upload` so pre-sync cleanup preserves it.
+- [x] Add regression coverage proving final reassertion preserves purge and the facade does not duplicate deletion/scanning engines.
+- [x] Update payload and public-command audits for the approved purge exception.
 
-PR #177 merged to `main` as `f6d732f1f03eb5e2219351cd0e468ada281e1978` and was deployed successfully. Startup proved canonical Welcome/Exit ownership and Exit Studio registration. The final real join/leave live-event verification gate remains pending because the user force-switched to DS-COMMAND-UX-024.
+## Validation
 
-### DS-TICKET-CAT-022 — Repair duplicate ticket categories across all existing servers
+- [ ] Targeted direct-purge tests.
+- [ ] Command-surface reassertion tests.
+- [ ] `/dank` payload diagnostic.
+- [ ] Public command-surface audit.
+- [ ] Public command-friction audit.
+- [ ] Python compile/static validation.
+- [ ] Full repository unit suite.
+- [ ] Standalone repository checks required by CI.
+- [ ] Final diff/conflict/duplicate-implementation inspection.
 
-PR #176 merged with repository/SQL validation green; required affected-guild live verification remains pending.
+## Cleanup status
 
-### DS-OPS-021 — Owner ticket authority, bulk moderation, and canonical join cards
+- No second message-deletion implementation added.
+- No second inactivity scanner/member-removal implementation added.
+- Legacy `/dank cleanup` and `/dank members` groups remain hidden by the compact surface; only the small purge facade is restored.
+- Menu access remains intact for users who prefer guided controls.
 
-Merged through PR #174 plus Welcome Studio hotfix PR #175; remaining production follow-up is paused/superseded where applicable.
+## Blockers
 
-### DS-SETUP-020 — Entitled ID-verification setup selection and VC permissions regression
+None known. Validation is pending on the implementation branch.
 
-Merged in PR #171; live Discloud/Discord verification gate remains paused.
+## Backlog
 
-## Preserved backlog
-
-- DS-STATS-019 — Durable Dank Stats invite-block counting; live verification pending.
-- DS-SETUP-019 — Cleanup confirmation modal crashes.
-- DS-MEDIA-001 — Klipy direct GIF unfurl listener.
-- DS-RESET-001 — Owner-authorized Emergency Reset and bulk cleanup console.
+None added from this conversation.
 
 ## Definition of Done
 
-DS-COMMAND-UX-024 is complete only when the public Discord command tree is intentionally small, every previously public action remains reachable through an authorized UI or the minimal upload command, existing safety/claim/owner/role/config guards are preserved, help text matches the new menu-first workflow, regression tests prove command-tree shape and action reachability, all CI/audits are green, the reviewed PR is merged, Discloud is deployed, and live Discord verification confirms the compact autocomplete surface plus representative moderation, ticket, verification, setup, and upload actions work end to end.
+DS-PURGE-025 is complete only when `/dank purge messages` and `/dank purge members` survive final compaction and pre-sync cleanup, both delegate to the existing canonical purge engines with their original permission/preview/confirmation/safety behavior, the final command payload remains under the repository safety limit, targeted and regression tests pass, compile/static/full-suite/standalone audits are green, and final conflict/duplicate/dead-code inspection is clean. Merge/deploy are separate actions and require explicit authorization.
