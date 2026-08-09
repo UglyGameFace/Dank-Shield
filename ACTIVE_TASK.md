@@ -5,6 +5,7 @@
 **Status:** IN PROGRESS — IMPLEMENTED, VALIDATING
 **Branch:** `fix/ds-purge-025-restore-direct-purge`
 **Base:** `main` at `7c30736e941bf2fd9a9390d9719acfa59990e0fa`
+**PR:** #179 (draft until exact-head validation is green)
 **Started:** 2026-08-09
 
 ## Scope
@@ -37,18 +38,21 @@ The newer menu paths remain available and must use the same canonical engines.
 - [x] Update canonical `/dank` child contract to `home`, `purge`, `upload` so pre-sync cleanup preserves it.
 - [x] Add regression coverage proving final reassertion preserves purge and the facade does not duplicate deletion/scanning engines.
 - [x] Update payload and public-command audits for the approved purge exception.
+- [x] Update the pre-existing live command-tree regression to recognize the intentional `purge` child.
 
 ## Validation
 
-- [ ] Targeted direct-purge tests.
-- [ ] Command-surface reassertion tests.
-- [ ] `/dank` payload diagnostic.
-- [ ] Public command-surface audit.
-- [ ] Public command-friction audit.
-- [ ] Python compile/static validation.
-- [ ] Full repository unit suite.
-- [ ] Standalone repository checks required by CI.
-- [ ] Final diff/conflict/duplicate-implementation inspection.
+- [ ] Targeted direct-purge tests — covered by exact-head full suite; rerun pending after stale expectation fix.
+- [ ] Command-surface reassertion tests — covered by exact-head full suite; rerun pending after stale expectation fix.
+- [x] Application Command Size Diagnostics run 625 passed on implementation head; runtime snapshot measured final `/dank` payload at 2825/7600.
+- [ ] `/dank` payload standalone diagnostic — exact-head CI rerun pending.
+- [ ] Public command-surface audit — exact-head CI rerun pending.
+- [ ] Public command-friction audit — exact-head CI rerun pending.
+- [x] Python compile/static validation passed on implementation head.
+- [ ] Full repository unit suite — first run found exactly one stale test expectation (`tests/test_welcome_card_live_command_tree.py` expected only `home`,`upload`); 1014 tests passed and that expectation is now corrected. Exact-head rerun pending.
+- [ ] Standalone repository checks required by CI — exact-head CI rerun pending.
+- [x] Initial branch diff/conflict inspection: PR is mergeable, based on current `main`, with no review threads or requested changes.
+- [ ] Final exact-head diff/conflict/duplicate-implementation inspection after CI rerun.
 
 ## Cleanup status
 
@@ -56,10 +60,11 @@ The newer menu paths remain available and must use the same canonical engines.
 - No second inactivity scanner/member-removal implementation added.
 - Legacy `/dank cleanup` and `/dank members` groups remain hidden by the compact surface; only the small purge facade is restored.
 - Menu access remains intact for users who prefer guided controls.
+- No temporary patch/applier/workflow files were added.
 
 ## Blockers
 
-None known. Validation is pending on the implementation branch.
+None known. Exact-head CI rerun is required after correcting the one stale command-tree test expectation.
 
 ## Backlog
 
