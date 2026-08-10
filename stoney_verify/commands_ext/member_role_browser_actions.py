@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from typing import Any, Optional
 
@@ -19,6 +20,10 @@ from .member_role_browser_common import (
     trim,
 )
 from .member_role_browser_review import open_review_panel
+
+
+_DESTRUCTIVE_PRECHECK_TIMEOUT_SECONDS = 8.0
+_DESTRUCTIVE_DISCORD_TIMEOUT_SECONDS = 15.0
 
 
 def member_detail_embed(
@@ -591,11 +596,26 @@ class MemberDestructiveActionModal(discord.ui.Modal):
         super().__init__(title=f"Confirm {action.title()}", timeout=300)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+
         if not await require_review(interaction):
             return
-        target = await self.parent._fresh_target(interaction)
+
+        try:
+            target = await asyncio.wait_for(
+                self.parent._fresh_target(interaction),
+                timeout=_DESTRUCTIVE_PRECHECK_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            await reply_ephemeral(
+                interaction,
+                "❌ Member refresh timed out. Nothing happened; try the action again.",
+            )
+            return
         if target is None:
             return
+
         if (
             str(self.confirmation.value or "").strip().casefold()
             != self.action.casefold()
@@ -606,12 +626,23 @@ class MemberDestructiveActionModal(discord.ui.Modal):
                 "Nothing happened.",
             )
             return
-        blockers = await action_blockers(
-            interaction.guild,
-            interaction.user,
-            target,
-            self.action,
-        )
+
+        try:
+            blockers = await asyncio.wait_for(
+                action_blockers(
+                    interaction.guild,
+                    interaction.user,
+                    target,
+                    self.action,
+                ),
+                timeout=_DESTRUCTIVE_PRECHECK_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            await reply_ephemeral(
+                interaction,
+                "❌ Moderation safety checks timed out. Nothing happened; try again.",
+            )
+            return
         if blockers:
             await reply_ephemeral(
                 interaction,
@@ -619,28 +650,41 @@ class MemberDestructiveActionModal(discord.ui.Modal):
                 + "\n• ".join(blockers),
             )
             return
+
         reason = str(self.reason.value or "").strip()
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        audit_reason = (
+            f"{reason} | By {interaction.user} ({interaction.user.id})"
+        )
+
         async with action_lock(
             interaction.guild.id,
             target.id,
             self.action,
         ):
             try:
-                audit_reason = (
-                    f"{reason} | By {interaction.user} ({interaction.user.id})"
-                )
                 if self.action == "kick":
-                    await target.kick(reason=audit_reason)
+                    await asyncio.wait_for(
+                        target.kick(reason=audit_reason),
+                        timeout=_DESTRUCTIVE_DISCORD_TIMEOUT_SECONDS,
+                    )
                 else:
-                    await interaction.guild.ban(
-                        target,
-                        reason=audit_reason,
-                        delete_message_seconds=0,
+                    await asyncio.wait_for(
+                        interaction.guild.ban(
+                            target,
+                            reason=audit_reason,
+                            delete_message_seconds=0,
+                        ),
+                        timeout=_DESTRUCTIVE_DISCORD_TIMEOUT_SECONDS,
                     )
                 ok = True
                 verb = "kicked" if self.action == "kick" else "banned"
                 result = f"{display_name(target)} was {verb}."
+            except asyncio.TimeoutError:
+                ok = False
+                result = (
+                    f"Discord did not confirm the {self.action} in time. "
+                    "Check the server state before retrying so the action is not duplicated."
+                )
             except discord.Forbidden:
                 ok = False
                 result = (
@@ -650,6 +694,13 @@ class MemberDestructiveActionModal(discord.ui.Modal):
             except Exception as exc:
                 ok = False
                 result = f"{self.action.title()} failed: {type(exc).__name__}."
+
+        try:
+            await interaction.followup.send(
+                ("✅ " if ok else "❌ ") + result,
+                ephemeral=True,
+            )
+        finally:
             await record_member_action(
                 guild_id=interaction.guild.id,
                 actor_id=interaction.user.id,
@@ -658,10 +709,6 @@ class MemberDestructiveActionModal(discord.ui.Modal):
                 reason=reason,
                 metadata={"ok": ok},
             )
-        await interaction.followup.send(
-            ("✅ " if ok else "❌ ") + result,
-            ephemeral=True,
-        )
 
 
 __all__ = ["MemberActionView", "member_detail_embed"]
