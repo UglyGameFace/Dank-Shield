@@ -9,6 +9,7 @@ import discord
 
 
 _BROWSER_TIMEOUT_SECONDS = 900
+_MEMBER_ACTION_AUDIT_TIMEOUT_SECONDS = 3.0
 _ACTION_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
 
@@ -334,14 +335,14 @@ async def record_member_action(
     action: str,
     reason: str,
     metadata: Optional[dict[str, Any]] = None,
-) -> None:
-    def _insert() -> None:
+) -> bool:
+    def _insert() -> bool:
         try:
             from stoney_verify.globals import get_supabase
 
             sb = get_supabase()
             if not sb:
-                return
+                return False
             payload = {
                 "guild_id": str(int(guild_id)),
                 "event_type": "member_browser_action",
@@ -353,13 +354,36 @@ async def record_member_action(
                 "created_at": discord.utils.utcnow().isoformat(),
             }
             sb.table("activity_feed_events").insert(payload).execute()
-        except Exception:
-            return
+            return True
+        except Exception as exc:
+            print(
+                "⚠️ member_browser audit write failed "
+                f"guild={int(guild_id)} target={int(target_id)} action={action} "
+                f"error={type(exc).__name__}"
+            )
+            return False
 
     try:
-        await asyncio.to_thread(_insert)
-    except Exception:
-        pass
+        return bool(
+            await asyncio.wait_for(
+                asyncio.to_thread(_insert),
+                timeout=_MEMBER_ACTION_AUDIT_TIMEOUT_SECONDS,
+            )
+        )
+    except asyncio.TimeoutError:
+        print(
+            "⚠️ member_browser audit write timed out "
+            f"guild={int(guild_id)} target={int(target_id)} action={action} "
+            f"timeout_s={_MEMBER_ACTION_AUDIT_TIMEOUT_SECONDS:g}"
+        )
+        return False
+    except Exception as exc:
+        print(
+            "⚠️ member_browser audit write failed "
+            f"guild={int(guild_id)} target={int(target_id)} action={action} "
+            f"error={type(exc).__name__}"
+        )
+        return False
 
 
 async def apply_staff_basic_verification(
