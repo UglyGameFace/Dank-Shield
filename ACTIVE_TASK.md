@@ -2,10 +2,10 @@
 
 ## DS-COMMAND-UX-024 — Consolidate Dank Shield into action-complete mega menus
 
-**Status:** IN PROGRESS — PRODUCTION REGRESSION FOLLOW-UP / VALIDATING  
-**Branch:** `fix/ds-command-ux-024-member-ban-responsiveness`  
-**Base:** merged `main` at `7c30736e941bf2fd9a9390d9719acfa59990e0fa`  
-**Original consolidation PR:** #178 merged 2026-08-09  
+**Status:** IN PROGRESS — PRODUCTION REGRESSION FOLLOW-UP / VALIDATING
+**Branch:** `fix/ds-command-ux-024-member-ban-responsiveness`
+**Base:** merged `main` at `7c30736e941bf2fd9a9390d9719acfa59990e0fa`
+**Original consolidation PR:** #178 merged 2026-08-09
 **Follow-up started:** 2026-08-10
 
 ## Current scope
