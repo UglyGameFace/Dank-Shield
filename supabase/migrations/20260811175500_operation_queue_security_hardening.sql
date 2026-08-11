@@ -1,7 +1,13 @@
 -- DS-BACKLOG-027 / #56
--- Harden the persistent operation queue used by the bot/dashboard.
+-- Harden and normalize the persistent operation queue used by bot/dashboard.
 
 begin;
+
+-- The original June migration accepted application-generated UUIDs but did not
+-- give the database a default. The direct-bootstrap path does. Normalize the
+-- historical table so both creation paths now expose the same contract.
+alter table if exists public.bot_operation_jobs
+    alter column id set default gen_random_uuid();
 
 alter table if exists public.bot_operation_jobs enable row level security;
 
