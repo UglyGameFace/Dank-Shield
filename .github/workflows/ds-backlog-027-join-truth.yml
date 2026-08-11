@@ -106,7 +106,7 @@ jobs:
             stoney_verify/events.py
           grep -F 'async with invite_lock_for(gid)' stoney_verify/members_new/join_context_service.py
           grep -F 'incoming_is_approval=True' stoney_verify/verification_new/service.py
-          grep -F 'approval_truth_quality' stoney_verify/verification_new/service.py
+          grep -F 'approval_meta = approval_context' stoney_verify/verification_new/service.py
           grep -F 'entry_conflict' stoney_verify/tickets_new/member_context_service.py
       - name: Commit join truth integration
         run: |
