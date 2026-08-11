@@ -104,9 +104,10 @@ jobs:
                   raise exception 'Community Tools tables must have RLS enabled';
               end if;
 
-              select jsonb_object_length(votes) into vote_count
-              from public.dank_sticky_polls
-              where channel_id = 2001;
+              select count(*) into vote_count
+              from public.dank_sticky_polls p
+              cross join lateral jsonb_object_keys(p.votes) as vote_key(key)
+              where p.channel_id = 2001;
 
               if vote_count <> 1 then
                   raise exception 'expected one persisted sticky-poll vote, got %', vote_count;
