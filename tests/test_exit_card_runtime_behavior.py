@@ -119,7 +119,38 @@ def test_exit_studio_sends_one_image_card_with_no_departed_member_ping(
     assert isinstance(embed, discord.Embed)
     assert embed.title == "Goodbye 9byte"
     assert "Nine Byte left Vibers Paradise. Members: 124" in (embed.description or "")
-    assert embed.footer.text == "dank_shield:exit_card_runtime:v1"
+    assert not getattr(embed.footer, "text", None)
+
+
+def test_live_exit_image_normalizes_decorative_unicode_without_rewriting_embed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _guild, channel, member = _world()
+    member.display_name = "𝓔𝔂𝓮𝔃 𝓞𝓯 𝓑𝓸𝓫"
+    seen: dict[str, str] = {}
+
+    async def config(_guild_id: int, *, refresh: bool = False) -> dict[str, object]:
+        return {
+            "exit_card_enabled": True,
+            "exit_card_channel_id": str(channel.id),
+            "exit_card_body": "{display_name} left {server_name}.",
+        }
+
+    async def card(render_member: object, _cfg: object) -> discord.File:
+        seen["display_name"] = str(getattr(render_member, "display_name"))
+        return discord.File(BytesIO(b"exit"), filename="exit.png")
+
+    monkeypatch.setattr(runtime, "get_guild_config", config)
+    monkeypatch.setattr(runtime, "exit_card_file", card)
+
+    result = asyncio.run(runtime.send_live_exit_card(member))
+
+    assert result.sent is True
+    assert seen["display_name"] == "Eyez Of Bob"
+    embed = channel.sent[0]["embed"]
+    assert isinstance(embed, discord.Embed)
+    assert "𝓔𝔂𝓮𝔃 𝓞𝓯 𝓑𝓸𝓫" in (embed.description or "")
+    assert not getattr(embed.footer, "text", None)
 
 
 def test_explicit_exit_disable_wins_over_old_leave_settings(
@@ -219,7 +250,7 @@ def test_image_failure_uses_exactly_one_exit_embed_fallback(
     assert "file" not in channel.sent[0]
     embed = channel.sent[0]["embed"]
     assert isinstance(embed, discord.Embed)
-    assert embed.footer.text == "dank_shield:exit_card_runtime:v1"
+    assert not getattr(embed.footer, "text", None)
 
 
 def test_duplicate_exit_delivery_is_suppressed(monkeypatch: pytest.MonkeyPatch) -> None:
