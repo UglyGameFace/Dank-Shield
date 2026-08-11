@@ -34,6 +34,7 @@ from stoney_verify.community_tools_service import (
     get_sticky_poll,
     list_stickies,
     normalize_https_url,
+    normalize_poll,
     reset_sticky_poll,
     save_sticky,
     save_sticky_poll,
@@ -61,6 +62,14 @@ def _manage_webhooks(interaction: discord.Interaction) -> bool:
     if not isinstance(member, discord.Member):
         return False
     return bool(member.guild_permissions.administrator or member.guild_permissions.manage_webhooks)
+
+
+def _can_send_messages(interaction: discord.Interaction) -> bool:
+    channel = _text_channel(interaction)
+    member = interaction.user
+    if channel is None or not isinstance(member, discord.Member):
+        return False
+    return bool(channel.permissions_for(member).send_messages)
 
 
 async def _private(
@@ -229,6 +238,8 @@ class CommunityToolsView(_OwnedView):
         _ = button
         if _text_channel(interaction) is None:
             return await _private(interaction, "❌ Create polls inside a normal text channel.")
+        if not _can_send_messages(interaction):
+            return await _private(interaction, "❌ You need **Send Messages** in this channel to create a poll.")
         await interaction.response.send_modal(NativePollModal())
 
     @discord.ui.button(label="Embed Builder", emoji="🧱", style=discord.ButtonStyle.primary, row=0)
@@ -599,6 +610,7 @@ class StickyPollModal(discord.ui.Modal, title="Create or edit sticky poll"):
             updated_by=int(interaction.user.id),
         )
         try:
+            validated_poll = normalize_poll(poll)
             existing = await get_sticky(int(channel.id))
             sticky = StickyConfig(
                 guild_id=int(interaction.guild.id),
@@ -613,7 +625,7 @@ class StickyPollModal(discord.ui.Modal, title="Create or edit sticky poll"):
                 last_sent_at=existing.last_sent_at if existing else None,
             )
             saved_sticky = await save_sticky(sticky)
-            saved_poll = await save_sticky_poll(poll)
+            saved_poll = await save_sticky_poll(validated_poll)
         except (InvalidCommunityToolValue, CommunityStorageUnavailable) as exc:
             return await _private(interaction, f"❌ {exc}")
         runtime = ensure_community_tools_runtime(interaction.client)
@@ -692,6 +704,8 @@ class NativePollModal(discord.ui.Modal, title="Create Discord poll"):
         channel = _text_channel(interaction)
         if channel is None:
             return await _private(interaction, "❌ Create polls inside a normal text channel.")
+        if not _can_send_messages(interaction):
+            return await _private(interaction, "❌ You need **Send Messages** in this channel to create a poll.")
         options = []
         for line in str(self.choices.value).splitlines():
             value = line.strip()

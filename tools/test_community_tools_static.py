@@ -51,6 +51,17 @@ def test_migration_persists_stickies_and_polls_service_role_only() -> None:
     assert "grant all on table public.dank_stickies to service_role" in MIGRATION
 
 
+def test_poll_posting_respects_member_channel_permissions_and_validates_before_sticky_write() -> None:
+    assert UI.count("_can_send_messages(interaction)") >= 2
+    assert "You need **Send Messages** in this channel to create a poll." in UI
+
+    sticky_poll = UI.split("class StickyPollModal", 1)[1].split("class StickyPollControlView", 1)[0]
+    assert "validated_poll = normalize_poll(poll)" in sticky_poll
+    assert sticky_poll.index("validated_poll = normalize_poll(poll)") < sticky_poll.index("saved_sticky = await save_sticky(sticky)")
+    assert "save_sticky_poll(validated_poll)" in sticky_poll
+
+
+
 def test_image_ai_is_explicitly_provider_gated() -> None:
     assert 'label="Image AI Status"' in UI
     assert "vision provider" in UI.lower()
