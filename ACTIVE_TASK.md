@@ -2,10 +2,10 @@
 
 ## DS-STICKY-026 — Smart StickyBot-style community tools
 
-**Status:** IN PROGRESS — IMPLEMENTED, FINAL VALIDATION / SUPABASE PREVIEW RESET
+**Status:** FINAL VALIDATION — IMPLEMENTED, SUPABASE PREVIEW GREEN
 **Branch:** `feature/ds-sticky-026-smart-community-tools`
 **Base:** current `main` after merged PR #179 (`591ca027e66d79a51ca3caaae539d1ca0fa97d48`)
-**PR:** #181 (draft until exact-head validation and Supabase preview are clean)
+**PR:** #181 (draft until exact-final-head CI is green)
 **Started:** 2026-08-11
 
 ## Scope
@@ -34,7 +34,9 @@ Target product surface:
 10. Production Supabase had a separate pending migration blocker: `20260802042000_ticket_category_setup_selection.sql` introduced `cod_services` and `game_services`, while the older `ticket_categories_intake_type_check` rejected both before reconciliation could finish.
 11. `20260802041900_expand_ticket_category_intake_types_v2.sql` now expands that production constraint immediately before the blocked migration while preserving all prior allowed routing values and rejecting unknown values.
 12. A production-like SQL workflow reproduces the historical constraint, applies the preflight twice, applies the formerly failing migration twice, verifies COD/game rows, and verifies invalid intake values remain blocked.
-13. The Supabase PR preview has separate stale branch migration history (`Remote migration versions not found in local migrations directory`), consistent with the Community Tools migration being renamed after the preview branch first observed it. The preview is being reset by closing/reopening the draft PR as Supabase's branch bot instructs.
+13. The Supabase PR preview's stale migration history was cleared by recreating the preview branch; Database, Services, APIs, Configurations, Migrations, Seeding, and Edge Functions all reported green afterward.
+14. Native community polls now require the invoking member's own channel `Send Messages` permission both before the modal opens and again on submit, preventing Dank Shield from acting as a posting proxy into read-only channels.
+15. Sticky polls are normalized/validated before the sticky row is persisted, preventing invalid poll input from leaving a mode=`poll` sticky without a valid poll definition.
 
 ## Changes
 
@@ -48,21 +50,23 @@ Target product surface:
 - [x] Community Tools Supabase migration plus dedicated SQL smoke coverage.
 - [x] Zero-database non-sticky message fast-path regression coverage.
 - [x] Production ticket-category intake constraint preflight and exact historical failure reproduction.
+- [x] Native poll channel-permission guard and sticky-poll pre-write validation.
+- [x] Temporary branch finalizer removed from the final diff.
 - [x] Preserve merged #179 direct purge surface and #180 member-action responsiveness.
 
 ## Validation
 
-- [x] Targeted sticky service/runtime tests passed on prior exact head.
-- [x] Community Tools UI/static safety tests passed on prior exact head.
-- [x] Unknown-channel zero-database fast-path tests passed on prior exact head.
+- [x] Targeted sticky service/runtime tests passed on prior exact heads.
+- [x] Community Tools UI/static safety tests passed, including final poll-safety static guard.
+- [x] Unknown-channel zero-database fast-path tests passed.
 - [x] Community Tools SQL Smoke passed after the production migration repair.
 - [x] Ticket Category Intake Preflight SQL passed and reproduces the Aug 2 production failure conditions.
 - [x] Application Command Size Diagnostics passed after the production migration repair.
 - [x] Ticket Owner Emergency Override passed after the production migration repair.
 - [x] Profile Runtime Diagnostics passed after the production migration repair.
-- [ ] Dank Shield CI exact-final-head run must complete after the final task-record/safety changes.
-- [ ] Supabase PR preview reset/recreation must clear stale branch migration history.
-- [ ] Final compare/review-thread/duplicate/dead-code inspection after the exact final head is established.
+- [x] Supabase PR preview recreation cleared the stale migration-history error and all preview tasks reported green.
+- [x] Branch is zero commits behind `main` and has no inline review threads.
+- [ ] Dank Shield CI exact-final-head run must complete after this final task-record commit.
 
 ## Cleanup status
 
@@ -70,13 +74,13 @@ Target product surface:
 - No prefix parser or new direct slash-command family.
 - No raw webhook URL/token storage.
 - No channel history scans for sticky movement.
+- No temporary finalizer workflow remains in the final tree/diff.
 - Existing Help, Status, Profile, Setup, Diagnostics, purge, and moderation systems remain canonical.
 - Production migration repair is an idempotent preflight ordered directly before the previously blocked migration; it does not rewrite remote migration history.
 
 ## Blockers
 
-- Supabase PR preview branch must finish recreation/reset and prove the stale preview-only migration history is gone.
-- Exact-final-head full CI must be green before PR #181 is marked ready.
+- Only the exact-final-head GitHub CI run remains before PR #181 can be marked ready for review.
 
 ## Backlog
 
