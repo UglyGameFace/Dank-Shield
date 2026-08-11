@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-"""Compatibility loader for stabilized ticket/setup checks."""
+"""Compatibility loader for remaining stabilized ticket/setup checks.
+
+Create Ticket menu/confirm ownership now lives directly in
+``commands_ext.public_ticket_panel_clean`` and is intentionally not loaded here.
+"""
 
 
 def _log(message: str) -> None:
@@ -35,7 +39,6 @@ def _apply_optional_guard(module_name: str, label: str) -> bool:
 
 def apply() -> bool:
     epoch_ok = _apply_optional_guard("ticket_panel_command_epoch_guard", "ticket-panel slash refresh guard")
-    confirm_ok = _apply_optional_guard("public_ticket_confirm_hardening_guard", "public ticket confirm hardening guard")
     lifecycle_lock_ok = _apply_optional_guard("ticket_lifecycle_action_lock_guard", "ticket lifecycle action lock guard")
     transcript_busy_ok = _apply_optional_guard("ticket_transcript_post_busy_guard", "ticket transcript post busy guard")
     identity_ok = _apply_optional_guard("ticket_staff_identity_guard", "ticket staff identity guard")
@@ -45,7 +48,18 @@ def apply() -> bool:
     repair_ok = _apply_optional_guard("ticket_panel_repair_records_command", "ticket record repair command")
     doctor_ok = _apply_optional_guard("ticket_panel_doctor_stability_guard", "doctor stability guard")
     setup_ok = _apply_optional_guard("setup_check_existing_server_inference_guard", "setup-check inference guard")
-    return bool(epoch_ok and confirm_ok and lifecycle_lock_ok and transcript_busy_ok and identity_ok and voice_notice_ok and controls_ok and action_refresh_ok and repair_ok and doctor_ok and setup_ok)
+    return bool(
+        epoch_ok
+        and lifecycle_lock_ok
+        and transcript_busy_ok
+        and identity_ok
+        and voice_notice_ok
+        and controls_ok
+        and action_refresh_ok
+        and repair_ok
+        and doctor_ok
+        and setup_ok
+    )
 
 
 apply()
