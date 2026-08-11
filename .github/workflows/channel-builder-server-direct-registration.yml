@@ -27,8 +27,12 @@ jobs:
         run: python tools/patch_channel_builder_server_routes.py --check
       - name: Apply direct Channel Builder route registration
         run: python tools/patch_channel_builder_server_routes.py --apply
-      - name: Run Channel Builder queue audit
-        run: python tools/audit_channel_builder_queue.py
+      - name: Verify patched owner file compiles
+        run: python -m py_compile stoney_verify/api_new/server.py stoney_verify/api_new/channel_builder_routes.py
+      - name: Verify direct route registration is present
+        run: |
+          grep -F 'from .channel_builder_routes import register_channel_builder_routes' stoney_verify/api_new/server.py
+          grep -F 'register_channel_builder_routes(app, sys.modules[__name__])' stoney_verify/api_new/server.py
       - name: Commit direct route registration
         run: |
           if git diff --quiet; then
