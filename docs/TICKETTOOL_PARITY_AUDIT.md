@@ -1,243 +1,77 @@
-# Dank Shield TicketTool Parity Audit
+# Dank Shield TicketTool-Parity Completion Map
 
-Last updated: 2026-05-08
+Updated: 2026-08-11  
+Owner task: DS-BACKLOG-027  
+Umbrella issue: #11
 
-## Product rule
+This document replaces the May 2026 snapshot. Issue #11 became an umbrella for multiple later ticket/setup/schema/scaling tasks, so checkbox age is no longer a useful source of truth. The canonical implementations and regression gates below are the source of truth for the original acceptance areas.
 
-Dank Shield should beat Ticket Tool by being faster and easier, not by forcing users through more steps.
+## 1. Ticket panel reliability and public UX
 
-Default workflow priority:
+| Original requirement | Canonical owner / evidence |
+|---|---|
+| Persistent Create Ticket panel survives restarts | `commands_ext/public_ticket_panel_clean.py` → `PublicCreateTicketPanelView(timeout=None)` and persistent view registration |
+| Create Ticket opens category picker, not direct modal | `TicketSelectView` / `TicketSelect` in the same owner |
+| Category can be reviewed with Confirm / Back before creation | `TicketConfirmView` in the same owner |
+| Wrong category can be corrected before creation | Back returns to the current session's category picker |
+| Ticket is created only after Confirm | `_create_ticket` is reached from the confirmed current session; optional forms are opened before creation |
+| Duplicate/stale menus cannot race ticket creation | owner-file interaction lock, newest-menu session ID, confirm lock, and existing-open-ticket recheck |
+| Setup blockers are shown before creation | `_ticket_setup_preflight` and `_setup_problem_embed` |
+| Ticket numbering remains persistent | `reserve_persistent_ticket_number` path |
+| Active/archive lifecycle behavior | canonical `tickets_new` lifecycle/services and ticket action audits |
+| Visible errors instead of silent interaction failures | owner helpers plus ticket lifecycle/action tests |
 
-1. Buttons first
-2. Select menus second
-3. Forms/modals last
+Regression gates:
 
-Forms/modals must be optional and off by default. The default ticket flow should be instant.
+- `.github/workflows/ticket-panel-owner.yml`
+- `tests/test_public_ticket_panel_single_owner.py`
+- `tools/audit_ticket_panel_doctor.py`
+- `tools/audit_ticket_category_menu.py`
 
-## Plain-language rule
+The former runtime callback rewrite files `public_ticket_panel_clean_hardening.py` and `public_ticket_confirm_hardening_guard.py` were removed by DS-BACKLOG-027. Their stale-menu, duplicate-interaction, confirm-lock and preflight behavior now lives in the actual ticket-panel owner.
 
-Dank Shield setup must use simple words that normal server owners and members understand immediately.
+## 2. Setup simplicity
 
-Avoid unclear labels like:
+The public owner remains the compact `/dank` menu-first surface rather than a large command tree. Canonical setup/service ownership includes:
 
-- "verification heavy"
-- "advanced workflow"
-- "intake flow"
-- "security posture"
-- "template profile"
+- `commands_ext/public_setup_group.py`
+- `startup_guards/setup_feature_health_scoreboard.py`
+- `tickets_new/managed_category_service.py`
+- `startup_guards/ticket_category_setup_guard.py`
+- `setup_permission_repair_services.py`
+- `permission_repair.py`
 
-Use direct labels like:
+Ticket category selection comes from the managed catalog used by both setup and the live panel. DS-BACKLOG-027 additionally provides selected-target **Fix Access** from setup and diagnostics, with minimum/full modes, explicit-deny confirmation, undo, and non-Administrator reauthorization.
 
-- "Basic server"
-- "Help desk"
-- "ID check"
-- "Voice check"
-- "Custom setup"
+## 3. DB/schema resilience
 
-Every setup option should answer these questions in plain English:
+Canonical migrations and compatibility services own schema truth. Important current gates include the managed ticket category migration/audit workflow, ticket-category selection/duplicate-repair migrations, the persistent operation queue + RLS hardening, schema compatibility checks before optional-field writes, and the Supabase migration-version audit in the main CI.
 
-1. What does this do?
-2. Who is it for?
-3. What will members see?
-4. Can I change it later?
+Auto-schema bootstrap is optional and must be security-equivalent to the migration path; DS-BACKLOG-027 specifically aligns `bot_operation_jobs` direct bootstrap with its hardened migration.
 
-## Confirmed direction
+## 4. Public scale / multi-server readiness
 
-- Default ticket creation should not force a form.
-- Users should be able to click and get a ticket open quickly.
-- Optional reason/category selection is acceptable when it saves time.
-- Long setup flows should be avoided.
-- Public setup should explain what is enabled, what is missing, and how to fix it.
-- Multi-guild isolation must remain strict.
-- Caching/scaling work comes after TicketTool parity is solid.
-- Do not assume every server wants the one specific server flow.
-- legacy single-server style verification must be available as an optional setup choice, not the only default.
-- Setup wording must be clear enough for young users, new Discord users, tired moderators, and users who need extra-simple instructions.
+The bot uses `AutoShardedBot`, per-guild configuration, bounded background work, and explicit shared operation serialization/idempotency for dangerous mutations. Current scale/security ownership includes:
 
-## Active TicketTool parity audit
+- `globals.py` — AutoShardedBot construction
+- `operation_queue.py` — persistent idempotency, per-guild/scoped concurrency, global/per-guild/per-operation backpressure, stale restart reconciliation, cancellation, retry/rate metrics and health
+- `api_new/queued_handlers.py` — direct structured-API mutation protection
+- `services/channel_builder_execution.py` — preflight + retry + rollback plan
+- `services/channel_builder_rollback_runtime.py` — persistent restart-safe rollback
+- `tools/test_multi_server_scale_static.py`
+- `tools/test_backlog_027_static.py`
+- `.github/workflows/backlog-027-validation.yml`
 
-### 1. Fast public ticket opening
+Unknown/dangerous queue classes default to broad serialization; explicitly scoped ticket/member/read-only classes can use bounded concurrency so unrelated guilds and safe scopes remain concurrent.
 
-Goal: user opens a ticket with the fewest possible steps.
+## 5. Legacy cleanup rule
 
-Required behavior:
+The rule remains: **do not add a new patch to fix an old patch.**
 
-- [ ] Default ticket button opens a ticket immediately.
-- [ ] If multiple ticket types exist, use a select menu before opening.
-- [ ] Do not require a modal/form by default.
-- [ ] If a form is enabled, label it clearly as optional.
-- [ ] Ticket channel should immediately show helpful next-step buttons after creation.
+DS-BACKLOG-027 removes the runtime import/callback rewrites that were still standing between the canonical owner and live behavior for Channel Builder route injection/export, structured API queue protection, operation-queue persistence retry, member cleanup queueing, and Create Ticket panel callback/confirm behavior.
 
-Acceptance:
+Remaining startup-guard modules must own a discrete compatibility/service boundary rather than duplicate the Create Ticket or Channel Builder owner. New work should be implemented directly in owner/service modules and tests should assert those owners, not require a runtime monkeypatch file to exist.
 
-- New user can open a normal support ticket in 1 click when only one ticket type exists.
-- New user can open a categorized ticket in 2 interactions when multiple types exist.
-- No default “describe your issue” modal interrupts the flow.
+## Acceptance status
 
-### 2. Ticket setup simplicity
-
-Goal: server owners can configure tickets without guessing.
-
-Required behavior:
-
-- [ ] `/dank setup` has a clear Tickets section.
-- [ ] Tickets section shows On/Off instead of technical status words when possible.
-- [ ] Tickets section shows missing permissions with real fixes.
-- [ ] Tickets section has Preview Panel.
-- [ ] Tickets section has Publish Panel.
-- [ ] Tickets section has Edit Ticket Types.
-- [ ] Ticket setup should not create duplicate/confusing panels.
-
-Acceptance:
-
-- Server owner can set up and publish a working ticket panel from setup without separate hidden commands.
-- Every warning shown has an actionable fix.
-
-### 3. Staff ticket controls
-
-Goal: staff can manage tickets as fast as Ticket Tool or faster.
-
-Required behavior:
-
-- [ ] Claim/unclaim ticket.
-- [ ] Assign/add staff.
-- [ ] Add user.
-- [ ] Remove user.
-- [ ] Rename ticket.
-- [ ] Close ticket.
-- [ ] Reopen ticket.
-- [ ] Delete ticket.
-- [ ] Private staff notes.
-- [ ] Priority/status controls.
-
-Acceptance:
-
-- Staff can complete common actions through buttons/select menus, not slash-command hunting.
-
-### 4. Transcript and close flow
-
-Goal: closing a ticket is reliable and professional.
-
-Required behavior:
-
-- [ ] Close confirmation.
-- [ ] Transcript generated before delete/archive.
-- [ ] Transcript sent to configured log channel.
-- [ ] Transcript handles attachments/embeds where possible.
-- [ ] Reopen works after close if configured.
-- [ ] Delete respects confirmation/safety settings.
-
-Acceptance:
-
-- No ticket can be deleted before transcript handling succeeds or clearly reports failure.
-
-### 5. Persistent panels and restart safety
-
-Goal: panels should survive bot restarts and not expire constantly.
-
-Required behavior:
-
-- [ ] Public ticket panel buttons are persistent.
-- [ ] Ticket channel action buttons are persistent.
-- [ ] Setup panels either refresh cleanly or explain when expired.
-- [ ] No “command outdated” loops after a successful boot.
-- [ ] Startup repairs missing ticket channel panels.
-
-Acceptance:
-
-- After restart, existing ticket panels and open ticket controls still work.
-
-### 6. Multi-guild production safety
-
-Goal: no server leaks settings or branding into another server.
-
-Required behavior:
-
-- [ ] Every ticket lookup is guild-scoped.
-- [ ] Every panel config is guild-scoped.
-- [ ] Every staff role/category/log channel is guild-scoped.
-- [ ] No Dank Shield branding remains in public scope.
-- [ ] No guild-specific hardcoded channel/role IDs in public workflows.
-
-Acceptance:
-
-- Installing Dank Shield in a second server cannot expose or reuse the first server’s ticket config.
-
-### 7. Better-than-TicketTool polish
-
-Goal: feel easier and more modern than Ticket Tool.
-
-Required behavior:
-
-- [ ] Clean ticket embed design.
-- [ ] Simple user-facing copy.
-- [ ] Staff-only controls clearly separated from user controls.
-- [ ] Setup preview matches the real published panel.
-- [ ] Error messages explain what happened and how to fix it.
-- [ ] Optional smart setup choices per server type.
-
-Acceptance:
-
-- A non-technical server owner can understand setup without reading docs.
-
-### 8. Plain setup choices
-
-Goal: stop assuming every server wants the same setup while keeping the legacy single-server style verification panel available as a simple choice.
-
-Setup choices should use plain labels:
-
-- [ ] Basic server — simple welcome/check-in and basic tickets.
-- [ ] Help desk — ticket support for members/customers.
-- [ ] ID check — users need to verify with an upload link.
-- [ ] Voice check — users can ask staff to verify them in voice chat.
-- [ ] ID + voice check — same style as the legacy single-server setup, but without hardcoded server branding.
-- [ ] Custom setup — choose only what this server needs.
-
-Required behavior:
-
-- [ ] `/dank setup` shows simple setup choices instead of technical labels.
-- [ ] Each choice has a one-sentence explanation.
-- [ ] Each choice has Preview before Publish.
-- [ ] Verification panel style is stored per guild.
-- [ ] legacy single-server style setup is selectable but not assumed.
-- [ ] Template choice must not hardcode server-specific channel IDs, role IDs, or branding into other guilds.
-- [ ] Switching setup choices should not erase existing config without explicit confirmation.
-
-Acceptance:
-
-- A new server owner can choose a setup without knowing bot/developer terminology.
-- The legacy single-server style verification panel can still be selected and published when desired.
-- Setup remains button/select driven and avoids forms unless absolutely necessary.
-
-## Already handled / removed from active TODO
-
-These items are not active blockers unless a regression appears:
-
-- Global `/dank` command surface exists in public profile.
-- `/dank members` command group exists.
-- Spam guard has been integrated into the public `/dank spam` surface.
-- Member scan lock/unlock workflow exists.
-- Member activity notice DM workflow exists.
-- Notice worker startup no longer uses `bot.loop` before login.
-- Notice Supabase calls have been moved off the Discord event loop in the nonblocking bundle.
-
-## Later, after TicketTool parity
-
-These are important, but they should not distract from ticket parity first:
-
-- Bot-wide smart caching system.
-- Background scan refresh cache.
-- Cache diagnostics.
-- Larger multi-guild scale testing.
-- Membership/subscription tier enforcement.
-
-## Non-negotiables
-
-- Do not force ticket users into forms by default.
-- Do not use confusing setup labels when plain words work.
-- Do not assume one server’s verification/service setup is the universal default.
-- Do not hardcode server-specific branding, channel IDs, or role IDs into public guild workflows.
-- Do not add tiny patch files for core ticket behavior.
-- Update existing owner files when behavior is wrong.
-- Keep server-specific configuration isolated.
-- Moderation actions must re-check live permissions and hierarchy before action.
+This map describes implementation ownership, **not CI success by itself**. DS-BACKLOG-027 is complete only when its exact final PR head passes focused Python regressions, static acceptance audits, PostgreSQL migration/RLS apply-twice validation, ticket/category/doctor owner audits, the repository-wide Dank Shield CI and compile/static suite, and final stale-reference/dead-file inspection.
