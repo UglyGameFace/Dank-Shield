@@ -34,7 +34,7 @@ Target product surface:
 10. Production Supabase had a separate pending migration blocker: `20260802042000_ticket_category_setup_selection.sql` introduced `cod_services` and `game_services`, while the older `ticket_categories_intake_type_check` rejected both before reconciliation could finish.
 11. `20260802041900_expand_ticket_category_intake_types_v2.sql` now expands that production constraint immediately before the blocked migration while preserving all prior allowed routing values and rejecting unknown values.
 12. A production-like SQL workflow reproduces the historical constraint, applies the preflight twice, applies the formerly failing migration twice, verifies COD/game rows, and verifies invalid intake values remain blocked.
-13. The Supabase PR preview has separate stale branch migration history (`Remote migration versions not found in local migrations directory`), consistent with the Community Tools migration being renamed after the preview branch first observed it. The preview must be reset/recreated before merge.
+13. The Supabase PR preview has separate stale branch migration history (`Remote migration versions not found in local migrations directory`), consistent with the Community Tools migration being renamed after the preview branch first observed it. The preview is being reset by closing/reopening the draft PR as Supabase's branch bot instructs.
 
 ## Changes
 
@@ -75,7 +75,7 @@ Target product surface:
 
 ## Blockers
 
-- Supabase PR preview branch must be recreated/reset to discard stale preview-only migration history from the earlier Community Tools migration filename.
+- Supabase PR preview branch must finish recreation/reset and prove the stale preview-only migration history is gone.
 - Exact-final-head full CI must be green before PR #181 is marked ready.
 
 ## Backlog
