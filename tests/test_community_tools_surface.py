@@ -94,7 +94,7 @@ def test_custom_sender_uses_bot_managed_webhook_not_user_webhook_secret() -> Non
 
 
 def test_migration_is_service_role_only_and_persists_both_sticky_tables() -> None:
-    migration = (ROOT / "supabase/migrations/202608110001_community_tools.sql").read_text(encoding="utf-8")
+    migration = (ROOT / "supabase/migrations/20260811122504_community_tools.sql").read_text(encoding="utf-8")
     assert "create table if not exists public.dank_stickies" in migration
     assert "create table if not exists public.dank_sticky_polls" in migration
     assert "enable row level security" in migration

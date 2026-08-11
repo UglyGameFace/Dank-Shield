@@ -7,7 +7,7 @@ SURFACE = (ROOT / "stoney_verify/commands_ext/public_command_surface_v2.py").rea
 UI = (ROOT / "stoney_verify/commands_ext/public_community_tools.py").read_text(encoding="utf-8")
 RUNTIME = (ROOT / "stoney_verify/community_tools_runtime.py").read_text(encoding="utf-8")
 SERVICE = (ROOT / "stoney_verify/community_tools_service.py").read_text(encoding="utf-8")
-MIGRATION = (ROOT / "supabase/migrations/202608110001_community_tools.sql").read_text(encoding="utf-8")
+MIGRATION = (ROOT / "supabase/migrations/20260811122504_community_tools.sql").read_text(encoding="utf-8")
 
 
 def test_home_routes_to_community_tools_without_expanding_dank_children() -> None:
