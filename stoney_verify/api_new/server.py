@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+import sys
 from typing import Any, Dict, List, Optional, Tuple
 
 from aiohttp import web
@@ -56,6 +57,7 @@ from ..events_new.members import (
     run_departed_reconciliation_for_guild,
     run_role_member_sync,
 )
+from .channel_builder_routes import register_channel_builder_routes
 
 _API_RUNNER: Optional[web.AppRunner] = None
 _API_SITE: Optional[web.TCPSite] = None
@@ -1473,6 +1475,8 @@ async def start_api(bot_instance: discord.Client):
     app.router.add_post("/members/reconcile", reconcile_departed)
     app.router.add_post("/members/role-sync", role_member_sync)
 
+
+    register_channel_builder_routes(app, sys.modules[__name__])
     runner = web.AppRunner(app)
     await runner.setup()
 
