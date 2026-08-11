@@ -58,6 +58,8 @@ from ..events_new.members import (
     run_role_member_sync,
 )
 from .channel_builder_routes import register_channel_builder_routes
+from .queued_handlers import queued_api_handler
+from ..operation_queue import operation_queue_health_summary
 
 _API_RUNNER: Optional[web.AppRunner] = None
 _API_SITE: Optional[web.TCPSite] = None
@@ -1428,6 +1430,7 @@ async def health(request: web.Request):
         auth_required=_should_require_api_auth(),
         bind_host=_api_bind_host(),
         bind_port=_api_bind_port(),
+        operation_queue=operation_queue_health_summary(),
     )
 
 
@@ -1444,17 +1447,17 @@ async def start_api(bot_instance: discord.Client):
 
     app.router.add_get("/health", health)
 
-    app.router.add_post("/ticket/create", create_ticket)
-    app.router.add_post("/ticket/close", close_ticket)
-    app.router.add_post("/ticket/delete", delete_ticket)
-    app.router.add_post("/ticket/reopen", reopen_ticket_endpoint)
-    app.router.add_post("/ticket/assign", assign_ticket_endpoint)
+    app.router.add_post("/ticket/create", queued_api_handler(sys.modules[__name__], "create_ticket", create_ticket))
+    app.router.add_post("/ticket/close", queued_api_handler(sys.modules[__name__], "close_ticket", close_ticket))
+    app.router.add_post("/ticket/delete", queued_api_handler(sys.modules[__name__], "delete_ticket", delete_ticket))
+    app.router.add_post("/ticket/reopen", queued_api_handler(sys.modules[__name__], "reopen_ticket_endpoint", reopen_ticket_endpoint))
+    app.router.add_post("/ticket/assign", queued_api_handler(sys.modules[__name__], "assign_ticket_endpoint", assign_ticket_endpoint))
 
     if unclaim_ticket is not None:
-        app.router.add_post("/ticket/unclaim", unclaim_ticket_endpoint)
+        app.router.add_post("/ticket/unclaim", queued_api_handler(sys.modules[__name__], "unclaim_ticket_endpoint", unclaim_ticket_endpoint))
 
     if transfer_ticket is not None:
-        app.router.add_post("/ticket/transfer", transfer_ticket_endpoint)
+        app.router.add_post("/ticket/transfer", queued_api_handler(sys.modules[__name__], "transfer_ticket_endpoint", transfer_ticket_endpoint))
 
     app.router.add_get("/tickets/queue", get_ticket_queue)
     app.router.add_post("/tickets/queue", get_ticket_queue)
@@ -1468,12 +1471,12 @@ async def start_api(bot_instance: discord.Client):
     app.router.add_get("/tickets/my-claimed", get_my_claimed_tickets)
     app.router.add_post("/tickets/my-claimed", get_my_claimed_tickets)
 
-    app.router.add_post("/tickets/sync-active", sync_active_tickets)
-    app.router.add_post("/tickets/sync-one", sync_one_ticket)
+    app.router.add_post("/tickets/sync-active", queued_api_handler(sys.modules[__name__], "sync_active_tickets", sync_active_tickets))
+    app.router.add_post("/tickets/sync-one", queued_api_handler(sys.modules[__name__], "sync_one_ticket", sync_one_ticket))
 
-    app.router.add_post("/members/sync", force_member_sync)
-    app.router.add_post("/members/reconcile", reconcile_departed)
-    app.router.add_post("/members/role-sync", role_member_sync)
+    app.router.add_post("/members/sync", queued_api_handler(sys.modules[__name__], "force_member_sync", force_member_sync))
+    app.router.add_post("/members/reconcile", queued_api_handler(sys.modules[__name__], "reconcile_departed", reconcile_departed))
+    app.router.add_post("/members/role-sync", queued_api_handler(sys.modules[__name__], "role_member_sync", role_member_sync))
 
 
     register_channel_builder_routes(app, sys.modules[__name__])

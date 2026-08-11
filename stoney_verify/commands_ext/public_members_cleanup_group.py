@@ -26,7 +26,9 @@ from stoney_verify.members_new.cleanup_service import (
     MemberCleanupRequest,
     MemberCleanupValidation,
     MemberCleanupResult,
+    actor_can_use_no_confirm,
     execute_member_cleanup,
+    finalize_cleanup_run,
     validate_member_cleanup,
 )
 from stoney_verify.members_new.cleanup_settings_service import (
@@ -394,12 +396,13 @@ async def _process_queue_items(
     *,
     items: list[QueuePreviewItem],
     reason: str,
-) -> tuple[list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], list[MemberCleanupResult]]:
     removed: list[str] = []
     blocked: list[str] = []
     failed: list[str] = []
+    results: list[MemberCleanupResult] = []
     if interaction.guild is None:
-        return removed, blocked, ["Guild missing while processing queue."]
+        return removed, blocked, ["Guild missing while processing queue."], results
 
     for item in items:
         request = MemberCleanupRequest(
@@ -410,6 +413,7 @@ async def _process_queue_items(
             inactive_days=int(item.inactive_days),
         )
         result: MemberCleanupResult = await execute_member_cleanup(interaction.guild, request)
+        results.append(result)
         line = f"**{_safe_name(result.target_display_name)}** (`{result.target_user_id}`) — {result.status}"
         if result.ok:
             removed.append(line)
@@ -418,7 +422,7 @@ async def _process_queue_items(
         else:
             failed.append(line)
         await asyncio.sleep(0.35)
-    return removed, blocked, failed
+    return removed, blocked, failed, results
 
 
 def _queue_result_embed(*, removed: list[str], blocked: list[str], failed: list[str], title: str = "🧹 Cleanup Queue Result") -> discord.Embed:
@@ -520,7 +524,13 @@ class ConfirmCleanupQueueView(discord.ui.View):
             embed=_result_embed("🧹 Processing", f"Processing **{len(self.items)}** member(s). Final safety checks are running again now.", ok=False),
             view=self,
         )
-        removed, blocked, failed = await _process_queue_items(interaction, items=self.items, reason=self.reason)
+        removed, blocked, failed, results = await _process_queue_items(interaction, items=self.items, reason=self.reason)
+        await finalize_cleanup_run(
+            interaction.guild, actor_user_id=self.actor_user_id,
+            mode="purge_all" if "Purge-All" in self.result_title else "cleanup_queue",
+            inactive_days=int(self.items[0].inactive_days if self.items else 90),
+            reason=self.reason, results=results,
+        )
         await interaction.edit_original_response(embed=_queue_result_embed(removed=removed, blocked=blocked, failed=failed, title=self.result_title), view=self)
 
     @discord.ui.button(label="Cancel", emoji="✋", style=discord.ButtonStyle.secondary)
@@ -606,6 +616,8 @@ async def members_cleanup_queue(
         return
 
     settings = await get_cleanup_settings(int(interaction.guild.id))
+    no_confirm_allowed, no_confirm_reason = await actor_can_use_no_confirm(interaction.user)
+    require_confirmation = bool(settings.require_queue_confirmation or not no_confirm_allowed)
     safe_limit = max(1, min(int(limit or settings.default_queue_limit or _QUEUE_DEFAULT_LIMIT), _QUEUE_MAX_LIMIT))
     include_low = bool(settings.allow_low_confidence_queue if include_low_confidence is None else include_low_confidence)
 
@@ -631,7 +643,7 @@ async def members_cleanup_queue(
         return await interaction.edit_original_response(embed=_result_embed("🧹 Cleanup Queue Empty", body, ok=False))
 
     body = (
-        f"{'This is a confirmation screen. Nothing has happened yet.' if settings.require_queue_confirmation else 'Auto-process mode is enabled. Processing starts from this message.'}\n\n"
+        f"{'This is a confirmation screen. Nothing has happened yet.' if require_confirmation else 'Authorized auto-process mode is enabled. Processing starts from this message.'}\n\n"
         f"{_queue_source_summary(report)}\n"
         f"Fresh scan run for queue: **{'Yes' if fresh_scan else 'No, used latest scan'}**\n"
         f"{_queue_context_line(settings, include_low_confidence=include_low, safe_limit=safe_limit)}\n\n"
@@ -641,7 +653,9 @@ async def members_cleanup_queue(
     if validation_blocked:
         body += "\n\n**Blocked by final validation**\n" + _trim("\n".join(f"• {_safe_name(c.display_name)} — {v.status}" for c, v in validation_blocked[:6]), 800)
 
-    if True:  # Safety invariant: mass cleanup always requires confirmation.
+    if not settings.require_queue_confirmation and not no_confirm_allowed:
+        body += f"\n\n⚠️ Saved no-confirm mode was ignored for this actor: {no_confirm_reason}"
+    if require_confirmation:
         body += "\n\nPress **Confirm Queue** to process these members one by one with final safety checks. Press **Cancel** to do nothing."
         return await interaction.edit_original_response(
             embed=_result_embed("⚠️ Confirm Cleanup Queue", body, ok=False),
@@ -653,7 +667,8 @@ async def members_cleanup_queue(
         embed=_result_embed("🧹 Processing Cleanup Queue", body, ok=False),
         allowed_mentions=discord.AllowedMentions.none(),
     )
-    removed, blocked, failed = await _process_queue_items(interaction, items=queued, reason=reason)
+    removed, blocked, failed, results = await _process_queue_items(interaction, items=queued, reason=reason)
+    await finalize_cleanup_run(interaction.guild, actor_user_id=int(interaction.user.id), mode="cleanup_queue", inactive_days=int(report.options.inactive_days), reason=reason, results=results, skipped=len(skipped) + len(validation_blocked))
     await interaction.edit_original_response(embed=_queue_result_embed(removed=removed, blocked=blocked, failed=failed))
 
 
@@ -679,6 +694,8 @@ async def members_purge_all(
     safe_days = max(7, min(int(inactive_days or 90), 730))
     safe_grace = max(1, min(int(grace_days or 14), 90))
     settings = await get_cleanup_settings(int(interaction.guild.id))
+    no_confirm_allowed, no_confirm_reason = await actor_can_use_no_confirm(interaction.user)
+    require_confirmation = bool(settings.require_queue_confirmation or not no_confirm_allowed)
 
     await interaction.response.defer(ephemeral=True, thinking=True)
     report, queued, skipped, validation_blocked = await _build_purge_all_preview(
@@ -707,7 +724,9 @@ async def members_purge_all(
     if not queued:
         return await interaction.edit_original_response(embed=_result_embed("🧹 Purge-All Found Nothing Eligible", body, ok=False))
 
-    if True:  # Safety invariant: mass cleanup always requires confirmation.
+    if not settings.require_queue_confirmation and not no_confirm_allowed:
+        body += f"\n\n⚠️ Saved no-confirm mode was ignored for this actor: {no_confirm_reason}"
+    if require_confirmation:
         body += "\n\nPress **Confirm Queue** to purge exactly these eligible members. Press **Cancel** to do nothing."
         return await interaction.edit_original_response(
             embed=_result_embed("⚠️ Confirm Purge-All", body, ok=False),
@@ -724,7 +743,8 @@ async def members_purge_all(
         embed=_result_embed("🧹 Processing Purge-All", body, ok=False),
         allowed_mentions=discord.AllowedMentions.none(),
     )
-    removed, blocked, failed = await _process_queue_items(interaction, items=queued, reason=reason)
+    removed, blocked, failed, results = await _process_queue_items(interaction, items=queued, reason=reason)
+    await finalize_cleanup_run(interaction.guild, actor_user_id=int(interaction.user.id), mode="purge_all", inactive_days=safe_days, reason=reason, results=results, skipped=len(skipped) + len(validation_blocked))
     await interaction.edit_original_response(embed=_queue_result_embed(removed=removed, blocked=blocked, failed=failed, title="🧹 Purge-All Result"))
 
 
@@ -746,6 +766,10 @@ async def members_cleanup_settings(
         return
 
     changed = any(value is not None for value in (require_queue_confirmation, allow_low_confidence_queue, default_queue_limit))
+    if require_queue_confirmation is False:
+        allowed, why = await actor_can_use_no_confirm(interaction.user)
+        if not allowed:
+            return await reply_once(interaction, {"content": f"❌ {why}", "ephemeral": True})
     if changed:
         settings = await update_cleanup_settings(
             int(interaction.guild.id),
