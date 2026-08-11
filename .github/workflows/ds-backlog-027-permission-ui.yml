@@ -1,0 +1,59 @@
+name: DS Backlog 027 Permission UI
+
+on:
+  push:
+    branches:
+      - fix/ds-backlog-integrity-027
+    paths:
+      - '.github/workflows/ds-backlog-027-permission-ui.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Wire exact target repair buttons
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('stoney_verify/setup_permission_repair_services.py')
+          text = p.read_text(encoding='utf-8')
+          preview_anchor = '''    @discord.ui.button(\n        label="Back",\n        emoji="⬅️",\n        style=discord.ButtonStyle.secondary,\n        custom_id="dank_setup_permission:back",\n        row=0,\n    )\n    async def back(\n'''
+          preview_insert = '''    @discord.ui.button(\n        label="Specific Channel",\n        emoji="🎯",\n        style=discord.ButtonStyle.primary,\n        custom_id="dank_setup_permission:target",\n        row=0,\n    )\n    async def target_repair(\n        self,\n        interaction: discord.Interaction,\n        button: discord.ui.Button,\n    ) -> None:\n        _ = button\n        from stoney_verify.permission_repair import open_target_permission_repair\n        await open_target_permission_repair(interaction)\n\n'''
+          result_anchor = '''    @discord.ui.button(\n        label="Back",\n        emoji="⬅️",\n        style=discord.ButtonStyle.secondary,\n        custom_id="dank_setup_permission_done:back",\n        row=0,\n    )\n    async def back(\n'''
+          result_insert = '''    @discord.ui.button(\n        label="Specific Channel",\n        emoji="🎯",\n        style=discord.ButtonStyle.primary,\n        custom_id="dank_setup_permission_done:target",\n        row=0,\n    )\n    async def target_repair(\n        self,\n        interaction: discord.Interaction,\n        button: discord.ui.Button,\n    ) -> None:\n        _ = button\n        from stoney_verify.permission_repair import open_target_permission_repair\n        await open_target_permission_repair(interaction)\n\n'''
+          if preview_insert not in text:
+              if preview_anchor not in text:
+                  raise SystemExit('preview anchor missing')
+              text = text.replace(preview_anchor, preview_insert + preview_anchor, 1)
+          if result_insert not in text:
+              if result_anchor not in text:
+                  raise SystemExit('result anchor missing')
+              text = text.replace(result_anchor, result_insert + result_anchor, 1)
+          p.write_text(text, encoding='utf-8')
+          PY
+      - name: Compile and statically verify Fix Access
+        run: |
+          python -m py_compile stoney_verify/permission_repair.py stoney_verify/setup_permission_repair_services.py
+          grep -F 'Specific Channel' stoney_verify/setup_permission_repair_services.py
+          grep -F 'open_target_permission_repair' stoney_verify/setup_permission_repair_services.py
+          grep -F 'administrator = False' stoney_verify/permission_repair.py
+          grep -F 'Undo token' stoney_verify/permission_repair.py
+          grep -F 'clear_explicit_denies=False' stoney_verify/permission_repair.py
+          grep -F 'clear_explicit_denies=True' stoney_verify/permission_repair.py
+      - name: Commit setup UI integration
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add stoney_verify/setup_permission_repair_services.py
+          git commit -m 'Expose selected-target Fix Access from setup'
+          git push
