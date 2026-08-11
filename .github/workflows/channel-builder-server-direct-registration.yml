@@ -2,6 +2,13 @@ name: Channel Builder Server Direct Registration
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - fix/ds-backlog-integrity-027
+    paths:
+      - '.github/workflows/channel-builder-server-direct-registration.yml'
+      - 'tools/patch_channel_builder_server_routes.py'
+      - 'stoney_verify/api_new/server.py'
 
 permissions:
   contents: write
