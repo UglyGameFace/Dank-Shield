@@ -31,6 +31,25 @@ def _admin_or_manage_guild(interaction: discord.Interaction) -> bool:
         return False
 
 
+class DiagnosticsActionView(discord.ui.View):
+    """Keep diagnostics read-only while offering an explicit repair handoff."""
+
+    def __init__(self, actor_id: int) -> None:
+        super().__init__(timeout=600)
+        self.actor_id = int(actor_id)
+
+    @discord.ui.button(label="Fix Channel Access", emoji="🛠️", style=discord.ButtonStyle.primary)
+    async def fix_access(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if interaction.user.id != self.actor_id:
+            return await interaction.response.send_message("❌ This diagnostics screen belongs to another admin.", ephemeral=True)
+        if not _admin_or_manage_guild(interaction):
+            return await interaction.response.send_message("❌ Manage Server or Administrator is required.", ephemeral=True)
+        from stoney_verify.permission_repair import open_target_permission_repair
+        await open_target_permission_repair(interaction)
+
+
+
 def _field_text(items: list[str], *, empty: str, limit: int = 1000) -> str:
     if not items:
         return empty
@@ -125,8 +144,8 @@ def _startup_diagnostics_embed(
     embed = discord.Embed(
         title="🩺 Dank Shield Diagnostics",
         description=(
-            "Read-only startup, guild-config, and activity-coverage health report. This does **not** reload guards, "
-            "change setup, grant permissions, touch tickets, or mutate server config."
+            "Read-only startup, guild-config, and activity-coverage health report. The report itself does **not** reload guards, "
+            "change setup, grant permissions, touch tickets, or mutate server config. Use **Fix Channel Access** below only when you intentionally want the separate repair workflow."
         ),
         color=color,
         timestamp=now_utc(),
@@ -218,6 +237,7 @@ async def diagnostics(interaction: discord.Interaction) -> None:
         sent = await safe_send_interaction(
             interaction,
             embed=embed,
+            view=DiagnosticsActionView(int(interaction.user.id)),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
