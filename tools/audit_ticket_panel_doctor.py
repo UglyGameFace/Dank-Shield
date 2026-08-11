@@ -13,7 +13,6 @@ FILES = [
     "stoney_verify/startup_guards/ticket_panel_doctor_stability_guard.py",
     "stoney_verify/startup_guards/ticket_panel_repair_records_command.py",
     "stoney_verify/startup_guards/ticket_panel_command_epoch_guard.py",
-    "stoney_verify/startup_guards/public_ticket_confirm_hardening_guard.py",
     "stoney_verify/startup_guards/ticket_staff_identity_guard.py",
     "stoney_verify/startup_guards/voice_ticket_claim_notice_guard.py",
     "stoney_verify/startup_guards/ticket_open_controls_status_guard.py",
@@ -25,8 +24,8 @@ FILES = [
 CHECKS = {
     "stoney_verify/startup_guards/ticket_panel_doctor_command.py": ["_doctor_command", "group.get_command"],
     "stoney_verify/startup_guards/ticket_panel_doctor_production_wording.py": [
+        "Create Ticket menu/confirm ownership now lives directly",
         "ticket_panel_command_epoch_guard",
-        "public_ticket_confirm_hardening_guard",
         "ticket_staff_identity_guard",
         "voice_ticket_claim_notice_guard",
         "ticket_open_controls_status_guard",
@@ -34,12 +33,6 @@ CHECKS = {
         "ticket_panel_repair_records_command",
         "ticket_panel_doctor_stability_guard",
         "setup_check_existing_server_inference_guard",
-    ],
-    "stoney_verify/startup_guards/public_ticket_confirm_hardening_guard.py": [
-        "Newest menu wins",
-        "Already opening that ticket",
-        "That ticket menu is stale",
-        "_PUBLIC_TICKET_CONFIRM_HARDENING_GUARD_APPLIED",
     ],
     "stoney_verify/startup_guards/ticket_action_controls_refresh_guard.py": [
         "_action_claim",
@@ -96,11 +89,29 @@ CHECKS = {
         "command outdated",
     ],
     "stoney_verify/startup_guards/setup_feature_health_scoreboard.py": ["_ticket_score", "build_feature_scoreboard"],
-    "stoney_verify/commands_ext/public_ticket_panel_clean.py": ["_health_lines", "_ticket_panel_group", "ticket_panel_message_id"],
+    "stoney_verify/commands_ext/public_ticket_panel_clean.py": [
+        "_health_lines",
+        "_ticket_panel_group",
+        "ticket_panel_message_id",
+        "_MENU_SESSIONS",
+        "_CONFIRM_LOCKS",
+        "Newest menu wins.",
+        "Ticket setup needs repair before this can open.",
+    ],
 }
+
+REMOVED_FILES = (
+    "stoney_verify/startup_guards/public_ticket_confirm_hardening_guard.py",
+    "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py",
+)
 
 
 def main() -> int:
+    for path in REMOVED_FILES:
+        if (ROOT / path).exists():
+            print(f"obsolete ticket panel runtime shim still exists: {path}", file=sys.stderr)
+            return 1
+
     for path in FILES:
         target = ROOT / path
         if not target.exists():
@@ -112,11 +123,15 @@ def main() -> int:
             print(f"compile failed {path}: {exc}", file=sys.stderr)
             return 1
     for path, snippets in CHECKS.items():
-        text = (ROOT / path).read_text(encoding="utf-8")
+        data = (ROOT / path).read_text(encoding="utf-8")
         for snippet in snippets:
-            if snippet not in text:
+            if snippet not in data:
                 print(f"{path} missing {snippet}", file=sys.stderr)
                 return 1
+    wording = (ROOT / "stoney_verify/startup_guards/ticket_panel_doctor_production_wording.py").read_text(encoding="utf-8")
+    if "public_ticket_confirm_hardening_guard" in wording:
+        print("ticket doctor still attempts to import removed confirm shim", file=sys.stderr)
+        return 1
     print("Ticket panel doctor audit passed")
     return 0
 
