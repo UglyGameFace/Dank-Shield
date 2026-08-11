@@ -42,6 +42,24 @@ def _find_category(guild: discord.Guild, name: str) -> Optional[discord.Category
     return None
 
 
+def _rollback_for_rename(channel: discord.abc.GuildChannel) -> dict[str, Any]:
+    return {
+        "action": "rename_channel",
+        "channel_id": str(getattr(channel, "id", "")),
+        "name": _channel_name(channel),
+        "category_id": str(getattr(getattr(channel, "category", None), "id", "") or ""),
+        "position": int(getattr(channel, "position", 0) or 0),
+    }
+
+
+def _rollback_for_created(channel: discord.abc.GuildChannel) -> dict[str, Any]:
+    return {
+        "action": "delete_created_channel",
+        "channel_id": str(getattr(channel, "id", "")),
+        "name": _channel_name(channel),
+    }
+
+
 async def list_channels_payload(*, server: Any, guild_id: Any) -> tuple[dict[str, Any] | None, Any | None]:
     guild, err = await rt.get_guild_or_response(server, guild_id)
     if err is not None:
@@ -83,8 +101,8 @@ def preflight_channel_builder_plan(guild: discord.Guild, items: list[dict[str, A
     me = getattr(guild, "me", None)
     try:
         perms = me.guild_permissions if isinstance(me, discord.Member) else None
-        if create_items and not bool(perms and (perms.manage_channels or perms.administrator)):
-            errors.append("Dank Shield is missing Manage Channels for channel creation.")
+        if (create_items or rename_items) and not bool(perms and (perms.manage_channels or perms.administrator)):
+            errors.append("Dank Shield is missing Manage Channels for Channel Builder mutations.")
     except Exception:
         errors.append("Dank Shield channel-management permissions could not be verified.")
 
@@ -111,16 +129,17 @@ async def execute_channel_builder_plan(
     gid = rt.safe_int(guild_id, 0)
     guild = server.bot.get_guild(gid) if gid else None
     if guild is None:
-        return {"status": "failed", "error": "guild_not_found", "guild_id": str(guild_id), "changed": [], "skipped": [], "failed": []}
+        return {"status": "failed", "error": "guild_not_found", "guild_id": str(guild_id), "changed": [], "skipped": [], "failed": [], "rollback_plan": []}
 
     validation = rt.validate_channel_builder_items(items)
     preflight = preflight_channel_builder_plan(guild, items)
     if validation or not bool(preflight.get("ok")):
-        return {"status": "failed", "error": "preflight_failed", "validation_errors": validation, "preflight": preflight, "changed": [], "skipped": [], "failed": []}
+        return {"status": "failed", "error": "preflight_failed", "validation_errors": validation, "preflight": preflight, "changed": [], "skipped": [], "failed": [], "rollback_plan": []}
 
     changed: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
+    rollback_plan: list[dict[str, Any]] = []
     reason = f"Dank Shield Channel Builder actor={actor_id or 'dashboard'} mode={mode}"
     retry_key = f"channel-builder:{gid}"
 
@@ -137,11 +156,13 @@ async def execute_channel_builder_plan(
                 if channel is None:
                     failed.append({"id": item.get("id"), "action": action, "error": "channel_not_found"})
                     continue
+                before = _rollback_for_rename(channel)
                 if dry_run:
-                    changed.append({"id": item.get("id"), "action": action, "from": _channel_name(channel), "to": final_name, "dry_run": True})
+                    changed.append({"id": item.get("id"), "action": action, "from": before["name"], "to": final_name, "dry_run": True})
                     continue
                 await with_retry(lambda: channel.edit(name=final_name, reason=reason), attempts=3, concurrency_key=retry_key)
-                changed.append({"id": item.get("id"), "action": action, "channel_id": str(getattr(channel, "id", "")), "to": final_name})
+                rollback_plan.insert(0, before)
+                changed.append({"id": item.get("id"), "action": action, "channel_id": str(getattr(channel, "id", "")), "from": before["name"], "to": final_name})
                 await asyncio.sleep(0.25)
                 continue
             if action == "create":
@@ -163,6 +184,7 @@ async def execute_channel_builder_plan(
                     return await guild.create_text_channel(final_name, category=parent, reason=reason)
 
                 created = await with_retry(create_one, attempts=3, concurrency_key=retry_key)
+                rollback_plan.insert(0, _rollback_for_created(created))
                 changed.append({"id": item.get("id"), "action": action, "type": kind, "channel_id": str(getattr(created, "id", "")), "name": final_name})
                 await asyncio.sleep(0.25)
                 continue
@@ -180,6 +202,8 @@ async def execute_channel_builder_plan(
         "changed": changed,
         "skipped": skipped,
         "failed": failed,
+        "rollback_plan": [] if dry_run else rollback_plan,
+        "rollback_available": bool(rollback_plan and not dry_run),
         "dry_run": bool(dry_run),
         "preflight": preflight,
     }
