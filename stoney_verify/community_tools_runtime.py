@@ -158,17 +158,11 @@ class StickyRuntime:
         self._pending_refreshes.discard(channel_key)
 
     async def _config_for(self, channel_id: int) -> Optional[StickyConfig]:
-        key = int(channel_id)
-        cached = self._configs.get(key)
-        if cached is not None:
-            return cached
-        try:
-            config = await get_sticky(key)
-        except CommunityStorageUnavailable:
-            return None
-        if config is not None:
-            self._configs[key] = config
-        return config
+        # The active sticky index is loaded once in on_ready and updated in-process
+        # whenever the Community Tools UI saves/removes a sticky. Unknown channels
+        # must stay a zero-database hot path: most Discord messages do not belong to
+        # sticky channels and should never create a Supabase read just to learn that.
+        return self._configs.get(int(channel_id))
 
     async def on_message(self, message: discord.Message) -> None:
         guild = getattr(message, "guild", None)
