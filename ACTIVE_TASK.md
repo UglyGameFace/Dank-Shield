@@ -1,89 +1,80 @@
 # ACTIVE TASK
 
-## DS-COMMAND-UX-024 — Consolidate Dank Shield into action-complete mega menus
+## DS-PURGE-025 — Restore direct Dank Shield purge commands
 
-**Status:** IN PROGRESS — PRODUCTION REGRESSION FOLLOW-UP / VALIDATING
-**Branch:** `fix/ds-command-ux-024-member-ban-responsiveness`
-**Base:** merged `main` at `7c30736e941bf2fd9a9390d9719acfa59990e0fa`
-**Original consolidation PR:** #178 merged 2026-08-09
-**Follow-up started:** 2026-08-10
+**Status:** IN PROGRESS — IMPLEMENTED, VALIDATING
+**Branch:** `fix/ds-purge-025-restore-direct-purge`
+**Base:** current `main` integrated at `c36519f185bb13959b74f41fae6d8f0aacd13846` (PR #180 preserved)
+**PR:** #179 (draft until exact-head validation is green)
+**Started:** 2026-08-09
 
-## Current scope
+## Scope
 
-Finish the existing DS-COMMAND-UX-024 Definition of Done after live use exposed two important facts:
+Restore obvious Discord slash-command access to Dank Shield's two existing purge systems without reintroducing the large legacy command tree or creating duplicate destructive logic.
 
-1. The reduced slash-command list is the intentional compact-v2 design, not command implementation deletion. The final Discord-visible normal roots are `/dank`, `/mod`, `/ticket`, `/tickets`, and `/verify`; `/dank` intentionally contains only `home` and `upload`. Retired entry points remain implemented behind the mega-menu centers.
-2. A live member-menu ban was reported as stuck. The real destructive-action path was inspected end to end before editing: `/mod` or `/dank home` → Member Command Center → member selector → `MemberActionView` → `MemberDestructiveActionModal` → staff/safety checks → per-target `action_lock` → Discord kick/ban → `record_member_action` Supabase insert → interaction follow-up.
+Target direct surface:
 
-## Confirmed findings
+- `/dank purge messages` — channel purge plus preview/confirmed user-message purge, including raw user IDs and whole-server scope.
+- `/dank purge members` — strict inactive verified/resident member purge with fresh evidence scan and final confirmation.
 
-- `public_command_surface_v2.install_compact_public_surface_v2()` explicitly enforces the compact command tree. The old subcommands were hidden from autocomplete by design; their services were not deleted.
-- `MemberDestructiveActionModal.on_submit()` previously did not defer the modal interaction until after member refresh and safety checks.
-- Destructive moderation previously held the per-target action lock while waiting for `record_member_action()`.
-- `record_member_action()` used `asyncio.to_thread()` for the Supabase insert with no outer timeout. A slow or hung database request could therefore keep the interaction spinning and the member/action lock held indefinitely after Discord had already processed the ban/kick.
-- The central `interaction_action_lock_guard` is currently an observe-first duplicate guard and is not the root cause of this wait.
-- Healthchecks on 2026-08-10 also show repeated DOWN/UP flaps, so live deployment verification must distinguish bot availability from interaction-path latency.
+The newer menu paths remain available and must use the same canonical engines.
 
-## Follow-up changes
+## Root cause findings
 
-- [x] Create isolated DS-COMMAND-UX-024 follow-up branch from merged `main`.
-- [x] Add a hard timeout to best-effort member-action audit writes and return success/failure instead of waiting forever.
-- [x] Add safe audit timeout/failure diagnostics without logging the moderation reason.
-- [x] Make destructive member modal submissions acknowledge Discord immediately before remote work.
-- [x] Time-bound target refresh and destructive safety checks; on timeout, fail closed and perform no moderation action.
-- [x] Time-bound Discord kick/ban requests and return an explicit uncertain-state warning if Discord does not confirm in time.
-- [x] Release the per-target action lock before sending the user result and before Supabase audit logging.
-- [x] Send the moderation result before best-effort audit logging; still attempt the audit in `finally`.
-- [x] Add a regression test that simulates a never-returning audit write and proves it times out.
-- [x] Add static ordering coverage proving destructive actions defer before remote work and audit only after the action lock is released and the result is sent.
-- [ ] Run focused tests and Python compile/import validation on the follow-up head.
-- [ ] Run the repository CI/regression gates and inspect the diff for conflicting/duplicate moderation paths.
-- [ ] Merge only when the follow-up checks are green.
-- [ ] Deploy merged `main` to Discloud.
-- [ ] Live-check the actual Discord command tree and a representative Member Command Center moderation action end to end.
-- [ ] Mark DS-COMMAND-UX-024 complete only after live verification.
+1. Inactive-member purge was originally exposed as `/dank members purge-all`; the implementation still exists in `public_members_cleanup_group.py`.
+2. Message/user purge still exists in `public_cleanup_group.py` as the canonical `cleanup_purge` handler.
+3. PR #144 intentionally replaced visible `/dank members ...` children with the Member Command Center, burying `purge-all` behind Activity & Cleanup → Purge Eligible.
+4. PR #178 intentionally reduced final `/dank` children to only `home` and `upload`; startup compaction therefore removes `/dank cleanup`, including its visible purge command.
+5. The pre-sync cleanup guard consumes `PUBLIC_DANK_CHILDREN`, so adding an unapproved shortcut anywhere else would be deleted before Discord sync.
+6. The correct repair is one approved compact `/dank purge` facade, installed after final compaction and delegated to the existing canonical purge handlers.
+7. The remaining CI failure at head `e2f3424` was a stale standalone contract assertion in `tools/test_public_status_command_surface_static.py` that still required exactly `home`,`upload`; it now recognizes the intentional `home`,`purge`,`upload` contract.
+8. Current `main` only overlapped this branch in `ACTIVE_TASK.md`; PR #180's member-action responsiveness implementation and regression test were preserved while reconciling #179 with `main`.
 
-## Intended compact command surface
+## Changes
 
-- `/dank home` — complete control center.
-- `/dank upload` — the single attachment command for Join background, Exit background, or custom card font.
-- `/mod` — moderation/member center.
-- `/ticket` — current ticket controls.
-- `/tickets` — ticket queues/setup/routing/categories.
-- `/verify` — verification status/repair center.
-- `View Dank Profile` context command remains.
+- [x] Add `public_direct_purge.py` with only two thin routes: `messages` and `members`.
+- [x] Delegate message purge to canonical `public_cleanup_group.cleanup_purge`.
+- [x] Delegate inactive-member purge to canonical `public_members_cleanup_group.members_purge_all`.
+- [x] Reinstall `/dank purge` after every final command-surface compaction/reassertion.
+- [x] Re-check final `/dank` payload and fail closed if the restored family exceeds the existing safety limit.
+- [x] Update canonical `/dank` child contract to `home`, `purge`, `upload` so pre-sync cleanup preserves it.
+- [x] Add regression coverage proving final reassertion preserves purge and the facade does not duplicate deletion/scanning engines.
+- [x] Update payload and public-command audits for the approved purge exception.
+- [x] Update the pre-existing live command-tree regression to recognize the intentional `purge` child.
+- [x] Update the stale status standalone contract check for the intentional direct purge child.
+- [x] Reconcile the branch with current `main` while preserving PR #180's member-action responsiveness changes.
 
-Every retired slash action must remain reachable through an authorized menu or the upload command.
+## Validation
 
-## Cleanup / conflict status
+- [ ] Targeted direct-purge tests — exact-head CI rerun pending.
+- [ ] Command-surface reassertion tests — exact-head CI rerun pending.
+- [x] Application Command Size Diagnostics run 625 passed on the earlier implementation head; runtime snapshot measured final `/dank` payload at 2825/7600. Exact-head rerun pending after main reconciliation.
+- [ ] `/dank` payload standalone diagnostic — exact-head CI rerun pending.
+- [ ] Public command-surface audit — exact-head CI rerun pending.
+- [ ] Public command-friction audit — exact-head CI rerun pending.
+- [ ] Python compile/static validation — exact-head CI rerun pending after main reconciliation.
+- [ ] Full repository unit suite — earlier branch head passed after correcting the stale live-command-tree expectation; exact-head rerun pending.
+- [ ] Standalone repository checks required by CI — stale status contract assertion corrected; exact-head rerun pending.
+- [x] Main reconciliation inspection: #179 and #180 production-code changes do not overlap; only the task record required manual ownership resolution.
+- [ ] Final exact-head diff/conflict/duplicate-implementation inspection after CI rerun.
 
-- No second moderation implementation was added.
-- Existing permission, hierarchy, protected-role, typed-confirmation, and owner/admin safety rules remain in the canonical member-action path.
-- The observe-mode global interaction lock guard was not changed.
-- The follow-up is intentionally limited to responsiveness/failure-bounding in the existing member destructive-action path plus its shared audit writer.
-- Final duplicate/conflict inspection is pending CI validation.
+## Cleanup status
 
-## Paused tasks
+- No second message-deletion implementation added.
+- No second inactivity scanner/member-removal implementation added.
+- Legacy `/dank cleanup` and `/dank members` groups remain hidden by the compact surface; only the small purge facade is restored.
+- Menu access remains intact for users who prefer guided controls.
+- PR #180's member-action timeout/audit responsiveness changes remain present after reconciliation.
+- No temporary patch/applier/workflow files were added.
 
-### DS-WELCOME-EXIT-023 — Welcome placeholder rendering and canonical Exit Card Studio
-PR #177 merged; final real join/leave live-event verification remains pending.
+## Blockers
 
-### DS-TICKET-CAT-022 — Repair duplicate ticket categories across all existing servers
-PR #176 merged; affected-guild live verification remains pending.
+None known. Exact-head CI must pass before PR #179 is marked ready to merge.
 
-### DS-OPS-021 — Owner ticket authority, bulk moderation, and canonical join cards
-Merged through PR #174 plus Welcome Studio hotfix PR #175; remaining production follow-up is paused/superseded where applicable.
+## Backlog
 
-### DS-SETUP-020 — Entitled ID-verification setup selection and VC permissions regression
-Merged in PR #171; live Discloud/Discord verification remains paused.
-
-## Preserved backlog
-
-- DS-STATS-019 — Durable Dank Stats invite-block counting; live verification pending.
-- DS-SETUP-019 — Cleanup confirmation modal crashes.
-- DS-MEDIA-001 — Klipy direct GIF unfurl listener.
-- DS-RESET-001 — Owner-authorized Emergency Reset and bulk cleanup console.
+None added from this conversation.
 
 ## Definition of Done
 
-DS-COMMAND-UX-024 is complete only when the public Discord command tree is intentionally small, every previously public action remains reachable through an authorized UI or the minimal upload command, existing safety/claim/owner/role/config guards are preserved, member destructive actions cannot hang indefinitely on prechecks, Discord requests, locks, or audit writes, help text matches the menu-first workflow, regression tests and CI are green, the reviewed follow-up is merged, Discloud is deployed, and live Discord verification confirms the compact autocomplete surface plus representative moderation, ticket, verification, setup, and upload actions work end to end.
+DS-PURGE-025 is complete only when `/dank purge messages` and `/dank purge members` survive final compaction and pre-sync cleanup, both delegate to the existing canonical purge engines with their original permission/preview/confirmation/safety behavior, the final command payload remains under the repository safety limit, targeted and regression tests pass, compile/static/full-suite/standalone audits are green, and final conflict/duplicate/dead-code inspection is clean. Merge/deploy are separate actions and require explicit authorization.

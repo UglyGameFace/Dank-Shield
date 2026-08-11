@@ -51,7 +51,10 @@ def test_final_surface_reasserts_after_additive_registrar_drift() -> None:
 
     register_compact_exit_card_commands(commands_module.bot, commands_module.bot.tree)
 
-    assert _dank_children() == {"home", "upload"}
+    assert _dank_children() == {"home", "purge", "upload"}
+    purge = dank_group.get_command("purge")
+    assert isinstance(purge, app_commands.Group)
+    assert {str(command.name) for command in purge.commands} == {"messages", "members"}
     assert "ticket-panel" not in _root_names()
     assert {
         name for name in _root_names() if name != "View Dank Profile"

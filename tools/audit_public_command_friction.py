@@ -4,7 +4,8 @@ from __future__ import annotations
 
 The canonical final product surface lives in ``stoney_verify.command_surface_contract``.
 Implementation modules may register broader groups before final compaction, but
-Discord must sync only the compact-v2 doorway commands.
+Discord must sync only the compact doorway commands plus the intentional direct
+purge exception.
 """
 
 import ast
@@ -28,6 +29,8 @@ STARTUP_LOADER = ROOT / "stoney_verify" / "startup_guards" / "__init__.py"
 ENV_EXAMPLE = ROOT / ".env.example"
 PUBLIC_SETUP_AUDIT = ROOT / "tools" / "audit_public_setup.py"
 PUBLIC_SURFACE_AUDIT = ROOT / "tools" / "audit_public_command_surface.py"
+DIRECT_PURGE = ROOT / "stoney_verify" / "commands_ext" / "public_direct_purge.py"
+FINAL_SURFACE = ROOT / "stoney_verify" / "commands_ext" / "public_exit_compact_surface.py"
 
 REQUIRED_STALE_TOP_LEVEL = {
     "stoney",
@@ -37,8 +40,6 @@ REQUIRED_STALE_TOP_LEVEL = {
     "ticket_panel_bootstrap_all",
     "verify_status",
     "repair_verify_ui",
-    # DS-COMMAND-UX-024 retired roots. They must be explicit cleanup targets so
-    # one post-deploy global sync removes stale Discord autocomplete entries.
     "ticket-intake",
     "ticket-category",
     "ticket-panel",
@@ -144,10 +145,10 @@ def main() -> int:
     )
     if PUBLIC_GLOBAL_COMMAND_COUNT != len(expected) or PUBLIC_GLOBAL_COMMAND_NAMES != expected:
         failures.append(
-            f"canonical compact-v2 global surface mismatch: count={PUBLIC_GLOBAL_COMMAND_COUNT} names={PUBLIC_GLOBAL_COMMAND_NAMES!r}"
+            f"canonical global surface mismatch: count={PUBLIC_GLOBAL_COMMAND_COUNT} names={PUBLIC_GLOBAL_COMMAND_NAMES!r}"
         )
-    if PUBLIC_DANK_CHILDREN != frozenset({"home", "upload"}):
-        failures.append(f"canonical compact-v2 /dank children mismatch: {sorted(PUBLIC_DANK_CHILDREN)!r}")
+    if PUBLIC_DANK_CHILDREN != frozenset({"home", "purge", "upload"}):
+        failures.append(f"canonical /dank children mismatch: {sorted(PUBLIC_DANK_CHILDREN)!r}")
 
     for path in (
         SLASH_CLEANUP,
@@ -156,13 +157,14 @@ def main() -> int:
         ENV_EXAMPLE,
         PUBLIC_SETUP_AUDIT,
         PUBLIC_SURFACE_AUDIT,
+        DIRECT_PURGE,
+        FINAL_SURFACE,
     ):
         if not path.exists():
             failures.append(f"missing required file: {path.relative_to(ROOT)}")
 
     stale_top = literal_set_from_file(SLASH_CLEANUP, "STALE_TOP_LEVEL_COMMANDS")
     pruned_dank = literal_set_from_file(SLASH_CLEANUP, "CONFUSING_DANK_CHILDREN")
-
     fail_missing("STALE_TOP_LEVEL_COMMANDS", stale_top, REQUIRED_STALE_TOP_LEVEL, failures)
     fail_missing("CONFUSING_DANK_CHILDREN", pruned_dank, REQUIRED_PRUNED_DANK_CHILDREN, failures)
 
@@ -200,11 +202,36 @@ def main() -> int:
         "DANK_GUILD_COMMAND_CLEANUP_IDS",
         "DANK_SYNC_BETA_GUILD_COMMANDS",
         "candidates.update(name for name in before if name not in ALLOWED_DANK_CHILDREN)",
+        "ALLOWED_DANK_CHILDREN = set(PUBLIC_DANK_CHILDREN)",
     ]
     cleanup_required_text.extend(sorted(REQUIRED_COMMAND_CLEANUP_EPOCH_MARKERS))
     for marker in cleanup_required_text:
         if marker not in cleanup_text:
             failures.append(f"slash command cleanup missing marker: {marker}")
+
+    purge_text = read(DIRECT_PURGE)
+    for marker in (
+        'name="purge"',
+        'name="messages"',
+        'name="members"',
+        "cleanup_purge",
+        "members_purge_all",
+    ):
+        if marker not in purge_text:
+            failures.append(f"direct purge facade missing marker: {marker}")
+    for forbidden in ("channel.history(", "scan_inactive_members(", "msg.delete(", "execute_member_cleanup("):
+        if forbidden in purge_text:
+            failures.append(f"direct purge facade duplicates canonical engine logic: {forbidden}")
+
+    final_text = read(FINAL_SURFACE)
+    for marker in (
+        "install_direct_purge_group()",
+        'expected_children = ["home", "purge", "upload"]',
+        "DANK_PAYLOAD_SAFETY_LIMIT",
+        "dank_payload_size(tree)",
+    ):
+        if marker not in final_text:
+            failures.append(f"final command surface missing purge marker: {marker}")
 
     branding_text = read(BRANDING_GUARD)
     for marker in REQUIRED_BRANDING_MARKERS:

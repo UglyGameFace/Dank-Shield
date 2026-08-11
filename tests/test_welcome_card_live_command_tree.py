@@ -15,7 +15,7 @@ from stoney_verify.commands_ext.public_exit_compact_surface import (
 from stoney_verify.commands_ext.public_setup_group import dank_group
 
 
-EXPECTED_DANK_CHILDREN = {"home", "upload"}
+EXPECTED_DANK_CHILDREN = {"home", "purge", "upload"}
 EXPECTED_GLOBAL_ROOTS = {"dank", "mod", "ticket", "tickets", "verify"}
 
 

@@ -23,7 +23,7 @@ def test_status_implementation_remains_loaded() -> None:
 def test_status_is_reached_from_compact_home_not_a_direct_dank_child() -> None:
     assert 'label="Status"' in SURFACE
     assert 'await _invoke_saved("status", interaction)' in SURFACE
-    assert 'PUBLIC_DANK_CHILDREN: frozenset[str] = frozenset({"home", "upload"})' in CONTRACT
+    assert 'PUBLIC_DANK_CHILDREN: frozenset[str] = frozenset({"home", "purge", "upload"})' in CONTRACT
 
 
 def test_setup_status_implementation_can_remain_loaded_but_final_tree_hides_it() -> None:
