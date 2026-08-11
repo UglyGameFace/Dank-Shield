@@ -6,22 +6,23 @@ from typing import Any
 
 from aiohttp import web
 
-from ..operation_queue import get_operation_job, submit_operation
+from ..operation_queue import cancel_operation_job, get_operation_job_persistent, submit_operation
 from ..services.channel_builder_runtime import (
-    execute_channel_builder_plan,
     get_guild_or_response,
-    list_channels_payload,
     normalize_channel_builder_items,
-    preflight_channel_builder_plan,
     safe_int,
     safe_str,
     validate_channel_builder_items,
+)
+from ..services.channel_builder_execution import (
+    execute_channel_builder_plan,
+    list_channels_payload,
+    preflight_channel_builder_plan,
 )
 from ..services.channel_builder_rollback_runtime import submit_rollback_job
 
 try:
     from stoney_verify.startup_guards import channel_builder_full_font_catalog_guard as _full_font_catalog
-
     _full_font_catalog.apply()
 except Exception:
     pass
@@ -33,7 +34,6 @@ async def _style_options_for_request(guild_id: int, data: dict[str, Any]) -> dic
         return dict(explicit)
     try:
         from stoney_verify.startup_guards.setup_channel_font_mode_guard import load_channel_font_options
-
         return await load_channel_font_options(guild_id)
     except Exception:
         return {}
@@ -137,12 +137,25 @@ async def get_channel_builder_operation(server: Any, request: web.Request):
     if not job_id:
         return server._json_error("job_id required")
     try:
-        job = get_operation_job(job_id)
+        job = await get_operation_job_persistent(job_id)
         if not job:
             return server._json_error("job not found", 404)
         return server._json_ok(job=job)
     except Exception as exc:
         return server._json_error("Failed to read operation job", 500, detail=repr(exc))
+
+
+async def cancel_channel_builder_operation(server: Any, request: web.Request):
+    job_id = safe_str(request.match_info.get("job_id") or request.query.get("job_id"))
+    if not job_id:
+        return server._json_error("job_id required")
+    try:
+        job = await cancel_operation_job(job_id)
+        if not job:
+            return server._json_error("job not found", 404)
+        return server._json_ok(job=job)
+    except Exception as exc:
+        return server._json_error("Failed to cancel operation job", 500, detail=repr(exc))
 
 
 def register_channel_builder_routes(app: web.Application, server: Any) -> None:
@@ -155,6 +168,7 @@ def register_channel_builder_routes(app: web.Application, server: Any) -> None:
     app.router.add_post("/channel-builder/rollback", lambda request: submit_rollback_job(server, request))
     app.router.add_get("/operation/{job_id}", lambda request: get_channel_builder_operation(server, request))
     app.router.add_get("/operations/{job_id}", lambda request: get_channel_builder_operation(server, request))
+    app.router.add_post("/operation/{job_id}/cancel", lambda request: cancel_channel_builder_operation(server, request))
 
 
 __all__ = ["register_channel_builder_routes"]
