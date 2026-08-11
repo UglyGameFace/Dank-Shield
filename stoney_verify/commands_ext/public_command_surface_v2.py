@@ -81,7 +81,7 @@ def _home_embed() -> discord.Embed:
     )
     embed.add_field(
         name="Utility",
-        value="📡 Status • 🩺 Diagnostics • 📎 Card Assets • ❓ Help",
+        value="🧰 Community Tools • 📡 Status • 🩺 Diagnostics • 📎 Card Assets • ❓ Help",
         inline=False,
     )
     embed.add_field(
@@ -232,6 +232,12 @@ class CompactDankHomeView(_OwnedView):
         from .public_command_hub import open_profile_entry
         await open_profile_entry(interaction)
 
+    @discord.ui.button(label="Community Tools", emoji="🧰", style=discord.ButtonStyle.secondary, row=2)
+    async def community(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_community_tools import open_community_tools
+        await open_community_tools(interaction, replace_message=True)
+
     @discord.ui.button(label="Status", emoji="📡", style=discord.ButtonStyle.secondary, row=2)
     async def status(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -262,7 +268,7 @@ class CompactDankHomeView(_OwnedView):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, row=2)
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, row=3)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.edit_message(content="Dank Shield Control Center closed.", embed=None, view=None)
@@ -383,7 +389,9 @@ def _compact_dank_children(tree: Any) -> int:
 
 def install_compact_public_surface_v2(bot: Any, tree: Any) -> dict[str, Any]:
     global _INSTALLED
-    _ = bot
+    from .public_community_tools import ensure_community_tools_runtime
+    ensure_community_tools_runtime(bot)
+
     if _INSTALLED:
         roots = sorted(str(getattr(item, "name", "")) for item in tree.get_commands(guild=None))
         return {"installed": True, "roots": roots}
