@@ -1,0 +1,121 @@
+name: DS Backlog 027 Join Truth
+
+on:
+  push:
+    branches:
+      - fix/ds-backlog-integrity-027
+    paths:
+      - '.github/workflows/ds-backlog-027-join-truth.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply exact join truth integration
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if new in text:
+                  return
+              if old not in text:
+                  raise SystemExit(f'{path}: missing anchor {old[:100]!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          join = 'stoney_verify/members_new/join_context_service.py'
+          replace_once(
+              join,
+              'from ..globals import get_supabase, now_utc\n',
+              'from ..globals import get_supabase, now_utc\n'
+              'from .join_truth_integrity import (\n'
+              '    invite_cache_ready, invite_lock_for, mark_invite_cache_ready,\n'
+              '    merge_with_persisted_member_sync, normalize_join_context,\n'
+              ')\n',
+          )
+          replace_once(join, 'async def warm_invite_cache_for_guild(guild: discord.Guild) -> bool:\n', 'async def _warm_invite_cache_for_guild_unlocked(guild: discord.Guild) -> bool:\n')
+          replace_once(
+              join,
+              '\n\nasync def detect_join_entry_context(member: discord.Member) -> Dict[str, Any]:\n',
+              '''\n\nasync def warm_invite_cache_for_guild(guild: discord.Guild) -> bool:\n    gid = int(getattr(guild, "id", 0) or 0)\n    if gid <= 0:\n        return False\n    async with invite_lock_for(gid):\n        ok = await _warm_invite_cache_for_guild_unlocked(guild)\n        mark_invite_cache_ready(gid, ok)\n        return ok\n\n\nasync def _detect_join_entry_context_unlocked(member: discord.Member) -> Dict[str, Any]:\n''',
+          )
+          replace_once(
+              join,
+              '\n\nasync def persist_member_join_context(\n',
+              '''\n\nasync def detect_join_entry_context(member: discord.Member) -> Dict[str, Any]:\n    guild = member.guild\n    gid = int(guild.id)\n    async with invite_lock_for(gid):\n        ready_before = invite_cache_ready(gid)\n        context = normalize_join_context(await _detect_join_entry_context_unlocked(member))\n        if not ready_before and str(context.get("entry_method") or "").strip().lower() == "invite_unresolved":\n            context["entry_method"] = "invite_cache_warming"\n            context["join_source"] = "invite_cache_warming"\n            context["verification_source"] = "invite_cache_warming"\n            context["entry_truth_quality"] = "partial"\n            context["entry_confidence"] = 35\n            context["entry_quality_reason"] = "Invite cache had no confirmed startup/reconnect baseline for this join."\n            context["entry_conflict"] = False\n        if str(context.get("entry_method") or "").strip().lower() != "invite_tracking_unavailable":\n            mark_invite_cache_ready(gid, True)\n        return normalize_join_context(context)\n\n\nasync def persist_member_join_context(\n''',
+          )
+          replace_once(
+              join,
+              '''        context = dict(context or await detect_join_entry_context(member) or {})\n        try:\n            _RECENT_JOIN_CONTEXT[(int(member.guild.id), int(member.id))] = (time.monotonic(), dict(context or {}))\n''',
+              '''        context = normalize_join_context(dict(context or await detect_join_entry_context(member) or {}))\n        try:\n            context = await asyncio.to_thread(\n                merge_with_persisted_member_sync, sb, guild_id, user_id, context, incoming_is_approval=False\n            )\n        except Exception:\n            context = normalize_join_context(context)\n        try:\n            _RECENT_JOIN_CONTEXT[(int(member.guild.id), int(member.id))] = (time.monotonic(), dict(context or {}))\n''',
+          )
+
+          verify = 'stoney_verify/verification_new/service.py'
+          replace_once(
+              verify,
+              'from ..globals import *  # noqa: F401,F403\n',
+              'from ..globals import *  # noqa: F401,F403\n'
+              'from ..members_new.join_truth_integrity import approval_context, merge_with_persisted_member_sync\n',
+          )
+          replace_once(
+              verify,
+              '''        if decision_kind == "denied":\n''',
+              '''        approval_meta = approval_context(\n            approved_by=staff_id,\n            approved_by_name=staff_name,\n            verification_source=verification_source,\n            approval_reason=str(decision_text),\n            source_ticket_id=ticket_channel_id,\n        )\n        try:\n            canonical_context = merge_with_persisted_member_sync(\n                sb, guild_id, user_id, {**member_patch, **approval_meta}, incoming_is_approval=True\n            )\n            for field in (\n                "entry_method", "join_source", "invite_code", "invited_by", "invited_by_name",\n                "vouched_by", "vouched_by_name", "entry_reason", "entry_truth_quality",\n                "entry_confidence", "entry_quality_reason", "entry_conflict", "vanity_used",\n            ):\n                if canonical_context.get(field) is not None:\n                    member_patch[field] = canonical_context.get(field)\n        except Exception:\n            canonical_context = dict(member_patch)\n\n        if decision_kind == "denied":\n''',
+          )
+          replace_once(
+              verify,
+              '''        if latest_join_row and latest_join_row.get("id") is not None:\n''',
+              '''        for field in (\n            "entry_method", "invite_code", "invited_by", "invited_by_name",\n            "entry_truth_quality", "entry_confidence", "entry_quality_reason", "entry_conflict",\n        ):\n            if canonical_context.get(field) is not None:\n                join_patch[field] = canonical_context.get(field)\n\n        if latest_join_row and latest_join_row.get("id") is not None:\n''',
+          )
+          replace_once(
+              verify,
+              '''            **truth_meta,\n        }\n\n        try:\n            (\n                sb.table("member_events")\n''',
+              '''            **truth_meta,\n            **approval_meta,\n        }\n\n        try:\n            (\n                sb.table("member_events")\n''',
+          )
+
+          ctx = 'stoney_verify/tickets_new/member_context_service.py'
+          replace_once(
+              ctx,
+              '''        "approval_reason": _clean_text(row.get("approval_reason")),\n        "raw": dict(row),\n''',
+              '''        "approval_reason": _clean_text(row.get("approval_reason")),\n        "join_source": _clean_text(row.get("join_source")),\n        "entry_truth_quality": _clean_text(row.get("entry_truth_quality")),\n        "entry_confidence": _as_int(row.get("entry_confidence"), 0),\n        "entry_quality_reason": _clean_text(row.get("entry_quality_reason")),\n        "entry_conflict": _boolish(row.get("entry_conflict"), False),\n        "raw": dict(row),\n''',
+          )
+          replace_once(
+              ctx,
+              '''        "join_note": _clean_text(row.get("join_note")),\n        "raw": dict(row),\n''',
+              '''        "join_note": _clean_text(row.get("join_note")),\n        "join_source": _clean_text(row.get("join_source")),\n        "entry_truth_quality": _clean_text(row.get("entry_truth_quality")),\n        "entry_confidence": _as_int(row.get("entry_confidence"), 0),\n        "entry_quality_reason": _clean_text(row.get("entry_quality_reason")),\n        "entry_conflict": _boolish(row.get("entry_conflict"), False),\n        "raw": dict(row),\n''',
+          )
+          PY
+      - name: Compile join truth owners
+        run: |
+          python -m py_compile \
+            stoney_verify/members_new/join_truth_integrity.py \
+            stoney_verify/members_new/join_context_service.py \
+            stoney_verify/verification_new/service.py \
+            stoney_verify/tickets_new/member_context_service.py \
+            stoney_verify/events.py
+          grep -F 'async with invite_lock_for(gid)' stoney_verify/members_new/join_context_service.py
+          grep -F 'incoming_is_approval=True' stoney_verify/verification_new/service.py
+          grep -F 'approval_truth_quality' stoney_verify/verification_new/service.py
+          grep -F 'entry_conflict' stoney_verify/tickets_new/member_context_service.py
+      - name: Commit join truth integration
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            stoney_verify/members_new/join_context_service.py \
+            stoney_verify/verification_new/service.py \
+            stoney_verify/tickets_new/member_context_service.py
+          git commit -m 'Preserve join truth through verification and reconnects'
+          git push
