@@ -10,6 +10,7 @@ GROUP = (ROOT / "stoney_verify/commands_ext/public_welcome_group.py").read_text(
 STUDIO = (ROOT / "stoney_verify/welcome_card_studio_ui.py").read_text(encoding="utf-8")
 RENDERER = (ROOT / "stoney_verify/welcome_card_renderer.py").read_text(encoding="utf-8")
 SERVICE = (ROOT / "stoney_verify/welcome_card_service.py").read_text(encoding="utf-8")
+CARD_TEXT = (ROOT / "stoney_verify/lifecycle_card_text.py").read_text(encoding="utf-8")
 
 
 def test_join_path_uses_one_canonical_studio_owned_runtime() -> None:
@@ -17,11 +18,12 @@ def test_join_path_uses_one_canonical_studio_owned_runtime() -> None:
     assert "cfg = await get_guild_config(int(member.guild.id), refresh=True)" in RUNTIME
     assert "if not welcome_cards_enabled(cfg):" in RUNTIME
     assert "welcome_join_enabled" not in RUNTIME
-    assert "card = await welcome_card_file(member, cfg)" in RUNTIME
+    assert "card = await welcome_card_file(image_card_member(member), cfg)" in RUNTIME
     assert "file=card" in RUNTIME
     assert 'embed.set_image(url=f"attachment://{card.filename}")' in RUNTIME
     assert "using canonical embed fallback" in RUNTIME
-    assert 'embed.set_footer(text="dank_shield:welcome_card_runtime:v1")' in RUNTIME
+    assert "dank_shield:welcome_card_runtime:v1" not in RUNTIME
+    assert "from .lifecycle_card_text import image_card_member" in RUNTIME
 
     assert "delivery = await send_live_welcome_card(member)" in ROUTER
     assert "_install_listener(_join_listener, \"on_member_join\")" in ROUTER
@@ -66,6 +68,13 @@ def test_studio_preview_uses_exact_live_embed_and_image_fallback_paths() -> None
     assert "the exact live text fallback is below" in STUDIO
     assert "Preview only • dank_shield:welcome_card_runtime:v1" in STUDIO
     assert "Preview fallback • dank_shield:welcome_card_runtime:v1" in STUDIO
+
+
+def test_image_text_adapter_normalizes_only_bitmap_member_copy() -> None:
+    assert 'unicodedata.normalize("NFKC", raw)' in CARD_TEXT
+    assert "class ImageCardMember" in CARD_TEXT
+    assert "def display_name" in CARD_TEXT
+    assert "def guild" in CARD_TEXT
 
 
 def test_public_card_upload_controls_remain_available() -> None:
