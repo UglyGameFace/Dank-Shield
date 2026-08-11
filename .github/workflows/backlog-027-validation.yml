@@ -20,6 +20,7 @@ on:
       - "tests/test_backlog_027_core.py"
       - "tests/test_public_ticket_panel_single_owner.py"
       - "tools/test_backlog_027_static.py"
+      - "tools/test_inactive_members_truth_gate_static.py"
       - "tools/audit_channel_builder_queue.py"
       - "tools/audit_ticket_category_menu.py"
       - "tools/audit_ticket_panel_doctor.py"
@@ -45,6 +46,7 @@ on:
       - "tests/test_backlog_027_core.py"
       - "tests/test_public_ticket_panel_single_owner.py"
       - "tools/test_backlog_027_static.py"
+      - "tools/test_inactive_members_truth_gate_static.py"
       - "tools/audit_channel_builder_queue.py"
       - "tools/audit_ticket_category_menu.py"
       - "tools/audit_ticket_panel_doctor.py"
@@ -101,6 +103,7 @@ jobs:
       - name: Run static acceptance audits
         run: |
           python tools/test_backlog_027_static.py
+          python tools/test_inactive_members_truth_gate_static.py
           python tools/audit_channel_builder_queue.py
           python tools/audit_ticket_category_menu.py
           python tools/audit_ticket_panel_doctor.py
