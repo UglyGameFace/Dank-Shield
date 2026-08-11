@@ -1,0 +1,160 @@
+name: Ticket Category Intake Preflight SQL
+
+on:
+  pull_request:
+    paths:
+      - "supabase/migrations/202607310001_managed_ticket_category_catalog.sql"
+      - "supabase/migrations/202607310002_managed_ticket_category_auto_sync.sql"
+      - "supabase/migrations/20260802041900_expand_ticket_category_intake_types_v2.sql"
+      - "supabase/migrations/20260802042000_ticket_category_setup_selection.sql"
+      - ".github/workflows/ticket-category-intake-preflight-sql.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "supabase/migrations/20260802041900_expand_ticket_category_intake_types_v2.sql"
+      - "supabase/migrations/20260802042000_ticket_category_setup_selection.sql"
+      - ".github/workflows/ticket-category-intake-preflight-sql.yml"
+  workflow_dispatch:
+
+jobs:
+  production-preflight:
+    name: Reproduce and prevent production intake constraint failure
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure PostgreSQL client is available
+        shell: bash
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+
+      - name: Prepare production-like legacy schema
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          create extension if not exists pgcrypto;
+
+          do $$
+          begin
+              if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon; end if;
+              if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated; end if;
+              if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role; end if;
+          end;
+          $$;
+
+          create table public.guild_configs (
+              guild_id text primary key,
+              updated_at timestamptz not null default now()
+          );
+
+          create table public.ticket_categories (
+              id uuid primary key default gen_random_uuid(),
+              guild_id text not null,
+              slug text not null,
+              name text not null,
+              description text,
+              intake_type text not null default 'general',
+              match_keywords jsonb not null default '[]'::jsonb,
+              button_label text,
+              sort_order integer not null default 999,
+              is_default boolean not null default false,
+              is_enabled boolean not null default true,
+              created_at timestamptz not null default now(),
+              updated_at timestamptz not null default now(),
+              constraint ticket_categories_intake_type_check check (
+                  intake_type = any (array[
+                      'general','support','verification','appeal','report','question',
+                      'partnership','account','purchase','billing','refund','technical',
+                      'bug','staff','ghost','custom','other'
+                  ]::text[])
+              )
+          );
+
+          insert into public.guild_configs(guild_id) values ('production-like-guild');
+          SQL
+
+      - name: Reproduce catalog state before the failed August migration
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/202607310001_managed_ticket_category_catalog.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/202607310002_managed_ticket_category_auto_sync.sql
+
+      - name: Apply intake preflight twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260802041900_expand_ticket_category_intake_types_v2.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260802041900_expand_ticket_category_intake_types_v2.sql
+
+      - name: Apply formerly failing category migration twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260802042000_ticket_category_setup_selection.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260802042000_ticket_category_setup_selection.sql
+
+      - name: Verify new routing types and constraint safety
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+              cod_count integer;
+              game_count integer;
+          begin
+              select count(*) into cod_count
+              from public.ticket_categories
+              where guild_id = 'production-like-guild' and intake_type = 'cod_services';
+
+              select count(*) into game_count
+              from public.ticket_categories
+              where guild_id = 'production-like-guild' and intake_type = 'game_services';
+
+              if cod_count <> 1 or game_count <> 1 then
+                  raise exception 'expected one COD and one game-services row, got COD %, game %', cod_count, game_count;
+              end if;
+          end;
+          $$;
+
+          insert into public.ticket_categories(guild_id, slug, name, intake_type)
+          values ('production-like-guild', 'constraint-cod', 'Constraint COD', 'cod_services');
+
+          insert into public.ticket_categories(guild_id, slug, name, intake_type)
+          values ('production-like-guild', 'constraint-game', 'Constraint Game', 'game_services');
+          SQL
+
+          if psql -v ON_ERROR_STOP=1 <<'SQL'
+          insert into public.ticket_categories(guild_id, slug, name, intake_type)
+          values ('production-like-guild', 'constraint-invalid', 'Constraint Invalid', 'definitely_invalid');
+          SQL
+          then
+            echo "::error::invalid intake_type unexpectedly passed the database constraint"
+            exit 1
+          fi

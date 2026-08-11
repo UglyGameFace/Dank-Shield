@@ -1,0 +1,136 @@
+name: Community Tools SQL Smoke
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/20260811122504_community_tools.sql'
+      - '.github/workflows/community-tools-sql.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  community-tools-sql:
+    name: Community Tools migration
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Ensure PostgreSQL client is available
+        shell: bash
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+
+      - name: Prepare Supabase roles
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+              if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon; end if;
+              if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated; end if;
+              if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role; end if;
+          end;
+          $$;
+          SQL
+
+      - name: Apply Community Tools migration twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pass in 1 2; do
+            echo "Applying Community Tools migration, pass ${pass}"
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260811122504_community_tools.sql
+          done
+
+      - name: Verify tables constraints RLS and cascade
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          insert into public.dank_stickies(
+              guild_id, channel_id, content, mode, interval_seconds, message_threshold
+          ) values (
+              1001, 2001, 'Persistent smoke sticky', 'plain', 15, 5
+          );
+
+          insert into public.dank_sticky_polls(
+              guild_id, channel_id, question, options, votes, state
+          ) values (
+              1001, 2001, 'Pick one', '["A", "B"]'::jsonb, '{"3001": 1}'::jsonb, 'active'
+          );
+
+          do $$
+          declare
+              sticky_rls boolean;
+              poll_rls boolean;
+              vote_count integer;
+          begin
+              select relrowsecurity into sticky_rls
+              from pg_class
+              where oid = 'public.dank_stickies'::regclass;
+
+              select relrowsecurity into poll_rls
+              from pg_class
+              where oid = 'public.dank_sticky_polls'::regclass;
+
+              if sticky_rls is not true or poll_rls is not true then
+                  raise exception 'Community Tools tables must have RLS enabled';
+              end if;
+
+              select count(*) into vote_count
+              from public.dank_sticky_polls p
+              cross join lateral jsonb_object_keys(p.votes) as vote_key(key)
+              where p.channel_id = 2001;
+
+              if vote_count <> 1 then
+                  raise exception 'expected one persisted sticky-poll vote, got %', vote_count;
+              end if;
+
+              begin
+                  insert into public.dank_stickies(
+                      guild_id, channel_id, content, mode, interval_seconds, message_threshold
+                  ) values (1001, 2002, 'Too fast', 'plain', 1, 5);
+                  raise exception 'interval constraint did not reject unsafe cadence';
+              exception
+                  when check_violation then null;
+              end;
+          end;
+          $$;
+
+          delete from public.dank_stickies where channel_id = 2001;
+
+          do $$
+          begin
+              if exists (select 1 from public.dank_sticky_polls where channel_id = 2001) then
+                  raise exception 'sticky-poll row did not cascade when its sticky was deleted';
+              end if;
+          end;
+          $$;
+          SQL
