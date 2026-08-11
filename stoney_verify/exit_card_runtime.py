@@ -12,6 +12,7 @@ import discord
 
 from .exit_card_service import exit_card_file, exit_cards_enabled
 from .guild_config import get_guild_config
+from .lifecycle_card_text import image_card_member
 from .lifecycle_template_renderer import render_lifecycle_template
 
 
@@ -197,7 +198,6 @@ def build_exit_card_embed(member: discord.Member, cfg: Any) -> discord.Embed:
         embed.set_thumbnail(url=member.display_avatar.url)
     except Exception:
         pass
-    embed.set_footer(text="dank_shield:exit_card_runtime:v1")
     return embed
 
 
@@ -249,7 +249,7 @@ async def send_live_exit_card(member: discord.Member) -> ExitCardDelivery:
 
         if can_attach:
             try:
-                card = await exit_card_file(member, cfg)
+                card = await exit_card_file(image_card_member(member), cfg)
                 embed.set_image(url=f"attachment://{card.filename}")
                 message = await channel.send(
                     embed=embed,
