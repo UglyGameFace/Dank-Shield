@@ -21,6 +21,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import discord
 
 from ..globals import get_supabase, now_utc
+from .join_truth_integrity import (
+    invite_cache_ready, invite_lock_for, mark_invite_cache_ready,
+    merge_with_persisted_member_sync, normalize_join_context,
+)
 
 try:
     from .sync_service import _build_risk_payload_from_profile
@@ -282,7 +286,7 @@ def invite_meta(invite: discord.Invite) -> Dict[str, Any]:
     }
 
 
-async def warm_invite_cache_for_guild(guild: discord.Guild) -> bool:
+async def _warm_invite_cache_for_guild_unlocked(guild: discord.Guild) -> bool:
     gid = int(getattr(guild, "id", 0) or 0)
     if gid <= 0:
         return False
@@ -317,7 +321,17 @@ async def warm_invite_cache_for_guild(guild: discord.Guild) -> bool:
     return True
 
 
-async def detect_join_entry_context(member: discord.Member) -> Dict[str, Any]:
+async def warm_invite_cache_for_guild(guild: discord.Guild) -> bool:
+    gid = int(getattr(guild, "id", 0) or 0)
+    if gid <= 0:
+        return False
+    async with invite_lock_for(gid):
+        ok = await _warm_invite_cache_for_guild_unlocked(guild)
+        mark_invite_cache_ready(gid, ok)
+        return ok
+
+
+async def _detect_join_entry_context_unlocked(member: discord.Member) -> Dict[str, Any]:
     guild = member.guild
     gid = int(guild.id)
 
@@ -447,6 +461,25 @@ async def detect_join_entry_context(member: discord.Member) -> Dict[str, Any]:
     return default_context
 
 
+async def detect_join_entry_context(member: discord.Member) -> Dict[str, Any]:
+    guild = member.guild
+    gid = int(guild.id)
+    async with invite_lock_for(gid):
+        ready_before = invite_cache_ready(gid)
+        context = normalize_join_context(await _detect_join_entry_context_unlocked(member))
+        if not ready_before and str(context.get("entry_method") or "").strip().lower() == "invite_unresolved":
+            context["entry_method"] = "invite_cache_warming"
+            context["join_source"] = "invite_cache_warming"
+            context["verification_source"] = "invite_cache_warming"
+            context["entry_truth_quality"] = "partial"
+            context["entry_confidence"] = 35
+            context["entry_quality_reason"] = "Invite cache had no confirmed startup/reconnect baseline for this join."
+            context["entry_conflict"] = False
+        if str(context.get("entry_method") or "").strip().lower() != "invite_tracking_unavailable":
+            mark_invite_cache_ready(gid, True)
+        return normalize_join_context(context)
+
+
 async def persist_member_join_context(
     member: discord.Member,
     risk_profile: Optional[Dict[str, Any]] = None,
@@ -461,7 +494,13 @@ async def persist_member_join_context(
         user_id = str(member.id)
         now_iso = _sync_iso_now()
         joined_at = member.joined_at.isoformat() if member.joined_at else now_iso
-        context = dict(context or await detect_join_entry_context(member) or {})
+        context = normalize_join_context(dict(context or await detect_join_entry_context(member) or {}))
+        try:
+            context = await asyncio.to_thread(
+                merge_with_persisted_member_sync, sb, guild_id, user_id, context, incoming_is_approval=False
+            )
+        except Exception:
+            context = normalize_join_context(context)
         try:
             _RECENT_JOIN_CONTEXT[(int(member.guild.id), int(member.id))] = (time.monotonic(), dict(context or {}))
         except Exception:
