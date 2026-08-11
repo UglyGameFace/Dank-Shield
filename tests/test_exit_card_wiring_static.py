@@ -12,6 +12,7 @@ COMMAND_MODULES = (ROOT / "stoney_verify/commands_ext/__init__.py").read_text(en
 LEGACY_LIFECYCLE = (ROOT / "stoney_verify/commands_ext/public_member_lifecycle_logs.py").read_text(encoding="utf-8")
 COMPACT = (ROOT / "stoney_verify/commands_ext/public_exit_compact_surface.py").read_text(encoding="utf-8")
 UPLOAD = (ROOT / "stoney_verify/commands_ext/public_exit_card_studio.py").read_text(encoding="utf-8")
+CARD_TEXT = (ROOT / "stoney_verify/lifecycle_card_text.py").read_text(encoding="utf-8")
 
 
 def test_router_has_one_canonical_public_leave_sender() -> None:
@@ -35,11 +36,17 @@ def test_legacy_public_lifecycle_module_cannot_be_registered_by_command_profile(
 def test_exit_runtime_owns_live_gate_route_image_and_fallback() -> None:
     assert "async def send_live_exit_card(" in RUNTIME
     assert "if not exit_cards_enabled(cfg):" in RUNTIME
-    assert "exit_card_file(member, cfg)" in RUNTIME
+    assert "exit_card_file(image_card_member(member), cfg)" in RUNTIME
     assert "using canonical embed fallback" in RUNTIME
-    assert 'embed.set_footer(text="dank_shield:exit_card_runtime:v1")' in RUNTIME
+    assert "dank_shield:exit_card_runtime:v1" not in RUNTIME
+    assert "from .lifecycle_card_text import image_card_member" in RUNTIME
     assert "duplicate_suppressed" in RUNTIME
     assert "exit_card_channel_id" in RUNTIME
+
+
+def test_image_text_adapter_is_shared_by_join_and_exit_bitmap_paths() -> None:
+    assert 'unicodedata.normalize("NFKC", raw)' in CARD_TEXT
+    assert "class ImageCardMember" in CARD_TEXT
 
 
 def test_exit_studio_exposes_complete_button_first_controls() -> None:
