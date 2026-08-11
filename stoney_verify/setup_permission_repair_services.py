@@ -498,6 +498,22 @@ class PermissionRepairPreviewView(discord.ui.View):
         await open_permission_repair(interaction, parent=self.parent)
 
     @discord.ui.button(
+        label="Specific Channel",
+        emoji="🎯",
+        style=discord.ButtonStyle.primary,
+        custom_id="dank_setup_permission:target",
+        row=0,
+    )
+    async def target_repair(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        from stoney_verify.permission_repair import open_target_permission_repair
+        await open_target_permission_repair(interaction)
+
+    @discord.ui.button(
         label="Back",
         emoji="⬅️",
         style=discord.ButtonStyle.secondary,
@@ -533,6 +549,22 @@ class PermissionRepairResultView(discord.ui.View):
         button: discord.ui.Button,
     ) -> None:
         await open_permission_repair(interaction, parent=self.parent)
+
+    @discord.ui.button(
+        label="Specific Channel",
+        emoji="🎯",
+        style=discord.ButtonStyle.primary,
+        custom_id="dank_setup_permission_done:target",
+        row=0,
+    )
+    async def target_repair(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        from stoney_verify.permission_repair import open_target_permission_repair
+        await open_target_permission_repair(interaction)
 
     @discord.ui.button(
         label="Back",

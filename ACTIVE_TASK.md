@@ -1,91 +1,116 @@
 # ACTIVE TASK
 
-## DS-STICKY-026 — Smart StickyBot-style community tools
+## DS-BACKLOG-027 — Finish incorrectly bulk-closed production backlog
 
-**Status:** FINAL VALIDATION — IMPLEMENTED, SUPABASE PREVIEW GREEN
-**Branch:** `feature/ds-sticky-026-smart-community-tools`
-**Base:** current `main` after merged PR #179 (`591ca027e66d79a51ca3caaae539d1ca0fa97d48`)
-**PR:** #181 (draft until exact-final-head CI is green)
+**Status:** ACTIVE — IMPLEMENTATION COMPLETE / FINAL VALIDATION
+**Branch:** `fix/ds-backlog-integrity-027`
+**PR:** #182 (draft)
+**Base:** merged `main` at `13759f84ce15ae5dcd7a48e01438d1dc94a1639b` (PR #181)
 **Started:** 2026-08-11
 
 ## Scope
 
-Integrate the useful StickyBot capability families into Dank Shield without copying StickyBot code, reintroducing a legacy prefix-command surface, duplicating existing Dank Shield systems, or adding competing message listeners.
+Finish or correctly supersede the issues that were bulk-closed as completed without enough implementation evidence:
 
-Target product surface:
+- #119 — one-click channel/category permission repair
+- #57 — Channel Builder direct registration + remove compatibility shim
+- #56 — global guild operation queue completion/integration
+- #20 — production inactive-member cleanup execution
+- #11 — TicketTool parity stabilization umbrella completion/supersession
+- #2 — invite/join/inviter/approval truth pipeline completion/supersession
 
-- Menu-first **Community Tools** center reachable from `/dank home`.
-- Persistent per-channel sticky messages with create/edit, pause/resume, remove, list, safe cadence, plain/embed modes, image/thumbnail support, custom sender persona, and sticky polls.
-- General Discord polls, member/server info, embed builder, and channel permission diagnostics.
-- No-key community utilities: weather, Wikipedia/random Wikipedia, WikiHow, NSFW-gated Urban Dictionary, dice, coin flip, and name compatibility.
-- Existing Dank Shield Help/Status/Profile/Setup systems remain canonical.
+Issues #1 and #168 were independently verified as genuinely implemented and are not being reopened or rewritten.
 
-## Root cause / implementation findings
+## Rules
 
-1. StickyBot core maps cleanly to one persistent Dank Shield sticky owner per channel with 15-second / 5-human-message defaults.
-2. Premium-style presentation features do not need a Dank Shield paywall; embeds, images, cadence, bot-managed sender personas, and sticky polls are ordinary Community Tools capabilities.
-3. Dank Shield already owns Help, Status, profile/member intelligence, setup/diagnostics, and a deliberately compact public command surface, so this feature stays behind `/dank home`.
-4. Exactly one Community Tools runtime listener owns sticky message movement; no `@bot.event` replacement or channel-history scan was added.
-5. Unknown non-sticky channels use an in-memory zero-database hot path; Supabase is not queried for every ordinary message.
-6. Sticky refresh burst coalescing carries the already-made trigger decision through the worker so counter reset cannot lose a refresh.
-7. Raw webhook URLs/tokens are never persisted; custom sender personas use a bot-managed webhook only when permitted.
-8. Image recognition has no configured vision provider, so the UI reports it unavailable instead of inventing an unreliable dependency.
-9. Community Tools migration uses a 14-digit Supabase timestamp and has an apply-twice PostgreSQL smoke test with RLS and persistence checks.
-10. Production Supabase had a separate pending migration blocker: `20260802042000_ticket_category_setup_selection.sql` introduced `cod_services` and `game_services`, while the older `ticket_categories_intake_type_check` rejected both before reconciliation could finish.
-11. `20260802041900_expand_ticket_category_intake_types_v2.sql` now expands that production constraint immediately before the blocked migration while preserving all prior allowed routing values and rejecting unknown values.
-12. A production-like SQL workflow reproduces the historical constraint, applies the preflight twice, applies the formerly failing migration twice, verifies COD/game rows, and verifies invalid intake values remain blocked.
-13. The Supabase PR preview's stale migration history was cleared by recreating the preview branch; Database, Services, APIs, Configurations, Migrations, Seeding, and Edge Functions all reported green afterward.
-14. Native community polls now require the invoking member's own channel `Send Messages` permission both before the modal opens and again on submit, preventing Dank Shield from acting as a posting proxy into read-only channels.
-15. Sticky polls are normalized/validated before the sticky row is persisted, preventing invalid poll input from leaving a mode=`poll` sticky without a valid poll definition.
+- Do not use issue state as implementation evidence.
+- Fix owner files/services directly; remove obsolete compatibility shims instead of adding patch-on-patch behavior.
+- Preserve the compact `/dank` public command surface and current multi-server isolation.
+- No Administrator permission requirement for public installs.
+- Dangerous mutations must use shared queue/idempotency or an equivalent scoped exclusive path.
+- Definition of Done requires targeted tests, regression/static/compile coverage, cleanup/dead-code/conflict inspection, and exact-final-head CI before merge readiness.
 
-## Changes
+## Implemented
 
-- [x] Persistent sticky persistence/service layer with restart-safe state.
-- [x] Single burst/rate-safe sticky runtime listener with per-channel locks and loop suppression.
-- [x] Sticky poll model/view with one-vote-per-user state and pause/resume/reset/end controls.
-- [x] Community Tools center behind `/dank home` with no new direct `/dank` child.
-- [x] General polls, embed builder, member/server info, and permission diagnostics.
-- [x] No-key community lookups/games with timeout/error/NSFW safeguards.
-- [x] Bot-managed custom sticky persona support without raw webhook-secret storage.
-- [x] Community Tools Supabase migration plus dedicated SQL smoke coverage.
-- [x] Zero-database non-sticky message fast-path regression coverage.
-- [x] Production ticket-category intake constraint preflight and exact historical failure reproduction.
-- [x] Native poll channel-permission guard and sticky-poll pre-write validation.
-- [x] Temporary branch finalizer removed from the final diff.
-- [x] Preserve merged #179 direct purge surface and #180 member-action responsiveness.
+### #57 Channel Builder direct registration
+- [x] `api_new/server.py` directly registers Channel Builder routes.
+- [x] Execution/preflight lives in canonical `services/channel_builder_execution.py`.
+- [x] Apply jobs produce real reverse-order rollback plans.
+- [x] Rollback can recover the completed source job through persistent queue storage after restart.
+- [x] Removed Channel Builder API injection/runtime-export shims and one-time registration workflow/codemod.
+- [x] Updated `tools/audit_channel_builder_queue.py` for the direct architecture.
 
-## Validation
+### #119 Permission repair
+- [x] Added exact channel/category selection with feature-specific audit.
+- [x] Added Recommended Minimum and Full Dank Shield Control modes without Administrator.
+- [x] Safe Fix Access changes only missing permissions on Dank Shield's own overwrite.
+- [x] Explicit bot denies are preserved unless separately confirmed.
+- [x] Category-child repair is opt-in and previewed.
+- [x] Added hierarchy/managed-role/Manage Channels blockers and reauthorization fallback.
+- [x] Added before snapshots, audit records, undo token/restore.
+- [x] Integrated Specific Channel repair into setup and Fix Channel Access into diagnostics.
 
-- [x] Targeted sticky service/runtime tests passed on prior exact heads.
-- [x] Community Tools UI/static safety tests passed, including final poll-safety static guard.
-- [x] Unknown-channel zero-database fast-path tests passed.
-- [x] Community Tools SQL Smoke passed after the production migration repair.
-- [x] Ticket Category Intake Preflight SQL passed and reproduces the Aug 2 production failure conditions.
-- [x] Application Command Size Diagnostics passed after the production migration repair.
-- [x] Ticket Owner Emergency Override passed after the production migration repair.
-- [x] Profile Runtime Diagnostics passed after the production migration repair.
-- [x] Supabase PR preview recreation cleared the stale migration-history error and all preview tasks reported green.
-- [x] Branch is zero commits behind `main` and has no inline review threads.
-- [ ] Dank Shield CI exact-final-head run must complete after this final task-record commit.
+### #56 Operation queue
+- [x] Persistent job reattach and persistent idempotency lookup.
+- [x] Startup reconciliation of stale active jobs.
+- [x] Cancellation rules for queued/running jobs.
+- [x] Global/per-guild/per-operation backpressure.
+- [x] Duration/failure/retry/rate-limit/stale-recovery metrics and health output.
+- [x] Discord-aware retry helper for safe individual API calls.
+- [x] Structured API ticket/member mutations register directly through canonical queue handlers.
+- [x] Channel Builder apply/rollback use canonical queue and retry paths.
+- [x] Removed API/persistence/member-cleanup queue import-hook shims.
+- [x] Added RLS/service-role-only hardening migration and security-equivalent direct bootstrap.
+- [x] Normalized historical queue UUID default so migration/bootstrap contracts match.
 
-## Cleanup status
+### #20 Inactive cleanup
+- [x] Preserved conservative scan/review engine and low-confidence protections.
+- [x] Actual cleanup execution now directly uses the canonical member-scoped operation queue.
+- [x] Final action-time scan/hierarchy/staff/owner/bot/lock safety remains required.
+- [x] Saved no-confirm mode actually works only for owner/Admin/configured Bot Manager.
+- [x] Bulk queue/purge-all finalize one persisted cleanup-run summary.
+- [x] At most one configured Discord modlog/status summary is posted per run.
+- [x] Removed member-cleanup queue monkeypatch.
 
-- One canonical Community Tools runtime listener; no duplicate sticky engine.
-- No prefix parser or new direct slash-command family.
-- No raw webhook URL/token storage.
-- No channel history scans for sticky movement.
-- No temporary finalizer workflow remains in the final tree/diff.
-- Existing Help, Status, Profile, Setup, Diagnostics, purge, and moderation systems remain canonical.
-- Production migration repair is an idempotent preflight ordered directly before the previously blocked migration; it does not rewrite remote migration history.
+### #2 Join/approval truth
+- [x] Invite cache/diff work serialized per guild.
+- [x] Invite baseline readiness tracked across warm/detect paths.
+- [x] Historical inviter/join field aliases normalized.
+- [x] Original join attribution and later verification approval truth are separate.
+- [x] Staff approval cannot overwrite a confirmed original invite source.
+- [x] Contradictory join evidence is surfaced and downgraded instead of silently trusted.
+- [x] Shared member-context reader exposes truth quality/confidence/conflict.
 
-## Blockers
+### #11 TicketTool parity umbrella
+- [x] Replaced stale May audit with current canonical ownership map.
+- [x] Persistent Create Ticket/category/Confirm/Back behavior remains in canonical panel owner.
+- [x] Moved stale-menu/duplicate-interaction/confirm/preflight behavior into `public_ticket_panel_clean.py` itself.
+- [x] Persistent view is primary owner; fallback listener is only a registration-failure fallback.
+- [x] Removed the two runtime callback rewrite guards.
+- [x] Updated ticket owner/category/doctor tests and audits so deleted shims are not hidden dependencies.
+- [x] Existing sharding/scale/schema/setup ownership linked in `docs/TICKETTOOL_PARITY_AUDIT.md`.
 
-- Only the exact-final-head GitHub CI run remains before PR #181 can be marked ready for review.
+## Validation state
 
-## Backlog
+Permanent validation added:
 
-- Image keyword recognition can be enabled later only when Dank Shield has a real configured vision provider.
+- `tests/test_backlog_027_core.py`
+- `tools/test_backlog_027_static.py`
+- `.github/workflows/backlog-027-validation.yml`
+- updated Channel Builder, ticket-category, ticket-panel-doctor, and ticket-panel-owner audits/workflows
+- PostgreSQL 16 apply-twice/RLS/grant/check/unique/recovery-index validation for the operation queue
+
+The first SQL run exposed a real historical mismatch: the June table had no DB UUID default while direct bootstrap did. The hardening migration now normalizes that with `gen_random_uuid()`.
+
+### Remaining Definition-of-Done gates
+- [ ] Exact final PR head: DS Backlog 027 Python regressions green.
+- [ ] Exact final PR head: operation queue PostgreSQL/RLS job green.
+- [ ] Exact final PR head: ticket/category/doctor/Channel Builder focused workflows green.
+- [ ] Exact final PR head: full Dank Shield CI unit/static/compile suite green.
+- [ ] Exact final PR head: Supabase preview/migration status green.
+- [ ] Final stale-reference/dead-file and unresolved-review-thread inspection.
+- [ ] Mark PR #182 ready only after every gate above passes.
 
 ## Definition of Done
 
-DS-STICKY-026 is complete only when the StickyBot capability families are deliberately mapped into Dank Shield, the sticky system is persistent/restart-safe/rate-safe and has exactly one canonical runtime owner, sticky and normal polls behave safely, utility features have permission/NSFW/network-failure safeguards, the compact public command surface is preserved, no raw webhook secret is stored, the production migration chain is no longer blocked by the legacy intake constraint, targeted/regression/migration/compile/full-suite/standalone audits pass, the Supabase PR preview is clean, and final conflict/duplicate/dead-code inspection is clean. Merge and production deployment remain separate actions.
+This task is complete only when the six questionable issues are fully implemented or deliberately superseded with exact canonical evidence, obsolete shims are removed, dangerous mutations are protected by canonical queue/idempotency paths, inactive cleanup safely executes rather than only scans, join/approval attribution remains truthful through reconcile paths, permission repair is usable end-to-end, and the exact final PR head passes targeted/regression/static/compile/SQL/Supabase validation with no unresolved review threads.

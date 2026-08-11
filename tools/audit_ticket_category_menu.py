@@ -9,7 +9,6 @@ ROOT = Path(__file__).resolve().parents[1]
 
 FILES = [
     "stoney_verify/commands_ext/public_ticket_panel_clean.py",
-    "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py",
     "stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py",
     "stoney_verify/startup_guards/ticket_category_setup_guard.py",
     "stoney_verify/startup_guards/ticket_form_default_templates_guard.py",
@@ -26,18 +25,12 @@ FILES = [
 CHECKS = {
     "stoney_verify/commands_ext/public_ticket_panel_clean.py": [
         'sb.table("ticket_categories").select("*")',
-        "TicketSelectView(rows)",
+        "TicketSelectView(rows, member.id, session_id)",
         "reserve_persistent_ticket_number",
         "return await reserve_persistent_ticket_number",
-    ],
-    "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py": [
-        "_INTERACTION_TTL_SECONDS",
-        "_interaction_key",
-        "_handle_once",
-        "_remove_redundant_fallback",
-        "persistent view owns Create Ticket",
-        "single-interaction owner active",
-        "ticket allocator remain untouched",
+        "_PANEL_INTERACTION_LOCKS",
+        "_MENU_SESSIONS",
+        "Newest menu wins.",
     ],
     "stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py": [
         'MIGRATION_FILE = "20260802042000_ticket_category_setup_selection.sql"',
@@ -122,12 +115,12 @@ CHECKS = {
     "stoney_verify/startup_guards/__init__.py": [
         "auto_schema_bootstrap",
         "ticket_category_schema_bootstrap_guard",
-        "public_ticket_panel_clean_hardening",
         "ticket_category_setup_guard",
     ],
 }
 
 OBSOLETE_FILES = (
+    "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py",
     "stoney_verify/startup_guards/ticket_category_cod_services_guard.py",
     "stoney_verify/startup_guards/ticket_category_game_services_guard.py",
     "supabase/migrations/202608020002_ticket_category_setup_completion_compat.sql",
@@ -136,24 +129,14 @@ OBSOLETE_FILES = (
 )
 
 FORBIDDEN_STARTUP_GUARDS = (
+    "public_ticket_panel_clean_hardening",
     "ticket_category_cod_services_guard",
     "ticket_category_game_services_guard",
-)
-
-FORBIDDEN_HARDENING_OVERRIDES = (
-    "panel_mod._next_number =",
-    "panel_mod._rows =",
-    "panel_mod._load_rows =",
-    "panel_mod._ticket_num =",
-    "_MENU_SESSION_SECONDS",
-    "You already have a ticket type menu open",
-    "_clean_public_rows",
 )
 
 ORDERED_STARTUP_SNIPPETS = [
     "auto_schema_bootstrap",
     "ticket_category_schema_bootstrap_guard",
-    "public_ticket_panel_clean_hardening",
     "ticket_category_setup_guard",
 ]
 
@@ -173,32 +156,20 @@ def main() -> int:
 
     for path in OBSOLETE_FILES:
         if (ROOT / path).exists():
-            print(f"obsolete category owner/migration still exists: {path}", file=sys.stderr)
+            print(f"obsolete category/panel owner still exists: {path}", file=sys.stderr)
             return 1
 
     for path, snippets in CHECKS.items():
-        text = (ROOT / path).read_text(encoding="utf-8")
+        data = (ROOT / path).read_text(encoding="utf-8")
         for snippet in snippets:
-            if snippet not in text:
+            if snippet not in data:
                 print(f"{path} missing {snippet}", file=sys.stderr)
                 return 1
-
-    hardening_text = (
-        ROOT / "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py"
-    ).read_text(encoding="utf-8")
-    for snippet in FORBIDDEN_HARDENING_OVERRIDES:
-        if snippet in hardening_text:
-            print(
-                "public_ticket_panel_clean_hardening.py restored stale ownership: "
-                f"{snippet}",
-                file=sys.stderr,
-            )
-            return 1
 
     startup_text = (ROOT / "stoney_verify/startup_guards/__init__.py").read_text(encoding="utf-8")
     for snippet in FORBIDDEN_STARTUP_GUARDS:
         if snippet in startup_text:
-            print(f"obsolete category guard still loaded: {snippet}", file=sys.stderr)
+            print(f"obsolete category/panel guard still loaded: {snippet}", file=sys.stderr)
             return 1
 
     positions = [startup_text.find(snippet) for snippet in ORDERED_STARTUP_SNIPPETS]

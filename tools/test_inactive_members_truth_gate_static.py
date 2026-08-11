@@ -77,11 +77,26 @@ def test_cleanup_queue_never_uses_cached_scan() -> None:
     assert "await scan_inactive_members" in block
 
 
-def test_mass_cleanup_always_requires_confirmation() -> None:
+def test_mass_cleanup_confirmation_defaults_safe_and_privileged_opt_out_is_narrow() -> None:
+    # Issue #20 requires confirmation by default plus an optional no-confirm
+    # mode for owner/Admin/Bot Manager. The old invariant that *everyone* must
+    # always confirm made the setting dead code. Keep the new contract strict:
+    # an unauthorized actor still forces confirmation even when the saved
+    # server setting says otherwise.
+    assert "actor_can_use_no_confirm" in CLEANUP_COMMANDS
     assert (
-        "Safety invariant: mass cleanup always requires confirmation"
+        "require_confirmation = bool(settings.require_queue_confirmation or not no_confirm_allowed)"
         in CLEANUP_COMMANDS
     )
+    assert "Saved no-confirm mode was ignored for this actor" in CLEANUP_COMMANDS
+    assert "if require_queue_confirmation is False:" in CLEANUP_COMMANDS
+    assert "if not allowed:" in CLEANUP_COMMANDS
+
+    assert "async def actor_can_use_no_confirm" in CLEANUP
+    assert "int(actor.id) == int(actor.guild.owner_id)" in CLEANUP
+    assert "actor.guild_permissions.administrator" in CLEANUP
+    assert "manager_roles" in CLEANUP
+    assert "Only the server owner, an Administrator, or a configured Bot Manager" in CLEANUP
 
 
 def test_ui_shows_actionability() -> None:
@@ -97,7 +112,7 @@ if __name__ == "__main__":
         test_historical_scan_is_review_only_until_authoritative_scope_is_complete,
         test_cleanup_always_rechecks_fresh_inactivity,
         test_cleanup_queue_never_uses_cached_scan,
-        test_mass_cleanup_always_requires_confirmation,
+        test_mass_cleanup_confirmation_defaults_safe_and_privileged_opt_out_is_narrow,
         test_ui_shows_actionability,
     ):
         test()

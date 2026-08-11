@@ -2,9 +2,10 @@ from __future__ import annotations
 
 """First-class Channel Builder rollback runtime service.
 
-Rollback is source-job based: the dashboard only sends the completed apply job ID.
-The bot reads the stored rollback_plan from the operation queue result and then
-queues a rollback job through the same channel mutation concurrency lane.
+Rollback is source-job based: the dashboard sends the completed apply job ID.
+The bot can recover that job from persistent queue storage after a dashboard or
+bot restart, validates the stored rollback plan, and queues the rollback through
+the same channel-mutation lane.
 """
 
 from typing import Any
@@ -13,13 +14,12 @@ import discord
 from aiohttp import web
 
 from .channel_builder_runtime import get_guild_or_response, safe_int, safe_str
+from ..operation_queue import get_operation_job_persistent, submit_operation, with_retry
 
 
-def source_job_rollback_plan(source_job_id: str, guild_id: int) -> tuple[list[dict[str, Any]], dict[str, Any] | None, str]:
+async def source_job_rollback_plan(source_job_id: str, guild_id: int) -> tuple[list[dict[str, Any]], dict[str, Any] | None, str]:
     try:
-        from ..operation_queue import get_operation_job
-
-        job = get_operation_job(source_job_id)
+        job = await get_operation_job_persistent(source_job_id)
     except Exception as exc:
         return [], None, f"Unable to read source operation: {exc!r}"
 
@@ -37,10 +37,7 @@ def source_job_rollback_plan(source_job_id: str, guild_id: int) -> tuple[list[di
     if not isinstance(raw_plan, list) or not raw_plan:
         return [], job, "Source operation has no rollback plan."
 
-    plan: list[dict[str, Any]] = []
-    for row in raw_plan[:150]:
-        if isinstance(row, dict):
-            plan.append(dict(row))
+    plan = [dict(row) for row in raw_plan[:150] if isinstance(row, dict)]
     if not plan:
         return [], job, "Rollback plan was empty after validation."
     return plan, job, ""
@@ -66,7 +63,11 @@ async def rollback_delete_created(guild: discord.Guild, row: dict[str, Any], *, 
             "reason": "already missing",
         }
     before = safe_str(getattr(channel, "name", ""))
-    await channel.delete(reason=reason)
+    await with_retry(
+        lambda: channel.delete(reason=reason),
+        attempts=3,
+        concurrency_key=f"channel-builder-rollback:{guild.id}",
+    )
     return {"ok": True, "action": "delete_created_channel", "channel_id": str(channel_id), "deleted_name": before}
 
 
@@ -85,7 +86,11 @@ async def rollback_rename(guild: discord.Guild, row: dict[str, Any], *, reason: 
     position = safe_int(row.get("position"), -1)
     if position >= 0:
         kwargs["position"] = position
-    await channel.edit(reason=reason, **kwargs)
+    await with_retry(
+        lambda: channel.edit(reason=reason, **kwargs),
+        attempts=3,
+        concurrency_key=f"channel-builder-rollback:{guild.id}",
+    )
     return {"ok": True, "action": "rename_channel", "channel_id": str(channel_id), "before": before, "after": target_name}
 
 
@@ -99,7 +104,7 @@ async def execute_rollback_plan(
 ) -> dict[str, Any]:
     guild, err = await get_guild_or_response(server, guild_id)
     if err is not None:
-        return {"status": "failed", "error": "guild not found"}
+        return {"status": "failed", "error": "guild not found", "counts": {"deleted": 0, "restored": 0, "skipped": 0, "failed": len(rollback_plan)}}
     assert guild is not None
 
     reason = f"Dank Shield Channel Builder rollback by {actor_id or 'dashboard'} source_job={source_job_id}"
@@ -119,14 +124,18 @@ async def execute_rollback_plan(
                 result = {"ok": True, "action": action or "unknown", "skipped": True, "reason": "unsupported rollback action"}
                 counts["skipped"] += 1
         except Exception as exc:
-            result = {"ok": False, "action": action or "unknown", "error": repr(exc)}
+            result = {"ok": False, "action": action or "unknown", "error": type(exc).__name__, "detail": str(exc)[:180]}
             counts["failed"] += 1
         results.append(result)
 
     return {
-        "status": "partial" if counts["failed"] else "succeeded",
+        "status": "failed" if counts["failed"] and not (counts["deleted"] or counts["restored"] or counts["skipped"]) else ("partial" if counts["failed"] else "succeeded"),
         "source_job_id": source_job_id,
         "guild_id": str(guild_id),
+        "attempted": len(rollback_plan),
+        "succeeded": counts["deleted"] + counts["restored"],
+        "skipped_count": counts["skipped"],
+        "failed_count": counts["failed"],
         "counts": counts,
         "results": results,
     }
@@ -145,13 +154,11 @@ async def submit_rollback_job(server: Any, request: web.Request):
     if not source_job_id:
         return server._json_error("source_job_id required")
 
-    rollback_plan, source_job, error = source_job_rollback_plan(source_job_id, guild_id)
+    rollback_plan, source_job, error = await source_job_rollback_plan(source_job_id, guild_id)
     if error:
         return server._json_error(error, 409, source_job=source_job)
 
     try:
-        from ..operation_queue import submit_operation
-
         job = await submit_operation(
             guild_id=guild_id,
             actor_id=actor_id or None,
@@ -159,6 +166,7 @@ async def submit_rollback_job(server: Any, request: web.Request):
             risk_level="dangerous",
             source="dashboard",
             payload={"source_job_id": source_job_id, "rollback_count": len(rollback_plan)},
+            idempotency_key=f"channel-builder-rollback:{guild_id}:{source_job_id}",
             concurrency_class="channel_mutation",
             concurrency_key="channel_builder",
             timeout_seconds=900.0,
@@ -174,3 +182,10 @@ async def submit_rollback_job(server: Any, request: web.Request):
         return server._json_ok(queued=True, job=job, source_job_id=source_job_id, rollback_count=len(rollback_plan))
     except Exception as exc:
         return server._json_error("Failed to queue Channel Builder rollback", 500, detail=repr(exc))
+
+
+__all__ = [
+    "execute_rollback_plan",
+    "source_job_rollback_plan",
+    "submit_rollback_job",
+]

@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import discord
 
 from ..globals import *  # noqa: F401,F403
+from ..members_new.join_truth_integrity import approval_context, merge_with_persisted_member_sync
 
 from ..tickets import (
     find_ticket_owner_retry,
@@ -416,6 +417,27 @@ def _sync_member_verification_context(
             if vouched_by_name:
                 member_patch["vouched_by_name"] = vouched_by_name
 
+        approval_meta = approval_context(
+            approved_by=staff_id,
+            approved_by_name=staff_name,
+            verification_source=verification_source,
+            approval_reason=str(decision_text),
+            source_ticket_id=ticket_channel_id,
+        )
+        try:
+            canonical_context = merge_with_persisted_member_sync(
+                sb, guild_id, user_id, {**member_patch, **approval_meta}, incoming_is_approval=True
+            )
+            for field in (
+                "entry_method", "join_source", "invite_code", "invited_by", "invited_by_name",
+                "vouched_by", "vouched_by_name", "entry_reason", "entry_truth_quality",
+                "entry_confidence", "entry_quality_reason", "entry_conflict", "vanity_used",
+            ):
+                if canonical_context.get(field) is not None:
+                    member_patch[field] = canonical_context.get(field)
+        except Exception:
+            canonical_context = dict(member_patch)
+
         if decision_kind == "denied":
             member_patch["has_verified_role"] = False
             member_patch["role_state"] = "unverified_only"
@@ -467,6 +489,13 @@ def _sync_member_verification_context(
             **truth_meta,
         }
 
+        for field in (
+            "entry_method", "invite_code", "invited_by", "invited_by_name",
+            "entry_truth_quality", "entry_confidence", "entry_quality_reason", "entry_conflict",
+        ):
+            if canonical_context.get(field) is not None:
+                join_patch[field] = canonical_context.get(field)
+
         if latest_join_row and latest_join_row.get("id") is not None:
             try:
                 (
@@ -499,6 +528,7 @@ def _sync_member_verification_context(
             "channel_id": ticket_channel_id,
             "channel_name": channel.name if isinstance(channel, discord.TextChannel) else None,
             **truth_meta,
+            **approval_meta,
         }
 
         try:

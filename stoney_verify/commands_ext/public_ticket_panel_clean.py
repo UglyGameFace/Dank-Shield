@@ -10,6 +10,8 @@ creation.
 import asyncio
 import os
 import re
+import time
+import uuid
 from datetime import timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -25,6 +27,12 @@ _PANEL_GROUP_REGISTERED = False
 _PANEL_FALLBACK_LISTENER_REGISTERED = False
 _CREATE_LOCKS: Dict[Tuple[int, int], asyncio.Lock] = {}
 _NUMBER_LOCKS: Dict[int, asyncio.Lock] = {}
+_PANEL_INTERACTION_LOCKS: Dict[int, asyncio.Lock] = {}
+_PANEL_INTERACTION_DONE_UNTIL: Dict[int, float] = {}
+_MENU_SESSIONS: Dict[Tuple[int, int], Dict[str, Any]] = {}
+_CONFIRM_LOCKS: Dict[Tuple[int, int], asyncio.Lock] = {}
+_MENU_TTL_SECONDS = 900.0
+_INTERACTION_TTL_SECONDS = 90.0
 
 PANEL_BUTTON_CUSTOM_ID = "sv:ticket:panel:create:clean:v1"
 PANEL_BUTTON_CUSTOM_IDS = {PANEL_BUTTON_CUSTOM_ID}
@@ -635,45 +643,199 @@ def _category_embed(row: Dict[str, Any]) -> discord.Embed:
     return embed
 
 
+def _session_key(guild_id: int, user_id: int) -> Tuple[int, int]:
+    return (int(guild_id), int(user_id))
+
+
+def _new_menu_session(guild_id: int, user_id: int) -> str:
+    session_id = uuid.uuid4().hex[:16]
+    _MENU_SESSIONS[_session_key(guild_id, user_id)] = {"id": session_id, "created": time.monotonic()}
+    return session_id
+
+
+def _menu_session_current(guild_id: int, user_id: int, session_id: str) -> bool:
+    data = _MENU_SESSIONS.get(_session_key(guild_id, user_id)) or {}
+    if str(data.get("id") or "") != str(session_id or ""):
+        return False
+    created = float(data.get("created") or 0.0)
+    return bool(created and (time.monotonic() - created) <= _MENU_TTL_SECONDS)
+
+
+def _consume_menu_session(guild_id: int, user_id: int, session_id: str) -> bool:
+    key = _session_key(guild_id, user_id)
+    if not _menu_session_current(guild_id, user_id, session_id):
+        return False
+    _MENU_SESSIONS.pop(key, None)
+    return True
+
+
+def _disable_view(view: discord.ui.View) -> None:
+    for item in list(getattr(view, "children", []) or []):
+        try:
+            item.disabled = True
+        except Exception:
+            pass
+
+
+def _member_from_interaction(i: discord.Interaction) -> Optional[discord.Member]:
+    return i.user if isinstance(i.user, discord.Member) else None
+
+
+async def _stale_ticket_menu(i: discord.Interaction) -> None:
+    await _ephemeral(i, "That ticket menu is stale. Press **Create Ticket** again and use the newest menu.")
+
+
+def _form_questions(row: Dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        from stoney_verify.startup_guards import ticket_forms_foundation_guard as forms
+        return list(forms._category_questions(row) or [])
+    except Exception:
+        return []
+
+
+async def _open_form_modal(i: discord.Interaction, row: Dict[str, Any], questions: list[dict[str, Any]]) -> bool:
+    try:
+        from stoney_verify.startup_guards import ticket_forms_foundation_guard as forms
+        import sys
+        await i.response.send_modal(forms.DashboardTicketFormModal(sys.modules[__name__], row, questions))
+        return True
+    except Exception as exc:
+        _warn(f"ticket form modal failed before response consumption: {type(exc).__name__}: {_short(exc, 220)}")
+        await _ephemeral(i, "❌ Could not open the optional ticket form. Nothing was created; try Confirm again.")
+        return False
+
+
+async def _ticket_setup_preflight(guild: discord.Guild) -> Tuple[Optional[discord.CategoryChannel], Optional[discord.Role], List[str], List[str]]:
+    blockers: List[str] = []
+    warnings: List[str] = []
+    try:
+        parent = await asyncio.wait_for(_active_category(guild), timeout=6.0)
+    except asyncio.TimeoutError:
+        parent = None
+        blockers.append("Active Tickets category lookup timed out.")
+    except Exception as exc:
+        parent = None
+        blockers.append(f"Active Tickets category lookup failed: {type(exc).__name__}.")
+    try:
+        staff = await asyncio.wait_for(_staff_role(guild), timeout=6.0)
+    except asyncio.TimeoutError:
+        staff = None
+        blockers.append("Ticket staff role lookup timed out.")
+    except Exception as exc:
+        staff = None
+        blockers.append(f"Ticket staff role lookup failed: {type(exc).__name__}.")
+    if parent is None:
+        blockers.append("Active Tickets category is not saved or could not be found.")
+    else:
+        missing = list(_missing_category_perms(parent, guild.me) or [])
+        if missing:
+            blockers.append(f"Dank Shield is missing in **{parent.name}**: {', '.join(missing)}.")
+        blockers.extend(list(_ticket_category_shape_blockers(parent, staff) or []))
+    if staff is None:
+        blockers.append("Ticket staff role is not saved or could not be found.")
+    try:
+        panel = await asyncio.wait_for(_panel_channel(guild), timeout=4.0)
+        if isinstance(panel, discord.TextChannel):
+            missing_panel = list(_missing_text_perms(panel, guild.me) or [])
+            if missing_panel:
+                warnings.append(f"Ticket panel channel {panel.mention} has bot permission issues: {', '.join(missing_panel)}.")
+    except Exception:
+        pass
+    return parent, staff, list(dict.fromkeys(blockers)), list(dict.fromkeys(warnings))
+
+
+def _setup_problem_embed(guild: discord.Guild, blockers: List[str], warnings: List[str]) -> discord.Embed:
+    embed = discord.Embed(
+        title="🎫 Ticket Setup Needs Repair",
+        description="I stopped before ticket creation because this server cannot create tickets safely yet.",
+        color=discord.Color.orange(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(name="Blockers", value=("\n".join(f"• {x}" for x in blockers) or "None")[:1024], inline=False)
+    if warnings:
+        embed.add_field(name="Warnings", value="\n".join(f"• {x}" for x in warnings)[:1024], inline=False)
+    embed.add_field(name="Fastest fix", value="Run `/dank setup` → **Safety & Repair** → **Specific Channel**, or `/dank diagnostics` → **Fix Channel Access**.", inline=False)
+    return embed
+
+
 class TicketConfirmView(discord.ui.View):
-    def __init__(self, rows: List[Dict[str, Any]], row: Dict[str, Any]) -> None:
-        super().__init__(timeout=1800)
+    def __init__(self, rows: List[Dict[str, Any]], row: Dict[str, Any], owner_id: int, session_id: str) -> None:
+        super().__init__(timeout=_MENU_TTL_SECONDS)
         self.rows = rows
         self.row = row
+        self.owner_id = int(owner_id)
+        self.session_id = str(session_id)
 
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green, emoji="✅")
     async def confirm(self, i: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _create_ticket(i, self.row)
+        guild = i.guild
+        member = _member_from_interaction(i)
+        if guild is None or member is None or int(member.id) != self.owner_id:
+            return await _ephemeral(i, "Only the member who opened this ticket menu can use it.")
+        key = _session_key(guild.id, member.id)
+        lock = _CONFIRM_LOCKS.setdefault(key, asyncio.Lock())
+        if lock.locked():
+            return await _ephemeral(i, "Already opening that ticket. Please wait a second.")
+        async with lock:
+            if not _menu_session_current(guild.id, member.id, self.session_id):
+                return await _stale_ticket_menu(i)
+            _parent, _staff, blockers, warnings = await _ticket_setup_preflight(guild)
+            if blockers:
+                return await _ephemeral(i, "❌ Ticket setup needs repair before this can open.", embed=_setup_problem_embed(guild, blockers, warnings))
+            questions = _form_questions(self.row)
+            if questions:
+                opened = await _open_form_modal(i, self.row, questions)
+                if opened:
+                    _consume_menu_session(guild.id, member.id, self.session_id)
+                return None
+            if not _consume_menu_session(guild.id, member.id, self.session_id):
+                return await _stale_ticket_menu(i)
+            _disable_view(self)
+            try:
+                await i.response.edit_message(content="Opening your ticket…", embed=_category_embed(self.row), view=self)
+            except Exception:
+                pass
+            await _create_ticket(i, self.row)
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, emoji="↩️")
     async def back(self, i: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
+        guild = i.guild
+        member = _member_from_interaction(i)
+        if guild is None or member is None or int(member.id) != self.owner_id or not _menu_session_current(guild.id, member.id, self.session_id):
+            return await _stale_ticket_menu(i)
         embed = discord.Embed(title="Create Ticket", description="Choose the type of ticket you want to open.", color=discord.Color.blurple())
         embed.set_footer(text="Pick a category. You can review it before anything is created.")
-        await _edit_or_reply(i, content="Choose a ticket type.", embed=embed, view=TicketSelectView(self.rows))
+        await _edit_or_reply(i, content="Choose a ticket type.", embed=embed, view=TicketSelectView(self.rows, self.owner_id, self.session_id))
 
 
 class TicketSelect(discord.ui.Select):
-    def __init__(self, rows: List[Dict[str, Any]]) -> None:
+    def __init__(self, rows: List[Dict[str, Any]], owner_id: int, session_id: str) -> None:
         self.rows = rows
+        self.owner_id = int(owner_id)
+        self.session_id = str(session_id)
         super().__init__(placeholder="Choose a ticket type", min_values=1, max_values=1, options=[discord.SelectOption(label=_row_name(r), value=_row_slug(r), description=_row_desc(r), emoji="🎫") for r in rows[:25]])
 
     async def callback(self, i: discord.Interaction) -> None:
+        guild = i.guild
+        member = _member_from_interaction(i)
+        if guild is None or member is None or int(member.id) != self.owner_id or not _menu_session_current(guild.id, member.id, self.session_id):
+            return await _stale_ticket_menu(i)
         slug = _safe_str(self.values[0], "support")
         row = next((r for r in self.rows if _row_slug(r) == slug), {"slug": slug, "name": "Support"})
-        await _edit_or_reply(i, content="Confirm this ticket type.", embed=_category_embed(row), view=TicketConfirmView(self.rows, row))
+        await _edit_or_reply(i, content="Confirm this ticket type.", embed=_category_embed(row), view=TicketConfirmView(self.rows, row, self.owner_id, self.session_id))
 
 
 class TicketSelectView(discord.ui.View):
-    def __init__(self, rows: List[Dict[str, Any]]) -> None:
-        super().__init__(timeout=1800)
-        self.add_item(TicketSelect(rows))
+    def __init__(self, rows: List[Dict[str, Any]], owner_id: int, session_id: str) -> None:
+        super().__init__(timeout=_MENU_TTL_SECONDS)
+        self.add_item(TicketSelect(rows, owner_id, session_id))
 
 
-async def _handle_panel_button(i: discord.Interaction) -> None:
+async def _handle_panel_button_core(i: discord.Interaction) -> None:
     guild = i.guild
-    member = i.user if isinstance(i.user, discord.Member) else None
+    member = _member_from_interaction(i)
     await _defer(i, True)
     if guild is None or member is None:
         return await _ephemeral(i, "❌ This must be used inside a server.")
@@ -683,16 +845,45 @@ async def _handle_panel_button(i: discord.Interaction) -> None:
         existing = None
     if existing:
         return await _ephemeral(i, f"You already have an open ticket: {existing.mention}")
+    _parent, _staff, blockers, warnings = await _ticket_setup_preflight(guild)
+    if blockers:
+        return await _ephemeral(i, "❌ Ticket setup needs repair before members can open tickets.", embed=_setup_problem_embed(guild, blockers, warnings))
     try:
         rows, warning = await asyncio.wait_for(_load_rows(guild), timeout=6.0)
     except asyncio.TimeoutError:
         rows, warning = [dict(x) for x in DEFAULT_ROWS], "Ticket category loading timed out; using fallback categories."
+    session_id = _new_menu_session(guild.id, member.id)
     embed = discord.Embed(title="Create Ticket", description="Choose the type of ticket you want to open.", color=discord.Color.blurple())
-    embed.set_footer(text="Pick a category. You can review it before anything is created.")
+    embed.set_footer(text="Pick a category. You can review it before anything is created. Newest menu wins.")
+    notices = list(warnings)
     if warning:
-        embed.add_field(name="Setup Notice", value=_short(warning, 900), inline=False)
-    await _ephemeral(i, "Choose a ticket type.", embed=embed, view=TicketSelectView(rows))
+        notices.append(_short(warning, 900))
+    if notices:
+        embed.add_field(name="Setup Notice", value="\n".join(f"• {x}" for x in dict.fromkeys(notices))[:1024], inline=False)
+    await _ephemeral(i, "Choose a ticket type.", embed=embed, view=TicketSelectView(rows, member.id, session_id))
 
+
+async def _handle_panel_button(i: discord.Interaction) -> None:
+    now = time.monotonic()
+    for key, until in list(_PANEL_INTERACTION_DONE_UNTIL.items())[:500]:
+        if until <= now:
+            _PANEL_INTERACTION_DONE_UNTIL.pop(key, None)
+            lock = _PANEL_INTERACTION_LOCKS.get(key)
+            if lock is None or not lock.locked():
+                _PANEL_INTERACTION_LOCKS.pop(key, None)
+    interaction_key = int(getattr(i, "id", 0) or id(i))
+    if _PANEL_INTERACTION_DONE_UNTIL.get(interaction_key, 0.0) > now:
+        return
+    lock = _PANEL_INTERACTION_LOCKS.setdefault(interaction_key, asyncio.Lock())
+    if lock.locked():
+        return
+    async with lock:
+        if _PANEL_INTERACTION_DONE_UNTIL.get(interaction_key, 0.0) > time.monotonic():
+            return
+        try:
+            await _handle_panel_button_core(i)
+        finally:
+            _PANEL_INTERACTION_DONE_UNTIL[interaction_key] = time.monotonic() + _INTERACTION_TTL_SECONDS
 
 
 async def handle_public_ticket_panel_click(
@@ -882,13 +1073,15 @@ def register_public_ticket_panel_clean(bot: Any, tree: Any) -> None:
             _log(f"registered persistent Create Ticket view custom_id={PANEL_BUTTON_CUSTOM_ID}")
         except Exception as e:
             _warn(f"could not register persistent view: {e!r}")
-    if not _PANEL_FALLBACK_LISTENER_REGISTERED:
+    if not _PANEL_VIEW_REGISTERED and not _PANEL_FALLBACK_LISTENER_REGISTERED:
         try:
             bot.add_listener(_component_fallback_listener, "on_interaction")
             _PANEL_FALLBACK_LISTENER_REGISTERED = True
-            _log("registered Create Ticket component fallback listener")
+            _log("persistent view unavailable; registered Create Ticket fallback listener")
         except Exception as e:
             _warn(f"could not register Create Ticket fallback listener: {e!r}")
+    elif _PANEL_VIEW_REGISTERED:
+        _PANEL_FALLBACK_LISTENER_REGISTERED = True
     if not _PANEL_GROUP_REGISTERED:
         try:
             if tree.get_command("ticket-panel", guild=None) is not None:

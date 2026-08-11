@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Load and advertise the shared guild operation queue.
 
-The actual queue lives in stoney_verify.operation_queue so commands, dashboard
-API handlers, setup guards, and Channel Builder code can import one shared
-implementation instead of each feature inventing its own locks.
+Integration guards remain only for legacy flows that have not yet moved their
+queue call into the canonical owner module. New/updated flows must import
+``stoney_verify.operation_queue`` directly.
 """
 
 from typing import Any
@@ -26,39 +26,43 @@ def _warn(message: str) -> None:
         pass
 
 
-def _load_integration_guards() -> None:
+def _load_remaining_legacy_integrations() -> None:
     for module_name in (
         "command_sync_operation_queue_guard",
-        "channel_builder_api_guard",
         "verification_operation_queue_guard",
-        "member_cleanup_operation_queue_guard",
         "spam_guard_operation_queue_guard",
     ):
         try:
             __import__(f"stoney_verify.startup_guards.{module_name}")
-            _log(f"integration guard loaded module={module_name}")
+            _log(f"legacy integration loaded module={module_name}")
         except Exception as e:
-            _warn(f"integration guard failed module={module_name}: {e!r}")
+            _warn(f"legacy integration failed module={module_name}: {e!r}")
 
 
 def install() -> bool:
     global _INSTALLED
     if _INSTALLED:
-        _load_integration_guards()
+        _load_remaining_legacy_integrations()
         return True
     _INSTALLED = True
 
     try:
-        from ..operation_queue import operation_queue_health_summary
+        from ..operation_queue import (
+            ensure_operation_queue_started_background,
+            operation_queue_health_summary,
+        )
 
+        ensure_operation_queue_started_background()
         summary: dict[str, Any] = operation_queue_health_summary()
         global_state = dict(summary.get("global") or {})
         _log(
-            "loaded; shared guild operation queue active "
+            "loaded; canonical guild operation queue active "
             f"max_global={global_state.get('max_global')} "
+            f"max_per_guild={global_state.get('max_per_guild')} "
+            f"max_per_type={global_state.get('max_per_type')} "
             f"persistence={global_state.get('persistence')}"
         )
-        _load_integration_guards()
+        _load_remaining_legacy_integrations()
         return True
     except Exception as e:
         _warn(f"failed to load operation queue: {e!r}")

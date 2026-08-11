@@ -4,7 +4,6 @@ on:
   pull_request:
     paths:
       - "stoney_verify/commands_ext/public_ticket_panel_clean.py"
-      - "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py"
       - "tests/test_public_ticket_panel_single_owner.py"
       - ".github/workflows/ticket-panel-owner.yml"
   push:
@@ -12,7 +11,6 @@ on:
       - main
     paths:
       - "stoney_verify/commands_ext/public_ticket_panel_clean.py"
-      - "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py"
       - "tests/test_public_ticket_panel_single_owner.py"
       - ".github/workflows/ticket-panel-owner.yml"
 
@@ -41,11 +39,10 @@ jobs:
           pip install -q -r requirements.txt
           pip install -q pytest
 
-      - name: Compile clean panel ownership modules
+      - name: Compile canonical ticket panel owner
         run: |
           python -m py_compile \
             stoney_verify/commands_ext/public_ticket_panel_clean.py \
-            stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py \
             tests/test_public_ticket_panel_single_owner.py
 
       - name: Run focused single-owner regressions

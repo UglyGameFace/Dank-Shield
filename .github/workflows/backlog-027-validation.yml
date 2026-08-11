@@ -1,0 +1,209 @@
+name: DS Backlog 027 Validation
+
+on:
+  pull_request:
+    paths:
+      - "stoney_verify/operation_queue.py"
+      - "stoney_verify/permission_repair.py"
+      - "stoney_verify/api_new/**"
+      - "stoney_verify/services/channel_builder_*.py"
+      - "stoney_verify/members_new/cleanup_service.py"
+      - "stoney_verify/members_new/join_*.py"
+      - "stoney_verify/verification_new/service.py"
+      - "stoney_verify/tickets_new/member_context_service.py"
+      - "stoney_verify/commands_ext/public_members_cleanup_group.py"
+      - "stoney_verify/commands_ext/public_ticket_panel_clean.py"
+      - "stoney_verify/commands_ext/public_diagnostics_group.py"
+      - "stoney_verify/setup_permission_repair_services.py"
+      - "stoney_verify/startup_guards/operation_queue_schema_guard.py"
+      - "supabase/migrations/20260811175500_operation_queue_security_hardening.sql"
+      - "tests/test_backlog_027_core.py"
+      - "tests/test_public_ticket_panel_single_owner.py"
+      - "tools/test_backlog_027_static.py"
+      - "tools/test_inactive_members_truth_gate_static.py"
+      - "tools/audit_channel_builder_queue.py"
+      - "tools/audit_ticket_category_menu.py"
+      - "tools/audit_ticket_panel_doctor.py"
+      - ".github/workflows/backlog-027-validation.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "stoney_verify/operation_queue.py"
+      - "stoney_verify/permission_repair.py"
+      - "stoney_verify/api_new/**"
+      - "stoney_verify/services/channel_builder_*.py"
+      - "stoney_verify/members_new/cleanup_service.py"
+      - "stoney_verify/members_new/join_*.py"
+      - "stoney_verify/verification_new/service.py"
+      - "stoney_verify/tickets_new/member_context_service.py"
+      - "stoney_verify/commands_ext/public_members_cleanup_group.py"
+      - "stoney_verify/commands_ext/public_ticket_panel_clean.py"
+      - "stoney_verify/commands_ext/public_diagnostics_group.py"
+      - "stoney_verify/setup_permission_repair_services.py"
+      - "stoney_verify/startup_guards/operation_queue_schema_guard.py"
+      - "supabase/migrations/20260811175500_operation_queue_security_hardening.sql"
+      - "tests/test_backlog_027_core.py"
+      - "tests/test_public_ticket_panel_single_owner.py"
+      - "tools/test_backlog_027_static.py"
+      - "tools/test_inactive_members_truth_gate_static.py"
+      - "tools/audit_channel_builder_queue.py"
+      - "tools/audit_ticket_category_menu.py"
+      - "tools/audit_ticket_panel_doctor.py"
+      - ".github/workflows/backlog-027-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-regressions:
+    name: Backlog Python regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+      - name: Compile changed canonical owners
+        run: |
+          python -m py_compile \
+            stoney_verify/operation_queue.py \
+            stoney_verify/permission_repair.py \
+            stoney_verify/api_new/server.py \
+            stoney_verify/api_new/queued_handlers.py \
+            stoney_verify/api_new/channel_builder_routes.py \
+            stoney_verify/services/channel_builder_execution.py \
+            stoney_verify/services/channel_builder_rollback_runtime.py \
+            stoney_verify/members_new/cleanup_service.py \
+            stoney_verify/members_new/join_context_service.py \
+            stoney_verify/members_new/join_truth_integrity.py \
+            stoney_verify/verification_new/service.py \
+            stoney_verify/tickets_new/member_context_service.py \
+            stoney_verify/commands_ext/public_members_cleanup_group.py \
+            stoney_verify/commands_ext/public_ticket_panel_clean.py \
+            stoney_verify/commands_ext/public_diagnostics_group.py \
+            stoney_verify/setup_permission_repair_services.py \
+            stoney_verify/startup_guards/operation_queue_schema_guard.py
+      - name: Run DS-BACKLOG-027 unit regressions
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          python -m pytest -q --tb=short \
+            tests/test_backlog_027_core.py \
+            tests/test_public_ticket_panel_single_owner.py
+      - name: Run static acceptance audits
+        run: |
+          python tools/test_backlog_027_static.py
+          python tools/test_inactive_members_truth_gate_static.py
+          python tools/audit_channel_builder_queue.py
+          python tools/audit_ticket_category_menu.py
+          python tools/audit_ticket_panel_doctor.py
+
+  operation-queue-sql:
+    name: Operation Queue SQL / RLS
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dank_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dank_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGPASSWORD: postgres
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGDATABASE: dank_test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare Supabase-compatible roles
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          create extension if not exists pgcrypto;
+          do $$ begin create role anon nologin; exception when duplicate_object then null; end $$;
+          do $$ begin create role authenticated nologin; exception when duplicate_object then null; end $$;
+          do $$ begin create role service_role nologin; exception when duplicate_object then null; end $$;
+          SQL
+      - name: Apply base queue migration and hardening twice
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260613_bot_operation_jobs.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260811175500_operation_queue_security_hardening.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260811175500_operation_queue_security_hardening.sql
+      - name: Verify RLS, grants, constraints, dedupe, and recovery indexes
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            rls_enabled boolean;
+            anon_select boolean;
+            auth_select boolean;
+            service_select boolean;
+            active_index integer;
+          begin
+            select relrowsecurity into rls_enabled
+              from pg_class c join pg_namespace n on n.oid = c.relnamespace
+             where n.nspname = 'public' and c.relname = 'bot_operation_jobs';
+            if rls_enabled is distinct from true then raise exception 'RLS not enabled'; end if;
+
+            select has_table_privilege('anon', 'public.bot_operation_jobs', 'SELECT') into anon_select;
+            select has_table_privilege('authenticated', 'public.bot_operation_jobs', 'SELECT') into auth_select;
+            select has_table_privilege('service_role', 'public.bot_operation_jobs', 'SELECT') into service_select;
+            if anon_select or auth_select or not service_select then
+              raise exception 'queue grants are wrong anon=% auth=% service=%', anon_select, auth_select, service_select;
+            end if;
+
+            select count(*) into active_index from pg_indexes
+             where schemaname='public' and tablename='bot_operation_jobs'
+               and indexname in ('idx_bot_operation_jobs_active_recovery','idx_bot_operation_jobs_guild_operation_active');
+            if active_index <> 2 then raise exception 'active recovery indexes missing'; end if;
+          end $$;
+
+          insert into public.bot_operation_jobs
+            (guild_id, actor_id, operation_type, risk_level, source, idempotency_key, payload_hash, status)
+          values
+            ('42','7','ticket_close','dangerous','dashboard','same-key','abc','queued');
+
+          do $$ begin
+            begin
+              insert into public.bot_operation_jobs
+                (guild_id, operation_type, risk_level, source, idempotency_key, payload_hash, status)
+              values ('42','ticket_close','dangerous','dashboard','same-key','abc','queued');
+              raise exception 'duplicate guild/idempotency key unexpectedly succeeded';
+            exception when unique_violation then null;
+            end;
+
+            begin
+              insert into public.bot_operation_jobs
+                (guild_id, operation_type, risk_level, source, idempotency_key, payload_hash, status)
+              values ('43','bad','dangerous','dashboard','x','abc','definitely_invalid');
+              raise exception 'invalid status unexpectedly succeeded';
+            exception when check_violation then null;
+            end;
+
+            begin
+              insert into public.bot_operation_jobs
+                (guild_id, operation_type, risk_level, source, idempotency_key, payload_hash, status)
+              values ('44','bad','dangerous','unknown_source','y','abc','queued');
+              raise exception 'invalid source unexpectedly succeeded';
+            exception when check_violation then null;
+            end;
+          end $$;
+          SQL

@@ -310,6 +310,11 @@ def _normalize_guild_member_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "verification_source": _clean_text(row.get("verification_source")),
         "entry_reason": _clean_text(row.get("entry_reason")),
         "approval_reason": _clean_text(row.get("approval_reason")),
+        "join_source": _clean_text(row.get("join_source")),
+        "entry_truth_quality": _clean_text(row.get("entry_truth_quality")),
+        "entry_confidence": _as_int(row.get("entry_confidence"), 0),
+        "entry_quality_reason": _clean_text(row.get("entry_quality_reason")),
+        "entry_conflict": _boolish(row.get("entry_conflict"), False),
         "raw": dict(row),
     }
 
@@ -334,6 +339,11 @@ def _normalize_member_join_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "approved_by_name": _clean_text(row.get("approved_by_name")),
         "source_ticket_id": _clean_text(row.get("source_ticket_id")),
         "join_note": _clean_text(row.get("join_note")),
+        "join_source": _clean_text(row.get("join_source")),
+        "entry_truth_quality": _clean_text(row.get("entry_truth_quality")),
+        "entry_confidence": _as_int(row.get("entry_confidence"), 0),
+        "entry_quality_reason": _clean_text(row.get("entry_quality_reason")),
+        "entry_conflict": _boolish(row.get("entry_conflict"), False),
         "raw": dict(row),
     }
 

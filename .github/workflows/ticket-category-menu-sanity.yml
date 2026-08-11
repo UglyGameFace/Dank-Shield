@@ -3,7 +3,7 @@ name: Ticket Category Menu Sanity
 on:
   pull_request:
     paths:
-      - "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py"
+      - "stoney_verify/commands_ext/public_ticket_panel_clean.py"
       - "stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py"
       - "stoney_verify/startup_guards/ticket_category_setup_guard.py"
       - "stoney_verify/startup_guards/ticket_form_default_templates_guard.py"
@@ -18,7 +18,7 @@ on:
       - ".github/workflows/ticket-category-menu-sanity.yml"
   push:
     paths:
-      - "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py"
+      - "stoney_verify/commands_ext/public_ticket_panel_clean.py"
       - "stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py"
       - "stoney_verify/startup_guards/ticket_category_setup_guard.py"
       - "stoney_verify/startup_guards/ticket_form_default_templates_guard.py"
