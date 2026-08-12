@@ -113,6 +113,37 @@ def test_studio_enabled_sends_without_legacy_join_toggle(
     assert isinstance(channel.sent[0]["file"], discord.File)
 
 
+def test_live_image_normalizes_decorative_unicode_without_changing_discord_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _guild, channel, member = _world()
+    member.display_name = "𝔼𝕪𝕖𝕫 𝕆𝕗 𝔹𝕠𝕓"
+    seen: dict[str, str] = {}
+
+    async def fake_config(_guild_id: int, *, refresh: bool = False) -> dict[str, object]:
+        return {
+            "welcome_card_enabled": True,
+            "join_welcome_channel_id": str(channel.id),
+            "welcome_join_body": "Welcome {display_name}",
+        }
+
+    async def fake_card(render_member: object, _cfg: object) -> discord.File:
+        seen["display_name"] = str(getattr(render_member, "display_name"))
+        return discord.File(BytesIO(b"card"), filename="welcome.png")
+
+    monkeypatch.setattr(runtime, "get_guild_config", fake_config)
+    monkeypatch.setattr(runtime, "welcome_card_file", fake_card)
+
+    result = asyncio.run(runtime.send_live_welcome_card(member))
+
+    assert result.sent is True
+    assert seen["display_name"] == "Eyez Of Bob"
+    embed = channel.sent[0]["embed"]
+    assert isinstance(embed, discord.Embed)
+    assert "𝔼𝕪𝕖𝕫 𝕆𝕗 𝔹𝕠𝕓" in (embed.description or "")
+    assert not getattr(embed.footer, "text", None)
+
+
 def test_disabled_studio_posts_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     _guild, channel, member = _world()
 
@@ -194,7 +225,7 @@ def test_render_failure_uses_one_canonical_embed_fallback_and_resolves_username_
     assert "Welcome Tester to Test Guild." == embed.description
     assert "{username}" not in (embed.title or "").lower()
     assert "{ username }" not in (embed.title or "").lower()
-    assert embed.footer.text == "dank_shield:welcome_card_runtime:v1"
+    assert not getattr(embed.footer, "text", None)
 
 
 def test_duplicate_join_delivery_is_suppressed(monkeypatch: pytest.MonkeyPatch) -> None:

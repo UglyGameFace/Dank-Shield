@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 router = (ROOT / "stoney_verify/startup_guards/member_lifecycle_router_guard.py").read_text(errors="ignore")
 join_runtime = (ROOT / "stoney_verify/welcome_card_runtime.py").read_text(errors="ignore")
 exit_runtime = (ROOT / "stoney_verify/exit_card_runtime.py").read_text(errors="ignore")
+card_text = (ROOT / "stoney_verify/lifecycle_card_text.py").read_text(errors="ignore")
 events = (ROOT / "stoney_verify/events.py").read_text(errors="ignore")
 fallback_path = ROOT / "stoney_verify/commands_ext/public_member_lifecycle_logs.py"
 fallback = fallback_path.read_text(errors="ignore") if fallback_path.exists() else ""
@@ -34,7 +35,7 @@ if "staff audit remains a separate route" not in router.lower():
     failures.append("router no longer documents that staff audit remains a separate route")
 
 required_join_runtime = [
-    'embed.set_footer(text="dank_shield:welcome_card_runtime:v1")',
+    "image_card_member(member)",
     "embed_links",
     "read_message_history",
     "duplicate_suppressed",
@@ -44,7 +45,7 @@ for marker in required_join_runtime:
         failures.append(f"join runtime missing marker: {marker}")
 
 required_exit_runtime = [
-    'embed.set_footer(text="dank_shield:exit_card_runtime:v1")',
+    "image_card_member(member)",
     "embed_links",
     "read_message_history",
     "duplicate_suppressed",
@@ -53,6 +54,16 @@ required_exit_runtime = [
 for marker in required_exit_runtime:
     if marker not in exit_runtime:
         failures.append(f"exit runtime missing marker: {marker}")
+
+for leaked_marker in (
+    "dank_shield:welcome_card_runtime:v1",
+    "dank_shield:exit_card_runtime:v1",
+):
+    if leaked_marker in join_runtime or leaked_marker in exit_runtime:
+        failures.append(f"live lifecycle runtime still exposes internal marker: {leaked_marker}")
+
+if 'unicodedata.normalize("NFKC", raw)' not in card_text:
+    failures.append("lifecycle bitmap text no longer normalizes compatibility Unicode")
 
 retired_public_sender_markers = [
     "join log sent guild=",

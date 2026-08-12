@@ -89,6 +89,8 @@ def test_canonical_runtime_owns_public_join_output() -> None:
     assert "delivery = await send_live_welcome_card(member)" in ROUTER
     assert "await _send_join_leave_join" not in ROUTER
     assert "dank_shield:join_leave_event:v3" not in CARD_RUNTIME
+    assert "dank_shield:welcome_card_runtime:v1" not in CARD_RUNTIME
+    assert "welcome_card_file(image_card_member(member), cfg)" in CARD_RUNTIME
 
 
 def test_staff_join_audit_and_canonical_public_exit_stay_separate() -> None:
@@ -97,7 +99,8 @@ def test_staff_join_audit_and_canonical_public_exit_stay_separate() -> None:
     assert "Public leave routing is owned by member_lifecycle_router_guard" in EVENTS
     assert "_install_listener(_leave_listener, \"on_member_remove\")" in ROUTER
     assert "delivery = await send_live_exit_card(member)" in ROUTER
-    assert 'embed.set_footer(text="dank_shield:exit_card_runtime:v1")' in EXIT_RUNTIME
+    assert "dank_shield:exit_card_runtime:v1" not in EXIT_RUNTIME
+    assert "exit_card_file(image_card_member(member), cfg)" in EXIT_RUNTIME
     assert 'set_footer(text="dank_shield:leave_event:v4")' not in ROUTER
 
 

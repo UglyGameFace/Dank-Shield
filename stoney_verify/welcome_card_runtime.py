@@ -16,6 +16,7 @@ from typing import Any, Mapping, Optional
 import discord
 
 from .guild_config import get_guild_config
+from .lifecycle_card_text import image_card_member
 from .lifecycle_template_renderer import (
     render_lifecycle_template,
     unresolved_known_placeholders,
@@ -195,7 +196,6 @@ def build_join_card_embed(member: discord.Member, cfg: Any) -> discord.Embed:
         embed.set_thumbnail(url=member.display_avatar.url)
     except Exception:
         pass
-    embed.set_footer(text="dank_shield:welcome_card_runtime:v1")
     return embed
 
 
@@ -251,7 +251,7 @@ async def send_live_welcome_card(member: discord.Member) -> WelcomeCardDelivery:
 
         if can_attach:
             try:
-                card = await welcome_card_file(member, cfg)
+                card = await welcome_card_file(image_card_member(member), cfg)
                 embed.set_image(url=f"attachment://{card.filename}")
                 message = await channel.send(
                     content=member.mention,

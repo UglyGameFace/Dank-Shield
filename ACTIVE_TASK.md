@@ -1,116 +1,49 @@
 # ACTIVE TASK
 
-## DS-BACKLOG-027 — Finish incorrectly bulk-closed production backlog
+## DS-LIFECYCLE-028 — Repair welcome/exit card visual integrity
 
-**Status:** ACTIVE — IMPLEMENTATION COMPLETE / FINAL VALIDATION
-**Branch:** `fix/ds-backlog-integrity-027`
-**PR:** #182 (draft)
-**Base:** merged `main` at `13759f84ce15ae5dcd7a48e01438d1dc94a1639b` (PR #181)
+**Status:** ACTIVE — IMPLEMENTED / VALIDATING
+**Branch:** `fix/ds-lifecycle-card-visual-integrity`
+**Base:** `03e90746c230b66599e8d931f86df56dd9fa0d8c` (merged PR #182)
 **Started:** 2026-08-11
 
-## Scope
+## Reported production failure
 
-Finish or correctly supersede the issues that were bulk-closed as completed without enough implementation evidence:
+The public join/leave log still exposed internal runtime identifiers in embed footers, including:
 
-- #119 — one-click channel/category permission repair
-- #57 — Channel Builder direct registration + remove compatibility shim
-- #56 — global guild operation queue completion/integration
-- #20 — production inactive-member cleanup execution
-- #11 — TicketTool parity stabilization umbrella completion/supersession
-- #2 — invite/join/inviter/approval truth pipeline completion/supersession
+- `dank_shield:welcome_card_runtime:v1`
+- `dank_shield:exit_card_runtime:v1`
 
-Issues #1 and #168 were independently verified as genuinely implemented and are not being reopened or rewritten.
+The generated bitmap card also rendered decorative Unicode display names as missing-glyph boxes even though Discord itself displayed the same names correctly.
 
-## Rules
+## Root cause
 
-- Do not use issue state as implementation evidence.
-- Fix owner files/services directly; remove obsolete compatibility shims instead of adding patch-on-patch behavior.
-- Preserve the compact `/dank` public command surface and current multi-server isolation.
-- No Administrator permission requirement for public installs.
-- Dangerous mutations must use shared queue/idempotency or an equivalent scoped exclusive path.
-- Definition of Done requires targeted tests, regression/static/compile coverage, cleanup/dead-code/conflict inspection, and exact-final-head CI before merge readiness.
+- `build_join_card_embed()` and `build_exit_card_embed()` explicitly wrote internal ownership/debug identifiers into public `Embed.set_footer()` calls.
+- Lifecycle duplicate suppression does not depend on those footers; both canonical runtimes already own scoped in-memory delivery locks/recent-delivery suppression.
+- The Pillow image path received the raw Discord `display_name`. Its existing `_safe_text()` logic handled whitespace/length only and did not normalize Unicode compatibility alphabets commonly used for decorative Discord names.
 
-## Implemented
+## Implementation
 
-### #57 Channel Builder direct registration
-- [x] `api_new/server.py` directly registers Channel Builder routes.
-- [x] Execution/preflight lives in canonical `services/channel_builder_execution.py`.
-- [x] Apply jobs produce real reverse-order rollback plans.
-- [x] Rollback can recover the completed source job through persistent queue storage after restart.
-- [x] Removed Channel Builder API injection/runtime-export shims and one-time registration workflow/codemod.
-- [x] Updated `tools/audit_channel_builder_queue.py` for the direct architecture.
+- [x] Removed internal runtime identifiers from live welcome-card and exit-card embed footers.
+- [x] Preserved embed timestamps and the original Discord-facing display-name/template text.
+- [x] Added `stoney_verify/lifecycle_card_text.py` as the shared bitmap-only text adapter.
+- [x] Apply Unicode NFKC compatibility normalization only to the member/server copy passed into lifecycle image rendering.
+- [x] Preserve ordinary accented, emoji, and non-Latin text instead of ASCII-stripping names.
+- [x] Updated canonical join and exit runtimes to render image files through the shared adapter.
+- [x] Added runtime regressions proving styled names become readable in image rendering while the public embed retains the original styled name.
+- [x] Updated welcome/exit wiring and join/leave centralization guards so leaked live runtime footer IDs cannot return silently.
+- [x] Added direct lifecycle image-text tests covering mathematical double-struck/script/monospace compatibility alphabets plus unchanged ordinary Unicode.
 
-### #119 Permission repair
-- [x] Added exact channel/category selection with feature-specific audit.
-- [x] Added Recommended Minimum and Full Dank Shield Control modes without Administrator.
-- [x] Safe Fix Access changes only missing permissions on Dank Shield's own overwrite.
-- [x] Explicit bot denies are preserved unless separately confirmed.
-- [x] Category-child repair is opt-in and previewed.
-- [x] Added hierarchy/managed-role/Manage Channels blockers and reauthorization fallback.
-- [x] Added before snapshots, audit records, undo token/restore.
-- [x] Integrated Specific Channel repair into setup and Fix Channel Access into diagnostics.
+## Validation required
 
-### #56 Operation queue
-- [x] Persistent job reattach and persistent idempotency lookup.
-- [x] Startup reconciliation of stale active jobs.
-- [x] Cancellation rules for queued/running jobs.
-- [x] Global/per-guild/per-operation backpressure.
-- [x] Duration/failure/retry/rate-limit/stale-recovery metrics and health output.
-- [x] Discord-aware retry helper for safe individual API calls.
-- [x] Structured API ticket/member mutations register directly through canonical queue handlers.
-- [x] Channel Builder apply/rollback use canonical queue and retry paths.
-- [x] Removed API/persistence/member-cleanup queue import-hook shims.
-- [x] Added RLS/service-role-only hardening migration and security-equivalent direct bootstrap.
-- [x] Normalized historical queue UUID default so migration/bootstrap contracts match.
-
-### #20 Inactive cleanup
-- [x] Preserved conservative scan/review engine and low-confidence protections.
-- [x] Actual cleanup execution now directly uses the canonical member-scoped operation queue.
-- [x] Final action-time scan/hierarchy/staff/owner/bot/lock safety remains required.
-- [x] Saved no-confirm mode actually works only for owner/Admin/configured Bot Manager.
-- [x] Bulk queue/purge-all finalize one persisted cleanup-run summary.
-- [x] At most one configured Discord modlog/status summary is posted per run.
-- [x] Removed member-cleanup queue monkeypatch.
-
-### #2 Join/approval truth
-- [x] Invite cache/diff work serialized per guild.
-- [x] Invite baseline readiness tracked across warm/detect paths.
-- [x] Historical inviter/join field aliases normalized.
-- [x] Original join attribution and later verification approval truth are separate.
-- [x] Staff approval cannot overwrite a confirmed original invite source.
-- [x] Contradictory join evidence is surfaced and downgraded instead of silently trusted.
-- [x] Shared member-context reader exposes truth quality/confidence/conflict.
-
-### #11 TicketTool parity umbrella
-- [x] Replaced stale May audit with current canonical ownership map.
-- [x] Persistent Create Ticket/category/Confirm/Back behavior remains in canonical panel owner.
-- [x] Moved stale-menu/duplicate-interaction/confirm/preflight behavior into `public_ticket_panel_clean.py` itself.
-- [x] Persistent view is primary owner; fallback listener is only a registration-failure fallback.
-- [x] Removed the two runtime callback rewrite guards.
-- [x] Updated ticket owner/category/doctor tests and audits so deleted shims are not hidden dependencies.
-- [x] Existing sharding/scale/schema/setup ownership linked in `docs/TICKETTOOL_PARITY_AUDIT.md`.
-
-## Validation state
-
-Permanent validation added:
-
-- `tests/test_backlog_027_core.py`
-- `tools/test_backlog_027_static.py`
-- `.github/workflows/backlog-027-validation.yml`
-- updated Channel Builder, ticket-category, ticket-panel-doctor, and ticket-panel-owner audits/workflows
-- PostgreSQL 16 apply-twice/RLS/grant/check/unique/recovery-index validation for the operation queue
-
-The first SQL run exposed a real historical mismatch: the June table had no DB UUID default while direct bootstrap did. The hardening migration now normalizes that with `gen_random_uuid()`.
-
-### Remaining Definition-of-Done gates
-- [ ] Exact final PR head: DS Backlog 027 Python regressions green.
-- [ ] Exact final PR head: operation queue PostgreSQL/RLS job green.
-- [ ] Exact final PR head: ticket/category/doctor/Channel Builder focused workflows green.
-- [ ] Exact final PR head: full Dank Shield CI unit/static/compile suite green.
-- [ ] Exact final PR head: Supabase preview/migration status green.
-- [ ] Final stale-reference/dead-file and unresolved-review-thread inspection.
-- [ ] Mark PR #182 ready only after every gate above passes.
+- [ ] Targeted welcome/exit runtime behavior tests green.
+- [ ] Lifecycle image-text tests green.
+- [ ] Welcome/exit wiring static tests green.
+- [ ] Join/leave centralization tool green.
+- [ ] Python compile/static coverage green.
+- [ ] Full Dank Shield CI green on exact final PR head.
+- [ ] Final diff/dead-reference/review-thread inspection complete.
 
 ## Definition of Done
 
-This task is complete only when the six questionable issues are fully implemented or deliberately superseded with exact canonical evidence, obsolete shims are removed, dangerous mutations are protected by canonical queue/idempotency paths, inactive cleanup safely executes rather than only scans, join/approval attribution remains truthful through reconcile paths, permission repair is usable end-to-end, and the exact final PR head passes targeted/regression/static/compile/SQL/Supabase validation with no unresolved review threads.
+A real join or leave must post a clean public lifecycle embed with no internal `dank_shield:*runtime*` footer text, generated card names using decorative compatibility alphabets must remain human-readable instead of tofu/missing-glyph boxes, normal Discord-facing names must not be rewritten, join/exit ownership and duplicate suppression must remain unchanged, and the exact final PR head must pass targeted plus full regression validation.
