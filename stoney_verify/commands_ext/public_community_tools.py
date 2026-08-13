@@ -41,7 +41,7 @@ from stoney_verify.community_tools_service import (
     set_sticky_poll_state,
 )
 from .public_quiet_notice import open_quiet_notice_center
-from .public_sticky_preview import show_sticky_preview
+from .public_sticky_preview import show_sticky_draft_preview, show_sticky_preview
 
 _ALLOWED_MENTIONS = discord.AllowedMentions.none()
 
@@ -165,8 +165,8 @@ def _sticky_status_embed(config: Optional[StickyConfig], poll: Optional[StickyPo
             name="Quick setup",
             value=(
                 "**1. Create / Edit** your message or embed.\n"
-                "**2. Preview / Test** the saved result privately or post a temporary 30-second test.\n"
-                "**3. Sticky Settings** holds pause, cadence, custom sender, and removal controls.\n"
+                "**2. Review the draft preview** and optionally post a temporary 30-second test.\n"
+                "**3. Publish Sticky** only when it looks right. Advanced options live in **Sticky Settings**.\n"
                 "For a persistent poll, use **Sticky Poll** instead."
             ),
             inline=False,
@@ -213,10 +213,10 @@ def _sticky_status_embed(config: Optional[StickyConfig], poll: Optional[StickyPo
     embed.add_field(name="Repeated pings", value="Blocked", inline=True)
     embed.add_field(
         name="Test safely",
-        value="Use **Preview / Test** to inspect the saved sticky or post a non-persistent 30-second test.",
+        value="Use **Preview / Test** to inspect the current live sticky or post a non-persistent 30-second test.",
         inline=False,
     )
-    embed.set_footer(text="Advanced controls are grouped under Sticky Settings • Quiet Server Notice runs separately")
+    embed.set_footer(text="Create / Edit now previews a draft before publishing • advanced controls are under Sticky Settings")
     return embed
 
 
@@ -499,11 +499,7 @@ class StickyRemoveConfirmView(_OwnedView):
     @discord.ui.button(label="Cancel", emoji="↩️", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _replace(
-            interaction,
-            embed=_sticky_status_embed(self.config),
-            view=StickyCenterView(self.owner_id, config=self.config, poll=None),
-        )
+        await _open_sticky_center(interaction)
 
 
 class StickyEditorModal(discord.ui.Modal, title="Create or edit sticky"):
@@ -556,20 +552,7 @@ class StickyEditorModal(discord.ui.Modal, title="Create or edit sticky"):
             thumbnail_url=str(self.thumbnail_url.value or ""),
             updated_by=int(interaction.user.id),
         )
-        try:
-            saved = await save_sticky(config)
-        except (InvalidCommunityToolValue, CommunityStorageUnavailable) as exc:
-            return await _private(interaction, f"❌ {exc}")
-        runtime = ensure_community_tools_runtime(interaction.client)
-        runtime.set_config(saved)
-        posted = await runtime.refresh_channel(channel, force=True)
-        text = "✅ Sticky saved and posted." if posted is not None else "⚠️ Sticky saved, but Dank Shield could not post it in this channel."
-        await _private(
-            interaction,
-            text,
-            embed=_sticky_status_embed(saved),
-            view=StickyCenterView(int(interaction.user.id), config=saved, poll=None),
-        )
+        await show_sticky_draft_preview(interaction, config)
 
 
 class StickySpeedModal(discord.ui.Modal, title="Sticky speed / cadence"):
