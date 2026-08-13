@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Private preview and non-persistent temporary test delivery for stickies."""
 
+from dataclasses import replace
 from typing import Any, Optional
 
 import discord
@@ -12,6 +13,7 @@ from stoney_verify.community_tools_service import (
     InvalidCommunityToolValue,
     StickyConfig,
     StickyPoll,
+    get_sticky,
     normalize_sticky,
     save_sticky,
 )
@@ -119,6 +121,24 @@ async def _post_temporary_test(
     await _private(interaction, note)
 
 
+def _merge_draft_with_live_state(draft: StickyConfig, current: Optional[StickyConfig]) -> StickyConfig:
+    """Keep content edits while preserving the latest operational/delivery state."""
+    if current is None:
+        return replace(draft, last_message_id=None, last_sent_at=None)
+    return replace(
+        draft,
+        enabled=current.enabled,
+        color=current.color,
+        interval_seconds=current.interval_seconds,
+        message_threshold=current.message_threshold,
+        use_webhook=current.use_webhook,
+        sender_name=current.sender_name,
+        sender_avatar_url=current.sender_avatar_url,
+        last_message_id=current.last_message_id,
+        last_sent_at=current.last_sent_at,
+    )
+
+
 class _OwnedPreviewView(discord.ui.View):
     def __init__(self, owner_id: int, *, timeout: float = 300) -> None:
         super().__init__(timeout=timeout)
@@ -162,7 +182,11 @@ class StickyDraftPreviewView(_OwnedPreviewView):
 
         await interaction.response.defer()
         try:
-            saved = await save_sticky(self.config)
+            current = await get_sticky(int(channel.id))
+            if current is not None and int(current.guild_id) != int(guild.id):
+                raise InvalidCommunityToolValue("The saved sticky does not belong to this server.")
+            publish_config = _merge_draft_with_live_state(self.config, current)
+            saved = await save_sticky(publish_config)
         except (InvalidCommunityToolValue, CommunityStorageUnavailable) as exc:
             return await interaction.followup.send(
                 f"❌ {exc}",
