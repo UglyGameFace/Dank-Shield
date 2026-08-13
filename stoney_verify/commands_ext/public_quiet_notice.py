@@ -351,12 +351,16 @@ class QuietNoticeModal(discord.ui.Modal, title="Quiet server notice"):
             seconds = parse_inactivity_duration(str(self.inactivity.value))
         except InvalidCommunityToolValue as exc:
             return await _private(interaction, f"❌ {exc}")
-        auto_clear = str(self.auto_clear.value).strip().lower() in {"y", "yes", "1", "true", "on"}
+
+        clear_choice = str(self.auto_clear.value).strip().lower()
+        if clear_choice not in {"y", "yes", "n", "no"}:
+            return await _private(interaction, "❌ For auto-clear, enter `yes` or `no`.")
+        auto_clear = clear_choice in {"y", "yes"}
+        now = utc_now()
         base = self.current or QuietNoticeConfig(
             guild_id=int(interaction.guild.id),
             channel_id=int(channel.id),
             content=_DEFAULT_QUIET_MESSAGE,
-            last_activity_at=utc_now(),
         )
         config = replace(
             base,
@@ -368,17 +372,23 @@ class QuietNoticeModal(discord.ui.Modal, title="Quiet server notice"):
             partner_name=str(self.partner_name.value or ""),
             partner_url=str(self.partner_url.value or ""),
             auto_clear=auto_clear,
-            last_activity_at=base.last_activity_at or utc_now(),
+            last_activity_at=now,
+            last_notice_message_id=None,
+            last_notice_sent_at=None,
             updated_by=int(interaction.user.id),
         )
         try:
             saved = await save_quiet_notice(config)
         except (InvalidCommunityToolValue, CommunityStorageUnavailable) as exc:
             return await _private(interaction, f"❌ {exc}")
-        ensure_community_tools_runtime(interaction.client).set_quiet_config(saved)
+
+        runtime = ensure_community_tools_runtime(interaction.client)
+        if self.current is not None and self.current.last_notice_message_id:
+            await runtime.delete_quiet_live_message(self.current)
+        runtime.set_quiet_config(saved)
         await _private(
             interaction,
-            "✅ Quiet notice saved. It will post once the entire server reaches the configured quiet time.",
+            "✅ Quiet notice saved. Its inactivity timer starts again from now.",
             embed=quiet_status_embed(saved),
             view=QuietNoticeCenterView(int(interaction.user.id), saved),
         )
