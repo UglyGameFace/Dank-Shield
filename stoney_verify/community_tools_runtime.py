@@ -342,25 +342,33 @@ class StickyRuntime:
         clear_live: bool,
     ) -> None:
         guild_id = int(config.guild_id)
+        lock = self._quiet_locks.setdefault(guild_id, asyncio.Lock())
         try:
-            if clear_live:
-                await self.delete_quiet_live_message(config)
-            try:
-                saved = await record_quiet_activity(
-                    guild_id,
-                    activity_at=observed,
-                    clear_delivery=clear_live,
+            async with lock:
+                latest = self._quiet_configs.get(guild_id) or config
+                should_clear_live = bool(
+                    latest.auto_clear
+                    and latest.last_notice_message_id
+                    and (clear_live or (_utc(latest.last_notice_sent_at) or observed) <= observed)
                 )
-            except CommunityStorageUnavailable:
-                saved = replace(
-                    config,
-                    last_activity_at=observed,
-                    last_notice_message_id=None if clear_live else config.last_notice_message_id,
-                    last_notice_sent_at=None if clear_live else config.last_notice_sent_at,
-                )
-            if saved is not None:
-                self.set_quiet_config(saved)
-                self._quiet_last_persisted[guild_id] = observed
+                if should_clear_live:
+                    await self.delete_quiet_live_message(latest)
+                try:
+                    saved = await record_quiet_activity(
+                        guild_id,
+                        activity_at=observed,
+                        clear_delivery=should_clear_live,
+                    )
+                except CommunityStorageUnavailable:
+                    saved = replace(
+                        latest,
+                        last_activity_at=observed,
+                        last_notice_message_id=None if should_clear_live else latest.last_notice_message_id,
+                        last_notice_sent_at=None if should_clear_live else latest.last_notice_sent_at,
+                    )
+                if saved is not None:
+                    self.set_quiet_config(saved)
+                    self._quiet_last_persisted[guild_id] = observed
         finally:
             self._quiet_activity_pending.discard(guild_id)
 
