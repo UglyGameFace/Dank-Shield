@@ -21,6 +21,12 @@ def test_quiet_activity_extends_the_single_canonical_message_listener() -> None:
     assert "bot.on_message =" not in RUNTIME
 
 
+def test_quiet_activity_and_delivery_share_the_same_per_guild_lock() -> None:
+    assert "self._quiet_locks: dict[int, asyncio.Lock]" in RUNTIME
+    assert RUNTIME.count("self._quiet_locks.setdefault(") >= 2
+    assert "latest = self._quiet_configs.get(guild_id) or config" in RUNTIME
+
+
 def test_quiet_notice_is_separate_from_channel_sticky_storage() -> None:
     assert 'QUIET_NOTICE_TABLE = "dank_quiet_notices"' in SERVICE
     assert "guild_id bigint primary key" in MIGRATION
@@ -43,6 +49,14 @@ def test_preview_and_quiet_test_paths_do_not_mutate_live_delivery_state() -> Non
     assert 'label="Post 30s Test"' in QUIET_UI
     assert "delete_after=30" in QUIET_UI
     assert "update_quiet_delivery" not in QUIET_UI
+
+
+def test_quiet_setup_edit_restarts_timer_and_clears_previous_delivery_state() -> None:
+    assert "last_activity_at=now" in QUIET_UI
+    assert "last_notice_message_id=None" in QUIET_UI
+    assert "last_notice_sent_at=None" in QUIET_UI
+    assert "Its inactivity timer starts again from now" in QUIET_UI
+    assert "For auto-clear, enter `yes` or `no`" in QUIET_UI
 
 
 def test_main_sticky_center_exposes_preview_and_quiet_notice_paths() -> None:
