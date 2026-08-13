@@ -59,11 +59,15 @@ def test_quiet_setup_edit_restarts_timer_and_clears_previous_delivery_state() ->
     assert "For auto-clear, enter `yes` or `no`" in QUIET_UI
 
 
-def test_main_sticky_center_exposes_preview_and_quiet_notice_paths() -> None:
+def test_main_sticky_center_is_compact_and_routes_advanced_controls() -> None:
     assert 'label="Preview / Test"' in MAIN_UI
+    assert 'label="Sticky Settings"' in MAIN_UI
     assert 'label="Quiet Server Notice"' in MAIN_UI
+    assert "class StickySettingsView" in MAIN_UI
     assert "show_sticky_preview" in MAIN_UI
     assert "open_quiet_notice_center" in MAIN_UI
+    assert "Advanced controls are grouped under Sticky Settings" in MAIN_UI
+    assert "Removal is kept here so destructive controls stay out of the main sticky screen" in MAIN_UI
 
 
 if __name__ == "__main__":
