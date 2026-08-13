@@ -42,7 +42,7 @@ def test_quiet_notice_schema_is_service_role_only_and_bounded() -> None:
 
 
 def test_temporary_preview_test_paths_do_not_mutate_live_delivery_state() -> None:
-    temporary_test = PREVIEW_UI.split("async def _post_temporary_test", 1)[1].split("class _OwnedPreviewView", 1)[0]
+    temporary_test = PREVIEW_UI.split("async def _post_temporary_test", 1)[1].split("def _merge_draft_with_live_state", 1)[0]
     assert 'delete_after=30' in temporary_test
     assert "save_sticky(" not in temporary_test
     assert "refresh_channel(" not in temporary_test
@@ -59,7 +59,10 @@ def test_create_edit_is_a_draft_until_explicit_publish() -> None:
     assert "save_sticky(" not in editor
     assert 'label="Publish Sticky"' in PREVIEW_UI
     assert 'label="Discard Draft"' in PREVIEW_UI
-    assert "save_sticky(self.config)" in PREVIEW_UI
+    assert "publish_config = _merge_draft_with_live_state(self.config, current)" in PREVIEW_UI
+    assert "saved = await save_sticky(publish_config)" in PREVIEW_UI
+    assert "last_message_id=current.last_message_id" in PREVIEW_UI
+    assert "enabled=current.enabled" in PREVIEW_UI
     assert "nothing has changed live yet" in PREVIEW_UI
 
 
