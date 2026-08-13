@@ -13,7 +13,7 @@ from stoney_verify.commands_ext.public_quiet_notice import (
     human_duration,
     parse_inactivity_duration,
 )
-from stoney_verify.commands_ext.public_sticky_preview import StickyPreviewTestView
+from stoney_verify.commands_ext.public_sticky_preview import StickyDraftPreviewView, StickyPreviewTestView
 from stoney_verify.community_quiet_notice_service import (
     QuietNoticeConfig,
     normalize_quiet_notice,
@@ -150,6 +150,12 @@ def test_normal_sticky_preview_exposes_non_persistent_30_second_test() -> None:
     sticky = StickyConfig(guild_id=1001, channel_id=2001, content="Hello", mode="plain")
     labels = _labels(StickyPreviewTestView(1, sticky, None))
     assert "Post 30s Test" in labels
+
+
+def test_sticky_draft_requires_explicit_publish_after_preview() -> None:
+    sticky = StickyConfig(guild_id=1001, channel_id=2001, content="Hello", mode="plain")
+    labels = _labels(StickyDraftPreviewView(1, sticky))
+    assert {"Publish Sticky", "Post 30s Test", "Discard Draft"} <= labels
 
 
 def test_main_sticky_center_stays_focused_and_advanced_actions_live_in_settings() -> None:
