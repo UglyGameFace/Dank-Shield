@@ -13,7 +13,11 @@ from stoney_verify.commands_ext.public_quiet_notice import (
     human_duration,
     parse_inactivity_duration,
 )
-from stoney_verify.commands_ext.public_sticky_preview import StickyDraftPreviewView, StickyPreviewTestView
+from stoney_verify.commands_ext.public_sticky_preview import (
+    StickyDraftPreviewView,
+    StickyPreviewTestView,
+    _merge_draft_with_live_state,
+)
 from stoney_verify.community_quiet_notice_service import (
     QuietNoticeConfig,
     normalize_quiet_notice,
@@ -98,7 +102,6 @@ def test_runtime_observes_human_activity_anywhere_in_configured_guild() -> None:
         runtime = StickyRuntime(SimpleNamespace())
         config = _quiet(last_activity_at=baseline)
         runtime.set_quiet_config(config)
-        # Prevent the background watcher from being created by this focused unit test.
         task = runtime._quiet_watch_task
         if task is not None:
             task.cancel()
@@ -156,6 +159,52 @@ def test_sticky_draft_requires_explicit_publish_after_preview() -> None:
     sticky = StickyConfig(guild_id=1001, channel_id=2001, content="Hello", mode="plain")
     labels = _labels(StickyDraftPreviewView(1, sticky))
     assert {"Publish Sticky", "Post 30s Test", "Discard Draft"} <= labels
+
+
+def test_draft_publish_preserves_latest_live_operational_and_delivery_state() -> None:
+    sent_at = datetime(2026, 8, 12, 15, 0, tzinfo=timezone.utc)
+    current = StickyConfig(
+        guild_id=1001,
+        channel_id=2001,
+        enabled=False,
+        content="old",
+        mode="plain",
+        color=0x123456,
+        interval_seconds=90,
+        message_threshold=12,
+        use_webhook=True,
+        sender_name="Community Host",
+        sender_avatar_url="https://example.com/avatar.png",
+        last_message_id=9999,
+        last_sent_at=sent_at,
+    )
+    draft = StickyConfig(
+        guild_id=1001,
+        channel_id=2001,
+        enabled=True,
+        content="new copy",
+        mode="embed",
+        title="New title",
+        interval_seconds=15,
+        message_threshold=5,
+        last_message_id=1111,
+    )
+    merged = _merge_draft_with_live_state(draft, current)
+    assert merged.content == "new copy"
+    assert merged.mode == "embed"
+    assert merged.title == "New title"
+    assert merged.enabled is False
+    assert merged.color == 0x123456
+    assert merged.interval_seconds == 90
+    assert merged.message_threshold == 12
+    assert merged.use_webhook is True
+    assert merged.sender_name == "Community Host"
+    assert merged.last_message_id == 9999
+    assert merged.last_sent_at == sent_at
+
+    fresh = _merge_draft_with_live_state(draft, None)
+    assert fresh.last_message_id is None
+    assert fresh.last_sent_at is None
 
 
 def test_main_sticky_center_stays_focused_and_advanced_actions_live_in_settings() -> None:
