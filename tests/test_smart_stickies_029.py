@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import discord
 import pytest
@@ -16,6 +18,7 @@ from stoney_verify.community_quiet_notice_service import (
     normalize_quiet_notice,
 )
 from stoney_verify.community_tools_runtime import (
+    StickyRuntime,
     quiet_notice_embed,
     quiet_notice_view,
     should_send_quiet_notice,
@@ -85,6 +88,37 @@ def test_quiet_notice_fires_once_per_quiet_cycle_and_rearms_after_activity() -> 
         last_activity_at=new_activity,
         now=new_activity + timedelta(hours=2, seconds=1),
     ) is True
+
+
+def test_runtime_observes_human_activity_anywhere_in_configured_guild() -> None:
+    async def scenario() -> None:
+        baseline = datetime(2026, 8, 12, 12, 0, tzinfo=timezone.utc)
+        observed = baseline + timedelta(seconds=10)
+        runtime = StickyRuntime(SimpleNamespace())
+        config = _quiet(last_activity_at=baseline)
+        runtime.set_quiet_config(config)
+        # Prevent the background watcher from being created by this focused unit test.
+        task = runtime._quiet_watch_task
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            runtime._quiet_watch_task = None
+
+        message = SimpleNamespace(
+            guild=SimpleNamespace(id=1001),
+            author=SimpleNamespace(bot=False),
+            webhook_id=None,
+            channel=SimpleNamespace(id=9999),
+            created_at=observed,
+        )
+        await runtime.on_message(message)
+        assert runtime._guild_last_activity[1001] == observed
+        assert 9999 not in runtime._configs
+
+    asyncio.run(scenario())
 
 
 def test_quiet_notice_preview_has_optional_partner_link_and_clear_truth() -> None:
