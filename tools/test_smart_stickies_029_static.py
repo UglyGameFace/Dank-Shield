@@ -41,14 +41,26 @@ def test_quiet_notice_schema_is_service_role_only_and_bounded() -> None:
     assert "grant all on table public.dank_quiet_notices to service_role" in MIGRATION
 
 
-def test_preview_and_quiet_test_paths_do_not_mutate_live_delivery_state() -> None:
-    assert 'label="Post 30s Test"' in PREVIEW_UI
-    assert "delete_after=30" in PREVIEW_UI
-    assert "refresh_channel" not in PREVIEW_UI
+def test_temporary_preview_test_paths_do_not_mutate_live_delivery_state() -> None:
+    temporary_test = PREVIEW_UI.split("async def _post_temporary_test", 1)[1].split("class _OwnedPreviewView", 1)[0]
+    assert 'delete_after=30' in temporary_test
+    assert "save_sticky(" not in temporary_test
+    assert "refresh_channel(" not in temporary_test
     assert "update_sticky_delivery" not in PREVIEW_UI
+
     assert 'label="Post 30s Test"' in QUIET_UI
     assert "delete_after=30" in QUIET_UI
     assert "update_quiet_delivery" not in QUIET_UI
+
+
+def test_create_edit_is_a_draft_until_explicit_publish() -> None:
+    editor = MAIN_UI.split("class StickyEditorModal", 1)[1].split("class StickySpeedModal", 1)[0]
+    assert "await show_sticky_draft_preview(interaction, config)" in editor
+    assert "save_sticky(" not in editor
+    assert 'label="Publish Sticky"' in PREVIEW_UI
+    assert 'label="Discard Draft"' in PREVIEW_UI
+    assert "save_sticky(self.config)" in PREVIEW_UI
+    assert "nothing has changed live yet" in PREVIEW_UI
 
 
 def test_quiet_setup_edit_restarts_timer_and_clears_previous_delivery_state() -> None:
@@ -66,7 +78,7 @@ def test_main_sticky_center_is_compact_and_routes_advanced_controls() -> None:
     assert "class StickySettingsView" in MAIN_UI
     assert "show_sticky_preview" in MAIN_UI
     assert "open_quiet_notice_center" in MAIN_UI
-    assert "Advanced controls are grouped under Sticky Settings" in MAIN_UI
+    assert "advanced controls are under Sticky Settings" in MAIN_UI
     assert "Removal is kept here so destructive controls stay out of the main sticky screen" in MAIN_UI
 
 
