@@ -196,17 +196,18 @@ class StickyDraftPreviewView(_OwnedPreviewView):
 
         runtime = ensure_community_tools_runtime(interaction.client)
         runtime.set_config(saved)
-        posted = await runtime.refresh_channel(channel, force=True)
+        posted = await runtime.refresh_channel(channel, force=True) if saved.enabled else None
 
         # Local import avoids a module-import cycle while still returning the user
         # to the canonical Sticky Center after the draft is actually published.
         from .public_community_tools import StickyCenterView, _sticky_status_embed
 
-        message = (
-            "✅ Sticky published."
-            if posted is not None
-            else "⚠️ Sticky was saved, but Dank Shield could not post it in this channel. Check channel permissions before retrying."
-        )
+        if not saved.enabled:
+            message = "✅ Sticky changes saved. It is still **paused**, so nothing was posted live. Resume it from Sticky Settings when ready."
+        elif posted is not None:
+            message = "✅ Sticky published."
+        else:
+            message = "⚠️ Sticky was saved, but Dank Shield could not post it in this channel. Check channel permissions before retrying."
         await interaction.edit_original_response(
             content=message,
             embed=_sticky_status_embed(saved),
