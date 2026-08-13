@@ -160,10 +160,15 @@ class StickyDraftPreviewView(_OwnedPreviewView):
         if int(channel.id) != int(self.config.channel_id) or int(guild.id) != int(self.config.guild_id):
             return await _private(interaction, "❌ This draft belongs to a different server channel. Reopen Sticky Messages there.")
 
+        await interaction.response.defer()
         try:
             saved = await save_sticky(self.config)
         except (InvalidCommunityToolValue, CommunityStorageUnavailable) as exc:
-            return await _private(interaction, f"❌ {exc}")
+            return await interaction.followup.send(
+                f"❌ {exc}",
+                ephemeral=True,
+                allowed_mentions=_ALLOWED_MENTIONS,
+            )
 
         runtime = ensure_community_tools_runtime(interaction.client)
         runtime.set_config(saved)
@@ -178,12 +183,13 @@ class StickyDraftPreviewView(_OwnedPreviewView):
             if posted is not None
             else "⚠️ Sticky was saved, but Dank Shield could not post it in this channel. Check channel permissions before retrying."
         )
-        await _private(
-            interaction,
-            message,
+        await interaction.edit_original_response(
+            content=message,
             embed=_sticky_status_embed(saved),
             view=StickyCenterView(int(interaction.user.id), config=saved, poll=None),
+            allowed_mentions=_ALLOWED_MENTIONS,
         )
+        self.stop()
 
     @discord.ui.button(label="Post 30s Test", emoji="🧪", style=discord.ButtonStyle.primary)
     async def post_test(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -193,7 +199,12 @@ class StickyDraftPreviewView(_OwnedPreviewView):
     @discord.ui.button(label="Discard Draft", emoji="✖️", style=discord.ButtonStyle.secondary)
     async def discard(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _private(interaction, "✅ Draft discarded. The current live sticky was not changed.")
+        await interaction.response.edit_message(
+            content="✅ Draft discarded. The current live sticky was not changed.",
+            embed=None,
+            view=None,
+            allowed_mentions=_ALLOWED_MENTIONS,
+        )
         self.stop()
 
 
