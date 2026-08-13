@@ -6,8 +6,15 @@ from typing import Any, Optional
 
 import discord
 
-from stoney_verify.community_tools_runtime import sticky_embed, sticky_poll_embed
-from stoney_verify.community_tools_service import StickyConfig, StickyPoll
+from stoney_verify.community_tools_runtime import ensure_community_tools_runtime, sticky_embed, sticky_poll_embed
+from stoney_verify.community_tools_service import (
+    CommunityStorageUnavailable,
+    InvalidCommunityToolValue,
+    StickyConfig,
+    StickyPoll,
+    normalize_sticky,
+    save_sticky,
+)
 
 _ALLOWED_MENTIONS = discord.AllowedMentions.none()
 
@@ -25,98 +32,35 @@ def _text_channel(interaction: discord.Interaction) -> Optional[discord.TextChan
     return channel if isinstance(channel, discord.TextChannel) else None
 
 
-class StickyPreviewTestView(discord.ui.View):
-    def __init__(self, owner_id: int, config: StickyConfig, poll: Optional[StickyPoll]) -> None:
-        super().__init__(timeout=300)
-        self.owner_id = int(owner_id)
-        self.config = config
-        self.poll = poll
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if int(interaction.user.id) == self.owner_id:
-            return True
-        await interaction.response.send_message(
-            "❌ Open your own Sticky Messages panel to run a test.",
-            ephemeral=True,
-            allowed_mentions=_ALLOWED_MENTIONS,
-        )
-        return False
-
-    @discord.ui.button(label="Post 30s Test", emoji="🧪", style=discord.ButtonStyle.primary)
-    async def post_test(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if not _manage_messages(interaction):
-            return await interaction.response.send_message(
-                "❌ Temporary sticky tests require **Manage Messages**.",
-                ephemeral=True,
-                allowed_mentions=_ALLOWED_MENTIONS,
-            )
-        channel = _text_channel(interaction)
-        if channel is None:
-            return await interaction.response.send_message(
-                "❌ Run the test inside a normal text channel.",
-                ephemeral=True,
-                allowed_mentions=_ALLOWED_MENTIONS,
-            )
-
-        try:
-            if self.config.mode == "plain":
-                await channel.send(
-                    content=self.config.content,
-                    allowed_mentions=_ALLOWED_MENTIONS,
-                    delete_after=30,
-                )
-            elif self.config.mode == "embed":
-                await channel.send(
-                    embed=sticky_embed(self.config),
-                    allowed_mentions=_ALLOWED_MENTIONS,
-                    delete_after=30,
-                )
-            elif self.config.mode == "poll" and self.poll is not None:
-                await channel.send(
-                    content="🧪 **Sticky poll test** — voting is disabled in temporary tests.",
-                    embed=sticky_poll_embed(self.poll),
-                    allowed_mentions=_ALLOWED_MENTIONS,
-                    delete_after=30,
-                )
-            else:
-                return await interaction.response.send_message(
-                    "❌ This sticky is missing preview data.",
-                    ephemeral=True,
-                    allowed_mentions=_ALLOWED_MENTIONS,
-                )
-        except (discord.Forbidden, discord.HTTPException):
-            return await interaction.response.send_message(
-                "❌ Dank Shield could not post the temporary test in this channel.",
-                ephemeral=True,
-                allowed_mentions=_ALLOWED_MENTIONS,
-            )
-
-        note = "✅ Temporary test posted for 30 seconds. It did **not** move or replace the real sticky."
-        if self.config.use_webhook:
-            note += " The test uses Dank Shield's identity; the live sticky will still use your configured custom sender."
-        await interaction.response.send_message(note, ephemeral=True, allowed_mentions=_ALLOWED_MENTIONS)
-
-
-async def show_sticky_preview(
+async def _private(
     interaction: discord.Interaction,
-    config: Optional[StickyConfig],
-    poll: Optional[StickyPoll],
+    content: str,
+    *,
+    embed: Optional[discord.Embed] = None,
+    view: Optional[discord.ui.View] = None,
 ) -> None:
-    if not _manage_messages(interaction):
-        return await interaction.response.send_message(
-            "❌ Sticky preview requires **Manage Messages**.",
-            ephemeral=True,
-            allowed_mentions=_ALLOWED_MENTIONS,
-        )
-    if config is None:
-        return await interaction.response.send_message(
-            "ℹ️ Create a sticky first, then come back here to preview it before changing the live message.",
-            ephemeral=True,
-            allowed_mentions=_ALLOWED_MENTIONS,
-        )
+    payload: dict[str, Any] = {
+        "content": content,
+        "ephemeral": True,
+        "allowed_mentions": _ALLOWED_MENTIONS,
+    }
+    if embed is not None:
+        payload["embed"] = embed
+    if view is not None:
+        payload["view"] = view
+    if interaction.response.is_done():
+        await interaction.followup.send(**payload)
+    else:
+        await interaction.response.send_message(**payload)
 
-    content = "👁️ **Private sticky preview** — only you can see this."
+
+def _preview_payload(config: StickyConfig, poll: Optional[StickyPoll], *, draft: bool) -> tuple[str, Optional[discord.Embed]]:
+    prefix = (
+        "👁️ **Draft preview** — nothing has changed live yet."
+        if draft
+        else "👁️ **Private sticky preview** — only you can see this."
+    )
+    content = prefix
     embed: Optional[discord.Embed] = None
     if config.mode == "plain":
         content += f"\n\n{config.content}"
@@ -130,7 +74,140 @@ async def show_sticky_preview(
 
     if config.use_webhook:
         content += f"\n\n🎭 **Live sender:** {config.sender_name or 'Dank Shield'}"
+    return content, embed
 
+
+async def _post_temporary_test(
+    interaction: discord.Interaction,
+    config: StickyConfig,
+    poll: Optional[StickyPoll],
+) -> None:
+    if not _manage_messages(interaction):
+        return await _private(interaction, "❌ Temporary sticky tests require **Manage Messages**.")
+    channel = _text_channel(interaction)
+    if channel is None:
+        return await _private(interaction, "❌ Run the test inside a normal text channel.")
+
+    try:
+        if config.mode == "plain":
+            await channel.send(
+                content=config.content,
+                allowed_mentions=_ALLOWED_MENTIONS,
+                delete_after=30,
+            )
+        elif config.mode == "embed":
+            await channel.send(
+                embed=sticky_embed(config),
+                allowed_mentions=_ALLOWED_MENTIONS,
+                delete_after=30,
+            )
+        elif config.mode == "poll" and poll is not None:
+            await channel.send(
+                content="🧪 **Sticky poll test** — voting is disabled in temporary tests.",
+                embed=sticky_poll_embed(poll),
+                allowed_mentions=_ALLOWED_MENTIONS,
+                delete_after=30,
+            )
+        else:
+            return await _private(interaction, "❌ This sticky is missing preview data.")
+    except (discord.Forbidden, discord.HTTPException):
+        return await _private(interaction, "❌ Dank Shield could not post the temporary test in this channel.")
+
+    note = "✅ Temporary test posted for 30 seconds. It did **not** move or replace the real sticky."
+    if config.use_webhook:
+        note += " The test uses Dank Shield's identity; the live sticky will still use your configured custom sender."
+    await _private(interaction, note)
+
+
+class _OwnedPreviewView(discord.ui.View):
+    def __init__(self, owner_id: int, *, timeout: float = 300) -> None:
+        super().__init__(timeout=timeout)
+        self.owner_id = int(owner_id)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) == self.owner_id:
+            return True
+        await _private(interaction, "❌ Open your own Sticky Messages panel to use these controls.")
+        return False
+
+
+class StickyPreviewTestView(_OwnedPreviewView):
+    def __init__(self, owner_id: int, config: StickyConfig, poll: Optional[StickyPoll]) -> None:
+        super().__init__(owner_id)
+        self.config = config
+        self.poll = poll
+
+    @discord.ui.button(label="Post 30s Test", emoji="🧪", style=discord.ButtonStyle.primary)
+    async def post_test(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _post_temporary_test(interaction, self.config, self.poll)
+
+
+class StickyDraftPreviewView(_OwnedPreviewView):
+    def __init__(self, owner_id: int, config: StickyConfig) -> None:
+        super().__init__(owner_id)
+        self.config = config
+
+    @discord.ui.button(label="Publish Sticky", emoji="✅", style=discord.ButtonStyle.success)
+    async def publish(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not _manage_messages(interaction):
+            return await _private(interaction, "❌ Publishing a sticky requires **Manage Messages**.")
+        channel = _text_channel(interaction)
+        guild = interaction.guild
+        if channel is None or guild is None:
+            return await _private(interaction, "❌ Publish the sticky from its destination text channel.")
+        if int(channel.id) != int(self.config.channel_id) or int(guild.id) != int(self.config.guild_id):
+            return await _private(interaction, "❌ This draft belongs to a different server channel. Reopen Sticky Messages there.")
+
+        try:
+            saved = await save_sticky(self.config)
+        except (InvalidCommunityToolValue, CommunityStorageUnavailable) as exc:
+            return await _private(interaction, f"❌ {exc}")
+
+        runtime = ensure_community_tools_runtime(interaction.client)
+        runtime.set_config(saved)
+        posted = await runtime.refresh_channel(channel, force=True)
+
+        # Local import avoids a module-import cycle while still returning the user
+        # to the canonical Sticky Center after the draft is actually published.
+        from .public_community_tools import StickyCenterView, _sticky_status_embed
+
+        message = (
+            "✅ Sticky published."
+            if posted is not None
+            else "⚠️ Sticky was saved, but Dank Shield could not post it in this channel. Check channel permissions before retrying."
+        )
+        await _private(
+            interaction,
+            message,
+            embed=_sticky_status_embed(saved),
+            view=StickyCenterView(int(interaction.user.id), config=saved, poll=None),
+        )
+
+    @discord.ui.button(label="Post 30s Test", emoji="🧪", style=discord.ButtonStyle.primary)
+    async def post_test(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _post_temporary_test(interaction, self.config, None)
+
+    @discord.ui.button(label="Discard Draft", emoji="✖️", style=discord.ButtonStyle.secondary)
+    async def discard(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _private(interaction, "✅ Draft discarded. The current live sticky was not changed.")
+        self.stop()
+
+
+async def show_sticky_preview(
+    interaction: discord.Interaction,
+    config: Optional[StickyConfig],
+    poll: Optional[StickyPoll],
+) -> None:
+    if not _manage_messages(interaction):
+        return await _private(interaction, "❌ Sticky preview requires **Manage Messages**.")
+    if config is None:
+        return await _private(interaction, "ℹ️ Create a sticky draft first, then preview it before publishing.")
+
+    content, embed = _preview_payload(config, poll, draft=False)
     payload: dict[str, Any] = {
         "content": content,
         "ephemeral": True,
@@ -142,4 +219,30 @@ async def show_sticky_preview(
     await interaction.response.send_message(**payload)
 
 
-__all__ = ["StickyPreviewTestView", "show_sticky_preview"]
+async def show_sticky_draft_preview(interaction: discord.Interaction, config: StickyConfig) -> None:
+    if not _manage_messages(interaction):
+        return await _private(interaction, "❌ Sticky preview requires **Manage Messages**.")
+    try:
+        safe = normalize_sticky(config)
+    except InvalidCommunityToolValue as exc:
+        return await _private(interaction, f"❌ {exc}")
+
+    content, embed = _preview_payload(safe, None, draft=True)
+    content += "\n\nUse **Publish Sticky** only when this looks right. You can also post a 30-second test first."
+    payload: dict[str, Any] = {
+        "content": content,
+        "ephemeral": True,
+        "allowed_mentions": _ALLOWED_MENTIONS,
+        "view": StickyDraftPreviewView(int(interaction.user.id), safe),
+    }
+    if embed is not None:
+        payload["embed"] = embed
+    await interaction.response.send_message(**payload)
+
+
+__all__ = [
+    "StickyDraftPreviewView",
+    "StickyPreviewTestView",
+    "show_sticky_draft_preview",
+    "show_sticky_preview",
+]
