@@ -41,6 +41,8 @@ from stoney_verify.community_tools_service import (
     set_sticky_enabled,
     set_sticky_poll_state,
 )
+from .public_quiet_notice import open_quiet_notice_center
+from .public_sticky_preview import show_sticky_preview
 
 _ALLOWED_MENTIONS = discord.AllowedMentions.none()
 
@@ -133,7 +135,10 @@ def _center_embed() -> discord.Embed:
     )
     embed.add_field(
         name="Persistent messages",
-        value="📌 One smart sticky per channel • plain/embed/poll • pause/resume • custom cadence • images • custom sender",
+        value=(
+            "📌 Smart channel stickies • 👁️ private preview + 30s test • 🌙 quiet-server notices • "
+            "plain/embed/poll • custom cadence • custom sender"
+        ),
         inline=False,
     )
     embed.add_field(
@@ -154,15 +159,28 @@ def _sticky_status_embed(config: Optional[StickyConfig], poll: Optional[StickyPo
     if config is None:
         embed = discord.Embed(
             title="📌 Sticky Messages",
-            description="No sticky is configured in this channel yet.",
+            description="No normal channel sticky is configured here yet.",
             color=discord.Color.blurple(),
         )
         embed.add_field(
-            name="Start here",
-            value="Use **Create / Edit** for a plain message or rich embed, or **Sticky Poll** for a persistent poll.",
+            name="Quick setup",
+            value=(
+                "**1. Create / Edit** your message or embed.\n"
+                "**2. Preview / Test** it privately or post a temporary 30-second test.\n"
+                "**3. Speed / Cadence** and **Custom Sender** are optional fine-tuning.\n"
+                "For a persistent poll, use **Sticky Poll** instead."
+            ),
             inline=False,
         )
-        embed.set_footer(text="Default movement: after 15 seconds or 5 new human messages")
+        embed.add_field(
+            name="Want a message only when the server gets quiet?",
+            value=(
+                "Use **Quiet Server Notice**. It watches human chat activity across the whole server and posts once "
+                "after the inactivity time you choose—great for partner servers, secondary communities, and off-hours."
+            ),
+            inline=False,
+        )
+        embed.set_footer(text="Normal sticky default: move after 15 seconds or 5 new human messages")
         return embed
 
     state = "▶️ Active" if config.enabled else "⏸️ Paused"
@@ -198,6 +216,12 @@ def _sticky_status_embed(config: Optional[StickyConfig], poll: Optional[StickyPo
         value="Blocked",
         inline=True,
     )
+    embed.add_field(
+        name="Before changing it live",
+        value="Use **Preview / Test** to inspect the current sticky or post a non-persistent 30-second test.",
+        inline=False,
+    )
+    embed.set_footer(text="Quiet Server Notice is separate and can run alongside this channel sticky")
     return embed
 
 
@@ -293,11 +317,31 @@ class StickyCenterView(_OwnedView):
         super().__init__(owner_id)
         self.config = config
         self.poll = poll
+        for item in self.children:
+            label = str(getattr(item, "label", "") or "")
+            if config is None and label in {
+                "Preview / Test",
+                "Pause / Resume",
+                "Remove",
+                "Speed / Cadence",
+                "Custom Sender",
+                "Poll Controls",
+            }:
+                item.disabled = True
+            elif label == "Poll Controls" and (config.mode != "poll" or poll is None):
+                item.disabled = True
+            elif label == "Custom Sender" and config.mode == "poll":
+                item.disabled = True
 
     @discord.ui.button(label="Create / Edit", emoji="✏️", style=discord.ButtonStyle.primary, row=0)
     async def edit(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.send_modal(StickyEditorModal(self.config))
+
+    @discord.ui.button(label="Preview / Test", emoji="👁️", style=discord.ButtonStyle.secondary, row=0)
+    async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await show_sticky_preview(interaction, self.config, self.poll)
 
     @discord.ui.button(label="Pause / Resume", emoji="⏯️", style=discord.ButtonStyle.secondary, row=0)
     async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -318,21 +362,6 @@ class StickyCenterView(_OwnedView):
             if saved.enabled:
                 await runtime.refresh_channel(channel, force=True)
         await _open_sticky_center(interaction, replace_message=False)
-
-    @discord.ui.button(label="Remove", emoji="🗑️", style=discord.ButtonStyle.danger, row=0)
-    async def remove(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if self.config is None:
-            return await _private(interaction, "❌ There is no sticky in this channel.")
-        await _replace(
-            interaction,
-            embed=discord.Embed(
-                title="Remove sticky?",
-                description="This deletes the saved sticky and its sticky-poll state for this channel.",
-                color=discord.Color.red(),
-            ),
-            view=StickyRemoveConfirmView(self.owner_id, self.config),
-        )
 
     @discord.ui.button(label="Server Stickies", emoji="📋", style=discord.ButtonStyle.secondary, row=1)
     async def list_server(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -372,6 +401,11 @@ class StickyCenterView(_OwnedView):
             return await _private(interaction, "❌ Custom sender personas require **Manage Webhooks**.")
         await interaction.response.send_modal(StickyPersonaModal(self.config))
 
+    @discord.ui.button(label="Quiet Server Notice", emoji="🌙", style=discord.ButtonStyle.success, row=2)
+    async def quiet_notice(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_quiet_notice_center(interaction)
+
     @discord.ui.button(label="Sticky Poll", emoji="📊", style=discord.ButtonStyle.success, row=2)
     async def sticky_poll(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -386,6 +420,21 @@ class StickyCenterView(_OwnedView):
             interaction,
             embed=sticky_poll_embed(self.poll),
             view=StickyPollControlView(self.owner_id, self.config, self.poll),
+        )
+
+    @discord.ui.button(label="Remove", emoji="🗑️", style=discord.ButtonStyle.danger, row=3)
+    async def remove(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if self.config is None:
+            return await _private(interaction, "❌ There is no sticky in this channel.")
+        await _replace(
+            interaction,
+            embed=discord.Embed(
+                title="Remove sticky?",
+                description="This deletes the saved sticky and its sticky-poll state for this channel. Quiet Server Notice is separate and is not removed.",
+                color=discord.Color.red(),
+            ),
+            view=StickyRemoveConfirmView(self.owner_id, self.config),
         )
 
     @discord.ui.button(label="Community Tools", emoji="🧰", style=discord.ButtonStyle.secondary, row=3)
