@@ -20,7 +20,6 @@ from stoney_verify.community_lookup_service import (
     wikipedia_lookup,
 )
 from stoney_verify.community_tools_runtime import (
-    community_tools_runtime,
     ensure_community_tools_runtime,
     sticky_poll_embed,
 )
@@ -166,8 +165,8 @@ def _sticky_status_embed(config: Optional[StickyConfig], poll: Optional[StickyPo
             name="Quick setup",
             value=(
                 "**1. Create / Edit** your message or embed.\n"
-                "**2. Preview / Test** it privately or post a temporary 30-second test.\n"
-                "**3. Speed / Cadence** and **Custom Sender** are optional fine-tuning.\n"
+                "**2. Preview / Test** the saved result privately or post a temporary 30-second test.\n"
+                "**3. Sticky Settings** holds pause, cadence, custom sender, and removal controls.\n"
                 "For a persistent poll, use **Sticky Poll** instead."
             ),
             inline=False,
@@ -211,17 +210,40 @@ def _sticky_status_embed(config: Optional[StickyConfig], poll: Optional[StickyPo
         value=(f"✅ {config.sender_name or 'Dank Shield'}" if config.use_webhook else "Off • normal Dank Shield message"),
         inline=True,
     )
+    embed.add_field(name="Repeated pings", value="Blocked", inline=True)
     embed.add_field(
-        name="Repeated pings",
-        value="Blocked",
-        inline=True,
-    )
-    embed.add_field(
-        name="Before changing it live",
-        value="Use **Preview / Test** to inspect the current sticky or post a non-persistent 30-second test.",
+        name="Test safely",
+        value="Use **Preview / Test** to inspect the saved sticky or post a non-persistent 30-second test.",
         inline=False,
     )
-    embed.set_footer(text="Quiet Server Notice is separate and can run alongside this channel sticky")
+    embed.set_footer(text="Advanced controls are grouped under Sticky Settings • Quiet Server Notice runs separately")
+    return embed
+
+
+def _sticky_settings_embed(config: StickyConfig) -> discord.Embed:
+    state = "Active" if config.enabled else "Paused"
+    embed = discord.Embed(
+        title="⚙️ Sticky Settings",
+        description=f"Settings for <#{config.channel_id}> • **{state}** • **{config.mode}**",
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Movement",
+        value=f"Every **{config.interval_seconds}s** or **{config.message_threshold}** new human messages.",
+        inline=False,
+    )
+    embed.add_field(
+        name="Sender",
+        value=(f"Custom sender: **{config.sender_name or 'Dank Shield'}**" if config.use_webhook else "Normal Dank Shield message"),
+        inline=False,
+    )
+    if config.mode == "poll":
+        embed.add_field(
+            name="Sticky polls",
+            value="Custom Sender is unavailable for polls because the bot owns the persistent vote buttons.",
+            inline=False,
+        )
+    embed.set_footer(text="Removal is kept here so destructive controls stay out of the main sticky screen")
     return embed
 
 
@@ -294,11 +316,7 @@ class CommunityToolsView(_OwnedView):
     @discord.ui.button(label="Fun & Lookup", emoji="🎲", style=discord.ButtonStyle.secondary, row=1)
     async def fun(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _replace(
-            interaction,
-            embed=_fun_embed(),
-            view=FunLookupView(self.owner_id),
-        )
+        await _replace(interaction, embed=_fun_embed(), view=FunLookupView(self.owner_id))
 
     @discord.ui.button(label="Dank Shield Home", emoji="🏠", style=discord.ButtonStyle.secondary, row=2)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -319,19 +337,11 @@ class StickyCenterView(_OwnedView):
         self.poll = poll
         for item in self.children:
             label = str(getattr(item, "label", "") or "")
-            if config is None and label in {
-                "Preview / Test",
-                "Pause / Resume",
-                "Remove",
-                "Speed / Cadence",
-                "Custom Sender",
-                "Poll Controls",
-            }:
+            if config is None and label in {"Preview / Test", "Sticky Settings"}:
                 item.disabled = True
-            elif label == "Poll Controls" and (config.mode != "poll" or poll is None):
-                item.disabled = True
-            elif label == "Custom Sender" and config.mode == "poll":
-                item.disabled = True
+            if label == "Sticky Poll" and config is not None and config.mode == "poll" and poll is not None:
+                item.label = "Poll Controls"
+                item.emoji = "🗳️"
 
     @discord.ui.button(label="Create / Edit", emoji="✏️", style=discord.ButtonStyle.primary, row=0)
     async def edit(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -343,25 +353,32 @@ class StickyCenterView(_OwnedView):
         _ = button
         await show_sticky_preview(interaction, self.config, self.poll)
 
-    @discord.ui.button(label="Pause / Resume", emoji="⏯️", style=discord.ButtonStyle.secondary, row=0)
-    async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="Sticky Settings", emoji="⚙️", style=discord.ButtonStyle.secondary, row=0)
+    async def settings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        channel = _text_channel(interaction)
-        if channel is None:
-            return await _private(interaction, "❌ This needs a text channel.")
-        try:
-            current = await get_sticky(int(channel.id))
-            if current is None:
-                return await _private(interaction, "❌ There is no sticky in this channel.")
-            saved = await set_sticky_enabled(int(channel.id), not current.enabled, actor_id=int(interaction.user.id))
-        except CommunityStorageUnavailable:
-            return await _private(interaction, "❌ Sticky storage is unavailable.")
-        runtime = ensure_community_tools_runtime(interaction.client)
-        if saved is not None:
-            runtime.set_config(saved)
-            if saved.enabled:
-                await runtime.refresh_channel(channel, force=True)
-        await _open_sticky_center(interaction, replace_message=False)
+        if self.config is None:
+            return await _private(interaction, "❌ Create a sticky first.")
+        await _replace(
+            interaction,
+            embed=_sticky_settings_embed(self.config),
+            view=StickySettingsView(self.owner_id, self.config, self.poll),
+        )
+
+    @discord.ui.button(label="Sticky Poll", emoji="📊", style=discord.ButtonStyle.success, row=1)
+    async def sticky_poll(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if self.config is not None and self.config.mode == "poll" and self.poll is not None:
+            return await _replace(
+                interaction,
+                embed=sticky_poll_embed(self.poll),
+                view=StickyPollControlView(self.owner_id, self.config, self.poll),
+            )
+        await interaction.response.send_modal(StickyPollModal(self.poll))
+
+    @discord.ui.button(label="Quiet Server Notice", emoji="🌙", style=discord.ButtonStyle.success, row=1)
+    async def quiet_notice(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_quiet_notice_center(interaction)
 
     @discord.ui.button(label="Server Stickies", emoji="📋", style=discord.ButtonStyle.secondary, row=1)
     async def list_server(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -383,50 +400,59 @@ class StickyCenterView(_OwnedView):
             embed.description = "\n".join(lines)
         await _private(interaction, embed=embed)
 
-    @discord.ui.button(label="Speed / Cadence", emoji="⏱️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Community Tools", emoji="🧰", style=discord.ButtonStyle.secondary, row=2)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _replace(interaction, embed=_center_embed(), view=CommunityToolsView(self.owner_id))
+
+
+class StickySettingsView(_OwnedView):
+    def __init__(self, owner_id: int, config: StickyConfig, poll: Optional[StickyPoll]) -> None:
+        super().__init__(owner_id)
+        self.config = config
+        self.poll = poll
+        if config.mode == "poll":
+            for item in self.children:
+                if str(getattr(item, "label", "") or "") == "Custom Sender":
+                    item.disabled = True
+
+    @discord.ui.button(label="Pause / Resume", emoji="⏯️", style=discord.ButtonStyle.secondary, row=0)
+    async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        channel = _text_channel(interaction)
+        if channel is None:
+            return await _private(interaction, "❌ This needs a text channel.")
+        try:
+            current = await get_sticky(int(channel.id))
+            if current is None:
+                return await _private(interaction, "❌ There is no sticky in this channel.")
+            saved = await set_sticky_enabled(int(channel.id), not current.enabled, actor_id=int(interaction.user.id))
+        except CommunityStorageUnavailable:
+            return await _private(interaction, "❌ Sticky storage is unavailable.")
+        runtime = ensure_community_tools_runtime(interaction.client)
+        if saved is not None:
+            runtime.set_config(saved)
+            if saved.enabled:
+                await runtime.refresh_channel(channel, force=True)
+        await _open_sticky_center(interaction, replace_message=False)
+
+    @discord.ui.button(label="Speed / Cadence", emoji="⏱️", style=discord.ButtonStyle.secondary, row=0)
     async def speed(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        if self.config is None:
-            return await _private(interaction, "❌ Create a sticky first.")
         await interaction.response.send_modal(StickySpeedModal(self.config))
 
-    @discord.ui.button(label="Custom Sender", emoji="🎭", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Custom Sender", emoji="🎭", style=discord.ButtonStyle.secondary, row=0)
     async def persona(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        if self.config is None:
-            return await _private(interaction, "❌ Create a sticky first.")
         if self.config.mode == "poll":
             return await _private(interaction, "ℹ️ Sticky polls stay bot-owned so their persistent vote buttons remain reliable.")
         if not _manage_webhooks(interaction):
             return await _private(interaction, "❌ Custom sender personas require **Manage Webhooks**.")
         await interaction.response.send_modal(StickyPersonaModal(self.config))
 
-    @discord.ui.button(label="Quiet Server Notice", emoji="🌙", style=discord.ButtonStyle.success, row=2)
-    async def quiet_notice(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await open_quiet_notice_center(interaction)
-
-    @discord.ui.button(label="Sticky Poll", emoji="📊", style=discord.ButtonStyle.success, row=2)
-    async def sticky_poll(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await interaction.response.send_modal(StickyPollModal(self.poll))
-
-    @discord.ui.button(label="Poll Controls", emoji="🗳️", style=discord.ButtonStyle.secondary, row=2)
-    async def poll_controls(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if self.config is None or self.config.mode != "poll" or self.poll is None:
-            return await _private(interaction, "❌ This channel does not have a sticky poll.")
-        await _replace(
-            interaction,
-            embed=sticky_poll_embed(self.poll),
-            view=StickyPollControlView(self.owner_id, self.config, self.poll),
-        )
-
-    @discord.ui.button(label="Remove", emoji="🗑️", style=discord.ButtonStyle.danger, row=3)
+    @discord.ui.button(label="Remove", emoji="🗑️", style=discord.ButtonStyle.danger, row=1)
     async def remove(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        if self.config is None:
-            return await _private(interaction, "❌ There is no sticky in this channel.")
         await _replace(
             interaction,
             embed=discord.Embed(
@@ -437,10 +463,14 @@ class StickyCenterView(_OwnedView):
             view=StickyRemoveConfirmView(self.owner_id, self.config),
         )
 
-    @discord.ui.button(label="Community Tools", emoji="🧰", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="Back to Sticky", emoji="↩️", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _replace(interaction, embed=_center_embed(), view=CommunityToolsView(self.owner_id))
+        await _replace(
+            interaction,
+            embed=_sticky_status_embed(self.config, self.poll),
+            view=StickyCenterView(self.owner_id, config=self.config, poll=self.poll),
+        )
 
 
 class StickyRemoveConfirmView(_OwnedView):
@@ -1105,6 +1135,7 @@ __all__ = [
     "FunLookupView",
     "InfoView",
     "StickyCenterView",
+    "StickySettingsView",
     "ensure_community_tools_runtime",
     "open_community_tools",
     "show_permission_check",
