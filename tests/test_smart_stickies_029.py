@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import discord
 import pytest
 
+from stoney_verify.commands_ext.public_community_tools import StickyCenterView, StickySettingsView
 from stoney_verify.commands_ext.public_quiet_notice import (
     QuietNoticeCenterView,
     human_duration,
@@ -23,7 +24,7 @@ from stoney_verify.community_tools_runtime import (
     quiet_notice_view,
     should_send_quiet_notice,
 )
-from stoney_verify.community_tools_service import InvalidCommunityToolValue, StickyConfig
+from stoney_verify.community_tools_service import InvalidCommunityToolValue, StickyConfig, StickyPoll
 
 
 def _labels(view: discord.ui.View) -> set[str]:
@@ -149,3 +150,35 @@ def test_normal_sticky_preview_exposes_non_persistent_30_second_test() -> None:
     sticky = StickyConfig(guild_id=1001, channel_id=2001, content="Hello", mode="plain")
     labels = _labels(StickyPreviewTestView(1, sticky, None))
     assert "Post 30s Test" in labels
+
+
+def test_main_sticky_center_stays_focused_and_advanced_actions_live_in_settings() -> None:
+    sticky = StickyConfig(guild_id=1001, channel_id=2001, content="Hello", mode="plain")
+    main_labels = _labels(StickyCenterView(1, config=sticky, poll=None))
+    assert {
+        "Create / Edit",
+        "Preview / Test",
+        "Sticky Settings",
+        "Sticky Poll",
+        "Quiet Server Notice",
+        "Server Stickies",
+        "Community Tools",
+    } <= main_labels
+    assert {"Pause / Resume", "Speed / Cadence", "Custom Sender", "Remove"}.isdisjoint(main_labels)
+
+    settings_labels = _labels(StickySettingsView(1, sticky, None))
+    assert {"Pause / Resume", "Speed / Cadence", "Custom Sender", "Remove", "Back to Sticky"} <= settings_labels
+
+
+def test_existing_sticky_poll_changes_main_action_to_poll_controls() -> None:
+    sticky = StickyConfig(guild_id=1001, channel_id=2001, content="Pick one", mode="poll")
+    poll = StickyPoll(
+        guild_id=1001,
+        channel_id=2001,
+        question="Pick one",
+        options=("A", "B"),
+        votes={},
+    )
+    labels = _labels(StickyCenterView(1, config=sticky, poll=poll))
+    assert "Poll Controls" in labels
+    assert "Sticky Poll" not in labels
