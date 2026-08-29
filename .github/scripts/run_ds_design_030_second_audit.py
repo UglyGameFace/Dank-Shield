@@ -10,6 +10,38 @@ end = source.index("\n          PY\n", start)
 raw = source[start:end]
 script = '\n'.join(line[10:] if line.startswith('          ') else line for line in raw.splitlines()) + '\n'
 
+# The original YAML-embedded picker body loses indentation while being extracted.
+# Replace that whole transform with explicit source strings so Python indentation
+# survives the trip through YAML intact.
+a = script.index('# Give Protection Manager separate exact category/channel routes.')
+b = script.index("p = p.replace('label=\"Allow Font on Defaults\"'", a)
+corrected_picker = '''# Give Protection Manager separate exact category/channel routes.
+picker_start = p.find('    @discord.ui.button(label="Pick Exact Item"')
+picker_end = p.find('    @discord.ui.button(label="Back to Design Studio"', picker_start)
+if picker_start < 0 or picker_end < 0:
+    raise SystemExit(f'protection picker markers invalid: start={picker_start} end={picker_end}')
+new_pick = (
+    '    @discord.ui.button(label="Pick Category", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="dank_design:protection_pick_category", row=1)\\n'
+    '    async def pick_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:\\n'
+    '        if not await _require_design_permission(interaction):\\n'
+    '            return\\n'
+    '        guild = interaction.guild\\n'
+    '        assert guild is not None\\n'
+    '        await interaction.response.edit_message(embed=_category_editor_embed(guild, page=0), view=CategoryEditorPickerView(guild, page=0))\\n'
+    '\\n'
+    '    @discord.ui.button(label="Pick Channel", emoji="#️⃣", style=discord.ButtonStyle.primary, custom_id="dank_design:protection_pick_channel", row=1)\\n'
+    '    async def pick_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:\\n'
+    '        if not await _require_design_permission(interaction):\\n'
+    '            return\\n'
+    '        guild = interaction.guild\\n'
+    '        assert guild is not None\\n'
+    '        await interaction.response.edit_message(embed=_channel_editor_embed(guild, page=0), view=ChannelEditorPickerView(guild, page=0))\\n'
+)
+p = p[:picker_start] + new_pick + '\\n' + p[picker_end:]
+
+'''
+script = script[:a] + corrected_picker + script[b:]
+
 # Scope the protection-count edit to _lock_count.
 a = script.index('# Count only effective exact-protection records')
 b = script.index('# Make Rules / Locks explain', a)
@@ -156,18 +188,22 @@ path = Path('/tmp/ds_design_030_second_audit.py')
 path.write_text(script, encoding='utf-8')
 runpy.run_path(str(path), run_name='__main__')
 
-# Fail here with useful transformed-source context rather than making the next
-# workflow step report a naked line number.
-public_path = Path('stoney_verify/commands_ext/public_design_studio.py')
-public_text = public_path.read_text(encoding='utf-8')
-try:
-    compile(public_text, str(public_path), 'exec')
-except (SyntaxError, IndentationError) as exc:
-    line = int(getattr(exc, 'lineno', 0) or 0)
-    lines = public_text.splitlines()
-    lo = max(1, line - 12)
-    hi = min(len(lines), line + 12)
-    print(f'PUBLIC COMPILE FAILURE: {exc!r}')
-    for number in range(lo, hi + 1):
-        print(f'{number:05d}: {lines[number - 1]!r}')
-    raise
+# Catch malformed generated source immediately and print the exact context.
+for check_path in (
+    Path('stoney_verify/commands_ext/public_design_studio.py'),
+    Path('stoney_verify/services/server_design_studio.py'),
+    Path('stoney_verify/startup_guards/server_design_majority_layout_guard.py'),
+    Path('tests/test_dank_design_consistency_030.py'),
+):
+    check_text = check_path.read_text(encoding='utf-8')
+    try:
+        compile(check_text, str(check_path), 'exec')
+    except (SyntaxError, IndentationError) as exc:
+        line = int(getattr(exc, 'lineno', 0) or 0)
+        lines = check_text.splitlines()
+        lo = max(1, line - 12)
+        hi = min(len(lines), line + 12)
+        print(f'COMPILE FAILURE {check_path}: {exc!r}')
+        for number in range(lo, hi + 1):
+            print(f'{number:05d}: {lines[number - 1]!r}')
+        raise
