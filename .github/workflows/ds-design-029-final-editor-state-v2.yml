@@ -59,18 +59,32 @@ jobs:
               'counts = _lock_count(options) if "_lock_count" in globals() else {"global": 0, "categories": 0, "channels": 0, "manual_names": 0}',
               "editors locks count fallback",
           )
-          if "Exact manual names" not in editors_block:
-              editors_block = editors_block.replace(
-                  '        f"Channel overrides: **{counts.get(\'channels\', 0)}**",\n',
-                  '        f"Channel overrides: **{counts.get(\'channels\', 0)}**",\n        f"Exact manual names: **{counts.get(\'manual_names\', 0)}**",\n',
-                  1,
-              )
           text = text[:editors_start] + editors_block + text[editors_end:]
           ''').lstrip()
           code = code[:patch_start] + corrected + '\n' + code[patch_end:]
 
           compiled = compile(code, '<final-editor-authority-patch>', 'exec')
           exec(compiled, {'__name__': '__main__'})
+
+          # This UI-only insertion is intentionally done after the extracted patch
+          # so nested source quoting cannot corrupt the patch program itself.
+          path = Path('stoney_verify/commands_ext/public_design_studio.py')
+          text = path.read_text(encoding='utf-8')
+          editors_start = text.index('def _editors_locks_embed(')
+          editors_end = text.index('class EditorsLocksButton', editors_start)
+          editors_block = text[editors_start:editors_end]
+          if 'Exact manual names:' not in editors_block:
+              lines = editors_block.splitlines()
+              for index, line in enumerate(lines):
+                  if 'Channel overrides:' in line:
+                      indent = line[: len(line) - len(line.lstrip())]
+                      lines.insert(index + 1, indent + "f\"Exact manual names: **{counts.get('manual_names', 0)}**\",")
+                      break
+              else:
+                  raise SystemExit('editors channel-override summary line missing')
+              editors_block = '\n'.join(lines) + ('\n' if editors_block.endswith('\n') else '')
+              text = text[:editors_start] + editors_block + text[editors_end:]
+              path.write_text(text, encoding='utf-8')
           PY
 
       - name: Validate focused and architecture paths
