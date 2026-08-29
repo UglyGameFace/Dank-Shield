@@ -1,0 +1,162 @@
+name: DS-DESIGN-029 final editor authority gate v3
+
+on:
+  push:
+    branches:
+      - fix/dank-design-editor-state-authority
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Apply final Dank Design authority patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          workflow = Path('.github/workflows/ds-design-029-final-editor-state.yml').read_text(encoding='utf-8')
+          marker = "          python - <<'PY'\n"
+          start = workflow.index(marker) + len(marker)
+          end = workflow.index("\n          PY", start)
+          code = dedent(workflow[start:end])
+
+          # The original fail-closed patch expected one fallback occurrence, but the
+          # real file has one in Design Doctor and one in Rules & Unlocks. Scope both.
+          label_at = code.index('"doctor count fallback"')
+          patch_start = code.rfind('text = replace_once(', 0, label_at)
+          patch_end = code.index('\n\n', label_at) + 2
+          corrected = dedent('''
+          doctor_start = text.index("def _doctor_embed(")
+          doctor_end = text.index("class DesignDoctorView", doctor_start)
+          doctor_block = text[doctor_start:doctor_end]
+          doctor_block = replace_once(
+              doctor_block,
+              'counts = _lock_count(options) if "_lock_count" in globals() else {"global": 0, "categories": 0, "channels": 0}',
+              'counts = _lock_count(options) if "_lock_count" in globals() else {"global": 0, "categories": 0, "channels": 0, "manual_names": 0}',
+              "doctor count fallback",
+          )
+          text = text[:doctor_start] + doctor_block + text[doctor_end:]
+
+          editors_start = text.index("def _editors_locks_embed(")
+          editors_end = text.index("class EditorsLocksButton", editors_start)
+          editors_block = text[editors_start:editors_end]
+          editors_block = replace_once(
+              editors_block,
+              'counts = _lock_count(options) if "_lock_count" in globals() else {"global": 0, "categories": 0, "channels": 0}',
+              'counts = _lock_count(options) if "_lock_count" in globals() else {"global": 0, "categories": 0, "channels": 0, "manual_names": 0}',
+              "editors locks count fallback",
+          )
+          text = text[:editors_start] + editors_block + text[editors_end:]
+          ''').lstrip()
+          code = code[:patch_start] + corrected + '\n' + code[patch_end:]
+
+          # Four generated source templates deliberately contain newline joins.
+          # Double-escape them so executing the patch writes '\\n' into Python
+          # source instead of inserting a literal newline inside a quoted string.
+          escape_target = 'value="\\n".join'
+          escape_replacement = 'value="\\\\n".join'
+          if code.count(escape_target) != 4:
+              raise SystemExit(f'generated newline join count={code.count(escape_target)}')
+          code = code.replace(escape_target, escape_replacement)
+
+          compile(code, '<final-editor-authority-patch>', 'exec')
+          exec(code, {'__name__': '__main__'})
+
+          # Add the exact-name count to the compact Rules & Unlocks card after the
+          # extracted transformation. Keeping this outside avoids nested quote soup.
+          path = Path('stoney_verify/commands_ext/public_design_studio.py')
+          text = path.read_text(encoding='utf-8')
+          editors_start = text.index('def _editors_locks_embed(')
+          editors_end = text.index('class EditorsLocksButton', editors_start)
+          editors_block = text[editors_start:editors_end]
+          if 'Exact manual names:' not in editors_block:
+              lines = editors_block.splitlines()
+              for index, line in enumerate(lines):
+                  if 'Channel overrides:' in line:
+                      indent = line[: len(line) - len(line.lstrip())]
+                      lines.insert(index + 1, indent + "f\"Exact manual names: **{counts.get('manual_names', 0)}**\",")
+                      break
+              else:
+                  raise SystemExit('editors channel-override summary line missing')
+              editors_block = '\n'.join(lines) + ('\n' if editors_block.endswith('\n') else '')
+              text = text[:editors_start] + editors_block + text[editors_end:]
+              path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Validate focused and architecture paths
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+          python -m py_compile \
+            stoney_verify/commands_ext/public_design_studio.py \
+            stoney_verify/services/server_design_studio.py \
+            stoney_verify/startup_guards/server_design_strict_layout_guard.py \
+            stoney_verify/startup_guards/server_design_majority_layout_guard.py \
+            tests/test_dank_design_editor_state_authority.py \
+            tests/test_server_design_strict_layout_guard.py
+          python -m pytest -q --tb=short --disable-warnings \
+            tests/test_dank_design_editor_state_authority.py \
+            tests/test_server_design_strict_layout_guard.py \
+            tests/test_server_design_category_aware_auto_detect.py \
+            tests/test_public_design_exact_native_guard_patch_static.py
+          python tools/test_design_layout_helpers_not_startup.py
+          for f in tools/test_dank_design_*.py; do python "$f"; done
+          git diff --check
+
+      - name: Record validation and commit source
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('ACTIVE_TASK.md')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace('**Status:** ACTIVE — ROOT CAUSE CONFIRMED / IMPLEMENTING', '**Status:** ACTIVE — IMPLEMENTATION COMPLETE / FULL PR CI PENDING', 1)
+          checks = {
+              '- [ ] Stop runtime Gothic normalization from mutating saved owner-approved global/category/channel locks.': '- [x] Stop runtime Gothic normalization from mutating saved owner-approved global/category/channel locks.',
+              '- [ ] Seed Channel Editor Custom Format from the selected channel\'s current live style; keep Server Style as an explicit opt-in reset/suggestion.': '- [x] Seed Channel Editor Custom Format from the selected channel\'s current live style; keep Server Style as an explicit opt-in reset/suggestion.',
+              '- [ ] Treat manual exact-editor changes as exact user intent.': '- [x] Treat manual exact-editor changes as exact user intent.',
+              '- [ ] Use the generic reviewed-plan Apply view for exact category/channel previews, not Style Change issue controls.': '- [x] Use the generic reviewed-plan Apply view for exact category/channel previews, not Style Change issue controls.',
+              '- [ ] Bind Apply to the exact preview/session that produced it so one preview cannot hijack another.': '- [x] Bind Apply and Style Change issue controls to the exact preview/session that produced them; config mutations invalidate older previews.',
+              '- [ ] Make strength 4 category-frame behavior match the UI contract.': '- [x] Make strength 4 category-frame behavior match the UI contract.',
+              '- [ ] Add runtime/static regressions for each failure path above.': '- [x] Add runtime/static regressions for each failure path above, including Direct Rename, exact-name ownership, live-item locks, and stale preview invalidation.',
+              '- [ ] Targeted Dank Design regression tests green.': '- [x] Targeted Dank Design regression tests green.',
+              '- [ ] Existing category-aware/strict-layout/exact-editor tests green.': '- [x] Existing category-aware/strict-layout/exact-editor tests green.',
+              '- [ ] Python compile/static coverage green.': '- [x] Python compile/static coverage green.',
+          }
+          for old, new in checks.items():
+              text = text.replace(old, new)
+          if '## Final editor-authority completion pass' not in text:
+              text += '''\n## Final editor-authority completion pass\n\n- [x] Direct Rename executes inside the guarded interaction path and refreshes from Discord API when available.\n- [x] Direct Rename persists a literal exact-name rule and rolls Discord back if persistence fails when possible.\n- [x] Exact manual names outrank channel/category/global style rules until explicitly replaced or unlocked.\n- [x] Per-item Lock Rule captures the selected item\'s live style instead of copying the whole-server preset.\n- [x] Rules & Unlocks / Design Doctor can display, remove, and clean stale exact-name rules.\n- [x] Saved-setting mutations invalidate older reviewed previews.\n- [x] Style Change secondary controls carry the same immutable preview identity as Apply.\n- [x] Strict layout helper is activated only through the native public Design module ownership path.\n- [x] Focused tests and design architecture/standalone guards pass before this commit.\n- [ ] Full repository PR CI and auxiliary PR workflows green on this exact final head.\n- [ ] Final PR diff/review/temp-artifact inspection complete.\n'''
+          path.write_text(text, encoding='utf-8')
+          PY
+          git rm .github/workflows/ds-design-029-final-editor-state.yml
+          git rm .github/workflows/ds-design-029-diagnose-doctor-match.yml
+          git rm .github/workflows/ds-design-029-final-editor-state-v2.yml
+          git rm .github/workflows/ds-design-029-final-editor-state-v3.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ACTIVE_TASK.md \
+            stoney_verify/commands_ext/public_design_studio.py \
+            stoney_verify/startup_guards/server_design_majority_layout_guard.py \
+            tests/test_server_design_strict_layout_guard.py \
+            tests/test_dank_design_editor_state_authority.py
+          git diff --cached --check
+          git commit -m "DS-DESIGN-029: complete Dank Design editor authority"
+          git push origin HEAD:fix/dank-design-editor-state-authority
