@@ -545,6 +545,7 @@ def build_styled_name(
     saved_base_name: str | None = None,
     icon_mode: str = "replace_missing",
     protection_rules: Mapping[str, str] | None = None,
+    protection_mode: str | None = None,
     separator_id: str | None = None,
     category_frame_id: str | None = None,
     font: str | None = None,
@@ -555,7 +556,10 @@ def build_styled_name(
     parsed = parse_channel_name(before, kind=kind)
     base = normalize_base_name(saved_base_name or parsed["base_name"] or before)
     theme = _theme(theme_id)
-    protection = _protection_mode_for(base, protection_rules)
+    requested_protection = safe_str(protection_mode).lower().replace("-", "_")
+    protection = requested_protection if requested_protection in PROTECTION_MODES else _protection_mode_for(base, protection_rules)
+    if protection == "category_frame_only":
+        protection = "full"
     result = DesignNameResult(before=before, after=before, base_name=base, kind=kind, protected=protection == "never")
     if result.protected:
         result.warnings.append("Safe skip — protected ticket/log/system item. This is intentional and does not block Apply.")
@@ -566,7 +570,7 @@ def build_styled_name(
         strength = 2
     use_emoji = strength >= 1
     use_separator = strength >= 2 and protection in {"separator_only", "full", "font_only", "category_frame_only"}
-    use_category_frame = kind == "category" and strength >= 3 and protection in {"category_frame_only", "full"}
+    use_category_frame = kind == "category" and strength >= 4 and protection == "full"
 
     # A theme-selected font is part of the theme identity. Strength controls how
     # much structure/clutter is added; it must not silently turn Goth/Clean back
@@ -575,9 +579,9 @@ def build_styled_name(
     if requested_font not in FONT_STYLES:
         requested_font = "normal"
     use_font = (
-        strength >= 2
+        strength >= 3
         and requested_font != "normal"
-        and protection in {"font_only", "full", "category_frame_only"}
+        and protection in {"font_only", "full"}
     )
     chosen_font = requested_font if use_font else "normal"
     name_text, substitutions = transform_text_safe(base, chosen_font, fallback_order=fallback_ladder(chosen_font))
@@ -617,7 +621,7 @@ def build_styled_name(
         result.after
         and not result.blockers
         and result.after != before
-        and not bool(exact_match)
+        and not bool(exact_match or strength >= 5)
         and _already_semantically_matches_design(before, base=base, font=chosen_font, expected_after=result.after)
     ):
         result.after = before
