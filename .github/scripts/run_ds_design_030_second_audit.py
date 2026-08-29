@@ -97,8 +97,7 @@ s = s.replace(old_semantic_doc, new_semantic_doc, 1)
 '''
 script = script[:a] + corrected_service_doc + script[b:]
 
-# Replace the entire duplicate detector structurally. Its behavior matters more
-# than preserving whatever whitespace happened to be in the old implementation.
+# Replace the entire duplicate detector structurally.
 a = script.index('old_dupes =', script.index("s = SERVICE.read_text(encoding='utf-8')"))
 b = script.index("m = MAJORITY.read_text(encoding='utf-8')", a)
 corrected_duplicates = '''dup_start = s.find('def detect_duplicate_outputs(items: list[dict[str, Any]]) -> list[str]:')
@@ -138,6 +137,20 @@ SERVICE.write_text(s, encoding='utf-8')
 
 '''
 script = script[:a] + corrected_duplicates + script[b:]
+
+# Keep the working majority count/copy edits from the original transform, but
+# remove the duplicate Recommended field using the actual function structure.
+majority_read = script.index("m = MAJORITY.read_text(encoding='utf-8')")
+a = script.index('duplicate_recommended =', majority_read)
+b = script.index("MAJORITY.write_text(m, encoding='utf-8')", a)
+corrected_recommended = '''target_fn = m.find('    def _target_embed(')
+first_recommended = m.find('        embed.add_field(\\n            name="Recommended",', target_fn)
+second_recommended = m.find('        embed.add_field(name="Recommended",', first_recommended + 1)
+if target_fn < 0 or first_recommended < 0 or second_recommended < 0:
+    raise SystemExit(f'majority recommendation markers invalid: fn={target_fn} first={first_recommended} second={second_recommended}')
+m = m[:first_recommended] + m[second_recommended:]
+'''
+script = script[:a] + corrected_recommended + script[b:]
 
 path = Path('/tmp/ds_design_030_second_audit.py')
 path.write_text(script, encoding='utf-8')
