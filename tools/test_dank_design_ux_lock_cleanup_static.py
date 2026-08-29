@@ -20,9 +20,11 @@ def test_rules_unlocks_surface_is_obvious() -> None:
     assert "Rules & Unlocks" in PUBLIC
     assert "Lock / Unlock Saved Rules" in PUBLIC
     assert "Unlock Saved Rules" in PUBLIC
-    assert "Nothing is permanent" in PUBLIC
     assert "Locked category rules" in PUBLIC
     assert "Locked channel overrides" in PUBLIC
+    assert "Name/style: Exact manual name → Channel override → Category rule → Global preset → Server draft." in PUBLIC
+    assert "Protection is evaluated separately per item." in PUBLIC
+    assert "Nothing is permanent" not in PUBLIC
     assert "Editors & Locks" not in PUBLIC
     assert "Format Lock Manager" not in PUBLIC
 
@@ -31,7 +33,9 @@ def test_lock_manager_shows_exact_presets() -> None:
     assert "Frame `{frame}`" in PUBLIC
     assert "Separator `{sep}`" in PUBLIC
     assert "Strength `{strength}/5`" in PUBLIC
-    assert "Protection policy → Channel override → Category rule → Global preset" in PUBLIC
+    assert "Name/style: Exact manual name → Channel override → Category rule → Global preset → Server draft." in PUBLIC
+    assert "Protection is evaluated separately per item." in PUBLIC
+    assert "Protection policy → Channel override → Category rule → Global preset" not in PUBLIC
 
 
 def test_separator_only_tool_explains_scope() -> None:

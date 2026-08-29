@@ -627,13 +627,17 @@ def apply_majority_to_options(
     elif emoji.get("enabled") is True:
         out["icon_mode"] = "replace_missing"
 
-    desired_strength = 2
+    desired_strength = 1
+    separator_id = _text(out.get("separator_id"), "none")
+    font_id = _text(out.get("font"), "normal")
     frame_id = _text(out.get("category_frame_id"), "plain")
+    if separator_id and separator_id != "none":
+        desired_strength = max(desired_strength, 2)
+    if font_id != "normal":
+        desired_strength = max(desired_strength, 3)
     if frame_id and frame_id != "plain":
-        desired_strength = 5 if _text(out.get("font"), "normal") != "normal" else 3
-    elif _text(out.get("font"), "normal") != "normal":
-        desired_strength = 4
-    out["strength"] = max(desired_strength, min(5, _safe_int(out.get("strength"), desired_strength)))
+        desired_strength = max(desired_strength, 4)
+    out["strength"] = desired_strength
     out["exact_match"] = True
     out["__majority_layout_inferred"] = True
     out["__majority_layout_summary"] = _summary_text(analysis)

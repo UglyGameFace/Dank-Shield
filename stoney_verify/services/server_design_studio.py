@@ -444,8 +444,8 @@ def _already_semantically_matches_design(before: str, *, base: str, font: str, e
 
     This prevents the preview from trying to re-normalize channels that already
     have the selected font/base text but differ only by minor separator/frame
-    decoration. Full exact-layout enforcement can be added later as a separate
-    explicit mode; the default design repair should avoid needless churn.
+    decoration. Strength 5 is the explicit exact-layout mode. Lower strengths may
+    preserve harmless existing decoration while enforcing the components they enable.
     """
 
     before_text = safe_str(before)
@@ -545,6 +545,7 @@ def build_styled_name(
     saved_base_name: str | None = None,
     icon_mode: str = "replace_missing",
     protection_rules: Mapping[str, str] | None = None,
+    protection_mode: str | None = None,
     separator_id: str | None = None,
     category_frame_id: str | None = None,
     font: str | None = None,
@@ -555,7 +556,10 @@ def build_styled_name(
     parsed = parse_channel_name(before, kind=kind)
     base = normalize_base_name(saved_base_name or parsed["base_name"] or before)
     theme = _theme(theme_id)
-    protection = _protection_mode_for(base, protection_rules)
+    requested_protection = safe_str(protection_mode).lower().replace("-", "_")
+    protection = requested_protection if requested_protection in PROTECTION_MODES else _protection_mode_for(base, protection_rules)
+    if protection == "category_frame_only":
+        protection = "full"
     result = DesignNameResult(before=before, after=before, base_name=base, kind=kind, protected=protection == "never")
     if result.protected:
         result.warnings.append("Safe skip — protected ticket/log/system item. This is intentional and does not block Apply.")
@@ -566,7 +570,7 @@ def build_styled_name(
         strength = 2
     use_emoji = strength >= 1
     use_separator = strength >= 2 and protection in {"separator_only", "full", "font_only", "category_frame_only"}
-    use_category_frame = kind == "category" and strength >= 3 and protection in {"category_frame_only", "full"}
+    use_category_frame = kind == "category" and strength >= 4 and protection == "full"
 
     # A theme-selected font is part of the theme identity. Strength controls how
     # much structure/clutter is added; it must not silently turn Goth/Clean back
@@ -575,9 +579,9 @@ def build_styled_name(
     if requested_font not in FONT_STYLES:
         requested_font = "normal"
     use_font = (
-        strength >= 2
+        strength >= 3
         and requested_font != "normal"
-        and protection in {"font_only", "full", "category_frame_only"}
+        and protection in {"font_only", "full"}
     )
     chosen_font = requested_font if use_font else "normal"
     name_text, substitutions = transform_text_safe(base, chosen_font, fallback_order=fallback_ladder(chosen_font))
@@ -617,7 +621,7 @@ def build_styled_name(
         result.after
         and not result.blockers
         and result.after != before
-        and not bool(exact_match)
+        and not bool(exact_match or strength >= 5)
         and _already_semantically_matches_design(before, base=base, font=chosen_font, expected_after=result.after)
     ):
         result.after = before
@@ -641,21 +645,32 @@ def build_styled_name(
 
 
 def detect_duplicate_outputs(items: list[dict[str, Any]]) -> list[str]:
-    seen: dict[str, str] = {}
-    duplicates: list[str] = []
+    """Report exact visible collisions introduced by this plan.
+
+    Existing duplicate names are legal in Discord and should not block an
+    unrelated design pass. Different icons/separators are also distinct visible
+    names, so compare the final rendered output instead of stripped base names.
+    """
+
+    buckets: dict[str, list[dict[str, Any]]] = {}
     for item in items:
         if item.get("status") == "failed" or item.get("protected"):
             continue
-        key = normalize_base_name(item.get("after"), default="")
+        key = strip_invisible(safe_str(item.get("after"))).strip()
         if not key:
             continue
-        before = safe_str(item.get("before"))
-        if key in seen:
-            duplicates.append(f"`{seen[key]}` and `{before}` would both become `{item.get('after')}`")
-        else:
-            seen[key] = before
-    return duplicates
+        buckets.setdefault(key, []).append(item)
 
+    duplicates: list[str] = []
+    for final_name, rows in buckets.items():
+        if len(rows) < 2 or not any(safe_str(row.get("status")) == "changed" for row in rows):
+            continue
+        first = rows[0]
+        for other in rows[1:]:
+            duplicates.append(
+                f"`{safe_str(first.get('before'))}` and `{safe_str(other.get('before'))}` would both become `{final_name}`"
+            )
+    return duplicates
 
 def summarize_plan(items: list[dict[str, Any]]) -> dict[str, int]:
     summary = {"total": len(items), "changed": 0, "unchanged": 0, "protected": 0, "failed": 0, "warnings": 0}
