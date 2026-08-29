@@ -1,0 +1,175 @@
+name: DS-DESIGN-029 cleanup obsolete persistence shim
+
+on:
+  push:
+    branches:
+      - fix/dank-design-editor-state-authority
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Remove obsolete persisted-lock normalization code
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("stoney_verify/startup_guards/server_design_strict_layout_guard.py")
+          text = path.read_text(encoding="utf-8")
+
+          text, count = re.subn(
+              r"\n# Existing guild configs may already have locks saved with the old Gothic Clean\n.*?_GOTHIC_FONTS = \{\"fraktur\", \"bold_fraktur\"\}\n",
+              "\n",
+              text,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f"legacy constants block: expected 1, found {count}")
+
+          text, count = re.subn(
+              r"\n\ndef _clean_key\(value: Any\) -> str:\n.*?return _clean_text\(value\)\.lower\(\)\.replace\(\"-\", \"_\"\)\n",
+              "",
+              text,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f"clean-key helper: expected 1, found {count}")
+
+          text, count = re.subn(
+              r"\n\ndef _lock_looks_gothic\(.*?\n\ndef _make_strict_match\(",
+              "\n\ndef _make_strict_match(",
+              text,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f"obsolete persistence helpers: expected 1, found {count}")
+
+          old = '''    if _PATCHED:
+              _patch_command_guard_options()
+              return True
+          '''
+          new = '''    if _PATCHED:
+              return True
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f"apply early-return block count={text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          old = '''        _PATCHED = True
+              _patch_command_guard_options()
+              print("✅ server_design_strict_layout_guard active; Gothic Clean uses clear spaced pipe and strict drift detection")
+          '''
+          new = '''        _PATCHED = True
+              print("✅ server_design_strict_layout_guard active; Gothic Clean uses clear spaced pipe and strict drift detection")
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f"apply final persistence-hook block count={text.count(old)}")
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding="utf-8")
+
+          path = Path("tests/test_server_design_strict_layout_guard.py")
+          text = path.read_text(encoding="utf-8")
+          text, count = re.subn(
+              r"\n\ndef test_saved_gothic_locks_preserve_owner_selected_separators\(\):\n.*\Z",
+              "\n",
+              text,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f"obsolete normalizer regression: expected 1, found {count}")
+          path.write_text(text, encoding="utf-8")
+
+          path = Path("tests/test_dank_design_editor_state_authority.py")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace(
+              "from stoney_verify.startup_guards import server_design_strict_layout_guard as strict_guard\n",
+              "",
+              1,
+          )
+          old_test = '''def test_saved_owner_rules_are_not_rewritten_by_gothic_default_normalizer() -> None:
+              options = {
+                  "theme_id": "gothic_clean",
+                  "format_lock_global": {"enabled": True, "font": "fraktur", "separator_id": "bar_heavy"},
+                  "category_format_locks": {"123": {"font": "fraktur", "separator_id": "bar_full"}},
+                  "channel_format_locks": {"456": {"font": "fraktur", "separator_id": "katakana_dot"}},
+              }
+
+              normalized = strict_guard._normalize_gothic_design_options(options)
+
+              assert normalized == options
+              assert normalized["channel_format_locks"]["456"]["separator_id"] == "katakana_dot"
+          '''
+          new_test = '''def test_strict_layout_guard_has_no_persisted_design_option_rewriter() -> None:
+              guard_source = Path("stoney_verify/startup_guards/server_design_strict_layout_guard.py").read_text(encoding="utf-8")
+
+              assert "_patch_command_guard_options" not in guard_source
+              assert "_normalize_gothic_lock" not in guard_source
+              assert "command_guard._load_design_options" not in guard_source
+              assert "command_guard._save_design_options" not in guard_source
+          '''
+          if text.count(old_test) != 1:
+              raise SystemExit(f"editor authority persistence regression count={text.count(old_test)}")
+          text = text.replace(old_test, new_test, 1)
+          path.write_text(text, encoding="utf-8")
+
+          print("DS-DESIGN-029 persistence cleanup applied")
+          PY
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+
+      - name: Validate cleanup and focused regressions
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          python -m py_compile \
+            stoney_verify/commands_ext/public_design_studio.py \
+            stoney_verify/services/server_design_studio.py \
+            stoney_verify/startup_guards/server_design_strict_layout_guard.py \
+            tests/test_dank_design_editor_state_authority.py
+          python -m pytest -q --tb=short --disable-warnings \
+            tests/test_dank_design_editor_state_authority.py \
+            tests/test_server_design_category_aware_auto_detect.py \
+            tests/test_server_design_strict_layout_guard.py \
+            tests/test_public_design_exact_native_guard_patch_static.py
+          ! grep -q "_patch_command_guard_options" stoney_verify/startup_guards/server_design_strict_layout_guard.py
+          ! grep -q "_normalize_gothic_lock" stoney_verify/startup_guards/server_design_strict_layout_guard.py
+          git diff --check
+
+      - name: Commit cleanup and remove temporary workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/ds-design-029-cleanup.yml
+          git add \
+            stoney_verify/startup_guards/server_design_strict_layout_guard.py \
+            tests/test_server_design_strict_layout_guard.py \
+            tests/test_dank_design_editor_state_authority.py
+          git diff --cached --check
+          git commit -m "DS-DESIGN-029: remove obsolete design lock rewrite shim"
+          git push origin HEAD:fix/dank-design-editor-state-authority
