@@ -1,0 +1,165 @@
+name: DS-DESIGN-029 final editor authority gate v5
+
+on:
+  push:
+    branches:
+      - fix/dank-design-editor-state-authority
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Apply final editor and parser repairs
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          # v3 contains the last broad transformation that compiled successfully.
+          v3 = Path('.github/workflows/ds-design-029-final-editor-state-v3.yml').read_text(encoding='utf-8')
+          marker = "          python - <<'PY'\n"
+          start = v3.index(marker) + len(marker)
+          end = v3.index("\n          PY", start)
+          code = dedent(v3[start:end])
+          compile(code, '<v3-final-authority-transform>', 'exec')
+          exec(code, {'__name__': '__main__'})
+
+          # Patch only the loop inside _strip_leading_icon. Known separators must
+          # stop icon parsing before Unicode So classification can swallow them.
+          path = Path('stoney_verify/services/server_design_studio.py')
+          text = path.read_text(encoding='utf-8')
+          func_start = text.index('def _strip_leading_icon(')
+          loop_start = text.index('    while index < len(chars):\n', func_start)
+          loop_end = text.index('    return "".join(icon_chars).strip(), "".join(chars[index:]).strip()\n', loop_start)
+          replacement = '''    while index < len(chars):
+              remaining = "".join(chars[index:])
+              if any(remaining.startswith(sep) for sep in _all_separator_values()):
+                  break
+              ch = chars[index]
+              if _is_emojiish(ch) or (icon_chars and ch in {variation, joiner}):
+                  icon_chars.append(ch)
+                  index += 1
+                  continue
+              break
+          '''
+          replacement = dedent(replacement)
+          replacement = ''.join('    ' + line if line else line for line in replacement.splitlines(keepends=True))
+          text = text[:loop_start] + replacement + text[loop_end:]
+          path.write_text(text, encoding='utf-8')
+
+          # Update only the old implementation-specific assertion inside its test.
+          path = Path('tests/test_dank_design_editor_state_authority.py')
+          text = path.read_text(encoding='utf-8')
+          test_start = text.index('def test_exact_editor_apply_is_bound_to_the_preview_user_reviewed() -> None:')
+          test_end = text.index('\ndef ', test_start + 5)
+          block = text[test_start:test_end]
+          old_line = '    assert "if self.pending_created_at is not None:" in PUBLIC_STUDIO\n'
+          old_message = '    assert "This Apply button belongs to an older preview" in PUBLIC_STUDIO\n'
+          if old_line not in block or old_message not in block:
+              raise SystemExit('old stale-preview assertions not found in target test')
+          block = block.replace(old_line, '    assert "if not _pending_matches(payload, self.pending_created_at):" in PUBLIC_STUDIO\n', 1)
+          block = block.replace(old_message, '    assert "older or invalidated preview" in PUBLIC_STUDIO\n', 1)
+          text = text[:test_start] + block + text[test_end:]
+          path.write_text(text, encoding='utf-8')
+
+          # Parser-level regression for emoji+separator and separator-only input.
+          path = Path('tests/test_server_design_strict_layout_guard.py')
+          text = path.read_text(encoding='utf-8')
+          test_name = 'def test_known_separator_is_not_swallowed_into_icon_prefix() -> None:'
+          if test_name not in text:
+              text = text.rstrip() + dedent('''
+
+
+              def test_known_separator_is_not_swallowed_into_icon_prefix() -> None:
+                  with_icon = studio.parse_channel_name("🎮│free-games")
+                  assert with_icon["emoji"] == "🎮"
+                  assert with_icon["separator"] == "│"
+                  assert with_icon["base_name"] == "free-games"
+
+                  separator_only = studio.parse_channel_name("│free-games")
+                  assert separator_only["emoji"] == ""
+                  assert separator_only["separator"] == "│"
+                  assert separator_only["base_name"] == "free-games"
+              ''') + "\n"
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Validate focused and architecture paths
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+          python -m py_compile \
+            stoney_verify/commands_ext/public_design_studio.py \
+            stoney_verify/services/server_design_studio.py \
+            stoney_verify/startup_guards/server_design_strict_layout_guard.py \
+            stoney_verify/startup_guards/server_design_majority_layout_guard.py \
+            tests/test_dank_design_editor_state_authority.py \
+            tests/test_server_design_strict_layout_guard.py
+          python -m pytest -q --tb=short --disable-warnings \
+            tests/test_dank_design_editor_state_authority.py \
+            tests/test_server_design_strict_layout_guard.py \
+            tests/test_server_design_category_aware_auto_detect.py \
+            tests/test_public_design_exact_native_guard_patch_static.py
+          python tools/test_design_layout_helpers_not_startup.py
+          for f in tools/test_dank_design_*.py; do python "$f"; done
+          git diff --check
+
+      - name: Record validation and commit final source
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('ACTIVE_TASK.md')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace('**Status:** ACTIVE — ROOT CAUSE CONFIRMED / IMPLEMENTING', '**Status:** ACTIVE — IMPLEMENTATION COMPLETE / FULL PR CI PENDING', 1)
+          checks = {
+              '- [ ] Stop runtime Gothic normalization from mutating saved owner-approved global/category/channel locks.': '- [x] Stop runtime Gothic normalization from mutating saved owner-approved global/category/channel locks.',
+              '- [ ] Seed Channel Editor Custom Format from the selected channel\'s current live style; keep Server Style as an explicit opt-in reset/suggestion.': '- [x] Seed Channel Editor Custom Format from the selected channel\'s current live style; keep Server Style as an explicit opt-in reset/suggestion.',
+              '- [ ] Treat manual exact-editor changes as exact user intent.': '- [x] Treat manual exact-editor changes as exact user intent.',
+              '- [ ] Use the generic reviewed-plan Apply view for exact category/channel previews, not Style Change issue controls.': '- [x] Use the generic reviewed-plan Apply view for exact category/channel previews, not Style Change issue controls.',
+              '- [ ] Bind Apply to the exact preview/session that produced it so one preview cannot hijack another.': '- [x] Bind Apply and Style Change issue controls to the exact preview/session that produced them; config mutations invalidate older previews.',
+              '- [ ] Make strength 4 category-frame behavior match the UI contract.': '- [x] Make strength 4 category-frame behavior match the UI contract.',
+              '- [ ] Add runtime/static regressions for each failure path above.': '- [x] Add runtime/static regressions for each failure path above, including Direct Rename, exact-name ownership, live-item locks, stale preview invalidation, and separator replacement.',
+              '- [ ] Targeted Dank Design regression tests green.': '- [x] Targeted Dank Design regression tests green.',
+              '- [ ] Existing category-aware/strict-layout/exact-editor tests green.': '- [x] Existing category-aware/strict-layout/exact-editor tests green.',
+              '- [ ] Python compile/static coverage green.': '- [x] Python compile/static coverage green.',
+          }
+          for old, new in checks.items():
+              text = text.replace(old, new)
+          if '## Final editor-authority completion pass' not in text:
+              text += '''\n## Final editor-authority completion pass\n\n- [x] Direct Rename executes inside the guarded interaction path and refreshes from Discord API when available.\n- [x] Direct Rename persists a literal exact-name rule and rolls Discord back if persistence fails when possible.\n- [x] Exact manual names outrank channel/category/global style rules until explicitly replaced or unlocked.\n- [x] Per-item Lock Rule captures the selected item\'s live style instead of copying the whole-server preset.\n- [x] Rules & Unlocks / Design Doctor can display, remove, and clean stale exact-name rules.\n- [x] Saved-setting mutations invalidate older reviewed previews.\n- [x] Style Change secondary controls carry the same immutable preview identity as Apply.\n- [x] Known existing separators are parsed separately from leading emoji and are replaced rather than stacked.\n- [x] Strict layout helper is activated only through the native public Design module ownership path.\n- [x] Focused tests and design architecture/standalone guards pass before this commit.\n- [ ] Full repository PR CI and auxiliary PR workflows green on this exact final head.\n- [ ] Final PR diff/review/temp-artifact inspection complete.\n'''
+          path.write_text(text, encoding='utf-8')
+          PY
+          git rm .github/workflows/ds-design-029-final-editor-state.yml
+          git rm .github/workflows/ds-design-029-diagnose-doctor-match.yml
+          git rm .github/workflows/ds-design-029-final-editor-state-v2.yml
+          git rm .github/workflows/ds-design-029-final-editor-state-v3.yml
+          git rm .github/workflows/ds-design-029-final-editor-state-v4.yml
+          git rm .github/workflows/ds-design-029-final-editor-state-v5.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ACTIVE_TASK.md \
+            stoney_verify/commands_ext/public_design_studio.py \
+            stoney_verify/services/server_design_studio.py \
+            stoney_verify/startup_guards/server_design_majority_layout_guard.py \
+            tests/test_server_design_strict_layout_guard.py \
+            tests/test_dank_design_editor_state_authority.py
+          git diff --cached --check
+          git commit -m "DS-DESIGN-029: complete Dank Design editor authority"
+          git push origin HEAD:fix/dank-design-editor-state-authority
