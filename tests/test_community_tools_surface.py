@@ -9,7 +9,9 @@ from stoney_verify.commands_ext.public_community_tools import (
     CommunityToolsView,
     FunLookupView,
     StickyCenterView,
+    StickySettingsView,
 )
+from stoney_verify.community_tools_service import StickyConfig
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -45,19 +47,33 @@ def test_community_center_keeps_sticky_poll_info_permissions_and_lookup_paths() 
     } <= labels
 
 
-def test_sticky_center_keeps_full_management_surface() -> None:
+def test_sticky_center_is_compact_and_routes_advanced_management() -> None:
     labels = _labels(StickyCenterView(1, config=None, poll=None))
     assert {
         "Create / Edit",
-        "Pause / Resume",
-        "Remove",
-        "Server Stickies",
-        "Speed / Cadence",
-        "Custom Sender",
+        "Preview / Test",
+        "Sticky Settings",
         "Sticky Poll",
-        "Poll Controls",
+        "Quiet Server Notice",
+        "Server Stickies",
         "Community Tools",
     } <= labels
+    assert {
+        "Pause / Resume",
+        "Remove",
+        "Speed / Cadence",
+        "Custom Sender",
+    }.isdisjoint(labels)
+
+    config = StickyConfig(guild_id=1, channel_id=2, content="hello")
+    settings = _labels(StickySettingsView(1, config, None))
+    assert {
+        "Pause / Resume",
+        "Remove",
+        "Speed / Cadence",
+        "Custom Sender",
+        "Back to Sticky",
+    } <= settings
 
 
 def test_fun_lookup_surface_includes_stickybot_family_and_provider_truth() -> None:
