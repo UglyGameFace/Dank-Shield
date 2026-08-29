@@ -26,12 +26,9 @@ def test_default_protected_names_can_allow_font_and_layout_without_full_framing(
     assert "dank_design:protection_restore_defaults" in PUBLIC
 
 
-def test_protection_manager_explains_font_fallback_is_not_a_blocker() -> None:
-    assert "Unsupported font glyphs fall back per character" in PUBLIC
-    assert "protection is a rename policy, not a font failure" in PUBLIC
-
-
-def test_font_engine_falls_back_per_character() -> None:
+def test_font_fallback_is_a_renderer_contract_not_protection_ui_copy() -> None:
+    assert "Unsupported font glyphs fall back per character" not in PUBLIC
+    assert "protection is a rename policy, not a font failure" not in PUBLIC
     assert "font styling is never allowed to block a rename by itself" in SERVICE
     assert "falls back per" in SERVICE
     assert "TransformSubstitution" in SERVICE
@@ -42,8 +39,7 @@ if __name__ == "__main__":
     for test in (
         test_protection_manager_has_obvious_unlock_controls,
         test_default_protected_names_can_allow_font_and_layout_without_full_framing,
-        test_protection_manager_explains_font_fallback_is_not_a_blocker,
-        test_font_engine_falls_back_per_character,
+        test_font_fallback_is_a_renderer_contract_not_protection_ui_copy,
     ):
         test()
         print(f"PASS {test.__name__}")
