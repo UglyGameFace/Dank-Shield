@@ -155,3 +155,19 @@ script = script[:a] + corrected_recommended + script[b:]
 path = Path('/tmp/ds_design_030_second_audit.py')
 path.write_text(script, encoding='utf-8')
 runpy.run_path(str(path), run_name='__main__')
+
+# Fail here with useful transformed-source context rather than making the next
+# workflow step report a naked line number.
+public_path = Path('stoney_verify/commands_ext/public_design_studio.py')
+public_text = public_path.read_text(encoding='utf-8')
+try:
+    compile(public_text, str(public_path), 'exec')
+except (SyntaxError, IndentationError) as exc:
+    line = int(getattr(exc, 'lineno', 0) or 0)
+    lines = public_text.splitlines()
+    lo = max(1, line - 12)
+    hi = min(len(lines), line + 12)
+    print(f'PUBLIC COMPILE FAILURE: {exc!r}')
+    for number in range(lo, hi + 1):
+        print(f'{number:05d}: {lines[number - 1]!r}')
+    raise
