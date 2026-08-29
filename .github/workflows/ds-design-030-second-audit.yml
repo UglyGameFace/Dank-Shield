@@ -1,0 +1,490 @@
+name: DS-DESIGN-030 Second Audit
+
+on:
+  push:
+    branches:
+      - fix/dank-design-consistency-locks
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Apply second-pass consistency repairs
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          PUBLIC = Path('stoney_verify/commands_ext/public_design_studio.py')
+          SERVICE = Path('stoney_verify/services/server_design_studio.py')
+          MAJORITY = Path('stoney_verify/startup_guards/server_design_majority_layout_guard.py')
+          TEST = Path('tests/test_dank_design_consistency_030.py')
+
+          def once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected 1 match, found {count}')
+              return text.replace(old, new, 1)
+
+          def between(text, start, end, replacement, label):
+              s = text.find(start)
+              if s < 0:
+                  raise SystemExit(f'{label}: start not found')
+              e = text.find(end, s)
+              if e < 0:
+                  raise SystemExit(f'{label}: end not found')
+              return text[:s] + replacement.rstrip() + '\n\n\n' + text[e:]
+
+          p = PUBLIC.read_text(encoding='utf-8')
+
+          # Count only effective exact-protection records, not corrupt raw keys.
+          p = once(
+              p,
+              '    protection_items = _mapping_dict(options.get("protection_item_rules"))\n',
+              '    protection_items = _protection_item_rules(options) if "_protection_item_rules" in globals() else _mapping_dict(options.get("protection_item_rules"))\n',
+              'effective protection count',
+          )
+
+          # Make Rules / Locks explain the two independent authority axes correctly.
+          p = once(
+              p,
+              '            "Exact manual name → Exact protection policy → Channel override → Category rule → Global lock → Current server draft.\\n"\n            "Changing a broader rule never overwrites a narrower item rule."\n',
+              '            "Name/style authority: Exact manual name → Channel override → Category rule → Global lock → Current server draft.\\n"\n            "Protection is a separate exact-item/default policy that limits which style pieces may run. Broader style rules never overwrite narrower ones."\n',
+              'saved locks authority text',
+          )
+          p = once(
+              p,
+              '        value="Exact manual name → Protection policy → Channel override → Category rule → Global preset → Detected live style preview",\n',
+              '        value="Name/style: Exact manual name → Channel override → Category rule → Global preset → Server draft. Protection is evaluated separately per item.",\n',
+              'lock manager priority text',
+          )
+          p = once(
+              p,
+              '        value="Exact name → Exact protection → Channel → Category → Global → Server draft.",\n',
+              '        value="Name/style: Exact name → Channel → Category → Global → Server draft. Protection is separate and exact-item rules beat default-name policy.",\n',
+              'rules hub authority text',
+          )
+
+          # Surface all saved rule types on the home screen.
+          p = once(
+              p,
+              '            f"Locked channel overrides: **{counts[\'channels\']}**",\n            "Open **Rules & Unlocks** to see the exact preset each category/channel follows or unlock it.",\n',
+              '            f"Locked channel overrides: **{counts[\'channels\']}**",\n            f"Exact manual names: **{counts[\'manual_names\']}**",\n            f"Exact protection overrides: **{counts[\'protection_items\']}**",\n            "Open **Rules & Unlocks** to inspect or remove any saved rule without changing the others.",\n',
+              'home saved counts',
+          )
+
+          # Protection buttons inside an exact editor should say what they actually open.
+          p = p.replace('"**Protected Names / Unlock** = control whether this category is styled, partially styled, or skipped."', '"**Protection Mode** = control whether this exact category is styled, partially styled, or skipped."')
+          p = p.replace('"**Protected Names / Unlock** = control whether this item is styled, partially styled, or skipped."', '"**Protection Mode** = control whether this exact item is styled, partially styled, or skipped."')
+          p = p.replace('label="Protected Names / Unlock", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_protection_mode"', 'label="Protection Mode", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_protection_mode"')
+          p = p.replace('label="Protected Names / Unlock", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_protection_mode"', 'label="Protection Mode", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_protection_mode"')
+          p = p.replace('embed.set_footer(text="Rename is instant • Preview/Change Channel Separator Only/Custom Format use Apply later")', 'embed.set_footer(text="Rename is instant • Preview Fixes and Custom Format use Apply later")')
+
+          # Give Protection Manager separate exact category/channel routes.
+          old_pick = '''    @discord.ui.button(label="Pick Exact Item", emoji="#️⃣", style=discord.ButtonStyle.primary, custom_id="dank_design:protection_pick_item", row=1)
+              async def pick_item(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+                  if not await _require_design_permission(interaction):
+                      return
+                  guild = interaction.guild
+                  assert guild is not None
+                  if "ChannelEditorPickerView" not in globals():
+                      return await interaction.response.send_message("Channel Editor is not installed yet.", ephemeral=True)
+                  await interaction.response.edit_message(
+                      embed=_channel_editor_embed(guild, page=0),
+                      view=ChannelEditorPickerView(guild, page=0),
+                  )
+'''.replace('              ', '    ')
+          new_pick = '''    @discord.ui.button(label="Pick Category", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="dank_design:protection_pick_category", row=1)
+    async def pick_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.edit_message(embed=_category_editor_embed(guild, page=0), view=CategoryEditorPickerView(guild, page=0))
+
+    @discord.ui.button(label="Pick Channel", emoji="#️⃣", style=discord.ButtonStyle.primary, custom_id="dank_design:protection_pick_channel", row=1)
+    async def pick_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.edit_message(embed=_channel_editor_embed(guild, page=0), view=ChannelEditorPickerView(guild, page=0))
+'''
+          if old_pick not in p:
+              # Use structural markers if whitespace differs.
+              start = p.find('    @discord.ui.button(label="Pick Exact Item"')
+              end = p.find('    @discord.ui.button(label="Back to Design Studio"', start)
+              if start < 0 or end < 0:
+                  raise SystemExit('protection picker block not found')
+              p = p[:start] + new_pick + '\n' + p[end:]
+          else:
+              p = p.replace(old_pick, new_pick, 1)
+
+          p = p.replace('label="Allow Font on Defaults"', 'label="Allow Font + Layout on Defaults"')
+          p = p.replace('embed.title = "🔤 Default Protected Names Allow Font"', 'embed.title = "🔤 Default Protected Names Allow Font + Layout"')
+          p = p.replace('now allow font styling while still blocking full layout/frame changes.', 'now allow separator + font styling while still blocking category-frame/full styling.')
+
+          # One canonical fail-closed persistence path only.
+          p = once(
+              p,
+              '    await _save_options(interaction, options) if "_save_options" in globals() else await _save_design_options(int(guild.id), options)\n    return options, changed\n',
+              '    await _save_options(interaction, options)\n    return options, changed\n',
+              'default protection save path',
+          )
+
+          # Centralize the strength needed to reproduce detected components.
+          insert_at = p.find('def _live_majority_exact_lock(')
+          if insert_at < 0:
+              raise SystemExit('live majority lock marker not found')
+          helper = '''def _required_strength_for_components(*, scope: str, font: Any, separator_id: Any, category_frame_id: Any) -> int:
+    strength = 1
+    if _safe_str(separator_id, "none") not in {"", "none"}:
+        strength = max(strength, 2)
+    if _safe_str(font, "normal").lower().replace("-", "_") != "normal":
+        strength = max(strength, 3)
+    if _safe_str(scope) == "category" and _safe_str(category_frame_id, "plain") not in {"", "plain"}:
+        strength = max(strength, 4)
+    return strength
+
+
+'''
+          if 'def _required_strength_for_components(' not in p:
+              p = p[:insert_at] + helper + p[insert_at:]
+
+          old_return = '''        return {
+              "scope": scope,
+              "theme_id": _safe_str(inferred.get("theme_id"), _safe_str(options.get("theme_id"), "gothic_clean")),
+              "strength": _safe_int(inferred.get("strength"), _safe_int(options.get("strength"), 4)),
+              "font": _safe_str(inferred.get("font"), "normal").lower().replace("-", "_"),
+              "separator_id": _safe_str(inferred.get("separator_id"), "none"),
+              "category_frame_id": _safe_str(inferred.get("category_frame_id"), "plain"),
+'''.replace('              ', '            ')
+          new_return = '''        detected_font = _safe_str(inferred.get("font"), "normal").lower().replace("-", "_")
+        detected_separator = _safe_str(inferred.get("separator_id"), "none")
+        detected_frame = _safe_str(inferred.get("category_frame_id"), "plain")
+        detected_strength = _required_strength_for_components(
+            scope=scope,
+            font=detected_font,
+            separator_id=detected_separator,
+            category_frame_id=detected_frame,
+        )
+
+        return {
+            "scope": scope,
+            "theme_id": _safe_str(inferred.get("theme_id"), _safe_str(options.get("theme_id"), "gothic_clean")),
+            "strength": detected_strength,
+            "font": detected_font,
+            "separator_id": detected_separator,
+            "category_frame_id": detected_frame,
+'''
+          if old_return not in p:
+              raise SystemExit('live majority return block not found')
+          p = p.replace(old_return, new_return, 1)
+
+          # Live target strength must reproduce the actual captured target.
+          p = once(
+              p,
+              '            lock["strength"] = max(2, _safe_int(lock.get("strength"), 4))\n',
+              '            lock["strength"] = _required_strength_for_components(scope=scope, font=lock.get("font"), separator_id=lock.get("separator_id"), category_frame_id=lock.get("category_frame_id"))\n',
+              'channel captured strength',
+          )
+          p = once(
+              p,
+              '            lock["strength"] = max(3, _safe_int(lock.get("strength"), 4))\n',
+              '            lock["strength"] = _required_strength_for_components(scope=scope, font=lock.get("font"), separator_id=lock.get("separator_id"), category_frame_id=lock.get("category_frame_id"))\n',
+              'category captured strength',
+          )
+          p = once(
+              p,
+              '    lock.setdefault("strength", max(2, _safe_int(options.get("strength"), 4)))\n',
+              '    lock.setdefault("strength", max(1, min(5, _safe_int(options.get("strength"), 4))))\n',
+              'initial exact strength',
+          )
+
+          # Exact editor descriptions must match the engine's current five levels.
+          old_strengths = '''    descriptions = {
+              1: "Lightest: mostly icon/name.",
+              2: "Clean: font + separator for channels.",
+              3: "Adds category header styling.",
+              4: "Recommended balance for most servers.",
+              5: "Full theme: strongest visual style.",
+          }
+'''.replace('          ', '    ')
+          new_strengths = '''    descriptions = {
+        1: "Icons/base only; no separator, font, or frame.",
+        2: "Layout: adds the selected channel separator.",
+        3: "Font: layout plus the selected font.",
+        4: "Recommended: adds category frames where applicable.",
+        5: "Exact: strictly normalizes the full selected format.",
+    }
+'''
+          if old_strengths not in p:
+              raise SystemExit('exact strength descriptions not found')
+          p = p.replace(old_strengths, new_strengths, 1)
+
+          # Current layout example must respect strength instead of rendering every selected component unconditionally.
+          p = between(
+              p,
+              'def _exact_current_layout_example(',
+              'def _exact_selected_format_lines(',
+              '''def _exact_current_layout_example(
+    guild: discord.Guild,
+    *,
+    scope: str,
+    target_id: int,
+    lock: Mapping[str, Any],
+) -> str:
+    def render(kind: str, base: str) -> str:
+        result = studio.build_styled_name(
+            base,
+            kind=kind,
+            theme_id=_safe_str(lock.get("theme_id"), "gothic_clean"),
+            strength=_safe_int(lock.get("strength"), 4),
+            icon_mode=_safe_str(lock.get("icon_mode"), "replace_missing"),
+            protection_rules={},
+            protection_mode="full",
+            separator_id=_safe_str(lock.get("separator_id")) or None,
+            category_frame_id=_safe_str(lock.get("category_frame_id")) or None,
+            font=_safe_str(lock.get("font")) or None,
+            emoji_override=_safe_str(lock.get("emoji_override")) or "🎮",
+            exact_match=True,
+        )
+        return _safe_str(result.after, base)
+
+    if _exact_format_applies_category_frame(scope):
+        return f"Category: `{render('category', 'gaming')}`\\nChild channel: `{render('text', 'gaming-news')}`"
+    return f"`{render('text', 'gaming-news')}`"''',
+              'strength-aware layout example',
+          )
+
+          p = p.replace('name="Preview sample",', 'name="Style sample (final preview also checks protection)",')
+
+          # Use the same immutable pending helper everywhere.
+          old_pending = '''    key = _key(int(guild.id), int(interaction.user.id))
+    created_at = time.time()
+    _PENDING[key] = {
+        "created_at": created_at,
+        "items": items,
+        "options": dict(repair_options),
+        "mode": f"{scope}_exact_format",
+        "target_id": str(int(target_id)),
+    }
+'''
+          new_pending = '''    created_at = _store_pending(
+        int(guild.id),
+        int(interaction.user.id),
+        {
+            "items": items,
+            "options": dict(repair_options),
+            "mode": f"{scope}_exact_format",
+            "target_id": str(int(target_id)),
+        },
+    )
+'''
+          p = once(p, old_pending, new_pending, 'exact pending helper')
+
+          # Preserve channel's category context when backing out of Custom Format.
+          p = once(
+              p,
+              '                    await interaction.response.edit_message(embed=_channel_action_embed(channel), view=ChannelEditorActionView(self.target_id))\n',
+              '                    parent = getattr(channel, "category", None)\n                    category_id = _safe_int(getattr(parent, "id", 0), 0) or None\n                    await interaction.response.edit_message(embed=_channel_action_embed(channel), view=ChannelEditorActionView(self.target_id, category_id=category_id))\n',
+              'exact back category context',
+          )
+
+          PUBLIC.write_text(p, encoding='utf-8')
+
+          s = SERVICE.read_text(encoding='utf-8')
+          s = once(
+              s,
+              '    Full exact-layout enforcement can be added later as a separate\n    explicit mode; the default design repair should avoid needless churn.\n',
+              '    Strength 5 is the explicit exact-layout mode. Lower strengths may\n    preserve harmless existing decoration while enforcing the components they enable.\n',
+              'semantic match doc',
+          )
+          old_dupes = '''def detect_duplicate_outputs(items: list[dict[str, Any]]) -> list[str]:
+    seen: dict[str, str] = {}
+    duplicates: list[str] = []
+    for item in items:
+        if item.get("status") == "failed" or item.get("protected"):
+            continue
+        key = normalize_base_name(item.get("after"), default="")
+        if not key:
+            continue
+        before = safe_str(item.get("before"))
+        if key in seen:
+            duplicates.append(f"`{seen[key]}` and `{before}` would both become `{item.get('after')}`")
+        else:
+            seen[key] = before
+    return duplicates
+'''
+          new_dupes = '''def detect_duplicate_outputs(items: list[dict[str, Any]]) -> list[str]:
+    """Report exact visible collisions introduced by this plan.
+
+    Existing duplicate names are legal in Discord and should not block an
+    unrelated design pass. Different icons/separators are also distinct visible
+    names, so compare the final rendered output instead of stripped base names.
+    """
+
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        if item.get("status") == "failed" or item.get("protected"):
+            continue
+        key = strip_invisible(safe_str(item.get("after"))).strip()
+        if not key:
+            continue
+        buckets.setdefault(key, []).append(item)
+
+    duplicates: list[str] = []
+    for final_name, rows in buckets.items():
+        if len(rows) < 2 or not any(safe_str(row.get("status")) == "changed" for row in rows):
+            continue
+        first = rows[0]
+        for other in rows[1:]:
+            duplicates.append(
+                f"`{safe_str(first.get('before'))}` and `{safe_str(other.get('before'))}` would both become `{final_name}`"
+            )
+    return duplicates
+'''
+          s = once(s, old_dupes, new_dupes, 'duplicate output detection')
+          SERVICE.write_text(s, encoding='utf-8')
+
+          m = MAJORITY.read_text(encoding='utf-8')
+          m = once(
+              m,
+              '    for key in ("category_format_locks", "channel_format_locks", "manual_name_overrides"):\n',
+              '    for key in ("category_format_locks", "channel_format_locks", "manual_name_overrides", "protection_item_rules"):\n',
+              'majority saved rule count',
+          )
+          m = once(
+              m,
+              '            value=f"Saved rules found: **{_saved_rule_count(options)}**\\nChannel rules beat category rules, category rules beat global rules, and Smart Auto-Detect only fills unlocked areas.",\n',
+              '            value=(f"Saved rules found: **{_saved_rule_count(options)}**\\n"\n                   "Exact names stay literal. Channel style rules beat category rules, category rules beat the global rule, and exact protection is evaluated separately per item."),\n',
+              'majority saved rules copy',
+          )
+          duplicate_recommended = '''        embed.add_field(
+            name="Recommended",
+            value=(
+                "Use **Smart Auto-Detect** to repair unlocked outliers using each category's own channel style. "
+                "Use **Saved Layout** to enforce saved design rules instead."
+            ),
+            inline=False,
+        )
+        embed.add_field(name="Recommended", value=_repair_mode_recommendation_text(), inline=False)
+'''
+          m = once(
+              m,
+              duplicate_recommended,
+              '        embed.add_field(name="Recommended", value=_repair_mode_recommendation_text(), inline=False)\n',
+              'duplicate majority recommendation',
+          )
+          MAJORITY.write_text(m, encoding='utf-8')
+
+          test = TEST.read_text(encoding='utf-8')
+          test += '''
+
+
+def test_live_lock_strength_matches_captured_components() -> None:
+    assert public_studio._required_strength_for_components(scope="channel", font="normal", separator_id="none", category_frame_id="plain") == 1
+    assert public_studio._required_strength_for_components(scope="channel", font="normal", separator_id="bar_full", category_frame_id="plain") == 2
+    assert public_studio._required_strength_for_components(scope="channel", font="fraktur", separator_id="bar_full", category_frame_id="plain") == 3
+    assert public_studio._required_strength_for_components(scope="category", font="fraktur", separator_id="bar_full", category_frame_id="lenticular") == 4
+
+
+def test_duplicate_detector_compares_actual_final_names_and_ignores_existing_duplicates() -> None:
+    different_icons = [
+        {"before": "a", "after": "🎮｜general", "status": "changed", "protected": False},
+        {"before": "b", "after": "💬｜general", "status": "changed", "protected": False},
+    ]
+    assert studio.detect_duplicate_outputs(different_icons) == []
+
+    existing_duplicates = [
+        {"before": "general", "after": "general", "status": "unchanged", "protected": False},
+        {"before": "general", "after": "general", "status": "unchanged", "protected": False},
+    ]
+    assert studio.detect_duplicate_outputs(existing_duplicates) == []
+
+    introduced_collision = [
+        {"before": "general", "after": "general", "status": "unchanged", "protected": False},
+        {"before": "chat", "after": "general", "status": "changed", "protected": False},
+    ]
+    assert len(studio.detect_duplicate_outputs(introduced_collision)) == 1
+
+
+def test_exact_strength_copy_matches_engine_semantics() -> None:
+    source = Path("stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
+    assert '2: "Layout: adds the selected channel separator."' in source
+    assert '3: "Font: layout plus the selected font."' in source
+    assert '5: "Exact: strictly normalizes the full selected format."' in source
+    assert 'max(3, _safe_int(lock.get("strength"), 4))' not in source
+
+
+def test_rules_surfaces_separate_style_authority_from_protection_policy() -> None:
+    source = Path("stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
+    assert "Protection is a separate exact-item/default policy" in source
+    assert "Exact protection overrides:" in source
+    assert 'label="Protection Mode"' in source
+    assert 'label="Pick Category"' in source
+    assert 'label="Pick Channel"' in source
+
+
+def test_exact_preview_uses_canonical_pending_store() -> None:
+    source = Path("stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
+    start = source.index("async def _save_exact_and_preview")
+    end = source.index("class ExactFormatEditorView", start)
+    block = source[start:end]
+    assert "_store_pending(" in block
+    assert "_PENDING[key]" not in block
+
+
+def test_majority_guard_has_one_recommendation_and_counts_exact_protection() -> None:
+    source = Path("stoney_verify/startup_guards/server_design_majority_layout_guard.py").read_text(encoding="utf-8")
+    target_start = source.index("def _target_embed")
+    target_end = source.index("def _saved_embed", target_start)
+    target = source[target_start:target_end]
+    assert target.count('name="Recommended"') == 1
+    count_start = source.index("def _saved_rule_count")
+    count_end = source.index("def _repair_mode_recommendation_text", count_start)
+    assert '"protection_item_rules"' in source[count_start:count_end]
+'''
+          TEST.write_text(test, encoding='utf-8')
+          PY
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+
+      - name: Validate second-pass repairs
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          python -m compileall -q stoney_verify tests/test_dank_design_consistency_030.py
+          python -m pytest tests/test_dank_design_consistency_030.py tests/test_dank_design_editor_state_authority.py tests/test_server_design_strict_layout_guard.py tests/test_server_design_category_aware_auto_detect.py tests/test_server_design_majority_layout.py tests/test_server_design_majority_repair_safety.py tests/test_server_design_style_zones.py tests/test_server_design_repair_confidence.py -q --tb=short
+          python tools/test_dank_design_safe_repair_cleanup_static.py
+          python tools/audit_dank_design_smart_auto_detect.py
+          python tools/test_design_layout_helpers_not_startup.py
+          git diff --check
+
+      - name: Commit clean second-pass source
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/ds-design-030-second-audit.yml
+          git add stoney_verify/commands_ext/public_design_studio.py stoney_verify/services/server_design_studio.py stoney_verify/startup_guards/server_design_majority_layout_guard.py tests/test_dank_design_consistency_030.py
+          git commit -m "DS-DESIGN-030: close second-pass Dank Design inconsistencies"
+          git push origin HEAD:fix/dank-design-consistency-locks
