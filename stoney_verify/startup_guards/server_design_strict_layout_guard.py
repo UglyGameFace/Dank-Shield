@@ -8,14 +8,14 @@ Design Studio consistency repair flow: a channel with the right fraktur text but
 no separator, a thin separator, or a different separator could be counted as
 "unchanged" and then skipped by Fix Mismatches.
 
-This guard keeps the useful font/base skip, but only after the visible layout
-pieces also match. Separator, leading emoji, and known category frame drift now
-show up as changed items so the normal preview/apply/rollback path can repair
-it.
+This helper is activated by the native /dank design registration path. It never
+owns startup registration and it only patches the service instance exposed by
+the already-loaded native public_design_studio module.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import replace
+import sys
 from typing import Any
 
 _PATCHED = False
@@ -49,6 +49,7 @@ _RENAME_SAFE_DEFAULT_PROTECTED_NAMES = {
     "staff-chat",
 }
 
+
 def _clean_text(value: Any) -> str:
     try:
         return str(value or "").strip()
@@ -80,11 +81,7 @@ def _relax_visual_name_defaults(studio: Any) -> None:
 
 
 def _ensure_spaced_pipe_separator(studio: Any) -> None:
-    """Install the plain visible separator used by Gothic Clean.
-
-    This deliberately uses ordinary ASCII with spaces because it renders clearly
-    on Discord mobile and cannot be mistaken for a doubled unicode bar.
-    """
+    """Install the plain visible separator used by Gothic Clean."""
 
     try:
         if _GOTHIC_CLEAN_SEPARATOR_ID in getattr(studio, "SEPARATORS_BY_ID", {}):
@@ -102,10 +99,9 @@ def _ensure_spaced_pipe_separator(studio: Any) -> None:
 
 
 def _normalize_theme_defaults(studio: Any) -> None:
-    """Use a plain spaced pipe for Gothic Clean.
+    """Use a plain spaced pipe as the Gothic Clean default only.
 
-    Discord mobile can make fullwidth/heavy unicode bars look like `||` beside
-    fraktur letters. Gothic Clean should be clear first, decorative second.
+    This changes the theme definition, not saved owner-approved locks.
     """
 
     if getattr(studio, "_DANK_GOTHIC_SPACED_PIPE_ACTIVE", False):
@@ -161,13 +157,29 @@ def _make_strict_match(original: Callable[..., bool], studio: Any) -> Callable[.
     return _strict_already_semantically_matches_design
 
 
+def _native_design_module() -> Any | None:
+    """Return the already-loaded native Dank Design module.
+
+    The native registration path loads this module before activating helpers.
+    Refusing to self-import here keeps ownership out of startup/compat layers.
+    """
+
+    return sys.modules.get("stoney_verify.commands_ext.public_design_studio")
+
+
 def apply() -> bool:
     global _PATCHED, _ORIGINAL
     if _PATCHED:
         return True
 
     try:
-        from stoney_verify.services import server_design_studio as studio
+        command_guard = _native_design_module()
+        if command_guard is None:
+            return False
+
+        studio = getattr(command_guard, "studio", None)
+        if studio is None:
+            return False
 
         _relax_visual_name_defaults(studio)
         _normalize_theme_defaults(studio)
@@ -182,7 +194,7 @@ def apply() -> bool:
             studio._DANK_STRICT_LAYOUT_MATCH_ACTIVE = True
 
         _PATCHED = True
-        print("✅ server_design_strict_layout_guard active; Gothic Clean uses clear spaced pipe and strict drift detection")
+        print("✅ server_design_strict_layout_guard active via native public_design_studio")
         return True
     except Exception as exc:
         try:
