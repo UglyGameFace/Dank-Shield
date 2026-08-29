@@ -20,46 +20,8 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
-      - name: Derive majority strength from detected layout
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          service_path = Path("stoney_verify/services/server_design_majority_layout.py")
-          text = service_path.read_text(encoding="utf-8")
-          old = '    out["strength"] = max(desired_strength, min(5, _safe_int(out.get("strength"), desired_strength)))\n'
-          new = '    out["strength"] = desired_strength\n'
-          count = text.count(old)
-          if count != 1:
-              raise SystemExit(f"expected one majority strength assignment, found {count}")
-          service_path.write_text(text.replace(old, new, 1), encoding="utf-8")
-
-          test_path = Path("tests/test_server_design_majority_layout.py")
-          tests = test_path.read_text(encoding="utf-8")
-          marker = "def test_majority_strength_is_derived_from_detected_components_not_old_draft()"
-          if marker not in tests:
-              tests += '''
-
-
-def test_majority_strength_is_derived_from_detected_components_not_old_draft():
-    names = [
-        "💬│general",
-        "📢│announcements",
-        "🎮│gaming",
-    ]
-    analysis = majority.infer_live_majority_layout(studio, _records(names))
-    options = majority.apply_majority_to_options(
-        studio,
-        {"theme_id": "gothic_clean", "strength": 5},
-        analysis,
-    )
-
-    assert analysis["font"]["id"] == "normal"
-    assert options["separator_id"] == "bar_thin"
-    assert options["strength"] == 2
-'''
-          test_path.write_text(tests, encoding="utf-8")
-          PY
+      - name: Apply final majority repair
+        run: python .github/scripts/ds_design_030_final_audit.py
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip -q
@@ -78,7 +40,7 @@ def test_majority_strength_is_derived_from_detected_components_not_old_draft():
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/ds-design-030-final-audit.yml
+          git rm .github/workflows/ds-design-030-final-audit.yml .github/scripts/ds_design_030_final_audit.py
           git add stoney_verify/services/server_design_majority_layout.py tests/test_server_design_majority_layout.py
           git commit -m "DS-DESIGN-030: derive majority strength from live layout"
           git push origin HEAD:fix/dank-design-consistency-locks
