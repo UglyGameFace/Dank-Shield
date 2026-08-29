@@ -45,19 +45,18 @@ jobs:
           func_start = text.index('def _strip_leading_icon(')
           loop_start = text.index('    while index < len(chars):\n', func_start)
           loop_end = text.index('    return "".join(icon_chars).strip(), "".join(chars[index:]).strip()\n', loop_start)
-          replacement = '''    while index < len(chars):
-              remaining = "".join(chars[index:])
-              if any(remaining.startswith(sep) for sep in _all_separator_values()):
-                  break
-              ch = chars[index]
-              if _is_emojiish(ch) or (icon_chars and ch in {variation, joiner}):
-                  icon_chars.append(ch)
-                  index += 1
-                  continue
-              break
-          '''
-          replacement = dedent(replacement)
-          replacement = ''.join('    ' + line if line else line for line in replacement.splitlines(keepends=True))
+          replacement = (
+              '    while index < len(chars):\n'
+              '        remaining = "".join(chars[index:])\n'
+              '        if any(remaining.startswith(sep) for sep in _all_separator_values()):\n'
+              '            break\n'
+              '        ch = chars[index]\n'
+              '        if _is_emojiish(ch) or (icon_chars and ch in {variation, joiner}):\n'
+              '            icon_chars.append(ch)\n'
+              '            index += 1\n'
+              '            continue\n'
+              '        break\n'
+          )
           text = text[:loop_start] + replacement + text[loop_end:]
           path.write_text(text, encoding='utf-8')
 
