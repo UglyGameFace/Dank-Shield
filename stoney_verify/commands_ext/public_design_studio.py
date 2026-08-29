@@ -2023,61 +2023,45 @@ class SeparatorExamplePickButton(discord.ui.Button):
 
 class SeparatorExamplesPageButton(discord.ui.Button):
     def __init__(self, page: int, *, label: str, emoji: str, row: int) -> None:
-        super().__init__(
-            label=label,
-            emoji=emoji,
-            style=discord.ButtonStyle.secondary,
-            custom_id=f"dank_design:sep_examples_page:{page}",
-            row=row,
-        )
+        super().__init__(label=label, emoji=emoji, style=discord.ButtonStyle.secondary, custom_id=f"dank_design:sep_examples_page:{page}", row=row)
         self.page = int(page)
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         async def action() -> None:
             if not await _require_design_permission(interaction):
                 return
-
             guild = interaction.guild
             assert guild is not None
-
-        view = getattr(self, "view", None)
-        scope = getattr(view, "scope", "channel")
-        target_id = int(getattr(view, "target_id", 0))
-        lock = _exact_lock_for_user(guild, int(interaction.user.id), scope, target_id)
-
-        await interaction.response.edit_message(
-            embed=_separator_gallery_embed(guild, scope=scope, target_id=target_id, lock=lock, page=self.page),
-            view=SeparatorExamplesView(guild, scope=scope, target_id=target_id, lock=lock, page=self.page),
-        )
+            view = getattr(self, "view", None)
+            scope = getattr(view, "scope", "channel")
+            target_id = int(getattr(view, "target_id", 0))
+            lock = _exact_lock_for_user(guild, int(interaction.user.id), scope, target_id)
+            await interaction.response.edit_message(
+                embed=_separator_gallery_embed(guild, scope=scope, target_id=target_id, lock=lock, page=self.page),
+                view=SeparatorExamplesView(guild, scope=scope, target_id=target_id, lock=lock, page=self.page),
+            )
+        await _guard_design_action(interaction, "design.exact.examples.page", action, defer=False)
 
 
 class SeparatorExamplesBackButton(discord.ui.Button):
     def __init__(self, *, row: int) -> None:
-        super().__init__(
-            label="Back to Custom Format",
-            emoji="⬅️",
-            style=discord.ButtonStyle.secondary,
-            custom_id="dank_design:sep_examples_back",
-            row=row,
-        )
+        super().__init__(label="Back to Custom Format", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:sep_examples_back", row=row)
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         async def action() -> None:
             if not await _require_design_permission(interaction):
                 return
-
             guild = interaction.guild
             assert guild is not None
-
-        view = getattr(self, "view", None)
-        scope = getattr(view, "scope", "channel")
-        target_id = int(getattr(view, "target_id", 0))
-        lock = _exact_lock_for_user(guild, int(interaction.user.id), scope, target_id)
-
-        await interaction.response.edit_message(
-            embed=_exact_format_embed(guild, scope=scope, target_id=target_id, lock=lock),
-            view=ExactFormatEditorViewFactory(guild, scope, target_id, lock),
-        )
+            view = getattr(self, "view", None)
+            scope = getattr(view, "scope", "channel")
+            target_id = int(getattr(view, "target_id", 0))
+            lock = _exact_lock_for_user(guild, int(interaction.user.id), scope, target_id)
+            await interaction.response.edit_message(
+                embed=_exact_format_embed(guild, scope=scope, target_id=target_id, lock=lock),
+                view=ExactFormatEditorViewFactory(guild, scope, target_id, lock),
+            )
+        await _guard_design_action(interaction, "design.exact.examples.back", action, defer=False)
 
 
 class SeparatorExamplesView(discord.ui.View):

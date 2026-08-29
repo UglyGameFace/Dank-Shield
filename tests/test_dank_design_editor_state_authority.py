@@ -57,3 +57,15 @@ def test_exact_editor_apply_is_bound_to_the_preview_user_reviewed() -> None:
     assert "pending_created_at=created_at" in PUBLIC_STUDIO
     assert "if self.pending_created_at is not None:" in PUBLIC_STUDIO
     assert "This Apply button belongs to an older preview" in PUBLIC_STUDIO
+
+
+def test_separator_example_navigation_executes_inside_guarded_action() -> None:
+    page_start = PUBLIC_STUDIO.index("class SeparatorExamplesPageButton")
+    back_start = PUBLIC_STUDIO.index("class SeparatorExamplesBackButton", page_start)
+    view_start = PUBLIC_STUDIO.index("class SeparatorExamplesView", back_start)
+    page_block = PUBLIC_STUDIO[page_start:back_start]
+    back_block = PUBLIC_STUDIO[back_start:view_start]
+    assert 'await _guard_design_action(interaction, "design.exact.examples.page", action, defer=False)' in page_block
+    assert 'await _guard_design_action(interaction, "design.exact.examples.back", action, defer=False)' in back_block
+    assert page_block.index("guild = interaction.guild") < page_block.index("await interaction.response.edit_message")
+    assert back_block.index("guild = interaction.guild") < back_block.index("await interaction.response.edit_message")
