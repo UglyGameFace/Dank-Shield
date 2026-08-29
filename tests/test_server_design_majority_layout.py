@@ -160,7 +160,8 @@ def test_clean_design_text_replaces_literal_newline_artifacts():
     assert "\\n" not in cleaned
 
 
-
+# A stale draft at strength 5 must not make a simple live separator layout run
+# through stronger font/frame/exact semantics than Smart Auto-Detect observed.
 def test_majority_strength_is_derived_from_detected_components_not_old_draft():
     names = [
         "💬│general",
