@@ -43,6 +43,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/ds-design-030-second-audit.yml .github/workflows/ds-design-030-second-audit-v2.yml .github/workflows/ds-design-030-second-audit-v3.yml .github/workflows/ds-design-030-second-audit-v4.yml .github/workflows/ds-design-030-second-audit-v5.yml .github/scripts/run_ds_design_030_second_audit.py
-          git add stoney_verify/commands_ext/public_design_studio.py stoney_verify/services/server_design_studio.py stoney_verify/startup_guards/server_design_majority_layout_guard.py tests/test_dank_design_consistency_030.py
+          git add stoney_verify/commands_ext/public_design_studio.py stoney_verify/services/server_design_studio.py stoney_verify/services/server_design_majority_layout.py stoney_verify/startup_guards/server_design_majority_layout_guard.py tests/test_dank_design_consistency_030.py
           git commit -m "DS-DESIGN-030: close second-pass Dank Design inconsistencies"
           git push origin HEAD:fix/dank-design-consistency-locks
