@@ -1260,6 +1260,81 @@ def _live_majority_exact_lock(
         return {}
 
 
+def _live_target_exact_lock(
+    guild: discord.Guild | None,
+    options: Mapping[str, Any],
+    *,
+    scope: str,
+    target_id: int,
+) -> dict[str, Any]:
+    """Seed Custom Format from the selected item's current live style.
+
+    Server/category majority remains an explicit choice through the Server Style
+    button. Opening one item for manual editing must not preload unrelated style
+    values and then persist them as if the user deliberately selected them.
+    """
+
+    majority_lock = _live_majority_exact_lock(
+        guild,
+        options,
+        scope=scope,
+        target_id=target_id,
+    )
+    if guild is None:
+        return majority_lock
+
+    target = guild.get_channel(int(target_id))
+    if target is None:
+        return majority_lock
+
+    try:
+        from stoney_verify.services import server_design_majority_layout as majority
+
+        name = _safe_str(getattr(target, "name", ""))
+        if not name:
+            return majority_lock
+
+        lock = dict(majority_lock or _current_format_lock(options, scope=scope))
+        lock["scope"] = scope
+        lock["theme_id"] = _safe_str(
+            lock.get("theme_id"),
+            _safe_str(options.get("theme_id"), "gothic_clean"),
+        )
+        lock["icon_mode"] = "keep_existing"
+        lock["emoji_override"] = ""
+        lock["exact_match"] = False
+        lock["__source"] = "live_target"
+
+        detected_font = _safe_str(
+            majority.detect_font_id(studio, name),
+            "normal",
+        ).lower().replace("-", "_")
+        lock["font"] = detected_font if detected_font in studio.FONT_STYLES else "normal"
+
+        if scope == "channel":
+            separator = majority.detect_channel_separator(studio, name)
+            separator_id = _safe_str(separator.get("separator_id"), "")
+            if not separator_id:
+                separator_id = majority.ensure_separator_spec(
+                    studio,
+                    _safe_str(separator.get("token"), ""),
+                    _safe_str(separator.get("spacing"), "none"),
+                )
+            if separator_id in studio.SEPARATORS_BY_ID or separator_id == "none":
+                lock["separator_id"] = separator_id
+            lock["strength"] = max(2, _safe_int(lock.get("strength"), 4))
+        elif scope == "category":
+            frame = majority.detect_category_frame(studio, name)
+            frame_id = _safe_str(frame.get("id"), "plain")
+            if frame_id in studio.CATEGORY_FRAMES_BY_ID:
+                lock["category_frame_id"] = frame_id
+            lock["strength"] = max(3, _safe_int(lock.get("strength"), 4))
+
+        return lock
+    except Exception:
+        return majority_lock
+
+
 def _separator_choice_label(sep_id: Any) -> str:
     sep_id = _safe_str(sep_id, "none")
     if sep_id == "none":
@@ -1336,6 +1411,7 @@ def _initial_editor_lock(
     guild: discord.Guild | None = None,
 ) -> dict[str, Any]:
     majority_lock = _live_majority_exact_lock(guild, options, scope=scope, target_id=target_id)
+    target_lock = _live_target_exact_lock(guild, options, scope=scope, target_id=target_id)
 
     if scope == "category":
         locks = _mapping_dict(options.get("category_format_locks"))
@@ -1359,8 +1435,8 @@ def _initial_editor_lock(
         ):
             if majority_lock.get(key) is not None:
                 lock[key] = majority_lock.get(key)
-    elif majority_lock:
-        lock = dict(majority_lock)
+    elif target_lock:
+        lock = dict(target_lock)
     else:
         lock = _current_format_lock(options, scope=scope)
         lock["__source"] = "saved_design_rule"
@@ -1484,6 +1560,7 @@ def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, loc
     )
     source_label = {
         "live_majority": "Live server majority",
+        "live_target": "Selected item current style",
         "saved_exact_rule": "Saved exact rule",
         "saved_design_rule": "Saved design rule",
         "manual_override": "Manual draft override",
@@ -1844,6 +1921,7 @@ async def _update_exact_draft(
     current.update(dict(patch))
     if any(not str(key).startswith("__") for key in dict(patch)):
         current["__source"] = "manual_override"
+        current["exact_match"] = True
     _FORMAT_EDITOR_DRAFTS[key] = current
     await interaction.response.edit_message(
         embed=_exact_format_embed(guild, scope=scope, target_id=target_id, lock=current),
@@ -2048,11 +2126,13 @@ async def _save_exact_and_preview(interaction: discord.Interaction, *, scope: st
         title = "👁️ Channel Format Preview"
 
     key = _key(int(guild.id), int(interaction.user.id))
+    created_at = time.time()
     _PENDING[key] = {
-        "created_at": time.time(),
+        "created_at": created_at,
         "items": items,
         "options": dict(repair_options),
         "mode": f"{scope}_exact_format",
+        "target_id": str(int(target_id)),
     }
 
     has_blockers = any(item.get("status") == "failed" for item in items)
@@ -2060,7 +2140,10 @@ async def _save_exact_and_preview(interaction: discord.Interaction, *, scope: st
 
     await interaction.edit_original_response(
         embed=_preview_embed(guild, items, title=title),
-        view=StyleChangePreviewView(can_apply=not has_blockers and has_changes, has_blockers=has_blockers),
+        view=DesignPreviewView(
+            can_apply=not has_blockers and has_changes,
+            pending_created_at=created_at,
+        ),
     )
 
 
@@ -5007,8 +5090,9 @@ class DesignHomeView(discord.ui.View):
 
 
 class DesignPreviewView(discord.ui.View):
-    def __init__(self, *, can_apply: bool) -> None:
+    def __init__(self, *, can_apply: bool, pending_created_at: float | None = None) -> None:
         super().__init__(timeout=900)
+        self.pending_created_at = pending_created_at
         self.apply.disabled = not can_apply
 
     @discord.ui.button(label="Apply Reviewed Changes", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_design:apply", row=0)
@@ -5019,6 +5103,14 @@ class DesignPreviewView(discord.ui.View):
         assert guild is not None
         key = _key(int(guild.id), int(interaction.user.id))
         payload = _PENDING.get(key) or {}
+        if self.pending_created_at is not None:
+            current_created_at = float(payload.get("created_at") or 0.0)
+            if current_created_at != self.pending_created_at:
+                await interaction.response.send_message(
+                    "❌ This Apply button belongs to an older preview. Reopen the editor and preview the current choices before applying.",
+                    ephemeral=True,
+                )
+                return
         items = list(payload.get("items") or [])
         if not items:
             await interaction.response.send_message("No saved preview found. Press **Preview Saved Design** first.", ephemeral=True)

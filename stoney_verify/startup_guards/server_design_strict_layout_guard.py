@@ -158,26 +158,15 @@ def _normalize_gothic_lock(lock: Any, *, fallback_theme_id: str = "") -> Any:
 
 
 def _normalize_gothic_design_options(options: Any) -> dict[str, Any]:
-    out = dict(options) if isinstance(options, Mapping) else {}
-    fallback_theme_id = _clean_key(out.get("theme_id")) or "gothic_clean"
+    """Preserve saved owner-approved rules byte-for-byte.
 
-    if fallback_theme_id == "gothic_clean" and _clean_key(out.get("separator_id")) in _LEGACY_GOTHIC_SEPARATOR_IDS:
-        out["separator_id"] = _GOTHIC_CLEAN_SEPARATOR_ID
+    Gothic Clean's current default is normalized at the theme-definition layer by
+    ``_normalize_theme_defaults``. Rewriting persisted global/category/channel
+    locks here made an explicit editor choice silently collapse back to the theme
+    default on the next config load/save. Saved rules are authoritative.
+    """
 
-    global_lock = _normalize_gothic_lock(out.get("format_lock_global"), fallback_theme_id=fallback_theme_id)
-    if isinstance(global_lock, Mapping):
-        out["format_lock_global"] = dict(global_lock)
-
-    for key in ("category_format_locks", "channel_format_locks"):
-        locks = out.get(key)
-        if not isinstance(locks, Mapping):
-            continue
-        out[key] = {
-            str(lock_id): _normalize_gothic_lock(lock, fallback_theme_id=fallback_theme_id)
-            for lock_id, lock in dict(locks).items()
-        }
-
-    return out
+    return dict(options) if isinstance(options, Mapping) else {}
 
 
 def _patch_command_guard_options() -> None:
