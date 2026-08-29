@@ -10,9 +10,11 @@ end = source.index("\n          PY\n", start)
 raw = source[start:end]
 script = '\n'.join(line[10:] if line.startswith('          ') else line for line in raw.splitlines()) + '\n'
 
+# Scope the protection-count edit to _lock_count. The original safety matcher
+# saw the same raw storage line in stale-cleanup code and correctly refused to guess.
 a = script.index('# Count only effective exact-protection records')
 b = script.index('# Make Rules / Locks explain', a)
-corrected = (
+corrected_count = (
     "# Count only effective exact-protection records, not corrupt raw keys.\n"
     "needle = '    protection_items = _mapping_dict(options.get(\"protection_item_rules\"))\\n'\n"
     "section = p.find('def _lock_count(options: Mapping[str, Any])')\n"
@@ -22,7 +24,43 @@ corrected = (
     "    raise SystemExit(f'effective protection count target invalid: section={section} pos={pos} end={section_end}')\n"
     "p = p[:pos] + '    protection_items = _protection_item_rules(options) if \"_protection_item_rules\" in globals() else _mapping_dict(options.get(\"protection_item_rules\"))\\n' + p[pos + len(needle):]\n\n"
 )
-script = script[:a] + corrected + script[b:]
+script = script[:a] + corrected_count + script[b:]
+
+# Replace the brittle literal matcher for _live_majority_exact_lock with a
+# function-scoped structural edit. Preserve icon/source metadata below the
+# component fields while deriving the minimum strength that actually reproduces
+# the detected separator/font/frame.
+a = script.index('          old_return =', script.index('# Centralize the strength needed')) if '          old_return =' in script else script.index('old_return =', script.index('# Centralize the strength needed'))
+b = script.index('# Live target strength must reproduce', a)
+corrected_majority = '''# Derive live-majority strength from the components that were actually detected.
+majority_start = p.find('def _live_majority_exact_lock(')
+return_start = p.find('        return {\\n', majority_start)
+icon_line = p.find('            "icon_mode":', return_start)
+if majority_start < 0 or return_start < 0 or icon_line < 0:
+    raise SystemExit(f'live majority structural markers invalid: fn={majority_start} return={return_start} icon={icon_line}')
+detected_prefix = ''' + "'''" + '''        detected_font = _safe_str(inferred.get("font"), "normal").lower().replace("-", "_")
+        detected_separator = _safe_str(inferred.get("separator_id"), "none")
+        detected_frame = _safe_str(inferred.get("category_frame_id"), "plain")
+        detected_strength = _required_strength_for_components(
+            scope=scope,
+            font=detected_font,
+            separator_id=detected_separator,
+            category_frame_id=detected_frame,
+        )
+
+        return {
+            "scope": scope,
+            "theme_id": _safe_str(inferred.get("theme_id"), _safe_str(options.get("theme_id"), "gothic_clean")),
+            "strength": detected_strength,
+            "font": detected_font,
+            "separator_id": detected_separator,
+            "category_frame_id": detected_frame,
+''' + "'''" + '''
+p = p[:return_start] + detected_prefix + p[icon_line:]
+
+'''
+script = script[:a] + corrected_majority + script[b:]
+
 path = Path('/tmp/ds_design_030_second_audit.py')
 path.write_text(script, encoding='utf-8')
 runpy.run_path(str(path), run_name='__main__')
