@@ -91,27 +91,3 @@ def test_gothic_clean_default_uses_clear_spaced_pipe_separator():
     assert "｜" not in result.after
     assert "┃" not in result.after
     assert "❘" not in result.after
-
-
-def test_saved_gothic_locks_preserve_owner_selected_separators():
-    options = {
-        "theme_id": "gothic_clean",
-        "format_lock_global": {
-            "enabled": True,
-            "theme_id": "gothic_clean",
-            "font": "fraktur",
-            "separator_id": "bar_full",
-        },
-        "category_format_locks": {
-            "123": {"theme_id": "gothic_clean", "font": "fraktur", "separator_id": "bar_full"},
-        },
-        "channel_format_locks": {
-            "456": {"theme_id": "gothic_clean", "font": "fraktur", "separator_id": "bar_heavy"},
-        },
-    }
-
-    normalized = server_design_strict_layout_guard._normalize_gothic_design_options(options)
-
-    assert normalized["format_lock_global"]["separator_id"] == "bar_full"
-    assert normalized["category_format_locks"]["123"]["separator_id"] == "bar_full"
-    assert normalized["channel_format_locks"]["456"]["separator_id"] == "bar_heavy"

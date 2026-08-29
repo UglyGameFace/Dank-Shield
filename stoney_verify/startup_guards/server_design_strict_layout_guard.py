@@ -49,23 +49,11 @@ _RENAME_SAFE_DEFAULT_PROTECTED_NAMES = {
     "staff-chat",
 }
 
-# Existing guild configs may already have locks saved with the old Gothic Clean
-# separator. Normalize those at load time so Fix Mismatches reflects the new
-# clear spaced-pipe Gothic layout immediately instead of reusing stale vertical
-# bars that look doubled on Discord mobile.
-_LEGACY_GOTHIC_SEPARATOR_IDS = {"bar_full", "bar_heavy", "bar_block", "bar_medium", "bar_bold"}
-_GOTHIC_FONTS = {"fraktur", "bold_fraktur"}
-
-
 def _clean_text(value: Any) -> str:
     try:
         return str(value or "").strip()
     except Exception:
         return ""
-
-
-def _clean_key(value: Any) -> str:
-    return _clean_text(value).lower().replace("-", "_")
 
 
 def _frame_signature(studio: Any, value: Any) -> str:
@@ -140,65 +128,6 @@ def _normalize_theme_defaults(studio: Any) -> None:
         pass
 
 
-def _lock_looks_gothic(lock: Mapping[str, Any], *, fallback_theme_id: str = "") -> bool:
-    theme_id = _clean_key(lock.get("theme_id") or fallback_theme_id)
-    font = _clean_key(lock.get("font"))
-    return theme_id == "gothic_clean" or font in _GOTHIC_FONTS
-
-
-def _normalize_gothic_lock(lock: Any, *, fallback_theme_id: str = "") -> Any:
-    if not isinstance(lock, Mapping):
-        return lock
-    out = dict(lock)
-    if _lock_looks_gothic(out, fallback_theme_id=fallback_theme_id):
-        separator = _clean_key(out.get("separator_id"))
-        if separator in _LEGACY_GOTHIC_SEPARATOR_IDS:
-            out["separator_id"] = _GOTHIC_CLEAN_SEPARATOR_ID
-    return out
-
-
-def _normalize_gothic_design_options(options: Any) -> dict[str, Any]:
-    """Preserve saved owner-approved rules byte-for-byte.
-
-    Gothic Clean's current default is normalized at the theme-definition layer by
-    ``_normalize_theme_defaults``. Rewriting persisted global/category/channel
-    locks here made an explicit editor choice silently collapse back to the theme
-    default on the next config load/save. Saved rules are authoritative.
-    """
-
-    return dict(options) if isinstance(options, Mapping) else {}
-
-
-def _patch_command_guard_options() -> None:
-    try:
-        import sys
-
-        for module_name in (
-            "stoney_verify.commands_ext.public_design_studio",
-            "stoney_verify.startup_guards.server_design_studio_command_guard",
-        ):
-            command_guard = sys.modules.get(module_name)
-            if command_guard is None or getattr(command_guard, "_DANK_GOTHIC_LOCK_NORMALIZER_ACTIVE", False):
-                continue
-
-            original_load = getattr(command_guard, "_load_design_options", None)
-            original_save = getattr(command_guard, "_save_design_options", None)
-            if not callable(original_load) or not callable(original_save):
-                continue
-
-            async def _load_design_options_normalized(guild_id: int, _original_load=original_load) -> dict[str, Any]:
-                return _normalize_gothic_design_options(await _original_load(guild_id))
-
-            async def _save_design_options_normalized(guild_id: int, options: Mapping[str, Any], _original_save=original_save) -> None:
-                await _original_save(guild_id, _normalize_gothic_design_options(options))
-
-            command_guard._load_design_options = _load_design_options_normalized
-            command_guard._save_design_options = _save_design_options_normalized
-            command_guard._DANK_GOTHIC_LOCK_NORMALIZER_ACTIVE = True
-    except Exception:
-        pass
-
-
 def _make_strict_match(original: Callable[..., bool], studio: Any) -> Callable[..., bool]:
     def _strict_already_semantically_matches_design(
         before: str,
@@ -235,7 +164,6 @@ def _make_strict_match(original: Callable[..., bool], studio: Any) -> Callable[.
 def apply() -> bool:
     global _PATCHED, _ORIGINAL
     if _PATCHED:
-        _patch_command_guard_options()
         return True
 
     try:
@@ -254,7 +182,6 @@ def apply() -> bool:
             studio._DANK_STRICT_LAYOUT_MATCH_ACTIVE = True
 
         _PATCHED = True
-        _patch_command_guard_options()
         print("✅ server_design_strict_layout_guard active; Gothic Clean uses clear spaced pipe and strict drift detection")
         return True
     except Exception as exc:
