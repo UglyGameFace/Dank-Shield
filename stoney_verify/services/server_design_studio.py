@@ -444,8 +444,8 @@ def _already_semantically_matches_design(before: str, *, base: str, font: str, e
 
     This prevents the preview from trying to re-normalize channels that already
     have the selected font/base text but differ only by minor separator/frame
-    decoration. Full exact-layout enforcement can be added later as a separate
-    explicit mode; the default design repair should avoid needless churn.
+    decoration. Strength 5 is the explicit exact-layout mode. Lower strengths may
+    preserve harmless existing decoration while enforcing the components they enable.
     """
 
     before_text = safe_str(before)
@@ -645,21 +645,32 @@ def build_styled_name(
 
 
 def detect_duplicate_outputs(items: list[dict[str, Any]]) -> list[str]:
-    seen: dict[str, str] = {}
-    duplicates: list[str] = []
+    """Report exact visible collisions introduced by this plan.
+
+    Existing duplicate names are legal in Discord and should not block an
+    unrelated design pass. Different icons/separators are also distinct visible
+    names, so compare the final rendered output instead of stripped base names.
+    """
+
+    buckets: dict[str, list[dict[str, Any]]] = {}
     for item in items:
         if item.get("status") == "failed" or item.get("protected"):
             continue
-        key = normalize_base_name(item.get("after"), default="")
+        key = strip_invisible(safe_str(item.get("after"))).strip()
         if not key:
             continue
-        before = safe_str(item.get("before"))
-        if key in seen:
-            duplicates.append(f"`{seen[key]}` and `{before}` would both become `{item.get('after')}`")
-        else:
-            seen[key] = before
-    return duplicates
+        buckets.setdefault(key, []).append(item)
 
+    duplicates: list[str] = []
+    for final_name, rows in buckets.items():
+        if len(rows) < 2 or not any(safe_str(row.get("status")) == "changed" for row in rows):
+            continue
+        first = rows[0]
+        for other in rows[1:]:
+            duplicates.append(
+                f"`{safe_str(first.get('before'))}` and `{safe_str(other.get('before'))}` would both become `{final_name}`"
+            )
+    return duplicates
 
 def summarize_plan(items: list[dict[str, Any]]) -> dict[str, int]:
     summary = {"total": len(items), "changed": 0, "unchanged": 0, "protected": 0, "failed": 0, "warnings": 0}

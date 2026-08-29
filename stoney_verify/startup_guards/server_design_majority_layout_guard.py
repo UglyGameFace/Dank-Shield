@@ -177,7 +177,7 @@ def _saved_rule_count(options: Mapping[str, Any]) -> int:
     global_rule = options.get("format_lock_global")
     if isinstance(global_rule, Mapping) and global_rule.get("enabled"):
         total += 1
-    for key in ("category_format_locks", "channel_format_locks", "manual_name_overrides"):
+    for key in ("category_format_locks", "channel_format_locks", "manual_name_overrides", "protection_item_rules"):
         value = options.get(key)
         if isinstance(value, Mapping):
             total += len(value)
@@ -336,16 +336,9 @@ def _patch_guided_flow(command_guard: Any, majority: Any, studio: Any, discord: 
         )
         embed.add_field(
             name="Saved rules",
-            value=f"Saved rules found: **{_saved_rule_count(options)}**\nChannel rules beat category rules, category rules beat global rules, and Smart Auto-Detect only fills unlocked areas.",
+            value=(f"Saved rules found: **{_saved_rule_count(options)}**\n"
+                   "Exact names stay literal. Channel style rules beat category rules, category rules beat the global rule, and exact protection is evaluated separately per item."),
             inline=True,
-        )
-        embed.add_field(
-            name="Recommended",
-            value=(
-                "Use **Smart Auto-Detect** to repair unlocked outliers using each category's own channel style. "
-                "Use **Saved Layout** to enforce saved design rules instead."
-            ),
-            inline=False,
         )
         embed.add_field(name="Recommended", value=_repair_mode_recommendation_text(), inline=False)
         embed.set_footer(text="Read-only screen. Choose a target to generate the final preview.")

@@ -83,3 +83,68 @@ def test_help_uses_real_current_button_labels() -> None:
     assert "Preview Server" not in PUBLIC
     assert "**Preview Design**" not in PUBLIC
     assert "Edit Custom Format" not in PUBLIC
+
+
+
+def test_live_lock_strength_matches_captured_components() -> None:
+    assert public_studio._required_strength_for_components(scope="channel", font="normal", separator_id="none", category_frame_id="plain") == 1
+    assert public_studio._required_strength_for_components(scope="channel", font="normal", separator_id="bar_full", category_frame_id="plain") == 2
+    assert public_studio._required_strength_for_components(scope="channel", font="fraktur", separator_id="bar_full", category_frame_id="plain") == 3
+    assert public_studio._required_strength_for_components(scope="category", font="fraktur", separator_id="bar_full", category_frame_id="lenticular") == 4
+
+
+def test_duplicate_detector_compares_actual_final_names_and_ignores_existing_duplicates() -> None:
+    different_icons = [
+        {"before": "a", "after": "🎮｜general", "status": "changed", "protected": False},
+        {"before": "b", "after": "💬｜general", "status": "changed", "protected": False},
+    ]
+    assert studio.detect_duplicate_outputs(different_icons) == []
+
+    existing_duplicates = [
+        {"before": "general", "after": "general", "status": "unchanged", "protected": False},
+        {"before": "general", "after": "general", "status": "unchanged", "protected": False},
+    ]
+    assert studio.detect_duplicate_outputs(existing_duplicates) == []
+
+    introduced_collision = [
+        {"before": "general", "after": "general", "status": "unchanged", "protected": False},
+        {"before": "chat", "after": "general", "status": "changed", "protected": False},
+    ]
+    assert len(studio.detect_duplicate_outputs(introduced_collision)) == 1
+
+
+def test_exact_strength_copy_matches_engine_semantics() -> None:
+    source = Path("stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
+    assert '2: "Layout: adds the selected channel separator."' in source
+    assert '3: "Font: layout plus the selected font."' in source
+    assert '5: "Exact: strictly normalizes the full selected format."' in source
+    assert 'max(3, _safe_int(lock.get("strength"), 4))' not in source
+
+
+def test_rules_surfaces_separate_style_authority_from_protection_policy() -> None:
+    source = Path("stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
+    assert "Protection is a separate exact-item/default policy" in source
+    assert "Exact protection overrides:" in source
+    assert 'label="Protection Mode"' in source
+    assert 'label="Pick Category"' in source
+    assert 'label="Pick Channel"' in source
+
+
+def test_exact_preview_uses_canonical_pending_store() -> None:
+    source = Path("stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
+    start = source.index("async def _save_exact_and_preview")
+    end = source.index("class ExactFormatEditorView", start)
+    block = source[start:end]
+    assert "_store_pending(" in block
+    assert "_PENDING[key]" not in block
+
+
+def test_majority_guard_has_one_recommendation_and_counts_exact_protection() -> None:
+    source = Path("stoney_verify/startup_guards/server_design_majority_layout_guard.py").read_text(encoding="utf-8")
+    target_start = source.index("def _target_embed")
+    target_end = source.index("def _saved_embed", target_start)
+    target = source[target_start:target_end]
+    assert target.count('name="Recommended"') == 1
+    count_start = source.index("def _saved_rule_count")
+    count_end = source.index("def _repair_mode_recommendation_text", count_start)
+    assert '"protection_item_rules"' in source[count_start:count_end]
