@@ -1,0 +1,67 @@
+name: DS-DESIGN-030 Consistency Repair v2
+
+on:
+  push:
+    branches:
+      - fix/dank-design-consistency-locks
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Extract and run repair payload
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          source = Path('.github/workflows/ds-design-030-consistency-repair.yml').read_text(encoding='utf-8')
+          marker = "          python - <<'PY'\n"
+          start = source.index(marker) + len(marker)
+          end = source.index("\n          PY\n", start)
+          raw = source[start:end]
+          lines = []
+          for line in raw.splitlines():
+              lines.append(line[10:] if line.startswith('          ') else line)
+          Path('/tmp/ds_design_030_repair.py').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          PY
+          python /tmp/ds_design_030_repair.py
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+
+      - name: Focused validation
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          python -m compileall -q stoney_verify
+          python -m pytest tests/test_dank_design_consistency_030.py tests/test_dank_design_editor_state_authority.py tests/test_server_design_strict_layout_guard.py tests/test_server_design_category_aware_auto_detect.py tests/test_server_design_style_zones.py tests/test_server_design_repair_confidence.py -q --tb=short
+          python tools/test_dank_design_safe_repair_cleanup_static.py
+          python tools/audit_dank_design_smart_auto_detect.py
+          git diff --check
+
+      - name: Commit repaired source and remove temporary gates
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/ds-design-030-consistency-repair.yml .github/workflows/ds-design-030-consistency-repair-v2.yml
+          git add stoney_verify/commands_ext/public_design_studio.py stoney_verify/services/server_design_studio.py tests/test_dank_design_consistency_030.py
+          git commit -m "DS-DESIGN-030: repair Dank Design rules and consistency"
+          git push origin HEAD:fix/dank-design-consistency-locks
