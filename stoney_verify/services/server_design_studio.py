@@ -356,6 +356,9 @@ def _strip_leading_icon(value: str) -> tuple[str, str]:
     variation = chr(0xFE0F)
     joiner = chr(0x200D)
     while index < len(chars):
+        remaining = "".join(chars[index:])
+        if any(remaining.startswith(sep) for sep in _all_separator_values()):
+            break
         ch = chars[index]
         if _is_emojiish(ch) or (icon_chars and ch in {variation, joiner}):
             icon_chars.append(ch)

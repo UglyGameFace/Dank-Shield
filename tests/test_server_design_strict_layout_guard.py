@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from stoney_verify.services import server_design_studio as studio
+from stoney_verify.commands_ext import public_design_studio  # noqa: F401
 from stoney_verify.startup_guards import server_design_strict_layout_guard
 
 
@@ -91,3 +92,15 @@ def test_gothic_clean_default_uses_clear_spaced_pipe_separator():
     assert "｜" not in result.after
     assert "┃" not in result.after
     assert "❘" not in result.after
+
+
+def test_known_separator_is_not_swallowed_into_icon_prefix() -> None:
+    with_icon = studio.parse_channel_name("🎮│free-games")
+    assert with_icon["emoji"] == "🎮"
+    assert with_icon["separator"] == "│"
+    assert with_icon["base_name"] == "free-games"
+
+    separator_only = studio.parse_channel_name("│free-games")
+    assert separator_only["emoji"] == ""
+    assert separator_only["separator"] == "│"
+    assert separator_only["base_name"] == "free-games"

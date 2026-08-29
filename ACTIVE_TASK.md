@@ -66,3 +66,20 @@ A manual Category Editor / Channel Editor choice must remain authoritative throu
 ## Definition of Done
 
 A user editing one channel or category has that explicit rule remain authoritative through save, preview, and apply; saved item-level rules are never silently rewritten by a whole-server theme normalizer; stale preview buttons cannot apply newer pending state; exact editor navigation works; Recommended category styling matches the UI; temporary implementation machinery is absent; and the exact final PR head passes targeted plus full repository validation and final diff/review inspection.
+
+## Final editor-authority completion pass
+
+- [x] Direct Rename executes inside the guarded interaction path and refreshes from Discord API when available.
+- [x] Direct Rename persists a literal exact-name rule and rolls Discord back if persistence fails when possible.
+- [x] Exact manual names outrank channel/category/global style rules until explicitly replaced or unlocked.
+- [x] Per-item Lock Rule captures the selected item's live style instead of copying the whole-server preset.
+- [x] Rules & Unlocks / Design Doctor can display, remove, and clean stale exact-name rules.
+- [x] Rules & Unlocks preserves full saved style detail: font, category frame, separator, and strength.
+- [x] Saved-setting mutations invalidate older reviewed previews.
+- [x] Style Change Apply and missing-icon controls carry the same immutable preview identity.
+- [x] Missing-icon repairs remain batched in groups of five and rebuild the preview for the next unresolved batch.
+- [x] Known existing separators are parsed separately from leading emoji and are replaced rather than stacked.
+- [x] Strict layout helper is activated only through the native public Design module ownership path.
+- [x] Focused tests and design architecture/standalone guards pass before this commit.
+- [ ] Full repository PR CI and auxiliary PR workflows green on this exact final head.
+- [ ] Final PR diff/review/temp-artifact inspection complete.

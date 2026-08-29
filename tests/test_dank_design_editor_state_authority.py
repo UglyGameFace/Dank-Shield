@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from stoney_verify.services import server_design_studio as studio
+from stoney_verify.commands_ext import public_design_studio as public_studio
 
 
 PUBLIC_STUDIO = Path("stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
@@ -55,8 +56,8 @@ def test_exact_editor_preview_does_not_reuse_whole_server_style_change_controls(
 
 def test_exact_editor_apply_is_bound_to_the_preview_user_reviewed() -> None:
     assert "pending_created_at=created_at" in PUBLIC_STUDIO
-    assert "if self.pending_created_at is not None:" in PUBLIC_STUDIO
-    assert "This Apply button belongs to an older preview" in PUBLIC_STUDIO
+    assert "if not _pending_matches(payload, self.pending_created_at):" in PUBLIC_STUDIO
+    assert "older or invalidated preview" in PUBLIC_STUDIO
 
 
 def test_separator_example_navigation_executes_inside_guarded_action() -> None:
@@ -69,3 +70,59 @@ def test_separator_example_navigation_executes_inside_guarded_action() -> None:
     assert 'await _guard_design_action(interaction, "design.exact.examples.back", action, defer=False)' in back_block
     assert page_block.index("guild = interaction.guild") < page_block.index("await interaction.response.edit_message")
     assert back_block.index("guild = interaction.guild") < back_block.index("await interaction.response.edit_message")
+
+
+def test_manual_name_override_preserves_literal_name_without_normalizing() -> None:
+    item = public_studio._manual_name_override_plan_item(
+        "old-category",
+        "My Exact Category Name",
+        kind="category",
+        channel_id=123,
+        category_id=123,
+    )
+    assert item["after"] == "My Exact Category Name"
+    assert item["status"] == "changed"
+    assert item["format_lock_scope"] == "manual_name"
+
+
+def test_direct_rename_runs_inside_guard_and_saves_exact_name() -> None:
+    start = PUBLIC_STUDIO.index("class DirectRenameModal")
+    end = PUBLIC_STUDIO.index("def _category_action_embed", start)
+    block = PUBLIC_STUDIO[start:end]
+    assert 'await _guard_design_action(interaction, "design.direct_rename", action, defer=False)' in block
+    assert "await _save_manual_name_override(" in block
+    assert block.index("guild = interaction.guild") < block.index("await channel.edit(")
+
+
+def test_direct_rename_refresh_prefers_live_api() -> None:
+    start = PUBLIC_STUDIO.index("async def _direct_rename_fetch_target")
+    end = PUBLIC_STUDIO.index("def _direct_rename_result_value", start)
+    block = PUBLIC_STUDIO[start:end]
+    assert "await guild.fetch_channel" in block
+    assert block.index("await guild.fetch_channel") < block.index("return cached if cached is not None else fallback")
+
+
+def test_manual_name_override_outranks_style_plan_and_is_unlockable() -> None:
+    assert 'manual_override = _manual_name_override_for(options, channel_id)' in PUBLIC_STUDIO
+    assert '"format_lock_scope": "manual_name"' in PUBLIC_STUDIO
+    assert 'elif scope == "manual_name":' in PUBLIC_STUDIO
+    assert 'options["manual_name_overrides"] = {}' in PUBLIC_STUDIO
+
+
+def test_item_lock_buttons_capture_live_item_style_not_global_preset() -> None:
+    assert 'scope="category", target_id=self.category_id, target=category' in PUBLIC_STUDIO
+    assert 'scope="channel", target_id=self.channel_id, target=channel' in PUBLIC_STUDIO
+    assert "async def _save_live_target_format_lock(" in PUBLIC_STUDIO
+
+
+def test_config_saves_invalidate_old_pending_previews() -> None:
+    assert "def _invalidate_pending_for_guild" in PUBLIC_STUDIO
+    save_start = PUBLIC_STUDIO.index("async def _save_design_options")
+    save_end = PUBLIC_STUDIO.index("def _bot_missing_manage", save_start)
+    assert "_invalidate_pending_for_guild(int(guild_id))" in PUBLIC_STUDIO[save_start:save_end]
+
+
+def test_style_change_issue_controls_are_bound_to_preview_identity() -> None:
+    assert "class StyleChangePreviewView" in PUBLIC_STUDIO
+    assert "pending_created_at=pending_created_at" in PUBLIC_STUDIO
+    assert "_pending_matches(pending, self.pending_created_at)" in PUBLIC_STUDIO

@@ -177,7 +177,7 @@ def _saved_rule_count(options: Mapping[str, Any]) -> int:
     global_rule = options.get("format_lock_global")
     if isinstance(global_rule, Mapping) and global_rule.get("enabled"):
         total += 1
-    for key in ("category_format_locks", "channel_format_locks"):
+    for key in ("category_format_locks", "channel_format_locks", "manual_name_overrides"):
         value = options.get(key)
         if isinstance(value, Mapping):
             total += len(value)
@@ -403,15 +403,13 @@ def _patch_guided_flow(command_guard: Any, majority: Any, studio: Any, discord: 
             )
             if saved_rules:
                 requested["__auto_detect_saved_rules_respected_count"] = saved_rules
-            command_guard._PENDING[command_guard._key(int(guild.id), int(interaction.user.id))] = {
-                "created_at": command_guard.time.time(),
-                "items": items,
-                "options": dict(requested),
-                "mode": "consistency_smart_auto_detect",
-            }
+            created_at = command_guard._store_pending(
+                int(guild.id), int(interaction.user.id),
+                {"items": items, "options": dict(requested), "mode": "consistency_smart_auto_detect"},
+            )
             await interaction.edit_original_response(
                 embed=command_guard._consistency_embed(guild, items, requested),
-                view=command_guard.DesignPreviewView(can_apply=live_apply_allowed),
+                view=command_guard.DesignPreviewView(can_apply=live_apply_allowed, pending_created_at=created_at),
             )
 
         @discord.ui.button(label="Use Saved Layout", emoji="🔒", style=discord.ButtonStyle.secondary, custom_id="dank_design:majority_use_saved", row=0)
@@ -424,15 +422,16 @@ def _patch_guided_flow(command_guard: Any, majority: Any, studio: Any, discord: 
             options = await _load_options(int(guild.id))
             items = await command_guard.build_design_plan(guild, options)
             counts = _counts(command_guard, items)
-            command_guard._PENDING[command_guard._key(int(guild.id), int(interaction.user.id))] = {
-                "created_at": command_guard.time.time(),
-                "items": items,
-                "options": dict(options),
-                "mode": "consistency_saved_layout",
-            }
+            created_at = command_guard._store_pending(
+                int(guild.id), int(interaction.user.id),
+                {"items": items, "options": dict(options), "mode": "consistency_saved_layout"},
+            )
             await interaction.edit_original_response(
                 embed=_saved_embed(items),
-                view=command_guard.DesignPreviewView(can_apply=not counts.get("failed") and bool(counts.get("needs_fix"))),
+                view=command_guard.DesignPreviewView(
+                    can_apply=not counts.get("failed") and bool(counts.get("needs_fix")),
+                    pending_created_at=created_at,
+                ),
             )
 
         @discord.ui.button(label="Preview Only", emoji="👁️", style=discord.ButtonStyle.secondary, custom_id="dank_design:majority_preview_only", row=1)

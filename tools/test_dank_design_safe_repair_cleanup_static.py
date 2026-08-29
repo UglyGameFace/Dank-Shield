@@ -35,7 +35,9 @@ def test_smart_auto_detect_apply_requires_high_confidence_but_keeps_saved_rules(
     assert "live_apply_allowed" in MAJORITY_GUARD
     assert 'bool(confidence.get("apply_allowed"))' in MAJORITY_GUARD
     assert "saved_rules == 0" not in MAJORITY_GUARD
-    assert "DesignPreviewView(can_apply=live_apply_allowed)" in MAJORITY_GUARD
+    assert "can_apply=live_apply_allowed" in MAJORITY_GUARD
+    assert "pending_created_at=created_at" in MAJORITY_GUARD
+    assert "_store_pending" in MAJORITY_GUARD
     assert "__auto_detect_saved_rules_respected_count" in MAJORITY_GUARD
 
 
