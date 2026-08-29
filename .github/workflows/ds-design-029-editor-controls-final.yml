@@ -1,0 +1,135 @@
+name: DS-DESIGN-029 finalize exact editor navigation repair
+
+on:
+  push:
+    branches:
+      - fix/dank-design-editor-state-authority
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Apply exact editor navigation repair
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          def replace_between(text: str, start: str, end: str, replacement: str, label: str) -> str:
+              if text.count(start) != 1:
+                  raise SystemExit(f"{label} start count={text.count(start)}")
+              start_at = text.index(start)
+              end_at = text.index(end, start_at)
+              return text[:start_at] + replacement + text[end_at:]
+
+          path = Path("stoney_verify/commands_ext/public_design_studio.py")
+          text = path.read_text(encoding="utf-8")
+          page_class = dedent('''
+          class SeparatorExamplesPageButton(discord.ui.Button):
+              def __init__(self, page: int, *, label: str, emoji: str, row: int) -> None:
+                  super().__init__(label=label, emoji=emoji, style=discord.ButtonStyle.secondary, custom_id=f"dank_design:sep_examples_page:{page}", row=row)
+                  self.page = int(page)
+
+              async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+                  async def action() -> None:
+                      if not await _require_design_permission(interaction):
+                          return
+                      guild = interaction.guild
+                      assert guild is not None
+                      view = getattr(self, "view", None)
+                      scope = getattr(view, "scope", "channel")
+                      target_id = int(getattr(view, "target_id", 0))
+                      lock = _exact_lock_for_user(guild, int(interaction.user.id), scope, target_id)
+                      await interaction.response.edit_message(
+                          embed=_separator_gallery_embed(guild, scope=scope, target_id=target_id, lock=lock, page=self.page),
+                          view=SeparatorExamplesView(guild, scope=scope, target_id=target_id, lock=lock, page=self.page),
+                      )
+                  await _guard_design_action(interaction, "design.exact.examples.page", action, defer=False)
+
+
+          ''').lstrip()
+          text = replace_between(text, "class SeparatorExamplesPageButton(discord.ui.Button):\n", "class SeparatorExamplesBackButton(discord.ui.Button):\n", page_class, "page class")
+
+          back_class = dedent('''
+          class SeparatorExamplesBackButton(discord.ui.Button):
+              def __init__(self, *, row: int) -> None:
+                  super().__init__(label="Back to Custom Format", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:sep_examples_back", row=row)
+
+              async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+                  async def action() -> None:
+                      if not await _require_design_permission(interaction):
+                          return
+                      guild = interaction.guild
+                      assert guild is not None
+                      view = getattr(self, "view", None)
+                      scope = getattr(view, "scope", "channel")
+                      target_id = int(getattr(view, "target_id", 0))
+                      lock = _exact_lock_for_user(guild, int(interaction.user.id), scope, target_id)
+                      await interaction.response.edit_message(
+                          embed=_exact_format_embed(guild, scope=scope, target_id=target_id, lock=lock),
+                          view=ExactFormatEditorViewFactory(guild, scope, target_id, lock),
+                      )
+                  await _guard_design_action(interaction, "design.exact.examples.back", action, defer=False)
+
+
+          ''').lstrip()
+          text = replace_between(text, "class SeparatorExamplesBackButton(discord.ui.Button):\n", "class SeparatorExamplesView(discord.ui.View):\n", back_class, "back class")
+          path.write_text(text, encoding="utf-8")
+
+          path = Path("tests/test_dank_design_editor_state_authority.py")
+          text = path.read_text(encoding="utf-8").rstrip()
+          if "def test_separator_example_navigation_executes_inside_guarded_action() -> None:" not in text:
+              text += dedent('''
+
+
+              def test_separator_example_navigation_executes_inside_guarded_action() -> None:
+                  page_start = PUBLIC_STUDIO.index("class SeparatorExamplesPageButton")
+                  back_start = PUBLIC_STUDIO.index("class SeparatorExamplesBackButton", page_start)
+                  view_start = PUBLIC_STUDIO.index("class SeparatorExamplesView", back_start)
+                  page_block = PUBLIC_STUDIO[page_start:back_start]
+                  back_block = PUBLIC_STUDIO[back_start:view_start]
+                  assert 'await _guard_design_action(interaction, "design.exact.examples.page", action, defer=False)' in page_block
+                  assert 'await _guard_design_action(interaction, "design.exact.examples.back", action, defer=False)' in back_block
+                  assert page_block.index("guild = interaction.guild") < page_block.index("await interaction.response.edit_message")
+                  assert back_block.index("guild = interaction.guild") < back_block.index("await interaction.response.edit_message")
+              ''')
+          path.write_text(text.rstrip() + "\n", encoding="utf-8")
+          PY
+
+      - name: Validate exact editor and adjacent design paths
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+          python -m py_compile stoney_verify/commands_ext/public_design_studio.py tests/test_dank_design_editor_state_authority.py
+          python -m pytest -q --tb=short --disable-warnings \
+            tests/test_dank_design_editor_state_authority.py \
+            tests/test_server_design_category_aware_auto_detect.py \
+            tests/test_server_design_strict_layout_guard.py \
+            tests/test_public_design_exact_native_guard_patch_static.py
+          git diff --check
+
+      - name: Commit source repair and remove temporary workflows
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/ds-design-029-editor-controls.yml
+          git rm .github/workflows/ds-design-029-editor-controls-final.yml
+          git add stoney_verify/commands_ext/public_design_studio.py tests/test_dank_design_editor_state_authority.py
+          git diff --cached --check
+          git commit -m "DS-DESIGN-029: repair exact editor example navigation"
+          git push origin HEAD:fix/dank-design-editor-state-authority
