@@ -61,6 +61,32 @@ p = p[:return_start] + detected_prefix + p[icon_line:]
 '''
 script = script[:a] + corrected_majority + script[b:]
 
+# Replace the brittle exact-strength-description literal with a function-scoped
+# structural edit. The source indentation changed during earlier cleanup, which
+# is precisely why large whitespace-dependent source transforms are a charming
+# way for humans to manufacture their own problems.
+a = script.index('# Exact editor descriptions must match')
+b = script.index('# Current layout example must respect strength', a)
+corrected_strengths = '''# Exact editor descriptions must match the engine's current five levels.
+strength_fn = p.find('def _exact_strength_description(strength: int) -> str:')
+map_start = p.find('    descriptions = {\\n', strength_fn)
+return_start = p.find('    return descriptions.get(', map_start)
+map_end = p.rfind('    }\\n', map_start, return_start)
+if strength_fn < 0 or map_start < 0 or return_start < 0 or map_end < 0:
+    raise SystemExit(f'exact strength structural markers invalid: fn={strength_fn} map={map_start} end={map_end} return={return_start}')
+new_strengths = ''' + "'''" + '''    descriptions = {
+        1: "Icons/base only; no separator, font, or frame.",
+        2: "Layout: adds the selected channel separator.",
+        3: "Font: layout plus the selected font.",
+        4: "Recommended: adds category frames where applicable.",
+        5: "Exact: strictly normalizes the full selected format.",
+    }
+''' + "'''" + '''
+p = p[:map_start] + new_strengths + p[map_end + len('    }\\n'):]
+
+'''
+script = script[:a] + corrected_strengths + script[b:]
+
 path = Path('/tmp/ds_design_030_second_audit.py')
 path.write_text(script, encoding='utf-8')
 runpy.run_path(str(path), run_name='__main__')
