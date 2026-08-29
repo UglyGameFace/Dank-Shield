@@ -10,8 +10,7 @@ end = source.index("\n          PY\n", start)
 raw = source[start:end]
 script = '\n'.join(line[10:] if line.startswith('          ') else line for line in raw.splitlines()) + '\n'
 
-# Scope the protection-count edit to _lock_count. The original safety matcher
-# saw the same raw storage line in stale-cleanup code and correctly refused to guess.
+# Scope the protection-count edit to _lock_count.
 a = script.index('# Count only effective exact-protection records')
 b = script.index('# Make Rules / Locks explain', a)
 corrected_count = (
@@ -26,10 +25,7 @@ corrected_count = (
 )
 script = script[:a] + corrected_count + script[b:]
 
-# Replace the brittle literal matcher for _live_majority_exact_lock with a
-# function-scoped structural edit. Preserve icon/source metadata below the
-# component fields while deriving the minimum strength that actually reproduces
-# the detected separator/font/frame.
+# Derive live-majority strength from detected components instead of inherited draft strength.
 a = script.index('          old_return =', script.index('# Centralize the strength needed')) if '          old_return =' in script else script.index('old_return =', script.index('# Centralize the strength needed'))
 b = script.index('# Live target strength must reproduce', a)
 corrected_majority = '''# Derive live-majority strength from the components that were actually detected.
@@ -61,7 +57,7 @@ p = p[:return_start] + detected_prefix + p[icon_line:]
 '''
 script = script[:a] + corrected_majority + script[b:]
 
-# Replace the brittle exact-strength-description literal with a function-scoped edit.
+# Exact strength descriptions use the actual helper signature in source.
 a = script.index('# Exact editor descriptions must match')
 b = script.index('# Current layout example must respect strength', a)
 corrected_strengths = '''# Exact editor descriptions must match the engine's current five levels.
@@ -83,6 +79,25 @@ p = p[:map_start] + new_strengths + p[map_end + len('    }\\n'):]
 
 '''
 script = script[:a] + corrected_strengths + script[b:]
+
+# The workflow's docstring matcher contains YAML line-continuation artifacts.
+# Replace it with a scoped service-source edit so the repair does not depend on
+# how YAML happens to fold quoted newlines.
+service_read = script.index("s = SERVICE.read_text(encoding='utf-8')")
+a = script.index('s = once(', service_read)
+b = script.index('old_dupes =', a)
+corrected_service_doc = '''old_semantic_doc = ''' + "'''" + '''    decoration. Full exact-layout enforcement can be added later as a separate
+    explicit mode; the default design repair should avoid needless churn.
+''' + "'''" + '''
+new_semantic_doc = ''' + "'''" + '''    decoration. Strength 5 is the explicit exact-layout mode. Lower strengths may
+    preserve harmless existing decoration while enforcing the components they enable.
+''' + "'''" + '''
+if old_semantic_doc not in s:
+    raise SystemExit('semantic match doc structural target not found')
+s = s.replace(old_semantic_doc, new_semantic_doc, 1)
+
+'''
+script = script[:a] + corrected_service_doc + script[b:]
 
 path = Path('/tmp/ds_design_030_second_audit.py')
 path.write_text(script, encoding='utf-8')
