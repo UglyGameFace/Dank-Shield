@@ -27,113 +27,120 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          from textwrap import dedent
 
-          def replace_once(text: str, old: str, new: str, label: str) -> str:
-              if text.count(old) != 1:
-                  raise SystemExit(f"{label} count={text.count(old)}")
-              return text.replace(old, new, 1)
+          def replace_between(text: str, start: str, end: str, replacement: str, label: str) -> str:
+              if text.count(start) != 1:
+                  raise SystemExit(f"{label} start count={text.count(start)}")
+              start_at = text.index(start)
+              end_at = text.index(end, start_at)
+              return text[:start_at] + replacement + text[end_at:]
 
           path = Path("stoney_verify/commands_ext/public_design_studio.py")
           text = path.read_text(encoding="utf-8")
 
-          old_page = '''    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
-              async def action() -> None:
-                  if not await _require_design_permission(interaction):
-                      return
+          page_class = dedent('''
+          class SeparatorExamplesPageButton(discord.ui.Button):
+              def __init__(self, page: int, *, label: str, emoji: str, row: int) -> None:
+                  super().__init__(
+                      label=label,
+                      emoji=emoji,
+                      style=discord.ButtonStyle.secondary,
+                      custom_id=f"dank_design:sep_examples_page:{page}",
+                      row=row,
+                  )
+                  self.page = int(page)
 
-                  guild = interaction.guild
-                  assert guild is not None
+              async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+                  async def action() -> None:
+                      if not await _require_design_permission(interaction):
+                          return
 
-              view = getattr(self, "view", None)
-              scope = getattr(view, "scope", "channel")
-              target_id = int(getattr(view, "target_id", 0))
-              lock = _exact_lock_for_user(guild, int(interaction.user.id), scope, target_id)
+                      guild = interaction.guild
+                      assert guild is not None
+                      view = getattr(self, "view", None)
+                      scope = getattr(view, "scope", "channel")
+                      target_id = int(getattr(view, "target_id", 0))
+                      lock = _exact_lock_for_user(guild, int(interaction.user.id), scope, target_id)
 
-              await interaction.response.edit_message(
-                  embed=_separator_gallery_embed(guild, scope=scope, target_id=target_id, lock=lock, page=self.page),
-                  view=SeparatorExamplesView(guild, scope=scope, target_id=target_id, lock=lock, page=self.page),
-              )
-          '''
-          new_page = '''    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
-              async def action() -> None:
-                  if not await _require_design_permission(interaction):
-                      return
+                      await interaction.response.edit_message(
+                          embed=_separator_gallery_embed(guild, scope=scope, target_id=target_id, lock=lock, page=self.page),
+                          view=SeparatorExamplesView(guild, scope=scope, target_id=target_id, lock=lock, page=self.page),
+                      )
 
-                  guild = interaction.guild
-                  assert guild is not None
-                  view = getattr(self, "view", None)
-                  scope = getattr(view, "scope", "channel")
-                  target_id = int(getattr(view, "target_id", 0))
-                  lock = _exact_lock_for_user(guild, int(interaction.user.id), scope, target_id)
+                  await _guard_design_action(interaction, "design.exact.examples.page", action, defer=False)
 
-                  await interaction.response.edit_message(
-                      embed=_separator_gallery_embed(guild, scope=scope, target_id=target_id, lock=lock, page=self.page),
-                      view=SeparatorExamplesView(guild, scope=scope, target_id=target_id, lock=lock, page=self.page),
+
+          ''').lstrip()
+          text = replace_between(
+              text,
+              "class SeparatorExamplesPageButton(discord.ui.Button):\n",
+              "class SeparatorExamplesBackButton(discord.ui.Button):\n",
+              page_class,
+              "separator examples page class",
+          )
+
+          back_class = dedent('''
+          class SeparatorExamplesBackButton(discord.ui.Button):
+              def __init__(self, *, row: int) -> None:
+                  super().__init__(
+                      label="Back to Custom Format",
+                      emoji="⬅️",
+                      style=discord.ButtonStyle.secondary,
+                      custom_id="dank_design:sep_examples_back",
+                      row=row,
                   )
 
-              await _guard_design_action(interaction, "design.exact.examples.page", action, defer=False)
-          '''
-          text = replace_once(text, old_page, new_page, "separator examples page callback")
+              async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+                  async def action() -> None:
+                      if not await _require_design_permission(interaction):
+                          return
 
-          old_back = '''    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
-              async def action() -> None:
-                  if not await _require_design_permission(interaction):
-                      return
+                      guild = interaction.guild
+                      assert guild is not None
+                      view = getattr(self, "view", None)
+                      scope = getattr(view, "scope", "channel")
+                      target_id = int(getattr(view, "target_id", 0))
+                      lock = _exact_lock_for_user(guild, int(interaction.user.id), scope, target_id)
 
-                  guild = interaction.guild
-                  assert guild is not None
+                      await interaction.response.edit_message(
+                          embed=_exact_format_embed(guild, scope=scope, target_id=target_id, lock=lock),
+                          view=ExactFormatEditorViewFactory(guild, scope, target_id, lock),
+                      )
 
-              view = getattr(self, "view", None)
-              scope = getattr(view, "scope", "channel")
-              target_id = int(getattr(view, "target_id", 0))
-              lock = _exact_lock_for_user(guild, int(interaction.user.id), scope, target_id)
+                  await _guard_design_action(interaction, "design.exact.examples.back", action, defer=False)
 
-              await interaction.response.edit_message(
-                  embed=_exact_format_embed(guild, scope=scope, target_id=target_id, lock=lock),
-                  view=ExactFormatEditorViewFactory(guild, scope, target_id, lock),
-              )
-          '''
-          new_back = '''    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
-              async def action() -> None:
-                  if not await _require_design_permission(interaction):
-                      return
 
-                  guild = interaction.guild
-                  assert guild is not None
-                  view = getattr(self, "view", None)
-                  scope = getattr(view, "scope", "channel")
-                  target_id = int(getattr(view, "target_id", 0))
-                  lock = _exact_lock_for_user(guild, int(interaction.user.id), scope, target_id)
-
-                  await interaction.response.edit_message(
-                      embed=_exact_format_embed(guild, scope=scope, target_id=target_id, lock=lock),
-                      view=ExactFormatEditorViewFactory(guild, scope, target_id, lock),
-                  )
-
-              await _guard_design_action(interaction, "design.exact.examples.back", action, defer=False)
-          '''
-          text = replace_once(text, old_back, new_back, "separator examples back callback")
+          ''').lstrip()
+          text = replace_between(
+              text,
+              "class SeparatorExamplesBackButton(discord.ui.Button):\n",
+              "class SeparatorExamplesView(discord.ui.View):\n",
+              back_class,
+              "separator examples back class",
+          )
           path.write_text(text, encoding="utf-8")
 
           path = Path("tests/test_dank_design_editor_state_authority.py")
           text = path.read_text(encoding="utf-8")
-          addition = '''
+          test_name = "def test_separator_example_navigation_executes_inside_guarded_action() -> None:"
+          if test_name not in text:
+              text = text.rstrip() + dedent('''
 
-          def test_separator_example_navigation_executes_inside_guarded_action() -> None:
-              page_start = PUBLIC_STUDIO.index("class SeparatorExamplesPageButton")
-              back_start = PUBLIC_STUDIO.index("class SeparatorExamplesBackButton", page_start)
-              view_start = PUBLIC_STUDIO.index("class SeparatorExamplesView", back_start)
-              page_block = PUBLIC_STUDIO[page_start:back_start]
-              back_block = PUBLIC_STUDIO[back_start:view_start]
 
-              assert 'await _guard_design_action(interaction, "design.exact.examples.page", action, defer=False)' in page_block
-              assert 'await _guard_design_action(interaction, "design.exact.examples.back", action, defer=False)' in back_block
-              assert page_block.index("guild = interaction.guild") < page_block.index("await interaction.response.edit_message")
-              assert back_block.index("guild = interaction.guild") < back_block.index("await interaction.response.edit_message")
-          '''
-          if "def test_separator_example_navigation_executes_inside_guarded_action" in text:
-              raise SystemExit("navigation regression already exists")
-          path.write_text(text.rstrip() + addition + "\n", encoding="utf-8")
+              def test_separator_example_navigation_executes_inside_guarded_action() -> None:
+                  page_start = PUBLIC_STUDIO.index("class SeparatorExamplesPageButton")
+                  back_start = PUBLIC_STUDIO.index("class SeparatorExamplesBackButton", page_start)
+                  view_start = PUBLIC_STUDIO.index("class SeparatorExamplesView", back_start)
+                  page_block = PUBLIC_STUDIO[page_start:back_start]
+                  back_block = PUBLIC_STUDIO[back_start:view_start]
+
+                  assert 'await _guard_design_action(interaction, "design.exact.examples.page", action, defer=False)' in page_block
+                  assert 'await _guard_design_action(interaction, "design.exact.examples.back", action, defer=False)' in back_block
+                  assert page_block.index("guild = interaction.guild") < page_block.index("await interaction.response.edit_message")
+                  assert back_block.index("guild = interaction.guild") < back_block.index("await interaction.response.edit_message")
+              ''') + "\n"
+          path.write_text(text, encoding="utf-8")
           PY
 
       - name: Install and validate editor regressions
