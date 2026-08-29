@@ -61,14 +61,11 @@ p = p[:return_start] + detected_prefix + p[icon_line:]
 '''
 script = script[:a] + corrected_majority + script[b:]
 
-# Replace the brittle exact-strength-description literal with a function-scoped
-# structural edit. The source indentation changed during earlier cleanup, which
-# is precisely why large whitespace-dependent source transforms are a charming
-# way for humans to manufacture their own problems.
+# Replace the brittle exact-strength-description literal with a function-scoped edit.
 a = script.index('# Exact editor descriptions must match')
 b = script.index('# Current layout example must respect strength', a)
 corrected_strengths = '''# Exact editor descriptions must match the engine's current five levels.
-strength_fn = p.find('def _exact_strength_description(strength: int) -> str:')
+strength_fn = p.find('def _exact_strength_description(value: int) -> str:')
 map_start = p.find('    descriptions = {\\n', strength_fn)
 return_start = p.find('    return descriptions.get(', map_start)
 map_end = p.rfind('    }\\n', map_start, return_start)
