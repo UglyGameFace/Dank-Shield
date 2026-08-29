@@ -188,10 +188,42 @@ path = Path('/tmp/ds_design_030_second_audit.py')
 path.write_text(script, encoding='utf-8')
 runpy.run_path(str(path), run_name='__main__')
 
+# The live-majority service still encoded the old strength ordering. Under the
+# current engine, separator=2, font=3, category frame=4, exact=5. Derive the
+# minimum strength from the components actually selected so category frames and
+# fonts are faithfully reproduced instead of silently disappearing.
+majority_service_path = Path('stoney_verify/services/server_design_majority_layout.py')
+majority_service = majority_service_path.read_text(encoding='utf-8')
+old_strength_block = '''    desired_strength = 2
+    frame_id = _text(out.get("category_frame_id"), "plain")
+    if frame_id and frame_id != "plain":
+        desired_strength = 5 if _text(out.get("font"), "normal") != "normal" else 3
+    elif _text(out.get("font"), "normal") != "normal":
+        desired_strength = 4
+    out["strength"] = max(desired_strength, min(5, _safe_int(out.get("strength"), desired_strength)))
+'''
+new_strength_block = '''    desired_strength = 1
+    separator_id = _text(out.get("separator_id"), "none")
+    font_id = _text(out.get("font"), "normal")
+    frame_id = _text(out.get("category_frame_id"), "plain")
+    if separator_id and separator_id != "none":
+        desired_strength = max(desired_strength, 2)
+    if font_id != "normal":
+        desired_strength = max(desired_strength, 3)
+    if frame_id and frame_id != "plain":
+        desired_strength = max(desired_strength, 4)
+    out["strength"] = max(desired_strength, min(5, _safe_int(out.get("strength"), desired_strength)))
+'''
+if old_strength_block not in majority_service:
+    raise SystemExit('majority service old strength block not found')
+majority_service = majority_service.replace(old_strength_block, new_strength_block, 1)
+majority_service_path.write_text(majority_service, encoding='utf-8')
+
 # Catch malformed generated source immediately and print the exact context.
 for check_path in (
     Path('stoney_verify/commands_ext/public_design_studio.py'),
     Path('stoney_verify/services/server_design_studio.py'),
+    Path('stoney_verify/services/server_design_majority_layout.py'),
     Path('stoney_verify/startup_guards/server_design_majority_layout_guard.py'),
     Path('tests/test_dank_design_consistency_030.py'),
 ):
