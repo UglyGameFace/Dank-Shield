@@ -1,0 +1,161 @@
+name: Smart Stickies 029
+
+on:
+  pull_request:
+    paths:
+      - 'stoney_verify/community_tools_runtime.py'
+      - 'stoney_verify/community_quiet_notice_service.py'
+      - 'stoney_verify/commands_ext/public_community_tools.py'
+      - 'stoney_verify/commands_ext/public_quiet_notice.py'
+      - 'stoney_verify/commands_ext/public_sticky_preview.py'
+      - 'tests/test_smart_stickies_029.py'
+      - 'tools/test_smart_stickies_029_static.py'
+      - 'supabase/migrations/20260811122504_community_tools.sql'
+      - 'supabase/migrations/20260812224000_smart_sticky_quiet_notices.sql'
+      - '.github/workflows/smart-stickies-029.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  focused-python:
+    name: Smart sticky focused regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+      - name: Compile smart sticky modules
+        run: |
+          python -m py_compile \
+            stoney_verify/community_tools_runtime.py \
+            stoney_verify/community_quiet_notice_service.py \
+            stoney_verify/commands_ext/public_community_tools.py \
+            stoney_verify/commands_ext/public_quiet_notice.py \
+            stoney_verify/commands_ext/public_sticky_preview.py
+      - name: Run focused regressions
+        run: python -m pytest -q --tb=short --disable-warnings tests/test_smart_stickies_029.py tests/test_community_tools_surface.py
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+      - name: Run ownership/static guard
+        run: python tools/test_smart_stickies_029_static.py
+
+  quiet-notice-sql:
+    name: Quiet notice SQL/RLS smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Ensure PostgreSQL client is available
+        shell: bash
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+      - name: Prepare Supabase roles
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+              if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon; end if;
+              if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated; end if;
+              if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role; end if;
+          end;
+          $$;
+          SQL
+      - name: Apply Community Tools and quiet-notice migrations twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pass in 1 2; do
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260811122504_community_tools.sql
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260812224000_smart_sticky_quiet_notices.sql
+          done
+      - name: Verify quiet notice constraints RLS grants and persistence
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          insert into public.dank_quiet_notices(
+              guild_id, channel_id, content, inactivity_seconds, partner_name, partner_url, auto_clear,
+              last_activity_at
+          ) values (
+              1001, 2001, 'Members may be in our partner community.', 7200,
+              'Partner Place', 'https://discord.gg/example', true, now()
+          );
+
+          do $$
+          declare
+              quiet_rls boolean;
+              inactivity integer;
+          begin
+              select relrowsecurity into quiet_rls
+              from pg_class
+              where oid = 'public.dank_quiet_notices'::regclass;
+              if quiet_rls is not true then
+                  raise exception 'quiet notice table must have RLS enabled';
+              end if;
+
+              select inactivity_seconds into inactivity
+              from public.dank_quiet_notices
+              where guild_id = 1001;
+              if inactivity <> 7200 then
+                  raise exception 'quiet inactivity persistence mismatch';
+              end if;
+
+              begin
+                  insert into public.dank_quiet_notices(
+                      guild_id, channel_id, content, inactivity_seconds
+                  ) values (1002, 2002, 'Too fast', 60);
+                  raise exception 'quiet inactivity constraint did not reject 60 seconds';
+              exception
+                  when check_violation then null;
+              end;
+          end;
+          $$;
+
+          set role anon;
+          do $$
+          begin
+              begin
+                  perform * from public.dank_quiet_notices;
+                  raise exception 'anon unexpectedly retained quiet notice access';
+              exception
+                  when insufficient_privilege then null;
+              end;
+          end;
+          $$;
+          reset role;
+          SQL
