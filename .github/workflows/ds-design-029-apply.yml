@@ -1,0 +1,355 @@
+name: DS-DESIGN-029 apply editor authority patch
+
+on:
+  push:
+    branches:
+      - fix/dank-design-editor-state-authority
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Apply focused source and regression patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {count}")
+              return text.replace(old, new, 1)
+
+          # 1) Saved owner-approved design locks must never be rewritten by theme migration.
+          path = Path('stoney_verify/startup_guards/server_design_strict_layout_guard.py')
+          text = path.read_text(encoding='utf-8')
+          pattern = re.compile(
+              r"def _normalize_gothic_design_options\(options: Any\) -> dict\[str, Any\]:\n.*?\n\n\ndef _patch_command_guard_options\(\) -> None:",
+              re.S,
+          )
+          replacement = '''def _normalize_gothic_design_options(options: Any) -> dict[str, Any]:
+              """Preserve saved owner-approved rules byte-for-byte.
+
+              Gothic Clean's current default is normalized at the theme-definition layer by
+              ``_normalize_theme_defaults``. Rewriting persisted global/category/channel
+              locks here made an explicit editor choice silently collapse back to the theme
+              default on the next config load/save. Saved rules are authoritative.
+              """
+
+              return dict(options) if isinstance(options, Mapping) else {}
+
+
+          def _patch_command_guard_options() -> None:'''
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'strict-layout normalizer: expected 1 function, found {count}')
+          path.write_text(text, encoding='utf-8')
+
+          # 2) Strength 4 is labelled Recommended, so category frames must apply at 4.
+          path = Path('stoney_verify/services/server_design_studio.py')
+          text = path.read_text(encoding='utf-8')
+          text = replace_once(
+              text,
+              'use_category_frame = kind == "category" and strength in {3, 5} and protection in {"category_frame_only", "full"}',
+              'use_category_frame = kind == "category" and strength >= 3 and protection in {"category_frame_only", "full"}',
+              'category-frame strength',
+          )
+          path.write_text(text, encoding='utf-8')
+
+          # 3) Item editor authority and preview binding.
+          path = Path('stoney_verify/commands_ext/public_design_studio.py')
+          text = path.read_text(encoding='utf-8')
+
+          marker = '\n\ndef _separator_choice_label(sep_id: Any) -> str:\n'
+          if marker not in text:
+              raise SystemExit('live-target helper insertion marker missing')
+          helper = r'''
+
+          def _live_target_exact_lock(
+              guild: discord.Guild | None,
+              options: Mapping[str, Any],
+              *,
+              scope: str,
+              target_id: int,
+          ) -> dict[str, Any]:
+              """Seed Custom Format from the selected item's live style.
+
+              The server/category majority remains available through the explicit Server Style
+              button. Opening one channel/category for manual editing must not silently preload
+              unrelated majority values that later become an owner-approved exact rule.
+              """
+
+              majority_lock = _live_majority_exact_lock(
+                  guild,
+                  options,
+                  scope=scope,
+                  target_id=target_id,
+              )
+              if guild is None:
+                  return majority_lock
+
+              target = guild.get_channel(int(target_id))
+              if target is None:
+                  return majority_lock
+
+              try:
+                  from stoney_verify.services import server_design_majority_layout as majority
+
+                  name = _safe_str(getattr(target, "name", ""))
+                  if not name:
+                      return majority_lock
+
+                  lock = dict(majority_lock or _current_format_lock(options, scope=scope))
+                  lock["scope"] = scope
+                  lock["theme_id"] = _safe_str(lock.get("theme_id"), _safe_str(options.get("theme_id"), "gothic_clean"))
+                  lock["icon_mode"] = "keep_existing"
+                  lock["emoji_override"] = ""
+                  lock["exact_match"] = False
+                  lock["__source"] = "live_target"
+
+                  detected_font = _safe_str(majority.detect_font_id(studio, name), "normal").lower().replace("-", "_")
+                  lock["font"] = detected_font if detected_font in studio.FONT_STYLES else "normal"
+
+                  if scope == "channel":
+                      separator = majority.detect_channel_separator(studio, name)
+                      separator_id = _safe_str(separator.get("separator_id"), "")
+                      if not separator_id:
+                          separator_id = majority.ensure_separator_spec(
+                              studio,
+                              _safe_str(separator.get("token"), ""),
+                              _safe_str(separator.get("spacing"), "none"),
+                          )
+                      if separator_id in studio.SEPARATORS_BY_ID or separator_id == "none":
+                          lock["separator_id"] = separator_id
+                      lock["strength"] = max(2, _safe_int(lock.get("strength"), 4))
+                  elif scope == "category":
+                      frame = majority.detect_category_frame(studio, name)
+                      frame_id = _safe_str(frame.get("id"), "plain")
+                      if frame_id in studio.CATEGORY_FRAMES_BY_ID:
+                          lock["category_frame_id"] = frame_id
+                      lock["strength"] = max(3, _safe_int(lock.get("strength"), 4))
+
+                  return lock
+              except Exception:
+                  return majority_lock
+          '''
+          text = text.replace(marker, helper + marker, 1)
+
+          text = replace_once(
+              text,
+              '    majority_lock = _live_majority_exact_lock(guild, options, scope=scope, target_id=target_id)\n',
+              '    majority_lock = _live_majority_exact_lock(guild, options, scope=scope, target_id=target_id)\n    target_lock = _live_target_exact_lock(guild, options, scope=scope, target_id=target_id)\n',
+              'initial editor target seed',
+          )
+          text = replace_once(
+              text,
+              '    elif majority_lock:\n        lock = dict(majority_lock)\n',
+              '    elif target_lock:\n        lock = dict(target_lock)\n',
+              'initial editor majority authority',
+          )
+          text = replace_once(
+              text,
+              '        "live_majority": "Live server majority",\n',
+              '        "live_majority": "Live server majority",\n        "live_target": "Selected item current style",\n',
+              'editor source label',
+          )
+          text = replace_once(
+              text,
+              '    if any(not str(key).startswith("__") for key in dict(patch)):\n        current["__source"] = "manual_override"\n',
+              '    if any(not str(key).startswith("__") for key in dict(patch)):\n        current["__source"] = "manual_override"\n        current["exact_match"] = True\n',
+              'manual exact intent',
+          )
+
+          old_pending = '''    key = _key(int(guild.id), int(interaction.user.id))
+              _PENDING[key] = {
+                  "created_at": time.time(),
+                  "items": items,
+                  "options": dict(repair_options),
+                  "mode": f"{scope}_exact_format",
+              }
+
+              has_blockers = any(item.get("status") == "failed" for item in items)
+              has_changes = any(item.get("status") == "changed" for item in items)
+
+              await interaction.edit_original_response(
+                  embed=_preview_embed(guild, items, title=title),
+                  view=StyleChangePreviewView(can_apply=not has_blockers and has_changes, has_blockers=has_blockers),
+              )'''
+          new_pending = '''    key = _key(int(guild.id), int(interaction.user.id))
+              created_at = time.time()
+              _PENDING[key] = {
+                  "created_at": created_at,
+                  "items": items,
+                  "options": dict(repair_options),
+                  "mode": f"{scope}_exact_format",
+                  "target_id": str(int(target_id)),
+              }
+
+              has_blockers = any(item.get("status") == "failed" for item in items)
+              has_changes = any(item.get("status") == "changed" for item in items)
+
+              await interaction.edit_original_response(
+                  embed=_preview_embed(guild, items, title=title),
+                  view=DesignPreviewView(
+                      can_apply=not has_blockers and has_changes,
+                      pending_created_at=created_at,
+                  ),
+              )'''
+          text = replace_once(text, old_pending, new_pending, 'exact preview view')
+
+          text = replace_once(
+              text,
+              'class DesignPreviewView(discord.ui.View):\n    def __init__(self, *, can_apply: bool) -> None:\n        super().__init__(timeout=900)\n        self.apply.disabled = not can_apply\n',
+              'class DesignPreviewView(discord.ui.View):\n    def __init__(self, *, can_apply: bool, pending_created_at: float | None = None) -> None:\n        super().__init__(timeout=900)\n        self.pending_created_at = pending_created_at\n        self.apply.disabled = not can_apply\n',
+              'preview identity constructor',
+          )
+          text = replace_once(
+              text,
+              '        payload = _PENDING.get(key) or {}\n        items = list(payload.get("items") or [])\n',
+              '        payload = _PENDING.get(key) or {}\n        if self.pending_created_at is not None:\n            current_created_at = float(payload.get("created_at") or 0.0)\n            if current_created_at != self.pending_created_at:\n                await interaction.response.send_message(\n                    "❌ This Apply button belongs to an older preview. Reopen the editor and preview the current choices before applying.",\n                    ephemeral=True,\n                )\n                return\n        items = list(payload.get("items") or [])\n',
+              'preview identity apply guard',
+          )
+          path.write_text(text, encoding='utf-8')
+
+          # 4) Update the old regression that encoded the broken perpetual rewrite.
+          path = Path('tests/test_server_design_strict_layout_guard.py')
+          text = path.read_text(encoding='utf-8')
+          text = replace_once(
+              text,
+              'def test_legacy_gothic_saved_locks_are_normalized_to_clear_spaced_pipe():',
+              'def test_saved_gothic_locks_preserve_owner_selected_separators():',
+              'strict-layout test name',
+          )
+          text = replace_once(
+              text,
+              '    assert normalized["format_lock_global"]["separator_id"] == "pipe_spaced"\n    assert normalized["category_format_locks"]["123"]["separator_id"] == "pipe_spaced"\n    assert normalized["channel_format_locks"]["456"]["separator_id"] == "pipe_spaced"\n',
+              '    assert normalized["format_lock_global"]["separator_id"] == "bar_full"\n    assert normalized["category_format_locks"]["123"]["separator_id"] == "bar_full"\n    assert normalized["channel_format_locks"]["456"]["separator_id"] == "bar_heavy"\n',
+              'strict-layout saved-lock expectations',
+          )
+          path.write_text(text, encoding='utf-8')
+
+          # 5) Permanent regressions for the exact failure paths.
+          Path('tests/test_dank_design_editor_state_authority.py').write_text(r'''from __future__ import annotations
+
+          from pathlib import Path
+
+          from stoney_verify.services import server_design_studio as studio
+          from stoney_verify.startup_guards import server_design_strict_layout_guard as strict_guard
+
+
+          PUBLIC_STUDIO = Path("stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
+
+
+          def test_saved_owner_rules_are_not_rewritten_by_gothic_default_normalizer() -> None:
+              options = {
+                  "theme_id": "gothic_clean",
+                  "format_lock_global": {"enabled": True, "font": "fraktur", "separator_id": "bar_heavy"},
+                  "category_format_locks": {"123": {"font": "fraktur", "separator_id": "bar_full"}},
+                  "channel_format_locks": {"456": {"font": "fraktur", "separator_id": "katakana_dot"}},
+              }
+
+              normalized = strict_guard._normalize_gothic_design_options(options)
+
+              assert normalized == options
+              assert normalized["channel_format_locks"]["456"]["separator_id"] == "katakana_dot"
+
+
+          def test_recommended_strength_four_applies_selected_category_frame() -> None:
+              result = studio.build_styled_name(
+                  "gaming",
+                  kind="category",
+                  theme_id="premium_clean",
+                  strength=4,
+                  category_frame_id="lenticular",
+                  font="normal",
+                  icon_mode="clear",
+                  exact_match=True,
+              )
+
+              assert result.status == "changed"
+              assert result.after.startswith("【")
+              assert result.after.endswith("】")
+
+
+          def test_manual_exact_editor_changes_force_exact_match() -> None:
+              assert 'current["exact_match"] = True' in PUBLIC_STUDIO
+
+
+          def test_unsaved_exact_editor_seeds_from_selected_item_not_server_majority() -> None:
+              assert "def _live_target_exact_lock(" in PUBLIC_STUDIO
+              assert "target_lock = _live_target_exact_lock" in PUBLIC_STUDIO
+              assert "elif target_lock:" in PUBLIC_STUDIO
+              assert '"live_target": "Selected item current style"' in PUBLIC_STUDIO
+
+
+          def test_exact_editor_preview_does_not_reuse_whole_server_style_change_controls() -> None:
+              start = PUBLIC_STUDIO.index("async def _save_exact_and_preview")
+              end = PUBLIC_STUDIO.index("class ExactFormatEditorView", start)
+              exact_preview = PUBLIC_STUDIO[start:end]
+              assert "view=DesignPreviewView(" in exact_preview
+              assert "StyleChangePreviewView" not in exact_preview
+
+
+          def test_exact_editor_apply_is_bound_to_the_preview_user_reviewed() -> None:
+              assert "pending_created_at=created_at" in PUBLIC_STUDIO
+              assert "if self.pending_created_at is not None:" in PUBLIC_STUDIO
+              assert "This Apply button belongs to an older preview" in PUBLIC_STUDIO
+          ''').read_text(encoding='utf-8').replace('\n          ', '\n').lstrip(), encoding='utf-8')
+
+          print('DS-DESIGN-029 patch applied')
+          PY
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+
+      - name: Validate focused Dank Design regressions
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+        run: |
+          python -m py_compile \
+            stoney_verify/commands_ext/public_design_studio.py \
+            stoney_verify/services/server_design_studio.py \
+            stoney_verify/startup_guards/server_design_strict_layout_guard.py \
+            tests/test_dank_design_editor_state_authority.py
+          python -m pytest -q --tb=short --disable-warnings \
+            tests/test_dank_design_editor_state_authority.py \
+            tests/test_server_design_category_aware_auto_detect.py \
+            tests/test_server_design_strict_layout_guard.py \
+            tests/test_public_design_exact_native_guard_patch_static.py
+          git diff --check
+
+      - name: Commit focused implementation and remove temporary workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/ds-design-029-apply.yml
+          git add \
+            stoney_verify/commands_ext/public_design_studio.py \
+            stoney_verify/services/server_design_studio.py \
+            stoney_verify/startup_guards/server_design_strict_layout_guard.py \
+            tests/test_server_design_strict_layout_guard.py \
+            tests/test_dank_design_editor_state_authority.py
+          git diff --cached --check
+          git commit -m "DS-DESIGN-029: honor item editor choices through apply"
+          git push origin HEAD:fix/dank-design-editor-state-authority
