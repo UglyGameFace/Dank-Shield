@@ -356,6 +356,9 @@ def _strip_leading_icon(value: str) -> tuple[str, str]:
     variation = chr(0xFE0F)
     joiner = chr(0x200D)
     while index < len(chars):
+        remaining = "".join(chars[index:])
+        if any(remaining.startswith(sep) for sep in _all_separator_values()):
+            break
         ch = chars[index]
         if _is_emojiish(ch) or (icon_chars and ch in {variation, joiner}):
             icon_chars.append(ch)
@@ -563,7 +566,7 @@ def build_styled_name(
         strength = 2
     use_emoji = strength >= 1
     use_separator = strength >= 2 and protection in {"separator_only", "full", "font_only", "category_frame_only"}
-    use_category_frame = kind == "category" and strength in {3, 5} and protection in {"category_frame_only", "full"}
+    use_category_frame = kind == "category" and strength >= 3 and protection in {"category_frame_only", "full"}
 
     # A theme-selected font is part of the theme identity. Strength controls how
     # much structure/clutter is added; it must not silently turn Goth/Clean back

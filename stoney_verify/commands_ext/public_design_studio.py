@@ -107,6 +107,33 @@ def _guild_key(guild_id: int) -> str:
     return str(int(guild_id))
 
 
+def _store_pending(guild_id: int, user_id: int, payload: Mapping[str, Any]) -> float:
+    created_at = time.time()
+    _PENDING[_key(int(guild_id), int(user_id))] = {
+        "created_at": created_at,
+        **dict(payload),
+    }
+    return created_at
+
+
+def _pending_matches(payload: Mapping[str, Any] | None, expected_created_at: float | None) -> bool:
+    if not payload:
+        return False
+    if expected_created_at is None:
+        return True
+    try:
+        return float(payload.get("created_at") or 0.0) == float(expected_created_at)
+    except Exception:
+        return False
+
+
+def _invalidate_pending_for_guild(guild_id: int) -> None:
+    prefix = f"{int(guild_id)}:"
+    for pending_key in list(_PENDING.keys()):
+        if str(pending_key).startswith(prefix):
+            _PENDING.pop(pending_key, None)
+
+
 def _lock_for(guild_id: int) -> asyncio.Lock:
     key = _guild_key(guild_id)
     lock = _LOCKS.get(key)
@@ -275,14 +302,17 @@ async def _load_design_options(guild_id: int) -> dict[str, Any]:
     return default
 
 
-async def _save_design_options(guild_id: int, options: Mapping[str, Any]) -> None:
+async def _save_design_options(guild_id: int, options: Mapping[str, Any]) -> bool:
     try:
         from stoney_verify.guild_config import clear_guild_config_cache, upsert_guild_config
 
         await upsert_guild_config(guild_id, {"server_design_studio_options": dict(options)})
         clear_guild_config_cache(guild_id)
+        _invalidate_pending_for_guild(int(guild_id))
+        return True
     except Exception as exc:
-        print(f"⚠️ server_design_studio_command_guard config save skipped: {type(exc).__name__}: {exc}")
+        print(f"⚠️ public_design_studio config save skipped: {type(exc).__name__}: {exc}")
+        return False
 
 
 def _bot_missing_manage(channel: discord.abc.GuildChannel, bot_member: discord.Member | None) -> str:
@@ -345,14 +375,78 @@ def _mapping_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _manual_name_overrides(options: Mapping[str, Any]) -> dict[str, Any]:
+    return _mapping_dict(options.get("manual_name_overrides"))
+
+
+def _manual_name_override_for(options: Mapping[str, Any], target_id: int) -> dict[str, Any] | None:
+    raw = _manual_name_overrides(options).get(str(int(target_id)))
+    if isinstance(raw, Mapping):
+        name = _safe_str(raw.get("name"), "")
+        if not name:
+            return None
+        return {**dict(raw), "name": name}
+    if isinstance(raw, str) and raw.strip():
+        return {"name": raw.strip(), "scope": "unknown"}
+    return None
+
+
+def _clear_manual_name_override_from_options(options: dict[str, Any], target_id: int) -> bool:
+    overrides = _manual_name_overrides(options)
+    removed = overrides.pop(str(int(target_id)), None) is not None
+    options["manual_name_overrides"] = overrides
+    return removed
+
+
+def _manual_name_override_plan_item(
+    current_name: str,
+    desired_name: str,
+    *,
+    kind: str,
+    channel_id: int,
+    category_id: int,
+) -> dict[str, Any]:
+    before = _safe_str(current_name)
+    desired = _safe_str(desired_name)
+    blockers: list[str] = []
+    if not desired:
+        blockers.append("Saved manual name is empty. Unlock it and rename again.")
+    if len(desired) > studio.DISCORD_NAME_LIMIT:
+        blockers.append(
+            f"Saved manual name is too long for Discord ({len(desired)}/{studio.DISCORD_NAME_LIMIT})."
+        )
+    after = desired[: studio.DISCORD_NAME_LIMIT] if desired else before
+    status = "failed" if blockers else ("changed" if after != before else "unchanged")
+    return {
+        "channel_id": str(int(channel_id)),
+        "category_id": str(int(category_id or 0)),
+        "kind": kind,
+        "before": before,
+        "after": after,
+        "base_name": studio.normalize_base_name(before),
+        "status": status,
+        "protected": False,
+        "warnings": ["Exact manual name override is authoritative for this item."],
+        "blockers": blockers,
+        "substitutions": [],
+        "readability_score": 100,
+        "mobile_score": 100,
+        "clutter_score": 0,
+        "format_lock_scope": "manual_name",
+        "manual_name_override": True,
+    }
+
+
 def _lock_count(options: Mapping[str, Any]) -> dict[str, int]:
     global_lock = _mapping_dict(options.get("format_lock_global"))
     category_locks = _mapping_dict(options.get("category_format_locks"))
     channel_locks = _mapping_dict(options.get("channel_format_locks"))
+    manual_names = _manual_name_overrides(options)
     return {
         "global": 1 if global_lock.get("enabled") else 0,
         "categories": len(category_locks),
         "channels": len(channel_locks),
+        "manual_names": len(manual_names),
     }
 
 
@@ -403,11 +497,14 @@ def _effective_format_options(
     return effective
 
 
-async def _save_options(interaction: discord.Interaction, options: Mapping[str, Any]) -> None:
+async def _save_options(interaction: discord.Interaction, options: Mapping[str, Any]) -> bool:
     guild = interaction.guild
     if guild is None:
         raise RuntimeError("This must be used inside a server.")
-    await _save_design_options(int(guild.id), dict(options))
+    saved = await _save_design_options(int(guild.id), dict(options))
+    if not saved:
+        raise RuntimeError("Dank Design settings could not be saved.")
+    return True
 
 
 async def _save_global_lock(interaction: discord.Interaction) -> dict[str, Any]:
@@ -421,6 +518,7 @@ async def _save_global_lock(interaction: discord.Interaction) -> dict[str, Any]:
 async def _save_category_lock(interaction: discord.Interaction, category_id: int) -> dict[str, Any]:
     assert interaction.guild is not None
     options = await _load_design_options(int(interaction.guild.id))
+    _clear_manual_name_override_from_options(options, int(category_id))
     locks = _mapping_dict(options.get("category_format_locks"))
     locks[str(int(category_id))] = _current_format_lock(options, scope="category")
     options["category_format_locks"] = locks
@@ -431,9 +529,38 @@ async def _save_category_lock(interaction: discord.Interaction, category_id: int
 async def _save_channel_lock(interaction: discord.Interaction, channel_id: int) -> dict[str, Any]:
     assert interaction.guild is not None
     options = await _load_design_options(int(interaction.guild.id))
+    _clear_manual_name_override_from_options(options, int(channel_id))
     locks = _mapping_dict(options.get("channel_format_locks"))
     locks[str(int(channel_id))] = _current_format_lock(options, scope="channel")
     options["channel_format_locks"] = locks
+    await _save_options(interaction, options)
+    return options
+
+
+async def _save_manual_name_override(
+    interaction: discord.Interaction,
+    *,
+    target_id: int,
+    scope: str,
+    exact_name: str,
+) -> dict[str, Any]:
+    guild = interaction.guild
+    if guild is None:
+        raise RuntimeError("This must be used inside a server.")
+    name = _safe_str(exact_name)
+    if not name:
+        raise RuntimeError("Manual name cannot be blank.")
+    if len(name) > studio.DISCORD_NAME_LIMIT:
+        raise RuntimeError("Manual name is too long for Discord.")
+
+    options = await _load_design_options(int(guild.id))
+    overrides = _manual_name_overrides(options)
+    overrides[str(int(target_id))] = {
+        "name": name,
+        "scope": _safe_str(scope, "channel"),
+        "locked_at": _utc_iso_design(),
+    }
+    options["manual_name_overrides"] = overrides
     await _save_options(interaction, options)
     return options
 
@@ -452,10 +579,9 @@ async def _clear_all_locks(interaction: discord.Interaction) -> dict[str, Any]:
     options["format_lock_global"] = {}
     options["category_format_locks"] = {}
     options["channel_format_locks"] = {}
+    options["manual_name_overrides"] = {}
     await _save_options(interaction, options)
     return options
-
-
 
 
 def _format_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> discord.Embed:
@@ -471,12 +597,11 @@ def _format_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> dis
     embed = discord.Embed(
         title="🔐 Lock / Unlock Saved Rules",
         description=(
-            "Review exactly which preset is locked for global, categories, and channels. "
+            "Review global/category/channel style locks and exact manual-name overrides. "
             "Unlock individual rules or clean stale/deleted targets. Nothing is permanent."
         ),
         color=discord.Color.blurple(),
     )
-
     embed.add_field(
         name="Current global preset",
         value="\n".join((
@@ -488,28 +613,27 @@ def _format_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> dis
         )),
         inline=False,
     )
-
     embed.add_field(
         name="Saved rules / locks",
         value="\n".join((
+            f"Exact manual names: **{counts['manual_names']}**",
             f"Global preset: **{'On' if counts['global'] else 'Off'}**",
             f"Locked category rules: **{counts['categories']}**",
             f"Locked channel overrides: **{counts['channels']}**",
+            f"Exact manual names: **{counts['manual_names']}**",
         )),
         inline=True,
     )
-
     embed.add_field(
         name="What each rule means",
         value="\n".join((
-            "Category rule preset shows: Font `{font}` • Separator `{sep}` • Frame `{frame}` • Strength `{strength}/5`.",
-            "Channel override preset shows: Font `{font}` • Separator `{sep}` • Strength `{strength}/5`.",
-            "Priority: Protection policy → Channel override → Category rule → Global preset → Detected live style preview.",
-            "Protected Names / Unlock controls protected ticket/log/system names separately.",
+            "**Exact manual name** keeps the literal Discord name you typed until you unlock or replace it.",
+            "**Category/channel style locks** keep the selected visual format.",
+            "Priority: Exact manual name → Channel override → Category rule → Global preset → Detected live style.",
+            "Protected Names / Unlock controls automated styling safety separately.",
         )),
         inline=False,
     )
-
     embed.set_footer(text="Use numbered buttons to unlock one saved rule. Nothing is permanent.")
     return _clean_design_embed(embed)
 
@@ -527,29 +651,41 @@ async def build_design_plan(guild: discord.Guild, options: Mapping[str, Any]) ->
         parent = getattr(channel, "category", None)
         channel_id = _safe_int(getattr(channel, "id", 0), 0)
         category_id = channel_id if kind == "category" else _safe_int(getattr(parent, "id", 0), 0)
-        effective_options = _effective_format_options(options, channel_id=channel_id, category_id=category_id)
+        manual_override = _manual_name_override_for(options, channel_id)
 
-        result = studio.build_styled_name(
-            current_name,
-            kind="category" if kind == "category" else "text",
-            theme_id=_safe_str(effective_options.get("theme_id"), theme_id),
-            strength=_safe_int(effective_options.get("strength"), strength),
-            icon_mode=_safe_str(effective_options.get("icon_mode"), icon_mode),
-            protection_rules=protection_rules,
-            separator_id=_safe_str(effective_options.get("separator_id")) or None,
-            category_frame_id=_safe_str(effective_options.get("category_frame_id")) or None,
-            font=_safe_str(effective_options.get("font")) or None,
-            emoji_override=_safe_str(effective_options.get("emoji_override")) or None,
-            exact_match=bool(effective_options.get("exact_match", False)),
-        )
-        item = result.to_plan_item(channel_id=getattr(channel, "id", ""), category_id=getattr(parent, "id", ""))
-        item["kind"] = kind
-        item["format_lock_scope"] = _safe_str(effective_options.get("__format_lock_scope"), "auto")
+        if manual_override is not None:
+            item = _manual_name_override_plan_item(
+                current_name,
+                _safe_str(manual_override.get("name"), ""),
+                kind=kind,
+                channel_id=channel_id,
+                category_id=category_id,
+            )
+        else:
+            effective_options = _effective_format_options(options, channel_id=channel_id, category_id=category_id)
+            result = studio.build_styled_name(
+                current_name,
+                kind="category" if kind == "category" else "text",
+                theme_id=_safe_str(effective_options.get("theme_id"), theme_id),
+                strength=_safe_int(effective_options.get("strength"), strength),
+                icon_mode=_safe_str(effective_options.get("icon_mode"), icon_mode),
+                protection_rules=protection_rules,
+                separator_id=_safe_str(effective_options.get("separator_id")) or None,
+                category_frame_id=_safe_str(effective_options.get("category_frame_id")) or None,
+                font=_safe_str(effective_options.get("font")) or None,
+                emoji_override=_safe_str(effective_options.get("emoji_override")) or None,
+                exact_match=bool(effective_options.get("exact_match", False)),
+            )
+            item = result.to_plan_item(channel_id=getattr(channel, "id", ""), category_id=getattr(parent, "id", ""))
+            item["kind"] = kind
+            item["format_lock_scope"] = _safe_str(effective_options.get("__format_lock_scope"), "auto")
+
         missing = _bot_missing_manage(channel, bot_member)
         if missing and item.get("status") != "protected":
             item.setdefault("blockers", []).append(missing)
             item["status"] = "failed"
         items.append(item)
+
     duplicates = studio.detect_duplicate_outputs(items)
     if duplicates:
         duplicate_names = {line.split(" would both become ")[-1].strip("`") for line in duplicates}
@@ -1145,7 +1281,7 @@ class FormatLocksView(discord.ui.View):
         options = await _clear_all_locks(interaction)
         embed = _format_locks_embed(guild, options)
         embed.title = "🧹 All Format Locks Cleared"
-        embed.description = "Global, category, and channel format locks were cleared. Auto theme rules are active again."
+        embed.description = "Global, category, channel, and exact manual-name rules were cleared. Auto theme rules are active again."
         await interaction.response.edit_message(embed=embed, view=FormatLocksView())
 
     @discord.ui.button(label="Back to Design Studio", emoji="🎨", style=discord.ButtonStyle.secondary, custom_id="dank_design:format_locks_back", row=4)
@@ -1260,6 +1396,82 @@ def _live_majority_exact_lock(
         return {}
 
 
+def _live_target_exact_lock(
+    guild: discord.Guild | None,
+    options: Mapping[str, Any],
+    *,
+    scope: str,
+    target_id: int,
+    target: Any | None = None,
+) -> dict[str, Any]:
+    """Seed Custom Format from the selected item's current live style.
+
+    Server/category majority remains an explicit choice through the Server Style
+    button. Opening one item for manual editing must not preload unrelated style
+    values and then persist them as if the user deliberately selected them.
+    """
+
+    majority_lock = _live_majority_exact_lock(
+        guild,
+        options,
+        scope=scope,
+        target_id=target_id,
+    )
+    if guild is None:
+        return majority_lock
+
+    target = target or guild.get_channel(int(target_id))
+    if target is None:
+        return majority_lock
+
+    try:
+        from stoney_verify.services import server_design_majority_layout as majority
+
+        name = _safe_str(getattr(target, "name", ""))
+        if not name:
+            return majority_lock
+
+        lock = dict(majority_lock or _current_format_lock(options, scope=scope))
+        lock["scope"] = scope
+        lock["theme_id"] = _safe_str(
+            lock.get("theme_id"),
+            _safe_str(options.get("theme_id"), "gothic_clean"),
+        )
+        lock["icon_mode"] = "keep_existing"
+        lock["emoji_override"] = ""
+        lock["exact_match"] = False
+        lock["__source"] = "live_target"
+
+        detected_font = _safe_str(
+            majority.detect_font_id(studio, name),
+            "normal",
+        ).lower().replace("-", "_")
+        lock["font"] = detected_font if detected_font in studio.FONT_STYLES else "normal"
+
+        if scope == "channel":
+            separator = majority.detect_channel_separator(studio, name)
+            separator_id = _safe_str(separator.get("separator_id"), "")
+            if not separator_id:
+                separator_id = majority.ensure_separator_spec(
+                    studio,
+                    _safe_str(separator.get("token"), ""),
+                    _safe_str(separator.get("spacing"), "none"),
+                )
+            if separator_id in studio.SEPARATORS_BY_ID or separator_id == "none":
+                lock["separator_id"] = separator_id
+            lock["strength"] = max(2, _safe_int(lock.get("strength"), 4))
+        elif scope == "category":
+            frame = majority.detect_category_frame(studio, name)
+            frame_id = _safe_str(frame.get("id"), "plain")
+            if frame_id in studio.CATEGORY_FRAMES_BY_ID:
+                lock["category_frame_id"] = frame_id
+            lock["strength"] = max(3, _safe_int(lock.get("strength"), 4))
+
+        return lock
+    except Exception:
+        return majority_lock
+
+
 def _separator_choice_label(sep_id: Any) -> str:
     sep_id = _safe_str(sep_id, "none")
     if sep_id == "none":
@@ -1336,6 +1548,7 @@ def _initial_editor_lock(
     guild: discord.Guild | None = None,
 ) -> dict[str, Any]:
     majority_lock = _live_majority_exact_lock(guild, options, scope=scope, target_id=target_id)
+    target_lock = _live_target_exact_lock(guild, options, scope=scope, target_id=target_id)
 
     if scope == "category":
         locks = _mapping_dict(options.get("category_format_locks"))
@@ -1359,8 +1572,8 @@ def _initial_editor_lock(
         ):
             if majority_lock.get(key) is not None:
                 lock[key] = majority_lock.get(key)
-    elif majority_lock:
-        lock = dict(majority_lock)
+    elif target_lock:
+        lock = dict(target_lock)
     else:
         lock = _current_format_lock(options, scope=scope)
         lock["__source"] = "saved_design_rule"
@@ -1484,6 +1697,7 @@ def _exact_format_embed(guild: discord.Guild, *, scope: str, target_id: int, loc
     )
     source_label = {
         "live_majority": "Live server majority",
+        "live_target": "Selected item current style",
         "saved_exact_rule": "Saved exact rule",
         "saved_design_rule": "Saved design rule",
         "manual_override": "Manual draft override",
@@ -1589,6 +1803,7 @@ async def _save_exact_lock(interaction: discord.Interaction, *, scope: str, targ
         lock = _initial_editor_lock(options, scope=scope, target_id=target_id, guild=guild)
 
     options = await _load_design_options(int(guild.id))
+    _clear_manual_name_override_from_options(options, int(target_id))
     lock["scope"] = scope
     lock["locked_at"] = _utc_iso_design()
     persist_lock = _persistable_exact_lock(lock)
@@ -1605,6 +1820,43 @@ async def _save_exact_lock(interaction: discord.Interaction, *, scope: str, targ
     await _save_options(interaction, options)
     return options
 
+
+
+async def _save_live_target_format_lock(
+    interaction: discord.Interaction,
+    *,
+    scope: str,
+    target_id: int,
+    target: Any | None = None,
+) -> dict[str, Any]:
+    guild = interaction.guild
+    assert guild is not None
+    options = await _load_design_options(int(guild.id))
+    live_target = target or await _direct_rename_fetch_target(guild, int(target_id), guild.get_channel(int(target_id)))
+    lock = _live_target_exact_lock(
+        guild,
+        options,
+        scope=scope,
+        target_id=int(target_id),
+        target=live_target,
+    )
+    if not lock:
+        raise RuntimeError("Could not detect this item's live format.")
+    lock["scope"] = scope
+    lock["exact_match"] = True
+    lock["locked_at"] = _utc_iso_design()
+    persist_lock = _persistable_exact_lock(lock)
+    _clear_manual_name_override_from_options(options, int(target_id))
+    if scope == "category":
+        locks = _mapping_dict(options.get("category_format_locks"))
+        locks[str(int(target_id))] = persist_lock
+        options["category_format_locks"] = locks
+    else:
+        locks = _mapping_dict(options.get("channel_format_locks"))
+        locks[str(int(target_id))] = persist_lock
+        options["channel_format_locks"] = locks
+    await _save_options(interaction, options)
+    return options
 
 def _exact_font_example_text(font_id: str) -> str:
     font_id = _safe_str(font_id, "normal").lower().replace("-", "_")
@@ -1844,6 +2096,7 @@ async def _update_exact_draft(
     current.update(dict(patch))
     if any(not str(key).startswith("__") for key in dict(patch)):
         current["__source"] = "manual_override"
+        current["exact_match"] = True
     _FORMAT_EDITOR_DRAFTS[key] = current
     await interaction.response.edit_message(
         embed=_exact_format_embed(guild, scope=scope, target_id=target_id, lock=current),
@@ -1945,61 +2198,45 @@ class SeparatorExamplePickButton(discord.ui.Button):
 
 class SeparatorExamplesPageButton(discord.ui.Button):
     def __init__(self, page: int, *, label: str, emoji: str, row: int) -> None:
-        super().__init__(
-            label=label,
-            emoji=emoji,
-            style=discord.ButtonStyle.secondary,
-            custom_id=f"dank_design:sep_examples_page:{page}",
-            row=row,
-        )
+        super().__init__(label=label, emoji=emoji, style=discord.ButtonStyle.secondary, custom_id=f"dank_design:sep_examples_page:{page}", row=row)
         self.page = int(page)
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         async def action() -> None:
             if not await _require_design_permission(interaction):
                 return
-
             guild = interaction.guild
             assert guild is not None
-
-        view = getattr(self, "view", None)
-        scope = getattr(view, "scope", "channel")
-        target_id = int(getattr(view, "target_id", 0))
-        lock = _exact_lock_for_user(guild, int(interaction.user.id), scope, target_id)
-
-        await interaction.response.edit_message(
-            embed=_separator_gallery_embed(guild, scope=scope, target_id=target_id, lock=lock, page=self.page),
-            view=SeparatorExamplesView(guild, scope=scope, target_id=target_id, lock=lock, page=self.page),
-        )
+            view = getattr(self, "view", None)
+            scope = getattr(view, "scope", "channel")
+            target_id = int(getattr(view, "target_id", 0))
+            lock = _exact_lock_for_user(guild, int(interaction.user.id), scope, target_id)
+            await interaction.response.edit_message(
+                embed=_separator_gallery_embed(guild, scope=scope, target_id=target_id, lock=lock, page=self.page),
+                view=SeparatorExamplesView(guild, scope=scope, target_id=target_id, lock=lock, page=self.page),
+            )
+        await _guard_design_action(interaction, "design.exact.examples.page", action, defer=False)
 
 
 class SeparatorExamplesBackButton(discord.ui.Button):
     def __init__(self, *, row: int) -> None:
-        super().__init__(
-            label="Back to Custom Format",
-            emoji="⬅️",
-            style=discord.ButtonStyle.secondary,
-            custom_id="dank_design:sep_examples_back",
-            row=row,
-        )
+        super().__init__(label="Back to Custom Format", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:sep_examples_back", row=row)
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         async def action() -> None:
             if not await _require_design_permission(interaction):
                 return
-
             guild = interaction.guild
             assert guild is not None
-
-        view = getattr(self, "view", None)
-        scope = getattr(view, "scope", "channel")
-        target_id = int(getattr(view, "target_id", 0))
-        lock = _exact_lock_for_user(guild, int(interaction.user.id), scope, target_id)
-
-        await interaction.response.edit_message(
-            embed=_exact_format_embed(guild, scope=scope, target_id=target_id, lock=lock),
-            view=ExactFormatEditorViewFactory(guild, scope, target_id, lock),
-        )
+            view = getattr(self, "view", None)
+            scope = getattr(view, "scope", "channel")
+            target_id = int(getattr(view, "target_id", 0))
+            lock = _exact_lock_for_user(guild, int(interaction.user.id), scope, target_id)
+            await interaction.response.edit_message(
+                embed=_exact_format_embed(guild, scope=scope, target_id=target_id, lock=lock),
+                view=ExactFormatEditorViewFactory(guild, scope, target_id, lock),
+            )
+        await _guard_design_action(interaction, "design.exact.examples.back", action, defer=False)
 
 
 class SeparatorExamplesView(discord.ui.View):
@@ -2048,11 +2285,13 @@ async def _save_exact_and_preview(interaction: discord.Interaction, *, scope: st
         title = "👁️ Channel Format Preview"
 
     key = _key(int(guild.id), int(interaction.user.id))
+    created_at = time.time()
     _PENDING[key] = {
-        "created_at": time.time(),
+        "created_at": created_at,
         "items": items,
         "options": dict(repair_options),
         "mode": f"{scope}_exact_format",
+        "target_id": str(int(target_id)),
     }
 
     has_blockers = any(item.get("status") == "failed" for item in items)
@@ -2060,7 +2299,10 @@ async def _save_exact_and_preview(interaction: discord.Interaction, *, scope: st
 
     await interaction.edit_original_response(
         embed=_preview_embed(guild, items, title=title),
-        view=StyleChangePreviewView(can_apply=not has_blockers and has_changes, has_blockers=has_blockers),
+        view=DesignPreviewView(
+            can_apply=not has_blockers and has_changes,
+            pending_created_at=created_at,
+        ),
     )
 
 
@@ -2339,44 +2581,34 @@ async def _preview_scope(
 ) -> None:
     if not await _require_design_permission(interaction):
         return
-
     guild = interaction.guild
     assert guild is not None
-
     await interaction.response.defer(ephemeral=True, thinking=True)
-
     options = await _load_design_options(int(guild.id))
     repair_options = dict(options)
-
     if mode in {"category_editor", "channel_editor"}:
         repair_options["__use_live_majority_layout"] = True
-
     all_items = await build_design_plan(guild, repair_options)
-
     if category_id is not None:
         items = _filter_plan_for_category(all_items, int(category_id))
     elif channel_id is not None:
         items = _filter_plan_for_channel(all_items, int(channel_id))
     else:
         items = all_items
-
-    key = _key(int(guild.id), int(interaction.user.id))
-    _PENDING[key] = {
-        "created_at": time.time(),
-        "items": items,
-        "options": dict(repair_options),
-        "mode": mode,
-        "scope_title": scope_title,
-    }
-
+    created_at = _store_pending(
+        int(guild.id),
+        int(interaction.user.id),
+        {"items": items, "options": dict(repair_options), "mode": mode, "scope_title": scope_title},
+    )
     has_blockers = any(item.get("status") == "failed" for item in items)
     has_changes = any(item.get("status") == "changed" for item in items)
-
     await interaction.edit_original_response(
         embed=_preview_embed(guild, items, title=scope_title),
-        view=DesignPreviewView(can_apply=not has_blockers and has_changes),
+        view=DesignPreviewView(
+            can_apply=not has_blockers and has_changes,
+            pending_created_at=created_at,
+        ),
     )
-
 
 
 class DesignCategoryEditorButton(discord.ui.Button):
@@ -2695,13 +2927,10 @@ async def _direct_rename_fetch_target(
     fallback: Any,
 ) -> Any:
     cached = guild.get_channel(int(target_id))
-    if cached is not None:
-        return cached
-
     try:
         return await guild.fetch_channel(int(target_id))
     except Exception:
-        return fallback
+        return cached if cached is not None else fallback
 
 
 def _direct_rename_result_value(old_name: str, requested_name: str, actual_name: str) -> str:
@@ -2728,7 +2957,7 @@ class DirectRenameModal(discord.ui.Modal):
         self.category_id = int(category_id) if category_id is not None else None
         self.new_name = discord.ui.TextInput(
             label="New Discord name",
-            placeholder="This applies immediately after Submit",
+            placeholder="This applies immediately and becomes the saved exact name",
             default=_short_label(current_name, 90),
             min_length=1,
             max_length=100,
@@ -2740,73 +2969,109 @@ class DirectRenameModal(discord.ui.Modal):
         async def action() -> None:
             if not await _require_design_permission(interaction):
                 return
-
             guild = interaction.guild
             assert guild is not None
 
-        channel = guild.get_channel(self.target_id)
-        if channel is None:
-            return await interaction.response.send_message("That item no longer exists.", ephemeral=True)
+            channel = await _direct_rename_fetch_target(guild, self.target_id, guild.get_channel(self.target_id))
+            if channel is None:
+                await interaction.response.send_message("That item no longer exists.", ephemeral=True)
+                return
 
-        old_name = _safe_str(getattr(channel, "name", ""), "unknown")
-        requested_name = _safe_str(self.new_name.value, "").strip()
+            old_name = _safe_str(getattr(channel, "name", ""), "unknown")
+            requested_name = _safe_str(self.new_name.value, "").strip()
+            if not requested_name:
+                await interaction.response.send_message("Name cannot be blank.", ephemeral=True)
+                return
+            if self.scope != "category" and _direct_rename_has_unsafe_channel_icon(requested_name):
+                await interaction.response.send_message(
+                    "❌ That icon is unsafe for channel names. `#️⃣` and square placeholder icons can break into blocks. "
+                    "Pick a real emoji/icon, or use it on a category only.",
+                    ephemeral=True,
+                )
+                return
 
-        if not requested_name:
-            return await interaction.response.send_message("Name cannot be blank.", ephemeral=True)
+            try:
+                await channel.edit(
+                    name=requested_name,
+                    reason=f"Dank Design direct rename by {interaction.user} ({interaction.user.id})",
+                )
+            except discord.Forbidden:
+                await interaction.response.send_message(
+                    "❌ I cannot rename that. I need **Manage Channels**, and my role must be high enough.",
+                    ephemeral=True,
+                )
+                return
+            except discord.HTTPException as exc:
+                await interaction.response.send_message(f"❌ Discord rejected that rename: `{exc}`", ephemeral=True)
+                return
 
-        if self.scope != "category" and _direct_rename_has_unsafe_channel_icon(requested_name):
-            return await interaction.response.send_message(
-                "❌ That icon is unsafe for channel names. `#️⃣` and square placeholder icons can break into blocks. "
-                "Pick a real emoji/icon, or use it on a category only.",
-                ephemeral=True,
+            refreshed = await _direct_rename_fetch_target(guild, self.target_id, channel)
+            actual_name = _safe_str(getattr(refreshed, "name", requested_name), requested_name)
+
+            try:
+                await _save_manual_name_override(
+                    interaction,
+                    target_id=self.target_id,
+                    scope=self.scope,
+                    exact_name=actual_name,
+                )
+            except Exception as exc:
+                rolled_back = False
+                try:
+                    await refreshed.edit(
+                        name=old_name,
+                        reason=f"Dank Design rename rollback after rule save failure by {interaction.user} ({interaction.user.id})",
+                    )
+                    rolled_back = True
+                except Exception:
+                    pass
+                if rolled_back:
+                    await interaction.response.send_message(
+                        "❌ The exact-name rule could not be saved, so the rename was rolled back. "
+                        f"Nothing was left half-applied. Error: `{type(exc).__name__}`",
+                        ephemeral=True,
+                    )
+                else:
+                    await interaction.response.send_message(
+                        "⚠️ Discord accepted the rename, but Dank Design could not save its exact-name rule or roll it back. "
+                        "Do not run a design Apply until persistence is repaired.",
+                        ephemeral=True,
+                    )
+                return
+
+            refreshed = await _direct_rename_fetch_target(guild, self.target_id, refreshed)
+            actual_name = _safe_str(getattr(refreshed, "name", actual_name), actual_name)
+            if self.scope == "category" and isinstance(refreshed, discord.CategoryChannel):
+                embed = _category_action_embed(refreshed)
+                view = CategoryEditorActionView(self.target_id)
+                embed.title = "✅ Category Renamed & Saved"
+            else:
+                embed = _channel_action_embed(refreshed)
+                view = ChannelEditorActionView(self.target_id, category_id=self.category_id)
+                embed.title = "✅ Channel Renamed & Saved"
+            embed.add_field(
+                name="Applied immediately",
+                value=_direct_rename_result_value(old_name, requested_name, actual_name),
+                inline=False,
             )
-
-        try:
-            await channel.edit(
-                name=requested_name,
-                reason=f"Dank Design direct rename by {interaction.user} ({interaction.user.id})",
+            embed.add_field(
+                name="Exact-name rule",
+                value=(
+                    "This literal Discord name is now authoritative for this item. "
+                    "Global/category styles cannot replace it unless you use Custom Format, Lock Rule, or Unlock Saved Rules."
+                ),
+                inline=False,
             )
-        except discord.Forbidden:
-            return await interaction.response.send_message(
-                "❌ I cannot rename that. I need **Manage Channels**, and my role must be high enough.",
-                ephemeral=True,
-            )
-        except discord.HTTPException as exc:
-            return await interaction.response.send_message(
-                f"❌ Discord rejected that rename: `{exc}`",
-                ephemeral=True,
-            )
+            try:
+                await interaction.response.edit_message(embed=embed, view=view)
+            except Exception:
+                await interaction.response.send_message(
+                    f"✅ Renamed and saved exact name: `{old_name}` → `{actual_name}`",
+                    ephemeral=True,
+                )
 
-        refreshed = await _direct_rename_fetch_target(guild, self.target_id, channel)
-        actual_name = _safe_str(getattr(refreshed, "name", requested_name), requested_name)
+        await _guard_design_action(interaction, "design.direct_rename", action, defer=False)
 
-        if self.scope == "category" and isinstance(refreshed, discord.CategoryChannel):
-            embed = _category_action_embed(refreshed)
-            view = CategoryEditorActionView(self.target_id)
-            embed.title = "✅ Category Renamed"
-        else:
-            embed = _channel_action_embed(refreshed)
-            view = ChannelEditorActionView(self.target_id, category_id=self.category_id)
-            embed.title = "✅ Channel Renamed"
-
-        embed.add_field(
-            name="Applied immediately",
-            value=_direct_rename_result_value(old_name, requested_name, actual_name),
-            inline=False,
-        )
-        embed.add_field(
-            name="Next",
-            value="Use **Refresh** to reload the live Discord name, or use **Preview Repairs** only if you want a preview/apply workflow.",
-            inline=False,
-        )
-
-        try:
-            await interaction.response.edit_message(embed=embed, view=view)
-        except Exception:
-            await interaction.response.send_message(
-                f"✅ Renamed immediately: `{old_name}` → `{actual_name}`",
-                ephemeral=True,
-            )
 
 def _category_action_embed(category: discord.CategoryChannel) -> discord.Embed:
     child_count = len(list(getattr(category, "channels", []) or []))
@@ -2938,7 +3203,7 @@ class CategoryEditorActionView(discord.ui.View):
             category = guild.get_channel(self.category_id)
             if not isinstance(category, discord.CategoryChannel):
                 return await interaction.response.send_message("That category no longer exists.", ephemeral=True)
-            options = await _save_category_lock(interaction, self.category_id)
+            options = await _save_live_target_format_lock(interaction, scope="category", target_id=self.category_id, target=category)
             counts = _lock_count(options)
             embed = _category_action_embed(category)
             embed.title = "✅ Category Rule Locked"
@@ -3028,7 +3293,7 @@ class ChannelEditorActionView(discord.ui.View):
             channel = guild.get_channel(self.channel_id)
             if channel is None:
                 return await interaction.response.send_message("That channel no longer exists.", ephemeral=True)
-            options = await _save_channel_lock(interaction, self.channel_id)
+            options = await _save_live_target_format_lock(interaction, scope="channel", target_id=self.channel_id, target=channel)
             counts = _lock_count(options)
             embed = _channel_action_embed(channel)
             embed.title = "✅ Channel Rule Locked"
@@ -3136,13 +3401,16 @@ def _doctor_stale_lock_lines(guild: discord.Guild, options: Mapping[str, Any]) -
     lines: list[str] = []
     category_locks = _mapping_dict(options.get("category_format_locks"))
     channel_locks = _mapping_dict(options.get("channel_format_locks"))
-
+    manual_names = _manual_name_overrides(options)
     for cid in list(category_locks.keys()):
         if guild.get_channel(_safe_int(cid, 0)) is None:
             lines.append(f"• stale category lock `{cid}`")
     for cid in list(channel_locks.keys()):
         if guild.get_channel(_safe_int(cid, 0)) is None:
             lines.append(f"• stale channel lock `{cid}`")
+    for cid in list(manual_names.keys()):
+        if guild.get_channel(_safe_int(cid, 0)) is None:
+            lines.append(f"• stale exact-name rule `{cid}`")
     return lines
 
 
@@ -3183,7 +3451,7 @@ def _doctor_embed(guild: discord.Guild, options: Mapping[str, Any], items: list[
     summary = studio.summarize_plan(items)
     score = studio.design_score(items)
     duplicates = studio.detect_duplicate_outputs(items)
-    counts = _lock_count(options) if "_lock_count" in globals() else {"global": 0, "categories": 0, "channels": 0}
+    counts = _lock_count(options) if "_lock_count" in globals() else {"global": 0, "categories": 0, "channels": 0, "manual_names": 0}
     scope_counts = _doctor_scope_counts(items)
 
     missing_locks = _doctor_missing_category_locks(guild, options)
@@ -3325,8 +3593,7 @@ class DesignDoctorView(discord.ui.View):
 
         options = await _load_design_options(int(guild.id))
         items = await build_design_plan(guild, options)
-        key = _key(int(guild.id), int(interaction.user.id))
-        _PENDING[key] = {"created_at": time.time(), "items": items, "options": dict(options), "mode": "consistency_check"}
+        created_at = _store_pending(int(guild.id), int(interaction.user.id), {"items": items, "options": dict(options), "mode": "consistency_check"})
 
         has_blockers = any(item.get("status") == "failed" for item in items)
         has_changes = any(item.get("status") == "changed" for item in items)
@@ -3338,7 +3605,7 @@ class DesignDoctorView(discord.ui.View):
 
         await interaction.edit_original_response(
             embed=embed,
-            view=DesignPreviewView(can_apply=not has_blockers and has_changes),
+            view=DesignPreviewView(can_apply=not has_blockers and has_changes, pending_created_at=created_at),
         )
 
     @discord.ui.button(label="Category Editor", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="dank_design:doctor_category", row=1)
@@ -3380,51 +3647,48 @@ LOCK_MANAGER_PAGE_SIZE = 8
 
 def _lock_manager_rows(guild: discord.Guild, options: Mapping[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-
-    global_lock = _mapping_dict(options.get("format_lock_global")) if "_mapping_dict" in globals() else {}
-    if global_lock.get("enabled"):
-        rows.append({
-            "scope": "global",
-            "target_id": "0",
-            "label": "Global default format",
-            "exists": True,
-            "font": _safe_str(global_lock.get("font"), "normal"),
-            "separator_id": _safe_str(global_lock.get("separator_id"), ""),
-            "strength": _safe_int(global_lock.get("strength"), 4),
-        })
-
-    category_locks = _mapping_dict(options.get("category_format_locks")) if "_mapping_dict" in globals() else {}
-    for raw_id, lock in sorted(category_locks.items(), key=lambda pair: str(pair[0])):
+    manual_names = _manual_name_overrides(options)
+    for raw_id, record in sorted(manual_names.items(), key=lambda pair: str(pair[0])):
         cid = _safe_int(raw_id, 0)
         channel = guild.get_channel(cid)
-        label = _safe_str(getattr(channel, "name", ""), f"Deleted category {cid}")
-        lock_map = _mapping_dict(lock)
+        record_map = _mapping_dict(record)
+        exact_name = _safe_str(record_map.get("name") if record_map else record, "")
         rows.append({
-            "scope": "category",
+            "scope": "manual_name",
             "target_id": str(cid),
-            "label": label,
-            "exists": isinstance(channel, discord.CategoryChannel),
-            "font": _safe_str(lock_map.get("font"), "normal"),
-            "separator_id": _safe_str(lock_map.get("separator_id"), ""),
-            "strength": _safe_int(lock_map.get("strength"), 4),
-        })
-
-    channel_locks = _mapping_dict(options.get("channel_format_locks")) if "_mapping_dict" in globals() else {}
-    for raw_id, lock in sorted(channel_locks.items(), key=lambda pair: str(pair[0])):
-        cid = _safe_int(raw_id, 0)
-        channel = guild.get_channel(cid)
-        label = _safe_str(getattr(channel, "name", ""), f"Deleted channel {cid}")
-        lock_map = _mapping_dict(lock)
-        rows.append({
-            "scope": "channel",
-            "target_id": str(cid),
-            "label": label,
+            "label": _safe_str(getattr(channel, "name", ""), exact_name or f"Deleted item {cid}"),
             "exists": channel is not None,
-            "font": _safe_str(lock_map.get("font"), "normal"),
-            "separator_id": _safe_str(lock_map.get("separator_id"), ""),
-            "strength": _safe_int(lock_map.get("strength"), 4),
+            "exact_name": exact_name,
         })
-
+    global_lock = _mapping_dict(options.get("format_lock_global"))
+    if global_lock.get("enabled"):
+        rows.append({"scope": "global", "target_id": "0", "label": "Global default format", "exists": True,
+                     "font": _safe_str(global_lock.get("font"), "normal"), "separator_id": _safe_str(global_lock.get("separator_id"), ""),
+                     "strength": _safe_int(global_lock.get("strength"), 4)})
+    category_locks = _mapping_dict(options.get("category_format_locks"))
+    for raw_id, lock in sorted(category_locks.items(), key=lambda pair: str(pair[0])):
+        cid = _safe_int(raw_id, 0); channel = guild.get_channel(cid); lock_map = _mapping_dict(lock)
+        rows.append({"scope": "category", "target_id": str(cid), "label": _safe_str(getattr(channel, "name", ""), f"Deleted category {cid}"),
+                     "exists": isinstance(channel, discord.CategoryChannel), "font": _safe_str(lock_map.get("font"), "normal"),
+                     "separator_id": _safe_str(lock_map.get("separator_id"), ""), "strength": _safe_int(lock_map.get("strength"), 4)})
+    channel_locks = _mapping_dict(options.get("channel_format_locks"))
+    for raw_id, lock in sorted(channel_locks.items(), key=lambda pair: str(pair[0])):
+        cid = _safe_int(raw_id, 0); channel = guild.get_channel(cid); lock_map = _mapping_dict(lock)
+        rows.append({"scope": "channel", "target_id": str(cid), "label": _safe_str(getattr(channel, "name", ""), f"Deleted channel {cid}"),
+                     "exists": channel is not None, "font": _safe_str(lock_map.get("font"), "normal"),
+                     "separator_id": _safe_str(lock_map.get("separator_id"), ""), "strength": _safe_int(lock_map.get("strength"), 4)})
+    for row in rows:
+        scope = _safe_str(row.get("scope"), "")
+        target_key = _safe_str(row.get("target_id"), "0")
+        if scope == "global":
+            source_lock = global_lock
+        elif scope == "category":
+            source_lock = _mapping_dict(category_locks.get(target_key))
+        elif scope == "channel":
+            source_lock = _mapping_dict(channel_locks.get(target_key))
+        else:
+            continue
+        row["category_frame_id"] = _safe_str(source_lock.get("category_frame_id"), "plain")
     return rows
 
 
@@ -3434,69 +3698,54 @@ def _format_lock_manager_embed(guild: discord.Guild, options: Mapping[str, Any],
     page = max(0, min(int(page), total_pages - 1))
     start = page * LOCK_MANAGER_PAGE_SIZE
     chunk = rows[start:start + LOCK_MANAGER_PAGE_SIZE]
-
     stale_count = sum(1 for row in rows if not row.get("exists"))
     embed = discord.Embed(
         title="🔐 Lock / Unlock Saved Rules",
-        description=(
-            "Review saved global/category/channel locks, remove individual overrides, or clean stale locks."
-        ),
+        description="Review exact names and style locks, remove individual overrides, or clean stale locks.",
         color=discord.Color.blurple() if not stale_count else discord.Color.orange(),
     )
-
     if not rows:
-        embed.add_field(
-            name="Saved locks",
-            value="No format locks saved yet. Use **Category Editor** or **Channel Editor** to create locks.",
-            inline=False,
-        )
+        embed.add_field(name="Saved locks", value="No saved rules yet. Use Rename, Custom Format, or Lock Rule to create one.", inline=False)
     else:
         lines: list[str] = []
         for index, row in enumerate(chunk, start=1):
             exists = "✅" if row.get("exists") else "⚠️"
-            scope = _safe_str(row.get("scope"), "lock").title()
+            scope = _safe_str(row.get("scope"), "lock")
             label = _safe_str(row.get("label"), "Unknown")
-            font = _safe_str(row.get("font"), "normal").replace("_", " ").title()
-            sep = _safe_str(row.get("separator_id"), "none").replace("_", " ").title()
-            strength = _safe_int(row.get("strength"), 4)
-            lines.append(f"**{index}.** {exists} **{scope}** `{label}` · Font: `{font}` · Sep: `{sep}` · Strength: `{strength}`")
-        embed.add_field(name=f"Locks page {page + 1}/{total_pages}", value="\n".join(lines)[:1024], inline=False)
-
+            if scope == "manual_name":
+                exact_name = _safe_str(row.get("exact_name"), label)
+                lines.append(f"**{index}.** {exists} **Exact Name** `{label}` → keep `{exact_name}`")
+            else:
+                font = _safe_str(row.get("font"), "normal").replace("_", " ").title()
+                frame = _safe_str(row.get("category_frame_id"), "plain").replace("_", " ").title()
+                sep = _safe_str(row.get("separator_id"), "none").replace("_", " ").title()
+                strength = _safe_int(row.get("strength"), 4)
+                lines.append(f"**{index}.** {exists} **{scope.title()}** `{label}` · Font `{font}` · Frame `{frame}` · Separator `{sep}` · Strength `{strength}/5`")
+        embed.add_field(name=f"Rules page {page + 1}/{total_pages}", value="\n".join(lines)[:1024], inline=False)
     embed.add_field(
         name="Priority order",
-        value="Protection policy → Channel override → Category rule → Global preset → Detected live style preview",
+        value="Exact manual name → Protection policy → Channel override → Category rule → Global preset → Detected live style preview",
         inline=False,
     )
-
     if stale_count:
-        embed.add_field(
-            name="Stale locks found",
-            value=f"**{stale_count}** saved lock(s) point to deleted/missing channels or categories.",
-            inline=False,
-        )
-
-    embed.set_footer(text="Use the numbered buttons to remove one lock, or clean stale locks only.")
+        embed.add_field(name="Stale rules found", value=f"**{stale_count}** saved rule(s) point to deleted/missing items.", inline=False)
+    embed.set_footer(text="Use the numbered buttons to unlock one rule, or clean stale rules only.")
     return _clean_design_embed(embed)
 
 
 async def _remove_format_lock(interaction: discord.Interaction, *, scope: str, target_id: int) -> dict[str, Any]:
     guild = interaction.guild
     assert guild is not None
-
     options = await _load_design_options(int(guild.id))
     scope = _safe_str(scope).lower()
-
     if scope == "global":
         options["format_lock_global"] = {}
     elif scope == "category":
-        locks = _mapping_dict(options.get("category_format_locks"))
-        locks.pop(str(int(target_id)), None)
-        options["category_format_locks"] = locks
+        locks = _mapping_dict(options.get("category_format_locks")); locks.pop(str(int(target_id)), None); options["category_format_locks"] = locks
     elif scope == "channel":
-        locks = _mapping_dict(options.get("channel_format_locks"))
-        locks.pop(str(int(target_id)), None)
-        options["channel_format_locks"] = locks
-
+        locks = _mapping_dict(options.get("channel_format_locks")); locks.pop(str(int(target_id)), None); options["channel_format_locks"] = locks
+    elif scope == "manual_name":
+        _clear_manual_name_override_from_options(options, int(target_id))
     await _save_options(interaction, options)
     return options
 
@@ -3504,26 +3753,23 @@ async def _remove_format_lock(interaction: discord.Interaction, *, scope: str, t
 async def _clean_stale_format_locks(interaction: discord.Interaction) -> tuple[dict[str, Any], int]:
     guild = interaction.guild
     assert guild is not None
-
     options = await _load_design_options(int(guild.id))
     removed = 0
-
     category_locks = _mapping_dict(options.get("category_format_locks"))
     for raw_id in list(category_locks.keys()):
-        channel = guild.get_channel(_safe_int(raw_id, 0))
-        if not isinstance(channel, discord.CategoryChannel):
-            category_locks.pop(raw_id, None)
-            removed += 1
+        if not isinstance(guild.get_channel(_safe_int(raw_id, 0)), discord.CategoryChannel):
+            category_locks.pop(raw_id, None); removed += 1
     options["category_format_locks"] = category_locks
-
     channel_locks = _mapping_dict(options.get("channel_format_locks"))
     for raw_id in list(channel_locks.keys()):
-        channel = guild.get_channel(_safe_int(raw_id, 0))
-        if channel is None:
-            channel_locks.pop(raw_id, None)
-            removed += 1
+        if guild.get_channel(_safe_int(raw_id, 0)) is None:
+            channel_locks.pop(raw_id, None); removed += 1
     options["channel_format_locks"] = channel_locks
-
+    manual_names = _manual_name_overrides(options)
+    for raw_id in list(manual_names.keys()):
+        if guild.get_channel(_safe_int(raw_id, 0)) is None:
+            manual_names.pop(raw_id, None); removed += 1
+    options["manual_name_overrides"] = manual_names
     await _save_options(interaction, options)
     return options, removed
 
@@ -3554,7 +3800,7 @@ class LockRemoveButton(discord.ui.Button):
     def __init__(self, row_data: Mapping[str, Any], *, display_index: int, row: int) -> None:
         scope = _safe_str(row_data.get("scope"), "lock")
         label = _safe_str(row_data.get("label"), "Unknown")
-        emoji = {"global": "🌐", "category": "🗂️", "channel": "#️⃣"}.get(scope, "🔒")
+        emoji = {"manual_name": "✏️", "global": "🌐", "category": "🗂️", "channel": "#️⃣"}.get(scope, "🔒")
         super().__init__(
             label=f"Unlock {display_index}. {_short_label(label, 46) if '_short_label' in globals() else label[:46]}",
             emoji=emoji,
@@ -4031,7 +4277,7 @@ class StartHereView(discord.ui.View):
 
 
 def _editors_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> discord.Embed:
-    counts = _lock_count(options) if "_lock_count" in globals() else {"global": 0, "categories": 0, "channels": 0}
+    counts = _lock_count(options) if "_lock_count" in globals() else {"global": 0, "categories": 0, "channels": 0, "manual_names": 0}
     embed = discord.Embed(
         title="🧰 Rules & Unlocks",
         description=(
@@ -4050,6 +4296,7 @@ def _editors_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
             f"Global: **{'On' if counts.get('global') else 'Off'}**\n"
             f"Category locks: **{counts.get('categories', 0)}**\n"
             f"Channel overrides: **{counts.get('channels', 0)}**"
+            f"Exact manual names: **{counts.get('manual_names', 0)}**",
         ),
         inline=False,
     )
@@ -4862,18 +5109,25 @@ class StyleChangeView(discord.ui.View):
         has_blockers = any(item.get("status") == "failed" for item in items)
         has_changes = any(item.get("status") == "changed" for item in items)
 
-        _PENDING[_key(int(guild.id), int(interaction.user.id))] = {
-            "created_at": time.time(),
-            "items": items,
-            "options": dict(options),
-            "mode": "style_change_separator",
-            "style_change_dimension": "channel_separator",
-            "separator_id": self.separator_id,
-        }
+        created_at = _store_pending(
+            int(guild.id),
+            int(interaction.user.id),
+            {
+                "items": items,
+                "options": dict(options),
+                "mode": "style_change_separator",
+                "style_change_dimension": "channel_separator",
+                "separator_id": self.separator_id,
+            },
+        )
 
         await interaction.edit_original_response(
             embed=_style_change_preview_embed(guild, items, separator_id=self.separator_id),
-            view=StyleChangePreviewView(can_apply=not has_blockers and has_changes, has_blockers=has_blockers),
+            view=StyleChangePreviewView(
+                can_apply=not has_blockers and has_changes,
+                has_blockers=has_blockers,
+                pending_created_at=created_at,
+            ),
         )
 
     @discord.ui.button(label="Back to Design Studio", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:style_change_back", row=4)
@@ -4918,20 +5172,14 @@ class DesignHomeView(discord.ui.View):
             repair_options = dict(options)
             repair_options["__use_live_majority_layout"] = True
             items = await build_design_plan(guild, repair_options)
-        key = _key(int(guild.id), int(interaction.user.id))
-        _PENDING[key] = {
-            "created_at": time.time(),
-            "items": items,
-            "options": dict(repair_options),
-            "mode": "consistency_check",
-        }
+        created_at = _store_pending(int(guild.id), int(interaction.user.id), {"items": items, "options": dict(repair_options), "mode": "consistency_check"})
 
         has_blockers = any(item.get("status") == "failed" for item in items)
         has_changes = any(item.get("status") == "changed" for item in items)
 
         await interaction.edit_original_response(
             embed=_consistency_embed(guild, items, repair_options),
-            view=DesignPreviewView(can_apply=not has_blockers and has_changes),
+            view=DesignPreviewView(can_apply=not has_blockers and has_changes, pending_created_at=created_at),
         )
 
     @discord.ui.button(label="Change Channel Separator Only", emoji="⚡", style=discord.ButtonStyle.secondary, custom_id="dank_design:style_change", row=2)
@@ -4958,16 +5206,11 @@ class DesignHomeView(discord.ui.View):
         await interaction.response.defer(ephemeral=True, thinking=True)
         options = await _load_design_options(int(guild.id))
         items = await build_design_plan(guild, options)
-        _PENDING[_key(int(guild.id), int(interaction.user.id))] = {
-            "created_at": time.time(),
-            "items": items,
-            "options": dict(options),
-            "mode": "preview_server",
-        }
+        created_at = _store_pending(int(guild.id), int(interaction.user.id), {"items": items, "options": dict(options), "mode": "preview_server"})
         has_blockers = any(item.get("status") == "failed" for item in items)
         await interaction.edit_original_response(
             embed=_preview_embed(guild, items, title="👁️ Server Design Preview"),
-            view=DesignPreviewView(can_apply=not has_blockers and any(item.get("status") == "changed" for item in items)),
+            view=DesignPreviewView(can_apply=not has_blockers and any(item.get("status") == "changed" for item in items), pending_created_at=created_at),
         )
 
     @discord.ui.button(label="Category Editor", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="dank_design:category_editor", row=3)
@@ -5007,8 +5250,9 @@ class DesignHomeView(discord.ui.View):
 
 
 class DesignPreviewView(discord.ui.View):
-    def __init__(self, *, can_apply: bool) -> None:
+    def __init__(self, *, can_apply: bool, pending_created_at: float | None = None) -> None:
         super().__init__(timeout=900)
+        self.pending_created_at = pending_created_at
         self.apply.disabled = not can_apply
 
     @discord.ui.button(label="Apply Reviewed Changes", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_design:apply", row=0)
@@ -5019,6 +5263,12 @@ class DesignPreviewView(discord.ui.View):
         assert guild is not None
         key = _key(int(guild.id), int(interaction.user.id))
         payload = _PENDING.get(key) or {}
+        if not _pending_matches(payload, self.pending_created_at):
+            await interaction.response.send_message(
+                "❌ This Apply button belongs to an older or invalidated preview. Preview the current choices before applying.",
+                ephemeral=True,
+            )
+            return
         items = list(payload.get("items") or [])
         if not items:
             await interaction.response.send_message("No saved preview found. Press **Preview Saved Design** first.", ephemeral=True)
@@ -5205,208 +5455,123 @@ def _style_change_rebuild_preview_response(
     separator_id = _safe_str(pending.get("separator_id"), "none")
     has_blockers = any(item.get("status") == "failed" for item in items)
     has_changes = any(item.get("status") == "changed" for item in items)
+    created_at = float(pending.get("created_at") or 0.0)
     embed = _style_change_preview_embed(guild, items, separator_id=separator_id)
-    return embed, StyleChangePreviewView(can_apply=not has_blockers and has_changes, has_blockers=has_blockers)
+    return embed, StyleChangePreviewView(
+        can_apply=not has_blockers and has_changes,
+        has_blockers=has_blockers,
+        pending_created_at=created_at,
+    )
 
 
 class StyleChangeFixMissingEmojiModal(discord.ui.Modal):
-    def __init__(self, *, items: list[dict[str, Any]], separator_id: str) -> None:
+    def __init__(self, *, items: list[dict[str, Any]], separator_id: str, pending_created_at: float) -> None:
         super().__init__(title="Choose Missing Icons")
         self.separator_id = _safe_str(separator_id, "none")
+        self.pending_created_at = float(pending_created_at)
         self.item_keys: list[str] = []
-
         for index, item in enumerate(items[:5], start=1):
             channel_id = _safe_str(item.get("channel_id"), "")
             self.item_keys.append(channel_id)
             before = _safe_str(item.get("before"), "channel")
             base = _safe_str(item.get("base_name"), before)
-            field = discord.ui.TextInput(
-                label=f"{index}. Emoji for {base}"[:45],
-                placeholder=f"Example: 🎮 for {before}"[:100],
-                min_length=1,
-                max_length=12,
-                required=True,
-            )
+            field = discord.ui.TextInput(label=f"{index}. Emoji for {base}"[:45], placeholder=f"Example: 🎮 for {before}"[:100], min_length=1, max_length=12, required=True)
             self.add_item(field)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         async def action() -> None:
             if not await _require_design_permission(interaction):
                 return
-
-            guild = interaction.guild
-            assert guild is not None
-
+            guild = interaction.guild; assert guild is not None
             key = _key(int(guild.id), int(interaction.user.id))
             pending = _PENDING.get(key)
-            if not pending:
-                await safe_send_interaction(
-                    interaction,
-                    content="This preview expired. Run Style Change again.",
-                    ephemeral=True,
-                    action_name="design.style_change.missing_icons.expired",
-                )
+            if not _pending_matches(pending, self.pending_created_at):
+                await safe_send_interaction(interaction, content="This Style Change preview is stale. Preview the current change again.", ephemeral=True, action_name="design.style_change.missing_icons.stale")
                 return
-
+            assert pending is not None
             items = list(pending.get("items") or [])
             separator_id = _safe_str(pending.get("separator_id"), self.separator_id)
-
-            values_by_channel: dict[str, str] = {}
-            for channel_id, child in zip(self.item_keys, self.children):
-                values_by_channel[channel_id] = _safe_str(getattr(child, "value", ""), "")
-
+            values_by_channel = {channel_id: _safe_str(getattr(child, "value", ""), "") for channel_id, child in zip(self.item_keys, self.children)}
             for item in items:
                 channel_id = _safe_str(item.get("channel_id"), "")
                 if channel_id not in values_by_channel:
                     continue
-
                 manual_emoji = values_by_channel[channel_id]
-                after, warnings, blockers = _style_change_after_with_manual_emoji(
-                    _safe_str(item.get("before"), ""),
-                    separator_id,
-                    manual_emoji,
-                )
-
-                item["after"] = after
-                item["warnings"] = warnings
-                item["blockers"] = blockers
+                after, warnings, blockers = _style_change_after_with_manual_emoji(_safe_str(item.get("before"), ""), separator_id, manual_emoji)
+                item["after"] = after; item["warnings"] = warnings; item["blockers"] = blockers
                 item["status"] = "failed" if blockers else ("changed" if after != item.get("before") else "unchanged")
                 item["style_change_manual_emoji"] = manual_emoji
-
             pending["items"] = items
             _PENDING[key] = pending
-
             embed, view = _style_change_rebuild_preview_response(guild, pending)
             await interaction.response.edit_message(embed=embed, view=view)
-
         await _guard_design_action(interaction, "design.style_change.missing_icons_submit", action, defer=False)
 
 
 class StyleChangeApplySafeOnlyButton(discord.ui.Button):
-    def __init__(self, *, row: int = 2) -> None:
-        super().__init__(
-            label="Apply Safe Ones Only",
-            emoji="✅",
-            style=discord.ButtonStyle.secondary,
-            custom_id="dank_design:style_change_skip_issues",
-            row=row,
-        )
+    def __init__(self, *, pending_created_at: float, row: int = 2) -> None:
+        super().__init__(label="Apply Safe Ones Only", emoji="✅", style=discord.ButtonStyle.secondary, custom_id="dank_design:style_change_skip_issues", row=row)
+        self.pending_created_at = float(pending_created_at)
 
-    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+    async def callback(self, interaction: discord.Interaction) -> None:
         async def action() -> None:
             if not await _require_design_permission(interaction):
                 return
-
-            guild = interaction.guild
-            assert guild is not None
-
+            guild = interaction.guild; assert guild is not None
             key = _key(int(guild.id), int(interaction.user.id))
             pending = _PENDING.get(key)
-            if not pending:
-                await safe_send_interaction(
-                    interaction,
-                    content="This preview expired. Run Style Change again.",
-                    ephemeral=True,
-                    action_name="design.style_change.apply_safe.expired",
-                )
+            if not _pending_matches(pending, self.pending_created_at):
+                await safe_send_interaction(interaction, content="This Style Change preview is stale. Preview the current change again.", ephemeral=True, action_name="design.style_change.apply_safe.stale")
                 return
-
-            items = list(pending.get("items") or [])
+            assert pending is not None
             safe_items: list[dict[str, Any]] = []
-
-            for item in items:
+            for item in list(pending.get("items") or []):
                 if item.get("status") == "failed":
-                    skipped = dict(item)
-                    skipped["after"] = skipped.get("before")
-                    skipped["status"] = "protected"
-                    skipped["protected"] = True
-                    skipped["warnings"] = ["Skipped by user from Style Change issues review."]
-                    skipped["blockers"] = []
-                    safe_items.append(skipped)
+                    skipped = dict(item); skipped["after"] = skipped.get("before"); skipped["status"] = "protected"; skipped["protected"] = True
+                    skipped["warnings"] = ["Skipped by user from Style Change issues review."]; skipped["blockers"] = []; safe_items.append(skipped)
                 else:
                     safe_items.append(item)
-
-            pending["items"] = safe_items
-            pending["style_change_skipped_issues"] = True
-            _PENDING[key] = pending
-
+            pending["items"] = safe_items; pending["style_change_skipped_issues"] = True; _PENDING[key] = pending
             separator_id = _safe_str(pending.get("separator_id"), "none")
-            embed = _style_change_preview_embed(guild, safe_items, separator_id=separator_id)
-            embed.title = "👁️ Style Change Preview · Safe Changes Only"
-            embed.add_field(
-                name="Skipped issues",
-                value="Needs-review rows were left untouched. Apply will only rename safe rows.",
-                inline=False,
-            )
-
-            await interaction.response.edit_message(
-                embed=embed,
-                view=StyleChangePreviewView(can_apply=True, has_blockers=False),
-            )
-
+            embed = _style_change_preview_embed(guild, safe_items, separator_id=separator_id); embed.title = "👁️ Style Change Preview · Safe Changes Only"
+            embed.add_field(name="Skipped issues", value="Needs-review rows were left untouched. Apply will only rename safe rows.", inline=False)
+            await interaction.response.edit_message(embed=embed, view=StyleChangePreviewView(can_apply=True, has_blockers=False, pending_created_at=self.pending_created_at))
         await _guard_design_action(interaction, "design.style_change.apply_safe_only", action, defer=False)
 
 
 class StyleChangeFixMissingEmojiButton(discord.ui.Button):
-    def __init__(self, *, row: int = 2) -> None:
-        super().__init__(
-            label="Choose Missing Icons",
-            emoji="😀",
-            style=discord.ButtonStyle.primary,
-            custom_id="dank_design:style_change_fix_missing_emojis",
-            row=row,
-        )
+    def __init__(self, *, pending_created_at: float, row: int = 2) -> None:
+        super().__init__(label="Choose Missing Icons", emoji="😀", style=discord.ButtonStyle.primary, custom_id="dank_design:style_change_fix_missing_emojis", row=row)
+        self.pending_created_at = float(pending_created_at)
 
-    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+    async def callback(self, interaction: discord.Interaction) -> None:
         async def action() -> None:
             if not await _require_design_permission(interaction):
                 return
-
-            guild = interaction.guild
-            assert guild is not None
-
+            guild = interaction.guild; assert guild is not None
             key = _key(int(guild.id), int(interaction.user.id))
             pending = _PENDING.get(key)
-            if not pending:
-                await safe_send_interaction(
-                    interaction,
-                    content="This preview expired. Run Style Change again.",
-                    ephemeral=True,
-                    action_name="design.style_change.fix_missing.expired",
-                )
+            if not _pending_matches(pending, self.pending_created_at):
+                await safe_send_interaction(interaction, content="This Style Change preview is stale. Preview the current change again.", ephemeral=True, action_name="design.style_change.fix_missing.stale")
                 return
-
-            items = list(pending.get("items") or [])
-            missing = _style_change_missing_emoji_items(items)
-
+            assert pending is not None
+            missing = _style_change_missing_emoji_items(list(pending.get("items") or []))
             if not missing:
-                await safe_send_interaction(
-                    interaction,
-                    content="No missing-emoji rows found in this preview.",
-                    ephemeral=True,
-                    action_name="design.style_change.fix_missing.none",
-                )
+                await safe_send_interaction(interaction, content="No missing-emoji rows found in this preview.", ephemeral=True, action_name="design.style_change.fix_missing.none")
                 return
-
-            # Discord modals support at most 5 text inputs. Open the first batch,
-            # then rebuild the preview after submit so this button can handle
-            # the next unresolved batch instead of dead-ending the flow.
+            # Discord modals support at most 5 text inputs. The rebuilt preview
+            # exposes this control again for the next unresolved batch.
             batch = missing[:5]
-            separator_id = _safe_str(pending.get("separator_id"), "none")
-            await interaction.response.send_modal(
-                StyleChangeFixMissingEmojiModal(items=batch, separator_id=separator_id)
-            )
-
+            await interaction.response.send_modal(StyleChangeFixMissingEmojiModal(items=batch, separator_id=_safe_str(pending.get("separator_id"), "none"), pending_created_at=self.pending_created_at))
         await _guard_design_action(interaction, "design.style_change.fix_missing_icons_modal", action, defer=False)
 
 
 class StyleChangePreviewView(DesignPreviewView):
-    def __init__(self, *, can_apply: bool, has_blockers: bool = False) -> None:
-        super().__init__(can_apply=can_apply)
-
+    def __init__(self, *, can_apply: bool, has_blockers: bool = False, pending_created_at: float) -> None:
+        super().__init__(can_apply=can_apply, pending_created_at=pending_created_at)
         if has_blockers:
-            self.add_item(StyleChangeFixMissingEmojiButton(row=2))
-            self.add_item(StyleChangeApplySafeOnlyButton(row=2))
+            self.add_item(StyleChangeFixMissingEmojiButton(row=2, pending_created_at=pending_created_at))
+            self.add_item(StyleChangeApplySafeOnlyButton(row=2, pending_created_at=pending_created_at))
 
 
 class DesignDoneView(discord.ui.View):

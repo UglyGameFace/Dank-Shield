@@ -1,73 +1,85 @@
 # ACTIVE TASK
 
-## DS-STICKY-029 — Smart sticky UX, preview/testing, and quiet-server notices
+## DS-DESIGN-029 — Repair Dank Design editor state authority
 
-**Status:** COMPLETE — READY FOR REVIEW
-**Branch:** `feat/ds-smart-stickies-029`
+**Status:** VALIDATING — IMPLEMENTATION + FOCUSED REGRESSIONS GREEN
+**Branch:** `fix/dank-design-editor-state-authority`
+**PR:** #185
 **Base:** `6f02f644b40f175da91190340a83c3d4ee81854c` (merged PR #183)
-**Validated implementation head:** `9fd3180febd1ebdc88adca5d8638dd62b6f3c63a`
-**Started:** 2026-08-12
-**Completed:** 2026-08-12
+**Started:** 2026-08-28
 
-## Previous task closure
+## Outcome required
 
-DS-LIFECYCLE-028 is complete. PR #183 merged at `6f02f644b40f175da91190340a83c3d4ee81854c`; its exact final head `877797da635509a77c93b32cc5f84c59594277a7` passed Dank Shield CI including Python compile, the full unit suite, and standalone static/tool audits. No unresolved review threads remained.
+A manual Category Editor / Channel Editor choice must remain authoritative through save, preview, and apply. Older whole-server design choices must not silently replace an explicit item-level rule.
 
-## User request / scope
+## Root cause / execution path
 
-Improve Sticky Messages so the setup is easier to understand and less button-heavy, add a safe Preview/Test path, and add a generic inactivity-triggered notice that any Dank Shield server can configure. The inactivity use case must support partner/community destinations without being hard-coded to one server.
+- [x] Intended precedence confirmed: saved channel override → saved category rule → saved global rule → local auto-detection. PR #92 explicitly established that saved owner-approved rules always win.
+- [x] `build_design_plan()` / effective option resolution still honor that precedence.
+- [x] `_save_exact_lock()` persists the selected category/channel rule before preview.
+- [x] `DesignPreviewView.apply()` applies the reviewed plan and does not intentionally rebuild the whole-server design.
+- [x] Primary reversion root cause confirmed: the later `server_design_strict_layout_guard` monkey-patched design option load/save and rewrote persisted Gothic/Fraktur global/category/channel locks to the Gothic default separator. Explicit `bar_full`, `bar_heavy`, and other saved choices could therefore become `pipe_spaced` before preview/apply.
+- [x] Unsaved Custom Format drafts were seeded from server/category majority rather than the selected item's live style, allowing old majority values to hitchhike into a new exact rule.
+- [x] Manual selector changes could retain `exact_match=False`, allowing Smart Fix suppression to override explicit user intent.
+- [x] Exact item previews reused `StyleChangePreviewView`, a whole-server separator-repair view with unrelated controls.
+- [x] Exact previews shared mutable `_PENDING` state without binding Apply to the preview that created the button.
+- [x] Strength 4 is labeled Recommended but category frames were enabled only at strengths 3 and 5.
+- [x] Exact editor Separator Examples next/previous/back callbacks defined a guarded action but never executed it, then referenced `guild` outside that action.
 
-## Root-cause findings
+## Changes
 
-- The old Sticky Center exposed nine controls at once with little state-aware guidance, so first-time setup read like an admin toolbox instead of a short workflow.
-- A normal sticky could only be verified by saving it and immediately posting it live; there was no private preview or temporary test-post path.
-- Sticky movement is event-driven by messages in the sticky channel. A true “no activity for N time” trigger cannot be implemented only inside `on_message`, because no event fires when nobody talks.
-- The existing sticky row is keyed by channel, so overloading it with a server-wide inactivity notice would prevent a normal sticky and quiet notice from coexisting in the same channel.
-- The canonical `StickyRuntime` was already the single message-listener owner and had to remain so; inactivity support extends that runtime instead of adding a competing listener or monkey patch.
+- [x] Removed obsolete persisted Gothic-lock normalization / command option load-save monkey patch. Gothic Clean's current default remains normalized only at the theme-definition layer.
+- [x] Saved owner-approved channel/category/global rules are preserved instead of rewritten.
+- [x] Unsaved exact editors seed from the selected item's current live style; **Server Style** remains the explicit opt-in majority reset.
+- [x] Manual exact-editor changes force exact intent.
+- [x] Exact category/channel previews use the generic reviewed-plan Apply view.
+- [x] Exact Apply is bound to the preview timestamp and rejects an obsolete Apply button after a newer preview replaces pending state.
+- [x] Strength 4 applies the selected category frame consistently with the UI contract.
+- [x] Separator Examples paging/back navigation now executes inside `_guard_design_action` with valid guild/editor state.
+- [x] Added `tests/test_dank_design_editor_state_authority.py` covering the repaired authority paths.
 
-## Implementation
+## Validation / results
 
-- [x] Replaced the sticky button wall with a compact, state-aware main screen: Create/Edit, Preview/Test, Sticky Settings, Sticky Poll/Poll Controls, Quiet Server Notice, Server Stickies, and Community Tools.
-- [x] Moved pause/resume, cadence, custom sender, and destructive removal into Sticky Settings.
-- [x] Changed Create/Edit into a draft-first flow: edit -> private draft preview -> optional 30-second public test -> explicit Publish Sticky or Discard Draft.
-- [x] Added private preview plus a temporary 30-second test for existing plain/embed/poll stickies without changing live delivery state; voting is disabled in poll previews/tests.
-- [x] Preserved the latest live pause state, cadence, custom sender, and delivery message ID when publishing an edited draft so a stale preview cannot casually re-enable or duplicate the live sticky.
-- [x] Added a separate service-role-only `dank_quiet_notices` table so a server-wide quiet notice can coexist with ordinary channel stickies.
-- [x] Added one quiet notice per guild with destination channel, inactivity duration (5 minutes through 7 days), custom message, optional partner/community name + validated HTTPS link, auto-clear-on-activity, delivery state, and persisted last-human-activity timestamp.
-- [x] Extended the canonical `StickyRuntime` with one background quiet checker and in-memory/throttled activity persistence; no channel-history scan and no second `on_message` owner were introduced.
-- [x] Quiet notices send at most once per inactivity cycle, re-arm on the next real human message anywhere in the guild, ignore bot/webhook messages, and optionally remove the stale notice when activity resumes.
-- [x] Added guided Quiet Server Notice setup/status/preview/test/pause/resume/remove flows with generic copy suitable for partner servers, secondary communities, game/community hubs, or normal off-hours messaging.
-- [x] Preserved mention suppression, managed-webhook secrecy, poll persistence, existing one-sticky-per-channel behavior, and the canonical public command surface.
+- [x] Affected Python modules compile in focused gates.
+- [x] Focused editor-authority + category-aware + strict-layout + exact-editor suites pass.
+- [x] Final exact-editor navigation focused gate: **26 tests passed**.
+- [x] `git diff --check` passed before committing the navigation repair.
+- [x] Temporary patch/apply workflows removed from the branch after successful source commits.
+- [x] Pre-PR diff limited to Dank Design implementation, strict-layout compatibility cleanup, regressions, and this task record.
+- [ ] Full unit test suite green on exact final PR head.
+- [ ] Applicable standalone `tools/test_*.py` guards green on exact final PR head.
+- [ ] Full Dank Shield CI and auxiliary PR workflows green on exact final PR head.
+- [ ] Final PR diff / review threads / comments / commit status inspected after CI.
 
-## Validation
+## Cleanup / compatibility
 
-- [x] Targeted quiet-trigger/service/runtime tests green.
-- [x] Sticky surface/draft-preview/live-preview/quiet-setup/poll-routing tests green.
-- [x] Community Tools static ownership/security checks green, including the single-listener and no-history-scan guards.
-- [x] New quiet-notice SQL migration applies twice on PostgreSQL 16 and verifies RLS, grants, inactivity constraints, and service-role-only storage.
-- [x] Focused module compilation green.
-- [x] Full Dank Shield CI green on implementation head `9fd3180febd1ebdc88adca5d8638dd62b6f3c63a`: committed-diff whitespace, Python compile, full unit suite, standalone tool checks, public setup/command/invite/safety audits, role/event-boundary audits, managed-category SQL smoke, and claim-first ticket security all passed.
-- [x] Dedicated Smart Stickies 029 workflow green on the same implementation head: focused Python regressions/static guard and quiet-notice SQL/RLS smoke both passed.
-- [x] Final changed-file/diff inspection found no unrelated implementation, duplicate listener, monkey patch, history scan, stale community-runtime import, or conflicting storage owner.
-- [x] PR #184 remained mergeable with no unresolved review threads during final inspection.
+- [x] Obsolete persisted-lock normalizer and its dead persistence hook removed rather than left as a no-op shim.
+- [x] Names-only safety preserved. No intended changes to permissions, overwrites, roles, topics, order, tickets, verification, slowmode, NSFW, archive state, or category placement.
+- [x] Rollback snapshots, protected-name behavior, and channel → category → global precedence preserved.
+- [ ] Final dead-reference/conflict-artifact inspection after final PR head settles.
 
-## Cleanup / conflict status
+## Backlog outside current Apply-reversion fix
 
-- `StickyRuntime.on_message` remains the only canonical Community Tools message listener.
-- Quiet activity delivery and return-to-activity cleanup share one per-guild lock to prevent competing quiet-message state changes.
-- The temporary test paths do not call sticky/quiet delivery persistence or move the live message.
-- The old main-screen advanced controls were integrated into `StickySettingsView`; no duplicate advanced management path was retained on the main Sticky Center.
-- Historical migration `20260811122504_community_tools.sql` remains immutable; quiet-notice persistence is isolated in `20260812224000_smart_sticky_quiet_notices.sql`.
-- No open Sticky/Community Tools PR conflict or unresolved review thread remains.
-
-## Blockers
-
-None.
-
-## Backlog
-
-None added during DS-STICKY-029.
+- Direct Rename immediately renames Discord but does not create/update an exact saved style rule. A later saved-design preview can therefore restyle that renamed item. This is a separate UX/ownership behavior because Direct Rename has no reviewed Apply step; do not broaden this PR unless required for the current authority fix.
+- `_initial_editor_lock()` currently computes majority inference and `_live_target_exact_lock()` computes it again. This is redundant work, not a correctness blocker; optimize separately if worthwhile.
 
 ## Definition of Done
 
-Met. A server manager can understand the Sticky Messages screen without guesswork, preview/test a draft before publishing it, safely preview/test an existing live sticky, configure a server-wide quiet notice with a clear inactivity threshold and optional partner/community destination, receive no more than one notice per quiet period, have that notice re-arm only after real human activity, and keep normal stickies/polls working unchanged. Targeted tests, SQL/RLS checks, compile/static validation, full CI, cleanup/conflict inspection, and review-thread inspection all passed on the validated implementation.
+A user editing one channel or category has that explicit rule remain authoritative through save, preview, and apply; saved item-level rules are never silently rewritten by a whole-server theme normalizer; stale preview buttons cannot apply newer pending state; exact editor navigation works; Recommended category styling matches the UI; temporary implementation machinery is absent; and the exact final PR head passes targeted plus full repository validation and final diff/review inspection.
+
+## Final editor-authority completion pass
+
+- [x] Direct Rename executes inside the guarded interaction path and refreshes from Discord API when available.
+- [x] Direct Rename persists a literal exact-name rule and rolls Discord back if persistence fails when possible.
+- [x] Exact manual names outrank channel/category/global style rules until explicitly replaced or unlocked.
+- [x] Per-item Lock Rule captures the selected item's live style instead of copying the whole-server preset.
+- [x] Rules & Unlocks / Design Doctor can display, remove, and clean stale exact-name rules.
+- [x] Rules & Unlocks preserves full saved style detail: font, category frame, separator, and strength.
+- [x] Saved-setting mutations invalidate older reviewed previews.
+- [x] Style Change Apply and missing-icon controls carry the same immutable preview identity.
+- [x] Missing-icon repairs remain batched in groups of five and rebuild the preview for the next unresolved batch.
+- [x] Known existing separators are parsed separately from leading emoji and are replaced rather than stacked.
+- [x] Strict layout helper is activated only through the native public Design module ownership path.
+- [x] Focused tests and design architecture/standalone guards pass before this commit.
+- [ ] Full repository PR CI and auxiliary PR workflows green on this exact final head.
+- [ ] Final PR diff/review/temp-artifact inspection complete.
