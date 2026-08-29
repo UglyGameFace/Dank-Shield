@@ -80,9 +80,7 @@ p = p[:map_start] + new_strengths + p[map_end + len('    }\\n'):]
 '''
 script = script[:a] + corrected_strengths + script[b:]
 
-# The workflow's docstring matcher contains YAML line-continuation artifacts.
-# Replace it with a scoped service-source edit so the repair does not depend on
-# how YAML happens to fold quoted newlines.
+# Replace the YAML-sensitive semantic-doc matcher with a service-scoped edit.
 service_read = script.index("s = SERVICE.read_text(encoding='utf-8')")
 a = script.index('s = once(', service_read)
 b = script.index('old_dupes =', a)
@@ -98,6 +96,48 @@ s = s.replace(old_semantic_doc, new_semantic_doc, 1)
 
 '''
 script = script[:a] + corrected_service_doc + script[b:]
+
+# Replace the entire duplicate detector structurally. Its behavior matters more
+# than preserving whatever whitespace happened to be in the old implementation.
+a = script.index('old_dupes =', script.index("s = SERVICE.read_text(encoding='utf-8')"))
+b = script.index("m = MAJORITY.read_text(encoding='utf-8')", a)
+corrected_duplicates = '''dup_start = s.find('def detect_duplicate_outputs(items: list[dict[str, Any]]) -> list[str]:')
+dup_end = s.find('\\ndef ', dup_start + 1)
+if dup_start < 0 or dup_end < 0:
+    raise SystemExit(f'duplicate detector structural markers invalid: start={dup_start} end={dup_end}')
+new_duplicate_detector = ''' + "'''" + '''def detect_duplicate_outputs(items: list[dict[str, Any]]) -> list[str]:
+    """Report exact visible collisions introduced by this plan.
+
+    Existing duplicate names are legal in Discord and should not block an
+    unrelated design pass. Different icons/separators are also distinct visible
+    names, so compare the final rendered output instead of stripped base names.
+    """
+
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        if item.get("status") == "failed" or item.get("protected"):
+            continue
+        key = strip_invisible(safe_str(item.get("after"))).strip()
+        if not key:
+            continue
+        buckets.setdefault(key, []).append(item)
+
+    duplicates: list[str] = []
+    for final_name, rows in buckets.items():
+        if len(rows) < 2 or not any(safe_str(row.get("status")) == "changed" for row in rows):
+            continue
+        first = rows[0]
+        for other in rows[1:]:
+            duplicates.append(
+                f"`{safe_str(first.get('before'))}` and `{safe_str(other.get('before'))}` would both become `{final_name}`"
+            )
+    return duplicates
+''' + "'''" + '''
+s = s[:dup_start] + new_duplicate_detector.rstrip() + '\\n\\n' + s[dup_end + 1:]
+SERVICE.write_text(s, encoding='utf-8')
+
+'''
+script = script[:a] + corrected_duplicates + script[b:]
 
 path = Path('/tmp/ds_design_030_second_audit.py')
 path.write_text(script, encoding='utf-8')
