@@ -637,7 +637,7 @@ def apply_majority_to_options(
         desired_strength = max(desired_strength, 3)
     if frame_id and frame_id != "plain":
         desired_strength = max(desired_strength, 4)
-    out["strength"] = max(desired_strength, min(5, _safe_int(out.get("strength"), desired_strength)))
+    out["strength"] = desired_strength
     out["exact_match"] = True
     out["__majority_layout_inferred"] = True
     out["__majority_layout_summary"] = _summary_text(analysis)

@@ -158,3 +158,22 @@ def test_clean_design_text_replaces_literal_newline_artifacts():
     assert cleaned == "Line 1\nLine 2\nLine 3\nLine 4"
     assert "/n" not in cleaned
     assert "\\n" not in cleaned
+
+
+
+def test_majority_strength_is_derived_from_detected_components_not_old_draft():
+    names = [
+        "💬│general",
+        "📢│announcements",
+        "🎮│gaming",
+    ]
+    analysis = majority.infer_live_majority_layout(studio, _records(names))
+    options = majority.apply_majority_to_options(
+        studio,
+        {"theme_id": "gothic_clean", "strength": 5},
+        analysis,
+    )
+
+    assert analysis["font"]["id"] == "normal"
+    assert options["separator_id"] == "bar_thin"
+    assert options["strength"] == 2
