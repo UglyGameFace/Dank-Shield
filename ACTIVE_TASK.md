@@ -1,49 +1,55 @@
 # ACTIVE TASK
 
-## DS-LIFECYCLE-028 — Repair welcome/exit card visual integrity
+## DS-DESIGN-029 — Repair Dank Design editor state authority
 
-**Status:** ACTIVE — IMPLEMENTED / VALIDATING
-**Branch:** `fix/ds-lifecycle-card-visual-integrity`
-**Base:** `03e90746c230b66599e8d931f86df56dd9fa0d8c` (merged PR #182)
-**Started:** 2026-08-11
+**Status:** ACTIVE — ROOT CAUSE CONFIRMED / IMPLEMENTING
+**Branch:** `fix/dank-design-editor-state-authority`
+**Base:** `6f02f644b40f175da91190340a83c3d4ee81854c` (merged PR #183)
+**Started:** 2026-08-28
 
 ## Reported production failure
 
-The public join/leave log still exposed internal runtime identifiers in embed footers, including:
+Dank Design does not reliably honor manual Category Editor / Channel Editor choices. A user can configure one channel or category, preview/apply it, and see older whole-server design choices win again instead of the explicit item-level choice.
 
-- `dank_shield:welcome_card_runtime:v1`
-- `dank_shield:exit_card_runtime:v1`
+## Root cause / execution path findings
 
-The generated bitmap card also rendered decorative Unicode display names as missing-glyph boxes even though Discord itself displayed the same names correctly.
+- [x] The intended precedence is saved channel override → saved category rule → saved global rule → local auto-detection. PR #92 explicitly established that saved owner-approved rules always win.
+- [x] `build_design_plan()` still resolves that precedence correctly.
+- [x] `_save_exact_lock()` persists a selected category/channel rule before preview.
+- [x] `DesignPreviewView.apply()` applies the saved preview items and does not itself rebuild the whole-server plan.
+- [x] A later `server_design_strict_layout_guard` violates the saved-rule contract by normalizing every Gothic/Fraktur saved global/category/channel lock on every config load/save. Explicit user-selected separators such as legacy/full/heavy bars can therefore be silently rewritten to `pipe_spaced` before the preview is built.
+- [x] Custom Format currently initializes unsaved editor drafts from category-local majority/server style, so changing one dimension can unintentionally carry old/local style values into the new explicit rule.
+- [x] Manual exact-editor selector changes leave `exact_match=False`, allowing smart semantic suppression instead of treating the user's explicit choice as authoritative.
+- [x] Exact-format previews incorrectly reuse `StyleChangePreviewView`, which can expose whole-server separator-repair controls on an item-scoped editor preview.
+- [x] All preview workflows share one mutable `_PENDING` slot per guild/user with no preview identity, so a later preview can replace the data behind an older Apply button.
+- [x] Category frame application is inconsistent with the UI: strength 4 is labeled Recommended but the engine currently enables category frames only at strengths 3 and 5.
 
-## Root cause
+## Implementation scope
 
-- `build_join_card_embed()` and `build_exit_card_embed()` explicitly wrote internal ownership/debug identifiers into public `Embed.set_footer()` calls.
-- Lifecycle duplicate suppression does not depend on those footers; both canonical runtimes already own scoped in-memory delivery locks/recent-delivery suppression.
-- The Pillow image path received the raw Discord `display_name`. Its existing `_safe_text()` logic handled whitespace/length only and did not normalize Unicode compatibility alphabets commonly used for decorative Discord names.
-
-## Implementation
-
-- [x] Removed internal runtime identifiers from live welcome-card and exit-card embed footers.
-- [x] Preserved embed timestamps and the original Discord-facing display-name/template text.
-- [x] Added `stoney_verify/lifecycle_card_text.py` as the shared bitmap-only text adapter.
-- [x] Apply Unicode NFKC compatibility normalization only to the member/server copy passed into lifecycle image rendering.
-- [x] Preserve ordinary accented, emoji, and non-Latin text instead of ASCII-stripping names.
-- [x] Updated canonical join and exit runtimes to render image files through the shared adapter.
-- [x] Added runtime regressions proving styled names become readable in image rendering while the public embed retains the original styled name.
-- [x] Updated welcome/exit wiring and join/leave centralization guards so leaked live runtime footer IDs cannot return silently.
-- [x] Added direct lifecycle image-text tests covering mathematical double-struck/script/monospace compatibility alphabets plus unchanged ordinary Unicode.
+- [ ] Stop runtime Gothic normalization from mutating saved owner-approved global/category/channel locks.
+- [ ] Seed Channel Editor Custom Format from the selected channel's current live style; keep Server Style as an explicit opt-in reset/suggestion.
+- [ ] Treat manual exact-editor changes as exact user intent.
+- [ ] Use the generic reviewed-plan Apply view for exact category/channel previews, not Style Change issue controls.
+- [ ] Bind Apply to the exact preview/session that produced it so one preview cannot hijack another.
+- [ ] Make strength 4 category-frame behavior match the UI contract.
+- [ ] Add runtime/static regressions for each failure path above.
 
 ## Validation required
 
-- [ ] Targeted welcome/exit runtime behavior tests green.
-- [ ] Lifecycle image-text tests green.
-- [ ] Welcome/exit wiring static tests green.
-- [ ] Join/leave centralization tool green.
+- [ ] Targeted Dank Design regression tests green.
+- [ ] Existing category-aware/strict-layout/exact-editor tests green.
 - [ ] Python compile/static coverage green.
+- [ ] Full unit test suite green.
+- [ ] Applicable standalone `tools/test_*.py` guards green.
 - [ ] Full Dank Shield CI green on exact final PR head.
-- [ ] Final diff/dead-reference/review-thread inspection complete.
+- [ ] Final diff/dead-reference/temporary-artifact/review-thread inspection complete.
+
+## Cleanup / compatibility
+
+- Preserve names-only safety, rollback snapshots, protected-name behavior, channel → category → global precedence, and local auto-detection.
+- Do not alter permissions, overwrites, roles, topics, order, tickets, verification, slowmode, NSFW, archive state, or category placement.
+- Remove any temporary patch/apply workflow used to land the source changes before completion.
 
 ## Definition of Done
 
-A real join or leave must post a clean public lifecycle embed with no internal `dank_shield:*runtime*` footer text, generated card names using decorative compatibility alphabets must remain human-readable instead of tofu/missing-glyph boxes, normal Discord-facing names must not be rewritten, join/exit ownership and duplicate suppression must remain unchanged, and the exact final PR head must pass targeted plus full regression validation.
+A user editing one channel or category must have that explicit choice remain authoritative through save, preview, and apply; saved item-level rules must never be silently rewritten by a whole-server theme normalizer; stale/parallel previews must not be able to apply another preview's state; recommended category styling must behave consistently with the UI; and the exact final PR head must pass targeted plus full regression validation with no temporary implementation artifacts left behind.
