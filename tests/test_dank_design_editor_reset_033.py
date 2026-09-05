@@ -218,6 +218,89 @@ def test_native_scoped_planner_filters_before_confidence(
     assert analysis["mode"] == "category_aware_scoped"
 
 
+def test_category_editor_repairs_header_from_saved_design_and_children_from_local_layout(monkeypatch: pytest.MonkeyPatch) -> None:
+    inferred_items = [
+        {
+            "channel_id": "10",
+            "category_id": "",
+            "kind": "category",
+            "status": "unchanged",
+            "before": "old-category",
+            "after": "old-category",
+            "auto_detect_preserved": True,
+        },
+        {
+            "channel_id": "11",
+            "category_id": "10",
+            "kind": "text",
+            "status": "changed",
+            "before": "🔥｜general",
+            "after": "🔥┃general",
+        },
+        {
+            "channel_id": "20",
+            "category_id": "99",
+            "kind": "text",
+            "status": "changed",
+            "before": "other",
+            "after": "other-fixed",
+        },
+    ]
+    saved_items = [
+        {
+            "channel_id": "10",
+            "category_id": "",
+            "kind": "category",
+            "status": "changed",
+            "before": "old-category",
+            "after": "【 𝕆𝕃𝔻 ℂ𝔸𝕋𝔼𝔾𝕆ℝ𝕐 】",
+        },
+        {
+            "channel_id": "11",
+            "category_id": "10",
+            "kind": "text",
+            "status": "changed",
+            "before": "🔥｜general",
+            "after": "saved-global-child",
+        },
+    ]
+
+    monkeypatch.setattr(plan_service, "live_records", lambda guild: [])
+    monkeypatch.setattr(plan_service.majority, "ensure_separator_spec", lambda *args, **kwargs: "pipe_spaced")
+    monkeypatch.setattr(plan_service.majority, "build_category_aware_options", lambda studio, options, records: (dict(options), {"ok": True}))
+    monkeypatch.setattr(plan_service.majority, "annotate_category_aware_plan_items", lambda studio, items, options: [dict(item) for item in items])
+
+    async def fake_build(guild: Any, options: Any) -> list[dict[str, Any]]:
+        rows = inferred_items if options.get("__scoped_editor_repair") else saved_items
+        return [dict(item) for item in rows]
+
+    captured: list[dict[str, Any]] = []
+
+    def fake_confidence(items: list[dict[str, Any]], *, context: str) -> dict[str, Any]:
+        captured[:] = [dict(item) for item in items]
+        return {"apply_allowed": True, "blocked_lines": [], "review_lines": []}
+
+    monkeypatch.setattr(legacy, "build_design_plan", fake_build)
+    monkeypatch.setattr(plan_service.repair_confidence, "evaluate_repair_plan", fake_confidence)
+
+    items, _options, analysis = run(
+        plan_service.build_scoped_repair_plan(
+            object(),
+            {"theme_id": "custom", "strength": 4},
+            category_id=10,
+        )
+    )
+
+    assert [item["channel_id"] for item in items] == ["10", "11"]
+    header = items[0]
+    child = items[1]
+    assert header["after"] == "【 𝕆𝕃𝔻 ℂ𝔸𝕋𝔼𝔾𝕆ℝ𝕐 】"
+    assert header["scoped_category_header_source"] == "saved_design"
+    assert child["after"] == "🔥┃general"
+    assert captured == items
+    assert analysis["category_header_source"] == "saved_design"
+
+
 def test_public_apply_persists_separator_and_reset_ui_is_unambiguous() -> None:
     assert "async def _persist_separator_settings" in V2_SOURCE
     assert "rule_service.persist_separator_choice" in V2_SOURCE
