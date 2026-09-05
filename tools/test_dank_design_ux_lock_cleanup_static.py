@@ -29,8 +29,10 @@ def test_rules_and_protection_copy_explains_non_rename_behavior() -> None:
     assert "Saved Rules & Protection" in V2
     assert "does **not** rename a Discord item by itself" in V2
     assert "Layout Rules" in V2
-    assert "Unlock / Clean" in V2
+    assert "Remove One Rule" in V2
     assert "Protection" in V2
+    assert "Reset All Design Overrides" in V2
+    assert "Reset This Category/Channel" in V2
     assert "Narrower rules always win" in V2
     assert "Protection is separate" in V2
 

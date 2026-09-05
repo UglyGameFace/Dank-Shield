@@ -1,110 +1,87 @@
 # ACTIVE TASK
 
-## DS-DESIGN-032 — Consolidate Server Design / Dank Design Studio
+## DS-DESIGN-033 — Fix separator, editor, reset correctness and remove redundant Dank Design paths
 
-**Status:** COMPLETE — IMPLEMENTATION + FOCUSED/FULL VALIDATION GREEN
-**Branch:** `fix/ds-design-032-design-studio-consolidation`
-**PR:** #188
-**Base:** `dd7bbe235ba26c84b5e2dbaa367ebecc6f72081b` (`main`, merged DS-COMMUNITY-031)
-**Implementation head validated:** `7e91b041376c7ed7d7882c64f0c10e18f8d53c30`
-**Maps to:** `P0-DESIGN-001` / design-specific portion of `P0-GUARD-001`
+**Status:** IN PROGRESS — CORRECTNESS FIXES LANDED, FULL OWNERSHIP/REDUNDANCY AUDIT ACTIVE
+**Branch:** `fix/ds-design-033-editor-separator-reset-correctness`
+**Base:** `656ee13d02e54614c9f6f7a34d69008f2a0943e1` (`main`, merged DS-DESIGN-032)
 **Started:** 2026-09-05
-**Completed:** 2026-09-05
 
-## Outcome
+## Outcome required
 
-Server Design / Dank Design Studio now has one coherent public workflow, one explicit native plan authority, transaction-like batch apply/undo behavior, preserved saved-rule precedence, and no live Server Design behavior injected through the former strict/majority startup-guard monkey patches. The compact `/dank home` → **Server Design** doorway and Setup both open the same Studio owner.
+Make Dank Design behave exactly like its UI says and leave one understandable execution path for each job. A selected separator must become the saved desired separator, category/channel editors must preview the correct native scoped plan, Reset must remove the authority the user expects, and dead compatibility/runtime-patch-era code must not remain around as a second apparent owner.
 
-## Scope
+## User-reported failures
 
-- `/dank home` → Server Design and all other routes into Server Design.
-- `public_design_studio_v2.py` public Studio workflow owner.
-- `public_design_studio.py` compatibility backend for mature exact-item/rule editors.
-- Native saved-design and Smart Repair planning.
-- Preview/apply/compensation/rollback execution.
-- Saved global/category/channel/exact-name rules and protection precedence.
-- Design-specific enhancement/startup-guard compatibility layers.
-- Setup → Server Design bridge.
-- Focused behavioral/static CI plus full repository validation.
-- No unrelated Community Tools, moderation, ticketing, verification, profile, or welcome-card redesign.
+- Channel separators selected in Dank Design are not working/sticking correctly.
+- Category Editor behavior is incorrect.
+- Locks do not appear to lift when trying to reset/remove them.
+- Full Dank Design pass requested for redundant code after the correctness repair.
 
 ## Root causes confirmed
 
-- [x] The old Studio mixed whole-server design, exact-item editing, repair, rule management, protection, help, and rollback into one oversized home flow.
-- [x] The normal design registration path activated strict/majority guard modules that replaced live design functions/classes at runtime.
-- [x] A redundant command-module guard mutated command registries/profiles despite the native design group already being registered.
-- [x] Setup still routed through deprecated compatibility registration behavior instead of the same public Studio owner.
-- [x] Smart Repair depended on runtime replacement of `build_design_plan` rather than an explicit native planning service.
-- [x] The compact `/dank home` Server Design button imposed a stricter Manage Server/Administrator gate than the Studio's established Manage Channels authority.
-- [x] Majority-layout compatibility still retained a parser replacement hook even though the native parser was already separator-aware.
+- [x] **Separator-only Apply changed live names without saving the selected separator into authoritative design settings/rules.**
+- [x] **Saved lock generation could ignore a user-selected separator.** `_current_format_lock()` could derive `separator_id` from the theme and revive the old separator.
+- [x] **Category/Channel `Preview Fixes` depended on retired runtime magic.** The editor still set `__use_live_majority_layout=True` instead of explicitly using the native scoped plan service.
+- [x] **Reset/remove behavior was fragmented across overlapping authorities.** Removing one row could leave another exact/category/global/protection authority active while the UI implied the item was unlocked.
+- [x] **Reset All did not clear normalized-name `protection_rules`.**
+- [x] **Separator-only planning did not correctly honor exact-item protection/cumulative protection modes.**
+- [x] **Exact manual names could immediately fight a newly applied separator.**
+- [x] **Category Editor could repair children while preserving the selected category header even when its saved design required a category-name repair.**
+- [x] **Retired design startup guards/shims still physically exist after DS-DESIGN-032.** They are no longer supposed to own runtime behavior, but their presence creates maintenance ambiguity and must be classified by actual references before removal.
 
-## Execution path inspected
+## Execution path under repair/audit
 
-- [x] public command registration/profiles → `public_design_group`.
-- [x] compact `/dank home` → **Server Design** → `public_design_bridge` → consolidated Studio.
-- [x] Setup → Server Design bridge → the same consolidated Studio.
-- [x] Studio home → Design Entire Server.
-- [x] Studio home → Edit One Category / Channel → mature exact-item editors.
-- [x] Studio home → Fix Inconsistent Names → scan → Smart Repair preview.
-- [x] Studio home → Saved Rules & Protection.
-- [x] preview → full-batch preflight → paced apply → compensation on failure.
-- [x] durable Apply snapshot → Undo preview → full-batch undo preflight → restore/compensation.
-- [x] saved-rule precedence and category-aware auto-detection.
-- [x] strict/majority compatibility guards and redundant command-module registration guard.
-- [x] native separator parsing and majority-layout helpers.
+- [x] `/dank home` → Server Design → Design Entire Server → Change Separators Only.
+- [x] separator selector → preview → consolidated Apply → persist separator authority.
+- [x] Edit One Category / Channel → Preview Fixes → native scoped planner.
+- [x] Custom Format → exact category/channel saved rules.
+- [x] Saved Rules & Protection → remove one rule / reset item / reset all.
+- [x] Native plan-service scoped planning and confidence integration.
+- [x] Regression coverage for separator persistence, scoped preview, category-header repair, and complete reset semantics.
+- [ ] Classify every Dank Design command/service/guard/helper as active owner, compatibility-only, duplicate-but-needed, or dead.
+- [ ] Remove dead runtime-patch-era design guards/shims and temporary patch machinery when references prove they are unnecessary.
+- [ ] Verify legacy backend contains only still-reachable compatibility/editor primitives or documented migration debt, not a competing public workflow.
 
-## Changes
+## Changes landed so far
 
-- [x] Added a five-workflow Studio hub: **Design Entire Server**, **Edit One Category / Channel**, **Fix Inconsistent Names**, **Saved Rules & Protection**, and **Undo Last Apply**.
-- [x] Added `server_design_plan_service.py` as the explicit plan authority for saved design and category-aware Smart Repair.
-- [x] Added `server_design_apply_service.py` for full-batch preflight, per-item freshness checks, compensation, durable snapshot rows, and safe Undo execution.
-- [x] Smart Repair is category-aware, keeps saved narrow rules authoritative, and fails closed when confidence is too low.
-- [x] Batch design changes use one reviewed Preview → Apply path; exact single-item Rename remains the only clearly documented immediate rename action.
-- [x] Strict-layout and majority-layout startup guards are retired to validation-only compatibility shims and no longer replace live design functions/classes.
-- [x] The redundant command-module guard no longer mutates public command registries/profiles.
-- [x] Setup and compact home both route to the same consolidated Studio instead of competing design screens.
-- [x] Compact home preserves the established **Manage Channels** design authority instead of requiring Manage Server/Administrator.
-- [x] Public recovery guidance points users to `/dank home` → **Server Design**, matching the actual compact command surface.
-- [x] The old majority parser hook is now an inert compatibility no-op; separator-safe parsing remains owned by the native design service.
-- [x] Added dedicated `Dank Design 032` CI covering the compact doorway, Studio owners, native services, focused regressions, and ownership/UX audits.
+- [x] Added `server_design_rule_service.py` as the pure saved-rule/separator/reset authority.
+- [x] Separator-only Apply now saves the chosen separator transactionally and updates exact-name rows touched by that reviewed batch.
+- [x] Explicit saved separators now beat theme defaults when locks are built/synchronized.
+- [x] Category/Channel `Preview Fixes` now routes through native scoped planning.
+- [x] Added `Reset This Category` / `Reset This Channel` and complete Reset All semantics.
+- [x] Corrected separator protection semantics and exact-item protection lookup.
+- [x] Added scoped category-header repair behavior.
+- [x] Replaced misleading one-rule “Unlock” result semantics with explicit remove/reset language in the active UI path.
+- [x] Added DS-DESIGN-033 focused regressions and extended dedicated Design CI.
 
-## Validation / results
+## Redundancy audit targets
 
-- [x] Dedicated **Dank Design 032** workflow passed on implementation head `7e91b041376c7ed7d7882c64f0c10e18f8d53c30`.
-- [x] Focused Design suite: **88 passed, 1 warning**.
-- [x] Smart Auto-Detect audit reports `category_local=yes`, `deterministic=yes`, `runtime_patch=no`, `native_flow=yes`.
-- [x] Native registration, safe-repair, UX/authority, parser ownership, and compact Manage Channels doorway audits passed.
-- [x] Full **Dank Shield CI** passed on the same implementation head.
-- [x] Full repository tests: **1132 passed, 9 warnings in 388.28s**.
-- [x] All standalone `tools/test_*.py` checks passed.
-- [x] Public setup, command surface/friction, invite-permission, setup-safety, role-truth, and event-boundary audits passed.
-- [x] **Application Command Size Diagnostics**, **Profile Runtime Diagnostics**, and **Ticket Owner Emergency Override** passed on the implementation head.
-- [x] Branch comparison before this bookkeeping-only completion commit: **59 commits ahead, 0 behind** `main`.
-- [x] Changed-file scope before this bookkeeping-only completion commit: **29 files**, limited to Server Design routing/services/guards/tests/tools/CI plus task bookkeeping.
-- [x] PR patch inspection found no added `<<<<<<<` / `>>>>>>>` conflict markers.
-- [x] Obvious credential-prefix inspection found no added `ghp_`, `sk-`, or `xoxb-` secrets.
+- `public_design_studio_v2.py` — public workflow owner.
+- `public_design_studio.py` — compatibility/editor/backend module; audit every surviving public-looking view/registration path.
+- `public_design_bridge.py`, `public_design_group.py`, `public_design_enhancements.py` — registration/compatibility ownership.
+- `server_design_plan_service.py`, `server_design_rule_service.py`, `server_design_apply_service.py`, majority/confidence/studio services — service authority overlap.
+- Retired startup guards: `server_design_command_module_guard.py`, `server_design_majority_layout_guard.py`, `server_design_strict_layout_guard.py`, `server_design_studio_command_guard.py`.
+- Runtime metadata/legacy helpers such as `__use_live_majority_layout`, `_infer_live_majority_context`, old consistency/doctor/home paths, deprecated registration helpers, and one-shot patch assets.
 
-## Cleanup / compatibility
+## Validation required
 
-- [x] Public navigation and batch execution now have explicit owners; historical exact-item/rule editor code remains only as a compatibility backend where it still provides mature functionality.
-- [x] Historical `tools/apply_*design*` artifacts were not made live and were not deleted blindly; they remain outside the public execution path.
-- [x] No unrelated system behavior was intentionally changed.
-- [x] No design-specific live startup monkey patch remains in the validated path.
+- [x] Explicit separator persistence has focused regression coverage.
+- [x] Existing saved style fields remain unchanged during deliberate separator-only persistence coverage.
+- [x] Category/Channel Editor uses native scoped planning in focused coverage.
+- [x] Reset This Item removes every same-item override layer in focused coverage.
+- [x] Reset All Design Overrides clears every advertised override layer while preserving ordinary server draft settings in focused coverage.
+- [ ] No active production path imports or activates retired design runtime guards.
+- [ ] No duplicate public command registration or competing public home/apply owner remains.
+- [ ] Temporary one-shot patch workflow/helper removed.
+- [ ] Focused Dank Design tests/audits green on exact final head.
+- [ ] Full repository CI green on exact final head.
+- [ ] Final diff scoped; conflict markers and obvious committed credential prefixes absent.
 
-## Conflicts / blockers
+## Scope protection
 
-None remaining for DS-DESIGN-032.
-
-## Backlog outside this task
-
-- Broader non-Design startup-guard cleanup remains separate under `P0-GUARD-001`.
-- A future deeper extraction of mature exact-item/rule editors from the legacy Studio module can be handled separately; it is not required for the now-single public workflow/plan authority.
-- Discord Gateway uptime/reconnect flapping remains a separate runtime/hosting task.
+No unrelated Community Tools, moderation, tickets, verification, profiles, welcome cards, or hosting/runtime work in this task.
 
 ## Next step
 
-Run exact-head validation for this bookkeeping-only completion commit, mark PR #188 ready, and merge when the final checks remain green.
-
-## Definition of Done
-
-Met: one public Server Design workflow hierarchy, one explicit native plan authority, no design behavior injected through startup-guard monkey patches, preserved saved-rule precedence, safe reviewed batch apply/undo behavior, correct Manage Channels access from the compact doorway, focused regression coverage, and green full repository validation.
+Trace every remaining reference to the retired guards, legacy public-looking UI owners, runtime magic flags, and temporary patch files. Remove only code proven dead, preserve required compatibility primitives, then run focused and full exact-head validation before merging.

@@ -19,9 +19,9 @@ from stoney_verify.commands_ext import public_design_studio as legacy
 from stoney_verify.services import server_design_apply_service as apply_service
 from stoney_verify.services import server_design_plan_service as plans
 from stoney_verify.services import server_design_repair_confidence as repair_confidence
+from stoney_verify.services import server_design_rule_service as rule_service
 
 studio = legacy.studio
-_PATCHED = False
 _COMPATIBILITY_BRIDGE_INSTALLED = False
 
 
@@ -90,6 +90,7 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
         value=(
             f"Theme: **{getattr(theme, 'label', 'Gothic Clean')}**\n"
             f"Strength: **{_safe_int(options.get('strength'), 4)}/5**\n"
+            f"Separator: **{legacy._separator_choice_label(rule_service.effective_draft_separator(options, theme_separator=_safe_str(getattr(theme, 'channel_separator', 'none'), 'none')))}**\n"  # type: ignore[attr-defined]
             f"Global rule: **{'On' if counts.get('global') else 'Off'}**"
         ),
         inline=True,
@@ -100,7 +101,8 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
             f"Categories: **{counts.get('categories', 0)}**\n"
             f"Channels: **{counts.get('channels', 0)}**\n"
             f"Exact names: **{counts.get('manual_names', 0)}**\n"
-            f"Protection overrides: **{counts.get('protection_items', 0)}**"
+            f"Exact protection: **{counts.get('protection_items', 0)}**\n"
+            f"Name protection: **{counts.get('protection_names', 0)}**"
         ),
         inline=True,
     )
@@ -142,7 +144,7 @@ def _compat_help_embed() -> discord.Embed:
     )
     embed.add_field(
         name="Saved Rules & Protection",
-        value="Rules change what future previews enforce. Saving or unlocking a rule does not rename Discord by itself.",
+        value="Rules change what future previews enforce. Saving or removing a rule does not rename Discord by itself.",
         inline=False,
     )
     embed.set_footer(text="Batch changes are transactional-style: preflight first, stop on error, compensate partial changes")
@@ -283,8 +285,11 @@ class DesignServerView(DesignView):
         guild = interaction.guild
         assert guild is not None
         options = await _load_design_options(int(guild.id))
-        _analysis, repair_options, _summary = legacy._infer_live_majority_context(guild, options)  # type: ignore[attr-defined]
-        current = _safe_str(repair_options.get("separator_id"), "none")
+        theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
+        current = rule_service.effective_draft_separator(
+            options,
+            theme_separator=_safe_str(getattr(theme, "channel_separator", "none"), "none"),
+        )
         selected = "bar_heavy" if current == "none" else current
         await interaction.response.edit_message(
             embed=legacy._style_change_embed(guild, options, separator_id=selected),  # type: ignore[attr-defined]
@@ -496,7 +501,7 @@ def _saved_rules_embed(guild: discord.Guild, options: Mapping[str, Any]) -> disc
     counts = _rule_counts(options)
     embed = discord.Embed(
         title="🔐 Saved Rules & Protection",
-        description="These settings control what **future previews** enforce. Saving, unlocking, or changing a rule here does **not** rename a Discord item by itself.",
+        description="These settings control what **future previews** enforce. Saving, removing, or changing a rule here does **not** rename a Discord item by itself.",
         color=discord.Color.blurple(),
     )
     embed.add_field(
@@ -506,16 +511,17 @@ def _saved_rules_embed(guild: discord.Guild, options: Mapping[str, Any]) -> disc
             f"Category: **{counts.get('categories', 0)}**\n"
             f"Channel: **{counts.get('channels', 0)}**\n"
             f"Exact names: **{counts.get('manual_names', 0)}**\n"
-            f"Exact protection: **{counts.get('protection_items', 0)}**"
+            f"Exact protection: **{counts.get('protection_items', 0)}**\n"
+            f"Name protection: **{counts.get('protection_names', 0)}**"
         ),
         inline=False,
     )
     embed.add_field(
         name="Which tool does what",
         value=(
-            "**Layout Rules** = global/category/channel visual rules.\n"
-            "**Unlock / Clean** = remove one saved rule or stale rule.\n"
-            "**Protection** = decide which exact/default names automated styling may touch."
+            "**Layout Rules** = global/category/channel visual rules, plus **Reset All Design Overrides**.\n"
+            "**Remove One Rule** = remove exactly one listed saved rule or clean deleted-item rows.\n"
+            "**Protection** = manage exact-item and normalized-name protection. For every same-item override, use **Reset This Category/Channel** in the item editor."
         ),
         inline=False,
     )
@@ -536,7 +542,7 @@ class SavedRulesView(DesignView):
         options = await _load_design_options(int(guild.id))
         await interaction.response.edit_message(embed=legacy._format_locks_embed(guild, options), view=legacy.FormatLocksView())  # type: ignore[attr-defined]
 
-    @discord.ui.button(label="Unlock / Clean", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:unlock", row=0)
+    @discord.ui.button(label="Remove One Rule", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:unlock", row=0)
     async def unlock(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -791,6 +797,26 @@ class UndoConfirmView(DesignView):
         await _go_home(interaction)
 
 
+async def _persist_separator_settings(
+    interaction: discord.Interaction,
+    payload: Mapping[str, Any],
+    applied: list[apply_service.PreparedRename],
+) -> dict[str, Any]:
+    guild = interaction.guild
+    assert guild is not None
+    chosen = _safe_str(payload.get("separator_id"), "")
+    if not chosen:
+        raise RuntimeError("Separator preview did not contain a selected separator.")
+    previous = await _load_design_options(int(guild.id))
+    updated = rule_service.persist_separator_choice(
+        previous,
+        separator_id=chosen,
+        applied_rows=applied,
+    )
+    await legacy._save_options(interaction, updated)  # type: ignore[attr-defined]
+    return previous
+
+
 class ReviewedPreviewView(DesignView):
     """One transactional preview/apply owner for every active Studio batch flow."""
 
@@ -880,11 +906,50 @@ class ReviewedPreviewView(DesignView):
                 await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=bool(snapshot)))
                 return
 
+            separator_previous_options: dict[str, Any] | None = None
+            if mode == "style_change_separator":
+                try:
+                    separator_previous_options = await _persist_separator_settings(interaction, payload, result.applied)
+                except Exception as settings_exc:
+                    if result.applied:
+                        restored, residual, rollback_failures = await apply_service.compensate_applied(
+                            guild,
+                            result.applied,
+                            user_id=int(interaction.user.id),
+                            delay_seconds=studio.DEFAULT_DELAY_SECONDS,
+                        )
+                    else:
+                        restored, residual, rollback_failures = 0, [], []
+                    emergency, durable = await _store_residual_snapshot(int(guild.id), int(interaction.user.id), residual)
+                    legacy._PENDING.pop(key, None)  # type: ignore[attr-defined]
+                    embed = discord.Embed(
+                        title="⚠️ Separator Apply Reversed Because Its Setting Could Not Be Saved",
+                        description=(
+                            f"Saving the selected separator failed with **{type(settings_exc).__name__}**. "
+                            + (
+                                f"Automatically restored **{restored}** live rename(s); the old saved design remains authoritative."
+                                if not residual
+                                else f"Automatic restore left **{len(residual)}** row(s) changed. An {'durable' if durable else 'emergency memory-only'} Undo record was retained for them."
+                            )
+                        ),
+                        color=discord.Color.orange(),
+                    )
+                    if rollback_failures:
+                        embed.add_field(name="Restore attention", value="\n".join(f"• {line}" for line in rollback_failures[:8])[:1024], inline=False)
+                    await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=bool(emergency)))
+                    return
+
             snapshot: dict[str, Any] | None = None
             if result.applied:
                 try:
                     snapshot = await _store_durable_snapshot(int(guild.id), int(interaction.user.id), result.applied)
                 except Exception as snapshot_exc:
+                    settings_restore_error = ""
+                    if separator_previous_options is not None:
+                        try:
+                            await legacy._save_options(interaction, separator_previous_options)  # type: ignore[attr-defined]
+                        except Exception as restore_exc:
+                            settings_restore_error = type(restore_exc).__name__
                     restored, residual, rollback_failures = await apply_service.compensate_applied(
                         guild,
                         result.applied,
@@ -907,15 +972,25 @@ class ReviewedPreviewView(DesignView):
                     )
                     if rollback_failures:
                         embed.add_field(name="Restore attention", value="\n".join(f"• {line}" for line in rollback_failures[:8])[:1024], inline=False)
+                    if settings_restore_error:
+                        embed.add_field(name="Saved-setting attention", value=f"The previous separator setting could not be restored automatically (`{settings_restore_error}`). Do not run another design Apply until that setting is reviewed.", inline=False)
                     await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=bool(emergency)))
                     return
 
             legacy._PENDING.pop(key, None)  # type: ignore[attr-defined]
 
-        title = "✅ Inconsistent Names Repaired" if "consistency" in mode else "✅ Reviewed Design Applied"
+        if mode == "style_change_separator":
+            title = "✅ Channel Separator Applied & Saved"
+            description = f"Changed **{len(result.applied)}** live channel name(s), left **{skipped}** reviewed skip(s) untouched, and saved **{legacy._separator_choice_label(payload.get('separator_id'))}** as the authoritative separator. Failed **0**."  # type: ignore[attr-defined]
+        elif "consistency" in mode:
+            title = "✅ Inconsistent Names Repaired"
+            description = f"Changed **{len(result.applied)}** item(s). Left **{skipped}** reviewed skip(s) untouched. Failed **0**."
+        else:
+            title = "✅ Reviewed Design Applied"
+            description = f"Changed **{len(result.applied)}** item(s). Left **{skipped}** reviewed skip(s) untouched. Failed **0**."
         embed = discord.Embed(
             title=title,
-            description=f"Changed **{len(result.applied)}** item(s). Left **{skipped}** reviewed skip(s) untouched. Failed **0**.",
+            description=description,
             color=discord.Color.green(),
         )
         if snapshot:
@@ -973,29 +1048,6 @@ async def open_design_studio(interaction: discord.Interaction) -> None:
     )
 
 
-def register_public_design_studio_command(bot: Any = None, tree: Any = None) -> bool:
-    """Compatibility registrar; normal ownership is public_design_group."""
-
-    global _PATCHED
-    if _PATCHED:
-        return True
-    try:
-        import stoney_verify.commands_ext as commands_ext
-        from stoney_verify.commands_ext.public_setup_group import dank_group
-
-        allowed = set(getattr(commands_ext, "_ALLOWED_DANK_CHILDREN", set()) or set())
-        allowed.add("design")
-        commands_ext._ALLOWED_DANK_CHILDREN = allowed
-        if dank_group.get_command("design") is None:
-            @dank_group.command(name="design", description="Open Dank Design Studio for safe channel/category name styling.")
-            async def dank_design(interaction: discord.Interaction) -> None:
-                await open_design_studio(interaction)
-        _PATCHED = True
-        return True
-    except Exception:
-        return False
-
-
 __all__ = [
     "DesignHomeView",
     "DesignServerView",
@@ -1013,5 +1065,4 @@ __all__ = [
     "_open_undo",
     "_require_design_permission",
     "open_design_studio",
-    "register_public_design_studio_command",
 ]
