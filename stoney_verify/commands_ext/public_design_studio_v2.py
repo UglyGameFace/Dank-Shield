@@ -658,7 +658,7 @@ async def _pop_snapshot_if_current(guild_id: int, created_at: float) -> bool:
             legacy._LAST_SNAPSHOTS[guild_key] = rows[-10:]  # type: ignore[attr-defined]
             return True
         return False
-    popped = await legacy._pop_latest_rollback_snapshot(int(guild.id))  # type: ignore[attr-defined]
+    popped = await legacy._pop_latest_rollback_snapshot(int(guild_id))  # type: ignore[attr-defined]
     return _snapshot_matches(popped, created_at)
 
 
