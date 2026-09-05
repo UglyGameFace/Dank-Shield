@@ -32,9 +32,17 @@ def test_design_group_uses_consolidated_native_registration_not_startup_guard():
     assert "register_public_design_studio_command" in STUDIO
 
 
-def test_design_studio_home_is_a_five_workflow_hub():
+def test_design_studio_home_is_a_five_plain_language_workflow_hub():
     assert "🎨 Dank Design Studio" in STUDIO
     assert "class DesignHomeView" in STUDIO
-    for label in ("Design Server", "Edit One Item", "Review / Repair", "Saved Rules", "Rollback"):
+    for label in (
+        "Design Entire Server",
+        "Edit One Category / Channel",
+        "Fix Inconsistent Names",
+        "Saved Rules & Protection",
+        "Undo Last Apply",
+    ):
         assert f'label="{label}"' in STUDIO
-    assert "DesignServerThemeSelect" not in STUDIO[STUDIO.index("class DesignHomeView"):]
+    home = STUDIO[STUDIO.index("class DesignHomeView"):STUDIO.index("async def _fresh_channel_map")]
+    assert "DesignServerThemeSelect" not in home
+    assert "DesignServerStrengthSelect" not in home
