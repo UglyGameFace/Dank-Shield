@@ -102,11 +102,14 @@ def test_direct_rename_refresh_prefers_live_api() -> None:
     assert block.index("await guild.fetch_channel") < block.index("return cached if cached is not None else fallback")
 
 
-def test_manual_name_override_outranks_style_plan_and_is_unlockable() -> None:
+def test_manual_name_override_outranks_style_plan_and_is_resettable() -> None:
     assert 'manual_override = _manual_name_override_for(options, channel_id)' in PUBLIC_STUDIO
     assert '"format_lock_scope": "manual_name"' in PUBLIC_STUDIO
     assert 'elif scope == "manual_name":' in PUBLIC_STUDIO
-    assert 'options["manual_name_overrides"] = {}' in PUBLIC_STUDIO
+    assert "rule_service.reset_item_overrides" in PUBLIC_STUDIO
+    assert "rule_service.reset_all_overrides" in PUBLIC_STUDIO
+    assert 'label="Reset This Category"' in PUBLIC_STUDIO
+    assert 'label="Reset This Channel"' in PUBLIC_STUDIO
 
 
 def test_item_lock_buttons_capture_live_item_style_not_global_preset() -> None:
