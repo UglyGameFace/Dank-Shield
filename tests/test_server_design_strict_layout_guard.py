@@ -1,8 +1,7 @@
 from __future__ import annotations
 
+from stoney_verify.services import server_design_plan_service as plan_service
 from stoney_verify.services import server_design_studio as studio
-from stoney_verify.commands_ext import public_design_studio  # noqa: F401
-from stoney_verify.startup_guards import server_design_strict_layout_guard
 
 
 def _styled_free_games() -> str:
@@ -14,79 +13,86 @@ def _styled_free_games() -> str:
     return text
 
 
-def test_strict_layout_guard_flags_missing_separator_as_changed():
-    server_design_strict_layout_guard.apply()
+def _strict_options(**extra: object) -> dict[str, object]:
+    return plan_service.normalize_plan_options(
+        {"theme_id": "gothic_clean", "strength": 5, **extra},
+        strict=True,
+    )
 
+
+def test_native_strict_plan_flags_missing_separator_as_changed() -> None:
+    options = _strict_options(separator_id="bar_full")
     result = studio.build_styled_name(
         f"🎮{_styled_free_games()}",
         theme_id="gothic_clean",
         strength=5,
-        separator_id="bar_full",
+        separator_id=str(options["separator_id"]),
         font="fraktur",
+        exact_match=bool(options["exact_match"]),
     )
-
     assert result.status == "changed"
     assert result.after.startswith("🎮｜")
 
 
-def test_strict_layout_guard_flags_thin_separator_when_fullwidth_is_expected():
-    server_design_strict_layout_guard.apply()
-
+def test_native_strict_plan_flags_thin_separator_when_fullwidth_is_expected() -> None:
+    options = _strict_options(separator_id="bar_full")
     result = studio.build_styled_name(
         f"🎮│{_styled_free_games()}",
         theme_id="gothic_clean",
         strength=5,
-        separator_id="bar_full",
+        separator_id=str(options["separator_id"]),
         font="fraktur",
+        exact_match=bool(options["exact_match"]),
     )
-
     assert result.status == "changed"
     assert result.after.startswith("🎮｜")
 
 
-def test_strict_layout_guard_allows_exact_separator_match_to_remain_unchanged():
-    server_design_strict_layout_guard.apply()
-
+def test_native_strict_plan_allows_exact_separator_match_to_remain_unchanged() -> None:
+    options = _strict_options(separator_id="bar_full")
     current = f"🎮｜{_styled_free_games()}"
     result = studio.build_styled_name(
         current,
         theme_id="gothic_clean",
         strength=5,
-        separator_id="bar_full",
+        separator_id=str(options["separator_id"]),
         font="fraktur",
+        exact_match=bool(options["exact_match"]),
     )
-
     assert result.status == "unchanged"
     assert result.after == current
 
 
-def test_strict_layout_guard_allows_visual_log_channel_repair():
-    server_design_strict_layout_guard.apply()
-
+def test_native_plan_allows_visual_log_channel_repair_without_global_protected_set_mutation() -> None:
+    before = set(studio.DEFAULT_PROTECTED_NAMES)
+    options = _strict_options()
     result = studio.build_styled_name(
         "mod-log",
         theme_id="gothic_clean",
         strength=5,
-        separator_id="bar_full",
+        separator_id=str(options["separator_id"]),
         font="fraktur",
+        exact_match=bool(options["exact_match"]),
+        protection_rules=options["protection_rules"],
     )
-
     assert not result.protected
     assert result.status == "changed"
-    assert "｜" in result.after
+    assert " | " in result.after
+    assert set(studio.DEFAULT_PROTECTED_NAMES) == before
 
 
-def test_gothic_clean_default_uses_clear_spaced_pipe_separator():
-    server_design_strict_layout_guard.apply()
-
-    theme = studio.THEMES_BY_ID["gothic_clean"]
+def test_gothic_clean_default_uses_clear_spaced_pipe_without_theme_catalog_patch() -> None:
+    original_theme_separator = studio.THEMES_BY_ID["gothic_clean"].channel_separator
+    options = _strict_options()
     result = studio.build_styled_name(
         "free-games",
         theme_id="gothic_clean",
         strength=5,
+        separator_id=str(options["separator_id"]),
+        exact_match=bool(options["exact_match"]),
     )
-
-    assert theme.channel_separator == "pipe_spaced"
+    assert original_theme_separator == "bar_full"
+    assert options["separator_id"] == "pipe_spaced"
     assert result.status == "changed"
     assert result.after.startswith("🎮 | ")
     assert "｜" not in result.after
