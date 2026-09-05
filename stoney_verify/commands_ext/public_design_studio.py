@@ -4,10 +4,11 @@ import unicodedata
 
 """Public /dank design command for the Server Design Studio.
 
-The runtime guard keeps the command in the existing /dank group and uses the
-pure service engine for preview/apply/rollback. It only edits channel/category
-names and never mutates permissions, overwrites, topics, order, slowmode, NSFW,
-archive settings, or category placement.
+This module is the compatibility/backend layer for mature exact-item, saved-rule,
+separator, and rollback primitives used by the consolidated V2 Studio. It does
+not register a public command or own the public home/apply workflow. Design
+operations only edit channel/category names and never mutate permissions,
+overwrites, topics, order, slowmode, NSFW, archive settings, or placement.
 """
 
 import asyncio
@@ -1078,7 +1079,7 @@ def _consistency_lines(items: list[dict[str, Any]], *, limit: int = 12) -> list[
 
 def _consistency_embed(guild: discord.Guild, items: list[dict[str, Any]], options: Mapping[str, Any]) -> discord.Embed:
     summary = _consistency_summary(items)
-    is_live = bool(options.get("__majority_layout_inferred") or options.get("__use_live_majority_layout"))
+    is_live = bool(options.get("__majority_layout_inferred"))
     live_summary = options.get("__majority_layout_summary") if isinstance(options.get("__majority_layout_summary"), Mapping) else {}
 
     if not live_summary:
@@ -5290,201 +5291,18 @@ class StyleChangeView(discord.ui.View):
 
 
 class DesignHomeView(discord.ui.View):
+    """Import-time compatibility symbol; V2 replaces it before public use."""
+
     def __init__(self, options: Mapping[str, Any] | None = None) -> None:
         super().__init__(timeout=900)
-        options = options or {}
-        self.add_item(ThemeSelect(_safe_str(options.get("theme_id"), "gothic_clean")))
-        self.add_item(StrengthSelect(_safe_int(options.get("strength"), 2)))
-
-    @discord.ui.button(label="Review Name Drift", emoji="🧭", style=discord.ButtonStyle.success, custom_id="dank_design:consistency_check", row=2)
-    async def consistency_check(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-
-        await interaction.response.defer(ephemeral=True, thinking=True)
-
-        options = await _load_design_options(int(guild.id))
-        try:
-            from stoney_verify.services import server_design_majority_layout as majority
-
-            analysis, repair_options, _summary = _infer_live_majority_context(guild, options)
-            items = await build_design_plan(guild, repair_options)
-            items = majority.annotate_plan_items(items, analysis, repair_options, studio=studio)
-        except Exception:
-            repair_options = dict(options)
-            repair_options["__use_live_majority_layout"] = True
-            items = await build_design_plan(guild, repair_options)
-        created_at = _store_pending(int(guild.id), int(interaction.user.id), {"items": items, "options": dict(repair_options), "mode": "consistency_check"})
-
-        has_blockers = any(item.get("status") == "failed" for item in items)
-        has_changes = any(item.get("status") == "changed" for item in items)
-
-        await interaction.edit_original_response(
-            embed=_consistency_embed(guild, items, repair_options),
-            view=DesignPreviewView(can_apply=not has_blockers and has_changes, pending_created_at=created_at),
-        )
-
-    @discord.ui.button(label="Change Channel Separator Only", emoji="⚡", style=discord.ButtonStyle.secondary, custom_id="dank_design:style_change", row=2)
-    async def style_change(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        options = await _load_design_options(int(guild.id))
-        _analysis, repair_options, _summary = _infer_live_majority_context(guild, options)
-        current_sep = _safe_str(repair_options.get("separator_id"), "none")
-        selected = "bar_heavy" if current_sep == "none" else current_sep
-        await interaction.response.edit_message(
-            embed=_style_change_embed(guild, options, separator_id=selected),
-            view=StyleChangeView(separator_id=selected),
-        )
-
-    @discord.ui.button(label="Preview Saved Design", emoji="👁️", style=discord.ButtonStyle.primary, custom_id="dank_design:preview", row=2)
-    async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        options = await _load_design_options(int(guild.id))
-        items = await build_design_plan(guild, options)
-        created_at = _store_pending(int(guild.id), int(interaction.user.id), {"items": items, "options": dict(options), "mode": "preview_server"})
-        has_blockers = any(item.get("status") == "failed" for item in items)
-        await interaction.edit_original_response(
-            embed=_preview_embed(guild, items, title="👁️ Server Design Preview"),
-            view=DesignPreviewView(can_apply=not has_blockers and any(item.get("status") == "changed" for item in items), pending_created_at=created_at),
-        )
-
-    @discord.ui.button(label="Category Editor", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="dank_design:category_editor", row=3)
-    async def category_editor(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        await interaction.response.edit_message(
-            embed=_category_editor_embed(guild, page=0),
-            view=CategoryEditorPickerView(guild, page=0),
-        )
-
-    @discord.ui.button(label="Channel Editor", emoji="#️⃣", style=discord.ButtonStyle.primary, custom_id="dank_design:channel_editor", row=3)
-    async def channel_editor(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        await interaction.response.edit_message(
-            embed=_channel_editor_embed(guild, page=0),
-            view=ChannelEditorPickerView(guild, page=0),
-        )
-
-    @discord.ui.button(label="Help", emoji="❓", style=discord.ButtonStyle.secondary, custom_id="dank_design:start_here", row=4)
-    async def guide(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        await interaction.response.edit_message(embed=_start_here_embed(), view=StartHereView())
-
-    @discord.ui.button(label="Rules & Resets", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_tools", row=4)
-    async def advanced_tools(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        await interaction.response.edit_message(embed=_advanced_tools_embed(), view=AdvancedToolsView())
-
 
 
 class DesignPreviewView(discord.ui.View):
+    """Import-time base only; V2 owns every active reviewed Apply surface."""
+
     def __init__(self, *, can_apply: bool, pending_created_at: float | None = None) -> None:
         super().__init__(timeout=900)
         self.pending_created_at = pending_created_at
-        self.apply.disabled = not can_apply
-
-    @discord.ui.button(label="Apply Reviewed Changes", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_design:apply", row=0)
-    async def apply(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        key = _key(int(guild.id), int(interaction.user.id))
-        payload = _PENDING.get(key) or {}
-        if not _pending_matches(payload, self.pending_created_at):
-            await interaction.response.send_message(
-                "❌ This Apply button belongs to an older or invalidated preview. Preview the current choices before applying.",
-                ephemeral=True,
-            )
-            return
-        items = list(payload.get("items") or [])
-        if not items:
-            await interaction.response.send_message("No saved preview found. Press **Preview Saved Design** first.", ephemeral=True)
-            return
-        if any(item.get("status") == "failed" for item in items):
-            await interaction.response.send_message("❌ This preview has hard blockers. Fix them before applying.", ephemeral=True)
-            return
-        lock = _lock_for(int(guild.id))
-        if lock.locked():
-            await interaction.response.send_message("⏳ A design job is already running for this server. Wait for it to finish.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True, thinking=False)
-        changed = 0
-        skipped = 0
-        failed: list[str] = []
-        snapshot: list[dict[str, Any]] = []
-        async with lock:
-            for index, item in enumerate(items, start=1):
-                if item.get("status") != "changed":
-                    skipped += 1
-                    continue
-                channel = guild.get_channel(_safe_int(item.get("channel_id"), 0))
-                if channel is None:
-                    failed.append(f"missing `{item.get('before')}`")
-                    continue
-                before = _safe_str(item.get("before"))
-                after = _safe_str(item.get("after"))[: studio.DISCORD_NAME_LIMIT]
-                current = _safe_str(getattr(channel, "name", ""))
-                if current != before:
-                    failed.append(f"stale `{before}` is now `{current}`")
-                    continue
-                try:
-                    await channel.edit(name=after, reason=f"Dank Shield Server Design apply by {int(interaction.user.id)}")
-                    changed += 1
-                    snapshot.append({**item, "old_name": before, "new_name": after, "admin_id": str(int(interaction.user.id)), "timestamp": time.time(), "action_type": "apply"})
-                    if changed % 5 == 0:
-                        await interaction.edit_original_response(content=f"🚀 Applying design… changed {changed}, skipped {skipped}, failed {len(failed)}. Current: `{after}`")
-                    await asyncio.sleep(studio.DEFAULT_DELAY_SECONDS)
-                except Exception as exc:
-                    failed.append(f"`{current}`: {type(exc).__name__}")
-        if snapshot:
-            snapshot_payload = {"created_at": time.time(), "items": snapshot, "admin_id": str(int(interaction.user.id))}
-            _LAST_SNAPSHOTS.setdefault(_guild_key(int(guild.id)), []).append(snapshot_payload)
-            _LAST_SNAPSHOTS[_guild_key(int(guild.id))] = _LAST_SNAPSHOTS[_guild_key(int(guild.id))][-10:]
-            await _persist_rollback_snapshot(int(guild.id), snapshot_payload)
-        _PENDING.pop(key, None)
-        mode = _safe_str(payload.get("mode"), "preview")
-        complete_title = "✅ Design Inconsistencies Fixed" if mode == "consistency_check" else ("✅ Change Channel Separator Only Applied" if mode.startswith("style_change") else "✅ Server Design Apply Complete")
-        complete_description = (
-            f"Changed **{changed}** item(s). Skipped **{skipped}**. Failed **{len(failed)}**."
-            if mode not in {"consistency_check", "style_change_separator"}
-            else (f"Repaired **{changed}** inconsistent name(s). Safe skipped **{skipped}**. Failed **{len(failed)}**." if mode == "consistency_check" else f"Changed separator on **{changed}** channel(s). Skipped **{skipped}**. Failed **{len(failed)}**.")
-        )
-        embed = discord.Embed(
-            title=complete_title,
-            description=complete_description,
-            color=discord.Color.green() if not failed else discord.Color.orange(),
-        )
-        if failed:
-            embed.add_field(name="Skipped / Failed", value="\n".join(failed[:10])[:1024], inline=False)
-        if snapshot:
-            embed.add_field(name="Rollback", value="A rollback snapshot was created. Use **Rollback** if the style does not look right.", inline=False)
-        await interaction.edit_original_response(content=None, embed=embed, view=DesignDoneView(can_rollback=bool(snapshot)))
-
-    @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:preview_back", row=0)
-    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        assert interaction.guild is not None
-        options = await _load_design_options(int(interaction.guild.id))
-        await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
-
 
 
 def _style_change_missing_emoji_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

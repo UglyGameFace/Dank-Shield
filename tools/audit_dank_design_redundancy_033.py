@@ -57,6 +57,12 @@ def main() -> int:
 
     if "__use_live_majority_layout" in PLAN:
         failures.append("retired live-majority runtime magic flag remains in the native planner")
+    if "__use_live_majority_layout" in LEGACY:
+        failures.append("retired live-majority runtime magic flag remains in the legacy backend")
+    if '@discord.ui.button(label="Review Name Drift"' in LEGACY:
+        failures.append("retired mashed legacy public home still exists")
+    if 'custom_id="dank_design:apply"' in LEGACY:
+        failures.append("retired independent legacy Apply owner still exists")
     if "command_guard.build_design_plan =" in PLAN:
         failures.append("native planner still contains runtime build_design_plan reassignment")
     if "majority.build_category_aware_options" not in PLAN or "majority.annotate_category_aware_plan_items" not in PLAN:
