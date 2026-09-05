@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LEGACY_PATH = ROOT / "stoney_verify/commands_ext/public_design_studio.py"
 V2_PATH = ROOT / "stoney_verify/commands_ext/public_design_studio_v2.py"
 TEST_PATH = ROOT / "tests/test_dank_design_consistency_030.py"
+CONSOLIDATION_TEST_PATH = ROOT / "tests/test_design_studio_consolidation_032.py"
 AUDIT_PATH = ROOT / "tools/audit_dank_design_redundancy_033.py"
 
 
@@ -116,6 +117,27 @@ if "test_doctor_does_not_treat_optional_category_locks_as_required" in test:
 if "def test_rules_surface_has_one_counter_and_retired_submenus_are_absent" not in test:
     raise RuntimeError("replacement dead-submenu regression was not installed")
 TEST_PATH.write_text(test, encoding="utf-8")
+
+consolidation = CONSOLIDATION_TEST_PATH.read_text(encoding="utf-8")
+consolidation = consolidation.replace('    assert "One exact Rename" in V2\n', "")
+old_bridge = '''def test_legacy_bridge_is_small_explicit_navigation_help_and_apply_boundary() -> None:\n    assert legacy._home_embed is studio_v2._home_embed\n    assert legacy._start_here_embed is studio_v2._compat_help_embed\n    assert legacy._design_help_embed is studio_v2._compat_help_embed\n    assert legacy.DesignHomeView is studio_v2.DesignHomeView\n    assert legacy.DesignPreviewView is studio_v2.ReviewedPreviewView\n    assert legacy.StyleChangePreviewView is studio_v2.LegacyStyleChangePreviewView\n\n    bridge_start = V2.index("def _install_legacy_compatibility_bridge")\n    bridge_end = V2.index("\\n\\n_install_legacy_compatibility_bridge()", bridge_start)\n    bridge = V2[bridge_start:bridge_end]\n    for required in (\n        "legacy._home_embed = _home_embed",\n        "legacy._start_here_embed = _compat_help_embed",\n        "legacy.DesignHomeView = DesignHomeView",\n        "legacy.DesignPreviewView = ReviewedPreviewView",\n        "legacy.StyleChangePreviewView = LegacyStyleChangePreviewView",\n    ):\n        assert required in bridge\n    for forbidden in (\n        "legacy.build_design_plan =",\n        "legacy.DesignDoctorView =",\n        "legacy._load_design_options =",\n        "legacy.register_public_design_studio_command =",\n    ):\n        assert forbidden not in bridge\n\n\n'''
+new_bridge = '''def test_legacy_bridge_is_small_explicit_navigation_and_apply_boundary() -> None:\n    assert legacy._home_embed is studio_v2._home_embed\n    assert not hasattr(legacy, "_start_here_embed")\n    assert not hasattr(legacy, "_design_help_embed")\n    assert legacy.DesignHomeView is studio_v2.DesignHomeView\n    assert legacy.DesignPreviewView is studio_v2.ReviewedPreviewView\n    assert legacy.StyleChangePreviewView is studio_v2.LegacyStyleChangePreviewView\n\n    bridge_start = V2.index("def _install_legacy_compatibility_bridge")\n    bridge_end = V2.index("\\n\\n_install_legacy_compatibility_bridge()", bridge_start)\n    bridge = V2[bridge_start:bridge_end]\n    for required in (\n        "legacy._home_embed = _home_embed",\n        "legacy.DesignHomeView = DesignHomeView",\n        "legacy.DesignPreviewView = ReviewedPreviewView",\n        "legacy.StyleChangePreviewView = LegacyStyleChangePreviewView",\n    ):\n        assert required in bridge\n    for forbidden in (\n        "legacy._start_here_embed =",\n        "legacy._design_help_embed =",\n        "legacy.build_design_plan =",\n        "legacy.DesignDoctorView =",\n        "legacy._load_design_options =",\n        "legacy.register_public_design_studio_command =",\n    ):\n        assert forbidden not in bridge\n\n\n'''
+if consolidation.count(old_bridge) != 1:
+    raise RuntimeError("consolidation bridge test changed unexpectedly")
+consolidation = consolidation.replace(old_bridge, new_bridge)
+consolidation = consolidation.replace(
+    '    assert LEGACY.count("view=DesignHomeView(options)") >= 8\n',
+    '    assert LEGACY.count("view=DesignHomeView(options)") >= 7\n',
+)
+for stale in (
+    'assert "One exact Rename" in V2',
+    "legacy._start_here_embed is studio_v2._compat_help_embed",
+    "legacy._design_help_embed is studio_v2._compat_help_embed",
+    'LEGACY.count("view=DesignHomeView(options)") >= 8',
+):
+    if stale in consolidation:
+        raise RuntimeError(f"stale consolidation expectation survived cleanup: {stale}")
+CONSOLIDATION_TEST_PATH.write_text(consolidation, encoding="utf-8")
 
 audit = AUDIT_PATH.read_text(encoding="utf-8")
 needle = "    if 'custom_id=\"dank_design:apply\"' in LEGACY:\n        failures.append(\"retired independent legacy Apply owner still exists\")\n"
