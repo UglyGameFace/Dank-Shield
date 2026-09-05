@@ -134,26 +134,15 @@ def _split_leading_emoji(studio: Any, value: Any, *, preserve_remainder_spaces: 
 
 
 def install_separator_safe_parser(studio: Any) -> None:
-    """Keep visual separator bars from being swallowed as part of an emoji.
+    """Deprecated compatibility no-op.
 
-    The existing parser treats Unicode symbols as emoji-ish. Box/vertical bar
-    separators are also Unicode symbols, so names such as `🎭│profile` can be
-    misread as emoji=`🎭│` with no separator. The repair path installs this
-    parser before building the rename plan so separator drift can be detected and
-    repaired accurately.
+    ``server_design_studio._strip_leading_icon`` is now natively separator-aware,
+    so majority detection must not replace parser functions at runtime. Historical
+    callers may keep invoking this helper while migration code is retired.
     """
 
-    if getattr(studio, "_DANK_SEPARATOR_SAFE_ICON_PARSE_ACTIVE", False):
-        return
-
-    def _separator_safe_strip_leading_icon(value: str) -> tuple[str, str]:
-        return _split_leading_emoji(studio, value, preserve_remainder_spaces=False)
-
-    try:
-        studio._strip_leading_icon = _separator_safe_strip_leading_icon  # type: ignore[attr-defined]
-        studio._DANK_SEPARATOR_SAFE_ICON_PARSE_ACTIVE = True
-    except Exception:
-        pass
+    _ = studio
+    return None
 
 
 def _remove_leading_emoji(studio: Any, raw: str, *, kind: str = "text") -> tuple[str, str]:
@@ -393,7 +382,7 @@ def _record_name(record: Any) -> str:
 def _record_kind(record: Any) -> str:
     if isinstance(record, Mapping):
         return _text(record.get("kind"), "text").lower()
-    return _text(getattr(record, "kind", "text"), "text").lower()
+    return _text(getattr(record, "kind", "text").lower())
 
 
 def _separator_key(parts: Mapping[str, Any]) -> tuple[str, str]:

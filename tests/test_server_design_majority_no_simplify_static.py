@@ -1,34 +1,34 @@
 from pathlib import Path
 
 
-SOURCE = Path("stoney_verify/startup_guards/server_design_majority_layout_guard.py").read_text()
+CONFIDENCE = Path("stoney_verify/services/server_design_repair_confidence.py").read_text()
+PLAN = Path("stoney_verify/services/server_design_plan_service.py").read_text()
 
 
-def test_smart_auto_detect_blocks_decorative_simplification_apply():
-    required = [
-        "_looks_display_heading",
+def test_smart_auto_detect_blocks_decorative_simplification_apply() -> None:
+    for phrase in (
+        "_display_score",
         "_looks_plain_slug",
-        "_visual_downgrade_items",
-        "_majority_apply_blocked",
-        "Apply blocked — would simplify this server",
-        "Apply is blocked because this preview would simplify styled section names",
-        "not _majority_apply_blocked(items)",
-    ]
+        "_is_aesthetic_downgrade",
+        "BLOCKED_AESTHETIC_DOWNGRADE",
+        '"smart_category_auto_detect"',
+        "Would simplify or strip this server's existing visual style.",
+    ):
+        assert phrase in CONFIDENCE
 
-    for phrase in required:
-        assert phrase in SOURCE
-
-
-def test_smart_auto_detect_recommendation_is_category_aware():
-    assert "For hand-built servers, choose **Use Live Majority**." not in SOURCE
-    assert "Smart Auto-Detect" in SOURCE
-    assert "learn each category separately" in SOURCE
-    assert "Saved channel/category/global rules always win" in SOURCE
-    assert "mixed categories are left alone instead of being flattened" in SOURCE
+    assert "_fail_closed_on_low_confidence" in PLAN
+    assert 'item["status"] = "failed"' in PLAN
 
 
-def test_patch_is_names_only_not_permission_or_config_repair():
-    forbidden = [
+def test_smart_auto_detect_recommendation_is_category_aware() -> None:
+    assert "build_category_aware_options" in PLAN
+    assert "annotate_category_aware_plan_items" in PLAN
+    assert "Mixed categories keep their own" in PLAN
+    assert "respect_saved_rules=True" in PLAN
+
+
+def test_native_repair_services_are_names_only_not_permission_or_config_repair() -> None:
+    forbidden = (
         "set_permissions",
         "edit_permissions",
         "create_role",
@@ -37,8 +37,7 @@ def test_patch_is_names_only_not_permission_or_config_repair():
         "create_category",
         "manage_roles",
         "manage_channels",
-    ]
-
-    lowered = SOURCE.lower()
+    )
+    lowered = (CONFIDENCE + PLAN).lower()
     for phrase in forbidden:
         assert phrase not in lowered

@@ -2,10 +2,8 @@ from __future__ import annotations
 
 """Public /dank design command registrar.
 
-This module exists so Server Design Studio is attached during the normal
-commands_ext registration pass, before Discord slash command sync runs. Runtime
-startup guards can still provide safety services, but visible slash commands must
-be present before the tree is synced.
+Server Design is registered during the normal commands_ext pass. Runtime startup
+layers do not inject commands or replace Studio behavior after registration.
 """
 
 from typing import Any
@@ -27,19 +25,19 @@ def register_public_design_group_commands(bot: Any = None, tree: Any = None) -> 
     if _REGISTERED:
         return
 
-    # Dank Design command registration is native. Layout enhancements are now
-    # activated from commands_ext, not from startup boot.
     import stoney_verify.commands_ext as commands_ext
     from stoney_verify.commands_ext.public_setup_group import dank_group
-    from stoney_verify.commands_ext import public_design_studio as design
-    from stoney_verify.commands_ext import public_design_enhancements as enhancements
+    from stoney_verify.commands_ext import public_design_studio_v2 as design
 
+    # `design` is already part of the canonical public registry. Keep this tiny
+    # compatibility assertion local to registration instead of mutating command
+    # profiles through a startup guard.
     allowed = set(getattr(commands_ext, "_ALLOWED_DANK_CHILDREN", set()) or set())
     allowed.add("design")
     commands_ext._ALLOWED_DANK_CHILDREN = allowed
 
     if dank_group.get_command("design") is None:
-        @dank_group.command(name="design", description="Open Dank Design Studio for channel/category name styling.")
+        @dank_group.command(name="design", description="Open Dank Design Studio for safe server name styling.")
         async def dank_design(interaction: discord.Interaction) -> None:
             async def action() -> None:
                 await design.open_design_studio(interaction)
@@ -54,9 +52,8 @@ def register_public_design_group_commands(bot: Any = None, tree: Any = None) -> 
                 error_guidance=_DESIGN_ERROR_GUIDANCE,
             )
 
-    enhancements.activate_public_design_enhancements()
     _REGISTERED = True
-    print("✅ public_design_group registered guarded native /dank design")
+    print("✅ public_design_group registered consolidated native /dank design")
 
 
 __all__ = ["register_public_design_group_commands"]

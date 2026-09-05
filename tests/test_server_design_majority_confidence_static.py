@@ -1,32 +1,41 @@
 from pathlib import Path
 
 
-SOURCE = Path("stoney_verify/startup_guards/server_design_majority_layout_guard.py").read_text()
+PLAN = Path("stoney_verify/services/server_design_plan_service.py").read_text()
+CONFIDENCE = Path("stoney_verify/services/server_design_repair_confidence.py").read_text()
+V2 = Path("stoney_verify/commands_ext/public_design_studio_v2.py").read_text()
 
 
-def test_majority_repair_uses_confidence_engine():
-    required = [
+def test_smart_auto_detect_uses_native_confidence_engine() -> None:
+    for phrase in (
         "server_design_repair_confidence",
         "evaluate_repair_plan",
+        'context="smart_category_auto_detect"',
+        "__repair_confidence_result",
+        "_fail_closed_on_low_confidence",
+    ):
+        assert phrase in PLAN
+
+    for phrase in (
         "confidence_summary_text",
-        "Repair confidence",
-        "Blocked by design safety",
-        "Needs review",
-        "Apply disabled when confidence is low",
-    ]
-
-    for phrase in required:
-        assert phrase in SOURCE
+        "BLOCKED_AESTHETIC_DOWNGRADE",
+        "BLOCKED_LOW_CONFIDENCE",
+        "apply_allowed",
+    ):
+        assert phrase in CONFIDENCE
 
 
-def test_majority_repair_recommends_category_aware_auto_detect():
-    assert "For hand-built servers, choose **Use Live Majority**." not in SOURCE
-    assert "Smart Auto-Detect" in SOURCE
-    assert "learn each category separately" in SOURCE
-    assert "Saved channel/category/global rules always win" in SOURCE
+def test_smart_auto_detect_is_category_aware_and_saved_rules_remain_authoritative() -> None:
+    assert "build_category_aware_options" in PLAN
+    assert "annotate_category_aware_plan_items" in PLAN
+    assert "respect_saved_rules=True" in PLAN
+    assert "mixed categories" in PLAN.lower()
+    assert "Narrow saved rules always win" in V2
+    assert "keeps saved narrow rules authoritative" in V2
 
 
-def test_majority_apply_is_blocked_by_confidence_without_rewriting_internal_ids():
-    assert "__repair_confidence_result" in SOURCE
-    assert "Repair confidence blocked automatic apply" in SOURCE
-    assert "repair_confidence_blocked" in SOURCE
+def test_low_confidence_plan_is_non_applicable_before_the_ui_renders() -> None:
+    assert 'item["status"] = "failed"' in PLAN
+    assert "confidence is too low" in PLAN
+    assert "This preview has blockers" in V2
+    assert "This preview is obsolete" in V2

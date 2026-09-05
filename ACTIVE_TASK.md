@@ -1,111 +1,110 @@
 # ACTIVE TASK
 
-## DS-COMMUNITY-031 — Community Tools correctness, durability, and UX hardening
+## DS-DESIGN-032 — Consolidate Server Design / Dank Design Studio
 
 **Status:** COMPLETE — IMPLEMENTATION + FOCUSED/FULL VALIDATION GREEN
-**Branch:** `fix/ds-community-031-community-tools-hardening`
-**PR:** #187
-**Base:** `d7ee1420e4cadef915919e59bb401408a6489dde` (`main`, merged DS-DESIGN-030)
-**Implementation head validated:** `ff4a7cc0da7d5cf8027aae66d6aceffe39760cf3`
+**Branch:** `fix/ds-design-032-design-studio-consolidation`
+**PR:** #188
+**Base:** `dd7bbe235ba26c84b5e2dbaa367ebecc6f72081b` (`main`, merged DS-COMMUNITY-031)
+**Implementation head validated:** `7e91b041376c7ed7d7882c64f0c10e18f8d53c30`
+**Maps to:** `P0-DESIGN-001` / design-specific portion of `P0-GUARD-001`
 **Started:** 2026-09-05
 **Completed:** 2026-09-05
 
 ## Outcome
 
-The public **Community Tools** section now follows one coherent, durability-first execution model while preserving the compact `/dank home` command surface. Stickies, sticky polls, quiet notices, native polls, embeds, member/server information, permission diagnostics, fun/lookups, persistence, restart handling, and failure paths were all inspected and hardened in scope.
+Server Design / Dank Design Studio now has one coherent public workflow, one explicit native plan authority, transaction-like batch apply/undo behavior, preserved saved-rule precedence, and no live Server Design behavior injected through the former strict/majority startup-guard monkey patches. The compact `/dank home` → **Server Design** doorway and Setup both open the same Studio owner.
 
 ## Scope
 
-- Community Tools public UI and navigation.
-- Sticky configuration, delivery, preview, custom sender, cadence, listing, and removal.
-- Sticky polls and native Discord polls.
-- Quiet-server notices and their server-wide activity runtime.
-- Embed Builder.
-- Member / Server Info and Permission Check.
-- Fun & Lookup network utilities and simple games.
-- Community Tools persistence, startup reconciliation, permissions, concurrency, migrations, and focused CI/tests.
-- No unrelated moderation, ticketing, verification, Dank Design, profile, or welcome-card redesign.
+- `/dank home` → Server Design and all other routes into Server Design.
+- `public_design_studio_v2.py` public Studio workflow owner.
+- `public_design_studio.py` compatibility backend for mature exact-item/rule editors.
+- Native saved-design and Smart Repair planning.
+- Preview/apply/compensation/rollback execution.
+- Saved global/category/channel/exact-name rules and protection precedence.
+- Design-specific enhancement/startup-guard compatibility layers.
+- Setup → Server Design bridge.
+- Focused behavioral/static CI plus full repository validation.
+- No unrelated Community Tools, moderation, ticketing, verification, profile, or welcome-card redesign.
 
-## Findings / root causes confirmed
+## Root causes confirmed
 
-- [x] Sticky replacement used destructive ordering and could remove the healthy live copy before a durable replacement existed.
-- [x] Sticky + sticky-poll persistence could split across two writes and leave partial state.
-- [x] Poll vote persistence was serialized while visible message rendering could still race backwards.
-- [x] Quiet watcher exceptions could terminate the watcher and burst activity persistence could save an older timestamp.
-- [x] Persistent configuration loading relied on unpaged PostgREST reads and startup reconciliation was unbounded.
-- [x] Quiet-notice edits could silently replace the configured destination; preview/destructive actions also used unsafe authority/order.
-- [x] Effective channel permissions were not consistently authoritative and Custom Sender could claim a state the bot could not actually maintain.
-- [x] Poll/embed/sticky editors had inconsistent preview/publish behavior, silent input coercion, stale-editor risks, and stale poll-state transitions.
-- [x] Server Sticky listing truncated, external lookups had brittle provider handling/resource usage, Dice was unnecessarily fixed, and Image AI advertised a provider that did not exist.
+- [x] The old Studio mixed whole-server design, exact-item editing, repair, rule management, protection, help, and rollback into one oversized home flow.
+- [x] The normal design registration path activated strict/majority guard modules that replaced live design functions/classes at runtime.
+- [x] A redundant command-module guard mutated command registries/profiles despite the native design group already being registered.
+- [x] Setup still routed through deprecated compatibility registration behavior instead of the same public Studio owner.
+- [x] Smart Repair depended on runtime replacement of `build_design_plan` rather than an explicit native planning service.
+- [x] The compact `/dank home` Server Design button imposed a stricter Manage Server/Administrator gate than the Studio's established Manage Channels authority.
+- [x] Majority-layout compatibility still retained a parser replacement hook even though the native parser was already separator-aware.
 
 ## Execution path inspected
 
-- [x] `/dank home` → compact public surface → `open_community_tools()`.
-- [x] `CommunityToolsView` and all nested views/modals.
-- [x] `community_tools_service.py` Supabase validation/read/write path.
-- [x] `community_tools_runtime.py` single-owner `on_message` + `on_ready` runtime.
-- [x] Sticky preview/publish path and managed-webhook sender path.
-- [x] Sticky-poll vote/update/render path.
-- [x] Quiet-notice service/UI/runtime path.
-- [x] Lookup service and provider failure handling.
-- [x] Community Tools migrations, focused Python tests, static ownership guards, SQL smoke, and full repository CI.
-- [x] discord.py poll support/permissions behavior used by the implementation.
+- [x] public command registration/profiles → `public_design_group`.
+- [x] compact `/dank home` → **Server Design** → `public_design_bridge` → consolidated Studio.
+- [x] Setup → Server Design bridge → the same consolidated Studio.
+- [x] Studio home → Design Entire Server.
+- [x] Studio home → Edit One Category / Channel → mature exact-item editors.
+- [x] Studio home → Fix Inconsistent Names → scan → Smart Repair preview.
+- [x] Studio home → Saved Rules & Protection.
+- [x] preview → full-batch preflight → paced apply → compensation on failure.
+- [x] durable Apply snapshot → Undo preview → full-batch undo preflight → restore/compensation.
+- [x] saved-rule precedence and category-aware auto-detection.
+- [x] strict/majority compatibility guards and redundant command-module registration guard.
+- [x] native separator parsing and majority-layout helpers.
 
 ## Changes
 
-- [x] Sticky replacement is non-destructive: send replacement → persist delivery → remove old; failed persistence rolls back the replacement.
-- [x] Sticky + sticky-poll mode transitions use an atomic service-role-only RPC and remove stale poll rows when leaving poll mode.
-- [x] Sticky-poll vote + visible render updates are serialized and obsolete poll cards are rejected.
-- [x] Quiet watcher isolates failures, preserves latest activity, and keeps destructive actions persistence-first.
-- [x] Persistent configuration reads paginate and startup reconciliation uses bounded concurrency.
-- [x] Quiet-notice destination is preserved unless deliberately changed; stale controls and destination-specific tests are guarded.
-- [x] Effective channel permissions are authoritative; Custom Sender fails closed and managed-webhook cleanup is handled safely.
-- [x] Permission Check is feature-oriented and reports operator/bot blockers.
-- [x] Sticky creation uses guided type selection; embed color is editable; invalid ranges/booleans are rejected instead of silently rewritten.
-- [x] Native polls, embeds, message/embed stickies, and sticky polls use reviewed preview/publish flows where applicable.
-- [x] Stale drafts/editors cannot overwrite newer live state while runtime-only state such as votes/delivery movement is preserved correctly.
-- [x] Server Stickies pagination, weather/lookups, redirect/payload validation, Dice notation, and user-facing copy were improved.
-- [x] Unavailable Image AI was removed from the public menu rather than pretending a provider exists.
-- [x] Focused regressions, static ownership guards, migration/RLS/atomic SQL smoke, rollback/concurrency tests, and CI coverage were expanded.
+- [x] Added a five-workflow Studio hub: **Design Entire Server**, **Edit One Category / Channel**, **Fix Inconsistent Names**, **Saved Rules & Protection**, and **Undo Last Apply**.
+- [x] Added `server_design_plan_service.py` as the explicit plan authority for saved design and category-aware Smart Repair.
+- [x] Added `server_design_apply_service.py` for full-batch preflight, per-item freshness checks, compensation, durable snapshot rows, and safe Undo execution.
+- [x] Smart Repair is category-aware, keeps saved narrow rules authoritative, and fails closed when confidence is too low.
+- [x] Batch design changes use one reviewed Preview → Apply path; exact single-item Rename remains the only clearly documented immediate rename action.
+- [x] Strict-layout and majority-layout startup guards are retired to validation-only compatibility shims and no longer replace live design functions/classes.
+- [x] The redundant command-module guard no longer mutates public command registries/profiles.
+- [x] Setup and compact home both route to the same consolidated Studio instead of competing design screens.
+- [x] Compact home preserves the established **Manage Channels** design authority instead of requiring Manage Server/Administrator.
+- [x] Public recovery guidance points users to `/dank home` → **Server Design**, matching the actual compact command surface.
+- [x] The old majority parser hook is now an inert compatibility no-op; separator-safe parsing remains owned by the native design service.
+- [x] Added dedicated `Dank Design 032` CI covering the compact doorway, Studio owners, native services, focused regressions, and ownership/UX audits.
 
 ## Validation / results
 
-- [x] Affected modules compile.
-- [x] Focused Community Tools suite passes: **42 passed** on the validated implementation head.
-- [x] Smart Stickies regressions pass.
-- [x] Community Tools surface/static guards pass.
-- [x] PostgreSQL migration/RLS/atomic transition smoke passes, including applying migrations twice.
-- [x] Full `Dank Shield CI` passes on the validated implementation head.
-- [x] Application Command Size Diagnostics passes.
-- [x] Ticket Owner Emergency Override passes.
-- [x] Profile Runtime Diagnostics passes.
-- [x] Supabase Preview recovered and completed successfully.
-- [x] Branch comparison is clean: **24 commits ahead, 0 behind** `main` before this bookkeeping-only completion commit.
-- [x] Changed-file scope is limited to the expected 15 Community Tools/runtime/test/migration/workflow/task files.
-- [x] Conflict-marker inspection found no `<<<<<<<` / `>>>>>>>` markers in the PR patch.
-- [x] Obvious credential-prefix inspection found no committed `ghp_`, `sk-`, or `xoxb-` secrets in the PR patch.
+- [x] Dedicated **Dank Design 032** workflow passed on implementation head `7e91b041376c7ed7d7882c64f0c10e18f8d53c30`.
+- [x] Focused Design suite: **88 passed, 1 warning**.
+- [x] Smart Auto-Detect audit reports `category_local=yes`, `deterministic=yes`, `runtime_patch=no`, `native_flow=yes`.
+- [x] Native registration, safe-repair, UX/authority, parser ownership, and compact Manage Channels doorway audits passed.
+- [x] Full **Dank Shield CI** passed on the same implementation head.
+- [x] Full repository tests: **1132 passed, 9 warnings in 388.28s**.
+- [x] All standalone `tools/test_*.py` checks passed.
+- [x] Public setup, command surface/friction, invite-permission, setup-safety, role-truth, and event-boundary audits passed.
+- [x] **Application Command Size Diagnostics**, **Profile Runtime Diagnostics**, and **Ticket Owner Emergency Override** passed on the implementation head.
+- [x] Branch comparison before this bookkeeping-only completion commit: **59 commits ahead, 0 behind** `main`.
+- [x] Changed-file scope before this bookkeeping-only completion commit: **29 files**, limited to Server Design routing/services/guards/tests/tools/CI plus task bookkeeping.
+- [x] PR patch inspection found no added `<<<<<<<` / `>>>>>>>` conflict markers.
+- [x] Obvious credential-prefix inspection found no added `ghp_`, `sk-`, or `xoxb-` secrets.
 
 ## Cleanup / compatibility
 
-- [x] Existing single-owner Community Tools runtime remains authoritative; no second listener/runtime or monkey patch was introduced.
-- [x] Raw webhook URLs/tokens remain forbidden from persistent storage.
-- [x] Compact public command roots remain unchanged; improvements stay menu-first.
-- [x] Stale/conflicting affected Community Tools logic was integrated or removed.
-- [x] Mode transitions/removal do not intentionally leave obsolete sticky-poll state behind.
-- [x] Unrelated user/project work was not modified.
+- [x] Public navigation and batch execution now have explicit owners; historical exact-item/rule editor code remains only as a compatibility backend where it still provides mature functionality.
+- [x] Historical `tools/apply_*design*` artifacts were not made live and were not deleted blindly; they remain outside the public execution path.
+- [x] No unrelated system behavior was intentionally changed.
+- [x] No design-specific live startup monkey patch remains in the validated path.
 
 ## Conflicts / blockers
 
-None remaining for DS-COMMUNITY-031. The earlier Supabase preview service-health warning recovered to a successful check on the validated head.
+None remaining for DS-DESIGN-032.
 
 ## Backlog outside this task
 
-- Discord Gateway uptime/reconnect flapping remains a separate runtime/hosting task and was intentionally not mixed into Community Tools.
+- Broader non-Design startup-guard cleanup remains separate under `P0-GUARD-001`.
+- A future deeper extraction of mature exact-item/rule editors from the legacy Studio module can be handled separately; it is not required for the now-single public workflow/plan authority.
+- Discord Gateway uptime/reconnect flapping remains a separate runtime/hosting task.
 
 ## Next step
 
-PR #187 is ready to leave draft after the bookkeeping-only completion commit is observed clean by GitHub. No additional Community Tools implementation is required unless runtime testing discovers a new reproducible defect.
+Run exact-head validation for this bookkeeping-only completion commit, mark PR #188 ready, and merge when the final checks remain green.
 
 ## Definition of Done
 
-Met. Every currently exposed Community Tools feature now follows the corrected authoritative paths covered by this task; destructive actions are persistence-safe; restart/reconnect state remains coherent; permissions reflect real channel capability; user-entered values are not silently rewritten; unavailable functionality is not advertised; network/provider failures fail cleanly; scalable reads/reconciliation do not silently omit large deployments; affected regressions and repository CI are green; and the final diff remains scoped and clean.
+Met: one public Server Design workflow hierarchy, one explicit native plan authority, no design behavior injected through startup-guard monkey patches, preserved saved-rule precedence, safe reviewed batch apply/undo behavior, correct Manage Channels access from the compact doorway, focused regression coverage, and green full repository validation.

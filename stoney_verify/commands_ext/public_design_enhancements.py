@@ -1,35 +1,22 @@
 from __future__ import annotations
 
-"""Native activation point for Dank Design layout enhancements.
+"""Compatibility hook for historical Dank Design enhancement activation.
 
-This is not a startup guard. It is called by the normal /dank design command
-registration path after the native design module is loaded.
+Design behavior is now owned by the consolidated Studio and
+``server_design_plan_service``. This function intentionally performs no imports
+from startup_guards and does not replace live functions/classes.
 """
 
-_PATCHED = False
+_ACTIVATED = False
 
 
 def activate_public_design_enhancements() -> bool:
-    global _PATCHED
-
-    if _PATCHED:
+    global _ACTIVATED
+    if _ACTIVATED:
         return True
-
-    # Ensure the native design command module exists before enhancement modules
-    # look for it in sys.modules.
-    from stoney_verify.commands_ext import public_design_studio  # noqa: F401
-    from stoney_verify.startup_guards import server_design_strict_layout_guard as strict_layout
-    from stoney_verify.startup_guards import server_design_majority_layout_guard as majority_layout
-
-    strict_ok = bool(strict_layout.apply())
-    majority_ok = bool(majority_layout.apply())
-
-    _PATCHED = bool(strict_ok and majority_ok)
-    if _PATCHED:
-        print("✅ public_design_enhancements active; strict/majority layout owned by native /dank design path")
-    else:
-        print(f"⚠️ public_design_enhancements partial strict={strict_ok} majority={majority_ok}")
-    return _PATCHED
+    _ACTIVATED = True
+    print("✅ public_design_enhancements compatibility hook active; native design services own behavior")
+    return True
 
 
 __all__ = ["activate_public_design_enhancements"]

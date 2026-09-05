@@ -10,8 +10,10 @@ def apply() -> bool:
     try:
         import stoney_verify.commands_ext as commands_ext
 
+        # Overview still has legacy startup ownership. Dank Design does not: it
+        # is already in the canonical commands_ext registry and public profiles.
         allowed = set(getattr(commands_ext, "_ALLOWED_DANK_CHILDREN", set()) or set())
-        allowed.update({"overview", "design"})
+        allowed.add("overview")
         commands_ext._ALLOWED_DANK_CHILDREN = allowed
 
         from stoney_verify.commands_ext import public_setup_overview
@@ -20,15 +22,9 @@ def apply() -> bool:
         if callable(register):
             register(None, None)
 
-        try:
-            from stoney_verify.startup_guards import server_design_studio_command_guard
-
-            server_design_studio_command_guard.apply()
-        except Exception as design_exc:
-            print(f"⚠️ setup_overview_command_guard design command attach failed: {type(design_exc).__name__}: {design_exc}")
-
-        # This guard is loaded after the feature command guards, so it is the
-        # safest place to do the final public /dank surface cleanup.
+        # This guard is loaded after feature command guards, so it remains the
+        # final public /dank surface cleanup owner until P0-GUARD-001 removes the
+        # broader startup-guard layer.
         try:
             from stoney_verify.startup_guards import production_command_surface_guard
 
@@ -37,7 +33,7 @@ def apply() -> bool:
             print(f"⚠️ setup_overview_command_guard final command prune failed: {type(prune_exc).__name__}: {prune_exc}")
 
         _PATCHED = True
-        print("✅ setup_overview_command_guard active; /dank overview and /dank design are allowed in public setup surface")
+        print("✅ setup_overview_command_guard active; /dank overview allowed without design command mutation")
         return True
     except Exception as exc:
         try:

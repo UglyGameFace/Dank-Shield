@@ -44,12 +44,13 @@ _SYSTEM_WORDS = {
     "log",
 }
 
-
 _REVIEW_ZONES = {
     "verification",
     "support_tickets",
     "safety_logs",
 }
+
+_AUTO_DETECT_CONTEXTS = {"live_majority", "smart_category_auto_detect"}
 
 
 def _text(value: Any, default: str = "") -> str:
@@ -103,11 +104,7 @@ def _uppercase_ratio(value: Any) -> float:
 
 
 def _display_score(value: Any) -> int:
-    """Generic visual style score.
-
-    This intentionally supports any user-made decoration instead of a small
-    hardcoded symbol list.
-    """
+    """Generic visual style score supporting user-made decoration."""
 
     text = _strip_code_format(value)
     if not text:
@@ -124,7 +121,6 @@ def _display_score(value: Any) -> int:
     score += min(5, _symbol_count(text))
     score += min(5, _styled_unicode_letter_count(text))
 
-    # Repeated non-word decoration or deliberate framing.
     if re.search(r"([^\w\s])\1+", text, flags=re.UNICODE):
         score += 2
     if len(re.findall(r"[^\w\s-]", text, flags=re.UNICODE)) >= 2:
@@ -174,16 +170,12 @@ def _is_aesthetic_downgrade(before: str, after: str, *, kind: str) -> bool:
 
     if kind == "category" and before_score >= 3 and _looks_plain_slug(after):
         return True
-
     if before_score >= 5 and after_score <= 1:
         return True
-
     if _styled_unicode_letter_count(before) >= 2 and _styled_unicode_letter_count(after) == 0:
         return True
-
     if _symbol_count(before) >= 2 and _symbol_count(after) == 0:
         return True
-
     return False
 
 
@@ -235,7 +227,10 @@ def score_repair_item(item: Mapping[str, Any], *, context: str = "generic") -> d
             "after": after,
         }
 
-    if context == "live_majority" and _is_aesthetic_downgrade(before, after, kind=kind):
+    # Both legacy Live Majority and the consolidated category-aware Smart
+    # Auto-Detect are automatic inference contexts. Neither may simplify an
+    # intentional hand-designed visual identity.
+    if context in _AUTO_DETECT_CONTEXTS and _is_aesthetic_downgrade(before, after, kind=kind):
         return {
             "classification": BLOCKED_AESTHETIC_DOWNGRADE,
             "confidence": 0,
@@ -244,7 +239,6 @@ def score_repair_item(item: Mapping[str, Any], *, context: str = "generic") -> d
             "after": after,
         }
 
-    zone = style_zones.zone_for_item(item)
     if _looks_system_surface(before) or zone in _REVIEW_ZONES:
         return {
             "classification": REVIEW_ONLY,

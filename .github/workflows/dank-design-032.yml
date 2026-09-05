@@ -1,0 +1,100 @@
+name: Dank Design 032
+
+on:
+  pull_request:
+    paths:
+      - 'ACTIVE_TASK.md'
+      - 'stoney_verify/commands_ext/public_command_surface_v2.py'
+      - 'stoney_verify/commands_ext/public_design_group.py'
+      - 'stoney_verify/commands_ext/public_design_studio.py'
+      - 'stoney_verify/commands_ext/public_design_studio_v2.py'
+      - 'stoney_verify/commands_ext/public_design_bridge.py'
+      - 'stoney_verify/commands_ext/public_design_enhancements.py'
+      - 'stoney_verify/services/server_design_studio.py'
+      - 'stoney_verify/services/server_design_majority_layout.py'
+      - 'stoney_verify/services/server_design_plan_service.py'
+      - 'stoney_verify/services/server_design_repair_confidence.py'
+      - 'stoney_verify/services/server_design_apply_service.py'
+      - 'stoney_verify/startup_guards/server_design_command_module_guard.py'
+      - 'stoney_verify/startup_guards/server_design_studio_command_guard.py'
+      - 'stoney_verify/startup_guards/server_design_strict_layout_guard.py'
+      - 'stoney_verify/startup_guards/server_design_majority_layout_guard.py'
+      - 'stoney_verify/startup_guards/setup_overview_command_guard.py'
+      - 'tests/test_design_studio_consolidation_032.py'
+      - 'tests/test_dank_design_*.py'
+      - 'tests/test_server_design_*.py'
+      - 'tests/test_public_design_*.py'
+      - 'tests/test_setup_design_bridge_behavior.py'
+      - 'tools/audit_dank_design_smart_auto_detect.py'
+      - 'tools/test_dank_design_*.py'
+      - 'tools/test_design_native_registration.py'
+      - 'tools/test_design_layout_helpers_not_startup.py'
+      - '.github/workflows/dank-design-032.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  focused-design:
+    name: Consolidated Design Studio regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+
+      - name: Compile Design Studio owners
+        run: |
+          python -m py_compile \
+            stoney_verify/commands_ext/public_command_surface_v2.py \
+            stoney_verify/commands_ext/public_design_group.py \
+            stoney_verify/commands_ext/public_design_studio.py \
+            stoney_verify/commands_ext/public_design_studio_v2.py \
+            stoney_verify/commands_ext/public_design_bridge.py \
+            stoney_verify/commands_ext/public_design_enhancements.py \
+            stoney_verify/services/server_design_studio.py \
+            stoney_verify/services/server_design_majority_layout.py \
+            stoney_verify/services/server_design_plan_service.py \
+            stoney_verify/services/server_design_repair_confidence.py \
+            stoney_verify/services/server_design_apply_service.py \
+            stoney_verify/startup_guards/server_design_command_module_guard.py \
+            stoney_verify/startup_guards/server_design_studio_command_guard.py \
+            stoney_verify/startup_guards/server_design_strict_layout_guard.py \
+            stoney_verify/startup_guards/server_design_majority_layout_guard.py
+
+      - name: Run focused Design Studio tests
+        run: >-
+          python -m pytest -q --tb=short --disable-warnings
+          tests/test_design_studio_consolidation_032.py
+          tests/test_dank_design_public_registration_static.py
+          tests/test_public_design_group_native_interaction_static.py
+          tests/test_setup_design_bridge_behavior.py
+          tests/test_server_design_strict_layout_guard.py
+          tests/test_server_design_majority_confidence_static.py
+          tests/test_server_design_majority_no_simplify_static.py
+          tests/test_dank_design_consistency_030.py
+          tests/test_dank_design_editor_state_authority.py
+          tests/test_server_design_category_aware_auto_detect.py
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+
+      - name: Run design ownership and UX audits
+        run: |
+          python tools/audit_dank_design_smart_auto_detect.py
+          python tools/test_dank_design_safe_repair_cleanup_static.py
+          python tools/test_dank_design_ux_lock_cleanup_static.py
+          python tools/test_design_native_registration.py
+          python tools/test_design_layout_helpers_not_startup.py
