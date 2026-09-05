@@ -7,9 +7,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MAJORITY = (ROOT / "stoney_verify/services/server_design_majority_layout.py").read_text(encoding="utf-8")
 STUDIO = (ROOT / "stoney_verify/services/server_design_studio.py").read_text(encoding="utf-8")
+PLAN = (ROOT / "stoney_verify/services/server_design_plan_service.py").read_text(encoding="utf-8")
 DESIGN_REGISTRAR = (ROOT / "stoney_verify/commands_ext/public_design_group.py").read_text(encoding="utf-8")
+DESIGN_V2 = (ROOT / "stoney_verify/commands_ext/public_design_studio_v2.py").read_text(encoding="utf-8")
 DESIGN_ENHANCEMENTS = (ROOT / "stoney_verify/commands_ext/public_design_enhancements.py").read_text(encoding="utf-8")
-DESIGN_BRIDGE = (ROOT / "stoney_verify/startup_guards/server_design_majority_layout_guard.py").read_text(encoding="utf-8")
 TESTS = (ROOT / "tests/test_server_design_category_aware_auto_detect.py").read_text(encoding="utf-8")
 
 
@@ -30,8 +31,6 @@ def main() -> int:
         if marker not in MAJORITY:
             failures.append(f"majority layout missing contract marker: {marker}")
 
-    # Separator identity must compare the raw stored separator value. Do not
-    # normalize or strip whitespace here: "│" and " │ " are different styles.
     separator_helper_start = MAJORITY.find("def _separator_spec_exists(")
     separator_helper_end = MAJORITY.find("\ndef ensure_separator_spec(", separator_helper_start)
     if separator_helper_start < 0 or separator_helper_end < 0:
@@ -74,19 +73,22 @@ def main() -> int:
         if marker not in TESTS:
             failures.append(f"category-aware regression coverage missing: {marker}")
 
-    # Verify the actual native registration/execution path instead of a deleted
-    # legacy command file. /dank design registers normally, activates the design
-    # enhancement layer, and that layer installs the category-aware plan bridge.
-    if "activate_public_design_enhancements" not in DESIGN_REGISTRAR:
-        failures.append("public design registrar does not activate the design enhancement layer")
-    if "server_design_majority_layout_guard" not in DESIGN_ENHANCEMENTS:
-        failures.append("public design enhancement layer does not activate the majority-layout bridge")
-    if "majority.build_category_aware_options" not in DESIGN_BRIDGE:
-        failures.append("live Smart Auto-Detect flow does not build category-aware options")
-    if "majority.annotate_category_aware_plan_items" not in DESIGN_BRIDGE:
-        failures.append("live Smart Auto-Detect preview flow does not annotate category-aware decisions")
-    if "command_guard.build_design_plan = _build_design_plan_with_majority" not in DESIGN_BRIDGE:
-        failures.append("category-aware Smart Auto-Detect bridge is not installed on the active design plan path")
+    # The active path must be explicit and native. No startup guard may replace
+    # build_design_plan or DesignDoctorView after command registration.
+    if "public_design_studio_v2 as design" not in DESIGN_REGISTRAR:
+        failures.append("public design registrar is not routed to the consolidated Studio")
+    if "server_design_majority_layout_guard" in DESIGN_ENHANCEMENTS:
+        failures.append("public design enhancement hook still imports the majority startup guard")
+    if "server_design_strict_layout_guard" in DESIGN_ENHANCEMENTS:
+        failures.append("public design enhancement hook still imports the strict startup guard")
+    if "majority.build_category_aware_options" not in PLAN:
+        failures.append("native design plan service does not build category-aware Smart Auto-Detect options")
+    if "majority.annotate_category_aware_plan_items" not in PLAN:
+        failures.append("native design plan service does not annotate category-aware decisions")
+    if "build_drift_repair_plan" not in DESIGN_V2:
+        failures.append("consolidated Review / Repair flow is not wired to the native drift plan")
+    if "__use_live_majority_layout" not in PLAN:
+        failures.append("native plan metadata no longer identifies Smart Auto-Detect previews")
 
     if failures:
         print("DANK DESIGN SMART AUTO-DETECT AUDIT FAILED")
@@ -95,7 +97,7 @@ def main() -> int:
         return 1
 
     print("DANK DESIGN SMART AUTO-DETECT AUDIT OK")
-    print("category_local=yes raw_separator_identity=yes deterministic=yes keep_existing_exact=yes duplicate_helpers=no native_flow=yes")
+    print("category_local=yes raw_separator_identity=yes deterministic=yes keep_existing_exact=yes runtime_patch=no native_flow=yes")
     return 0
 
 
