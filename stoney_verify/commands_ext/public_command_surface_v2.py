@@ -202,9 +202,9 @@ class CompactDankHomeView(_OwnedView):
     @discord.ui.button(label="Server Design", emoji="🎨", style=discord.ButtonStyle.secondary, row=1)
     async def design(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        from .public_command_hub import _admin_or_manage
-        if not _admin_or_manage(interaction):
-            return await _private(interaction, "❌ Server Design requires **Manage Server** or **Administrator**.")
+        # Server Design's established authority is Manage Channels. Do not put a
+        # stricter Manage Server/Admin gate in front of the canonical doorway;
+        # the shared Studio bridge performs the one authoritative permission check.
         from . import public_design_bridge
         await public_design_bridge.open_design_studio_from_setup(interaction)
 
