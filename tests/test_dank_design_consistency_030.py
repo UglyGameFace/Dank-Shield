@@ -82,9 +82,16 @@ def test_protection_editor_is_exact_id_scoped() -> None:
 
 
 def test_consolidated_home_uses_real_current_workflow_labels() -> None:
-    for label in ("Design Server", "Edit One Item", "Review / Repair", "Saved Rules", "Rollback"):
+    for label in (
+        "Design Entire Server",
+        "Edit One Category / Channel",
+        "Fix Inconsistent Names",
+        "Saved Rules & Protection",
+        "Undo Last Apply",
+    ):
         assert f'label="{label}"' in V2
-    assert "Preview Server" in V2
+    assert "Preview Server Changes" in V2
+    assert "Build Smart Repair Preview" in V2
     assert "Edit Custom Format" not in V2
 
 
