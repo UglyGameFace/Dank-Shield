@@ -10,6 +10,8 @@ majority_guard = Path("stoney_verify/startup_guards/server_design_majority_layou
 group = Path("stoney_verify/commands_ext/public_design_group.py").read_text(errors="ignore")
 enh = Path("stoney_verify/commands_ext/public_design_enhancements.py").read_text(errors="ignore")
 plan = Path("stoney_verify/services/server_design_plan_service.py").read_text(errors="ignore")
+majority_service = Path("stoney_verify/services/server_design_majority_layout.py").read_text(errors="ignore")
+native_studio = Path("stoney_verify/services/server_design_studio.py").read_text(errors="ignore")
 
 for module in (
     "stoney_verify.startup_guards.server_design_strict_layout_guard",
@@ -45,6 +47,16 @@ for marker in (
 
 if "activate_public_design_enhancements" not in enh:
     bad.append("public_design_enhancements compatibility entry point disappeared")
+
+# The native parser already stops before known separators. Majority analysis may
+# keep the old helper name for compatibility, but it must never replace the
+# parser function at runtime again.
+if "studio._strip_leading_icon =" in majority_service:
+    bad.append("majority service still monkey-patches native separator parsing")
+if "Deprecated compatibility no-op" not in majority_service:
+    bad.append("separator parser compatibility helper is not explicitly inert")
+if "if any(remaining.startswith(sep) for sep in _all_separator_values()):" not in native_studio:
+    bad.append("native Studio parser no longer owns separator-safe icon parsing")
 
 if bad:
     print("FAIL design layout helpers not startup")
