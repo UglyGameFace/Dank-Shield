@@ -15,23 +15,24 @@ from stoney_verify.community_tools_service import (
     StickyPoll,
     get_sticky,
     normalize_sticky,
-    save_sticky,
+    save_sticky_bundle,
 )
 
 _ALLOWED_MENTIONS = discord.AllowedMentions.none()
 
 
-def _manage_messages(interaction: discord.Interaction) -> bool:
-    member = interaction.user
-    return bool(
-        isinstance(member, discord.Member)
-        and (member.guild_permissions.administrator or member.guild_permissions.manage_messages)
-    )
-
-
 def _text_channel(interaction: discord.Interaction) -> Optional[discord.TextChannel]:
     channel = interaction.channel
     return channel if isinstance(channel, discord.TextChannel) else None
+
+
+def _manage_messages(interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None) -> bool:
+    member = interaction.user
+    target = channel or _text_channel(interaction)
+    if not isinstance(member, discord.Member) or target is None:
+        return False
+    perms = target.permissions_for(member)
+    return bool(member.guild_permissions.administrator or perms.manage_messages)
 
 
 async def _private(
@@ -57,11 +58,7 @@ async def _private(
 
 
 def _preview_payload(config: StickyConfig, poll: Optional[StickyPoll], *, draft: bool) -> tuple[str, Optional[discord.Embed]]:
-    prefix = (
-        "👁️ **Draft preview** — nothing has changed live yet."
-        if draft
-        else "👁️ **Private sticky preview** — only you can see this."
-    )
+    prefix = "👁️ **Draft preview** — nothing has changed live yet." if draft else "👁️ **Private sticky preview** — only you can see this."
     content = prefix
     embed: Optional[discord.Embed] = None
     if config.mode == "plain":
@@ -79,30 +76,33 @@ def _preview_payload(config: StickyConfig, poll: Optional[StickyPoll], *, draft:
     return content, embed
 
 
+def _destination(interaction: discord.Interaction, channel_id: int) -> Optional[discord.TextChannel]:
+    channel = interaction.client.get_channel(int(channel_id))
+    return channel if isinstance(channel, discord.TextChannel) else None
+
+
 async def _post_temporary_test(
     interaction: discord.Interaction,
     config: StickyConfig,
     poll: Optional[StickyPoll],
 ) -> None:
-    if not _manage_messages(interaction):
-        return await _private(interaction, "❌ Temporary sticky tests require **Manage Messages**.")
-    channel = _text_channel(interaction)
+    channel = _destination(interaction, int(config.channel_id))
     if channel is None:
-        return await _private(interaction, "❌ Run the test inside a normal text channel.")
+        return await _private(interaction, "❌ The sticky destination channel is unavailable.")
+    if not _manage_messages(interaction, channel):
+        return await _private(interaction, "❌ Temporary sticky tests require **Manage Messages in the destination channel**.")
+    me = channel.guild.me
+    perms = channel.permissions_for(me) if me is not None else None
+    if perms is None or not (perms.view_channel and perms.send_messages):
+        return await _private(interaction, "❌ Dank Shield cannot send messages in the sticky destination.")
+    if config.mode in {"embed", "poll"} and not perms.embed_links:
+        return await _private(interaction, "❌ Dank Shield needs **Embed Links** in the sticky destination.")
 
     try:
         if config.mode == "plain":
-            await channel.send(
-                content=config.content,
-                allowed_mentions=_ALLOWED_MENTIONS,
-                delete_after=30,
-            )
+            await channel.send(content=config.content, allowed_mentions=_ALLOWED_MENTIONS, delete_after=30)
         elif config.mode == "embed":
-            await channel.send(
-                embed=sticky_embed(config),
-                allowed_mentions=_ALLOWED_MENTIONS,
-                delete_after=30,
-            )
+            await channel.send(embed=sticky_embed(config), allowed_mentions=_ALLOWED_MENTIONS, delete_after=30)
         elif config.mode == "poll" and poll is not None:
             await channel.send(
                 content="🧪 **Sticky poll test** — voting is disabled in temporary tests.",
@@ -113,27 +113,26 @@ async def _post_temporary_test(
         else:
             return await _private(interaction, "❌ This sticky is missing preview data.")
     except (discord.Forbidden, discord.HTTPException):
-        return await _private(interaction, "❌ Dank Shield could not post the temporary test in this channel.")
+        return await _private(interaction, "❌ Dank Shield could not post the temporary test in the destination channel.")
 
-    note = "✅ Temporary test posted for 30 seconds. It did **not** move or replace the real sticky."
+    note = f"✅ Temporary test posted in <#{channel.id}> for 30 seconds. It did **not** move or replace the real sticky."
     if config.use_webhook:
-        note += " The test uses Dank Shield's identity; the live sticky will still use your configured custom sender."
+        note += " Tests use Dank Shield's identity; the published sticky still uses your configured managed sender."
     await _private(interaction, note)
 
 
 def _merge_draft_with_live_state(draft: StickyConfig, current: Optional[StickyConfig]) -> StickyConfig:
-    """Keep content edits while preserving the latest operational/delivery state."""
+    """Keep draft content/style while preserving only latest operational/delivery state."""
     if current is None:
         return replace(draft, last_message_id=None, last_sent_at=None)
     return replace(
         draft,
         enabled=current.enabled,
-        color=current.color,
         interval_seconds=current.interval_seconds,
         message_threshold=current.message_threshold,
-        use_webhook=current.use_webhook,
-        sender_name=current.sender_name,
-        sender_avatar_url=current.sender_avatar_url,
+        use_webhook=current.use_webhook if current.mode != "poll" else False,
+        sender_name=current.sender_name if current.mode != "poll" else "",
+        sender_avatar_url=current.sender_avatar_url if current.mode != "poll" else "",
         last_message_id=current.last_message_id,
         last_sent_at=current.last_sent_at,
     )
@@ -171,14 +170,14 @@ class StickyDraftPreviewView(_OwnedPreviewView):
     @discord.ui.button(label="Publish Sticky", emoji="✅", style=discord.ButtonStyle.success)
     async def publish(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        if not _manage_messages(interaction):
-            return await _private(interaction, "❌ Publishing a sticky requires **Manage Messages**.")
-        channel = _text_channel(interaction)
+        channel = _destination(interaction, int(self.config.channel_id))
         guild = interaction.guild
         if channel is None or guild is None:
-            return await _private(interaction, "❌ Publish the sticky from its destination text channel.")
-        if int(channel.id) != int(self.config.channel_id) or int(guild.id) != int(self.config.guild_id):
-            return await _private(interaction, "❌ This draft belongs to a different server channel. Reopen Sticky Messages there.")
+            return await _private(interaction, "❌ The sticky destination is unavailable.")
+        if not _manage_messages(interaction, channel):
+            return await _private(interaction, "❌ Publishing requires **Manage Messages in the destination channel**.")
+        if int(guild.id) != int(self.config.guild_id):
+            return await _private(interaction, "❌ This draft belongs to a different server.")
 
         await interaction.response.defer()
         try:
@@ -186,28 +185,27 @@ class StickyDraftPreviewView(_OwnedPreviewView):
             if current is not None and int(current.guild_id) != int(guild.id):
                 raise InvalidCommunityToolValue("The saved sticky does not belong to this server.")
             publish_config = _merge_draft_with_live_state(self.config, current)
-            saved = await save_sticky(publish_config)
+            saved, saved_poll = await save_sticky_bundle(publish_config, None)
+            if saved_poll is not None:
+                raise CommunityStorageUnavailable("Unexpected sticky-poll state remained after a normal sticky save.")
         except (InvalidCommunityToolValue, CommunityStorageUnavailable) as exc:
-            return await interaction.followup.send(
-                f"❌ {exc}",
-                ephemeral=True,
-                allowed_mentions=_ALLOWED_MENTIONS,
-            )
+            return await interaction.followup.send(f"❌ {exc}", ephemeral=True, allowed_mentions=_ALLOWED_MENTIONS)
 
         runtime = ensure_community_tools_runtime(interaction.client)
         runtime.set_config(saved)
         posted = await runtime.refresh_channel(channel, force=True) if saved.enabled else None
 
-        # Local import avoids a module-import cycle while still returning the user
-        # to the canonical Sticky Center after the draft is actually published.
         from .public_community_tools import StickyCenterView, _sticky_status_embed
 
         if not saved.enabled:
-            message = "✅ Sticky changes saved. It is still **paused**, so nothing was posted live. Resume it from Sticky Settings when ready."
+            message = "✅ Sticky changes saved atomically. It is still **paused**, so nothing was posted live."
         elif posted is not None:
             message = "✅ Sticky published."
         else:
-            message = "⚠️ Sticky was saved, but Dank Shield could not post it in this channel. Check channel permissions before retrying."
+            message = (
+                "⚠️ Sticky state was saved safely, but Dank Shield could not post the replacement. "
+                "The previous live sticky was left intact; run Permission Check before retrying."
+            )
         await interaction.edit_original_response(
             content=message,
             embed=_sticky_status_embed(saved),
@@ -238,10 +236,11 @@ async def show_sticky_preview(
     config: Optional[StickyConfig],
     poll: Optional[StickyPoll],
 ) -> None:
-    if not _manage_messages(interaction):
-        return await _private(interaction, "❌ Sticky preview requires **Manage Messages**.")
     if config is None:
         return await _private(interaction, "ℹ️ Create a sticky draft first, then preview it before publishing.")
+    channel = _destination(interaction, int(config.channel_id))
+    if channel is None or not _manage_messages(interaction, channel):
+        return await _private(interaction, "❌ Sticky preview requires **Manage Messages in the destination channel**.")
 
     content, embed = _preview_payload(config, poll, draft=False)
     payload: dict[str, Any] = {
@@ -256,8 +255,9 @@ async def show_sticky_preview(
 
 
 async def show_sticky_draft_preview(interaction: discord.Interaction, config: StickyConfig) -> None:
-    if not _manage_messages(interaction):
-        return await _private(interaction, "❌ Sticky preview requires **Manage Messages**.")
+    channel = _destination(interaction, int(config.channel_id))
+    if channel is None or not _manage_messages(interaction, channel):
+        return await _private(interaction, "❌ Sticky preview requires **Manage Messages in the destination channel**.")
     try:
         safe = normalize_sticky(config)
     except InvalidCommunityToolValue as exc:
