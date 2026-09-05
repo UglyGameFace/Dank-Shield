@@ -27,11 +27,12 @@ legacy = once(
     '        "protection_items": len(protection_items),\n        "protection_names": len(protection_names),\n    }\n',
     "protection name count result",
 )
-legacy = once(
-    legacy,
-    '            f"Exact protection overrides: **{counts[\'protection_items\']}**",\n',
-    '            f"Exact protection overrides: **{counts[\'protection_items\']}**",\n            f"Name protection overrides: **{counts[\'protection_names\']}**",\n',
-    "format locks count copy",
+count_copy = '            f"Exact protection overrides: **{counts[\'protection_items\']}**",\n'
+if legacy.count(count_copy) != 2:
+    raise RuntimeError(f"protection count copy: expected 2 matches, found {legacy.count(count_copy)}")
+legacy = legacy.replace(
+    count_copy,
+    count_copy + '            f"Name protection overrides: **{counts[\'protection_names\']}**",\n',
 )
 
 replacements = {
