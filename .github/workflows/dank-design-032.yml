@@ -12,6 +12,7 @@ on:
       - 'stoney_verify/services/server_design_majority_layout.py'
       - 'stoney_verify/services/server_design_plan_service.py'
       - 'stoney_verify/services/server_design_repair_confidence.py'
+      - 'stoney_verify/services/server_design_apply_service.py'
       - 'stoney_verify/startup_guards/server_design_command_module_guard.py'
       - 'stoney_verify/startup_guards/server_design_studio_command_guard.py'
       - 'stoney_verify/startup_guards/server_design_strict_layout_guard.py'
@@ -63,6 +64,7 @@ jobs:
             stoney_verify/services/server_design_majority_layout.py \
             stoney_verify/services/server_design_plan_service.py \
             stoney_verify/services/server_design_repair_confidence.py \
+            stoney_verify/services/server_design_apply_service.py \
             stoney_verify/startup_guards/server_design_command_module_guard.py \
             stoney_verify/startup_guards/server_design_studio_command_guard.py \
             stoney_verify/startup_guards/server_design_strict_layout_guard.py \
