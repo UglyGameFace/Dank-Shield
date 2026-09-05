@@ -1,6 +1,6 @@
 name: DS Design 033 Legacy Owner Cleanup
 
-# One-shot branch migration. Delete this workflow after the validated cleanup commit lands.
+# One-shot branch migration retry after consolidating exact-editor Apply ownership. Delete after success.
 on:
   push:
     branches:
