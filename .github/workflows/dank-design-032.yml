@@ -75,7 +75,7 @@ jobs:
           tests/test_dank_design_public_registration_static.py
           tests/test_public_design_group_native_interaction_static.py
           tests/test_setup_design_bridge_behavior.py
-          tests/test_server_design_strict_layout_guard.py
+          tests/test_server_design_strict_plan.py
           tests/test_server_design_majority_confidence_static.py
           tests/test_server_design_majority_no_simplify_static.py
           tests/test_dank_design_consistency_030.py
