@@ -142,6 +142,20 @@ def test_drift_plan_calls_category_aware_native_service_not_guard(monkeypatch: p
     assert analysis["mode"] == "category_aware"
 
 
+def test_smart_auto_detect_confidence_blocks_styled_heading_simplification() -> None:
+    scored = plan_service.repair_confidence.score_repair_item(
+        {
+            "kind": "category",
+            "status": "changed",
+            "before": "╭─ 𝕊𝕋𝔸𝔽𝔽 ─╮",
+            "after": "staff",
+        },
+        context="smart_category_auto_detect",
+    )
+    assert scored["classification"] == plan_service.repair_confidence.BLOCKED_AESTHETIC_DOWNGRADE
+    assert scored["confidence"] == 0
+
+
 def test_low_confidence_drift_plan_fails_closed_before_ui_apply(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_category_aware_path(monkeypatch, apply_allowed=False)
     items, options, analysis = run(plan_service.build_drift_repair_plan(SimpleNamespace(id=1), {"theme_id": "gothic_clean"}))
