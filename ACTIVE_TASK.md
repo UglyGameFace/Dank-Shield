@@ -1,60 +1,82 @@
 # ACTIVE TASK
 
-## DS-DESIGN-033 — Fix separator, category-editor, and reset/unlock correctness
+## DS-DESIGN-033 — Fix separator, editor, reset correctness and remove redundant Dank Design paths
 
-**Status:** IN PROGRESS — ROOT CAUSE CONFIRMED, IMPLEMENTATION NEXT
+**Status:** IN PROGRESS — CORRECTNESS FIXES LANDED, FULL OWNERSHIP/REDUNDANCY AUDIT ACTIVE
 **Branch:** `fix/ds-design-033-editor-separator-reset-correctness`
 **Base:** `656ee13d02e54614c9f6f7a34d69008f2a0943e1` (`main`, merged DS-DESIGN-032)
 **Started:** 2026-09-05
 
 ## Outcome required
 
-Make Dank Design behave exactly like its UI says: a selected channel separator must actually become the saved desired separator, category/channel editors must preview the correct native scoped plan, and Reset/Unlock must remove the authority the user expects instead of leaving hidden overlapping rules active.
+Make Dank Design behave exactly like its UI says and leave one understandable execution path for each job. A selected separator must become the saved desired separator, category/channel editors must preview the correct native scoped plan, Reset must remove the authority the user expects, and dead compatibility/runtime-patch-era code must not remain around as a second apparent owner.
 
 ## User-reported failures
 
 - Channel separators selected in Dank Design are not working/sticking correctly.
 - Category Editor behavior is incorrect.
-- Locks do not appear to lift when trying to reset/unlock them.
+- Locks do not appear to lift when trying to reset/remove them.
+- Full Dank Design pass requested for redundant code after the correctness repair.
 
 ## Root causes confirmed
 
-- [x] **Separator-only Apply changes live names but does not save the selected separator into the authoritative design settings/rules.** Its pending payload stores the old `options` unchanged, so a later saved-design preview can propose the old separator again.
-- [x] **Saved lock generation can ignore a user-selected separator.** `_current_format_lock()` derives `separator_id` from the theme's `channel_separator` instead of an explicit saved `options["separator_id"]`; `_sync_enabled_global_lock()` rebuilds an enabled global lock from that helper and can therefore restore the theme separator.
-- [x] **Category/Channel `Preview Fixes` still depends on a retired magic flag.** `_preview_scope()` sets `__use_live_majority_layout=True` and then calls legacy `build_design_plan()` directly. DS-DESIGN-032 removed the runtime guard that used to make that flag meaningful, so the scoped editor is not using the native plan service it now claims to use.
-- [x] **Reset/Unlock is fragmented across overlapping authorities.** Removing one category/channel/manual/protection row can leave another rule for the same item active, while the UI calls the action simply “Unlock.”
-- [x] **`Clear All Locks` does not clear name-level `protection_rules`.** It clears global/category/channel/manual/exact-item protection state, but protection overrides by normalized name can remain active after a user-facing reset.
+- [x] **Separator-only Apply changed live names without saving the selected separator into authoritative design settings/rules.**
+- [x] **Saved lock generation could ignore a user-selected separator.** `_current_format_lock()` could derive `separator_id` from the theme and revive the old separator.
+- [x] **Category/Channel `Preview Fixes` depended on retired runtime magic.** The editor still set `__use_live_majority_layout=True` instead of explicitly using the native scoped plan service.
+- [x] **Reset/remove behavior was fragmented across overlapping authorities.** Removing one row could leave another exact/category/global/protection authority active while the UI implied the item was unlocked.
+- [x] **Reset All did not clear normalized-name `protection_rules`.**
+- [x] **Separator-only planning did not correctly honor exact-item protection/cumulative protection modes.**
+- [x] **Exact manual names could immediately fight a newly applied separator.**
+- [x] **Category Editor could repair children while preserving the selected category header even when its saved design required a category-name repair.**
+- [x] **Retired design startup guards/shims still physically exist after DS-DESIGN-032.** They are no longer supposed to own runtime behavior, but their presence creates maintenance ambiguity and must be classified by actual references before removal.
 
-## Execution path under repair
+## Execution path under repair/audit
 
 - [x] `/dank home` → Server Design → Design Entire Server → Change Separators Only.
-- [x] separator selector → preview → consolidated Apply.
-- [x] Edit One Category / Channel → Category Editor / Channel Editor → Preview Fixes.
+- [x] separator selector → preview → consolidated Apply → persist separator authority.
+- [x] Edit One Category / Channel → Preview Fixes → native scoped planner.
 - [x] Custom Format → exact category/channel saved rules.
-- [x] Saved Rules & Protection → Layout Rules → Unlock / Clean → individual reset / clear all.
-- [ ] Native plan-service scoped planning and persistence integration.
-- [ ] Regression tests for separator persistence, scoped category preview, and complete reset semantics.
+- [x] Saved Rules & Protection → remove one rule / reset item / reset all.
+- [x] Native plan-service scoped planning and confidence integration.
+- [x] Regression coverage for separator persistence, scoped preview, category-header repair, and complete reset semantics.
+- [ ] Classify every Dank Design command/service/guard/helper as active owner, compatibility-only, duplicate-but-needed, or dead.
+- [ ] Remove dead runtime-patch-era design guards/shims and temporary patch machinery when references prove they are unnecessary.
+- [ ] Verify legacy backend contains only still-reachable compatibility/editor primitives or documented migration debt, not a competing public workflow.
 
-## Planned changes
+## Changes landed so far
 
-- [ ] Persist a reviewed separator-only Apply as the new separator component of the server draft and applicable saved style locks without changing font, category frame, permissions, order, or unrelated settings.
-- [ ] Make `_current_format_lock()` honor an explicit saved separator rather than silently falling back to the theme separator.
-- [ ] Route Category/Channel `Preview Fixes` through the native `server_design_plan_service` and then scope/filter the resulting plan.
-- [ ] Add an obvious **Reset This Item** operation that removes all exact/category/channel/manual-name/exact-protection authority for the selected item in one action.
-- [ ] Make **Reset All Design Overrides** actually reset all saved override layers, including name-level protection overrides, while preserving the ordinary server draft unless the UI explicitly says otherwise.
-- [ ] Make result screens state exactly what remains authoritative after a reset.
-- [ ] Add focused behavioral tests before merging.
+- [x] Added `server_design_rule_service.py` as the pure saved-rule/separator/reset authority.
+- [x] Separator-only Apply now saves the chosen separator transactionally and updates exact-name rows touched by that reviewed batch.
+- [x] Explicit saved separators now beat theme defaults when locks are built/synchronized.
+- [x] Category/Channel `Preview Fixes` now routes through native scoped planning.
+- [x] Added `Reset This Category` / `Reset This Channel` and complete Reset All semantics.
+- [x] Corrected separator protection semantics and exact-item protection lookup.
+- [x] Added scoped category-header repair behavior.
+- [x] Replaced misleading one-rule “Unlock” result semantics with explicit remove/reset language in the active UI path.
+- [x] Added DS-DESIGN-033 focused regressions and extended dedicated Design CI.
+
+## Redundancy audit targets
+
+- `public_design_studio_v2.py` — public workflow owner.
+- `public_design_studio.py` — compatibility/editor/backend module; audit every surviving public-looking view/registration path.
+- `public_design_bridge.py`, `public_design_group.py`, `public_design_enhancements.py` — registration/compatibility ownership.
+- `server_design_plan_service.py`, `server_design_rule_service.py`, `server_design_apply_service.py`, majority/confidence/studio services — service authority overlap.
+- Retired startup guards: `server_design_command_module_guard.py`, `server_design_majority_layout_guard.py`, `server_design_strict_layout_guard.py`, `server_design_studio_command_guard.py`.
+- Runtime metadata/legacy helpers such as `__use_live_majority_layout`, `_infer_live_majority_context`, old consistency/doctor/home paths, deprecated registration helpers, and one-shot patch assets.
 
 ## Validation required
 
-- [ ] Selected separator survives a later saved-design preview and bot restart/persistence reload path.
-- [ ] Existing category/channel style locks retain their font/frame/icon settings while adopting a deliberate separator-only update where intended.
-- [ ] Category Editor preview uses native scoped planning and never relies on `__use_live_majority_layout` runtime magic.
-- [ ] Reset This Item leaves no narrower rule for that item unless the user deliberately keeps one.
-- [ ] Reset All Design Overrides removes all saved override layers advertised by the UI.
-- [ ] Focused Dank Design tests/audits green.
+- [x] Explicit separator persistence has focused regression coverage.
+- [x] Existing saved style fields remain unchanged during deliberate separator-only persistence coverage.
+- [x] Category/Channel Editor uses native scoped planning in focused coverage.
+- [x] Reset This Item removes every same-item override layer in focused coverage.
+- [x] Reset All Design Overrides clears every advertised override layer while preserving ordinary server draft settings in focused coverage.
+- [ ] No active production path imports or activates retired design runtime guards.
+- [ ] No duplicate public command registration or competing public home/apply owner remains.
+- [ ] Temporary one-shot patch workflow/helper removed.
+- [ ] Focused Dank Design tests/audits green on exact final head.
 - [ ] Full repository CI green on exact final head.
-- [ ] Final diff scoped and conflict/credential-prefix checks clean.
+- [ ] Final diff scoped; conflict markers and obvious committed credential prefixes absent.
 
 ## Scope protection
 
@@ -62,4 +84,4 @@ No unrelated Community Tools, moderation, tickets, verification, profiles, welco
 
 ## Next step
 
-Implement the persistence/authority fixes first, then the scoped editor and reset semantics, and prove each reported failure with regression tests before calling the task complete.
+Trace every remaining reference to the retired guards, legacy public-looking UI owners, runtime magic flags, and temporary patch files. Remove only code proven dead, preserve required compatibility primitives, then run focused and full exact-head validation before merging.
