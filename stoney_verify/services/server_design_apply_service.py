@@ -31,7 +31,7 @@ class TransactionResult:
     applied: list[PreparedRename]
     failure: str = ""
     restored_count: int = 0
-    residual: list[dict[str, Any]] | None = None
+    residual: list[PreparedRename] | None = None
     rollback_failures: list[str] | None = None
 
     def __post_init__(self) -> None:
@@ -152,8 +152,8 @@ async def compensate_applied(
     *,
     user_id: int,
     delay_seconds: float,
-) -> tuple[int, list[dict[str, Any]], list[str]]:
-    """Restore rows changed by the current failed Apply attempt.
+) -> tuple[int, list[PreparedRename], list[str]]:
+    """Restore rows changed by the current failed transaction attempt.
 
     A fresh channel object is resolved before compensation because discord.py 2.x
     channel edits return edited objects rather than mutating the original object
@@ -161,20 +161,21 @@ async def compensate_applied(
     """
 
     restored = 0
-    residual: list[dict[str, Any]] = []
+    residual: list[PreparedRename] = []
     failures: list[str] = []
 
     for prepared in reversed(applied):
         channel = await _resolve_fresh_channel(guild, prepared.channel_id, prepared.channel)
         current = _text(getattr(channel, "name", ""))
         if current and current != prepared.after:
-            residual.append(dict(prepared.item))
+            prepared.channel = channel
+            residual.append(prepared)
             failures.append(f"`{prepared.after}` changed again before automatic rollback.")
             continue
         try:
             edited = await channel.edit(
                 name=prepared.before,
-                reason=f"Dank Shield automatic rollback after failed design apply by {int(user_id)}",
+                reason=f"Dank Shield automatic rollback after failed design transaction by {int(user_id)}",
             )
             if edited is not None:
                 prepared.channel = edited
@@ -182,7 +183,8 @@ async def compensate_applied(
             if delay_seconds > 0:
                 await asyncio.sleep(delay_seconds)
         except Exception as exc:
-            residual.append(dict(prepared.item))
+            prepared.channel = channel
+            residual.append(prepared)
             failures.append(f"Could not restore `{prepared.after}`: {type(exc).__name__}")
 
     return restored, residual, failures
@@ -288,24 +290,12 @@ async def undo_prepared(
                 await asyncio.sleep(delay_seconds)
         except Exception as exc:
             failure = f"Discord rejected Undo for `{prepared.before}` → `{prepared.after}`: {type(exc).__name__}."
-            # Compensate the undo by putting already-restored rows back to the
-            # names they had before Undo began. Swap before/after for the generic
-            # compensation helper.
-            compensation_rows = [
-                PreparedRename(
-                    channel_id=row.channel_id,
-                    channel=row.channel,
-                    item=dict(row.item),
-                    before=row.before,
-                    after=row.after,
-                )
-                for row in restored_to_old
-            ]
-            for row in compensation_rows:
-                row.before, row.after = row.after, row.before
+            # Each successful Undo row already has before=new and after=old.
+            # Generic compensation therefore does exactly what we need here:
+            # verify the current name is old, then restore it to new.
             restored, residual, rollback_failures = await compensate_applied(
                 guild,
-                compensation_rows,
+                restored_to_old,
                 user_id=user_id,
                 delay_seconds=delay_seconds,
             )
