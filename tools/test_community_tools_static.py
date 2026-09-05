@@ -46,6 +46,7 @@ def test_raw_webhook_secrets_are_never_stored() -> None:
     assert forbidden not in HARDENING
     assert 'MANAGED_WEBHOOK_NAME = "Dank Shield Sticky"' in RUNTIME
     assert ".create_webhook(" in RUNTIME
+    assert "perms.manage_webhooks and perms.manage_messages" in RUNTIME
 
 
 def test_migration_persists_stickies_and_polls_service_role_only() -> None:
@@ -69,11 +70,14 @@ def test_poll_and_embed_posting_use_preview_publish_and_real_permissions() -> No
     assert "the value was not silently changed" in UI
 
 
-def test_sticky_state_transitions_use_atomic_bundle() -> None:
+def test_sticky_state_transitions_use_atomic_bundle_and_stale_drafts_are_blocked() -> None:
     assert "save_sticky_bundle" in SERVICE
     assert "STICKY_BUNDLE_RPC" in SERVICE
     assert "save_sticky_bundle(publish_config, None)" in PREVIEW
-    assert "save_sticky_bundle(sticky, self.poll)" in UI
+    assert "save_sticky_bundle(sticky, publish_poll)" in UI
+    assert "_draft_is_stale(self.baseline, current" in PREVIEW
+    assert "_draft_is_stale(self.current_sticky, existing" in UI
+    assert "_draft_is_stale(self.baseline_sticky, current" in UI
     assert "save_sticky(sticky)\n            saved_poll" not in UI
 
 
@@ -85,12 +89,16 @@ def test_runtime_replacement_is_non_destructive_and_poll_render_is_serialized() 
     assert "await self._delete_message_object(message)" in RUNTIME
     assert "_poll_render_locks" in RUNTIME
     assert "cast_and_render_poll_vote" in RUNTIME
+    assert "clicked_message_id != int(current.last_message_id)" in RUNTIME
+    assert "older sticky-poll card" in RUNTIME
 
 
-def test_quiet_notice_destination_changes_are_explicit_and_destructive_order_is_safe() -> None:
+def test_quiet_notice_destination_changes_are_explicit_stale_safe_and_destructive_order_is_safe() -> None:
     assert 'label="Use This Channel"' in QUIET_UI
     assert "channel_id=int(base.channel_id)" in QUIET_UI
-    remove_block = QUIET_UI.split("class QuietNoticeRemoveView", 1)[1].split("class QuietNoticeModal", 1)[0]
+    assert "_quiet_editor_is_stale(self.current, current)" in QUIET_UI
+    assert "current = await get_quiet_notice" in QUIET_UI
+    remove_block = QUIET_UI.split("class QuietNoticeRemoveView", 1)[1].split("async def _refresh_live_notice", 1)[0]
     assert remove_block.index("await delete_quiet_notice") < remove_block.index("await runtime.delete_quiet_live_message")
     toggle_block = QUIET_UI.split("async def toggle", 1)[1].split("async def use_here", 1)[0]
     assert toggle_block.index("await set_quiet_notice_enabled") < toggle_block.index("await runtime.delete_quiet_live_message")
