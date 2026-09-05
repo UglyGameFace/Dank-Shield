@@ -43,6 +43,6 @@ def test_design_studio_home_is_a_five_plain_language_workflow_hub():
         "Undo Last Apply",
     ):
         assert f'label="{label}"' in STUDIO
-    home = STUDIO[STUDIO.index("class DesignHomeView"):STUDIO.index("async def _fresh_channel_map")]
+    home = STUDIO[STUDIO.index("class DesignHomeView"):STUDIO.index("def _undo_preview_embed")]
     assert "DesignServerThemeSelect" not in home
     assert "DesignServerStrengthSelect" not in home
