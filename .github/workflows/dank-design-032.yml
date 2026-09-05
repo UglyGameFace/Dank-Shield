@@ -3,6 +3,7 @@ name: Dank Design 032
 on:
   pull_request:
     paths:
+      - 'ACTIVE_TASK.md'
       - 'stoney_verify/commands_ext/public_command_surface_v2.py'
       - 'stoney_verify/commands_ext/public_design_group.py'
       - 'stoney_verify/commands_ext/public_design_studio.py'
