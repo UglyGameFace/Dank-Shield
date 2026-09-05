@@ -1,5 +1,6 @@
 name: DS Design 033 Legacy Owner Cleanup
 
+# One-shot branch migration. Delete this workflow after the validated cleanup commit lands.
 on:
   push:
     branches:
