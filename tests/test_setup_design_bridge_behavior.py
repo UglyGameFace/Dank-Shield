@@ -80,3 +80,6 @@ def test_setup_design_bridge_opens_same_consolidated_ephemeral_panel(monkeypatch
     opened_from_setup = next(field for field in embed.fields if str(field.name) == "Opened from Setup")
     assert "exact same Dank Design Studio" in str(opened_from_setup.value)
     assert "competing design screen" in str(opened_from_setup.value)
+    assert "`/dank home`" in design.legacy._DESIGN_ERROR_GUIDANCE
+    assert "Server Design" in design.legacy._DESIGN_ERROR_GUIDANCE
+    assert "`/dank design`" not in design.legacy._DESIGN_ERROR_GUIDANCE
