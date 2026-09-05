@@ -21,7 +21,7 @@ on:
       - 'tests/test_server_design_*.py'
       - 'tests/test_public_design_*.py'
       - 'tests/test_setup_design_bridge_behavior.py'
-      - 'tools/audit_dank_design_smart_auto_detect.py'
+      - 'tools/audit_dank_design_*.py'
       - 'tools/test_dank_design_*.py'
       - 'tools/test_design_native_registration.py'
       - 'tools/test_design_layout_helpers_not_startup.py'
@@ -88,6 +88,7 @@ jobs:
       - name: Run design ownership and UX audits
         run: |
           python tools/audit_dank_design_smart_auto_detect.py
+          python tools/audit_dank_design_redundancy_033.py
           python tools/test_dank_design_safe_repair_cleanup_static.py
           python tools/test_dank_design_ux_lock_cleanup_static.py
           python tools/test_design_native_registration.py
