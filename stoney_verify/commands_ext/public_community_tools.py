@@ -89,8 +89,6 @@ def _can_send_messages(interaction: discord.Interaction) -> bool:
 
 
 def _poll_permission(perms: Any) -> bool:
-    # discord.py 2.4 introduced poll permissions. Different Discord API/library
-    # revisions have exposed send_polls and create_polls; honor either when present.
     values = [bool(getattr(perms, name)) for name in ("send_polls", "create_polls") if hasattr(perms, name)]
     return all(values) if values else True
 
@@ -426,7 +424,7 @@ class StickyCenterView(_OwnedView):
                 embed=sticky_poll_embed(self.poll),
                 view=StickyPollControlView(self.owner_id, self.config, self.poll),
             )
-        await interaction.response.send_modal(StickyPollModal(self.poll))
+        await interaction.response.send_modal(StickyPollModal(self.config, self.poll))
 
     @discord.ui.button(label="Quiet Server Notice", emoji="🌙", style=discord.ButtonStyle.success, row=1)
     async def quiet_notice(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -806,8 +804,9 @@ class StickyPollModal(discord.ui.Modal, title="Create or edit sticky poll"):
         placeholder="Choice one\nChoice two",
     )
 
-    def __init__(self, current: Optional[StickyPoll]) -> None:
+    def __init__(self, current_sticky: Optional[StickyConfig], current: Optional[StickyPoll]) -> None:
         super().__init__()
+        self.current_sticky = current_sticky
         self.current = current
         if current is not None:
             self.question.default = current.question
@@ -823,12 +822,10 @@ class StickyPollModal(discord.ui.Modal, title="Create or edit sticky poll"):
         try:
             existing = await get_sticky(int(channel.id))
             live_poll = await get_sticky_poll(int(channel.id)) if existing is not None and existing.mode == "poll" else None
-            if _draft_is_stale(existing if self.current is not None else None, existing, self.current, live_poll):
-                # The sticky row comparison above intentionally collapses to itself for
-                # existing poll edits; poll design is the authority we need here.
-                raise InvalidCommunityToolValue("The sticky poll changed while this editor was open. Reopen it before saving a draft.")
-            if self.current is None and live_poll is not None:
-                raise InvalidCommunityToolValue("A sticky poll was created while this editor was open. Reopen Community Tools before replacing it.")
+            if _draft_is_stale(self.current_sticky, existing, self.current, live_poll):
+                raise InvalidCommunityToolValue(
+                    "The sticky changed while this poll editor was open. Reopen Community Tools before creating a draft so newer work is not overwritten."
+                )
             base_votes = dict(live_poll.votes) if live_poll is not None and tuple(live_poll.options) == options else {}
             base_state = live_poll.state if live_poll is not None else "active"
             poll = StickyPoll(
@@ -1106,10 +1103,9 @@ def _parse_color(value: str) -> int:
     if len(raw) != 6:
         raise InvalidCommunityToolValue("Color must be exactly six hex digits, such as `5865F2`.")
     try:
-        number = int(raw, 16)
+        return int(raw, 16)
     except ValueError as exc:
         raise InvalidCommunityToolValue("Color must be a six-digit hex value such as `5865F2`.") from exc
-    return number
 
 
 class EmbedBuilderModal(discord.ui.Modal, title="Build an embed"):
