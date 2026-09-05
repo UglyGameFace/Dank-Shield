@@ -1,17 +1,24 @@
-name: Smart Stickies 029
+name: Smart Stickies 029 / Community Tools 031
 
 on:
   pull_request:
     paths:
+      - 'stoney_verify/community_tools_service.py'
       - 'stoney_verify/community_tools_runtime.py'
       - 'stoney_verify/community_quiet_notice_service.py'
+      - 'stoney_verify/community_lookup_service.py'
       - 'stoney_verify/commands_ext/public_community_tools.py'
       - 'stoney_verify/commands_ext/public_quiet_notice.py'
       - 'stoney_verify/commands_ext/public_sticky_preview.py'
+      - 'tests/test_community_tools_service.py'
+      - 'tests/test_community_tools_surface.py'
       - 'tests/test_smart_stickies_029.py'
+      - 'tests/test_community_tools_hardening_031.py'
+      - 'tools/test_community_tools_static.py'
       - 'tools/test_smart_stickies_029_static.py'
       - 'supabase/migrations/20260811122504_community_tools.sql'
       - 'supabase/migrations/20260812224000_smart_sticky_quiet_notices.sql'
+      - 'supabase/migrations/20260905121500_community_tools_hardening.sql'
       - '.github/workflows/smart-stickies-029.yml'
 
 permissions:
@@ -19,9 +26,9 @@ permissions:
 
 jobs:
   focused-python:
-    name: Smart sticky focused regressions
+    name: Community Tools focused regressions
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -35,24 +42,33 @@ jobs:
           python -m pip install --upgrade pip -q
           pip install -q -r requirements.txt
           pip install -q pytest
-      - name: Compile smart sticky modules
+      - name: Compile Community Tools modules
         run: |
           python -m py_compile \
+            stoney_verify/community_tools_service.py \
             stoney_verify/community_tools_runtime.py \
             stoney_verify/community_quiet_notice_service.py \
+            stoney_verify/community_lookup_service.py \
             stoney_verify/commands_ext/public_community_tools.py \
             stoney_verify/commands_ext/public_quiet_notice.py \
             stoney_verify/commands_ext/public_sticky_preview.py
       - name: Run focused regressions
-        run: python -m pytest -q --tb=short --disable-warnings tests/test_smart_stickies_029.py tests/test_community_tools_surface.py
+        run: >-
+          python -m pytest -q --tb=short --disable-warnings
+          tests/test_community_tools_service.py
+          tests/test_community_tools_surface.py
+          tests/test_smart_stickies_029.py
+          tests/test_community_tools_hardening_031.py
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
-      - name: Run ownership/static guard
-        run: python tools/test_smart_stickies_029_static.py
+      - name: Run ownership/static guards
+        run: |
+          python tools/test_community_tools_static.py
+          python tools/test_smart_stickies_029_static.py
 
   quiet-notice-sql:
-    name: Quiet notice SQL/RLS smoke
+    name: Community Tools SQL/RLS/atomic smoke
     runs-on: ubuntu-latest
     timeout-minutes: 8
     services:
@@ -96,15 +112,16 @@ jobs:
           end;
           $$;
           SQL
-      - name: Apply Community Tools and quiet-notice migrations twice
+      - name: Apply Community Tools migrations twice
         shell: bash
         run: |
           set -euo pipefail
           for pass in 1 2; do
             psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260811122504_community_tools.sql
             psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260812224000_smart_sticky_quiet_notices.sql
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260905121500_community_tools_hardening.sql
           done
-      - name: Verify quiet notice constraints RLS grants and persistence
+      - name: Verify RLS persistence and atomic sticky transition
         shell: bash
         run: |
           psql -v ON_ERROR_STOP=1 <<'SQL'
@@ -116,33 +133,69 @@ jobs:
               'Partner Place', 'https://discord.gg/example', true, now()
           );
 
+          select public.save_dank_sticky_bundle(
+              jsonb_build_object(
+                  'guild_id', 1001,
+                  'channel_id', 2001,
+                  'enabled', true,
+                  'content', 'Pick one',
+                  'mode', 'poll',
+                  'color', 5793266,
+                  'interval_seconds', 15,
+                  'message_threshold', 5,
+                  'use_webhook', false,
+                  'updated_at', now()
+              ),
+              jsonb_build_object(
+                  'guild_id', 1001,
+                  'channel_id', 2001,
+                  'question', 'Pick one',
+                  'options', jsonb_build_array('A', 'B'),
+                  'votes', '{}'::jsonb,
+                  'state', 'active',
+                  'updated_at', now()
+              )
+          );
+
           do $$
           declare
               quiet_rls boolean;
-              inactivity integer;
+              sticky_rls boolean;
+              poll_rls boolean;
           begin
-              select relrowsecurity into quiet_rls
-              from pg_class
-              where oid = 'public.dank_quiet_notices'::regclass;
-              if quiet_rls is not true then
-                  raise exception 'quiet notice table must have RLS enabled';
+              select relrowsecurity into quiet_rls from pg_class where oid = 'public.dank_quiet_notices'::regclass;
+              select relrowsecurity into sticky_rls from pg_class where oid = 'public.dank_stickies'::regclass;
+              select relrowsecurity into poll_rls from pg_class where oid = 'public.dank_sticky_polls'::regclass;
+              if quiet_rls is not true or sticky_rls is not true or poll_rls is not true then
+                  raise exception 'Community Tools tables must have RLS enabled';
               end if;
-
-              select inactivity_seconds into inactivity
-              from public.dank_quiet_notices
-              where guild_id = 1001;
-              if inactivity <> 7200 then
-                  raise exception 'quiet inactivity persistence mismatch';
+              if not exists (select 1 from public.dank_sticky_polls where channel_id = 2001) then
+                  raise exception 'atomic poll transition did not persist poll state';
               end if;
+          end;
+          $$;
 
-              begin
-                  insert into public.dank_quiet_notices(
-                      guild_id, channel_id, content, inactivity_seconds
-                  ) values (1002, 2002, 'Too fast', 60);
-                  raise exception 'quiet inactivity constraint did not reject 60 seconds';
-              exception
-                  when check_violation then null;
-              end;
+          select public.save_dank_sticky_bundle(
+              jsonb_build_object(
+                  'guild_id', 1001,
+                  'channel_id', 2001,
+                  'enabled', true,
+                  'content', 'Normal sticky',
+                  'mode', 'plain',
+                  'color', 5793266,
+                  'interval_seconds', 15,
+                  'message_threshold', 5,
+                  'use_webhook', false,
+                  'updated_at', now()
+              ),
+              null
+          );
+
+          do $$
+          begin
+              if exists (select 1 from public.dank_sticky_polls where channel_id = 2001) then
+                  raise exception 'atomic plain transition left stale sticky-poll state';
+              end if;
           end;
           $$;
 
@@ -152,6 +205,12 @@ jobs:
               begin
                   perform * from public.dank_quiet_notices;
                   raise exception 'anon unexpectedly retained quiet notice access';
+              exception
+                  when insufficient_privilege then null;
+              end;
+              begin
+                  perform public.save_dank_sticky_bundle('{}'::jsonb, null);
+                  raise exception 'anon unexpectedly retained atomic sticky RPC access';
               exception
                   when insufficient_privilege then null;
               end;
