@@ -19,6 +19,7 @@ COMMAND_GUARD = (ROOT / "stoney_verify/startup_guards/server_design_command_modu
 SETUP_GUARD = (ROOT / "stoney_verify/startup_guards/setup_overview_command_guard.py").read_text(encoding="utf-8")
 V2 = (ROOT / "stoney_verify/commands_ext/public_design_studio_v2.py").read_text(encoding="utf-8")
 PLAN = (ROOT / "stoney_verify/services/server_design_plan_service.py").read_text(encoding="utf-8")
+LEGACY = (ROOT / "stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
 
 
 def run(coro: Any) -> Any:
@@ -29,23 +30,53 @@ def _labels(view: Any) -> list[str]:
     return [str(getattr(child, "label", "") or "") for child in view.children]
 
 
-def test_home_is_five_clear_workflows_not_a_mixed_control_panel() -> None:
+def test_home_is_five_plain_language_workflows_not_a_mixed_control_panel() -> None:
     view = studio_v2.DesignHomeView({"theme_id": "gothic_clean", "strength": 4})
-    assert _labels(view) == ["Design Server", "Edit One Item", "Review / Repair", "Saved Rules", "Rollback"]
+    assert _labels(view) == [
+        "Design Entire Server",
+        "Edit One Category / Channel",
+        "Fix Inconsistent Names",
+        "Saved Rules & Protection",
+        "Undo Last Apply",
+    ]
     assert all(child.__class__.__name__ != "DesignServerThemeSelect" for child in view.children)
     assert all(child.__class__.__name__ != "DesignServerStrengthSelect" for child in view.children)
 
 
-def test_server_design_controls_live_only_inside_design_server_workflow() -> None:
+def test_home_copy_explains_the_only_immediate_rename_exception() -> None:
+    assert "The home screen never changes a Discord name" in V2
+    assert "Only one action is immediate" in V2
+    assert "Edit One Category / Channel → **Rename**" in V2
+    assert "Nothing renames a channel/category until a reviewed preview is applied" not in V2
+    assert "Saved Rules & Protection" in V2
+    assert "does not rename anything by itself" in V2
+
+
+def test_server_design_controls_live_only_inside_design_entire_server_workflow() -> None:
     view = studio_v2.DesignServerView({"theme_id": "gothic_clean", "strength": 4})
     class_names = [child.__class__.__name__ for child in view.children]
     assert "DesignServerThemeSelect" in class_names
     assert "DesignServerStrengthSelect" in class_names
-    assert "Preview Server" in _labels(view)
-    assert "Separator Only" in _labels(view)
+    assert "Preview Server Changes" in _labels(view)
+    assert "Change Separators Only" in _labels(view)
+    assert "saved as settings immediately" in V2
+    assert "do **not** rename a single Discord channel/category" in V2
 
 
-def test_active_registration_does_not_activate_design_runtime_monkey_patches() -> None:
+def test_item_edit_workflow_distinguishes_immediate_rename_from_preview_flows() -> None:
+    assert "**Rename** is the only immediate name change" in V2
+    assert "**Preview Fixes** and **Custom Format** always show a preview" in V2
+    assert "**Rename applies immediately. No Apply button appears after Rename.**" in LEGACY
+
+
+def test_fix_inconsistent_names_uses_read_only_scan_then_smart_preview() -> None:
+    view = studio_v2.ReviewRepairView()
+    assert _labels(view) == ["Scan Saved Design", "Build Smart Repair Preview", "Back"]
+    assert "Scan Saved Design** is read-only" in V2
+    assert "blocks Apply when confidence is not high enough" in V2
+
+
+def test_active_registration_does_not_activate_design_runtime_monkey_patch_guards() -> None:
     assert "public_design_studio_v2 as design" in GROUP
     assert "activate_public_design_enhancements" not in GROUP
     assert "server_design_strict_layout_guard" not in GROUP
@@ -54,6 +85,37 @@ def test_active_registration_does_not_activate_design_runtime_monkey_patches() -
     assert "server_design_majority_layout_guard" not in ENHANCEMENTS
     assert "command_guard.build_design_plan =" not in PLAN
     assert "DesignDoctorView =" not in PLAN
+
+
+def test_legacy_bridge_is_small_explicit_and_only_consolidates_navigation_apply() -> None:
+    assert legacy._home_embed is studio_v2._home_embed
+    assert legacy.DesignHomeView is studio_v2.DesignHomeView
+    assert legacy.DesignPreviewView is studio_v2.ReviewedPreviewView
+    assert legacy.StyleChangePreviewView is studio_v2.LegacyStyleChangePreviewView
+
+    bridge_start = V2.index("def _install_legacy_compatibility_bridge")
+    bridge_end = V2.index("\n\n_install_legacy_compatibility_bridge()", bridge_start)
+    bridge = V2[bridge_start:bridge_end]
+    assert "legacy._home_embed = _home_embed" in bridge
+    assert "legacy.DesignHomeView = DesignHomeView" in bridge
+    assert "legacy.DesignPreviewView = ReviewedPreviewView" in bridge
+    assert "legacy.StyleChangePreviewView = LegacyStyleChangePreviewView" in bridge
+    for forbidden in (
+        "legacy.build_design_plan =",
+        "legacy.DesignDoctorView =",
+        "legacy._load_design_options =",
+        "legacy.register_public_design_studio_command =",
+    ):
+        assert forbidden not in bridge
+
+
+def test_all_legacy_back_paths_now_resolve_the_consolidated_home() -> None:
+    # The mature legacy editors still contain Back callbacks that call these
+    # globals. The canonical v2 import replaces exactly those two navigation
+    # globals, so every such callback resolves the same consolidated home.
+    assert LEGACY.count("view=DesignHomeView(options)") >= 8
+    assert legacy.DesignHomeView is studio_v2.DesignHomeView
+    assert legacy._home_embed is studio_v2._home_embed
 
 
 def test_design_command_guard_is_validation_only_not_registry_mutation() -> None:
@@ -144,12 +206,7 @@ def test_drift_plan_calls_category_aware_native_service_not_guard(monkeypatch: p
 
 def test_smart_auto_detect_confidence_blocks_styled_heading_simplification() -> None:
     scored = plan_service.repair_confidence.score_repair_item(
-        {
-            "kind": "category",
-            "status": "changed",
-            "before": "╭─ 𝕊𝕋𝔸𝔽𝔽 ─╮",
-            "after": "staff",
-        },
+        {"kind": "category", "status": "changed", "before": "╭─ 𝕊𝕋𝔸𝔽𝔽 ─╮", "after": "staff"},
         context="smart_category_auto_detect",
     )
     assert scored["classification"] == plan_service.repair_confidence.BLOCKED_AESTHETIC_DOWNGRADE
@@ -165,13 +222,79 @@ def test_low_confidence_drift_plan_fails_closed_before_ui_apply(monkeypatch: pyt
     assert "confidence is too low" in items[0]["blockers"][0]
 
 
-def test_all_primary_previews_share_one_reviewed_apply_component() -> None:
-    assert "class ReviewedPreviewView" in V2
-    assert V2.count("ReviewedPreviewView(") >= 3
+class FakeChannel:
+    def __init__(self, channel_id: int, name: str, *, fail_edit: bool = False) -> None:
+        self.id = channel_id
+        self.name = name
+        self.fail_edit = fail_edit
+        self.edits: list[str] = []
+
+    async def edit(self, *, name: str, reason: str) -> None:
+        self.edits.append(name)
+        if self.fail_edit:
+            raise RuntimeError("edit failed")
+        self.name = name
+
+
+class FakeGuild:
+    def __init__(self, channels: list[FakeChannel]) -> None:
+        self.channels = channels
+        self.categories: list[Any] = []
+        self._by_id = {channel.id: channel for channel in channels}
+
+    def get_channel(self, channel_id: int) -> FakeChannel | None:
+        return self._by_id.get(channel_id)
+
+    async def fetch_channels(self) -> list[FakeChannel]:
+        return list(self.channels)
+
+
+def test_apply_preflight_rejects_one_stale_row_before_any_edit() -> None:
+    first = FakeChannel(1, "one")
+    second = FakeChannel(2, "changed-by-admin")
+    guild = FakeGuild([first, second])
+    items = [
+        {"channel_id": "1", "before": "one", "after": "ONE", "status": "changed"},
+        {"channel_id": "2", "before": "two", "after": "TWO", "status": "changed"},
+    ]
+    ready, skipped, errors = run(studio_v2._preflight_apply(guild, items))
+    assert skipped == 0
+    assert len(ready) == 1
+    assert errors == ["`two` is now `changed-by-admin`."]
+    assert first.edits == []
+    assert second.edits == []
+
+
+def test_failed_apply_rollback_restores_only_this_attempt() -> None:
+    first = FakeChannel(1, "ONE")
+    item = {"channel_id": "1", "before": "one", "after": "ONE", "status": "changed"}
+    restored, residual, failures = run(studio_v2._rollback_attempt([(first, item, "one", "ONE")], user_id=99))
+    assert restored == 1
+    assert residual == []
+    assert failures == []
+    assert first.name == "one"
+    assert first.edits == ["one"]
+
+
+def test_apply_source_preflights_whole_batch_before_first_edit_and_stops_on_failure() -> None:
+    apply_start = V2.index("class ReviewedPreviewView")
+    bridge_start = V2.index("class LegacyStyleChangePreviewView", apply_start)
+    block = V2[apply_start:bridge_start]
+    assert block.index("await _preflight_apply(guild, items)") < block.index("await channel.edit(")
+    assert "**No names were changed.**" in block
+    assert "failure =" in block
+    assert "break" in block
+    assert "await _rollback_attempt(applied" in block
+    assert "**No partial design was left behind.**" in block
+
+
+def test_every_active_legacy_preview_uses_the_transactional_apply_owner() -> None:
+    assert legacy.DesignPreviewView is studio_v2.ReviewedPreviewView
+    assert legacy.StyleChangePreviewView is studio_v2.LegacyStyleChangePreviewView
+    assert issubclass(studio_v2.LegacyStyleChangePreviewView, studio_v2.ReviewedPreviewView)
     assert V2.count('label="Apply Reviewed Changes"') == 1
     assert "This preview is obsolete" in V2
-    assert "current != before" in V2
-    assert "_persist_rollback_snapshot" in V2
+    assert "_persist_snapshot_rows" in V2
 
 
 def test_setup_and_slash_command_converge_on_same_studio_module() -> None:
