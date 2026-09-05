@@ -567,7 +567,13 @@ class StickyRuntime:
             return cached
 
         me = channel.guild.me
-        if me is None or not channel.permissions_for(me).manage_webhooks:
+        if me is None:
+            return None
+        perms = channel.permissions_for(me)
+        # Bot-authenticated deletion of an older webhook-authored message needs
+        # Manage Messages. Requiring both permissions keeps Custom Sender from
+        # accumulating orphaned copies after every sticky movement.
+        if not (perms.manage_webhooks and perms.manage_messages):
             return None
         try:
             webhooks = await channel.webhooks()
@@ -647,7 +653,7 @@ class StickyRuntime:
             webhook = await self._managed_webhook(channel)
             if webhook is None:
                 raise InvalidCommunityToolValue(
-                    "Custom Sender is enabled, but Dank Shield cannot manage its sticky webhook in this channel."
+                    "Custom Sender is enabled, but Dank Shield does not have Manage Webhooks + Manage Messages in this channel."
                 )
             try:
                 webhook_payload: dict[str, Any] = {
@@ -736,6 +742,18 @@ class StickyRuntime:
         lock = self._poll_render_locks.setdefault(int(channel_id), asyncio.Lock())
         async with lock:
             try:
+                current = await get_sticky(int(channel_id))
+                clicked_message_id = int(getattr(getattr(interaction, "message", None), "id", 0) or 0)
+                if (
+                    current is None
+                    or current.mode != "poll"
+                    or not current.last_message_id
+                    or clicked_message_id != int(current.last_message_id)
+                ):
+                    return await _private(
+                        interaction,
+                        "❌ This is an older sticky-poll card. Use the newest poll message so your vote cannot land on a stale copy.",
+                    )
                 poll = await cast_sticky_poll_vote(
                     int(channel_id),
                     int(interaction.user.id),
