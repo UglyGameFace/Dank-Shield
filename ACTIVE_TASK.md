@@ -1,85 +1,130 @@
 # ACTIVE TASK
 
-## DS-DESIGN-029 — Repair Dank Design editor state authority
+## DS-COMMUNITY-031 — Community Tools correctness, durability, and UX hardening
 
-**Status:** VALIDATING — IMPLEMENTATION + FOCUSED REGRESSIONS GREEN
-**Branch:** `fix/dank-design-editor-state-authority`
-**PR:** #185
-**Base:** `6f02f644b40f175da91190340a83c3d4ee81854c` (merged PR #183)
-**Started:** 2026-08-28
+**Status:** IN PROGRESS — ROOT CAUSES CONFIRMED, IMPLEMENTATION STARTED
+**Branch:** `fix/ds-community-031-community-tools-hardening`
+**Base:** `d7ee1420e4cadef915919e59bb401408a6489dde` (`main`, merged DS-DESIGN-030)
+**Started:** 2026-09-05
 
 ## Outcome required
 
-A manual Category Editor / Channel Editor choice must remain authoritative through save, preview, and apply. Older whole-server design choices must not silently replace an explicit item-level rule.
+Make the entire public **Community Tools** section reliable and coherent rather than a collection of individually plausible buttons. Preserve the compact `/dank home` command surface while hardening stickies, sticky polls, quiet notices, native polls, embeds, member/server information, permission diagnostics, fun/lookups, persistence, restart behavior, and failure handling.
 
-## Root cause / execution path
+The task is complete only when the real execution paths are corrected, affected UX is internally consistent, regressions cover the failures, migrations/static guards remain safe, and the final branch passes applicable repository validation.
 
-- [x] Intended precedence confirmed: saved channel override → saved category rule → saved global rule → local auto-detection. PR #92 explicitly established that saved owner-approved rules always win.
-- [x] `build_design_plan()` / effective option resolution still honor that precedence.
-- [x] `_save_exact_lock()` persists the selected category/channel rule before preview.
-- [x] `DesignPreviewView.apply()` applies the reviewed plan and does not intentionally rebuild the whole-server design.
-- [x] Primary reversion root cause confirmed: the later `server_design_strict_layout_guard` monkey-patched design option load/save and rewrote persisted Gothic/Fraktur global/category/channel locks to the Gothic default separator. Explicit `bar_full`, `bar_heavy`, and other saved choices could therefore become `pipe_spaced` before preview/apply.
-- [x] Unsaved Custom Format drafts were seeded from server/category majority rather than the selected item's live style, allowing old majority values to hitchhike into a new exact rule.
-- [x] Manual selector changes could retain `exact_match=False`, allowing Smart Fix suppression to override explicit user intent.
-- [x] Exact item previews reused `StyleChangePreviewView`, a whole-server separator-repair view with unrelated controls.
-- [x] Exact previews shared mutable `_PENDING` state without binding Apply to the preview that created the button.
-- [x] Strength 4 is labeled Recommended but category frames were enabled only at strengths 3 and 5.
-- [x] Exact editor Separator Examples next/previous/back callbacks defined a guarded action but never executed it, then referenced `guild` outside that action.
+## Scope
 
-## Changes
+- Community Tools public UI and navigation.
+- Sticky configuration, delivery, preview, custom sender, cadence, listing, and removal.
+- Sticky polls and native Discord polls.
+- Quiet-server notices and their server-wide activity runtime.
+- Embed Builder.
+- Member / Server Info and Permission Check.
+- Fun & Lookup network utilities and simple games.
+- Community Tools persistence, startup reconciliation, permissions, concurrency, and focused CI/tests.
+- No unrelated moderation, ticketing, verification, Dank Design, profile, or welcome-card redesign.
 
-- [x] Removed obsolete persisted Gothic-lock normalization / command option load-save monkey patch. Gothic Clean's current default remains normalized only at the theme-definition layer.
-- [x] Saved owner-approved channel/category/global rules are preserved instead of rewritten.
-- [x] Unsaved exact editors seed from the selected item's current live style; **Server Style** remains the explicit opt-in majority reset.
-- [x] Manual exact-editor changes force exact intent.
-- [x] Exact category/channel previews use the generic reviewed-plan Apply view.
-- [x] Exact Apply is bound to the preview timestamp and rejects an obsolete Apply button after a newer preview replaces pending state.
-- [x] Strength 4 applies the selected category frame consistently with the UI contract.
-- [x] Separator Examples paging/back navigation now executes inside `_guard_design_action` with valid guild/editor state.
-- [x] Added `tests/test_dank_design_editor_state_authority.py` covering the repaired authority paths.
+## Findings / root causes
+
+### Durable delivery and runtime
+
+- [x] Sticky refresh currently deletes the previous live message **before** the replacement is sent and durably recorded. A failed send can therefore erase a healthy sticky; a failed delivery-state write can leave a stale DB pointer and later duplicate/orphan messages.
+- [x] Sticky-poll creation writes the sticky row and poll row separately. A failure between writes can leave `mode=poll` without poll state.
+- [x] Sticky poll vote storage is serialized, but the public message edit is not. Concurrent voters can save correctly and still race the visible totals backwards.
+- [x] Quiet watcher has no per-iteration/per-guild exception isolation; one unexpected runtime error can kill the watcher task.
+- [x] Quiet activity persistence writes the timestamp captured when the worker was scheduled instead of the newest in-memory activity after a burst, so a quick restart can restore an older quiet timestamp.
+- [x] Enabled sticky / quiet-notice startup queries are not explicitly paginated, which is unsafe for a public multi-server bot once PostgREST row limits are reached.
+- [x] Startup reconciliation fan-outs every configured item at once instead of using bounded concurrency.
+
+### Configuration authority / destructive ordering
+
+- [x] Editing an existing guild-wide Quiet Server Notice from another text channel silently replaces its destination with the editor's current channel.
+- [x] Quiet-notice temporary tests post in the panel's current channel, not necessarily the configured destination.
+- [x] Pause/remove delete the current quiet notice before durable state is changed. If persistence fails, an enabled config can survive and repost after its visible notice was destroyed.
+- [x] Sticky cadence editing drops current sticky-poll state from the returned center view, causing an existing poll to look like a new-poll action.
+- [x] Switching a sticky from poll mode to plain/embed leaves stale poll state unless explicitly cleaned.
+
+### Permissions and truthfulness
+
+- [x] Several Community Tools permission checks use guild-level permissions instead of effective channel permissions, ignoring channel overwrites.
+- [x] Custom Sender can be saved even when Dank Shield cannot manage webhooks in the destination, after which runtime silently falls back to a normal bot message while UI still claims a custom sender is active.
+- [x] Native poll creation does not explicitly check Discord's poll permissions even though discord.py 2.4+ exposes poll permission flags.
+- [x] Permission Check reports only Dank Shield and does not distinguish required vs optional feature permissions or the invoking user's effective access.
+- [x] Quiet Server Notice copy says "whole server" even though activity coverage can only include channels/messages Dank Shield can receive.
+
+### Input/UX consistency
+
+- [x] Sticky type is entered as free text (`plain`/`embed`) and the sticky editor cannot edit the persisted embed color.
+- [x] Several modal fields advertise hard ranges or yes/no values but silently clamp/coerce invalid input instead of rejecting it.
+- [x] Native poll choice de-duplication happens before visible truncation, allowing two long choices to collapse to the same displayed answer.
+- [x] Embed Builder and native poll posting are immediate while stickies already use the safer preview/publish pattern.
+- [x] Existing sticky-poll editing is immediate and can replace another sticky mode without a reviewed draft step.
+- [x] Sticky cadence copy sounds like an independent timer even though time eligibility is evaluated when human activity arrives.
+- [x] Server Stickies silently truncates at 25 rows.
+- [x] Image AI is exposed as a dead public button even though no provider exists.
+- [x] External lookup parsing can leak malformed provider payload exceptions past `CommunityLookupError`; each lookup also creates a fresh HTTP session and has no concurrency bound/cache.
+- [x] Fixed two-dice behavior is needlessly limited for a utility advertised as Dice.
+
+## Execution path inspected
+
+- [x] `/dank home` → compact public surface → `open_community_tools()`.
+- [x] `CommunityToolsView` and all nested views/modals.
+- [x] `community_tools_service.py` Supabase validation/read/write path.
+- [x] `community_tools_runtime.py` single-owner `on_message` + `on_ready` runtime.
+- [x] Sticky preview/publish path and managed-webhook sender path.
+- [x] Quiet-notice service/UI/runtime path.
+- [x] Lookup service and provider failure handling.
+- [x] Community Tools migrations, focused Python tests, static ownership guards, and SQL workflows.
+- [x] discord.py 2.4+ poll support/permissions checked against current library documentation.
+
+## Planned changes
+
+- [ ] Make sticky replacement non-destructive: send replacement → persist new delivery → remove old; roll back the new replacement if durable state cannot be recorded.
+- [ ] Add an atomic service operation for sticky + sticky-poll state transitions, including stale poll cleanup when leaving poll mode.
+- [ ] Serialize sticky-poll vote + visible refresh per channel.
+- [ ] Make quiet watcher resilient and persist the latest observed activity.
+- [ ] Paginate persistent configuration reads and bound startup reconciliation concurrency.
+- [ ] Preserve quiet-notice destination on ordinary edits; add an explicit destination-change action and test in the saved destination.
+- [ ] Persist pause/remove before deleting live quiet messages.
+- [ ] Use effective channel permissions and validate both operator and bot capabilities for each feature.
+- [ ] Make Permission Check feature-oriented and show operator + bot blockers.
+- [ ] Replace error-prone sticky type text with guided type selection; expose embed color.
+- [ ] Reject invalid ranges/booleans instead of silently changing user input.
+- [ ] Add safe preview/publish to immediate-post builders where practical without expanding the slash-command surface.
+- [ ] Improve server sticky listing, wording, lookup robustness/resource reuse, dice utility, and remove unavailable Image AI from the public menu.
+- [ ] Expand focused runtime/service/surface/static regressions and affected CI path coverage.
 
 ## Validation / results
 
-- [x] Affected Python modules compile in focused gates.
-- [x] Focused editor-authority + category-aware + strict-layout + exact-editor suites pass.
-- [x] Final exact-editor navigation focused gate: **26 tests passed**.
-- [x] `git diff --check` passed before committing the navigation repair.
-- [x] Temporary patch/apply workflows removed from the branch after successful source commits.
-- [x] Pre-PR diff limited to Dank Design implementation, strict-layout compatibility cleanup, regressions, and this task record.
-- [ ] Full unit test suite green on exact final PR head.
-- [ ] Applicable standalone `tools/test_*.py` guards green on exact final PR head.
-- [ ] Full Dank Shield CI and auxiliary PR workflows green on exact final PR head.
-- [ ] Final PR diff / review threads / comments / commit status inspected after CI.
+- [ ] Affected modules compile.
+- [ ] Focused Community Tools service/runtime tests pass.
+- [ ] Smart Stickies regressions pass.
+- [ ] Community Tools surface/static guards pass.
+- [ ] SQL migrations/workflows pass if persistence schema/RPC changes are required.
+- [ ] Full repository test/CI validation passes on the exact final PR head.
+- [ ] Final diff / accidental-file / secret / conflict-marker inspection passes.
 
 ## Cleanup / compatibility
 
-- [x] Obsolete persisted-lock normalizer and its dead persistence hook removed rather than left as a no-op shim.
-- [x] Names-only safety preserved. No intended changes to permissions, overwrites, roles, topics, order, tickets, verification, slowmode, NSFW, archive state, or category placement.
-- [x] Rollback snapshots, protected-name behavior, and channel → category → global precedence preserved.
-- [ ] Final dead-reference/conflict-artifact inspection after final PR head settles.
+- [x] Existing single-owner Community Tools runtime is authoritative; do not add a second listener/runtime or monkey patch.
+- [x] Raw webhook URLs/tokens remain forbidden from persistent storage.
+- [x] Compact public command roots stay unchanged; improvements remain menu-first.
+- [ ] Remove/integrate stale or conflicting Community Tools logic encountered in the affected paths.
+- [ ] Verify no obsolete poll/quiet/sticky state is left behind after mode transitions/removal.
 
-## Backlog outside current Apply-reversion fix
+## Conflicts / blockers
 
-- Direct Rename immediately renames Discord but does not create/update an exact saved style rule. A later saved-design preview can therefore restyle that renamed item. This is a separate UX/ownership behavior because Direct Rename has no reviewed Apply step; do not broaden this PR unless required for the current authority fix.
-- `_initial_editor_lock()` currently computes majority inference and `_live_target_exact_lock()` computes it again. This is redundant work, not a correctness blocker; optimize separately if worthwhile.
+- None identified at task start. The older `feature/ds-sticky-026-smart-community-tools` branch is obsolete and intentionally not reused because current `main` contains substantially newer merged work.
+
+## Backlog outside this task
+
+- Discord Gateway uptime/reconnect flapping is a separate runtime/hosting task and is not being mixed into Community Tools.
+
+## Next step
+
+Implement the durability and state-authority corrections first, then build UX improvements on top of those corrected primitives before running focused and full validation.
 
 ## Definition of Done
 
-A user editing one channel or category has that explicit rule remain authoritative through save, preview, and apply; saved item-level rules are never silently rewritten by a whole-server theme normalizer; stale preview buttons cannot apply newer pending state; exact editor navigation works; Recommended category styling matches the UI; temporary implementation machinery is absent; and the exact final PR head passes targeted plus full repository validation and final diff/review inspection.
-
-## Final editor-authority completion pass
-
-- [x] Direct Rename executes inside the guarded interaction path and refreshes from Discord API when available.
-- [x] Direct Rename persists a literal exact-name rule and rolls Discord back if persistence fails when possible.
-- [x] Exact manual names outrank channel/category/global style rules until explicitly replaced or unlocked.
-- [x] Per-item Lock Rule captures the selected item's live style instead of copying the whole-server preset.
-- [x] Rules & Unlocks / Design Doctor can display, remove, and clean stale exact-name rules.
-- [x] Rules & Unlocks preserves full saved style detail: font, category frame, separator, and strength.
-- [x] Saved-setting mutations invalidate older reviewed previews.
-- [x] Style Change Apply and missing-icon controls carry the same immutable preview identity.
-- [x] Missing-icon repairs remain batched in groups of five and rebuild the preview for the next unresolved batch.
-- [x] Known existing separators are parsed separately from leading emoji and are replaced rather than stacked.
-- [x] Strict layout helper is activated only through the native public Design module ownership path.
-- [x] Focused tests and design architecture/standalone guards pass before this commit.
-- [ ] Full repository PR CI and auxiliary PR workflows green on this exact final head.
-- [ ] Final PR diff/review/temp-artifact inspection complete.
+Every currently exposed Community Tools feature follows one authoritative, tested execution path; destructive actions are persistence-safe; restart/reconnect behavior remains coherent; permissions reflect real channel capability; user-entered values are not silently rewritten; public UI does not advertise unavailable functionality; network/provider failures fail cleanly; scalable reads/reconciliation do not silently omit large deployments; affected regressions and CI are green; final diff is scoped and clean; and any remaining limitation is stated explicitly rather than hidden behind fallback behavior.
