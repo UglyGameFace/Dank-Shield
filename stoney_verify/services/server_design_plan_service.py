@@ -128,6 +128,43 @@ def _scope_items(
     return scoped
 
 
+def _selected_category_header(items: list[dict[str, Any]], category_id: int) -> dict[str, Any] | None:
+    wanted = str(int(category_id))
+    for raw in items:
+        item = dict(raw)
+        if str(item.get("kind") or "") == "category" and str(item.get("channel_id") or "") == wanted:
+            return item
+    return None
+
+
+def _replace_category_header(
+    items: list[dict[str, Any]],
+    category_id: int,
+    header: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Replace the selected Category Editor header without touching child rows."""
+
+    if not isinstance(header, Mapping):
+        return [dict(item) for item in items]
+
+    wanted = str(int(category_id))
+    replacement = dict(header)
+    replacement["scoped_category_header_source"] = "saved_design"
+    out: list[dict[str, Any]] = []
+    replaced = False
+    for raw in items:
+        item = dict(raw)
+        if str(item.get("kind") or "") == "category" and str(item.get("channel_id") or "") == wanted:
+            if not replaced:
+                out.append(dict(replacement))
+                replaced = True
+            continue
+        out.append(item)
+    if not replaced:
+        out.insert(0, dict(replacement))
+    return out
+
+
 async def build_plan(
     guild: Any,
     options: Mapping[str, Any],
@@ -193,9 +230,11 @@ async def build_scoped_repair_plan(
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
     """Build Smart Repair for one Category/Channel Editor scope.
 
-    Confidence is evaluated *after* filtering to the selected scope. A messy,
-    unrelated category cannot block or distort the item the administrator is
-    actively reviewing.
+    Child channels use their category-local detected layout. The selected
+    category header itself uses the saved design/rule hierarchy, because the
+    category-aware channel detector intentionally preserves unsaved category
+    headers. Confidence is evaluated only after those two sources are combined
+    into the exact scope the administrator is reviewing.
     """
 
     from stoney_verify.commands_ext import public_design_studio as legacy
@@ -212,6 +251,15 @@ async def build_scoped_repair_plan(
     items = _scope_items(all_items, category_id=category_id, channel_id=channel_id)
     items = list(majority.annotate_category_aware_plan_items(studio, items, plan_options))
 
+    header_source = ""
+    if category_id is not None:
+        saved_options = normalize_plan_options(options, strict=True)
+        saved_items = list(await legacy.build_design_plan(guild, saved_options))
+        saved_header = _selected_category_header(saved_items, int(category_id))
+        items = _replace_category_header(items, int(category_id), saved_header)
+        if saved_header is not None:
+            header_source = "saved_design"
+
     confidence = repair_confidence.evaluate_repair_plan(items, context="smart_category_auto_detect")
     plan_options["__repair_confidence_result"] = dict(confidence)
     analysis = {
@@ -220,6 +268,7 @@ async def build_scoped_repair_plan(
         "confidence": dict(confidence),
         "category_id": str(int(category_id)) if category_id is not None else "",
         "channel_id": str(int(channel_id)) if channel_id is not None else "",
+        "category_header_source": header_source,
     }
     return _fail_closed_on_low_confidence(items, confidence), dict(plan_options), analysis
 
