@@ -30,7 +30,8 @@ def test_smart_auto_detect_is_category_aware_and_saved_rules_remain_authoritativ
     assert "annotate_category_aware_plan_items" in PLAN
     assert "respect_saved_rules=True" in PLAN
     assert "mixed categories" in PLAN.lower()
-    assert "Saved narrow rules win" in V2
+    assert "Narrow saved rules always win" in V2
+    assert "keeps saved narrow rules authoritative" in V2
 
 
 def test_low_confidence_plan_is_non_applicable_before_the_ui_renders() -> None:
