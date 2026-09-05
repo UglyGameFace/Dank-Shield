@@ -5,13 +5,14 @@ from __future__ import annotations
 The public Studio asks one service for every rename plan. Historical startup
 helpers replaced ``public_design_studio.build_design_plan`` at runtime, making
 results depend on import order. Live auto-detect, strict matching, saved-rule
-precedence, and compatibility defaults are explicit here instead.
+precedence, confidence gating, and compatibility defaults are explicit here.
 """
 
 from collections.abc import Mapping
 from typing import Any
 
 from stoney_verify.services import server_design_majority_layout as majority
+from stoney_verify.services import server_design_repair_confidence as repair_confidence
 from stoney_verify.services import server_design_studio as studio
 
 _RENAME_SAFE_VISUAL_NAMES = {
@@ -46,8 +47,8 @@ def normalize_plan_options(options: Mapping[str, Any], *, strict: bool = True) -
     out = dict(options)
 
     # Preserve the established Gothic Clean spaced-pipe default without a guard
-    # rewriting the ThemePreset tuple. The majority service owns dynamic visual
-    # catalog entries explicitly and deterministically.
+    # rewriting the ThemePreset tuple. Dynamic visual catalog entries are owned
+    # explicitly by the majority service.
     majority.ensure_separator_spec(studio, "|", "spaced")
     if str(out.get("theme_id") or "gothic_clean") == "gothic_clean" and not str(out.get("separator_id") or "").strip():
         out["separator_id"] = "pipe_spaced"
@@ -89,8 +90,8 @@ async def build_plan(
     """Build one deterministic plan through the native backend.
 
     Smart Auto-Detect remains category-aware. Mixed categories keep their own
-    style rather than being flattened to one server-wide majority, and the saved
-    rule precedence is retained by the existing effective-option resolver.
+    style rather than being flattened to one server-wide majority, and saved
+    rule precedence remains authoritative.
     """
 
     from stoney_verify.commands_ext import public_design_studio as legacy
@@ -112,6 +113,10 @@ async def build_plan(
     items = await legacy.build_design_plan(guild, plan_options)
     if use_live_majority:
         items = majority.annotate_category_aware_plan_items(studio, items, plan_options)
+        confidence = repair_confidence.evaluate_repair_plan(items, context="smart_category_auto_detect")
+        plan_options["__repair_confidence_result"] = dict(confidence)
+        analysis["confidence"] = dict(confidence)
+
     return list(items), dict(plan_options), analysis
 
 
@@ -129,10 +134,16 @@ async def build_drift_repair_plan(guild: Any, options: Mapping[str, Any]) -> tup
     )
 
 
+def confidence_allows_apply(options: Mapping[str, Any]) -> bool:
+    confidence = options.get("__repair_confidence_result")
+    return bool(isinstance(confidence, Mapping) and confidence.get("apply_allowed"))
+
+
 __all__ = [
     "build_drift_repair_plan",
     "build_plan",
     "build_saved_design_plan",
+    "confidence_allows_apply",
     "live_records",
     "normalize_plan_options",
 ]
