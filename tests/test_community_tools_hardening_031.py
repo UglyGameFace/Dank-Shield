@@ -16,6 +16,8 @@ from stoney_verify.commands_ext.public_community_tools import (
     _normalize_native_poll_choices,
     _parse_dice_notation,
 )
+from stoney_verify.commands_ext.public_quiet_notice import _quiet_editor_is_stale
+from stoney_verify.commands_ext.public_sticky_preview import _draft_is_stale
 from stoney_verify.community_quiet_notice_service import QuietNoticeConfig
 from stoney_verify.community_tools_runtime import StickyRuntime
 from stoney_verify.community_tools_service import (
@@ -132,6 +134,50 @@ def test_successful_sticky_replacement_persists_before_old_message_delete(monkey
         assert events == ["send_new", "persist_new", "fetch_old:111", "delete_old"]
 
     asyncio.run(scenario())
+
+
+def test_sticky_draft_conflict_detection_ignores_runtime_state_but_blocks_design_overwrite() -> None:
+    baseline = _sticky(
+        content="hello",
+        mode="embed",
+        title="Rules",
+        color=0x123456,
+        last_message_id=10,
+        last_sent_at=datetime(2026, 9, 5, 10, 0, tzinfo=timezone.utc),
+    )
+    moved = replace(
+        baseline,
+        last_message_id=11,
+        last_sent_at=datetime(2026, 9, 5, 10, 5, tzinfo=timezone.utc),
+        interval_seconds=90,
+        enabled=False,
+    )
+    assert _draft_is_stale(baseline, moved) is False
+    assert _draft_is_stale(baseline, replace(moved, content="newer admin copy")) is True
+
+    poll = StickyPoll(guild_id=1, channel_id=2, question="Pick", options=("A", "B"), votes={"1": 0})
+    voted = replace(poll, votes={"1": 0, "2": 1}, state="paused")
+    assert _draft_is_stale(baseline, moved, poll, voted) is False
+    assert _draft_is_stale(baseline, moved, poll, replace(voted, question="Changed question")) is True
+
+
+def test_quiet_editor_conflict_detection_ignores_runtime_activity_but_blocks_admin_overwrite() -> None:
+    baseline = _quiet(
+        content="quiet",
+        last_notice_message_id=99,
+        last_notice_sent_at=datetime(2026, 9, 5, 10, 5, tzinfo=timezone.utc),
+    )
+    runtime_only = replace(
+        baseline,
+        last_activity_at=datetime(2026, 9, 5, 10, 10, tzinfo=timezone.utc),
+        last_notice_message_id=100,
+        last_notice_sent_at=datetime(2026, 9, 5, 10, 9, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 9, 5, 10, 11, tzinfo=timezone.utc),
+    )
+    assert _quiet_editor_is_stale(baseline, runtime_only) is False
+    assert _quiet_editor_is_stale(baseline, replace(runtime_only, content="changed by another admin")) is True
+    assert _quiet_editor_is_stale(baseline, replace(runtime_only, channel_id=21)) is True
+    assert _quiet_editor_is_stale(None, runtime_only) is True
 
 
 def test_quiet_activity_worker_persists_latest_burst_timestamp(monkeypatch: pytest.MonkeyPatch) -> None:
