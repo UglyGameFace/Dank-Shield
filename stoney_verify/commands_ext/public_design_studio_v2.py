@@ -22,7 +22,6 @@ from stoney_verify.services import server_design_repair_confidence as repair_con
 from stoney_verify.services import server_design_rule_service as rule_service
 
 studio = legacy.studio
-_PATCHED = False
 _COMPATIBILITY_BRIDGE_INSTALLED = False
 
 
@@ -286,8 +285,11 @@ class DesignServerView(DesignView):
         guild = interaction.guild
         assert guild is not None
         options = await _load_design_options(int(guild.id))
-        _analysis, repair_options, _summary = legacy._infer_live_majority_context(guild, options)  # type: ignore[attr-defined]
-        current = _safe_str(repair_options.get("separator_id"), "none")
+        theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
+        current = rule_service.effective_draft_separator(
+            options,
+            theme_separator=_safe_str(getattr(theme, "channel_separator", "none"), "none"),
+        )
         selected = "bar_heavy" if current == "none" else current
         await interaction.response.edit_message(
             embed=legacy._style_change_embed(guild, options, separator_id=selected),  # type: ignore[attr-defined]
@@ -1046,29 +1048,6 @@ async def open_design_studio(interaction: discord.Interaction) -> None:
     )
 
 
-def register_public_design_studio_command(bot: Any = None, tree: Any = None) -> bool:
-    """Compatibility registrar; normal ownership is public_design_group."""
-
-    global _PATCHED
-    if _PATCHED:
-        return True
-    try:
-        import stoney_verify.commands_ext as commands_ext
-        from stoney_verify.commands_ext.public_setup_group import dank_group
-
-        allowed = set(getattr(commands_ext, "_ALLOWED_DANK_CHILDREN", set()) or set())
-        allowed.add("design")
-        commands_ext._ALLOWED_DANK_CHILDREN = allowed
-        if dank_group.get_command("design") is None:
-            @dank_group.command(name="design", description="Open Dank Design Studio for safe channel/category name styling.")
-            async def dank_design(interaction: discord.Interaction) -> None:
-                await open_design_studio(interaction)
-        _PATCHED = True
-        return True
-    except Exception:
-        return False
-
-
 __all__ = [
     "DesignHomeView",
     "DesignServerView",
@@ -1086,5 +1065,4 @@ __all__ = [
     "_open_undo",
     "_require_design_permission",
     "open_design_studio",
-    "register_public_design_studio_command",
 ]

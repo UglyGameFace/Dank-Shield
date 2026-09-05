@@ -189,7 +189,6 @@ async def build_plan(
         records = live_records(guild)
         inferred, profiles = majority.build_category_aware_options(studio, plan_options, records)
         plan_options = normalize_plan_options(inferred, strict=strict)
-        plan_options["__use_live_majority_layout"] = True
         plan_options["__respect_saved_rules"] = bool(respect_saved_rules)
         analysis = {
             "mode": "category_aware",

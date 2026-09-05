@@ -6,16 +6,16 @@ ROOT = Path(__file__).resolve().parents[1]
 LEGACY = (ROOT / "stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
 V2 = (ROOT / "stoney_verify/commands_ext/public_design_studio_v2.py").read_text(encoding="utf-8")
 PLAN = (ROOT / "stoney_verify/services/server_design_plan_service.py").read_text(encoding="utf-8")
-ENHANCEMENTS = (ROOT / "stoney_verify/commands_ext/public_design_enhancements.py").read_text(encoding="utf-8")
+RETIRED_ENHANCEMENTS = ROOT / "stoney_verify/commands_ext/public_design_enhancements.py"
 STARTUP = (ROOT / "stoney_verify/startup_guards/__init__.py").read_text(encoding="utf-8")
 
 
 def test_native_design_owns_enhancements_without_runtime_patch_loading() -> None:
     assert "server_design_plan_service as plans" in V2
-    assert "server_design_majority_layout_guard" not in ENHANCEMENTS
-    assert "server_design_strict_layout_guard" not in ENHANCEMENTS
+    assert not RETIRED_ENHANCEMENTS.exists()
     assert "server_design_majority_layout_guard" not in STARTUP
     assert "server_design_strict_layout_guard" not in STARTUP
+    assert "server_design_command_module_guard" not in STARTUP
 
 
 def test_fix_mismatched_names_copy_mentions_saved_rules_win() -> None:

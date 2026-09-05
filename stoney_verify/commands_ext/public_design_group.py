@@ -25,16 +25,11 @@ def register_public_design_group_commands(bot: Any = None, tree: Any = None) -> 
     if _REGISTERED:
         return
 
-    import stoney_verify.commands_ext as commands_ext
     from stoney_verify.commands_ext.public_setup_group import dank_group
     from stoney_verify.commands_ext import public_design_studio_v2 as design
 
-    # `design` is already part of the canonical public registry. Keep this tiny
-    # compatibility assertion local to registration instead of mutating command
-    # profiles through a startup guard.
-    allowed = set(getattr(commands_ext, "_ALLOWED_DANK_CHILDREN", set()) or set())
-    allowed.add("design")
-    commands_ext._ALLOWED_DANK_CHILDREN = allowed
+    # Command/profile ownership is declarative in commands_ext.__init__.py.
+    # Registration must not rewrite that registry at runtime.
 
     if dank_group.get_command("design") is None:
         @dank_group.command(name="design", description="Open Dank Design Studio for safe server name styling.")

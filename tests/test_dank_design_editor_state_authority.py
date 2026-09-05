@@ -9,13 +9,9 @@ from stoney_verify.commands_ext import public_design_studio as public_studio
 PUBLIC_STUDIO = Path("stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
 
 
-def test_strict_layout_guard_has_no_persisted_design_option_rewriter() -> None:
-    guard_source = Path("stoney_verify/startup_guards/server_design_strict_layout_guard.py").read_text(encoding="utf-8")
-
-    assert "_patch_command_guard_options" not in guard_source
-    assert "_normalize_gothic_lock" not in guard_source
-    assert "command_guard._load_design_options" not in guard_source
-    assert "command_guard._save_design_options" not in guard_source
+def test_retired_strict_layout_guard_is_absent() -> None:
+    guard = Path("stoney_verify/startup_guards/server_design_strict_layout_guard.py")
+    assert not guard.exists()
 
 
 def test_recommended_strength_four_applies_selected_category_frame() -> None:

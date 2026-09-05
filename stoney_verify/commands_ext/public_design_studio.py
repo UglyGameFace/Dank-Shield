@@ -23,7 +23,6 @@ from stoney_verify.interaction_guard import run_guarded_interaction, safe_send_i
 from stoney_verify.services import server_design_studio as studio
 from stoney_verify.services import server_design_rule_service as rule_service
 
-_PATCHED = False
 _PENDING: dict[str, dict[str, Any]] = {}
 _LAST_SNAPSHOTS: dict[str, list[dict[str, Any]]] = {}
 _LOCKS: dict[str, asyncio.Lock] = {}
@@ -5836,51 +5835,7 @@ class RollbackConfirmView(discord.ui.View):
         await _guard_design_action(interaction, "design.rollback.confirm", action, defer=False)
 
 
-async def open_design_studio(interaction: discord.Interaction) -> None:
-    if not await _require_design_permission(interaction):
-        return
-    assert interaction.guild is not None
-    options = await _load_design_options(int(interaction.guild.id))
-    await interaction.response.send_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options), ephemeral=True)
-
-
-def register_public_design_studio_command(bot: Any = None, tree: Any = None) -> bool:
-    """Register /dank design during normal commands_ext loading.
-
-    This replaces the old startup guard import-time registration path.
-    """
-
-    global _PATCHED
-    if _PATCHED:
-        return True
-
-    try:
-        import stoney_verify.commands_ext as commands_ext
-        from stoney_verify.commands_ext.public_setup_group import dank_group
-
-        allowed = set(getattr(commands_ext, "_ALLOWED_DANK_CHILDREN", set()) or set())
-        allowed.add("design")
-        commands_ext._ALLOWED_DANK_CHILDREN = allowed
-
-        if dank_group.get_command("design") is None:
-            @dank_group.command(name="design", description="Open Dank Design Studio for channel/category name styling.")
-            async def dank_design(interaction: discord.Interaction) -> None:
-                await open_design_studio(interaction)
-
-        _PATCHED = True
-        print("✅ public_design_studio registered /dank design natively")
-        return True
-    except Exception as exc:
-        try:
-            print(f"⚠️ public_design_studio registration failed: {type(exc).__name__}: {exc}")
-        except Exception:
-            pass
-        return False
-
-
 __all__ = [
-    "register_public_design_studio_command",
-    "open_design_studio",
     "build_design_plan",
     "DesignHomeView",
     "_home_embed",
