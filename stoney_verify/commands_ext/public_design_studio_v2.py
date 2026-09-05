@@ -102,7 +102,8 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
             f"Categories: **{counts.get('categories', 0)}**\n"
             f"Channels: **{counts.get('channels', 0)}**\n"
             f"Exact names: **{counts.get('manual_names', 0)}**\n"
-            f"Protection overrides: **{counts.get('protection_items', 0)}**"
+            f"Exact protection: **{counts.get('protection_items', 0)}**\n"
+            f"Name protection: **{counts.get('protection_names', 0)}**"
         ),
         inline=True,
     )
@@ -144,7 +145,7 @@ def _compat_help_embed() -> discord.Embed:
     )
     embed.add_field(
         name="Saved Rules & Protection",
-        value="Rules change what future previews enforce. Saving or unlocking a rule does not rename Discord by itself.",
+        value="Rules change what future previews enforce. Saving or removing a rule does not rename Discord by itself.",
         inline=False,
     )
     embed.set_footer(text="Batch changes are transactional-style: preflight first, stop on error, compensate partial changes")
@@ -498,7 +499,7 @@ def _saved_rules_embed(guild: discord.Guild, options: Mapping[str, Any]) -> disc
     counts = _rule_counts(options)
     embed = discord.Embed(
         title="🔐 Saved Rules & Protection",
-        description="These settings control what **future previews** enforce. Saving, unlocking, or changing a rule here does **not** rename a Discord item by itself.",
+        description="These settings control what **future previews** enforce. Saving, removing, or changing a rule here does **not** rename a Discord item by itself.",
         color=discord.Color.blurple(),
     )
     embed.add_field(
@@ -508,16 +509,17 @@ def _saved_rules_embed(guild: discord.Guild, options: Mapping[str, Any]) -> disc
             f"Category: **{counts.get('categories', 0)}**\n"
             f"Channel: **{counts.get('channels', 0)}**\n"
             f"Exact names: **{counts.get('manual_names', 0)}**\n"
-            f"Exact protection: **{counts.get('protection_items', 0)}**"
+            f"Exact protection: **{counts.get('protection_items', 0)}**\n"
+            f"Name protection: **{counts.get('protection_names', 0)}**"
         ),
         inline=False,
     )
     embed.add_field(
         name="Which tool does what",
         value=(
-            "**Layout Rules** = global/category/channel visual rules.\n"
-            "**Unlock / Clean** = remove one saved rule or stale rule.\n"
-            "**Protection** = decide which exact/default names automated styling may touch."
+            "**Layout Rules** = global/category/channel visual rules, plus **Reset All Design Overrides**.\n"
+            "**Remove One Rule** = remove exactly one listed saved rule or clean deleted-item rows.\n"
+            "**Protection** = manage exact-item and normalized-name protection. For every same-item override, use **Reset This Category/Channel** in the item editor."
         ),
         inline=False,
     )
@@ -538,7 +540,7 @@ class SavedRulesView(DesignView):
         options = await _load_design_options(int(guild.id))
         await interaction.response.edit_message(embed=legacy._format_locks_embed(guild, options), view=legacy.FormatLocksView())  # type: ignore[attr-defined]
 
-    @discord.ui.button(label="Unlock / Clean", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:unlock", row=0)
+    @discord.ui.button(label="Remove One Rule", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:unlock", row=0)
     async def unlock(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return

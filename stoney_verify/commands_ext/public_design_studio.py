@@ -426,7 +426,7 @@ def _manual_name_override_plan_item(
     desired = _safe_str(desired_name)
     blockers: list[str] = []
     if not desired:
-        blockers.append("Saved manual name is empty. Unlock it and rename again.")
+        blockers.append("Saved manual name is empty. Remove or reset that exact-name rule, then rename again.")
     if len(desired) > studio.DISCORD_NAME_LIMIT:
         blockers.append(
             f"Saved manual name is too long for Discord ({len(desired)}/{studio.DISCORD_NAME_LIMIT})."
@@ -459,12 +459,14 @@ def _lock_count(options: Mapping[str, Any]) -> dict[str, int]:
     channel_locks = _mapping_dict(options.get("channel_format_locks"))
     manual_names = _manual_name_overrides(options)
     protection_items = _protection_item_rules(options) if "_protection_item_rules" in globals() else _mapping_dict(options.get("protection_item_rules"))
+    protection_names = _protection_rules(options) if "_protection_rules" in globals() else _mapping_dict(options.get("protection_rules"))
     return {
         "global": 1 if global_lock.get("enabled") else 0,
         "categories": len(category_locks),
         "channels": len(channel_locks),
         "manual_names": len(manual_names),
         "protection_items": len(protection_items),
+        "protection_names": len(protection_names),
     }
 
 
@@ -678,6 +680,7 @@ def _format_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> dis
             f"Channel overrides: **{counts['channels']}**",
             f"Exact manual names: **{counts['manual_names']}**",
             f"Exact protection overrides: **{counts['protection_items']}**",
+            f"Name protection overrides: **{counts['protection_names']}**",
         )),
         inline=False,
     )
@@ -689,7 +692,7 @@ def _format_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> dis
         ),
         inline=False,
     )
-    embed.set_footer(text="Use Unlock Saved Rules to remove one rule without disturbing the others.")
+    embed.set_footer(text="Use Remove One Saved Rule to remove one listed rule, or Reset This Item to clear that item's same-item overrides.")
     return _clean_design_embed(embed)
 
 
@@ -896,7 +899,8 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
             f"Locked channel overrides: **{counts['channels']}**",
             f"Exact manual names: **{counts['manual_names']}**",
             f"Exact protection overrides: **{counts['protection_items']}**",
-            "Open **Rules & Unlocks** to inspect or remove any saved rule without changing the others.",
+            f"Name protection overrides: **{counts['protection_names']}**",
+            "Open **Rules & Resets** to inspect saved authority, remove one listed rule, or reset an item's overrides.",
         )),
         inline=True,
     )
@@ -3137,7 +3141,7 @@ class DirectRenameModal(discord.ui.Modal):
                 name="Exact-name rule",
                 value=(
                     "This literal Discord name is now authoritative for this item. "
-                    "Global/category styles cannot replace it unless you use Custom Format, Lock Rule, or Unlock Saved Rules."
+                    "Global/category styles cannot replace it unless you replace or reset this item's saved rule through Custom Format, Lock Rule, or Reset This Item."
                 ),
                 inline=False,
             )
@@ -3759,7 +3763,7 @@ class DesignDoctorView(discord.ui.View):
 
 
 # ---------------------------------------------------------------------------
-# Lock / Unlock Saved Rules
+# Saved Rule Removal / Reset
 # ---------------------------------------------------------------------------
 
 LOCK_MANAGER_PAGE_SIZE = 8
@@ -3809,8 +3813,8 @@ def _format_lock_manager_embed(guild: discord.Guild, options: Mapping[str, Any],
     chunk = rows[start:start + LOCK_MANAGER_PAGE_SIZE]
     stale_count = sum(1 for row in rows if not row.get("exists"))
     embed = discord.Embed(
-        title="🔐 Lock / Unlock Saved Rules",
-        description="Review exact names and style locks, remove individual overrides, or clean stale locks.",
+        title="🔐 Saved Rules — Remove One",
+        description="Each numbered button removes exactly one listed rule. A broader or different same-item rule can still remain active. Use Reset This Category/Channel in the item editor when you want every same-item override removed. Name-level protection is managed under Protection Rules.",
         color=discord.Color.blurple() if not stale_count else discord.Color.orange(),
     )
     if not rows:
@@ -3841,7 +3845,7 @@ def _format_lock_manager_embed(guild: discord.Guild, options: Mapping[str, Any],
     )
     if stale_count:
         embed.add_field(name="Stale rules found", value=f"**{stale_count}** saved rule(s) point to deleted/missing items.", inline=False)
-    embed.set_footer(text="Use the numbered buttons to unlock one rule, or clean stale rules only.")
+    embed.set_footer(text="Numbered buttons remove one listed rule only • Reset This Item clears same-item overrides • Clean Stale removes deleted-item rows only.")
     return _clean_design_embed(embed)
 
 
@@ -3896,7 +3900,7 @@ async def _clean_stale_format_locks(interaction: discord.Interaction) -> tuple[d
 class LockManagerButton(discord.ui.Button):
     def __init__(self, *, row: int = 4) -> None:
         super().__init__(
-            label="Unlock Saved Rules",
+            label="Remove One Saved Rule",
             emoji="🔐",
             style=discord.ButtonStyle.secondary,
             custom_id="dank_design:manage_locks",
@@ -4173,14 +4177,14 @@ def _protection_manager_embed(guild: discord.Guild, options: Mapping[str, Any]) 
         ),
         inline=False,
     )
-    embed.set_footer(text="Exact item overrides are visible in Unlock Saved Rules and can be removed independently.")
+    embed.set_footer(text="Exact item overrides are visible in Remove One Saved Rule and can be removed independently; normalized-name protection remains under Protection Rules.")
     return _clean_design_embed(embed)
 
 
 class ProtectionManagerButton(discord.ui.Button):
     def __init__(self, *, row: int = 4) -> None:
         super().__init__(
-            label="Protected Names / Unlock",
+            label="Protection Rules",
             emoji="🛡️",
             style=discord.ButtonStyle.secondary,
             custom_id="dank_design:protection_manager",
@@ -4412,14 +4416,14 @@ class StartHereView(discord.ui.View):
 def _editors_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> discord.Embed:
     counts = _lock_count(options)
     embed = discord.Embed(
-        title="🧰 Rules & Unlocks",
+        title="🧰 Rules & Resets",
         description=(
             "Every saved rule is scoped. Narrow rules win and broader rules never rewrite them.\n\n"
             "**Category Editor** = design a category and its children.\n"
             "**Channel Editor** = override exactly one item.\n"
             "**Saved Layout Rules** = manage reusable visual rules.\n"
-            "**Unlock Saved Rules** = inspect and remove exact names, style locks, or exact protection overrides.\n"
-            "**Protected Names / Unlock** = manage default protected-name policy."
+            "**Remove One Saved Rule** = inspect and remove exact names, style locks, or exact protection overrides.\n"
+            "**Protection Rules** = manage default protected-name policy."
         ),
         color=discord.Color.blurple(),
     )
@@ -4456,7 +4460,7 @@ def _editors_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
 class EditorsLocksButton(discord.ui.Button):
     def __init__(self, *, row: int = 3) -> None:
         super().__init__(
-            label="Rules & Unlocks",
+            label="Rules & Resets",
             emoji="🧰",
             style=discord.ButtonStyle.primary,
             custom_id="dank_design:editors_locks",
@@ -4513,7 +4517,7 @@ class EditorsLocksView(discord.ui.View):
             view=FormatLocksView(),
         )
 
-    @discord.ui.button(label="Unlock Saved Rules", emoji="🔐", style=discord.ButtonStyle.secondary, custom_id="dank_design:submenu_manage_locks", row=1)
+    @discord.ui.button(label="Remove One Saved Rule", emoji="🔐", style=discord.ButtonStyle.secondary, custom_id="dank_design:submenu_manage_locks", row=1)
     async def manage_locks(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -4525,7 +4529,7 @@ class EditorsLocksView(discord.ui.View):
             view=LockManagerView(guild, options, page=0),
         )
 
-    @discord.ui.button(label="Protected Names / Unlock", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:submenu_protection", row=2)
+    @discord.ui.button(label="Protection Rules", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:submenu_protection", row=2)
     async def protection(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -4597,7 +4601,7 @@ def _design_help_embed() -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text="Use Rules & Unlocks for problem checks, saved rules, rename protection, rollback, and help.")
+    embed.set_footer(text="Use Rules & Resets for problem checks, saved rules, rename protection, rollback, and help.")
     return _clean_design_embed(embed)
 
 
@@ -4615,8 +4619,8 @@ def _advanced_tools_embed() -> discord.Embed:
         value=(
             "🩺 **Check Design Problems** — audit saved rules, drift, duplicates, blockers.\n"
             "🔒 **Saved Layout Rules** — save reusable layouts.\n"
-            "🔐 **Unlock Saved Rules** — remove old overrides or stale locks.\n"
-            "🛡 **Protected Names / Unlock** — choose what should never be renamed.\n"
+            "🔐 **Remove One Saved Rule** — remove old overrides or stale locks.\n"
+            "🛡 **Protection Rules** — choose what should never be renamed.\n"
             "↩️ **Rollback** — undo the last applied rename batch.\n"
             "❓ **Help** — explain the workflow."
         ),
@@ -4649,7 +4653,7 @@ class AdvancedToolsView(discord.ui.View):
         options = await _load_design_options(int(guild.id))
         await interaction.response.edit_message(embed=_format_locks_embed(guild, options), view=FormatLocksView())
 
-    @discord.ui.button(label="Unlock Saved Rules", emoji="🔐", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_manage_locks", row=1)
+    @discord.ui.button(label="Remove One Saved Rule", emoji="🔐", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_manage_locks", row=1)
     async def manage_locks(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -4658,7 +4662,7 @@ class AdvancedToolsView(discord.ui.View):
         options = await _load_design_options(int(guild.id))
         await interaction.response.edit_message(embed=_format_lock_manager_embed(guild, options, page=0), view=LockManagerView(guild, options, page=0))
 
-    @discord.ui.button(label="Protected Names / Unlock", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_protection", row=1)
+    @discord.ui.button(label="Protection Rules", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_protection", row=1)
     async def protection(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -5382,7 +5386,7 @@ class DesignHomeView(discord.ui.View):
             return
         await interaction.response.edit_message(embed=_start_here_embed(), view=StartHereView())
 
-    @discord.ui.button(label="Rules & Unlocks", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_tools", row=4)
+    @discord.ui.button(label="Rules & Resets", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="dank_design:advanced_tools", row=4)
     async def advanced_tools(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
