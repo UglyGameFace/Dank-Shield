@@ -7,6 +7,7 @@ from stoney_verify.commands_ext import public_design_studio as public_studio
 
 
 PUBLIC_STUDIO = Path("stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
+V2_STUDIO = Path("stoney_verify/commands_ext/public_design_studio_v2.py").read_text(encoding="utf-8")
 
 
 def test_retired_strict_layout_guard_is_absent() -> None:
@@ -52,8 +53,9 @@ def test_exact_editor_preview_does_not_reuse_whole_server_style_change_controls(
 
 def test_exact_editor_apply_is_bound_to_the_preview_user_reviewed() -> None:
     assert "pending_created_at=created_at" in PUBLIC_STUDIO
-    assert "if not _pending_matches(payload, self.pending_created_at):" in PUBLIC_STUDIO
-    assert "older or invalidated preview" in PUBLIC_STUDIO
+    assert "legacy.DesignPreviewView = ReviewedPreviewView" in V2_STUDIO
+    assert "if not legacy._pending_matches(payload, self.pending_created_at):" in V2_STUDIO
+    assert "This preview is obsolete" in V2_STUDIO
 
 
 def test_separator_example_navigation_executes_inside_guarded_action() -> None:
