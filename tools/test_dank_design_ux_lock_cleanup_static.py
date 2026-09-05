@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 LEGACY = (ROOT / "stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
 V2 = (ROOT / "stoney_verify/commands_ext/public_design_studio_v2.py").read_text(encoding="utf-8")
+BRIDGE = (ROOT / "stoney_verify/commands_ext/public_design_bridge.py").read_text(encoding="utf-8")
 SAFE_TEST = (ROOT / "tools/test_dank_design_safe_repair_cleanup_static.py").read_text(encoding="utf-8")
 
 
@@ -49,6 +50,14 @@ def test_repair_flow_is_scan_then_preview_then_apply() -> None:
     assert "Apply is enabled only when the plan is fully reviewable and confidence is high" in V2
 
 
+def test_public_guidance_uses_compact_server_design_front_door() -> None:
+    assert "`/dank home`" in V2
+    assert "choose **Server Design**" in V2
+    assert "`/dank home` → **Server Design**" in BRIDGE
+    assert "Try `/dank design`" not in BRIDGE
+    assert "Reopen `/dank design`" not in V2
+
+
 def test_safe_repair_audit_tracks_current_authority_contract() -> None:
     assert "Narrow saved rules always win" in SAFE_TEST
     assert "keeps saved narrow rules authoritative" in SAFE_TEST
@@ -62,6 +71,7 @@ if __name__ == "__main__":
         test_rules_and_protection_copy_explains_non_rename_behavior,
         test_exact_item_editor_makes_immediate_rename_exception_explicit,
         test_repair_flow_is_scan_then_preview_then_apply,
+        test_public_guidance_uses_compact_server_design_front_door,
         test_safe_repair_audit_tracks_current_authority_contract,
     ):
         test()
