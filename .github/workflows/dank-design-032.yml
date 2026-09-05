@@ -9,17 +9,12 @@ on:
       - 'stoney_verify/commands_ext/public_design_studio.py'
       - 'stoney_verify/commands_ext/public_design_studio_v2.py'
       - 'stoney_verify/commands_ext/public_design_bridge.py'
-      - 'stoney_verify/commands_ext/public_design_enhancements.py'
       - 'stoney_verify/services/server_design_studio.py'
       - 'stoney_verify/services/server_design_majority_layout.py'
       - 'stoney_verify/services/server_design_plan_service.py'
       - 'stoney_verify/services/server_design_repair_confidence.py'
       - 'stoney_verify/services/server_design_apply_service.py'
       - 'stoney_verify/services/server_design_rule_service.py'
-      - 'stoney_verify/startup_guards/server_design_command_module_guard.py'
-      - 'stoney_verify/startup_guards/server_design_studio_command_guard.py'
-      - 'stoney_verify/startup_guards/server_design_strict_layout_guard.py'
-      - 'stoney_verify/startup_guards/server_design_majority_layout_guard.py'
       - 'stoney_verify/startup_guards/setup_overview_command_guard.py'
       - 'tests/test_design_studio_consolidation_032.py'
       - 'tests/test_dank_design_*.py'
@@ -56,7 +51,7 @@ jobs:
           pip install -q -r requirements.txt
           pip install -q pytest
 
-      - name: Compile Design Studio owners
+      - name: Compile active Design Studio owners
         run: |
           python -m py_compile \
             stoney_verify/commands_ext/public_command_surface_v2.py \
@@ -64,21 +59,17 @@ jobs:
             stoney_verify/commands_ext/public_design_studio.py \
             stoney_verify/commands_ext/public_design_studio_v2.py \
             stoney_verify/commands_ext/public_design_bridge.py \
-            stoney_verify/commands_ext/public_design_enhancements.py \
             stoney_verify/services/server_design_studio.py \
             stoney_verify/services/server_design_majority_layout.py \
             stoney_verify/services/server_design_plan_service.py \
             stoney_verify/services/server_design_repair_confidence.py \
             stoney_verify/services/server_design_apply_service.py \
-            stoney_verify/services/server_design_rule_service.py \
-            stoney_verify/startup_guards/server_design_command_module_guard.py \
-            stoney_verify/startup_guards/server_design_studio_command_guard.py \
-            stoney_verify/startup_guards/server_design_strict_layout_guard.py \
-            stoney_verify/startup_guards/server_design_majority_layout_guard.py
+            stoney_verify/services/server_design_rule_service.py
 
       - name: Run focused Design Studio tests
         run: >-
           python -m pytest -q --tb=short --disable-warnings
+          tests/test_dank_design_runtime_ownership_033.py
           tests/test_design_studio_consolidation_032.py
           tests/test_dank_design_editor_reset_033.py
           tests/test_dank_design_public_registration_static.py
