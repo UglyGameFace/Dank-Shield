@@ -242,7 +242,6 @@ async def build_scoped_repair_plan(
     records = live_records(guild)
     inferred, profiles = majority.build_category_aware_options(studio, plan_options, records)
     plan_options = normalize_plan_options(inferred, strict=True)
-    plan_options["__use_live_majority_layout"] = True
     plan_options["__respect_saved_rules"] = True
     plan_options["__scoped_editor_repair"] = True
 
