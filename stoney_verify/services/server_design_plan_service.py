@@ -2,11 +2,10 @@ from __future__ import annotations
 
 """Authoritative plan builder for Dank Design.
 
-The public Studio must ask one service for a rename plan. Historical startup
-helpers used to replace ``public_design_studio.build_design_plan`` at runtime;
-that made the result depend on import order. This module makes live-majority
-repair, strict layout matching, saved-rule precedence, and the Gothic Clean
-compatibility defaults explicit inputs instead.
+The public Studio asks one service for every rename plan. Historical startup
+helpers replaced ``public_design_studio.build_design_plan`` at runtime, making
+results depend on import order. Live auto-detect, strict matching, saved-rule
+precedence, and compatibility defaults are explicit here instead.
 """
 
 from collections.abc import Mapping
@@ -15,8 +14,6 @@ from typing import Any
 from stoney_verify.services import server_design_majority_layout as majority
 from stoney_verify.services import server_design_studio as studio
 
-# These names were historically removed from DEFAULT_PROTECTED_NAMES by a
-# runtime guard. Keep the behavior without mutating the global service catalog.
 _RENAME_SAFE_VISUAL_NAMES = {
     "audit-log",
     "bot-commands",
@@ -44,22 +41,19 @@ def _strict_lock_map(value: Any) -> dict[str, Any]:
 
 
 def normalize_plan_options(options: Mapping[str, Any], *, strict: bool = True) -> dict[str, Any]:
-    """Return plan options with native compatibility defaults applied.
-
-    No command module, class, or plan function is replaced. Saved narrow rules
-    remain authoritative; the compatibility defaults only fill missing behavior.
-    """
+    """Apply native compatibility defaults without replacing live functions."""
 
     out = dict(options)
 
-    # Preserve the established Gothic Clean visible separator without relying on
-    # server_design_strict_layout_guard to rewrite the global theme catalog.
+    # Preserve the established Gothic Clean spaced-pipe default without a guard
+    # rewriting the ThemePreset tuple. The majority service owns dynamic visual
+    # catalog entries explicitly and deterministically.
     majority.ensure_separator_spec(studio, "|", "spaced")
     if str(out.get("theme_id") or "gothic_clean") == "gothic_clean" and not str(out.get("separator_id") or "").strip():
         out["separator_id"] = "pipe_spaced"
 
-    # Preserve prior visual-name behavior without deleting names from the
-    # service's global protected-name set. Explicit owner rules still win.
+    # Preserve the old visual-name policy without mutating the global protected
+    # name set. Explicit per-name owner choices remain authoritative.
     protection = _mapping(out.get("protection_rules"))
     for name in _RENAME_SAFE_VISUAL_NAMES:
         protection.setdefault(name, "full")
@@ -77,7 +71,7 @@ def normalize_plan_options(options: Mapping[str, Any], *, strict: bool = True) -
 
 
 def live_records(guild: Any) -> list[dict[str, Any]]:
-    """Build majority-analysis records from the same editable items as Studio."""
+    """Use the same editable channel set as the historical Studio backend."""
 
     from stoney_verify.commands_ext import public_design_studio as legacy
 
@@ -92,10 +86,11 @@ async def build_plan(
     strict: bool = True,
     respect_saved_rules: bool = True,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
-    """Build one deterministic design plan.
+    """Build one deterministic plan through the native backend.
 
-    ``use_live_majority`` is explicit rather than a magic option flag that only
-    works when a startup guard happened to replace the plan function.
+    Smart Auto-Detect remains category-aware. Mixed categories keep their own
+    style rather than being flattened to one server-wide majority, and the saved
+    rule precedence is retained by the existing effective-option resolver.
     """
 
     from stoney_verify.commands_ext import public_design_studio as legacy
@@ -104,19 +99,19 @@ async def build_plan(
     analysis: dict[str, Any] = {}
 
     if use_live_majority:
-        analysis = dict(majority.infer_live_majority_layout(studio, live_records(guild)))
-        plan_options = majority.apply_majority_to_options(
-            studio,
-            plan_options,
-            analysis,
-            respect_locks=bool(respect_saved_rules),
-        )
-        plan_options = normalize_plan_options(plan_options, strict=strict)
+        records = live_records(guild)
+        inferred, profiles = majority.build_category_aware_options(studio, plan_options, records)
+        plan_options = normalize_plan_options(inferred, strict=strict)
         plan_options["__use_live_majority_layout"] = True
+        plan_options["__respect_saved_rules"] = bool(respect_saved_rules)
+        analysis = {
+            "mode": "category_aware",
+            "profiles": dict(profiles) if isinstance(profiles, Mapping) else {},
+        }
 
     items = await legacy.build_design_plan(guild, plan_options)
-    if analysis:
-        items = majority.annotate_plan_items(items, analysis, plan_options, studio=studio)
+    if use_live_majority:
+        items = majority.annotate_category_aware_plan_items(studio, items, plan_options)
     return list(items), dict(plan_options), analysis
 
 
