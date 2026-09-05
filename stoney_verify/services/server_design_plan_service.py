@@ -79,6 +79,31 @@ def live_records(guild: Any) -> list[dict[str, Any]]:
     return list(legacy._live_majority_records_for_design(guild))  # type: ignore[attr-defined]
 
 
+def _fail_closed_on_low_confidence(items: list[dict[str, Any]], confidence: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Turn an unsafe Smart Auto-Detect preview into a non-applicable plan.
+
+    The old runtime bridge disabled its Apply button after confidence analysis.
+    Encoding the gate in the plan is safer because every consumer, including a
+    future UI, receives a plan that cannot accidentally be treated as approved.
+    """
+
+    if bool(confidence.get("apply_allowed")):
+        return items
+
+    reason = "Smart Auto-Detect confidence is too low to apply this repair safely. Review the layout or use Saved Design / Edit One Item."
+    guarded: list[dict[str, Any]] = []
+    for raw in items:
+        item = dict(raw)
+        if item.get("status") == "changed":
+            blockers = list(item.get("blockers") or [])
+            if reason not in blockers:
+                blockers.append(reason)
+            item["blockers"] = blockers
+            item["status"] = "failed"
+        guarded.append(item)
+    return guarded
+
+
 async def build_plan(
     guild: Any,
     options: Mapping[str, Any],
@@ -110,12 +135,13 @@ async def build_plan(
             "profiles": dict(profiles) if isinstance(profiles, Mapping) else {},
         }
 
-    items = await legacy.build_design_plan(guild, plan_options)
+    items = list(await legacy.build_design_plan(guild, plan_options))
     if use_live_majority:
-        items = majority.annotate_category_aware_plan_items(studio, items, plan_options)
+        items = list(majority.annotate_category_aware_plan_items(studio, items, plan_options))
         confidence = repair_confidence.evaluate_repair_plan(items, context="smart_category_auto_detect")
         plan_options["__repair_confidence_result"] = dict(confidence)
         analysis["confidence"] = dict(confidence)
+        items = _fail_closed_on_low_confidence(items, confidence)
 
     return list(items), dict(plan_options), analysis
 
