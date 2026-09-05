@@ -14,6 +14,8 @@ from .globals import get_supabase
 
 STICKY_TABLE = "dank_stickies"
 STICKY_POLL_TABLE = "dank_sticky_polls"
+STICKY_BUNDLE_RPC = "save_dank_sticky_bundle"
+POSTGREST_PAGE_SIZE = 500
 
 DEFAULT_INTERVAL_SECONDS = 15
 DEFAULT_MESSAGE_THRESHOLD = 5
@@ -216,8 +218,14 @@ def normalize_sticky(config: StickyConfig) -> StickyConfig:
         color=max(0, min(_safe_int(config.color, 0x5865F2), 0xFFFFFF)),
         image_url=image_url,
         thumbnail_url=thumbnail_url,
-        interval_seconds=max(MIN_INTERVAL_SECONDS, min(_safe_int(config.interval_seconds, DEFAULT_INTERVAL_SECONDS), MAX_INTERVAL_SECONDS)),
-        message_threshold=max(MIN_MESSAGE_THRESHOLD, min(_safe_int(config.message_threshold, DEFAULT_MESSAGE_THRESHOLD), MAX_MESSAGE_THRESHOLD)),
+        interval_seconds=max(
+            MIN_INTERVAL_SECONDS,
+            min(_safe_int(config.interval_seconds, DEFAULT_INTERVAL_SECONDS), MAX_INTERVAL_SECONDS),
+        ),
+        message_threshold=max(
+            MIN_MESSAGE_THRESHOLD,
+            min(_safe_int(config.message_threshold, DEFAULT_MESSAGE_THRESHOLD), MAX_MESSAGE_THRESHOLD),
+        ),
         use_webhook=bool(config.use_webhook and mode != "poll"),
         sender_name=sender_name,
         sender_avatar_url=sender_avatar_url,
@@ -318,38 +326,9 @@ def _row_to_poll(row: Mapping[str, Any]) -> StickyPoll:
     )
 
 
-def _get_sticky_sync(channel_id: int) -> Optional[StickyConfig]:
-    try:
-        resp = _require_supabase().table(STICKY_TABLE).select("*").eq("channel_id", int(channel_id)).limit(1).execute()
-    except Exception as exc:
-        if isinstance(exc, CommunityStorageUnavailable):
-            raise
-        raise CommunityStorageUnavailable(f"`{STICKY_TABLE}` is unavailable.") from exc
-    rows = getattr(resp, "data", None) or []
-    if not rows or not isinstance(rows[0], Mapping):
-        return None
-    return _row_to_sticky(rows[0])
-
-
-def _list_stickies_sync(*, guild_id: Optional[int] = None, enabled_only: bool = False) -> list[StickyConfig]:
-    try:
-        query = _require_supabase().table(STICKY_TABLE).select("*")
-        if guild_id is not None:
-            query = query.eq("guild_id", int(guild_id))
-        if enabled_only:
-            query = query.eq("enabled", True)
-        resp = query.order("channel_id").execute()
-    except Exception as exc:
-        if isinstance(exc, CommunityStorageUnavailable):
-            raise
-        raise CommunityStorageUnavailable(f"`{STICKY_TABLE}` is unavailable.") from exc
-    rows = getattr(resp, "data", None) or []
-    return [_row_to_sticky(row) for row in rows if isinstance(row, Mapping)]
-
-
-def _save_sticky_sync(config: StickyConfig) -> StickyConfig:
+def _sticky_payload(config: StickyConfig) -> dict[str, Any]:
     safe = normalize_sticky(config)
-    payload = {
+    return {
         "guild_id": int(safe.guild_id),
         "channel_id": int(safe.channel_id),
         "enabled": bool(safe.enabled),
@@ -369,6 +348,61 @@ def _save_sticky_sync(config: StickyConfig) -> StickyConfig:
         "updated_by": int(safe.updated_by) if safe.updated_by else None,
         "updated_at": utc_now().isoformat(),
     }
+
+
+def _poll_payload(poll: StickyPoll) -> dict[str, Any]:
+    safe = normalize_poll(poll)
+    return {
+        "guild_id": int(safe.guild_id),
+        "channel_id": int(safe.channel_id),
+        "question": safe.question,
+        "options": list(safe.options),
+        "votes": dict(safe.votes),
+        "state": safe.state,
+        "updated_by": int(safe.updated_by) if safe.updated_by else None,
+        "updated_at": utc_now().isoformat(),
+    }
+
+
+def _get_sticky_sync(channel_id: int) -> Optional[StickyConfig]:
+    try:
+        resp = _require_supabase().table(STICKY_TABLE).select("*").eq("channel_id", int(channel_id)).limit(1).execute()
+    except Exception as exc:
+        if isinstance(exc, CommunityStorageUnavailable):
+            raise
+        raise CommunityStorageUnavailable(f"`{STICKY_TABLE}` is unavailable.") from exc
+    rows = getattr(resp, "data", None) or []
+    if not rows or not isinstance(rows[0], Mapping):
+        return None
+    return _row_to_sticky(rows[0])
+
+
+def _list_stickies_sync(*, guild_id: Optional[int] = None, enabled_only: bool = False) -> list[StickyConfig]:
+    rows: list[Mapping[str, Any]] = []
+    offset = 0
+    try:
+        while True:
+            query = _require_supabase().table(STICKY_TABLE).select("*")
+            if guild_id is not None:
+                query = query.eq("guild_id", int(guild_id))
+            if enabled_only:
+                query = query.eq("enabled", True)
+            resp = query.order("channel_id").range(offset, offset + POSTGREST_PAGE_SIZE - 1).execute()
+            page = [row for row in (getattr(resp, "data", None) or []) if isinstance(row, Mapping)]
+            rows.extend(page)
+            if len(page) < POSTGREST_PAGE_SIZE:
+                break
+            offset += POSTGREST_PAGE_SIZE
+    except Exception as exc:
+        if isinstance(exc, CommunityStorageUnavailable):
+            raise
+        raise CommunityStorageUnavailable(f"`{STICKY_TABLE}` is unavailable.") from exc
+    return [_row_to_sticky(row) for row in rows]
+
+
+def _save_sticky_sync(config: StickyConfig) -> StickyConfig:
+    safe = normalize_sticky(config)
+    payload = _sticky_payload(safe)
     try:
         resp = _require_supabase().table(STICKY_TABLE).upsert(payload, on_conflict="channel_id").execute()
     except Exception as exc:
@@ -403,16 +437,7 @@ def _get_poll_sync(channel_id: int) -> Optional[StickyPoll]:
 
 def _save_poll_sync(poll: StickyPoll) -> StickyPoll:
     safe = normalize_poll(poll)
-    payload = {
-        "guild_id": int(safe.guild_id),
-        "channel_id": int(safe.channel_id),
-        "question": safe.question,
-        "options": list(safe.options),
-        "votes": dict(safe.votes),
-        "state": safe.state,
-        "updated_by": int(safe.updated_by) if safe.updated_by else None,
-        "updated_at": utc_now().isoformat(),
-    }
+    payload = _poll_payload(safe)
     try:
         resp = _require_supabase().table(STICKY_POLL_TABLE).upsert(payload, on_conflict="channel_id").execute()
     except Exception as exc:
@@ -432,6 +457,57 @@ def _delete_poll_sync(channel_id: int) -> None:
         raise CommunityStorageUnavailable(f"`{STICKY_POLL_TABLE}` is not writable.") from exc
 
 
+def _save_sticky_bundle_sync(
+    config: StickyConfig,
+    poll: Optional[StickyPoll],
+) -> tuple[StickyConfig, Optional[StickyPoll]]:
+    """Persist a sticky and its optional poll in one database transaction.
+
+    The SQL RPC owns the transition so a process/network failure cannot leave a
+    poll-mode sticky without poll state, or stale poll state behind after a
+    plain/embed conversion.
+    """
+    safe_config = normalize_sticky(config)
+    safe_poll: Optional[StickyPoll] = None
+    if safe_config.mode == "poll":
+        if poll is None:
+            raise InvalidCommunityToolValue("Sticky poll state is required for poll mode.")
+        safe_poll = normalize_poll(poll)
+        if int(safe_poll.guild_id) != int(safe_config.guild_id) or int(safe_poll.channel_id) != int(safe_config.channel_id):
+            raise InvalidCommunityToolValue("Sticky and poll must belong to the same server channel.")
+    elif poll is not None:
+        raise InvalidCommunityToolValue("Poll state can only be saved with a poll-mode sticky.")
+
+    params = {
+        "p_sticky": _sticky_payload(safe_config),
+        "p_poll": _poll_payload(safe_poll) if safe_poll is not None else None,
+    }
+    try:
+        resp = _require_supabase().rpc(STICKY_BUNDLE_RPC, params).execute()
+    except Exception as exc:
+        if isinstance(exc, CommunityStorageUnavailable):
+            raise
+        raise CommunityStorageUnavailable(
+            f"Community Tools atomic save RPC `{STICKY_BUNDLE_RPC}` is unavailable. Apply the Community Tools hardening migration."
+        ) from exc
+
+    data = getattr(resp, "data", None)
+    if isinstance(data, list) and len(data) == 1 and isinstance(data[0], Mapping):
+        data = data[0]
+    if not isinstance(data, Mapping):
+        raise CommunityStorageUnavailable("Community Tools atomic save returned an invalid response.")
+
+    sticky_row = data.get("sticky")
+    poll_row = data.get("poll")
+    if not isinstance(sticky_row, Mapping):
+        raise CommunityStorageUnavailable("Community Tools atomic save did not return sticky state.")
+    saved_config = _row_to_sticky(sticky_row)
+    saved_poll = _row_to_poll(poll_row) if isinstance(poll_row, Mapping) else None
+    if saved_config.mode == "poll" and saved_poll is None:
+        raise CommunityStorageUnavailable("Community Tools atomic save did not return sticky-poll state.")
+    return saved_config, saved_poll
+
+
 async def get_sticky(channel_id: int) -> Optional[StickyConfig]:
     return await asyncio.to_thread(_get_sticky_sync, int(channel_id))
 
@@ -444,6 +520,18 @@ async def save_sticky(config: StickyConfig) -> StickyConfig:
     lock = _STICKY_LOCKS.setdefault(int(config.channel_id), asyncio.Lock())
     async with lock:
         return await asyncio.to_thread(_save_sticky_sync, config)
+
+
+async def save_sticky_bundle(
+    config: StickyConfig,
+    poll: Optional[StickyPoll] = None,
+) -> tuple[StickyConfig, Optional[StickyPoll]]:
+    channel_id = int(config.channel_id)
+    sticky_lock = _STICKY_LOCKS.setdefault(channel_id, asyncio.Lock())
+    poll_lock = _POLL_LOCKS.setdefault(channel_id, asyncio.Lock())
+    async with sticky_lock:
+        async with poll_lock:
+            return await asyncio.to_thread(_save_sticky_bundle_sync, config, poll)
 
 
 async def update_sticky_delivery(
@@ -480,10 +568,19 @@ async def set_sticky_enabled(channel_id: int, enabled: bool, *, actor_id: Option
 
 
 async def delete_sticky(channel_id: int) -> None:
-    lock = _STICKY_LOCKS.setdefault(int(channel_id), asyncio.Lock())
+    channel_key = int(channel_id)
+    sticky_lock = _STICKY_LOCKS.setdefault(channel_key, asyncio.Lock())
+    poll_lock = _POLL_LOCKS.setdefault(channel_key, asyncio.Lock())
+    async with sticky_lock:
+        async with poll_lock:
+            # dank_sticky_polls has ON DELETE CASCADE from the sticky row.
+            await asyncio.to_thread(_delete_sticky_sync, channel_key)
+
+
+async def delete_sticky_poll(channel_id: int) -> None:
+    lock = _POLL_LOCKS.setdefault(int(channel_id), asyncio.Lock())
     async with lock:
         await asyncio.to_thread(_delete_poll_sync, int(channel_id))
-        await asyncio.to_thread(_delete_sticky_sync, int(channel_id))
 
 
 async def get_sticky_poll(channel_id: int) -> Optional[StickyPoll]:
@@ -548,11 +645,18 @@ __all__ = [
     "DEFAULT_INTERVAL_SECONDS",
     "DEFAULT_MESSAGE_THRESHOLD",
     "InvalidCommunityToolValue",
+    "MAX_INTERVAL_SECONDS",
+    "MAX_MESSAGE_THRESHOLD",
     "MAX_POLL_OPTIONS",
+    "MIN_INTERVAL_SECONDS",
+    "MIN_MESSAGE_THRESHOLD",
+    "POSTGREST_PAGE_SIZE",
+    "STICKY_BUNDLE_RPC",
     "StickyConfig",
     "StickyPoll",
     "cast_sticky_poll_vote",
     "delete_sticky",
+    "delete_sticky_poll",
     "get_sticky",
     "get_sticky_poll",
     "list_stickies",
@@ -561,6 +665,7 @@ __all__ = [
     "normalize_sticky",
     "reset_sticky_poll",
     "save_sticky",
+    "save_sticky_bundle",
     "save_sticky_poll",
     "set_sticky_enabled",
     "set_sticky_poll_state",

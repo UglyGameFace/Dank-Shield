@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
 from .community_tools_service import (
+    POSTGREST_PAGE_SIZE,
     CommunityStorageUnavailable,
     InvalidCommunityToolValue,
     normalize_https_url,
@@ -163,17 +164,24 @@ def _get_sync(guild_id: int) -> Optional[QuietNoticeConfig]:
 
 
 def _list_sync(*, enabled_only: bool = False) -> list[QuietNoticeConfig]:
+    rows: list[Mapping[str, Any]] = []
+    offset = 0
     try:
-        query = _require_supabase().table(QUIET_NOTICE_TABLE).select("*")
-        if enabled_only:
-            query = query.eq("enabled", True)
-        resp = query.order("guild_id").execute()
+        while True:
+            query = _require_supabase().table(QUIET_NOTICE_TABLE).select("*")
+            if enabled_only:
+                query = query.eq("enabled", True)
+            resp = query.order("guild_id").range(offset, offset + POSTGREST_PAGE_SIZE - 1).execute()
+            page = [row for row in (getattr(resp, "data", None) or []) if isinstance(row, Mapping)]
+            rows.extend(page)
+            if len(page) < POSTGREST_PAGE_SIZE:
+                break
+            offset += POSTGREST_PAGE_SIZE
     except Exception as exc:
         if isinstance(exc, CommunityStorageUnavailable):
             raise
         raise CommunityStorageUnavailable(f"`{QUIET_NOTICE_TABLE}` is unavailable.") from exc
-    rows = getattr(resp, "data", None) or []
-    return [_row_to_quiet_notice(row) for row in rows if isinstance(row, Mapping)]
+    return [_row_to_quiet_notice(row) for row in rows]
 
 
 def _save_sync(config: QuietNoticeConfig) -> QuietNoticeConfig:

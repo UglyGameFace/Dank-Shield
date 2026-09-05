@@ -17,11 +17,7 @@ from stoney_verify.community_quiet_notice_service import (
     save_quiet_notice,
     set_quiet_notice_enabled,
 )
-from stoney_verify.community_tools_runtime import (
-    ensure_community_tools_runtime,
-    quiet_notice_embed,
-    quiet_notice_view,
-)
+from stoney_verify.community_tools_runtime import ensure_community_tools_runtime, quiet_notice_embed, quiet_notice_view
 from stoney_verify.community_tools_service import CommunityStorageUnavailable, InvalidCommunityToolValue, utc_now
 
 _ALLOWED_MENTIONS = discord.AllowedMentions.none()
@@ -32,17 +28,44 @@ _DEFAULT_QUIET_MESSAGE = (
 )
 
 
-def _manage_messages(interaction: discord.Interaction) -> bool:
-    member = interaction.user
-    return bool(
-        isinstance(member, discord.Member)
-        and (member.guild_permissions.administrator or member.guild_permissions.manage_messages)
-    )
-
-
 def _text_channel(interaction: discord.Interaction) -> Optional[discord.TextChannel]:
     channel = interaction.channel
     return channel if isinstance(channel, discord.TextChannel) else None
+
+
+def _manage_quiet_notice(interaction: discord.Interaction) -> bool:
+    member = interaction.user
+    return bool(
+        isinstance(member, discord.Member)
+        and (member.guild_permissions.administrator or member.guild_permissions.manage_guild)
+    )
+
+
+def _bot_can_post(channel: discord.TextChannel) -> bool:
+    me = channel.guild.me
+    if me is None:
+        return False
+    perms = channel.permissions_for(me)
+    return bool(perms.view_channel and perms.send_messages and perms.embed_links)
+
+
+def _quiet_authority_signature(config: Optional[QuietNoticeConfig]) -> Optional[tuple[Any, ...]]:
+    """Fields controlled by administrators, excluding runtime delivery/activity state."""
+    if config is None:
+        return None
+    return (
+        int(config.channel_id),
+        bool(config.enabled),
+        str(config.content),
+        int(config.inactivity_seconds),
+        str(config.partner_name),
+        str(config.partner_url),
+        bool(config.auto_clear),
+    )
+
+
+def _quiet_editor_is_stale(baseline: Optional[QuietNoticeConfig], current: Optional[QuietNoticeConfig]) -> bool:
+    return _quiet_authority_signature(baseline) != _quiet_authority_signature(current)
 
 
 async def _private(
@@ -116,8 +139,8 @@ def quiet_status_embed(config: Optional[QuietNoticeConfig]) -> discord.Embed:
         embed = discord.Embed(
             title="🌙 Quiet Server Notice",
             description=(
-                "Post one helpful message only after the **whole server** has had no human chat activity for a time you choose. "
-                "This is separate from normal stickies, so both can exist in the same channel."
+                "Post one helpful message after Dank Shield has observed no human chat activity for a time you choose. "
+                "Activity is server-wide across channels the bot can actually see."
             ),
             color=discord.Color.blurple(),
         )
@@ -128,16 +151,21 @@ def quiet_status_embed(config: Optional[QuietNoticeConfig]) -> discord.Embed:
         )
         embed.add_field(
             name="How it behaves",
-            value="One notice per quiet period. New human activity re-arms it. Auto-clear can remove the old notice when chat wakes up.",
+            value="One notice per quiet period. Visible human activity re-arms it. Auto-clear can remove the old notice when chat wakes up.",
             inline=False,
         )
-        embed.set_footer(text="Start with Setup / Edit • preview before testing publicly")
+        embed.add_field(
+            name="Who can configure it",
+            value="Server-wide behavior requires **Manage Server**. This avoids one channel moderator accidentally changing a guild-wide notice.",
+            inline=False,
+        )
+        embed.set_footer(text="Setup starts in the current channel; later edits preserve the saved destination unless you explicitly change it")
         return embed
 
     state = "▶️ Active" if config.enabled else "⏸️ Paused"
     embed = discord.Embed(
         title="🌙 Quiet Server Notice",
-        description=f"{state} • sends to <#{config.channel_id}> after **{human_duration(config.inactivity_seconds)}** of server-wide quiet",
+        description=f"{state} • destination <#{config.channel_id}> • after **{human_duration(config.inactivity_seconds)}** of observed quiet",
         color=discord.Color.green() if config.enabled else discord.Color.orange(),
     )
     embed.add_field(name="Message", value=config.content[:1000], inline=False)
@@ -147,8 +175,8 @@ def quiet_status_embed(config: Optional[QuietNoticeConfig]) -> discord.Embed:
             destination = f"[{destination}]({config.partner_url})"
         embed.add_field(name="Partner / destination", value=destination, inline=False)
     embed.add_field(name="Auto-clear when activity returns", value="Yes" if config.auto_clear else "No", inline=True)
-    embed.add_field(name="Repeat spam", value="Blocked — one post per quiet cycle", inline=True)
-    embed.set_footer(text="Any real human message anywhere in the server re-arms the next quiet cycle")
+    embed.add_field(name="Repeat spam", value="Blocked • one post per quiet cycle", inline=True)
+    embed.set_footer(text="Only human messages Dank Shield can receive count as activity; bot/webhook messages are ignored")
     return embed
 
 
@@ -170,7 +198,7 @@ class QuietNoticeCenterView(_OwnedView):
         self.config = config
         for item in self.children:
             label = str(getattr(item, "label", "") or "")
-            if config is None and label in {"Preview / Test", "Pause / Resume", "Remove"}:
+            if config is None and label in {"Preview / Test", "Pause / Resume", "Use This Channel", "Remove"}:
                 item.disabled = True
 
     @discord.ui.button(label="Setup / Edit", emoji="✏️", style=discord.ButtonStyle.primary, row=0)
@@ -181,38 +209,89 @@ class QuietNoticeCenterView(_OwnedView):
     @discord.ui.button(label="Preview / Test", emoji="👁️", style=discord.ButtonStyle.secondary, row=0)
     async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        if self.config is None:
-            return await _private(interaction, "ℹ️ Set up a quiet notice first.")
+        if interaction.guild is None:
+            return await _private(interaction, "❌ Use this in a server.")
+        try:
+            current = await get_quiet_notice(int(interaction.guild.id))
+        except CommunityStorageUnavailable:
+            return await _private(interaction, "❌ Quiet-notice storage is unavailable.")
+        if current is None:
+            return await _private(interaction, "ℹ️ The quiet notice was removed. Reopen the center before editing it again.")
         await _private(
             interaction,
-            "👁️ **Private quiet-notice preview** — only you can see this.",
-            embed=quiet_notice_embed(self.config),
-            view=QuietNoticePreviewView(self.owner_id, self.config),
+            f"👁️ **Private preview for <#{current.channel_id}>** — this is the latest saved configuration.",
+            embed=quiet_notice_embed(current),
+            view=QuietNoticePreviewView(self.owner_id, current),
         )
 
     @discord.ui.button(label="Pause / Resume", emoji="⏯️", style=discord.ButtonStyle.secondary, row=0)
     async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        if interaction.guild is None or self.config is None:
-            return await _private(interaction, "❌ No quiet notice is configured here.")
-        runtime = ensure_community_tools_runtime(interaction.client)
-        if self.config.enabled and self.config.last_notice_message_id:
-            await runtime.delete_quiet_live_message(self.config)
+        if not _manage_quiet_notice(interaction):
+            return await _private(interaction, "❌ Quiet Server Notice requires **Manage Server**.")
+        if interaction.guild is None:
+            return await _private(interaction, "❌ No server context is available.")
         try:
+            current = await get_quiet_notice(int(interaction.guild.id))
+            if current is None:
+                return await _private(interaction, "❌ That quiet notice no longer exists.")
             saved = await set_quiet_notice_enabled(
                 int(interaction.guild.id),
-                not self.config.enabled,
+                not current.enabled,
                 actor_id=int(interaction.user.id),
-                reset_activity_on_enable=not self.config.enabled,
+                reset_activity_on_enable=not current.enabled,
             )
         except CommunityStorageUnavailable:
-            return await _private(interaction, "❌ Quiet-notice storage is unavailable.")
+            return await _private(interaction, "❌ Quiet-notice storage is unavailable, so the current live notice was left untouched.")
         if saved is None:
             return await _private(interaction, "❌ That quiet notice no longer exists.")
+
+        runtime = ensure_community_tools_runtime(interaction.client)
         runtime.set_quiet_config(saved)
+        if not saved.enabled and current.last_notice_message_id:
+            await runtime.delete_quiet_live_message(current)
         await _private(
             interaction,
-            "✅ Quiet notice resumed and its inactivity timer restarted." if saved.enabled else "⏸️ Quiet notice paused.",
+            "✅ Quiet notice resumed and its inactivity timer restarted." if saved.enabled else "⏸️ Quiet notice paused. Durable state changed before the old live notice was removed.",
+            embed=quiet_status_embed(saved),
+            view=QuietNoticeCenterView(self.owner_id, saved),
+        )
+
+    @discord.ui.button(label="Use This Channel", emoji="📍", style=discord.ButtonStyle.secondary, row=1)
+    async def use_here(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not _manage_quiet_notice(interaction):
+            return await _private(interaction, "❌ Changing the server-wide destination requires **Manage Server**.")
+        channel = _text_channel(interaction)
+        guild = interaction.guild
+        if channel is None or guild is None:
+            return await _private(interaction, "❌ Choose a normal server text channel.")
+        if not _bot_can_post(channel):
+            return await _private(interaction, "❌ Dank Shield needs **View Channel + Send Messages + Embed Links** in this destination first.")
+        try:
+            current = await get_quiet_notice(int(guild.id))
+            if current is None:
+                return await _private(interaction, "❌ The quiet notice was removed while this panel was open.")
+            if int(channel.id) == int(current.channel_id):
+                return await _private(interaction, "ℹ️ This is already the saved quiet-notice destination.")
+            moved = replace(
+                current,
+                channel_id=int(channel.id),
+                last_activity_at=utc_now(),
+                last_notice_message_id=None,
+                last_notice_sent_at=None,
+                updated_by=int(interaction.user.id),
+            )
+            saved = await save_quiet_notice(moved)
+        except (InvalidCommunityToolValue, CommunityStorageUnavailable) as exc:
+            return await _private(interaction, f"❌ {exc}")
+        runtime = ensure_community_tools_runtime(interaction.client)
+        runtime.set_quiet_config(saved)
+        if current.last_notice_message_id:
+            await runtime.delete_quiet_live_message(current)
+        await _private(
+            interaction,
+            f"✅ Quiet-notice destination moved to <#{channel.id}>. The quiet timer restarted from now without overwriting newer message/timing settings.",
             embed=quiet_status_embed(saved),
             view=QuietNoticeCenterView(self.owner_id, saved),
         )
@@ -224,7 +303,7 @@ class QuietNoticeCenterView(_OwnedView):
             return await _private(interaction, "❌ No quiet notice is configured.")
         await _private(
             interaction,
-            "Remove the server-wide quiet notice? This does not affect normal channel stickies.",
+            "Remove the server-wide quiet notice? The confirmation rechecks the latest saved state before deleting anything.",
             view=QuietNoticeRemoveView(self.owner_id, self.config),
         )
 
@@ -253,20 +332,30 @@ class QuietNoticePreviewView(_OwnedView):
     @discord.ui.button(label="Post 30s Test", emoji="🧪", style=discord.ButtonStyle.primary)
     async def test_post(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        channel = _text_channel(interaction)
-        if channel is None:
-            return await _private(interaction, "❌ Run the test inside a normal text channel.")
+        if not _manage_quiet_notice(interaction):
+            return await _private(interaction, "❌ Quiet Server Notice testing requires **Manage Server**.")
+        try:
+            current = await get_quiet_notice(int(self.config.guild_id))
+        except CommunityStorageUnavailable:
+            return await _private(interaction, "❌ Quiet-notice storage is unavailable.")
+        if current is None:
+            return await _private(interaction, "❌ The quiet notice no longer exists.")
+        channel = interaction.client.get_channel(int(current.channel_id))
+        if not isinstance(channel, discord.TextChannel):
+            return await _private(interaction, "❌ The configured destination channel is unavailable.")
+        if not _bot_can_post(channel):
+            return await _private(interaction, "❌ Dank Shield cannot post embeds in the configured destination.")
         try:
             await channel.send(
                 content="🧪 **Quiet-notice test** — this temporary message does not change the inactivity timer.",
-                embed=quiet_notice_embed(self.config),
-                view=quiet_notice_view(self.config),
+                embed=quiet_notice_embed(current),
+                view=quiet_notice_view(current),
                 allowed_mentions=_ALLOWED_MENTIONS,
                 delete_after=30,
             )
         except (discord.Forbidden, discord.HTTPException):
-            return await _private(interaction, "❌ Dank Shield could not post the temporary test in this channel.")
-        await _private(interaction, "✅ Temporary quiet notice posted for 30 seconds. Live delivery state was not changed.")
+            return await _private(interaction, "❌ Dank Shield could not post the temporary test in the configured destination.")
+        await _private(interaction, f"✅ Temporary quiet notice posted in <#{channel.id}> for 30 seconds using the latest saved configuration. Durable delivery state was not changed.")
 
 
 class QuietNoticeRemoveView(_OwnedView):
@@ -277,13 +366,25 @@ class QuietNoticeRemoveView(_OwnedView):
     @discord.ui.button(label="Remove Quiet Notice", emoji="🗑️", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        runtime = ensure_community_tools_runtime(interaction.client)
-        await runtime.delete_quiet_live_message(self.config)
+        if not _manage_quiet_notice(interaction):
+            return await _private(interaction, "❌ Removing the server-wide notice requires **Manage Server**.")
         try:
-            await delete_quiet_notice(int(self.config.guild_id))
+            current = await get_quiet_notice(int(self.config.guild_id))
+            if current is None:
+                ensure_community_tools_runtime(interaction.client).remove_quiet_config(int(self.config.guild_id))
+                return await _private(
+                    interaction,
+                    "ℹ️ The quiet notice had already been removed.",
+                    embed=quiet_status_embed(None),
+                    view=QuietNoticeCenterView(self.owner_id, None),
+                )
+            await delete_quiet_notice(int(current.guild_id))
         except CommunityStorageUnavailable:
-            return await _private(interaction, "❌ Quiet-notice storage is unavailable.")
-        runtime.remove_quiet_config(int(self.config.guild_id))
+            return await _private(interaction, "❌ Quiet-notice storage is unavailable, so the live notice was left untouched.")
+        runtime = ensure_community_tools_runtime(interaction.client)
+        runtime.remove_quiet_config(int(current.guild_id))
+        if current.last_notice_message_id:
+            await runtime.delete_quiet_live_message(current)
         await _private(
             interaction,
             "✅ Quiet notice removed. Normal stickies were left alone.",
@@ -294,12 +395,36 @@ class QuietNoticeRemoveView(_OwnedView):
     @discord.ui.button(label="Cancel", emoji="↩️", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _private(interaction, embed=quiet_status_embed(self.config), view=QuietNoticeCenterView(self.owner_id, self.config))
+        try:
+            current = await get_quiet_notice(int(self.config.guild_id))
+        except CommunityStorageUnavailable:
+            current = self.config
+        await _private(interaction, embed=quiet_status_embed(current), view=QuietNoticeCenterView(self.owner_id, current))
+
+
+async def _refresh_live_notice(interaction: discord.Interaction, config: QuietNoticeConfig) -> bool:
+    if not config.last_notice_message_id:
+        return True
+    channel = interaction.client.get_channel(int(config.channel_id))
+    if not isinstance(channel, discord.TextChannel):
+        return False
+    try:
+        message = await channel.fetch_message(int(config.last_notice_message_id))
+        await message.edit(
+            embed=quiet_notice_embed(config),
+            view=quiet_notice_view(config),
+            allowed_mentions=_ALLOWED_MENTIONS,
+        )
+        return True
+    except discord.NotFound:
+        return False
+    except (discord.Forbidden, discord.HTTPException):
+        return False
 
 
 class QuietNoticeModal(discord.ui.Modal, title="Quiet server notice"):
     inactivity = discord.ui.TextInput(
-        label="Send after no human chat for...",
+        label="Send after no visible human chat for...",
         required=True,
         max_length=12,
         default="2h",
@@ -312,12 +437,7 @@ class QuietNoticeModal(discord.ui.Modal, title="Quiet server notice"):
         max_length=1800,
         default=_DEFAULT_QUIET_MESSAGE,
     )
-    partner_name = discord.ui.TextInput(
-        label="Partner/community name (optional)",
-        required=False,
-        max_length=100,
-        placeholder="Example: Our Partner Server",
-    )
+    partner_name = discord.ui.TextInput(label="Partner/community name (optional)", required=False, max_length=100)
     partner_url = discord.ui.TextInput(
         label="Partner/community HTTPS link (optional)",
         required=False,
@@ -342,11 +462,12 @@ class QuietNoticeModal(discord.ui.Modal, title="Quiet server notice"):
             self.auto_clear.default = "yes" if current.auto_clear else "no"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        if not _manage_messages(interaction):
-            return await _private(interaction, "❌ Quiet notices require **Manage Messages**.")
-        channel = _text_channel(interaction)
-        if interaction.guild is None or channel is None:
-            return await _private(interaction, "❌ Configure the quiet notice inside the text channel where it should appear.")
+        if not _manage_quiet_notice(interaction):
+            return await _private(interaction, "❌ Quiet Server Notice requires **Manage Server**.")
+        current_channel = _text_channel(interaction)
+        guild = interaction.guild
+        if guild is None or current_channel is None:
+            return await _private(interaction, "❌ Configure the quiet notice from a normal server text channel.")
         try:
             seconds = parse_inactivity_duration(str(self.inactivity.value))
         except InvalidCommunityToolValue as exc:
@@ -354,27 +475,40 @@ class QuietNoticeModal(discord.ui.Modal, title="Quiet server notice"):
 
         clear_choice = str(self.auto_clear.value).strip().lower()
         if clear_choice not in {"y", "yes", "n", "no"}:
-            return await _private(interaction, "❌ For auto-clear, enter `yes` or `no`.")
+            return await _private(interaction, "❌ For auto-clear, enter `yes` or `no`; nothing was changed.")
         auto_clear = clear_choice in {"y", "yes"}
+
+        try:
+            current = await get_quiet_notice(int(guild.id))
+        except CommunityStorageUnavailable:
+            return await _private(interaction, "❌ Quiet-notice storage is unavailable; nothing was changed.")
+        if _quiet_editor_is_stale(self.current, current):
+            return await _private(
+                interaction,
+                "❌ This quiet-notice editor is stale because another administrator changed or removed the saved configuration while it was open. Reopen Setup / Edit so their newer work is not overwritten.",
+            )
+
         now = utc_now()
-        base = self.current or QuietNoticeConfig(
-            guild_id=int(interaction.guild.id),
-            channel_id=int(channel.id),
+        is_new = current is None
+        base = current or QuietNoticeConfig(
+            guild_id=int(guild.id),
+            channel_id=int(current_channel.id),
             content=_DEFAULT_QUIET_MESSAGE,
+            last_activity_at=now,
         )
         config = replace(
             base,
-            guild_id=int(interaction.guild.id),
-            channel_id=int(channel.id),
-            enabled=True,
+            guild_id=int(guild.id),
+            channel_id=int(base.channel_id),
+            enabled=base.enabled,
             content=str(self.message.value or ""),
             inactivity_seconds=seconds,
             partner_name=str(self.partner_name.value or ""),
             partner_url=str(self.partner_url.value or ""),
             auto_clear=auto_clear,
-            last_activity_at=now,
-            last_notice_message_id=None,
-            last_notice_sent_at=None,
+            last_activity_at=now if is_new else base.last_activity_at,
+            last_notice_message_id=base.last_notice_message_id,
+            last_notice_sent_at=base.last_notice_sent_at,
             updated_by=int(interaction.user.id),
         )
         try:
@@ -383,12 +517,16 @@ class QuietNoticeModal(discord.ui.Modal, title="Quiet server notice"):
             return await _private(interaction, f"❌ {exc}")
 
         runtime = ensure_community_tools_runtime(interaction.client)
-        if self.current is not None and self.current.last_notice_message_id:
-            await runtime.delete_quiet_live_message(self.current)
         runtime.set_quiet_config(saved)
+        live_updated = await _refresh_live_notice(interaction, saved)
+        note = "✅ Quiet notice saved. Existing destination and runtime quiet-cycle state were preserved."
+        if is_new:
+            note = f"✅ Quiet notice created for <#{saved.channel_id}>. Its inactivity timer starts now."
+        elif saved.last_notice_message_id and not live_updated:
+            note += " The durable config is updated, but the current live card could not be edited."
         await _private(
             interaction,
-            "✅ Quiet notice saved. Its inactivity timer starts again from now.",
+            note,
             embed=quiet_status_embed(saved),
             view=QuietNoticeCenterView(int(interaction.user.id), saved),
         )
@@ -404,14 +542,14 @@ def _duration_input(seconds: int) -> str:
 
 
 async def open_quiet_notice_center(interaction: discord.Interaction) -> None:
-    if not _manage_messages(interaction):
-        return await _private(interaction, "❌ Quiet notices require **Manage Messages**.")
+    if not _manage_quiet_notice(interaction):
+        return await _private(interaction, "❌ Quiet Server Notice is server-wide and requires **Manage Server**.")
     if interaction.guild is None or _text_channel(interaction) is None:
         return await _private(interaction, "❌ Open this inside a normal server text channel.")
     try:
         config = await get_quiet_notice(int(interaction.guild.id))
     except CommunityStorageUnavailable:
-        return await _private(interaction, "❌ Quiet-notice storage is unavailable. The DS-STICKY-029 migration must be applied first.")
+        return await _private(interaction, "❌ Quiet-notice storage is unavailable. Apply the Community Tools quiet-notice migration first.")
     await _private(
         interaction,
         embed=quiet_status_embed(config),
@@ -422,6 +560,8 @@ async def open_quiet_notice_center(interaction: discord.Interaction) -> None:
 __all__ = [
     "QuietNoticeCenterView",
     "QuietNoticeModal",
+    "_quiet_authority_signature",
+    "_quiet_editor_is_stale",
     "human_duration",
     "open_quiet_notice_center",
     "parse_inactivity_duration",

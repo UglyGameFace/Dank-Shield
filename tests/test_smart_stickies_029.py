@@ -18,16 +18,8 @@ from stoney_verify.commands_ext.public_sticky_preview import (
     StickyPreviewTestView,
     _merge_draft_with_live_state,
 )
-from stoney_verify.community_quiet_notice_service import (
-    QuietNoticeConfig,
-    normalize_quiet_notice,
-)
-from stoney_verify.community_tools_runtime import (
-    StickyRuntime,
-    quiet_notice_embed,
-    quiet_notice_view,
-    should_send_quiet_notice,
-)
+from stoney_verify.community_quiet_notice_service import QuietNoticeConfig, normalize_quiet_notice
+from stoney_verify.community_tools_runtime import StickyRuntime, quiet_notice_embed, quiet_notice_view, should_send_quiet_notice
 from stoney_verify.community_tools_service import InvalidCommunityToolValue, StickyConfig, StickyPoll
 
 
@@ -130,15 +122,15 @@ def test_quiet_notice_preview_has_optional_partner_link_and_clear_truth() -> Non
     embed = quiet_notice_embed(config)
     assert "quiet here" in str(embed.title).lower()
     assert "Partner Place" in str(embed.fields[0].value)
-    assert "clears when human activity returns" in str(embed.footer.text)
+    assert "visible human activity returns" in str(embed.footer.text)
     view = quiet_notice_view(config)
     assert view is not None
     assert "Open Partner Place" in _labels(view)
 
 
-def test_quiet_notice_center_guides_setup_preview_pause_remove_and_back() -> None:
+def test_quiet_notice_center_guides_setup_preview_destination_pause_remove_and_back() -> None:
     labels = _labels(QuietNoticeCenterView(1, _quiet()))
-    assert {"Setup / Edit", "Preview / Test", "Pause / Resume", "Remove", "Back to Stickies"} <= labels
+    assert {"Setup / Edit", "Preview / Test", "Pause / Resume", "Use This Channel", "Remove", "Back to Stickies"} <= labels
 
     empty = QuietNoticeCenterView(1, None)
     disabled = {
@@ -146,7 +138,7 @@ def test_quiet_notice_center_guides_setup_preview_pause_remove_and_back() -> Non
         for item in empty.children
         if bool(getattr(item, "disabled", False))
     }
-    assert {"Preview / Test", "Pause / Resume", "Remove"} <= disabled
+    assert {"Preview / Test", "Pause / Resume", "Use This Channel", "Remove"} <= disabled
 
 
 def test_normal_sticky_preview_exposes_non_persistent_30_second_test() -> None:
@@ -161,7 +153,7 @@ def test_sticky_draft_requires_explicit_publish_after_preview() -> None:
     assert {"Publish Sticky", "Post 30s Test", "Discard Draft"} <= labels
 
 
-def test_draft_publish_preserves_latest_live_operational_and_delivery_state() -> None:
+def test_draft_publish_preserves_operational_state_but_keeps_draft_design() -> None:
     sent_at = datetime(2026, 8, 12, 15, 0, tzinfo=timezone.utc)
     current = StickyConfig(
         guild_id=1001,
@@ -185,6 +177,7 @@ def test_draft_publish_preserves_latest_live_operational_and_delivery_state() ->
         content="new copy",
         mode="embed",
         title="New title",
+        color=0xABCDEF,
         interval_seconds=15,
         message_threshold=5,
         last_message_id=1111,
@@ -193,8 +186,8 @@ def test_draft_publish_preserves_latest_live_operational_and_delivery_state() ->
     assert merged.content == "new copy"
     assert merged.mode == "embed"
     assert merged.title == "New title"
+    assert merged.color == 0xABCDEF
     assert merged.enabled is False
-    assert merged.color == 0x123456
     assert merged.interval_seconds == 90
     assert merged.message_threshold == 12
     assert merged.use_webhook is True
@@ -205,6 +198,7 @@ def test_draft_publish_preserves_latest_live_operational_and_delivery_state() ->
     fresh = _merge_draft_with_live_state(draft, None)
     assert fresh.last_message_id is None
     assert fresh.last_sent_at is None
+    assert fresh.color == 0xABCDEF
 
 
 def test_main_sticky_center_stays_focused_and_advanced_actions_live_in_settings() -> None:
