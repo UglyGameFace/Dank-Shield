@@ -104,7 +104,8 @@ def test_custom_sender_uses_managed_webhook_and_fails_closed() -> None:
     assert 'MANAGED_WEBHOOK_NAME = "Dank Shield Sticky"' in runtime
     assert ".create_webhook(" in runtime
     assert "No webhook URL/token is stored" in ui
-    assert "cannot manage its sticky webhook" in runtime
+    assert "Manage Webhooks + Manage Messages" in runtime
+    assert "perms.manage_webhooks and perms.manage_messages" in runtime
     assert "webhook_url" not in ui
 
 
