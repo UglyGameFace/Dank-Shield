@@ -2,18 +2,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-APPLIER = Path("tools/apply_p0_int_design_rollback_native_guard.py").read_text(encoding="utf-8")
-STUDIO = Path("stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
+LEGACY = Path("stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
+V2 = Path("stoney_verify/commands_ext/public_design_studio_v2.py").read_text(encoding="utf-8")
+RETIRED_APPLIER = Path("tools/apply_p0_int_design_rollback_native_guard.py")
 BAD_SPLIT_JOIN = 'value="' + "\n" + '".join'
 
 
-def test_rollback_applier_requires_exact_format_guard_first() -> None:
-    assert "Missing _guard_design_action" in APPLIER
-    assert "apply_p0_int_design_exact_format_native_guard.py" in APPLIER
-    assert "safe_send_interaction" in APPLIER
+def test_retired_rollback_mutator_is_absent() -> None:
+    assert not RETIRED_APPLIER.exists()
 
 
-def test_rollback_applier_targets_high_risk_rollback_actions() -> None:
+def test_rollback_runtime_has_native_guarded_actions() -> None:
+    assert "class RollbackConfirmView" in LEGACY
+    assert "async def _open_rollback" in LEGACY
     for action_name in (
         "design.rollback.open_button",
         "design.done.back_to_studio",
@@ -23,24 +24,18 @@ def test_rollback_applier_targets_high_risk_rollback_actions() -> None:
         "design.rollback.confirm.no_snapshot",
         "design.rollback.confirm",
     ):
-        assert action_name in APPLIER
+        assert action_name in LEGACY
+    assert "await _guard_design_action" in LEGACY
 
 
-def test_rollback_applier_repairs_split_newline_literals() -> None:
-    assert "repair_split_newline_literals" in APPLIER
-    assert "value=\"\\\\n\".join(preview)" in APPLIER
-    assert "value=\"\\\\n\".join(failed[:10])" in APPLIER
+def test_rollback_runtime_has_no_split_newline_artifact() -> None:
+    assert BAD_SPLIT_JOIN not in LEGACY
+    assert 'value="\\n".join(preview)[:1024] or "No items."' in LEGACY
+    assert 'value="\\n".join(failed[:10])[:1024]' in LEGACY
 
 
-def test_rollback_runtime_is_either_debt_or_applied() -> None:
-    assert "class RollbackConfirmView" in STUDIO
-    assert "async def _open_rollback" in STUDIO
-    if "design.rollback.confirm" in STUDIO:
-        assert BAD_SPLIT_JOIN not in STUDIO
-        assert "design.rollback.open" in STUDIO
-        assert "design.done.back_to_studio" in STUDIO
-        assert 'value="\\n".join(preview)[:1024] or "No items."' in STUDIO
-        assert 'value="\\n".join(failed[:10])[:1024]' in STUDIO
-    else:
-        assert "await interaction.response.defer(ephemeral=True, thinking=False)" in STUDIO
-        assert "await interaction.edit_original_response(embed=embed, view=None)" in STUDIO
+def test_consolidated_studio_owns_public_undo_flow() -> None:
+    assert "class UndoConfirmView" in V2
+    assert "class DoneView" in V2
+    assert "_open_undo" in V2
+    assert "Undo Last Apply" in V2
