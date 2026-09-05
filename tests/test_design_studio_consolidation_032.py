@@ -31,13 +31,7 @@ def _labels(view: Any) -> list[str]:
 
 def test_home_is_five_clear_workflows_not_a_mixed_control_panel() -> None:
     view = studio_v2.DesignHomeView({"theme_id": "gothic_clean", "strength": 4})
-    assert _labels(view) == [
-        "Design Server",
-        "Edit One Item",
-        "Review / Repair",
-        "Saved Rules",
-        "Rollback",
-    ]
+    assert _labels(view) == ["Design Server", "Edit One Item", "Review / Repair", "Saved Rules", "Rollback"]
     assert all(child.__class__.__name__ != "DesignServerThemeSelect" for child in view.children)
     assert all(child.__class__.__name__ != "DesignServerStrengthSelect" for child in view.children)
 
@@ -82,11 +76,7 @@ def test_setup_guard_no_longer_attaches_deprecated_design_command_shim() -> None
 def test_plan_defaults_preserve_gothic_pipe_and_visual_name_policy_without_global_mutation() -> None:
     before_protected = set(plan_service.studio.DEFAULT_PROTECTED_NAMES)
     options = plan_service.normalize_plan_options(
-        {
-            "theme_id": "gothic_clean",
-            "strength": 4,
-            "protection_rules": {"staff": "never"},
-        },
+        {"theme_id": "gothic_clean", "strength": 4, "protection_rules": {"staff": "never"}},
         strict=True,
     )
     assert options["separator_id"] == "pipe_spaced"
@@ -112,10 +102,8 @@ def test_strict_plan_marks_saved_rule_layers_exact_without_changing_precedence()
     assert options["channel_format_locks"]["20"]["exact_match"] is True
 
 
-def test_drift_plan_calls_category_aware_native_service_not_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+def _patch_category_aware_path(monkeypatch: pytest.MonkeyPatch, *, apply_allowed: bool) -> list[str]:
     events: list[str] = []
-    guild = SimpleNamespace(id=1)
-
     monkeypatch.setattr(plan_service, "live_records", lambda _guild: [{"id": "1", "category_id": "9", "kind": "text", "name": "chat"}])
 
     def build_category_aware(studio: Any, options: Any, records: Any) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -131,17 +119,36 @@ def test_drift_plan_calls_category_aware_native_service_not_guard(monkeypatch: p
         events.append("legacy-plan")
         assert options["__use_live_majority_layout"] is True
         assert options["category_format_locks"]["9"]["exact_match"] is True
-        return [{"channel_id": "1", "before": "chat", "after": "💬|chat", "status": "changed"}]
+        return [{"channel_id": "1", "before": "chat", "after": "💬|chat", "status": "changed", "blockers": []}]
 
     monkeypatch.setattr(plan_service.majority, "build_category_aware_options", build_category_aware)
     monkeypatch.setattr(plan_service.majority, "annotate_category_aware_plan_items", annotate)
     monkeypatch.setattr(legacy, "build_design_plan", build_plan)
+    monkeypatch.setattr(
+        plan_service.repair_confidence,
+        "evaluate_repair_plan",
+        lambda items, context: {"apply_allowed": apply_allowed, "level": "high" if apply_allowed else "low"},
+    )
+    return events
 
-    items, options, analysis = run(plan_service.build_drift_repair_plan(guild, {"theme_id": "gothic_clean"}))
+
+def test_drift_plan_calls_category_aware_native_service_not_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    events = _patch_category_aware_path(monkeypatch, apply_allowed=True)
+    items, options, analysis = run(plan_service.build_drift_repair_plan(SimpleNamespace(id=1), {"theme_id": "gothic_clean"}))
     assert events == ["category-aware", "legacy-plan", "annotate"]
     assert items[0]["status"] == "changed"
     assert options["__respect_saved_rules"] is True
+    assert options["__repair_confidence_result"]["apply_allowed"] is True
     assert analysis["mode"] == "category_aware"
+
+
+def test_low_confidence_drift_plan_fails_closed_before_ui_apply(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_category_aware_path(monkeypatch, apply_allowed=False)
+    items, options, analysis = run(plan_service.build_drift_repair_plan(SimpleNamespace(id=1), {"theme_id": "gothic_clean"}))
+    assert plan_service.confidence_allows_apply(options) is False
+    assert analysis["confidence"]["apply_allowed"] is False
+    assert items[0]["status"] == "failed"
+    assert "confidence is too low" in items[0]["blockers"][0]
 
 
 def test_all_primary_previews_share_one_reviewed_apply_component() -> None:
