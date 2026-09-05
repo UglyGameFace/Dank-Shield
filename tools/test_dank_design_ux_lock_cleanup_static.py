@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LEGACY = (ROOT / "stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
 V2 = (ROOT / "stoney_verify/commands_ext/public_design_studio_v2.py").read_text(encoding="utf-8")
 BRIDGE = (ROOT / "stoney_verify/commands_ext/public_design_bridge.py").read_text(encoding="utf-8")
+SURFACE = (ROOT / "stoney_verify/commands_ext/public_command_surface_v2.py").read_text(encoding="utf-8")
 SAFE_TEST = (ROOT / "tools/test_dank_design_safe_repair_cleanup_static.py").read_text(encoding="utf-8")
 
 
@@ -58,6 +59,16 @@ def test_public_guidance_uses_compact_server_design_front_door() -> None:
     assert "Reopen `/dank design`" not in V2
 
 
+def test_compact_home_preserves_manage_channels_design_authority() -> None:
+    start = SURFACE.index('label="Server Design"')
+    end = SURFACE.index('label="Roles & Profiles"', start)
+    design_route = SURFACE[start:end]
+    assert "public_design_bridge.open_design_studio_from_setup(interaction)" in design_route
+    assert "_admin_or_manage" not in design_route
+    assert "Server Design requires **Manage Server** or **Administrator**" not in SURFACE
+    assert "requires **Manage Channels**. It never requires Administrator." in LEGACY
+
+
 def test_safe_repair_audit_tracks_current_authority_contract() -> None:
     assert "Narrow saved rules always win" in SAFE_TEST
     assert "keeps saved narrow rules authoritative" in SAFE_TEST
@@ -72,6 +83,7 @@ if __name__ == "__main__":
         test_exact_item_editor_makes_immediate_rename_exception_explicit,
         test_repair_flow_is_scan_then_preview_then_apply,
         test_public_guidance_uses_compact_server_design_front_door,
+        test_compact_home_preserves_manage_channels_design_authority,
         test_safe_repair_audit_tracks_current_authority_contract,
     ):
         test()
