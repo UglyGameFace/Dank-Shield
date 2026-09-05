@@ -5,11 +5,22 @@ from __future__ import annotations
 import discord
 
 
+_PUBLIC_DESIGN_RECOVERY = (
+    "Nothing was changed unless the success message says it was. Reopen `/dank home`, "
+    "choose **Server Design**, then check `/dank diagnostics` with the Error ID if it keeps happening."
+)
+
+
 async def open_design_studio_from_setup(interaction: discord.Interaction) -> None:
     """Open the same Studio hub used by /dank home → Server Design without duplicating UI."""
 
     try:
         from stoney_verify.commands_ext import public_design_studio_v2 as design
+
+        # Mature exact-item editors still live in the compatibility backend. When
+        # they are reached through the compact public route, keep their recovery
+        # copy pointed at the route the user can actually see.
+        design.legacy._DESIGN_ERROR_GUIDANCE = _PUBLIC_DESIGN_RECOVERY  # type: ignore[attr-defined]
 
         if not await design._require_design_permission(interaction):  # type: ignore[attr-defined]
             return
