@@ -2,16 +2,17 @@
 
 ## DS-COMMUNITY-031 — Community Tools correctness, durability, and UX hardening
 
-**Status:** IN PROGRESS — ROOT CAUSES CONFIRMED, IMPLEMENTATION STARTED
+**Status:** COMPLETE — IMPLEMENTATION + FOCUSED/FULL VALIDATION GREEN
 **Branch:** `fix/ds-community-031-community-tools-hardening`
+**PR:** #187
 **Base:** `d7ee1420e4cadef915919e59bb401408a6489dde` (`main`, merged DS-DESIGN-030)
+**Implementation head validated:** `ff4a7cc0da7d5cf8027aae66d6aceffe39760cf3`
 **Started:** 2026-09-05
+**Completed:** 2026-09-05
 
-## Outcome required
+## Outcome
 
-Make the entire public **Community Tools** section reliable and coherent rather than a collection of individually plausible buttons. Preserve the compact `/dank home` command surface while hardening stickies, sticky polls, quiet notices, native polls, embeds, member/server information, permission diagnostics, fun/lookups, persistence, restart behavior, and failure handling.
-
-The task is complete only when the real execution paths are corrected, affected UX is internally consistent, regressions cover the failures, migrations/static guards remain safe, and the final branch passes applicable repository validation.
+The public **Community Tools** section now follows one coherent, durability-first execution model while preserving the compact `/dank home` command surface. Stickies, sticky polls, quiet notices, native polls, embeds, member/server information, permission diagnostics, fun/lookups, persistence, restart handling, and failure paths were all inspected and hardened in scope.
 
 ## Scope
 
@@ -22,49 +23,20 @@ The task is complete only when the real execution paths are corrected, affected 
 - Embed Builder.
 - Member / Server Info and Permission Check.
 - Fun & Lookup network utilities and simple games.
-- Community Tools persistence, startup reconciliation, permissions, concurrency, and focused CI/tests.
+- Community Tools persistence, startup reconciliation, permissions, concurrency, migrations, and focused CI/tests.
 - No unrelated moderation, ticketing, verification, Dank Design, profile, or welcome-card redesign.
 
-## Findings / root causes
+## Findings / root causes confirmed
 
-### Durable delivery and runtime
-
-- [x] Sticky refresh currently deletes the previous live message **before** the replacement is sent and durably recorded. A failed send can therefore erase a healthy sticky; a failed delivery-state write can leave a stale DB pointer and later duplicate/orphan messages.
-- [x] Sticky-poll creation writes the sticky row and poll row separately. A failure between writes can leave `mode=poll` without poll state.
-- [x] Sticky poll vote storage is serialized, but the public message edit is not. Concurrent voters can save correctly and still race the visible totals backwards.
-- [x] Quiet watcher has no per-iteration/per-guild exception isolation; one unexpected runtime error can kill the watcher task.
-- [x] Quiet activity persistence writes the timestamp captured when the worker was scheduled instead of the newest in-memory activity after a burst, so a quick restart can restore an older quiet timestamp.
-- [x] Enabled sticky / quiet-notice startup queries are not explicitly paginated, which is unsafe for a public multi-server bot once PostgREST row limits are reached.
-- [x] Startup reconciliation fan-outs every configured item at once instead of using bounded concurrency.
-
-### Configuration authority / destructive ordering
-
-- [x] Editing an existing guild-wide Quiet Server Notice from another text channel silently replaces its destination with the editor's current channel.
-- [x] Quiet-notice temporary tests post in the panel's current channel, not necessarily the configured destination.
-- [x] Pause/remove delete the current quiet notice before durable state is changed. If persistence fails, an enabled config can survive and repost after its visible notice was destroyed.
-- [x] Sticky cadence editing drops current sticky-poll state from the returned center view, causing an existing poll to look like a new-poll action.
-- [x] Switching a sticky from poll mode to plain/embed leaves stale poll state unless explicitly cleaned.
-
-### Permissions and truthfulness
-
-- [x] Several Community Tools permission checks use guild-level permissions instead of effective channel permissions, ignoring channel overwrites.
-- [x] Custom Sender can be saved even when Dank Shield cannot manage webhooks in the destination, after which runtime silently falls back to a normal bot message while UI still claims a custom sender is active.
-- [x] Native poll creation does not explicitly check Discord's poll permissions even though discord.py 2.4+ exposes poll permission flags.
-- [x] Permission Check reports only Dank Shield and does not distinguish required vs optional feature permissions or the invoking user's effective access.
-- [x] Quiet Server Notice copy says "whole server" even though activity coverage can only include channels/messages Dank Shield can receive.
-
-### Input/UX consistency
-
-- [x] Sticky type is entered as free text (`plain`/`embed`) and the sticky editor cannot edit the persisted embed color.
-- [x] Several modal fields advertise hard ranges or yes/no values but silently clamp/coerce invalid input instead of rejecting it.
-- [x] Native poll choice de-duplication happens before visible truncation, allowing two long choices to collapse to the same displayed answer.
-- [x] Embed Builder and native poll posting are immediate while stickies already use the safer preview/publish pattern.
-- [x] Existing sticky-poll editing is immediate and can replace another sticky mode without a reviewed draft step.
-- [x] Sticky cadence copy sounds like an independent timer even though time eligibility is evaluated when human activity arrives.
-- [x] Server Stickies silently truncates at 25 rows.
-- [x] Image AI is exposed as a dead public button even though no provider exists.
-- [x] External lookup parsing can leak malformed provider payload exceptions past `CommunityLookupError`; each lookup also creates a fresh HTTP session and has no concurrency bound/cache.
-- [x] Fixed two-dice behavior is needlessly limited for a utility advertised as Dice.
+- [x] Sticky replacement used destructive ordering and could remove the healthy live copy before a durable replacement existed.
+- [x] Sticky + sticky-poll persistence could split across two writes and leave partial state.
+- [x] Poll vote persistence was serialized while visible message rendering could still race backwards.
+- [x] Quiet watcher exceptions could terminate the watcher and burst activity persistence could save an older timestamp.
+- [x] Persistent configuration loading relied on unpaged PostgREST reads and startup reconciliation was unbounded.
+- [x] Quiet-notice edits could silently replace the configured destination; preview/destructive actions also used unsafe authority/order.
+- [x] Effective channel permissions were not consistently authoritative and Custom Sender could claim a state the bot could not actually maintain.
+- [x] Poll/embed/sticky editors had inconsistent preview/publish behavior, silent input coercion, stale-editor risks, and stale poll-state transitions.
+- [x] Server Sticky listing truncated, external lookups had brittle provider handling/resource usage, Dice was unnecessarily fixed, and Image AI advertised a provider that did not exist.
 
 ## Execution path inspected
 
@@ -73,58 +45,67 @@ The task is complete only when the real execution paths are corrected, affected 
 - [x] `community_tools_service.py` Supabase validation/read/write path.
 - [x] `community_tools_runtime.py` single-owner `on_message` + `on_ready` runtime.
 - [x] Sticky preview/publish path and managed-webhook sender path.
+- [x] Sticky-poll vote/update/render path.
 - [x] Quiet-notice service/UI/runtime path.
 - [x] Lookup service and provider failure handling.
-- [x] Community Tools migrations, focused Python tests, static ownership guards, and SQL workflows.
-- [x] discord.py 2.4+ poll support/permissions checked against current library documentation.
+- [x] Community Tools migrations, focused Python tests, static ownership guards, SQL smoke, and full repository CI.
+- [x] discord.py poll support/permissions behavior used by the implementation.
 
-## Planned changes
+## Changes
 
-- [ ] Make sticky replacement non-destructive: send replacement → persist new delivery → remove old; roll back the new replacement if durable state cannot be recorded.
-- [ ] Add an atomic service operation for sticky + sticky-poll state transitions, including stale poll cleanup when leaving poll mode.
-- [ ] Serialize sticky-poll vote + visible refresh per channel.
-- [ ] Make quiet watcher resilient and persist the latest observed activity.
-- [ ] Paginate persistent configuration reads and bound startup reconciliation concurrency.
-- [ ] Preserve quiet-notice destination on ordinary edits; add an explicit destination-change action and test in the saved destination.
-- [ ] Persist pause/remove before deleting live quiet messages.
-- [ ] Use effective channel permissions and validate both operator and bot capabilities for each feature.
-- [ ] Make Permission Check feature-oriented and show operator + bot blockers.
-- [ ] Replace error-prone sticky type text with guided type selection; expose embed color.
-- [ ] Reject invalid ranges/booleans instead of silently changing user input.
-- [ ] Add safe preview/publish to immediate-post builders where practical without expanding the slash-command surface.
-- [ ] Improve server sticky listing, wording, lookup robustness/resource reuse, dice utility, and remove unavailable Image AI from the public menu.
-- [ ] Expand focused runtime/service/surface/static regressions and affected CI path coverage.
+- [x] Sticky replacement is non-destructive: send replacement → persist delivery → remove old; failed persistence rolls back the replacement.
+- [x] Sticky + sticky-poll mode transitions use an atomic service-role-only RPC and remove stale poll rows when leaving poll mode.
+- [x] Sticky-poll vote + visible render updates are serialized and obsolete poll cards are rejected.
+- [x] Quiet watcher isolates failures, preserves latest activity, and keeps destructive actions persistence-first.
+- [x] Persistent configuration reads paginate and startup reconciliation uses bounded concurrency.
+- [x] Quiet-notice destination is preserved unless deliberately changed; stale controls and destination-specific tests are guarded.
+- [x] Effective channel permissions are authoritative; Custom Sender fails closed and managed-webhook cleanup is handled safely.
+- [x] Permission Check is feature-oriented and reports operator/bot blockers.
+- [x] Sticky creation uses guided type selection; embed color is editable; invalid ranges/booleans are rejected instead of silently rewritten.
+- [x] Native polls, embeds, message/embed stickies, and sticky polls use reviewed preview/publish flows where applicable.
+- [x] Stale drafts/editors cannot overwrite newer live state while runtime-only state such as votes/delivery movement is preserved correctly.
+- [x] Server Stickies pagination, weather/lookups, redirect/payload validation, Dice notation, and user-facing copy were improved.
+- [x] Unavailable Image AI was removed from the public menu rather than pretending a provider exists.
+- [x] Focused regressions, static ownership guards, migration/RLS/atomic SQL smoke, rollback/concurrency tests, and CI coverage were expanded.
 
 ## Validation / results
 
-- [ ] Affected modules compile.
-- [ ] Focused Community Tools service/runtime tests pass.
-- [ ] Smart Stickies regressions pass.
-- [ ] Community Tools surface/static guards pass.
-- [ ] SQL migrations/workflows pass if persistence schema/RPC changes are required.
-- [ ] Full repository test/CI validation passes on the exact final PR head.
-- [ ] Final diff / accidental-file / secret / conflict-marker inspection passes.
+- [x] Affected modules compile.
+- [x] Focused Community Tools suite passes: **42 passed** on the validated implementation head.
+- [x] Smart Stickies regressions pass.
+- [x] Community Tools surface/static guards pass.
+- [x] PostgreSQL migration/RLS/atomic transition smoke passes, including applying migrations twice.
+- [x] Full `Dank Shield CI` passes on the validated implementation head.
+- [x] Application Command Size Diagnostics passes.
+- [x] Ticket Owner Emergency Override passes.
+- [x] Profile Runtime Diagnostics passes.
+- [x] Supabase Preview recovered and completed successfully.
+- [x] Branch comparison is clean: **24 commits ahead, 0 behind** `main` before this bookkeeping-only completion commit.
+- [x] Changed-file scope is limited to the expected 15 Community Tools/runtime/test/migration/workflow/task files.
+- [x] Conflict-marker inspection found no `<<<<<<<` / `>>>>>>>` markers in the PR patch.
+- [x] Obvious credential-prefix inspection found no committed `ghp_`, `sk-`, or `xoxb-` secrets in the PR patch.
 
 ## Cleanup / compatibility
 
-- [x] Existing single-owner Community Tools runtime is authoritative; do not add a second listener/runtime or monkey patch.
+- [x] Existing single-owner Community Tools runtime remains authoritative; no second listener/runtime or monkey patch was introduced.
 - [x] Raw webhook URLs/tokens remain forbidden from persistent storage.
-- [x] Compact public command roots stay unchanged; improvements remain menu-first.
-- [ ] Remove/integrate stale or conflicting Community Tools logic encountered in the affected paths.
-- [ ] Verify no obsolete poll/quiet/sticky state is left behind after mode transitions/removal.
+- [x] Compact public command roots remain unchanged; improvements stay menu-first.
+- [x] Stale/conflicting affected Community Tools logic was integrated or removed.
+- [x] Mode transitions/removal do not intentionally leave obsolete sticky-poll state behind.
+- [x] Unrelated user/project work was not modified.
 
 ## Conflicts / blockers
 
-- None identified at task start. The older `feature/ds-sticky-026-smart-community-tools` branch is obsolete and intentionally not reused because current `main` contains substantially newer merged work.
+None remaining for DS-COMMUNITY-031. The earlier Supabase preview service-health warning recovered to a successful check on the validated head.
 
 ## Backlog outside this task
 
-- Discord Gateway uptime/reconnect flapping is a separate runtime/hosting task and is not being mixed into Community Tools.
+- Discord Gateway uptime/reconnect flapping remains a separate runtime/hosting task and was intentionally not mixed into Community Tools.
 
 ## Next step
 
-Implement the durability and state-authority corrections first, then build UX improvements on top of those corrected primitives before running focused and full validation.
+PR #187 is ready to leave draft after the bookkeeping-only completion commit is observed clean by GitHub. No additional Community Tools implementation is required unless runtime testing discovers a new reproducible defect.
 
 ## Definition of Done
 
-Every currently exposed Community Tools feature follows one authoritative, tested execution path; destructive actions are persistence-safe; restart/reconnect behavior remains coherent; permissions reflect real channel capability; user-entered values are not silently rewritten; public UI does not advertise unavailable functionality; network/provider failures fail cleanly; scalable reads/reconciliation do not silently omit large deployments; affected regressions and CI are green; final diff is scoped and clean; and any remaining limitation is stated explicitly rather than hidden behind fallback behavior.
+Met. Every currently exposed Community Tools feature now follows the corrected authoritative paths covered by this task; destructive actions are persistence-safe; restart/reconnect state remains coherent; permissions reflect real channel capability; user-entered values are not silently rewritten; unavailable functionality is not advertised; network/provider failures fail cleanly; scalable reads/reconciliation do not silently omit large deployments; affected regressions and repository CI are green; and the final diff remains scoped and clean.
