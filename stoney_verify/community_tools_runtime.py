@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-"""Single-owner runtime for persistent Dank Shield sticky messages."""
+"""Single-owner runtime for persistent Dank Shield Community Tools."""
 
 import asyncio
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Awaitable, Iterable, Optional
 
 import discord
 
@@ -32,6 +32,14 @@ MANAGED_WEBHOOK_NAME = "Dank Shield Sticky"
 _RUNTIME_ATTR = "_dank_community_tools_runtime"
 QUIET_CHECK_SECONDS = 30
 QUIET_ACTIVITY_PERSIST_SECONDS = 60
+STARTUP_RECONCILE_CONCURRENCY = 10
+
+
+def _log(message: str) -> None:
+    try:
+        print(f"community_tools_runtime: {message}", flush=True)
+    except Exception:
+        pass
 
 
 def _utc(value: Optional[datetime], *, fallback: Optional[datetime] = None) -> Optional[datetime]:
@@ -49,7 +57,7 @@ def should_refresh_sticky(
     message_count: int,
     now: Optional[datetime] = None,
 ) -> bool:
-    """Return whether a new human message should move this sticky to the bottom."""
+    """Return whether this human-message event should move the sticky."""
     if not config.enabled:
         return False
     if int(message_count) >= int(config.message_threshold):
@@ -113,7 +121,9 @@ def sticky_poll_embed(poll: StickyPoll) -> discord.Embed:
         color=discord.Color.blurple(),
     )
     embed.add_field(name=state_label, value="\n".join(lines) or "No choices.", inline=False)
-    embed.set_footer(text=f"Dank Shield • {poll.total_votes} total vote{'s' if poll.total_votes != 1 else ''} • one choice per member")
+    embed.set_footer(
+        text=f"Dank Shield • {poll.total_votes} total vote{'s' if poll.total_votes != 1 else ''} • one choice per member"
+    )
     return embed
 
 
@@ -129,7 +139,7 @@ def quiet_notice_embed(config: QuietNoticeConfig) -> discord.Embed:
         embed.add_field(name="Where people may be hanging out", value=value, inline=False)
     footer = "Dank Shield • quiet-server notice"
     if config.auto_clear:
-        footer += " • clears when human activity returns"
+        footer += " • clears when visible human activity returns"
     embed.set_footer(text=footer)
     return embed
 
@@ -173,26 +183,8 @@ class StickyVoteButton(discord.ui.Button["StickyPollView"]):
         self.option_index = int(option_index)
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        try:
-            poll = await cast_sticky_poll_vote(
-                self.channel_id,
-                int(interaction.user.id),
-                self.option_index,
-            )
-        except (InvalidCommunityToolValue, CommunityStorageUnavailable) as exc:
-            return await _private(interaction, f"❌ {exc}")
-        except Exception:
-            return await _private(interaction, "❌ The vote could not be saved.")
-
-        view = StickyPollView(poll)
-        try:
-            await interaction.response.edit_message(
-                embed=sticky_poll_embed(poll),
-                view=view,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-        except discord.HTTPException:
-            await _private(interaction, "✅ Vote saved. I could not refresh the public poll card yet.")
+        runtime = ensure_community_tools_runtime(interaction.client)
+        await runtime.cast_and_render_poll_vote(interaction, self.channel_id, self.option_index)
 
 
 class StickyPollView(discord.ui.View):
@@ -214,6 +206,7 @@ class StickyRuntime:
         self._locks: dict[int, asyncio.Lock] = {}
         self._webhooks: dict[int, discord.Webhook] = {}
         self._registered_poll_views: set[int] = set()
+        self._poll_render_locks: dict[int, asyncio.Lock] = {}
         self._pending_refreshes: set[int] = set()
         self._ready_lock = asyncio.Lock()
 
@@ -269,8 +262,7 @@ class StickyRuntime:
     async def _config_for(self, channel_id: int) -> Optional[StickyConfig]:
         # The active sticky index is loaded once in on_ready and updated in-process
         # whenever the Community Tools UI saves/removes a sticky. Unknown channels
-        # must stay a zero-database hot path: most Discord messages do not belong to
-        # sticky channels and should never create a Supabase read just to learn that.
+        # stay a zero-database hot path.
         return self._configs.get(int(channel_id))
 
     async def on_message(self, message: discord.Message) -> None:
@@ -346,72 +338,81 @@ class StickyRuntime:
         try:
             async with lock:
                 latest = self._quiet_configs.get(guild_id) or config
+                newest_observed = self._guild_last_activity.get(guild_id) or observed
                 should_clear_live = bool(
                     latest.auto_clear
                     and latest.last_notice_message_id
-                    and (clear_live or (_utc(latest.last_notice_sent_at) or observed) <= observed)
+                    and (clear_live or (_utc(latest.last_notice_sent_at) or newest_observed) <= newest_observed)
                 )
-                if should_clear_live:
-                    await self.delete_quiet_live_message(latest)
                 try:
                     saved = await record_quiet_activity(
                         guild_id,
-                        activity_at=observed,
+                        activity_at=newest_observed,
                         clear_delivery=should_clear_live,
                     )
                 except CommunityStorageUnavailable:
-                    saved = replace(
-                        latest,
-                        last_activity_at=observed,
-                        last_notice_message_id=None if should_clear_live else latest.last_notice_message_id,
-                        last_notice_sent_at=None if should_clear_live else latest.last_notice_sent_at,
-                    )
+                    # Keep the newest activity in memory, but do not destroy a live
+                    # notice whose durable delivery record could not be cleared.
+                    self._guild_last_activity[guild_id] = newest_observed
+                    return
                 if saved is not None:
                     self.set_quiet_config(saved)
-                    self._quiet_last_persisted[guild_id] = observed
+                    self._quiet_last_persisted[guild_id] = newest_observed
+                    if should_clear_live:
+                        await self.delete_quiet_live_message(latest)
         finally:
             self._quiet_activity_pending.discard(guild_id)
 
     async def _refresh_from_activity(self, channel: Any, config: StickyConfig) -> None:
         channel_id = int(getattr(channel, "id", config.channel_id) or config.channel_id)
         try:
-            # The listener already evaluated the 15s/message threshold trigger. Force
-            # the serialized worker to perform that decision instead of re-reading a
-            # counter that was intentionally reset after scheduling.
+            # The listener already evaluated the time/message trigger. Force the
+            # serialized worker instead of re-reading the intentionally reset count.
             await self.refresh_channel(channel, expected_config=config, force=True)
         finally:
             self._pending_refreshes.discard(channel_id)
+
+    async def _bounded(self, jobs: Iterable[Awaitable[Any]]) -> None:
+        semaphore = asyncio.Semaphore(STARTUP_RECONCILE_CONCURRENCY)
+
+        async def run(job: Awaitable[Any]) -> None:
+            async with semaphore:
+                try:
+                    await job
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    _log(f"startup reconciliation item failed: {type(exc).__name__}: {exc}")
+
+        await asyncio.gather(*(run(job) for job in jobs))
 
     async def on_ready(self) -> None:
         async with self._ready_lock:
             try:
                 configs = await list_stickies(enabled_only=True)
-            except CommunityStorageUnavailable:
+            except CommunityStorageUnavailable as exc:
+                _log(f"sticky startup load unavailable: {exc}")
                 configs = []
             self._configs = {int(item.channel_id): item for item in configs}
             self._counts = {int(item.channel_id): 0 for item in configs}
-            for config in configs:
-                await self._register_poll_view(config)
-            await asyncio.gather(
-                *(self._reconcile_config(config) for config in configs),
-                return_exceptions=True,
-            )
+            await self._bounded(self._register_poll_view(config) for config in configs)
+            await self._bounded(self._reconcile_config(config) for config in configs)
 
             try:
                 quiet_configs = await list_quiet_notices(enabled_only=True)
-            except CommunityStorageUnavailable:
+            except CommunityStorageUnavailable as exc:
+                _log(f"quiet-notice startup load unavailable: {exc}")
                 quiet_configs = []
             self._quiet_configs = {int(item.guild_id): item for item in quiet_configs}
+            self._guild_last_activity = {}
+            self._quiet_last_persisted = {}
             now = datetime.now(timezone.utc)
             for config in quiet_configs:
                 guild_id = int(config.guild_id)
                 activity = _utc(config.last_activity_at or config.updated_at, fallback=now) or now
                 self._guild_last_activity[guild_id] = activity
                 self._quiet_last_persisted[guild_id] = activity
-            await asyncio.gather(
-                *(self._reconcile_quiet_config(config) for config in quiet_configs),
-                return_exceptions=True,
-            )
+            await self._bounded(self._reconcile_quiet_config(config) for config in quiet_configs)
             if quiet_configs:
                 self._ensure_quiet_watch_task()
 
@@ -454,13 +455,13 @@ class StickyRuntime:
         activity = _utc(config.last_activity_at)
         sent_at = _utc(config.last_notice_sent_at)
         if config.auto_clear and activity is not None and sent_at is not None and activity > sent_at:
-            await self.delete_quiet_live_message(config)
             try:
                 saved = await clear_quiet_delivery(int(config.guild_id))
             except CommunityStorageUnavailable:
-                saved = replace(config, last_notice_message_id=None, last_notice_sent_at=None)
+                return
             if saved is not None:
                 self.set_quiet_config(saved)
+                await self.delete_quiet_live_message(config)
             return
         try:
             await channel.fetch_message(int(config.last_notice_message_id))
@@ -468,7 +469,7 @@ class StickyRuntime:
             try:
                 saved = await clear_quiet_delivery(int(config.guild_id))
             except CommunityStorageUnavailable:
-                saved = replace(config, last_notice_message_id=None, last_notice_sent_at=None)
+                return
             if saved is not None:
                 self.set_quiet_config(saved)
         except (discord.Forbidden, discord.HTTPException):
@@ -478,10 +479,17 @@ class StickyRuntime:
         try:
             await self.bot.wait_until_ready()
             while not self.bot.is_closed():
-                await self._check_quiet_notices()
+                try:
+                    await self._check_quiet_notices()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    _log(f"quiet watcher iteration failed: {type(exc).__name__}: {exc}")
                 await asyncio.sleep(QUIET_CHECK_SECONDS)
         except asyncio.CancelledError:
             raise
+        except Exception as exc:
+            _log(f"quiet watcher stopped unexpectedly: {type(exc).__name__}: {exc}")
 
     async def _check_quiet_notices(self, *, now: Optional[datetime] = None) -> None:
         current = _utc(now, fallback=datetime.now(timezone.utc)) or datetime.now(timezone.utc)
@@ -491,7 +499,12 @@ class StickyRuntime:
             activity = self._guild_last_activity.get(guild_id) or _utc(config.last_activity_at)
             if not should_send_quiet_notice(config, last_activity_at=activity, now=current):
                 continue
-            await self._post_quiet_notice(guild_id, current)
+            try:
+                await self._post_quiet_notice(guild_id, current)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _log(f"quiet notice failed guild={guild_id}: {type(exc).__name__}: {exc}")
 
     async def _post_quiet_notice(self, guild_id: int, now: datetime) -> None:
         lock = self._quiet_locks.setdefault(int(guild_id), asyncio.Lock())
@@ -520,23 +533,32 @@ class StickyRuntime:
                     sent_at=now,
                 )
             except CommunityStorageUnavailable:
-                saved = replace(config, last_notice_message_id=int(message.id), last_notice_sent_at=now)
-            if saved is not None:
-                self.set_quiet_config(saved)
+                await self._delete_message_object(message)
+                return
+            if saved is None:
+                await self._delete_message_object(message)
+                return
+            self.set_quiet_config(saved)
 
-    async def _delete_previous(self, channel: discord.TextChannel, message_id: Optional[int]) -> None:
+    async def _delete_message_object(self, message: Any) -> bool:
+        try:
+            await message.delete()
+            return True
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return False
+        except Exception:
+            return False
+
+    async def _delete_previous(self, channel: discord.TextChannel, message_id: Optional[int]) -> bool:
         if not message_id:
-            return
+            return True
         try:
             message = await channel.fetch_message(int(message_id))
         except discord.NotFound:
-            return
+            return True
         except (discord.Forbidden, discord.HTTPException):
-            return
-        try:
-            await message.delete()
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            pass
+            return False
+        return await self._delete_message_object(message)
 
     async def _managed_webhook(self, channel: discord.TextChannel) -> Optional[discord.Webhook]:
         channel_id = int(channel.id)
@@ -564,6 +586,39 @@ class StickyRuntime:
         except (discord.Forbidden, discord.HTTPException):
             return None
 
+    async def ensure_managed_webhook(self, channel: Any) -> bool:
+        if not isinstance(channel, discord.TextChannel):
+            return False
+        return await self._managed_webhook(channel) is not None
+
+    async def cleanup_managed_webhook(self, channel: Any) -> None:
+        if not isinstance(channel, discord.TextChannel):
+            return
+        channel_id = int(channel.id)
+        cached = self._webhooks.pop(channel_id, None)
+        if cached is not None:
+            try:
+                await cached.delete(reason="Dank Shield sticky custom sender disabled")
+                return
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
+        me = channel.guild.me
+        if me is None or not channel.permissions_for(me).manage_webhooks:
+            return
+        try:
+            webhooks = await channel.webhooks()
+        except (discord.Forbidden, discord.HTTPException):
+            return
+        bot_id = int(getattr(getattr(self.bot, "user", None), "id", 0) or 0)
+        for webhook in webhooks:
+            owner_id = int(getattr(getattr(webhook, "user", None), "id", 0) or 0)
+            if webhook.name != MANAGED_WEBHOOK_NAME or owner_id != bot_id:
+                continue
+            try:
+                await webhook.delete(reason="Dank Shield sticky custom sender disabled")
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
+
     async def _send(self, channel: discord.TextChannel, config: StickyConfig) -> discord.Message:
         allowed_mentions = discord.AllowedMentions.none()
         if config.mode == "poll":
@@ -590,22 +645,27 @@ class StickyRuntime:
 
         if config.use_webhook:
             webhook = await self._managed_webhook(channel)
-            if webhook is not None:
-                try:
-                    webhook_payload: dict[str, Any] = {
-                        "content": content,
-                        "embed": embed,
-                        "username": config.sender_name or "Dank Shield",
-                        "allowed_mentions": allowed_mentions,
-                        "wait": True,
-                    }
-                    if config.sender_avatar_url:
-                        webhook_payload["avatar_url"] = config.sender_avatar_url
-                    message = await webhook.send(**webhook_payload)
-                    if isinstance(message, discord.WebhookMessage):
-                        return message
-                except (discord.Forbidden, discord.HTTPException, ValueError):
-                    self._webhooks.pop(int(channel.id), None)
+            if webhook is None:
+                raise InvalidCommunityToolValue(
+                    "Custom Sender is enabled, but Dank Shield cannot manage its sticky webhook in this channel."
+                )
+            try:
+                webhook_payload: dict[str, Any] = {
+                    "content": content,
+                    "embed": embed,
+                    "username": config.sender_name or "Dank Shield",
+                    "allowed_mentions": allowed_mentions,
+                    "wait": True,
+                }
+                if config.sender_avatar_url:
+                    webhook_payload["avatar_url"] = config.sender_avatar_url
+                message = await webhook.send(**webhook_payload)
+                if isinstance(message, discord.WebhookMessage):
+                    return message
+                raise InvalidCommunityToolValue("Dank Shield's managed webhook did not return a message.")
+            except (discord.Forbidden, discord.HTTPException, ValueError) as exc:
+                self._webhooks.pop(int(channel.id), None)
+                raise InvalidCommunityToolValue("The configured custom sender could not post in this channel.") from exc
 
         return await channel.send(
             content=content,
@@ -640,23 +700,61 @@ class StickyRuntime:
             ):
                 return None
 
-            await self._delete_previous(channel, current.last_message_id)
+            previous_message_id = current.last_message_id
             try:
                 message = await self._send(channel, current)
             except (discord.Forbidden, discord.HTTPException, InvalidCommunityToolValue, CommunityStorageUnavailable):
                 return None
 
+            sent_at = datetime.now(timezone.utc)
             try:
                 saved = await update_sticky_delivery(
                     channel_id,
                     message_id=int(message.id),
-                    sent_at=datetime.now(timezone.utc),
+                    sent_at=sent_at,
                 )
             except CommunityStorageUnavailable:
-                saved = replace(current, last_message_id=int(message.id), last_sent_at=datetime.now(timezone.utc))
-            if saved is not None:
-                self.set_config(saved)
+                # Delivery state is authoritative. If it cannot be recorded, roll
+                # back the new post and leave the previous known-good sticky alone.
+                await self._delete_message_object(message)
+                return None
+            if saved is None:
+                await self._delete_message_object(message)
+                return None
+
+            self.set_config(saved)
+            if previous_message_id and int(previous_message_id) != int(message.id):
+                await self._delete_previous(channel, previous_message_id)
             return message
+
+    async def cast_and_render_poll_vote(
+        self,
+        interaction: discord.Interaction,
+        channel_id: int,
+        option_index: int,
+    ) -> None:
+        lock = self._poll_render_locks.setdefault(int(channel_id), asyncio.Lock())
+        async with lock:
+            try:
+                poll = await cast_sticky_poll_vote(
+                    int(channel_id),
+                    int(interaction.user.id),
+                    int(option_index),
+                )
+            except (InvalidCommunityToolValue, CommunityStorageUnavailable) as exc:
+                return await _private(interaction, f"❌ {exc}")
+            except Exception:
+                return await _private(interaction, "❌ The vote could not be saved.")
+
+            view = StickyPollView(poll)
+            try:
+                await interaction.response.edit_message(
+                    embed=sticky_poll_embed(poll),
+                    view=view,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except discord.HTTPException:
+                await _private(interaction, "✅ Vote saved. I could not refresh the public poll card yet.")
 
     async def delete_live_message(self, channel: Any, message_id: Optional[int]) -> None:
         if isinstance(channel, discord.TextChannel):
@@ -691,6 +789,7 @@ __all__ = [
     "MANAGED_WEBHOOK_NAME",
     "QUIET_ACTIVITY_PERSIST_SECONDS",
     "QUIET_CHECK_SECONDS",
+    "STARTUP_RECONCILE_CONCURRENCY",
     "StickyPollView",
     "StickyRuntime",
     "community_tools_runtime",
