@@ -14,6 +14,7 @@ from stoney_verify.community_tools_service import (
     StickyConfig,
     StickyPoll,
     get_sticky,
+    get_sticky_poll,
     normalize_sticky,
     save_sticky_bundle,
 )
@@ -33,6 +34,36 @@ def _manage_messages(interaction: discord.Interaction, channel: Optional[discord
         return False
     perms = target.permissions_for(member)
     return bool(member.guild_permissions.administrator or perms.manage_messages)
+
+
+def _sticky_design_signature(config: Optional[StickyConfig]) -> Optional[tuple[Any, ...]]:
+    if config is None:
+        return None
+    return (
+        str(config.mode),
+        str(config.content),
+        str(config.title),
+        int(config.color),
+        str(config.image_url),
+        str(config.thumbnail_url),
+    )
+
+
+def _poll_design_signature(poll: Optional[StickyPoll]) -> Optional[tuple[Any, ...]]:
+    if poll is None:
+        return None
+    return (str(poll.question), tuple(str(item) for item in poll.options))
+
+
+def _draft_is_stale(
+    baseline: Optional[StickyConfig],
+    current: Optional[StickyConfig],
+    baseline_poll: Optional[StickyPoll] = None,
+    current_poll: Optional[StickyPoll] = None,
+) -> bool:
+    if _sticky_design_signature(baseline) != _sticky_design_signature(current):
+        return True
+    return _poll_design_signature(baseline_poll) != _poll_design_signature(current_poll)
 
 
 async def _private(
@@ -122,7 +153,7 @@ async def _post_temporary_test(
 
 
 def _merge_draft_with_live_state(draft: StickyConfig, current: Optional[StickyConfig]) -> StickyConfig:
-    """Keep draft content/style while preserving only latest operational/delivery state."""
+    """Keep draft content/style while preserving latest operational/delivery state."""
     if current is None:
         return replace(draft, last_message_id=None, last_sent_at=None)
     return replace(
@@ -163,9 +194,18 @@ class StickyPreviewTestView(_OwnedPreviewView):
 
 
 class StickyDraftPreviewView(_OwnedPreviewView):
-    def __init__(self, owner_id: int, config: StickyConfig) -> None:
+    def __init__(
+        self,
+        owner_id: int,
+        config: StickyConfig,
+        *,
+        baseline: Optional[StickyConfig] = None,
+        baseline_poll: Optional[StickyPoll] = None,
+    ) -> None:
         super().__init__(owner_id)
         self.config = config
+        self.baseline = baseline
+        self.baseline_poll = baseline_poll
 
     @discord.ui.button(label="Publish Sticky", emoji="✅", style=discord.ButtonStyle.success)
     async def publish(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -182,8 +222,13 @@ class StickyDraftPreviewView(_OwnedPreviewView):
         await interaction.response.defer()
         try:
             current = await get_sticky(int(channel.id))
+            current_poll = await get_sticky_poll(int(channel.id)) if current is not None and current.mode == "poll" else None
             if current is not None and int(current.guild_id) != int(guild.id):
                 raise InvalidCommunityToolValue("The saved sticky does not belong to this server.")
+            if _draft_is_stale(self.baseline, current, self.baseline_poll, current_poll):
+                raise InvalidCommunityToolValue(
+                    "This draft is stale because another Community Tools change modified the live sticky while you were editing. Reopen the editor so newer work is not overwritten."
+                )
             publish_config = _merge_draft_with_live_state(self.config, current)
             saved, saved_poll = await save_sticky_bundle(publish_config, None)
             if saved_poll is not None:
@@ -254,7 +299,13 @@ async def show_sticky_preview(
     await interaction.response.send_message(**payload)
 
 
-async def show_sticky_draft_preview(interaction: discord.Interaction, config: StickyConfig) -> None:
+async def show_sticky_draft_preview(
+    interaction: discord.Interaction,
+    config: StickyConfig,
+    *,
+    baseline: Optional[StickyConfig] = None,
+    baseline_poll: Optional[StickyPoll] = None,
+) -> None:
     channel = _destination(interaction, int(config.channel_id))
     if channel is None or not _manage_messages(interaction, channel):
         return await _private(interaction, "❌ Sticky preview requires **Manage Messages in the destination channel**.")
@@ -264,12 +315,20 @@ async def show_sticky_draft_preview(interaction: discord.Interaction, config: St
         return await _private(interaction, f"❌ {exc}")
 
     content, embed = _preview_payload(safe, None, draft=True)
-    content += "\n\nUse **Publish Sticky** only when this looks right. You can also post a 30-second test first."
+    content += (
+        "\n\nUse **Publish Sticky** only when this looks right. You can also post a 30-second test first. "
+        "If another manager changes the live sticky before you publish, this draft will refuse to overwrite their newer work."
+    )
     payload: dict[str, Any] = {
         "content": content,
         "ephemeral": True,
         "allowed_mentions": _ALLOWED_MENTIONS,
-        "view": StickyDraftPreviewView(int(interaction.user.id), safe),
+        "view": StickyDraftPreviewView(
+            int(interaction.user.id),
+            safe,
+            baseline=baseline,
+            baseline_poll=baseline_poll,
+        ),
     }
     if embed is not None:
         payload["embed"] = embed
@@ -279,6 +338,8 @@ async def show_sticky_draft_preview(interaction: discord.Interaction, config: St
 __all__ = [
     "StickyDraftPreviewView",
     "StickyPreviewTestView",
+    "_draft_is_stale",
+    "_merge_draft_with_live_state",
     "show_sticky_draft_preview",
     "show_sticky_preview",
 ]
