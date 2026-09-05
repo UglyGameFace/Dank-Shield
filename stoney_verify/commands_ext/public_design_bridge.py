@@ -23,7 +23,7 @@ async def open_design_studio_from_setup(interaction: discord.Interaction) -> Non
         embed.add_field(
             name="Opened from Setup",
             value=(
-                "This is the same Dank Design Studio opened from `/dank home` → **Server Design**. "
+                "This is the exact same Dank Design Studio opened from `/dank home` → **Server Design**. "
                 "Setup no longer maintains a competing design screen."
             ),
             inline=False,
