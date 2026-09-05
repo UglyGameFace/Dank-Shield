@@ -5,6 +5,7 @@ from pathlib import Path
 GROUP = Path("stoney_verify/commands_ext/public_design_group.py").read_text(encoding="utf-8")
 STUDIO = Path("stoney_verify/commands_ext/public_design_studio_v2.py").read_text(encoding="utf-8")
 PLAN = Path("stoney_verify/services/server_design_plan_service.py").read_text(encoding="utf-8")
+APPLY = Path("stoney_verify/services/server_design_apply_service.py").read_text(encoding="utf-8")
 
 
 def test_design_group_registers_command_with_native_interaction_guard() -> None:
@@ -29,9 +30,13 @@ def test_consolidated_studio_uses_one_explicit_plan_service() -> None:
     assert "command_guard.build_design_plan =" not in PLAN
 
 
-def test_public_workflow_keeps_guarded_permission_and_safe_apply() -> None:
+def test_public_workflow_keeps_guarded_permission_and_transactional_apply() -> None:
     assert "_require_design_permission" in STUDIO
     assert "class ReviewedPreviewView" in STUDIO
     assert "This preview is obsolete" in STUDIO
-    assert "current != before" in STUDIO
+    assert "server_design_apply_service as apply_service" in STUDIO
+    assert "apply_service.preflight_plan" in STUDIO
+    assert "apply_service.apply_prepared" in STUDIO
+    assert "current != before" in APPLY
+    assert "compensate_applied" in APPLY
     assert "_persist_rollback_snapshot" in STUDIO
