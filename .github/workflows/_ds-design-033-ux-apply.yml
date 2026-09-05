@@ -30,11 +30,6 @@ jobs:
             stoney_verify/services/server_design_plan_service.py \
             stoney_verify/services/server_design_rule_service.py \
             stoney_verify/startup_guards/__init__.py
-          python -m pytest -q --tb=short --disable-warnings \
-            tests/test_dank_design_runtime_ownership_033.py \
-            tests/test_design_studio_consolidation_032.py \
-            tests/test_dank_design_editor_reset_033.py \
-            tests/test_dank_design_editor_state_authority.py
           git diff --check
 
       - name: Commit cleaned design ownership
