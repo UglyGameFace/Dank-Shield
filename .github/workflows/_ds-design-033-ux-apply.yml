@@ -1,4 +1,4 @@
-name: DS Design 033 UX One Shot Patch
+name: DS Design 033 Redundancy One Shot Patch
 
 on:
   push:
@@ -10,31 +10,40 @@ permissions:
 
 jobs:
   patch:
-    if: github.actor != 'github-actions[bot]'
+    if: github.actor != 'github-actions[bot]' && github.event.head_commit.message == 'DS-DESIGN-033: run full redundancy cleanup'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
         with:
           ref: fix/ds-design-033-editor-separator-reset-correctness
           fetch-depth: 0
 
-      - name: Apply guarded UX patch
+      - name: Apply guarded redundancy cleanup
         run: |
           python tools/_apply_ds_design_033_ux_patch.py
           python -m py_compile \
+            stoney_verify/commands_ext/public_design_group.py \
             stoney_verify/commands_ext/public_design_studio.py \
-            stoney_verify/commands_ext/public_design_studio_v2.py
+            stoney_verify/commands_ext/public_design_studio_v2.py \
+            stoney_verify/services/server_design_plan_service.py \
+            stoney_verify/services/server_design_rule_service.py \
+            stoney_verify/startup_guards/__init__.py
+          python -m pytest -q --tb=short --disable-warnings \
+            tests/test_dank_design_runtime_ownership_033.py \
+            tests/test_design_studio_consolidation_032.py \
+            tests/test_dank_design_editor_reset_033.py \
+            tests/test_dank_design_editor_state_authority.py
           git diff --check
 
-      - name: Commit patched sources
+      - name: Commit cleaned design ownership
         run: |
           if git diff --quiet; then
-            echo "No UX patch changes produced"
+            echo "No redundancy cleanup changes produced"
             exit 1
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add stoney_verify/commands_ext/public_design_studio.py stoney_verify/commands_ext/public_design_studio_v2.py
-          git commit -m "DS-DESIGN-033: make rule removal and reset unambiguous"
+          git add -A
+          git commit -m "DS-DESIGN-033: remove redundant Dank Design ownership paths"
           git push origin HEAD:fix/ds-design-033-editor-separator-reset-correctness
