@@ -2,10 +2,11 @@ from __future__ import annotations
 
 """Consolidated public Dank Design Studio.
 
-This is the one public workflow owner for /dank design. The historical Studio
-module remains a compatibility backend for mature exact-item editors and saved
-rule controls while all public navigation, batch preview/apply, Smart Repair,
-and Undo are owned here.
+This is the one public workflow owner for Server Design. The production front
+door is ``/dank home`` → **Server Design**. The historical Studio module remains
+a compatibility backend for mature exact-item editors and saved rule controls
+while all public navigation, batch preview/apply, Smart Repair, and Undo are
+owned here.
 """
 
 import time
@@ -60,7 +61,7 @@ class DesignView(discord.ui.View):
                 interaction,
                 content=(
                     "❌ Dank Design stopped because something unexpected happened. "
-                    "Reopen `/dank design` and build a fresh preview before trying the action again."
+                    "Reopen `/dank home`, choose **Server Design**, and build a fresh preview before trying the action again."
                 ),
                 ephemeral=True,
                 action_name="design.v2.component_error",
@@ -657,7 +658,7 @@ async def _pop_snapshot_if_current(guild_id: int, created_at: float) -> bool:
             legacy._LAST_SNAPSHOTS[guild_key] = rows[-10:]  # type: ignore[attr-defined]
             return True
         return False
-    popped = await legacy._pop_latest_rollback_snapshot(int(guild_id))  # type: ignore[attr-defined]
+    popped = await legacy._pop_latest_rollback_snapshot(int(guild.id))  # type: ignore[attr-defined]
     return _snapshot_matches(popped, created_at)
 
 
