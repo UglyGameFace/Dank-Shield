@@ -25,6 +25,7 @@ on:
       - 'tests/test_setup_design_bridge_behavior.py'
       - 'tools/audit_dank_design_smart_auto_detect.py'
       - 'tools/test_dank_design_*.py'
+      - 'tools/test_design_native_registration.py'
       - 'tools/test_design_layout_helpers_not_startup.py'
       - '.github/workflows/dank-design-032.yml'
 
@@ -87,8 +88,10 @@ jobs:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
 
-      - name: Run design ownership audits
+      - name: Run design ownership and UX audits
         run: |
           python tools/audit_dank_design_smart_auto_detect.py
           python tools/test_dank_design_safe_repair_cleanup_static.py
+          python tools/test_dank_design_ux_lock_cleanup_static.py
+          python tools/test_design_native_registration.py
           python tools/test_design_layout_helpers_not_startup.py
