@@ -59,7 +59,8 @@ def test_temporary_preview_test_paths_do_not_mutate_live_delivery_state() -> Non
 def test_create_edit_is_draft_until_explicit_atomic_publish() -> None:
     assert "class StickyMessageModal" in MAIN_UI
     assert "class StickyEmbedModal" in MAIN_UI
-    assert "await show_sticky_draft_preview(interaction, config)" in MAIN_UI
+    assert "show_sticky_draft_preview(" in MAIN_UI
+    assert "baseline=self.current" in MAIN_UI
     assert 'label="Publish Sticky"' in PREVIEW_UI
     assert 'label="Discard Draft"' in PREVIEW_UI
     assert "publish_config = _merge_draft_with_live_state(self.config, current)" in PREVIEW_UI
@@ -67,6 +68,7 @@ def test_create_edit_is_draft_until_explicit_atomic_publish() -> None:
     assert "last_message_id=current.last_message_id" in PREVIEW_UI
     assert "enabled=current.enabled" in PREVIEW_UI
     assert "nothing has changed live yet" in PREVIEW_UI
+    assert "_draft_is_stale(self.baseline, current" in PREVIEW_UI
     assert "create or replace function public.save_dank_sticky_bundle" in HARDENING
 
 
@@ -76,7 +78,8 @@ def test_quiet_setup_edit_preserves_authoritative_destination_and_delivery_state
     assert "last_notice_message_id=base.last_notice_message_id" in QUIET_UI
     assert "last_notice_sent_at=base.last_notice_sent_at" in QUIET_UI
     assert 'label="Use This Channel"' in QUIET_UI
-    assert "Existing destination and quiet-cycle state were preserved" in QUIET_UI
+    assert "Existing destination and runtime quiet-cycle state were preserved" in QUIET_UI
+    assert "_quiet_editor_is_stale(self.current, current)" in QUIET_UI
     assert "For auto-clear, enter `yes` or `no`" in QUIET_UI
 
 
