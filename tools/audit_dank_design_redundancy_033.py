@@ -65,6 +65,25 @@ def main() -> int:
         failures.append("retired independent legacy Apply owner still exists")
 
     for marker in (
+        "class ThemeSelect",
+        "class StrengthSelect",
+        "class FormatLocksButton",
+        "class DesignCategoryEditorButton",
+        "class DesignChannelEditorButton",
+        "class ProtectionManagerButton",
+        "class DesignDoneView",
+        "class RollbackConfirmView",
+        "async def _open_rollback",
+        "def _saved_style_summary",
+        "def _consistency_lines",
+        "def _consistency_embed",
+    ):
+        if marker in LEGACY:
+            failures.append(f"retired legacy owner/helper remains: {marker}")
+    if "Compatibility fallback only" not in LEGACY:
+        failures.append("legacy home fallback grew back into a competing home implementation")
+
+    for marker in (
         "class DesignDoctorButton",
         "class DesignDoctorView",
         "class StartHereButton",
@@ -130,7 +149,7 @@ def main() -> int:
     print("DANK DESIGN REDUNDANCY AUDIT OK")
     print(
         "public_registrar=1 retired_runtime=0 historical_mutators=0 "
-        "runtime_magic=0 dead_submenus=0 native_plan=yes consolidated_apply=yes compatibility_boundary=ui_only"
+        "runtime_magic=0 dead_submenus=0 dead_owners=0 native_plan=yes consolidated_apply=yes compatibility_boundary=ui_only"
     )
     return 0
 

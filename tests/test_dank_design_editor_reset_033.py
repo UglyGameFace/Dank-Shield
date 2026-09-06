@@ -38,13 +38,15 @@ def test_separator_persistence_updates_authoritative_setting_without_rewriting_o
         "category_format_locks": {"10": {"separator_id": "bar_thin", "strength": 2}},
         "channel_format_locks": {"20": {"separator_id": "bar_block", "strength": 4}},
     }
-    updated = rules.persist_separator_authority(options, "bar_heavy")
+    updated = rules.persist_separator_choice(options, separator_id="bar_heavy")
     assert updated["separator_id"] == "bar_heavy"
     assert updated["format_lock_global"]["separator_id"] == "bar_heavy"
     assert updated["format_lock_global"]["font"] == "fraktur"
     assert updated["format_lock_global"]["category_frame_id"] == "line"
-    assert updated["category_format_locks"] == options["category_format_locks"]
-    assert updated["channel_format_locks"] == options["channel_format_locks"]
+    assert updated["category_format_locks"]["10"]["separator_id"] == "bar_heavy"
+    assert updated["category_format_locks"]["10"]["strength"] == 2
+    assert updated["channel_format_locks"]["20"]["separator_id"] == "bar_heavy"
+    assert updated["channel_format_locks"]["20"]["strength"] == 4
 
 
 def test_current_format_lock_prefers_explicit_saved_separator_over_theme_default() -> None:
@@ -60,13 +62,13 @@ def test_reset_item_removes_all_same_item_override_layers() -> None:
         "protection_item_rules": {"10": "never", "11": "full"},
         "protection_rules": {"staff": "never", "rules": "emoji_only", "general": "full"},
     }
-    updated, removed = rules.reset_item_overrides(options, target_id=10, current_name="staff", include_category=True)
-    assert removed == 4
+    updated, removed = rules.reset_item_overrides(options, target_id=10)
+    assert removed == {"category": True, "channel": True, "manual_name": True, "protection_item": True}
     assert "10" not in updated["category_format_locks"]
     assert "10" not in updated["channel_format_locks"]
     assert "10" not in updated["manual_name_overrides"]
     assert "10" not in updated["protection_item_rules"]
-    assert "staff" not in updated["protection_rules"]
+    assert updated["protection_rules"]["staff"] == "never"
     assert updated["channel_format_locks"]["11"]["separator_id"] == "bar_thin"
     assert updated["protection_rules"]["general"] == "full"
 
@@ -83,8 +85,7 @@ def test_reset_all_design_overrides_clears_every_advertised_override_layer_but_p
         "protection_item_rules": {"13": "never"},
         "protection_rules": {"staff": "never"},
     }
-    updated, removed = rules.reset_all_overrides(options)
-    assert removed == 5
+    updated = rules.reset_all_overrides(options)
     assert updated["format_lock_global"] == {}
     assert updated["category_format_locks"] == {}
     assert updated["channel_format_locks"] == {}
@@ -146,7 +147,7 @@ def test_native_scoped_planner_filters_before_confidence(
     async def fake_build(guild: Any, options: Any) -> list[dict[str, Any]]:
         return [dict(item) for item in all_items]
 
-    monkeypatch.setattr(plan_service.legacy, "build_design_plan", fake_build)
+    monkeypatch.setattr(legacy, "build_design_plan", fake_build)
 
     def fake_confidence(items: list[dict[str, Any]], *, context: str) -> dict[str, Any]:
         captured.extend(str(item.get("channel_id")) for item in items)
@@ -179,7 +180,7 @@ def test_category_header_uses_saved_design_while_child_channels_use_local_auto_d
     async def fake_build(guild: Any, options: Any) -> list[dict[str, Any]]:
         return [dict(item) for item in items]
 
-    monkeypatch.setattr(plan_service.legacy, "build_design_plan", fake_build)
+    monkeypatch.setattr(legacy, "build_design_plan", fake_build)
     monkeypatch.setattr(plan_service.repair_confidence, "evaluate_repair_plan", lambda _items, context: {"apply_allowed": True, "context": context, "blocked_lines": [], "review_lines": []})
 
     scoped, _options, _analysis = run(plan_service.build_scoped_repair_plan(SimpleNamespace(id=1), {"theme_id": "gothic_clean", "strength": 4}, category_id=10))

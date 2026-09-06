@@ -811,18 +811,6 @@ def _infer_live_majority_context(
         }
 
 
-def _saved_style_summary(options: Mapping[str, Any]) -> dict[str, str]:
-    theme_id = _safe_str(options.get("theme_id"), "gothic_clean")
-    strength = _safe_int(options.get("strength"), 2)
-    theme = next((t for t in studio.THEMES if t.id == theme_id), studio.THEMES[1])
-    font_text = str(getattr(theme, "font", "normal") or "normal").replace("_", " ").title()
-    return {
-        "theme": _safe_str(getattr(theme, "label", "Gothic Clean"), "Gothic Clean"),
-        "font": font_text,
-        "strength": f"{strength}/5",
-    }
-
-
 def _majority_confidence_line(summary: Mapping[str, str]) -> str:
     values = [_safe_str(summary.get(key), "mixed/unknown").lower() for key in ("separator", "category_frame", "font", "leading_emoji")]
     if any("unavailable" in value for value in values):
@@ -835,78 +823,16 @@ def _majority_confidence_line(summary: Mapping[str, str]) -> str:
 
 
 def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) -> discord.Embed:
-    options = options or {}
-    counts = _lock_count(options)
-    _live_analysis, _live_options, live_summary = _infer_live_majority_context(guild, options)
-    saved = _saved_style_summary(options)
-
+    """Import-order fallback only; V2 replaces this before public Studio use."""
+    _ = guild, options
     embed = discord.Embed(
         title="🎨 Dank Design Studio",
-        description=" ".join((
-            "Design channel/category names without touching permissions, roles, topics, order, tickets, or verification.",
-            "Safe workflow: review first → preview exact names → apply only when you approve.",
-        )),
+        description="Open `/dank home`, then choose **Server Design** to use the consolidated Studio.",
         color=discord.Color.blurple(),
     )
-
-    embed.add_field(
-        name="Recommended workflow",
-        value="\n".join((
-            "👁️ **Preview Saved Design** — follows your saved global/category/channel rules and shows exact names before anything changes.",
-            "🧭 **Review Name Drift** — compares names against saved category/channel rules; live detection is preview-only when saved rules exist.",
-            "⚡ **Change Channel Separator Only** — changes channel separators only. It does not change icons, font, category frames, permissions, or order.",
-        )),
-        inline=False,
-    )
-
-    embed.add_field(
-        name="Edit one thing",
-        value="\n".join((
-            "🗂️ **Category Editor** — preview, rename, style, lock, or unlock one category.",
-            "#️⃣ **Channel Editor** — preview, rename, style, lock, or unlock one channel.",
-        )),
-        inline=False,
-    )
-
-    embed.add_field(
-        name="Detected live style",
-        value="\n".join((
-            f"Separator: **{_safe_str(live_summary.get('separator'), 'mixed/unknown')}**",
-            f"Categories: **{_safe_str(live_summary.get('category_frame'), 'mixed/unknown')}**",
-            f"Font/style: **{_safe_str(live_summary.get('font'), 'mixed/unknown')}**",
-            f"Leading emoji: **{_safe_str(live_summary.get('leading_emoji'), 'mixed/unknown')}**",
-            f"Confidence: **{_majority_confidence_line(live_summary)}**",
-        ))[:1024],
-        inline=False,
-    )
-
-    embed.add_field(
-        name="Saved design rule",
-        value="\n".join((
-            f"Theme: **{saved['theme']}**",
-            f"Font: **{saved['font']}**",
-            f"Strength: **{saved['strength']}**",
-            "Used by Preview Saved Design and manual saved rules.",
-        )),
-        inline=True,
-    )
-
-    embed.add_field(
-        name="Saved rules / locks",
-        value="\n".join((
-            f"Global preset: **{'On' if counts['global'] else 'Off'}**",
-            f"Locked category rules: **{counts['categories']}**",
-            f"Locked channel overrides: **{counts['channels']}**",
-            f"Exact manual names: **{counts['manual_names']}**",
-            f"Exact protection overrides: **{counts['protection_items']}**",
-            f"Name protection overrides: **{counts['protection_names']}**",
-            "Open **Rules & Resets** to inspect saved authority, remove one listed rule, or reset an item's overrides.",
-        )),
-        inline=True,
-    )
-
-    embed.set_footer(text="Names only • Saved rules win • Live detection is preview-only when saved rules exist")
+    embed.set_footer(text="Compatibility fallback only • Public home is owned by V2")
     return _clean_design_embed(embed)
+
 
 
 def _preview_embed(guild: discord.Guild, items: list[dict[str, Any]], *, title: str = "👁 Server Design Preview") -> discord.Embed:
@@ -1003,49 +929,6 @@ def _preview_embed(guild: discord.Guild, items: list[dict[str, Any]], *, title: 
 
 
 
-class ThemeSelect(discord.ui.Select):
-    def __init__(self, current: str) -> None:
-        options = []
-        for theme in studio.THEMES[:25]:
-            font_text = str(getattr(theme, "font", "normal") or "normal").replace("_", " ").title()
-            frame_text = str(getattr(theme, "category_frame", "plain") or "plain").replace("_", " ").title()
-            options.append(discord.SelectOption(label=theme.label[:100], value=theme.id, default=theme.id == current, description=f"Font: {font_text} • Category frame: {frame_text}"[:100]))
-        super().__init__(placeholder="Choose a design theme…", min_values=1, max_values=1, options=options, row=0)
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        assert interaction.guild is not None
-        options = await _load_design_options(int(interaction.guild.id))
-        options["theme_id"] = self.values[0]
-        _sync_enabled_global_lock(options)
-        await _save_options(interaction, options)
-        await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
-
-
-class StrengthSelect(discord.ui.Select):
-    def __init__(self, current: int) -> None:
-        labels = {
-            1: ("1 — Icons", "Icon/base cleanup only."),
-            2: ("2 — Layout", "Adds the selected channel separator."),
-            3: ("3 — Font", "Adds the selected font style."),
-            4: ("4 — Recommended", "Adds category frames for the full visual theme."),
-            5: ("5 — Exact", "Strictly normalize the selected full theme."),
-        }
-        options = [discord.SelectOption(label=label, value=str(value), default=value == current, description=description[:100]) for value, (label, description) in labels.items()]
-        super().__init__(placeholder="Choose how much styling to apply…", min_values=1, max_values=1, options=options, row=1)
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        assert interaction.guild is not None
-        options = await _load_design_options(int(interaction.guild.id))
-        options["strength"] = max(1, min(5, _safe_int(self.values[0], 4)))
-        _sync_enabled_global_lock(options)
-        await _save_options(interaction, options)
-        await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
-
-
 def _consistency_summary(items: list[dict[str, Any]]) -> dict[str, int]:
     out = {"matches": 0, "needs_fix": 0, "protected": 0, "failed": 0, "notes": 0}
     for item in items:
@@ -1061,124 +944,6 @@ def _consistency_summary(items: list[dict[str, Any]]) -> dict[str, int]:
         if item.get("warnings"):
             out["notes"] += 1
     return out
-
-
-def _consistency_lines(items: list[dict[str, Any]], *, limit: int = 12) -> list[str]:
-    rows: list[str] = []
-    for item in items:
-        if item.get("status") != "changed":
-            continue
-        before = _safe_str(item.get("before"))
-        after = _safe_str(item.get("after"))
-        kind = _safe_str(item.get("kind"), "channel")
-        rows.append(f"🧩 `{before}` → `{after}`"[:240])
-        if len(rows) >= limit:
-            break
-    return rows or ["No inconsistent channel names found."]
-
-
-def _consistency_embed(guild: discord.Guild, items: list[dict[str, Any]], options: Mapping[str, Any]) -> discord.Embed:
-    summary = _consistency_summary(items)
-    is_live = bool(options.get("__majority_layout_inferred"))
-    live_summary = options.get("__majority_layout_summary") if isinstance(options.get("__majority_layout_summary"), Mapping) else {}
-
-    if not live_summary:
-        _analysis, _repair_options, detected = _infer_live_majority_context(guild, options)
-        live_summary = detected
-
-    title = "✅ Live Majority Repair Preview" if is_live else "🧭 Saved Layout Consistency Check"
-    description = (
-        "**Review before apply.** Dank Shield copied the layout most channels/categories already use here.\n\n"
-        "Apply only renames safe outliers shown in this preview."
-        if is_live
-        else "Dank Shield compared channel/category names against the saved design rule.\n\n"
-        "Use this when your saved rules are intentionally correct."
-    )
-
-    embed = discord.Embed(
-        title=title,
-        description=description,
-        color=discord.Color.orange() if summary["failed"] else discord.Color.green(),
-    )
-
-    embed.add_field(
-        name="Detected target layout" if is_live else "Saved target layout",
-        value=(
-            f"Separator: **{_safe_str(live_summary.get('separator'), 'mixed/unknown')}**\n"
-            f"Category frame: **{_safe_str(live_summary.get('category_frame'), 'mixed/unknown')}**\n"
-            f"Font/style: **{_safe_str(live_summary.get('font'), 'mixed/unknown')}**\n"
-            f"Leading emoji: **{_safe_str(live_summary.get('leading_emoji'), 'mixed/unknown')}**"
-        )[:1024],
-        inline=False,
-    )
-
-    embed.add_field(
-        name="Results",
-        value=(
-            f"Already matching: **{summary['matches']}**\n"
-            f"Safe repairs: **{summary['needs_fix']}**\n"
-            f"Protected/skipped: **{summary['protected']}**\n"
-            f"Cannot repair yet: **{summary['failed']}**\n"
-            f"Notes: **{summary['notes']}**"
-        ),
-        inline=True,
-    )
-
-    if options.get("__majority_layout_overrode_locks"):
-        embed.add_field(
-            name="Saved rules ignored for this repair",
-            value=f"Review Name Drift ignored **{_safe_int(options.get('__majority_layout_overrode_locks'), 0)}** saved rule(s) so it could copy the live majority.",
-            inline=False,
-        )
-    elif options.get("__majority_layout_lock_override_active"):
-        embed.add_field(
-            name="Saved rules active",
-            value=f"**{_safe_int(options.get('__majority_layout_lock_override_active'), 0)}** saved rule(s) are active for this preview.",
-            inline=False,
-        )
-
-    embed.add_field(
-        name="What will be fixed",
-        value="\n".join(_consistency_lines(items, limit=12))[:1024],
-        inline=False,
-    )
-
-    if summary["protected"]:
-        embed.add_field(
-            name="Protected safe skips",
-            value=(
-                "Ticket/log/system names are intentionally protected unless you override them later. "
-                "They are not treated as failures."
-            ),
-            inline=False,
-        )
-
-    failed_lines = studio.preview_lines(items, filter_mode="failed", limit=5)
-    if failed_lines and failed_lines != ["No matching preview rows."]:
-        embed.add_field(name="Cannot fix yet", value="\n".join(failed_lines)[:1024], inline=False)
-
-    embed.set_footer(text="Names only • Preview first • Rollback snapshot kept before Apply")
-    return _clean_design_embed(embed)
-
-
-
-class FormatLocksButton(discord.ui.Button):
-    def __init__(self, *, row: int = 4) -> None:
-        super().__init__(
-            label="Format Locks",
-            emoji="🔒",
-            style=discord.ButtonStyle.primary,
-            custom_id="dank_design:format_locks",
-            row=row,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        options = await _load_design_options(int(guild.id))
-        await interaction.response.edit_message(embed=_format_locks_embed(guild, options), view=FormatLocksView())
 
 
 class CategoryFormatLockSelect(discord.ui.ChannelSelect):
@@ -2694,48 +2459,6 @@ async def _preview_scope(
         ),
     )
 
-class DesignCategoryEditorButton(discord.ui.Button):
-    def __init__(self, *, row: int = 3) -> None:
-        super().__init__(
-            label="Category Editor",
-            emoji="🗂️",
-            style=discord.ButtonStyle.primary,
-            custom_id="dank_design:category_editor",
-            row=row,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        await interaction.response.edit_message(
-            embed=_category_editor_embed(guild, page=0),
-            view=CategoryEditorPickerView(guild, page=0),
-        )
-
-
-class DesignChannelEditorButton(discord.ui.Button):
-    def __init__(self, *, row: int = 3) -> None:
-        super().__init__(
-            label="Channel Editor",
-            emoji="#️⃣",
-            style=discord.ButtonStyle.primary,
-            custom_id="dank_design:channel_editor",
-            row=row,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        await interaction.response.edit_message(
-            embed=_channel_editor_embed(guild, page=0),
-            view=ChannelEditorPickerView(guild, page=0),
-        )
-
-
 def _category_editor_embed(guild: discord.Guild, *, page: int) -> discord.Embed:
     categories = list(getattr(guild, "categories", []) or [])
     total_pages = max(1, (len(categories) + EDITOR_PAGE_SIZE - 1) // EDITOR_PAGE_SIZE)
@@ -3916,28 +3639,6 @@ def _protection_manager_embed(guild: discord.Guild, options: Mapping[str, Any]) 
     return _clean_design_embed(embed)
 
 
-class ProtectionManagerButton(discord.ui.Button):
-    def __init__(self, *, row: int = 4) -> None:
-        super().__init__(
-            label="Protection Rules",
-            emoji="🛡️",
-            style=discord.ButtonStyle.secondary,
-            custom_id="dank_design:protection_manager",
-            row=row,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        options = await _load_design_options(int(guild.id))
-        await interaction.response.edit_message(
-            embed=_protection_manager_embed(guild, options),
-            view=ProtectionManagerView(),
-        )
-
-
 class ProtectionManagerView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=900)
@@ -4917,123 +4618,6 @@ class StyleChangePreviewView(DesignPreviewView):
         if has_blockers:
             self.add_item(StyleChangeFixMissingEmojiButton(row=2, pending_created_at=pending_created_at))
             self.add_item(StyleChangeApplySafeOnlyButton(row=2, pending_created_at=pending_created_at))
-
-
-class DesignDoneView(discord.ui.View):
-    def __init__(self, *, can_rollback: bool) -> None:
-        super().__init__(timeout=900)
-        self.rollback.disabled = not can_rollback
-
-    @discord.ui.button(label="Rollback", emoji="↩️", style=discord.ButtonStyle.danger, custom_id="dank_design:rollback_done", row=0)
-    async def rollback(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        async def action() -> None:
-            await _open_rollback(interaction)
-
-        await _guard_design_action(interaction, "design.rollback.open_button", action, defer=False)
-
-    @discord.ui.button(label="Back to Studio", emoji="🎨", style=discord.ButtonStyle.secondary, custom_id="dank_design:done_back", row=0)
-    async def done_back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        async def action() -> None:
-            if not await _require_design_permission(interaction):
-                return
-            assert interaction.guild is not None
-            options = await _load_design_options(int(interaction.guild.id))
-            await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
-
-        await _guard_design_action(interaction, "design.done.back_to_studio", action, defer=False)
-
-
-async def _open_rollback(interaction: discord.Interaction) -> None:
-    async def action() -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        latest = await _latest_rollback_snapshot(int(guild.id))
-        if not latest:
-            await safe_send_interaction(
-                interaction,
-                content="No rollback snapshot is available for this server.",
-                ephemeral=True,
-                action_name="design.rollback.no_snapshot",
-            )
-            return
-        items = list(latest.get("items") or [])
-        preview = []
-        for item in reversed(items[-10:]):
-            preview.append(f"↩️ `{item.get('new_name')}` → `{item.get('old_name')}`")
-        embed = discord.Embed(title="↩️ Rollback Preview", description="Rollback uses the same safe 2-second rename queue.", color=discord.Color.orange())
-        embed.add_field(name="Items", value=str(len(items)), inline=True)
-        embed.add_field(name="Preview", value="\n".join(preview)[:1024] or "No items.", inline=False)
-        await safe_send_interaction(
-            interaction,
-            embed=embed,
-            view=RollbackConfirmView(),
-            ephemeral=True,
-            action_name="design.rollback.preview",
-        )
-
-    await _guard_design_action(interaction, "design.rollback.open", action, defer=False)
-
-
-class RollbackConfirmView(discord.ui.View):
-    def __init__(self) -> None:
-        super().__init__(timeout=900)
-
-    @discord.ui.button(label="Rollback Last Apply", emoji="↩️", style=discord.ButtonStyle.danger, custom_id="dank_design:rollback_confirm", row=0)
-    async def rollback_confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        async def action() -> None:
-            if not await _require_design_permission(interaction):
-                return
-            guild = interaction.guild
-            assert guild is not None
-            lock = _lock_for(int(guild.id))
-            if lock.locked():
-                await safe_send_interaction(
-                    interaction,
-                    content="⏳ A design job is already running for this server. Wait for it to finish.",
-                    ephemeral=True,
-                    action_name="design.rollback.locked",
-                )
-                return
-            latest = await _latest_rollback_snapshot(int(guild.id))
-            if not latest:
-                await safe_send_interaction(
-                    interaction,
-                    content="No rollback snapshot found.",
-                    ephemeral=True,
-                    action_name="design.rollback.confirm.no_snapshot",
-                )
-                return
-            items = list(latest.get("items") or [])
-            await interaction.response.defer(ephemeral=True, thinking=False)
-            reverted = 0
-            failed: list[str] = []
-            async with lock:
-                for item in reversed(items):
-                    channel = guild.get_channel(_safe_int(item.get("channel_id"), 0))
-                    if channel is None:
-                        failed.append(f"missing `{item.get('new_name')}`")
-                        continue
-                    current = _safe_str(getattr(channel, "name", ""))
-                    new_name = _safe_str(item.get("new_name"))
-                    old_name = _safe_str(item.get("old_name"))[: studio.DISCORD_NAME_LIMIT]
-                    if current != new_name:
-                        failed.append(f"stale `{new_name}` is now `{current}`")
-                        continue
-                    try:
-                        await channel.edit(name=old_name, reason=f"Dank Shield Server Design rollback by {int(interaction.user.id)}")
-                        reverted += 1
-                        await asyncio.sleep(studio.DEFAULT_DELAY_SECONDS)
-                    except Exception as exc:
-                        failed.append(f"`{current}`: {type(exc).__name__}")
-            await _pop_latest_rollback_snapshot(int(guild.id))
-            embed = discord.Embed(title="↩️ Rollback Complete", description=f"Restored **{reverted}** item(s). Failed **{len(failed)}**.", color=discord.Color.green() if not failed else discord.Color.orange())
-            if failed:
-                embed.add_field(name="Skipped / Failed", value="\n".join(failed[:10])[:1024], inline=False)
-            await interaction.edit_original_response(embed=embed, view=None)
-
-        await _guard_design_action(interaction, "design.rollback.confirm", action, defer=False)
 
 
 __all__ = [
