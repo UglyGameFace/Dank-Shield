@@ -32,6 +32,18 @@ def top_level_nodes(source: str) -> dict[str, ast.AST]:
     return out
 
 
+def exact_symbol_references(source: str, symbol: str) -> int:
+    """Count executable references to an exact symbol, not substring lookalikes."""
+    tree = ast.parse(source)
+    count = 0
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == symbol:
+            count += 1
+        elif isinstance(node, ast.Attribute) and node.attr == symbol:
+            count += 1
+    return count
+
+
 def remove_nodes(source: str, names: set[str]) -> str:
     nodes = top_level_nodes(source)
     missing = sorted(name for name in names if name not in nodes)
@@ -53,30 +65,37 @@ def remove_nodes(source: str, names: set[str]) -> str:
 
 legacy_before = LEGACY_PATH.read_text(encoding="utf-8")
 
-# Prove these are implementation islands before deleting them. They should not
-# be imported elsewhere; historical global references are confined to the dead
-# island itself or are replaced by the V2 compatibility bridge at public use.
-all_python = "\n".join(
-    path.read_text(encoding="utf-8", errors="ignore")
-    for path in ROOT.rglob("*.py")
-    if path != Path(__file__)
-)
+# Prove the public-looking button/select owners are not executable dependencies
+# outside the legacy backend. Exact AST references avoid false positives such as
+# ThemeSelect matching V2's DesignServerThemeSelect.
 for name in (
     "ThemeSelect",
+    "StrengthSelect",
     "FormatLocksButton",
     "DesignCategoryEditorButton",
     "DesignChannelEditorButton",
     "ProtectionManagerButton",
     "DesignDoneView",
 ):
-    if all_python.count(name) != legacy_before.count(name):
-        raise RuntimeError(f"{name} has a reference outside the legacy backend")
+    external: list[str] = []
+    for path in ROOT.rglob("*.py"):
+        if path in {LEGACY_PATH, Path(__file__)}:
+            continue
+        source = path.read_text(encoding="utf-8", errors="ignore")
+        try:
+            refs = exact_symbol_references(source, name)
+        except SyntaxError:
+            continue
+        if refs:
+            external.append(f"{path.relative_to(ROOT)}:{refs}")
+    if external:
+        raise RuntimeError(f"{name} has executable references outside legacy backend: {external}")
 
 legacy = remove_nodes(legacy_before, REMOVE_TOP_LEVEL)
 
-# The legacy backend still needs the symbol because mature editor Back buttons
-# resolve it dynamically. Keep a redirect-only fallback, while V2 replaces this
-# global with its real consolidated home function on public import.
+# Mature editor Back buttons resolve this global dynamically. Keep only an
+# import-order redirect fallback; V2 replaces it with the real consolidated Home
+# before any public Studio interaction.
 nodes = top_level_nodes(legacy)
 home = nodes.get("_home_embed")
 if home is None:
@@ -103,6 +122,7 @@ for name in REMOVE_TOP_LEVEL:
         raise RuntimeError(f"dead owner survived cleanup: {name}")
 for marker in (
     'class ThemeSelect',
+    'class StrengthSelect',
     'class FormatLocksButton',
     'class DesignCategoryEditorButton',
     'class DesignChannelEditorButton',
@@ -129,6 +149,7 @@ if needle not in audit:
     raise RuntimeError("redundancy audit dead-submenu block changed")
 extra = '''    for marker in (
         "class ThemeSelect",
+        "class StrengthSelect",
         "class FormatLocksButton",
         "class DesignCategoryEditorButton",
         "class DesignChannelEditorButton",
