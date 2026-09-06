@@ -12,26 +12,34 @@ def test_retired_rollback_mutator_is_absent() -> None:
     assert not RETIRED_APPLIER.exists()
 
 
-def test_rollback_runtime_has_native_guarded_actions() -> None:
-    assert "class RollbackConfirmView" in LEGACY
-    assert "async def _open_rollback" in LEGACY
-    for action_name in (
+def test_duplicate_legacy_rollback_ui_is_absent() -> None:
+    assert "class RollbackConfirmView" not in LEGACY
+    assert "async def _open_rollback" not in LEGACY
+    assert "class DesignDoneView" not in LEGACY
+    for retired_action in (
         "design.rollback.open_button",
         "design.done.back_to_studio",
-        "design.rollback.open",
         "design.rollback.preview",
-        "design.rollback.locked",
-        "design.rollback.confirm.no_snapshot",
         "design.rollback.confirm",
     ):
-        assert action_name in LEGACY
-    assert "await _guard_design_action" in LEGACY
+        assert retired_action not in LEGACY
 
 
-def test_rollback_runtime_has_no_split_newline_artifact() -> None:
+def test_rollback_persistence_primitives_remain_backend_owned() -> None:
+    for primitive in (
+        "_persist_rollback_snapshot",
+        "_latest_rollback_snapshot",
+        "_pop_latest_rollback_snapshot",
+    ):
+        assert f"def {primitive}" in LEGACY or f"async def {primitive}" in LEGACY
+        assert f"legacy.{primitive}" in V2
+
+
+def test_consolidated_undo_has_no_split_newline_artifact() -> None:
     assert BAD_SPLIT_JOIN not in LEGACY
-    assert 'value="\\n".join(preview)[:1024] or "No items."' in LEGACY
-    assert 'value="\\n".join(failed[:10])[:1024]' in LEGACY
+    assert BAD_SPLIT_JOIN not in V2
+    assert 'value="\\n".join(lines)[:1024] or "No restorable names."' in V2
+    assert '"\\n".join(f"• {line}" for line in errors[:8])[:1024]' in V2
 
 
 def test_consolidated_studio_owns_public_undo_flow() -> None:
@@ -39,3 +47,5 @@ def test_consolidated_studio_owns_public_undo_flow() -> None:
     assert "class DoneView" in V2
     assert "_open_undo" in V2
     assert "Undo Last Apply" in V2
+    assert "apply_service.preflight_undo" in V2
+    assert "apply_service.undo_prepared" in V2
