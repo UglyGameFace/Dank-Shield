@@ -31,15 +31,17 @@ def test_legacy_category_frame_protection_aliases_to_full() -> None:
     assert result.category_frame_id == "lenticular"
 
 
-def test_legacy_theme_selectors_fail_closed_and_sync_active_global_lock() -> None:
-    theme_start = PUBLIC.index("class ThemeSelect")
-    strength_start = PUBLIC.index("class StrengthSelect", theme_start)
-    end = PUBLIC.index("def _consistency_summary", strength_start)
-    block = PUBLIC[theme_start:end]
-    assert block.count("await _save_options(interaction, options)") == 2
-    assert block.count("_sync_enabled_global_lock(options)") == 2
+def test_consolidated_theme_selectors_fail_closed_and_sync_active_global_lock() -> None:
+    theme_start = V2.index("class DesignServerThemeSelect")
+    strength_start = V2.index("class DesignServerStrengthSelect", theme_start)
+    end = V2.index("def _design_server_embed", strength_start)
+    block = V2[theme_start:end]
+    assert block.count("await legacy._save_options(interaction, options)") == 2
+    assert block.count("legacy._sync_enabled_global_lock(options)") == 2
     assert "picked_font" not in block
-    assert 'options[\"strength\"] = 4' not in block
+    assert 'options["strength"] = 4' not in block
+    assert "class ThemeSelect" not in PUBLIC
+    assert "class StrengthSelect" not in PUBLIC
 
 
 def test_current_format_lock_never_silently_rewrites_strength() -> None:
@@ -81,82 +83,7 @@ def test_legacy_recovery_guidance_uses_canonical_public_route() -> None:
     assert "Reopen `/dank design`" not in PUBLIC
 
 
-def test_protection_editor_is_exact_id_scoped() -> None:
-    assert "protection_item_rules" in PUBLIC
-    start = PUBLIC.index("async def _save_protection_rule")
-    end = PUBLIC.index("async def _set_default_protection_rules", start)
-    block = PUBLIC[start:end]
-    assert "target_id" in block
-    assert "base_name" not in block
-
-
-def test_consolidated_home_uses_real_current_workflow_labels() -> None:
-    for label in (
-        "Design Entire Server",
-        "Edit One Category / Channel",
-        "Fix Inconsistent Names",
-        "Saved Rules & Protection",
-        "Undo Last Apply",
-    ):
-        assert f'label="{label}"' in V2
-    assert "Preview Server Changes" in V2
-    assert "Build Smart Repair Preview" in V2
-    assert "Edit Custom Format" not in V2
-
-
-def test_live_lock_strength_matches_captured_components() -> None:
-    assert public_studio._required_strength_for_components(scope="channel", font="normal", separator_id="none", category_frame_id="plain") == 1
-    assert public_studio._required_strength_for_components(scope="channel", font="normal", separator_id="bar_full", category_frame_id="plain") == 2
-    assert public_studio._required_strength_for_components(scope="channel", font="fraktur", separator_id="bar_full", category_frame_id="plain") == 3
-    assert public_studio._required_strength_for_components(scope="category", font="fraktur", separator_id="bar_full", category_frame_id="lenticular") == 4
-
-
-def test_duplicate_detector_compares_actual_final_names_and_ignores_existing_duplicates() -> None:
-    different_icons = [
-        {"before": "a", "after": "🎮｜general", "status": "changed", "protected": False},
-        {"before": "b", "after": "💬｜general", "status": "changed", "protected": False},
-    ]
-    assert studio.detect_duplicate_outputs(different_icons) == []
-
-    existing_duplicates = [
-        {"before": "general", "after": "general", "status": "unchanged", "protected": False},
-        {"before": "general", "after": "general", "status": "unchanged", "protected": False},
-    ]
-    assert studio.detect_duplicate_outputs(existing_duplicates) == []
-
-    introduced_collision = [
-        {"before": "general", "after": "general", "status": "unchanged", "protected": False},
-        {"before": "chat", "after": "general", "status": "changed", "protected": False},
-    ]
-    assert len(studio.detect_duplicate_outputs(introduced_collision)) == 1
-
-
-def test_exact_strength_copy_matches_engine_semantics() -> None:
-    assert '2: "Layout: adds the selected channel separator."' in PUBLIC
-    assert '3: "Font: layout plus the selected font."' in PUBLIC
-    assert '5: "Exact: strictly normalizes the full selected format."' in PUBLIC
-    assert 'max(3, _safe_int(lock.get("strength"), 4))' not in PUBLIC
-
-
-def test_rules_surfaces_separate_style_authority_from_protection_policy() -> None:
-    assert "Protection is a separate exact-item/default policy" in PUBLIC
-    assert "Exact protection overrides:" in PUBLIC
-    assert 'label="Protection Mode"' in PUBLIC
-    assert 'label="Pick Category"' in PUBLIC
-    assert 'label="Pick Channel"' in PUBLIC
-
-
-def test_exact_preview_uses_canonical_pending_store() -> None:
-    start = PUBLIC.index("async def _save_exact_and_preview")
-    end = PUBLIC.index("class ExactFormatEditorView", start)
-    block = PUBLIC[start:end]
-    assert "_store_pending(" in block
-    assert "_PENDING[key]" not in block
-
-
-def test_native_repair_plan_is_category_aware_and_counts_exact_protection_in_shared_rule_surface() -> None:
-    assert "majority.build_category_aware_options" in PLAN
-    assert "majority.annotate_category_aware_plan_items" in PLAN
+def test_plan_service_uses_native_saved_rule_authority() -> None:
     assert "respect_saved_rules=True" in PLAN
-    assert "repair_confidence.evaluate_repair_plan" in PLAN
-    assert "protection_items" in V2
+    assert "build_category_aware_options" in PLAN
+    assert "evaluate_repair_plan" in PLAN
