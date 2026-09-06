@@ -63,6 +63,26 @@ def main() -> int:
         failures.append("retired mashed legacy public home still exists")
     if 'custom_id="dank_design:apply"' in LEGACY:
         failures.append("retired independent legacy Apply owner still exists")
+
+    for marker in (
+        "class DesignDoctorButton",
+        "class DesignDoctorView",
+        "class StartHereButton",
+        "class StartHereView",
+        "class EditorsLocksButton",
+        "class EditorsLocksView",
+        "class AdvancedToolsView",
+        "def _doctor_embed",
+        "def _start_here_embed",
+        "def _editors_locks_embed",
+        "def _design_help_embed",
+        "def _advanced_tools_embed",
+    ):
+        if marker in LEGACY:
+            failures.append(f"retired legacy submenu/helper remains: {marker}")
+    for marker in ("def _compat_help_embed", "legacy._start_here_embed =", "legacy._design_help_embed ="):
+        if marker in V2:
+            failures.append(f"obsolete legacy help bridge remains: {marker}")
     if "command_guard.build_design_plan =" in PLAN:
         failures.append("native planner still contains runtime build_design_plan reassignment")
     if "majority.build_category_aware_options" not in PLAN or "majority.annotate_category_aware_plan_items" not in PLAN:
@@ -110,7 +130,7 @@ def main() -> int:
     print("DANK DESIGN REDUNDANCY AUDIT OK")
     print(
         "public_registrar=1 retired_runtime=0 historical_mutators=0 "
-        "runtime_magic=0 native_plan=yes consolidated_apply=yes compatibility_boundary=ui_only"
+        "runtime_magic=0 dead_submenus=0 native_plan=yes consolidated_apply=yes compatibility_boundary=ui_only"
     )
     return 0
 

@@ -74,7 +74,6 @@ def test_item_edit_workflow_distinguishes_immediate_rename_from_preview_flows() 
     assert "**Rename** is the only immediate name change" in V2
     assert "**Preview Fixes** and **Custom Format** show a preview" in V2
     assert "**Rename applies immediately. No Apply button appears after Rename.**" in LEGACY
-    assert "One exact Rename" in V2
 
 
 def test_fix_inconsistent_names_is_scan_then_explicit_smart_preview() -> None:
@@ -95,10 +94,10 @@ def test_active_registration_does_not_activate_design_runtime_monkey_patch_guard
     assert "__use_live_majority_layout" not in PLAN
 
 
-def test_legacy_bridge_is_small_explicit_navigation_help_and_apply_boundary() -> None:
+def test_legacy_bridge_is_small_explicit_navigation_and_apply_boundary() -> None:
     assert legacy._home_embed is studio_v2._home_embed
-    assert legacy._start_here_embed is studio_v2._compat_help_embed
-    assert legacy._design_help_embed is studio_v2._compat_help_embed
+    assert not hasattr(legacy, "_start_here_embed")
+    assert not hasattr(legacy, "_design_help_embed")
     assert legacy.DesignHomeView is studio_v2.DesignHomeView
     assert legacy.DesignPreviewView is studio_v2.ReviewedPreviewView
     assert legacy.StyleChangePreviewView is studio_v2.LegacyStyleChangePreviewView
@@ -108,13 +107,14 @@ def test_legacy_bridge_is_small_explicit_navigation_help_and_apply_boundary() ->
     bridge = V2[bridge_start:bridge_end]
     for required in (
         "legacy._home_embed = _home_embed",
-        "legacy._start_here_embed = _compat_help_embed",
         "legacy.DesignHomeView = DesignHomeView",
         "legacy.DesignPreviewView = ReviewedPreviewView",
         "legacy.StyleChangePreviewView = LegacyStyleChangePreviewView",
     ):
         assert required in bridge
     for forbidden in (
+        "legacy._start_here_embed =",
+        "legacy._design_help_embed =",
         "legacy.build_design_plan =",
         "legacy.DesignDoctorView =",
         "legacy._load_design_options =",
@@ -124,7 +124,7 @@ def test_legacy_bridge_is_small_explicit_navigation_help_and_apply_boundary() ->
 
 
 def test_all_legacy_back_paths_now_resolve_the_consolidated_home() -> None:
-    assert LEGACY.count("view=DesignHomeView(options)") >= 8
+    assert LEGACY.count("view=DesignHomeView(options)") >= 7
     assert legacy.DesignHomeView is studio_v2.DesignHomeView
     assert legacy._home_embed is studio_v2._home_embed
 

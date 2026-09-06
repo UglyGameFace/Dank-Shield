@@ -126,31 +126,6 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
     return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
 
 
-def _compat_help_embed() -> discord.Embed:
-    embed = discord.Embed(
-        title="🧭 How Dank Design Works",
-        description="There are no hidden apply rules. Pick the job that matches what you want to change.",
-        color=discord.Color.blurple(),
-    )
-    embed.add_field(
-        name="Whole server / repair / custom style",
-        value="Choose settings → Preview exact names → **Apply Reviewed Changes**. Nothing is renamed before that Apply button.",
-        inline=False,
-    )
-    embed.add_field(
-        name="One exact Rename",
-        value="Inside Edit One Category / Channel, **Rename** is immediate and saves that exact name rule. The item screen warns you before you use it.",
-        inline=False,
-    )
-    embed.add_field(
-        name="Saved Rules & Protection",
-        value="Rules change what future previews enforce. Saving or removing a rule does not rename Discord by itself.",
-        inline=False,
-    )
-    embed.set_footer(text="Batch changes are transactional-style: preflight first, stop on error, compensate partial changes")
-    return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
-
-
 async def _go_home(interaction: discord.Interaction) -> None:
     if not await _require_design_permission(interaction):
         return
@@ -1015,7 +990,7 @@ class LegacyStyleChangePreviewView(ReviewedPreviewView):
 def _install_legacy_compatibility_bridge() -> None:
     """Keep mature sub-editors inside the consolidated public workflow.
 
-    This bridge changes only navigation/help/apply UI globals. It does not replace
+    This bridge changes only navigation/apply UI globals. It does not replace
     planning, config, registration, doctor logic, or service functions.
     """
 
@@ -1023,8 +998,6 @@ def _install_legacy_compatibility_bridge() -> None:
     if _COMPATIBILITY_BRIDGE_INSTALLED:
         return
     legacy._home_embed = _home_embed  # type: ignore[attr-defined]
-    legacy._start_here_embed = _compat_help_embed  # type: ignore[attr-defined]
-    legacy._design_help_embed = _compat_help_embed  # type: ignore[attr-defined]
     legacy.DesignHomeView = DesignHomeView  # type: ignore[attr-defined]
     legacy.DesignPreviewView = ReviewedPreviewView  # type: ignore[attr-defined]
     legacy.StyleChangePreviewView = LegacyStyleChangePreviewView  # type: ignore[attr-defined]
@@ -1058,7 +1031,6 @@ __all__ = [
     "ReviewRepairView",
     "SavedRulesView",
     "UndoConfirmView",
-    "_compat_help_embed",
     "_home_embed",
     "_install_legacy_compatibility_bridge",
     "_load_design_options",

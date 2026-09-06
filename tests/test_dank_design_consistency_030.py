@@ -52,24 +52,33 @@ def test_rule_counts_include_exact_protection_overrides() -> None:
     assert counts["protection_items"] == 2
 
 
-def test_rules_ui_has_no_duplicate_exact_name_counter_or_joined_lines() -> None:
+def test_rules_surface_has_one_counter_and_retired_submenus_are_absent() -> None:
     start = PUBLIC.index("def _format_locks_embed")
     end = PUBLIC.index("async def build_design_plan", start)
     block = PUBLIC[start:end]
     assert block.count("Exact manual names:") == 1
-    editor_start = PUBLIC.index("def _editors_locks_embed")
-    editor_end = PUBLIC.index("class EditorsLocksButton", editor_start)
-    editor = PUBLIC[editor_start:editor_end]
-    assert "Exact manual names:" in editor
-    assert "Exact protection overrides:" in editor
+    for marker in (
+        "class DesignDoctorButton",
+        "class DesignDoctorView",
+        "class StartHereButton",
+        "class StartHereView",
+        "class EditorsLocksButton",
+        "class EditorsLocksView",
+        "class AdvancedToolsView",
+        "def _doctor_embed",
+        "def _start_here_embed",
+        "def _editors_locks_embed",
+        "def _design_help_embed",
+        "def _advanced_tools_embed",
+    ):
+        assert marker not in PUBLIC
+    assert "def _compat_help_embed" not in V2
 
 
-def test_doctor_does_not_treat_optional_category_locks_as_required() -> None:
-    start = PUBLIC.index("def _doctor_embed")
-    end = PUBLIC.index("class DesignDoctorButton", start)
-    block = PUBLIC[start:end]
-    assert "missing_locks" not in block
-    assert "lock missing categories" not in block
+def test_legacy_recovery_guidance_uses_canonical_public_route() -> None:
+    assert "Reopen `/dank home`" in PUBLIC
+    assert "choose **Server Design**" in PUBLIC
+    assert "Reopen `/dank design`" not in PUBLIC
 
 
 def test_protection_editor_is_exact_id_scoped() -> None:
