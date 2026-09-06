@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -91,33 +92,36 @@ def test_strict_saved_rule_layers_remain_exact_and_preserve_precedence() -> None
     assert normalized["channel_format_locks"]["20"]["separator_id"] == "bar_thin"
 
 
-@pytest.mark.asyncio
-async def test_category_aware_native_drift_plan_is_called(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_category_aware_native_drift_plan_is_called(monkeypatch: pytest.MonkeyPatch) -> None:
     guild = SimpleNamespace(id=1)
     monkeypatch.setattr(plan_service, "live_records", lambda _guild: [{"id": "1", "name": "general", "kind": "text", "category_id": ""}])
     monkeypatch.setattr(plan_service.majority, "build_category_aware_options", lambda _studio, options, _records: ({**dict(options), "__category_aware_auto_detect": True}, {"summaries": {}}))
     monkeypatch.setattr(plan_service.majority, "annotate_category_aware_plan_items", lambda _studio, items, _options: items)
-    monkeypatch.setattr(plan_service.legacy, "build_design_plan", AsyncMock(return_value=[]))
+    monkeypatch.setattr(legacy, "build_design_plan", AsyncMock(return_value=[]))
     monkeypatch.setattr(plan_service.repair_confidence, "evaluate_repair_plan", lambda _items, context: {"apply_allowed": True, "context": context})
 
-    _items, plan_options, _analysis = await plan_service.build_drift_repair_plan(guild, {"theme_id": "gothic_clean"})
+    _items, plan_options, _analysis = asyncio.run(plan_service.build_drift_repair_plan(guild, {"theme_id": "gothic_clean"}))
     assert plan_options["__category_aware_auto_detect"] is True
     assert plan_options["__repair_confidence_result"]["context"] == "smart_category_auto_detect"
 
 
-def test_low_confidence_drift_plan_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_low_confidence_drift_plan_fails_closed() -> None:
     items = [{"channel_id": "1", "before": "general", "after": "x", "status": "changed", "warnings": [], "blockers": []}]
     confidence = {"apply_allowed": False, "blocked_lines": ["Unsafe simplification"], "review_lines": [], "context": "smart_category_auto_detect"}
-    plan_service._fail_closed_on_low_confidence(items, confidence)
-    assert items[0]["status"] == "failed"
-    assert "Unsafe simplification" in items[0]["blockers"][0]
+    guarded = plan_service._fail_closed_on_low_confidence(items, confidence)
+    assert guarded[0]["status"] == "failed"
+    assert "confidence is too low" in guarded[0]["blockers"][0]
+    assert items[0]["status"] == "changed", "pure guard should not mutate caller rows in place"
 
 
 def test_smart_auto_detect_decorative_simplification_is_blocked() -> None:
-    items = [{"channel_id": "1", "before": "╭─ 𝕊𝕋𝔸𝔽𝔽 ─╮", "after": "staff", "status": "changed", "warnings": [], "blockers": []}]
-    result = repair_confidence.evaluate_repair_plan(items, context="smart_category_auto_detect")
+    item = {"channel_id": "1", "before": "╭─ 𝕊𝕋𝔸𝔽𝔽 ─╮", "after": "staff", "status": "changed", "warnings": [], "blockers": []}
+    scored = repair_confidence.score_repair_item(item, context="smart_category_auto_detect")
+    assert scored["classification"] == repair_confidence.BLOCKED_AESTHETIC_DOWNGRADE
+    assert "simplify" in str(scored["reason"]).lower() or "strip" in str(scored["reason"]).lower()
+    result = repair_confidence.evaluate_repair_plan([item], context="smart_category_auto_detect")
     assert result["apply_allowed"] is False
-    assert any("aesthetic" in str(line).lower() or "decorative" in str(line).lower() for line in result["blocked_lines"])
+    assert result["counts"].get(repair_confidence.BLOCKED_AESTHETIC_DOWNGRADE) == 1
 
 
 def test_one_reviewed_apply_component() -> None:
