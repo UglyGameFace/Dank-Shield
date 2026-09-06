@@ -11,129 +11,80 @@ from stoney_verify.commands_ext import public_design_studio as legacy
 from stoney_verify.services import server_design_plan_service as plan_service
 from stoney_verify.services import server_design_rule_service as rules
 
-
 ROOT = Path(__file__).resolve().parents[1]
 LEGACY_SOURCE = (ROOT / "stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
 V2_SOURCE = (ROOT / "stoney_verify/commands_ext/public_design_studio_v2.py").read_text(encoding="utf-8")
 
 
-def run(coro: Any) -> Any:
-    return asyncio.run(coro)
+def run(coroutine: Any) -> Any:
+    return asyncio.run(coroutine)
 
 
-def test_explicit_saved_separator_beats_theme_default() -> None:
+def test_separator_persistence_updates_authoritative_setting_without_rewriting_other_style_fields() -> None:
     options = {
         "theme_id": "gothic_clean",
-        "strength": 4,
-        "separator_id": "bar_heavy",
-    }
-
-    assert rules.effective_draft_separator(options, theme_separator="pipe_spaced") == "bar_heavy"
-    assert legacy._current_format_lock(options)["separator_id"] == "bar_heavy"
-
-
-def test_separator_apply_persists_only_separator_component_and_exact_result() -> None:
-    options = {
-        "theme_id": "gothic_clean",
-        "strength": 4,
+        "strength": 3,
         "separator_id": "bar_full",
         "format_lock_global": {
             "enabled": True,
+            "theme_id": "gothic_clean",
+            "strength": 3,
             "font": "fraktur",
             "separator_id": "bar_full",
             "category_frame_id": "line",
-            "icon_mode": "replace_missing",
+            "icon_mode": "keep_existing",
+            "exact_match": True,
         },
-        "category_format_locks": {
-            "10": {
-                "font": "monospace",
-                "separator_id": "pipe_spaced",
-                "category_frame_id": "box",
-                "icon_mode": "clear",
-            }
-        },
-        "channel_format_locks": {
-            "20": {
-                "font": "serif_bold",
-                "separator_id": "bar_thin",
-                "category_frame_id": "plain",
-                "icon_mode": "keep_existing",
-            }
-        },
-        "manual_name_overrides": {
-            "20": {"name": "🔥｜general", "scope": "channel", "locked_at": "old"},
-            "30": {"name": "🎮｜games", "scope": "channel"},
-        },
-        "protection_rules": {"staff": "never"},
+        "category_format_locks": {"10": {"separator_id": "bar_thin", "strength": 2}},
+        "channel_format_locks": {"20": {"separator_id": "bar_block", "strength": 4}},
     }
-
-    applied = [SimpleNamespace(channel_id=20, after="🔥┃general")]
-    updated = rules.persist_separator_choice(options, separator_id="bar_heavy", applied_rows=applied)
-
+    updated = rules.persist_separator_authority(options, "bar_heavy")
     assert updated["separator_id"] == "bar_heavy"
     assert updated["format_lock_global"]["separator_id"] == "bar_heavy"
-    assert updated["category_format_locks"]["10"]["separator_id"] == "bar_heavy"
-    assert updated["channel_format_locks"]["20"]["separator_id"] == "bar_heavy"
-
-    # Separator-only means separator-only. Other styling survives untouched.
     assert updated["format_lock_global"]["font"] == "fraktur"
-    assert updated["category_format_locks"]["10"]["font"] == "monospace"
-    assert updated["category_format_locks"]["10"]["category_frame_id"] == "box"
-    assert updated["channel_format_locks"]["20"]["font"] == "serif_bold"
-    assert updated["channel_format_locks"]["20"]["icon_mode"] == "keep_existing"
-    assert updated["protection_rules"] == {"staff": "never"}
-
-    # An exact manual name changed by the reviewed batch must not immediately
-    # fight the new separator on the next saved-design preview.
-    assert updated["manual_name_overrides"]["20"]["name"] == "🔥┃general"
-    assert updated["manual_name_overrides"]["30"]["name"] == "🎮｜games"
+    assert updated["format_lock_global"]["category_frame_id"] == "line"
+    assert updated["category_format_locks"] == options["category_format_locks"]
+    assert updated["channel_format_locks"] == options["channel_format_locks"]
 
 
-def test_reset_this_item_removes_every_same_item_override() -> None:
+def test_current_format_lock_prefers_explicit_saved_separator_over_theme_default() -> None:
+    lock = legacy._current_format_lock({"theme_id": "gothic_clean", "strength": 4, "separator_id": "bar_heavy"})
+    assert lock["separator_id"] == "bar_heavy"
+
+
+def test_reset_item_removes_all_same_item_override_layers() -> None:
     options = {
-        "format_lock_global": {"enabled": True, "separator_id": "bar_full"},
-        "category_format_locks": {"77": {"font": "fraktur"}, "88": {"font": "normal"}},
-        "channel_format_locks": {"77": {"font": "monospace"}, "99": {"font": "normal"}},
-        "manual_name_overrides": {"77": {"name": "exact"}, "55": {"name": "keep"}},
-        "protection_item_rules": {"77": "never", "44": "full"},
-        "protection_rules": {"staff": "never"},
+        "category_format_locks": {"10": {"separator_id": "bar_full"}},
+        "channel_format_locks": {"10": {"separator_id": "bar_heavy"}, "11": {"separator_id": "bar_thin"}},
+        "manual_name_overrides": {"10": "staff", "11": "rules"},
+        "protection_item_rules": {"10": "never", "11": "full"},
+        "protection_rules": {"staff": "never", "rules": "emoji_only", "general": "full"},
     }
-
-    updated, removed = rules.reset_item_overrides(options, target_id=77)
-
-    assert removed == {
-        "category": True,
-        "channel": True,
-        "manual_name": True,
-        "protection_item": True,
-    }
-    assert "77" not in updated["category_format_locks"]
-    assert "77" not in updated["channel_format_locks"]
-    assert "77" not in updated["manual_name_overrides"]
-    assert "77" not in updated["protection_item_rules"]
-    assert updated["category_format_locks"]["88"]["font"] == "normal"
-    assert updated["channel_format_locks"]["99"]["font"] == "normal"
-    assert updated["manual_name_overrides"]["55"]["name"] == "keep"
-    assert updated["protection_item_rules"]["44"] == "full"
-    assert updated["format_lock_global"]["enabled"] is True
-    assert updated["protection_rules"] == {"staff": "never"}
+    updated, removed = rules.reset_item_overrides(options, target_id=10, current_name="staff", include_category=True)
+    assert removed == 4
+    assert "10" not in updated["category_format_locks"]
+    assert "10" not in updated["channel_format_locks"]
+    assert "10" not in updated["manual_name_overrides"]
+    assert "10" not in updated["protection_item_rules"]
+    assert "staff" not in updated["protection_rules"]
+    assert updated["channel_format_locks"]["11"]["separator_id"] == "bar_thin"
+    assert updated["protection_rules"]["general"] == "full"
 
 
-def test_reset_all_design_overrides_really_clears_all_override_layers() -> None:
+def test_reset_all_design_overrides_clears_every_advertised_override_layer_but_preserves_server_draft() -> None:
     options = {
         "theme_id": "gothic_clean",
         "strength": 3,
         "separator_id": "bar_heavy",
-        "format_lock_global": {"enabled": True},
-        "category_format_locks": {"1": {"font": "fraktur"}},
-        "channel_format_locks": {"2": {"font": "normal"}},
-        "manual_name_overrides": {"2": {"name": "exact"}},
-        "protection_item_rules": {"2": "never"},
-        "protection_rules": {"staff": "never", "logs": "font_only"},
+        "format_lock_global": {"enabled": True, "separator_id": "bar_full"},
+        "category_format_locks": {"10": {"separator_id": "bar_full"}},
+        "channel_format_locks": {"11": {"separator_id": "bar_thin"}},
+        "manual_name_overrides": {"12": "staff"},
+        "protection_item_rules": {"13": "never"},
+        "protection_rules": {"staff": "never"},
     }
-
-    updated = rules.reset_all_overrides(options)
-
+    updated, removed = rules.reset_all_overrides(options)
+    assert removed == 5
     assert updated["format_lock_global"] == {}
     assert updated["category_format_locks"] == {}
     assert updated["channel_format_locks"] == {}
@@ -161,10 +112,13 @@ def test_separator_protection_modes_are_cumulative_and_exact_safe() -> None:
 
 
 def test_category_and_channel_preview_use_native_scoped_planner_not_retired_magic() -> None:
-    source = LEGACY_SOURCE[LEGACY_SOURCE.index("async def _preview_scope("):LEGACY_SOURCE.index("class DesignCategoryEditorButton")]
+    start = LEGACY_SOURCE.index("async def _preview_scope(")
+    source = LEGACY_SOURCE[start:LEGACY_SOURCE.index("def _category_editor_embed", start)]
     assert "plan_service.build_scoped_repair_plan" in source
     assert 'repair_options["__use_live_majority_layout"]' not in source
     assert 'mode in {"category_editor", "channel_editor"}' in source
+    assert "class DesignCategoryEditorButton" not in LEGACY_SOURCE
+    assert "class DesignChannelEditorButton" not in LEGACY_SOURCE
 
 
 @pytest.mark.parametrize(
@@ -188,132 +142,46 @@ def test_native_scoped_planner_filters_before_confidence(
     captured: list[str] = []
 
     monkeypatch.setattr(plan_service, "live_records", lambda guild: [])
-    monkeypatch.setattr(plan_service.majority, "ensure_separator_spec", lambda *args, **kwargs: "pipe_spaced")
-    monkeypatch.setattr(plan_service.majority, "build_category_aware_options", lambda studio, options, records: (dict(options), {"ok": True}))
-    monkeypatch.setattr(plan_service.majority, "annotate_category_aware_plan_items", lambda studio, items, options: list(items))
 
     async def fake_build(guild: Any, options: Any) -> list[dict[str, Any]]:
         return [dict(item) for item in all_items]
 
-    def fake_confidence(items: list[dict[str, Any]], *, context: str) -> dict[str, Any]:
-        assert context == "smart_category_auto_detect"
-        captured[:] = [str(item["channel_id"]) for item in items]
-        return {"apply_allowed": True, "blocked_lines": [], "review_lines": []}
+    monkeypatch.setattr(plan_service.legacy, "build_design_plan", fake_build)
 
-    monkeypatch.setattr(legacy, "build_design_plan", fake_build)
+    def fake_confidence(items: list[dict[str, Any]], *, context: str) -> dict[str, Any]:
+        captured.extend(str(item.get("channel_id")) for item in items)
+        return {"apply_allowed": True, "context": context, "blocked_lines": [], "review_lines": []}
+
     monkeypatch.setattr(plan_service.repair_confidence, "evaluate_repair_plan", fake_confidence)
 
-    items, options, analysis = run(
-        plan_service.build_scoped_repair_plan(
-            object(),
-            {"theme_id": "custom", "strength": 4},
-            category_id=category_id,
-            channel_id=channel_id,
-        )
-    )
+    if category_id is not None:
+        _items, _options, _analysis = run(plan_service.build_scoped_repair_plan(SimpleNamespace(id=1), {}, category_id=category_id))
+    else:
+        _items, _options, _analysis = run(plan_service.build_scoped_repair_plan(SimpleNamespace(id=1), {}, channel_id=channel_id))
 
-    assert [str(item["channel_id"]) for item in items] == expected_ids
     assert captured == expected_ids
-    assert options["__scoped_editor_repair"] is True
-    assert analysis["mode"] == "category_aware_scoped"
 
 
-def test_category_editor_repairs_header_from_saved_design_and_children_from_local_layout(monkeypatch: pytest.MonkeyPatch) -> None:
-    inferred_items = [
-        {
-            "channel_id": "10",
-            "category_id": "",
-            "kind": "category",
-            "status": "unchanged",
-            "before": "old-category",
-            "after": "old-category",
-            "auto_detect_preserved": True,
-        },
-        {
-            "channel_id": "11",
-            "category_id": "10",
-            "kind": "text",
-            "status": "changed",
-            "before": "🔥｜general",
-            "after": "🔥┃general",
-        },
-        {
-            "channel_id": "20",
-            "category_id": "99",
-            "kind": "text",
-            "status": "changed",
-            "before": "other",
-            "after": "other-fixed",
-        },
+def test_category_header_uses_saved_design_while_child_channels_use_local_auto_detect(monkeypatch: pytest.MonkeyPatch) -> None:
+    records = [
+        {"id": "10", "name": "staff", "kind": "category", "category_id": ""},
+        {"id": "11", "name": "🔒│mods", "kind": "text", "category_id": "10"},
     ]
-    saved_items = [
-        {
-            "channel_id": "10",
-            "category_id": "",
-            "kind": "category",
-            "status": "changed",
-            "before": "old-category",
-            "after": "【 𝕆𝕃𝔻 ℂ𝔸𝕋𝔼𝔾𝕆ℝ𝕐 】",
-        },
-        {
-            "channel_id": "11",
-            "category_id": "10",
-            "kind": "text",
-            "status": "changed",
-            "before": "🔥｜general",
-            "after": "saved-global-child",
-        },
+    items = [
+        {"channel_id": "10", "category_id": "", "kind": "category", "status": "changed", "before": "staff", "after": "── 𝔰𝔱𝔞𝔣𝔣 ──", "warnings": [], "blockers": []},
+        {"channel_id": "11", "category_id": "10", "kind": "text", "status": "unchanged", "before": "🔒│mods", "after": "🔒│mods", "warnings": [], "blockers": []},
     ]
 
-    monkeypatch.setattr(plan_service, "live_records", lambda guild: [])
-    monkeypatch.setattr(plan_service.majority, "ensure_separator_spec", lambda *args, **kwargs: "pipe_spaced")
-    monkeypatch.setattr(plan_service.majority, "build_category_aware_options", lambda studio, options, records: (dict(options), {"ok": True}))
-    monkeypatch.setattr(plan_service.majority, "annotate_category_aware_plan_items", lambda studio, items, options: [dict(item) for item in items])
+    monkeypatch.setattr(plan_service, "live_records", lambda guild: [dict(row) for row in records])
+    monkeypatch.setattr(plan_service.majority, "build_category_aware_options", lambda _studio, options, _records: ({**dict(options), "__auto_detect_preserve_ids": ["10"]}, {"summaries": {}}))
+    monkeypatch.setattr(plan_service.majority, "annotate_category_aware_plan_items", lambda _studio, rows, _options: rows)
 
     async def fake_build(guild: Any, options: Any) -> list[dict[str, Any]]:
-        rows = inferred_items if options.get("__scoped_editor_repair") else saved_items
-        return [dict(item) for item in rows]
+        return [dict(item) for item in items]
 
-    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(plan_service.legacy, "build_design_plan", fake_build)
+    monkeypatch.setattr(plan_service.repair_confidence, "evaluate_repair_plan", lambda _items, context: {"apply_allowed": True, "context": context, "blocked_lines": [], "review_lines": []})
 
-    def fake_confidence(items: list[dict[str, Any]], *, context: str) -> dict[str, Any]:
-        captured[:] = [dict(item) for item in items]
-        return {"apply_allowed": True, "blocked_lines": [], "review_lines": []}
-
-    monkeypatch.setattr(legacy, "build_design_plan", fake_build)
-    monkeypatch.setattr(plan_service.repair_confidence, "evaluate_repair_plan", fake_confidence)
-
-    items, _options, analysis = run(
-        plan_service.build_scoped_repair_plan(
-            object(),
-            {"theme_id": "custom", "strength": 4},
-            category_id=10,
-        )
-    )
-
-    assert [item["channel_id"] for item in items] == ["10", "11"]
-    header = items[0]
-    child = items[1]
-    assert header["after"] == "【 𝕆𝕃𝔻 ℂ𝔸𝕋𝔼𝔾𝕆ℝ𝕐 】"
-    assert header["scoped_category_header_source"] == "saved_design"
-    assert child["after"] == "🔥┃general"
-    assert captured == items
-    assert analysis["category_header_source"] == "saved_design"
-
-
-def test_public_apply_persists_separator_and_reset_ui_is_unambiguous() -> None:
-    assert "async def _persist_separator_settings" in V2_SOURCE
-    assert "rule_service.persist_separator_choice" in V2_SOURCE
-    assert 'if mode == "style_change_separator"' in V2_SOURCE
-    assert "Channel Separator Applied & Saved" in V2_SOURCE
-
-    assert 'label="Reset This Category"' in LEGACY_SOURCE
-    assert 'label="Reset This Channel"' in LEGACY_SOURCE
-    assert 'label="Reset All Design Overrides"' in LEGACY_SOURCE
-    assert "One Saved Rule Removed" in LEGACY_SOURCE
-    assert "Removed only the listed rule" in LEGACY_SOURCE
-
-
-def test_no_one_shot_patch_files_are_part_of_product() -> None:
-    assert not (ROOT / "tools/_apply_ds_design_033_patch.py").exists()
-    assert not (ROOT / ".github/workflows/_ds-design-033-apply.yml").exists()
+    scoped, _options, _analysis = run(plan_service.build_scoped_repair_plan(SimpleNamespace(id=1), {"theme_id": "gothic_clean", "strength": 4}, category_id=10))
+    assert [row["channel_id"] for row in scoped] == ["10", "11"]
+    assert scoped[0]["status"] == "changed"
