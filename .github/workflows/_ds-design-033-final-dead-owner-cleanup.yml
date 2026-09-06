@@ -35,8 +35,7 @@ jobs:
 
       - name: Remove final dead legacy owners and validate
         run: |
-          # Reference ownership checks are AST-based so V2 names such as
-          # DesignServerThemeSelect cannot masquerade as legacy ThemeSelect uses.
+          # Exact AST reference ownership plus tests migrated to the consolidated V2 owners.
           python tools/_ds_design_033_final_dead_owner_cleanup.py
           python -m py_compile \
             stoney_verify/commands_ext/public_design_studio.py \
