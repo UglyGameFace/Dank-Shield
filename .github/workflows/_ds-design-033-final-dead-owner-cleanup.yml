@@ -33,6 +33,47 @@ jobs:
           pip install -q -r requirements.txt
           pip install -q pytest
 
+      - name: Repair drifted regression contracts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/test_dank_design_editor_reset_033.py")
+          source = path.read_text(encoding="utf-8")
+
+          replacements = {
+              'updated = rules.persist_separator_authority(options, "bar_heavy")':
+                  'updated = rules.persist_separator_choice(options, separator_id="bar_heavy")',
+              '    assert updated["category_format_locks"] == options["category_format_locks"]\n    assert updated["channel_format_locks"] == options["channel_format_locks"]':
+                  '    assert updated["category_format_locks"]["10"]["separator_id"] == "bar_heavy"\n    assert updated["category_format_locks"]["10"]["strength"] == 2\n    assert updated["channel_format_locks"]["20"]["separator_id"] == "bar_heavy"\n    assert updated["channel_format_locks"]["20"]["strength"] == 4',
+              'updated, removed = rules.reset_item_overrides(options, target_id=10, current_name="staff", include_category=True)':
+                  'updated, removed = rules.reset_item_overrides(options, target_id=10)',
+              '    assert removed == 4':
+                  '    assert removed == {"category": True, "channel": True, "manual_name": True, "protection_item": True}',
+              '    assert "staff" not in updated["protection_rules"]':
+                  '    assert updated["protection_rules"]["staff"] == "never"',
+              '    updated, removed = rules.reset_all_overrides(options)\n    assert removed == 5':
+                  '    updated = rules.reset_all_overrides(options)',
+              'plan_service.legacy':
+                  'legacy',
+          }
+
+          for old, new in replacements.items():
+              count = source.count(old)
+              if count == 0:
+                  raise RuntimeError(f"expected regression drift marker missing: {old!r}")
+              if old != 'plan_service.legacy' and count != 1:
+                  raise RuntimeError(f"expected one regression drift marker, found {count}: {old!r}")
+              source = source.replace(old, new)
+
+          if "persist_separator_authority" in source or "plan_service.legacy" in source:
+              raise RuntimeError("drifted service API references survived repair")
+          if 'current_name="staff"' in source or "include_category=True" in source:
+              raise RuntimeError("obsolete reset_item_overrides arguments survived repair")
+
+          path.write_text(source, encoding="utf-8")
+          PY
+
       - name: Remove final dead legacy owners and validate
         run: |
           # Exact AST reference ownership plus tests migrated to the consolidated V2 owners.
