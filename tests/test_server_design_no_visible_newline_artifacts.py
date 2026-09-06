@@ -6,9 +6,11 @@ from pathlib import Path
 
 
 TARGETS = [
-    Path("stoney_verify/startup_guards/server_design_studio_command_guard.py"),
-    Path("stoney_verify/startup_guards/server_design_majority_layout_guard.py"),
+    Path("stoney_verify/commands_ext/public_design_studio.py"),
+    Path("stoney_verify/commands_ext/public_design_studio_v2.py"),
     Path("stoney_verify/services/server_design_majority_layout.py"),
+    Path("stoney_verify/services/server_design_plan_service.py"),
+    Path("stoney_verify/services/server_design_rule_service.py"),
     Path("stoney_verify/services/server_design_studio.py"),
 ]
 

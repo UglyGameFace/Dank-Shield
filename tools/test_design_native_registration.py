@@ -2,49 +2,35 @@ from __future__ import annotations
 
 from pathlib import Path
 
-bad = []
+ROOT = Path(__file__).resolve().parents[1]
+GROUP = (ROOT / "stoney_verify/commands_ext/public_design_group.py").read_text(encoding="utf-8")
+V2 = (ROOT / "stoney_verify/commands_ext/public_design_studio_v2.py").read_text(encoding="utf-8")
+LEGACY = (ROOT / "stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
+REGISTRY = (ROOT / "stoney_verify/commands_ext/__init__.py").read_text(encoding="utf-8")
 
-legacy = Path("stoney_verify/commands_ext/public_design_studio.py").read_text(errors="ignore")
-native = Path("stoney_verify/commands_ext/public_design_studio_v2.py").read_text(errors="ignore")
-group = Path("stoney_verify/commands_ext/public_design_group.py").read_text(errors="ignore")
-bridge = Path("stoney_verify/commands_ext/public_design_bridge.py").read_text(errors="ignore")
-startup = Path("stoney_verify/startup_guards/__init__.py").read_text(errors="ignore")
-shim = Path("stoney_verify/startup_guards/server_design_studio_command_guard.py").read_text(errors="ignore")
 
-if "register_public_design_studio_command" not in native:
-    bad.append("consolidated design owner missing compatibility registrar")
+def main() -> int:
+    failures: list[str] = []
+    if '@dank_group.command(name="design"' not in GROUP:
+        failures.append("public_design_group does not own /dank design")
+    if "public_design_studio_v2 as design" not in GROUP:
+        failures.append("public registrar does not route to consolidated Studio")
+    if "register_public_design_studio_command" in V2:
+        failures.append("v2 still exposes a duplicate command registrar")
+    if "register_public_design_studio_command" in LEGACY:
+        failures.append("legacy Studio still exposes a duplicate command registrar")
+    if '"public_design_group"' not in REGISTRY or '"design"' not in REGISTRY:
+        failures.append("canonical commands_ext registry is missing design ownership")
+    if 'allowed.add("design")' in GROUP:
+        failures.append("registration still mutates allowed children")
+    if failures:
+        print("DESIGN NATIVE REGISTRATION FAILED")
+        for failure in failures:
+            print(f"- {failure}")
+        return 1
+    print("PASS one native /dank design registrar")
+    return 0
 
-if "\napply()\n" in native:
-    bad.append("consolidated design owner calls apply() at import time")
 
-if "server_design_studio_command_guard as design" in group:
-    bad.append("public_design_group still imports design command guard")
-
-if "public_design_studio_v2 as design" not in group:
-    bad.append("public_design_group does not import consolidated design owner")
-
-if "public_design_studio_v2 as design" not in bridge:
-    bad.append("setup design bridge does not import consolidated design owner")
-
-if "stoney_verify.startup_guards.server_design_studio_command_guard" in startup:
-    bad.append("startup registry still loads deprecated design command shim")
-
-if "Deprecated import-only compatibility shim" not in shim:
-    bad.append("old design command guard is not clearly marked compatibility-only")
-
-if "from stoney_verify.commands_ext.public_design_studio_v2 import" not in shim:
-    bad.append("old design command shim does not delegate to consolidated owner")
-
-if "\napply()\n" in shim:
-    bad.append("old design command shim still calls apply() at import time")
-
-if "async def build_design_plan" not in legacy:
-    bad.append("legacy compatibility backend lost mature plan primitive unexpectedly")
-
-if bad:
-    print("FAIL design native registration")
-    for item in bad:
-        print(" -", item)
-    raise SystemExit(1)
-
-print("PASS design native registration")
+if __name__ == "__main__":
+    raise SystemExit(main())

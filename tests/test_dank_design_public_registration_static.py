@@ -24,12 +24,13 @@ def test_design_child_is_allowed_to_survive_public_prune():
     assert '"design"' in allowed
 
 
-def test_design_group_uses_consolidated_native_registration_not_startup_guard():
+def test_design_group_is_the_only_native_public_registration_owner():
     assert "register_public_design_group_commands" in GROUP
     assert "public_design_studio_v2 as design" in GROUP
+    assert GROUP.count('@dank_group.command(name="design"') == 1
     assert "server_design_studio_command_guard" not in GROUP
     assert "activate_public_design_enhancements" not in GROUP
-    assert "register_public_design_studio_command" in STUDIO
+    assert "register_public_design_studio_command" not in STUDIO
 
 
 def test_design_studio_home_is_a_five_plain_language_workflow_hub():

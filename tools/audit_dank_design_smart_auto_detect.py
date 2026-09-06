@@ -10,7 +10,11 @@ STUDIO = (ROOT / "stoney_verify/services/server_design_studio.py").read_text(enc
 PLAN = (ROOT / "stoney_verify/services/server_design_plan_service.py").read_text(encoding="utf-8")
 DESIGN_REGISTRAR = (ROOT / "stoney_verify/commands_ext/public_design_group.py").read_text(encoding="utf-8")
 DESIGN_V2 = (ROOT / "stoney_verify/commands_ext/public_design_studio_v2.py").read_text(encoding="utf-8")
-DESIGN_ENHANCEMENTS = (ROOT / "stoney_verify/commands_ext/public_design_enhancements.py").read_text(encoding="utf-8")
+RETIRED = (
+    ROOT / "stoney_verify/commands_ext/public_design_enhancements.py",
+    ROOT / "stoney_verify/startup_guards/server_design_majority_layout_guard.py",
+    ROOT / "stoney_verify/startup_guards/server_design_strict_layout_guard.py",
+)
 TESTS = (ROOT / "tests/test_server_design_category_aware_auto_detect.py").read_text(encoding="utf-8")
 
 
@@ -77,18 +81,17 @@ def main() -> int:
     # build_design_plan or DesignDoctorView after command registration.
     if "public_design_studio_v2 as design" not in DESIGN_REGISTRAR:
         failures.append("public design registrar is not routed to the consolidated Studio")
-    if "server_design_majority_layout_guard" in DESIGN_ENHANCEMENTS:
-        failures.append("public design enhancement hook still imports the majority startup guard")
-    if "server_design_strict_layout_guard" in DESIGN_ENHANCEMENTS:
-        failures.append("public design enhancement hook still imports the strict startup guard")
+    for retired in RETIRED:
+        if retired.exists():
+            failures.append(f"retired runtime-patch design module still exists: {retired.relative_to(ROOT)}")
     if "majority.build_category_aware_options" not in PLAN:
         failures.append("native design plan service does not build category-aware Smart Auto-Detect options")
     if "majority.annotate_category_aware_plan_items" not in PLAN:
         failures.append("native design plan service does not annotate category-aware decisions")
     if "build_drift_repair_plan" not in DESIGN_V2:
         failures.append("consolidated Review / Repair flow is not wired to the native drift plan")
-    if "__use_live_majority_layout" not in PLAN:
-        failures.append("native plan metadata no longer identifies Smart Auto-Detect previews")
+    if "__use_live_majority_layout" in PLAN:
+        failures.append("retired runtime-magic Smart Auto-Detect flag still exists in native plan service")
 
     if failures:
         print("DANK DESIGN SMART AUTO-DETECT AUDIT FAILED")

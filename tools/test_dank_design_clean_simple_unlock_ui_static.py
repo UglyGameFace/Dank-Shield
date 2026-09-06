@@ -3,53 +3,51 @@ from __future__ import annotations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PUBLIC = (
-    ROOT
-    / "stoney_verify/commands_ext/public_design_studio.py"
-).read_text(encoding="utf-8")
+LEGACY = (ROOT / "stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
+V2 = (ROOT / "stoney_verify/commands_ext/public_design_studio_v2.py").read_text(encoding="utf-8")
 
 
 def test_home_has_clear_current_workflow() -> None:
-    assert "Safe workflow: review first" in PUBLIC
-    assert "Recommended workflow" in PUBLIC
-    assert "Preview Saved Design" in PUBLIC
-    assert "Review Name Drift" in PUBLIC
-    assert "Change Channel Separator Only" in PUBLIC
-    assert "Category Editor" in PUBLIC
-    assert "Channel Editor" in PUBLIC
-    assert "Fix Mismatched Names" not in PUBLIC
-    assert "Find & Fix Inconsistencies" not in PUBLIC
+    assert "Pick **one job** below" in V2
+    assert "Design Entire Server" in V2
+    assert "Edit One Category / Channel" in V2
+    assert "Fix Inconsistent Names" in V2
+    assert "Saved Rules & Protection" in V2
+    assert "Undo Last Apply" in V2
+    assert "Fix Mismatched Names" not in V2
+    assert "Find & Fix Inconsistencies" not in V2
 
 
 def test_rules_and_unlocks_is_reachable() -> None:
-    assert 'label="Rules & Unlocks"' in PUBLIC
-    assert "Unlock Saved Rules" in PUBLIC
-    assert "Protected Names / Unlock" in PUBLIC
-    assert "class LockManagerButton" in PUBLIC
-    assert "class LockManagerView" in PUBLIC
+    assert 'label="Saved Rules & Protection"' in V2
+    assert 'label="Layout Rules"' in V2
+    assert 'label="Remove One Rule"' in V2
+    assert 'label="Protection"' in V2
+    assert "class LockManagerView" in LEGACY
+    assert "class ProtectionManagerView" in LEGACY
 
 
 def test_lock_manager_covers_saved_rule_scopes() -> None:
-    assert "category_format_locks" in PUBLIC
-    assert "channel_format_locks" in PUBLIC
-    assert "class LockRemoveButton" in PUBLIC
-    assert "Clean Stale" in PUBLIC
-    assert "remove individual overrides" in PUBLIC
+    assert "category_format_locks" in LEGACY
+    assert "channel_format_locks" in LEGACY
+    assert "class LockRemoveButton" in LEGACY
+    assert "Clean Stale" in LEGACY
+    assert "Remove this one rule only" in LEGACY or "remove exactly one" in V2
 
 
 def test_style_change_missing_icons_batches_without_dead_end() -> None:
-    assert "Choose Missing Icons" in PUBLIC
-    assert "batches of 5" in PUBLIC
-    assert "batch = missing[:5]" in PUBLIC
-    assert "StyleChangeFixMissingEmojiButton" in PUBLIC
-    assert "Too many missing-emoji rows for one modal" not in PUBLIC
+    assert "Choose Missing Icons" in LEGACY
+    assert "batches of 5" in LEGACY
+    assert "batch = missing[:5]" in LEGACY
+    assert "StyleChangeFixMissingEmojiButton" in LEGACY
+    assert "Too many missing-emoji rows for one modal" not in LEGACY
 
 
 def test_current_design_contract_keeps_preview_first_safety() -> None:
-    assert "Preview Saved Design" in PUBLIC
-    assert "Apply Reviewed Changes" in PUBLIC
-    assert "Nothing has been changed yet" in PUBLIC
-    assert "Rollback" in PUBLIC
+    assert "Preview Server Changes" in V2
+    assert "Apply Reviewed Changes" in V2
+    assert "Nothing is renamed" in V2
+    assert "Undo Last Apply" in V2
 
 
 if __name__ == "__main__":

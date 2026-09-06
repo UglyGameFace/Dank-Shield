@@ -49,7 +49,6 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.embed_builder_command_guard",
     "stoney_verify.startup_guards.share_router_guard",
     "stoney_verify.startup_guards.setup_overview_command_guard",
-    "stoney_verify.startup_guards.server_design_command_module_guard",
     "stoney_verify.startup_guards.protection_pack_manual_import_guard",
     "stoney_verify.startup_guards.protection_import_button_patch",
     "stoney_verify.startup_guards.setup_permission_repair_modlog_silence_guard",
@@ -121,7 +120,6 @@ _ALWAYS_SHOW_PREFIXES: Tuple[str, ...] = (
     "✅ protection_pack_manual_import_guard active",
     "✅ protection_import_button_patch active",
     "✅ ticket_forms_foundation_guard active",
-    "✅ server_design_command_module_guard active",
     "✅ production_command_surface_guard active",
 )
 _ONCE_ONLY_PREFIXES: Tuple[str, ...] = (
