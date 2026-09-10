@@ -61,6 +61,7 @@ def test_runtime_uses_central_scanner_and_has_ready_resume_recovery() -> None:
     assert "_AUTO_HISTORY_LIMIT = 250" in text
     assert "_EVENT_HISTORY_LIMIT = 75" in text
     assert "_POLICY_RETRY_DELAY_SECONDS = 15.0" in text
+    assert "await _flush_bulk_recovery_stats(gid, reason=reason)" in text
 
 
 def test_legacy_invite_guard_delegates_instead_of_owning_second_runtime() -> None:
@@ -95,6 +96,7 @@ def test_reconcile_guild_scans_only_channels_with_required_permissions(monkeypat
         return True
 
     calls: list[tuple[int, int, str, bool]] = []
+    flushes: list[tuple[int, str]] = []
 
     async def scan(channel, *, limit, repost_mixed, source):
         calls.append((channel.id, limit, source, repost_mixed))
@@ -106,12 +108,17 @@ def test_reconcile_guild_scans_only_channels_with_required_permissions(monkeypat
             "failed": 0,
         }
 
+    async def flush(guild_id: int, *, reason: str) -> None:
+        flushes.append((guild_id, reason))
+
     monkeypatch.setattr(runtime, "_guild_reconciliation_enabled", enabled)
     monkeypatch.setattr(runtime.policy, "scan_channel_invites", scan)
+    monkeypatch.setattr(runtime, "_flush_bulk_recovery_stats", flush)
 
     result = asyncio.run(runtime._reconcile_guild(guild, reason="ready", force=True))
 
     assert calls == [(11, 250, "auto-reconcile:ready", True)]
+    assert flushes == [(123, "ready")]
     assert result == {
         "channels": 1,
         "skipped_permission": 1,
