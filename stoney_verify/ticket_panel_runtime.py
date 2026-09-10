@@ -9,6 +9,7 @@ unrelated command registration failure skips the public ticket command module.
 """
 
 import asyncio
+import time
 from typing import Any
 
 import discord
@@ -28,27 +29,93 @@ def _custom_id(interaction: discord.Interaction) -> str:
         return ""
 
 
+def _safe_id(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except Exception:
+        return 0
+
+
+def _interaction_age_ms(interaction: discord.Interaction) -> int:
+    """Best-effort age of the Discord interaction when our listener sees it."""
+    try:
+        created_at = getattr(interaction, "created_at", None)
+        if created_at is None:
+            return -1
+        age = (discord.utils.utcnow() - created_at).total_seconds() * 1000.0
+        return max(0, int(round(age)))
+    except Exception:
+        return -1
+
+
+def _response_done(interaction: discord.Interaction) -> bool:
+    try:
+        return bool(interaction.response.is_done())
+    except Exception:
+        return False
+
+
+def _trace(
+    interaction: discord.Interaction,
+    stage: str,
+    *,
+    elapsed_ms: int | None = None,
+) -> None:
+    """Emit narrow telemetry for the clean Create Ticket interaction only."""
+    try:
+        guild = getattr(interaction, "guild", None)
+        user = getattr(interaction, "user", None)
+        parts = [
+            "🔎 ticket_panel_trace",
+            f"stage={stage}",
+            f"interaction={_safe_id(getattr(interaction, 'id', 0))}",
+            f"guild={_safe_id(getattr(guild, 'id', 0))}",
+            f"user={_safe_id(getattr(user, 'id', 0))}",
+            f"age_ms={_interaction_age_ms(interaction)}",
+            f"response_done={_response_done(interaction)}",
+        ]
+        if elapsed_ms is not None:
+            parts.append(f"listener_elapsed_ms={max(0, int(elapsed_ms))}")
+        print(" ".join(parts))
+    except Exception:
+        pass
+
+
 async def _ticket_panel_fallback_listener(
     interaction: discord.Interaction,
 ) -> None:
-    """Handle a clean-panel click only when persistent-view dispatch missed it."""
+    """Handle a clean-panel click only when earlier component dispatch missed it."""
+    started = time.monotonic()
     try:
         if interaction.type is not discord.InteractionType.component:
             return
         if _custom_id(interaction) not in panel.PANEL_BUTTON_CUSTOM_IDS:
             return
 
-        # Give discord.py's persistent view the first chance to acknowledge the
-        # interaction.  The canonical handler has its own interaction-id lock,
-        # so this listener cannot create a duplicate ticket/menu if both paths
-        # happen to wake at nearly the same time.
+        _trace(interaction, "listener_received")
+
+        # Give discord.py's registered component handlers the first chance to
+        # acknowledge the interaction. The canonical handler has its own
+        # interaction-id lock, so this listener cannot create a duplicate
+        # ticket/menu if another route wakes at nearly the same time.
         await asyncio.sleep(0.15)
-        if interaction.response.is_done():
+        elapsed_ms = int(round((time.monotonic() - started) * 1000.0))
+        if _response_done(interaction):
+            _trace(
+                interaction,
+                "ack_observed_before_fallback",
+                elapsed_ms=elapsed_ms,
+            )
             return
 
+        _trace(interaction, "fallback_dispatch", elapsed_ms=elapsed_ms)
         await panel.handle_public_ticket_panel_click(interaction)
+        elapsed_ms = int(round((time.monotonic() - started) * 1000.0))
+        _trace(interaction, "fallback_return", elapsed_ms=elapsed_ms)
     except Exception as exc:
         try:
+            elapsed_ms = int(round((time.monotonic() - started) * 1000.0))
+            _trace(interaction, "fallback_exception", elapsed_ms=elapsed_ms)
             print(
                 "⚠️ ticket_panel_runtime fallback failed: "
                 f"{type(exc).__name__}: {exc}"
