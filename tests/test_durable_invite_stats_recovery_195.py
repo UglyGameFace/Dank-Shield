@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from stoney_verify import durable_invite_stats
 
 
@@ -10,7 +12,7 @@ def _reset_state() -> None:
     durable_invite_stats._RECENT_EVENTS.clear()
     durable_invite_stats._PENDING.clear()
     durable_invite_stats._GUILD_LOCKS.clear()
-    durable_invite_stats._LAST_DURABLE_COUNT.clear()
+    durable_invite_stats._BULK_RECOVERY_SEED.clear()
 
 
 def _message(message_id: int, *, guild_id: int = 123, channel_id: int = 456):
@@ -30,7 +32,7 @@ def _decision(source: str):
     )
 
 
-def test_bulk_recovery_reuses_last_durable_count_and_defers_compatibility_sync(monkeypatch) -> None:
+def test_bulk_recovery_reuses_pass_local_durable_count_and_defers_compatibility_sync(monkeypatch) -> None:
     _reset_state()
     legacy_reads: list[int] = []
     seeds: list[int] = []
@@ -83,10 +85,10 @@ def test_bulk_recovery_reuses_last_durable_count_and_defers_compatibility_sync(m
     assert seeds == [10, 11]
     assert syncs == []
     assert outbox_writes == []
-    assert durable_invite_stats._LAST_DURABLE_COUNT[123] == 12
+    assert durable_invite_stats._BULK_RECOVERY_SEED[123] == 12
 
 
-def test_live_event_keeps_immediate_compatibility_sync(monkeypatch) -> None:
+def test_live_event_keeps_immediate_compatibility_sync_and_does_not_seed_bulk_state(monkeypatch) -> None:
     _reset_state()
     syncs: list[tuple[int, int]] = []
     outbox_writes: list[bool] = []
@@ -126,7 +128,7 @@ def test_live_event_keeps_immediate_compatibility_sync(monkeypatch) -> None:
     assert result.invites_blocked == 21
     assert syncs == [(123, 21)]
     assert outbox_writes == []
-    assert durable_invite_stats._LAST_DURABLE_COUNT[123] == 21
+    assert 123 not in durable_invite_stats._BULK_RECOVERY_SEED
 
 
 def test_success_only_rewrites_outbox_when_a_pending_entry_was_removed(monkeypatch) -> None:
@@ -179,19 +181,48 @@ def test_success_only_rewrites_outbox_when_a_pending_entry_was_removed(monkeypat
     assert outbox_writes == [True]
 
 
-def test_reconcile_guild_remembers_authoritative_durable_total(monkeypatch) -> None:
+def test_finish_bulk_recovery_flushes_once_and_clears_pass_local_seed(monkeypatch) -> None:
     _reset_state()
-    syncs: list[tuple[int, int]] = []
+    durable_invite_stats._BULK_RECOVERY_SEED[777] = 88
+    calls: list[int] = []
 
-    monkeypatch.setattr(durable_invite_stats, "_read_durable_count_sync", lambda _gid: 88)
+    async def fake_reconcile(guild_id: int):
+        calls.append(guild_id)
+        return 90
 
-    async def fake_sync(guild_id: int, count: int) -> None:
-        syncs.append((guild_id, count))
+    monkeypatch.setattr(durable_invite_stats, "reconcile_guild", fake_reconcile)
 
-    monkeypatch.setattr(durable_invite_stats, "_sync_compatibility_count", fake_sync)
+    result = asyncio.run(durable_invite_stats.finish_bulk_recovery(777))
 
-    result = asyncio.run(durable_invite_stats.reconcile_guild(777))
+    assert result == 90
+    assert calls == [777]
+    assert 777 not in durable_invite_stats._BULK_RECOVERY_SEED
 
-    assert result == 88
-    assert durable_invite_stats._LAST_DURABLE_COUNT[777] == 88
-    assert syncs == [(777, 88)]
+
+def test_finish_bulk_recovery_clears_pass_local_seed_when_flush_fails(monkeypatch) -> None:
+    _reset_state()
+    durable_invite_stats._BULK_RECOVERY_SEED[778] = 91
+
+    async def fail_reconcile(_guild_id: int):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(durable_invite_stats, "reconcile_guild", fail_reconcile)
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        asyncio.run(durable_invite_stats.finish_bulk_recovery(778))
+
+    assert 778 not in durable_invite_stats._BULK_RECOVERY_SEED
+
+
+def test_finish_bulk_recovery_is_noop_without_active_pass(monkeypatch) -> None:
+    _reset_state()
+    calls: list[int] = []
+
+    async def fake_reconcile(guild_id: int):
+        calls.append(guild_id)
+        return 1
+
+    monkeypatch.setattr(durable_invite_stats, "reconcile_guild", fake_reconcile)
+
+    assert asyncio.run(durable_invite_stats.finish_bulk_recovery(779)) is None
+    assert calls == []
