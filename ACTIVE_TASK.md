@@ -24,7 +24,7 @@ Production logs prove `invite_live_enforcer` still deletes newly observed invite
 ### 1. Recovery code was not on the production boot path
 
 - `stoney_verify/invite_policy_engine.py` is the authoritative invite decision/delete implementation and already exposes `scan_channel_invites()`.
-- `stoney_verify/startup_guards/discord_invite_blocker_runtime_guard.py` contains delayed recent-history sweeps, but the broad startup-guard loader is dormant during normal production boot.
+- `stoney_verify/startup_guards/discord_invite_blocker_runtime_guard.py` historically contained delayed recent-history sweeps, but the broad startup-guard loader is dormant during normal production boot.
 - `stoney_verify/globals.py` directly installs the guaranteed live `on_message` enforcer. That explains the production `invite_live_enforcer` logs, but this path performs live deletion only.
 - `/dank cleanup invites` and Protection Center history scans require staff action and do not repair a missed live window automatically.
 
@@ -36,6 +36,13 @@ Therefore an invite missed while the live event path was unavailable could remai
 - `get_guild_config()` then cached that false unconfigured result for 60 seconds.
 - A transient Supabase 504 could therefore temporarily make an existing guild appear unconfigured and make a configured live invite-blocking feature appear OFF.
 - `spam_guard.get_spam_settings()` already preserves cached/default runtime state on unavailable reads, so the divergent weak point was guild-config persistence semantics.
+
+### 3. Dormant compatibility code duplicated invite recovery ownership
+
+- The historical `discord_invite_blocker_runtime_guard` had its own channel sweep task map, sweep cooldown, delayed sweep loop, and listener installer.
+- Its private sweep helper had no external callers.
+- One older hard-block bridge still calls `_enforce_message` directly, so that compatibility entrypoint must remain until the legacy bridge is retired.
+- Keeping the old sweep machinery beside the new native runtime would create two recovery implementations and future listener-duplication risk.
 
 ## Implemented changes
 
@@ -54,6 +61,7 @@ Therefore an invite missed while the live event path was unavailable could remai
 - Cold-start unavailable reads return a safe isolated fallback but are never cached as authoritative.
 - Genuine successful no-row/unconfigured results remain cacheable exactly as before.
 - Unavailable writes preserve prior cached truth instead of replacing it with a false fallback.
+- Refactored `discord_invite_blocker_runtime_guard` into a compatibility bridge: it no longer owns sweep task/cooldown state or installs a second live listener; recovery delegates to `invite_reconciliation_runtime` while `_enforce_message` remains for the one legacy direct caller.
 
 ## Compatibility / safety invariants
 
@@ -62,7 +70,8 @@ Therefore an invite missed while the live event path was unavailable could remai
 - Exempt user/role/channel and explicitly allowed invite-code behavior is unchanged.
 - Link Shield and Invite Shield policy semantics are unchanged.
 - Durable invite statistics still use the existing central delete helper.
-- No duplicate live delete listener is activated.
+- `globals` is the single live listener owner and `invite_reconciliation_runtime` is the single recovery owner.
+- The historical guard remains import-compatible for its legacy direct `_enforce_message` caller without owning another listener.
 - Public guild config isolation remains enforced; unavailable fallbacks cannot inherit another guild's environment IDs.
 - A genuine unconfigured guild remains distinguishable from a failed database read.
 - No new Supabase tables or migrations are required.
@@ -73,6 +82,7 @@ Therefore an invite missed while the live event path was unavailable could remai
 `tests/test_invite_runtime_reconcile_194.py` covers:
 - real production boot wiring;
 - central-scanner-only recovery ownership;
+- legacy guard delegation with no second listener/sweep state;
 - idempotent listener installation;
 - permission-gated all-channel recovery;
 - disabled-policy no-scan behavior;
@@ -105,7 +115,7 @@ Therefore an invite missed while the live event path was unavailable could remai
 
 ## Cleanup / conflicts
 
-The dormant sweep-capable startup guard and the guaranteed globals live listener overlap historically, but this task does not activate another live delete owner. The new runtime is recovery-only. A broader startup-guard migration remains separate work unless required for correctness.
+Invite ownership is now explicit: the globals listener owns live enforcement, the new reconciliation runtime owns automatic history recovery, and the historical runtime guard is only a compatibility bridge. Its duplicate sweep task maps/listener installation were removed rather than left dormant for somebody to accidentally reactivate later.
 
 The guild-config change is shared code, but it is in the active invite execution path and directly fixes the transient 504 failure mode observed in production. Its behavior change is limited to unavailable reads/writes; authoritative DB results and genuine no-row behavior retain their previous semantics.
 
