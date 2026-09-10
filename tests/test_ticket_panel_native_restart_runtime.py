@@ -146,7 +146,7 @@ def test_fallback_only_delegates_clean_ticket_custom_id(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
-def test_ticket_trace_distinguishes_persistent_ack_from_fallback(monkeypatch, capsys) -> None:
+def test_ticket_trace_distinguishes_early_ack_from_fallback(monkeypatch, capsys) -> None:
     async def scenario() -> None:
         async def no_sleep(_seconds: float) -> None:
             return None
@@ -164,7 +164,7 @@ def test_ticket_trace_distinguishes_persistent_ack_from_fallback(monkeypatch, ca
         monkeypatch.setattr(runtime.asyncio, "sleep", no_sleep)
         monkeypatch.setattr(panel, "handle_public_ticket_panel_click", fake_handler)
 
-        persistent = SimpleNamespace(
+        acknowledged = SimpleNamespace(
             id=201,
             type=discord.InteractionType.component,
             data={"custom_id": panel.PANEL_BUTTON_CUSTOM_ID},
@@ -177,13 +177,13 @@ def test_ticket_trace_distinguishes_persistent_ack_from_fallback(monkeypatch, ca
             response=Response(done=False),
         )
 
-        await runtime._ticket_panel_fallback_listener(persistent)
+        await runtime._ticket_panel_fallback_listener(acknowledged)
         await runtime._ticket_panel_fallback_listener(recovered)
 
     asyncio.run(scenario())
     output = capsys.readouterr().out
     assert "ticket_panel_trace stage=listener_received interaction=201" in output
-    assert "stage=persistent_ack_observed interaction=201" in output
+    assert "stage=ack_observed_before_fallback interaction=201" in output
     assert "ticket_panel_trace stage=listener_received interaction=202" in output
     assert "stage=fallback_dispatch interaction=202" in output
     assert "stage=fallback_return interaction=202" in output
@@ -229,6 +229,6 @@ def test_runtime_trace_reports_delivery_age_and_ack_state_without_business_logic
     assert "ticket_panel_trace" in RUNTIME
     assert "age_ms=" in RUNTIME
     assert "response_done=" in RUNTIME
-    assert "persistent_ack_observed" in RUNTIME
+    assert "ack_observed_before_fallback" in RUNTIME
     assert "fallback_dispatch" in RUNTIME
     assert "fallback_return" in RUNTIME
