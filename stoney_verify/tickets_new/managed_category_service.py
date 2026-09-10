@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import threading
@@ -618,6 +619,99 @@ def _catalog_reconcile_needed(rows: Sequence[Mapping[str, Any]]) -> bool:
     return len(managed_keys) != len(set(managed_keys))
 
 
+def _configured_selected_keys(cfg: Mapping[str, Any]) -> tuple[str, ...]:
+    """Read a completed setup's saved managed keys without widening aliases."""
+    raw = _row_value(cfg, "ticket_category_setup_selected_keys", [])
+    values: Iterable[Any]
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            values = ()
+        else:
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                parsed = [part.strip() for part in text.split(",") if part.strip()]
+            values = parsed if isinstance(parsed, (list, tuple, set)) else ()
+    elif isinstance(raw, (list, tuple, set)):
+        values = raw
+    else:
+        values = ()
+
+    selected: List[str] = []
+    for value in values:
+        key = _slug(value)
+        key = _ALIAS_TO_KEY.get(key, key)
+        if key in _CATALOG_BY_KEY and key not in selected:
+            selected.append(key)
+    return tuple(selected[:25])
+
+
+def _saved_selection_reconcile_needed(
+    rows: Sequence[Mapping[str, Any]],
+    cfg: Mapping[str, Any],
+) -> bool:
+    """Detect drift between a completed per-guild selection and live row flags.
+
+    Catalog-shape checks deliberately ignore ``is_enabled`` because legacy guilds
+    without a completed v2 selection are allowed to keep their current choices.
+    Once setup v2 is complete, however, ``ticket_category_setup_selected_keys``
+    is the authority. If a later migration or stale write flips row enablement,
+    the next read must run the existing per-guild reconciliation RPC.
+    """
+    version = _safe_int(_row_value(cfg, "ticket_category_setup_version", 0), 0)
+    if version < CATEGORY_SETUP_VERSION or _config_required(cfg):
+        return False
+
+    selected = _configured_selected_keys(cfg)
+    custom_active = bool(_enabled_custom_rows(rows))
+    if not selected and not custom_active:
+        # An empty completed selection is only valid for custom-only setups.
+        # Do not turn every managed row off when the configuration itself is
+        # incomplete or corrupt.
+        return False
+
+    live_enabled = {
+        canonical_category_key(row)
+        for row in rows
+        if _managed(row)
+        and _row_enabled(row)
+        and canonical_category_key(row) in _CATALOG_BY_KEY
+    }
+    if live_enabled != set(selected):
+        return True
+
+    live_defaults = {
+        canonical_category_key(row)
+        for row in rows
+        if _managed(row)
+        and _safe_bool(row.get("is_default"), False)
+        and canonical_category_key(row) in _CATALOG_BY_KEY
+    }
+    if selected:
+        if "support" in selected:
+            expected_default = "support"
+        else:
+            expected_default = min(
+                selected,
+                key=lambda key: (
+                    _safe_int(_CATALOG_BY_KEY[key].get("sort_order"), 999),
+                    key,
+                ),
+            )
+        if live_defaults != {expected_default}:
+            return True
+        if any(
+            not _managed(row) and _safe_bool(row.get("is_default"), False)
+            for row in rows
+        ):
+            return True
+    elif live_defaults:
+        return True
+
+    return False
+
+
 def _claim_reconcile_window(guild_id: int, *, now: float | None = None) -> bool:
     """Debounce repair RPCs so bursty menu opens stay read-mostly."""
     current = time.monotonic() if now is None else float(now)
@@ -804,12 +898,13 @@ def _state_from_rows(
 
 
 def ensure_category_setup_state_sync(guild_id: int) -> CategorySetupState:
-    """Read category state, repairing stale managed catalog shapes when possible."""
+    """Read category state, repairing stale managed catalog or saved-selection drift."""
     guild_id = int(guild_id)
     cfg = _fetch_config_sync(guild_id)
     rows = _fetch_rows_sync(guild_id)
 
-    if _catalog_reconcile_needed(rows) and _claim_reconcile_window(guild_id):
+    reconcile_needed = _catalog_reconcile_needed(rows) or _saved_selection_reconcile_needed(rows, cfg)
+    if reconcile_needed and _claim_reconcile_window(guild_id):
         try:
             _sync_managed_categories_sync(guild_id)
         except ManagedCategorySyncError:
@@ -817,7 +912,7 @@ def ensure_category_setup_state_sync(guild_id: int) -> CategorySetupState:
         else:
             cfg = _fetch_config_sync(guild_id)
             rows = _fetch_rows_sync(guild_id)
-            if _catalog_reconcile_needed(rows):
+            if _catalog_reconcile_needed(rows) or _saved_selection_reconcile_needed(rows, cfg):
                 # The deployed RPC may still be an older migration. Keep the
                 # member-facing dedupe active and retry soon instead of treating
                 # an incomplete repair as success.
