@@ -64,6 +64,18 @@ def test_runtime_uses_central_scanner_and_has_ready_resume_recovery() -> None:
     assert "_POLICY_RETRY_DELAY_SECONDS = 15.0" in text
 
 
+def test_legacy_invite_guard_delegates_instead_of_owning_second_runtime() -> None:
+    text = (
+        ROOT / "stoney_verify" / "startup_guards" / "discord_invite_blocker_runtime_guard.py"
+    ).read_text(encoding="utf-8")
+    assert "_SWEEP_TASKS" not in text
+    assert "_LAST_SWEEP_AT" not in text
+    assert "bot.add_listener" not in text
+    assert "recovery.install_invite_reconciliation(bot)" in text
+    assert "await recovery._sweep_channel(" in text
+    assert "async def _enforce_message(" in text
+
+
 def test_install_is_idempotent() -> None:
     bot = FakeBot()
 
