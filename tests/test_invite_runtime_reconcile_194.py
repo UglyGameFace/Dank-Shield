@@ -61,6 +61,7 @@ def test_runtime_uses_central_scanner_and_has_ready_resume_recovery() -> None:
     assert '("on_message_edit", _recovery_edit_listener)' in text
     assert "_AUTO_HISTORY_LIMIT = 250" in text
     assert "_EVENT_HISTORY_LIMIT = 75" in text
+    assert "_POLICY_RETRY_DELAY_SECONDS = 15.0" in text
 
 
 def test_install_is_idempotent() -> None:
@@ -109,6 +110,7 @@ async def test_reconcile_guild_scans_only_channels_with_required_permissions(mon
         "allowed": 1,
         "deleted": 1,
         "failed": 0,
+        "deferred": 0,
     }
 
 
@@ -130,6 +132,66 @@ async def test_reconcile_skips_history_when_no_delete_feature_is_enabled(monkeyp
 
     assert result["channels"] == 0
     assert result["checked"] == 0
+    assert result["deferred"] == 0
+    assert 456 in runtime._LAST_GUILD_RECONCILE_AT
+
+
+@pytest.mark.asyncio
+async def test_unavailable_policy_is_deferred_without_starting_cooldown(monkeypatch) -> None:
+    guild = FakeGuild(654)
+    runtime._LAST_GUILD_RECONCILE_AT.clear()
+
+    async def unavailable(_guild):
+        return None
+
+    async def should_not_scan(*args, **kwargs):
+        raise AssertionError("history scan should wait for policy recovery")
+
+    monkeypatch.setattr(runtime, "_guild_reconciliation_enabled", unavailable)
+    monkeypatch.setattr(runtime.policy, "scan_channel_invites", should_not_scan)
+
+    result = await runtime._reconcile_guild(guild, reason="ready", force=True)
+
+    assert result["deferred"] == 1
+    assert result["checked"] == 0
+    assert 654 not in runtime._LAST_GUILD_RECONCILE_AT
+
+
+@pytest.mark.asyncio
+async def test_empty_policy_load_shape_is_treated_as_unavailable(monkeypatch) -> None:
+    guild = FakeGuild(655)
+
+    async def empty_policy(_guild, *, refresh=False):
+        assert refresh is True
+        return None, {}
+
+    monkeypatch.setattr(runtime.policy, "load_invite_policy", empty_policy)
+
+    assert await runtime._guild_reconciliation_enabled(guild) is None
+
+
+@pytest.mark.asyncio
+async def test_reconcile_all_retries_policy_unavailable_guild_once(monkeypatch) -> None:
+    guild = FakeGuild(656)
+    bot = SimpleNamespace(guilds=[guild])
+    calls: list[tuple[str, bool]] = []
+
+    async def reconcile(_guild, *, reason, force=False):
+        calls.append((reason, force))
+        if len(calls) == 1:
+            return {"deferred": 1}
+        return {"deferred": 0}
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(runtime, "_reconcile_guild", reconcile)
+    monkeypatch.setattr(runtime.asyncio, "sleep", no_sleep)
+    runtime._RECONCILE_TASK = None
+
+    await runtime._reconcile_all(bot, reason="ready")
+
+    assert calls == [("ready", False), ("ready-policy-retry", True)]
 
 
 @pytest.mark.asyncio
