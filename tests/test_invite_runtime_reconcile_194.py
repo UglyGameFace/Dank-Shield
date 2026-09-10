@@ -4,8 +4,6 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from stoney_verify import invite_reconciliation_runtime as runtime
 
 
@@ -89,8 +87,7 @@ def test_install_is_idempotent() -> None:
     assert len(bot.extra_events["on_resumed"]) == 1
 
 
-@pytest.mark.asyncio
-async def test_reconcile_guild_scans_only_channels_with_required_permissions(monkeypatch) -> None:
+def test_reconcile_guild_scans_only_channels_with_required_permissions(monkeypatch) -> None:
     guild = FakeGuild(123)
     runtime._LAST_GUILD_RECONCILE_AT.clear()
 
@@ -112,7 +109,7 @@ async def test_reconcile_guild_scans_only_channels_with_required_permissions(mon
     monkeypatch.setattr(runtime, "_guild_reconciliation_enabled", enabled)
     monkeypatch.setattr(runtime.policy, "scan_channel_invites", scan)
 
-    result = await runtime._reconcile_guild(guild, reason="ready", force=True)
+    result = asyncio.run(runtime._reconcile_guild(guild, reason="ready", force=True))
 
     assert calls == [(11, 250, "auto-reconcile:ready", True)]
     assert result == {
@@ -127,8 +124,7 @@ async def test_reconcile_guild_scans_only_channels_with_required_permissions(mon
     }
 
 
-@pytest.mark.asyncio
-async def test_reconcile_guild_bounds_created_channel_work(monkeypatch) -> None:
+def test_reconcile_guild_bounds_created_channel_work(monkeypatch) -> None:
     guild = FakeGuild(790)
     guild.text_channels = [FakeChannel(guild, channel_id, allowed=True) for channel_id in range(20, 25)]
     runtime._LAST_GUILD_RECONCILE_AT.clear()
@@ -161,7 +157,7 @@ async def test_reconcile_guild_bounds_created_channel_work(monkeypatch) -> None:
     monkeypatch.setattr(runtime, "_guild_reconciliation_enabled", enabled)
     monkeypatch.setattr(runtime.policy, "scan_channel_invites", scan)
 
-    result = await runtime._reconcile_guild(guild, reason="ready", force=True)
+    result = asyncio.run(runtime._reconcile_guild(guild, reason="ready", force=True))
 
     assert sorted(calls) == [20, 21, 22, 23, 24]
     assert max_active <= runtime._RECONCILE_CONCURRENCY
@@ -169,8 +165,7 @@ async def test_reconcile_guild_bounds_created_channel_work(monkeypatch) -> None:
     assert result["checked"] == 5
 
 
-@pytest.mark.asyncio
-async def test_reconcile_skips_history_when_no_delete_feature_is_enabled(monkeypatch) -> None:
+def test_reconcile_skips_history_when_no_delete_feature_is_enabled(monkeypatch) -> None:
     guild = FakeGuild(456)
     runtime._LAST_GUILD_RECONCILE_AT.clear()
 
@@ -183,7 +178,7 @@ async def test_reconcile_skips_history_when_no_delete_feature_is_enabled(monkeyp
     monkeypatch.setattr(runtime, "_guild_reconciliation_enabled", disabled)
     monkeypatch.setattr(runtime.policy, "scan_channel_invites", should_not_scan)
 
-    result = await runtime._reconcile_guild(guild, reason="ready", force=True)
+    result = asyncio.run(runtime._reconcile_guild(guild, reason="ready", force=True))
 
     assert result["channels"] == 0
     assert result["checked"] == 0
@@ -191,8 +186,7 @@ async def test_reconcile_skips_history_when_no_delete_feature_is_enabled(monkeyp
     assert 456 in runtime._LAST_GUILD_RECONCILE_AT
 
 
-@pytest.mark.asyncio
-async def test_unavailable_policy_is_deferred_without_starting_cooldown(monkeypatch) -> None:
+def test_unavailable_policy_is_deferred_without_starting_cooldown(monkeypatch) -> None:
     guild = FakeGuild(654)
     runtime._LAST_GUILD_RECONCILE_AT.clear()
 
@@ -205,15 +199,14 @@ async def test_unavailable_policy_is_deferred_without_starting_cooldown(monkeypa
     monkeypatch.setattr(runtime, "_guild_reconciliation_enabled", unavailable)
     monkeypatch.setattr(runtime.policy, "scan_channel_invites", should_not_scan)
 
-    result = await runtime._reconcile_guild(guild, reason="ready", force=True)
+    result = asyncio.run(runtime._reconcile_guild(guild, reason="ready", force=True))
 
     assert result["deferred"] == 1
     assert result["checked"] == 0
     assert 654 not in runtime._LAST_GUILD_RECONCILE_AT
 
 
-@pytest.mark.asyncio
-async def test_empty_policy_load_shape_is_treated_as_unavailable(monkeypatch) -> None:
+def test_empty_policy_load_shape_is_treated_as_unavailable(monkeypatch) -> None:
     guild = FakeGuild(655)
 
     async def empty_policy(_guild, *, refresh=False):
@@ -222,11 +215,10 @@ async def test_empty_policy_load_shape_is_treated_as_unavailable(monkeypatch) ->
 
     monkeypatch.setattr(runtime.policy, "load_invite_policy", empty_policy)
 
-    assert await runtime._guild_reconciliation_enabled(guild) is None
+    assert asyncio.run(runtime._guild_reconciliation_enabled(guild)) is None
 
 
-@pytest.mark.asyncio
-async def test_unavailable_guild_config_source_is_treated_as_unavailable(monkeypatch) -> None:
+def test_unavailable_guild_config_source_is_treated_as_unavailable(monkeypatch) -> None:
     guild = FakeGuild(657)
 
     async def unavailable_policy(_guild, *, refresh=False):
@@ -235,11 +227,10 @@ async def test_unavailable_guild_config_source_is_treated_as_unavailable(monkeyp
 
     monkeypatch.setattr(runtime.policy, "load_invite_policy", unavailable_policy)
 
-    assert await runtime._guild_reconciliation_enabled(guild) is None
+    assert asyncio.run(runtime._guild_reconciliation_enabled(guild)) is None
 
 
-@pytest.mark.asyncio
-async def test_reconcile_all_retries_policy_unavailable_guild_once(monkeypatch) -> None:
+def test_reconcile_all_retries_policy_unavailable_guild_once(monkeypatch) -> None:
     guild = FakeGuild(656)
     bot = SimpleNamespace(guilds=[guild])
     calls: list[tuple[str, bool]] = []
@@ -257,13 +248,12 @@ async def test_reconcile_all_retries_policy_unavailable_guild_once(monkeypatch) 
     monkeypatch.setattr(runtime, "_sleep", no_sleep)
     runtime._RECONCILE_TASK = None
 
-    await runtime._reconcile_all(bot, reason="ready")
+    asyncio.run(runtime._reconcile_all(bot, reason="ready"))
 
     assert calls == [("ready", False), ("ready-policy-retry", True)]
 
 
-@pytest.mark.asyncio
-async def test_event_recovery_rescans_recent_channel_history(monkeypatch) -> None:
+def test_event_recovery_rescans_recent_channel_history(monkeypatch) -> None:
     guild = FakeGuild(789)
     channel = guild.text_channels[0]
     runtime._LAST_CHANNEL_SWEEP_AT.clear()
@@ -281,6 +271,6 @@ async def test_event_recovery_rescans_recent_channel_history(monkeypatch) -> Non
     monkeypatch.setattr(runtime, "_guild_reconciliation_enabled", enabled)
     monkeypatch.setattr(runtime.policy, "scan_channel_invites", scan)
 
-    await runtime._sweep_channel(channel, reason="create")
+    asyncio.run(runtime._sweep_channel(channel, reason="create"))
 
     assert calls == [(11, 75, "live-recovery:create")]
