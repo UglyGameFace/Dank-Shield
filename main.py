@@ -57,8 +57,30 @@ def _sleep_before_import_if_discord_login_backoff_active() -> None:
         time.sleep(remaining)
 
 
+def _install_invite_reconciliation_runtime() -> None:
+    """Attach missed-invite recovery to the real bot before Discord login."""
+
+    try:
+        from stoney_verify.globals import bot
+        from stoney_verify.invite_reconciliation_runtime import (
+            install_invite_reconciliation,
+        )
+
+        if not install_invite_reconciliation(bot):
+            print(
+                "⚠️ invite_reconcile could not install; "
+                "live invite enforcement remains active but history recovery is unavailable"
+            )
+    except Exception as exc:
+        print(
+            "⚠️ invite_reconcile install failed before app import: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
 def main() -> None:
     _sleep_before_import_if_discord_login_backoff_active()
+    _install_invite_reconciliation_runtime()
     from stoney_verify.app import run as _run_dank_shield
 
     _run_dank_shield()

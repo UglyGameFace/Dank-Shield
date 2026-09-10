@@ -88,7 +88,7 @@ class GuildRuntimeConfig(dict):
     def is_unconfigured(self) -> bool:
         try:
             source = str(self.get("source") or "").strip().lower()
-            if source.startswith("unconfigured:"):
+            if source.startswith("unconfigured:") or source.startswith("unavailable:"):
                 return True
             if source.startswith("env_fallback"):
                 return True
@@ -408,6 +408,20 @@ def env_fallback_guild_config(guild_id: Any = None) -> GuildRuntimeConfig:
     )
 
 
+def _fallback_config_for_read_state(guild_id: Any, *, source: str) -> GuildRuntimeConfig:
+    """Build a safe non-DB config without leaking another guild's env IDs."""
+
+    gid = _fallback_guild_id(guild_id)
+    cfg = env_fallback_guild_config(gid)
+    if not _allow_env_fallback_for_guild(gid):
+        for key in list(cfg.keys()):
+            if key.endswith("_id"):
+                cfg[key] = None
+        cfg["use_env_fallbacks"] = False
+    cfg["source"] = str(source or "unavailable:unknown")
+    return cfg
+
+
 def _normalize_config_row(row: Optional[Mapping[str, Any]], guild_id: Any = None, *, table_name: Optional[str] = None) -> GuildRuntimeConfig:
     fallback = env_fallback_guild_config(guild_id)
     raw = _mapping_dict(row)
@@ -490,8 +504,9 @@ def _db_get_guild_config_sync(guild_id: Any) -> GuildRuntimeConfig:
 
     sb = get_supabase()
     if sb is None:
-        return env_fallback_guild_config(gid)
+        return _fallback_config_for_read_state(gid, source="unavailable:supabase_none")
 
+    read_failed = False
     for table_name in GUILD_CONFIG_TABLE_FALLBACKS:
         def _read(table_name: str = table_name):
             return (
@@ -509,19 +524,17 @@ def _db_get_guild_config_sync(guild_id: Any) -> GuildRuntimeConfig:
                 return _normalize_config_row(dict(rows[0]), gid, table_name=table_name)
         except Exception as e:
             if not _is_missing_table_error(e):
+                read_failed = True
                 _debug(f"DB config read failed table={table_name} guild={gid}: {repr(e)}")
             continue
+
+    if read_failed:
+        return _fallback_config_for_read_state(gid, source="unavailable:db_read_failed")
 
     if _allow_env_fallback_for_guild(gid):
         return env_fallback_guild_config(gid)
 
-    cfg = env_fallback_guild_config(gid)
-    for key in list(cfg.keys()):
-        if key.endswith("_id"):
-            cfg[key] = None
-    cfg["source"] = "unconfigured:isolated_public_fallback"
-    cfg["use_env_fallbacks"] = False
-    return cfg
+    return _fallback_config_for_read_state(gid, source="unconfigured:isolated_public_fallback")
 
 
 async def get_guild_config(guild_id: Any, *, force_refresh: bool = False, refresh: Optional[bool] = None) -> GuildRuntimeConfig:
@@ -537,6 +550,18 @@ async def get_guild_config(guild_id: Any, *, force_refresh: bool = False, refres
             return GuildRuntimeConfig(cached)
 
     config = await _run_db(f"get guild config async guild={gid}", lambda: _db_get_guild_config_sync(gid))
+    source = _safe_str(config.get("source"), "unknown").lower()
+
+    if source.startswith("unavailable:"):
+        cached = _CONFIG_CACHE.get(key)
+        if cached:
+            _debug(
+                f"DB config unavailable guild={gid}; preserving stale cached source="
+                f"{_safe_str(cached.get('source'), 'unknown')}"
+            )
+            return GuildRuntimeConfig(cached)
+        _debug(f"DB config unavailable guild={gid}; returning safe fallback without caching source={source}")
+        return GuildRuntimeConfig(config)
 
     _CONFIG_CACHE[key] = dict(config)
     _CONFIG_CACHE_TS[key] = _now()
@@ -579,7 +604,7 @@ def _db_upsert_guild_config_sync(guild_id: Any, patch: Mapping[str, Any]) -> Gui
 
     sb = get_supabase()
     if sb is None:
-        return env_fallback_guild_config(gid)
+        return _fallback_config_for_read_state(gid, source="unavailable:supabase_none")
 
     last_error: Optional[Exception] = None
 
@@ -624,10 +649,24 @@ def _db_upsert_guild_config_sync(guild_id: Any, patch: Mapping[str, Any]) -> Gui
 
 async def upsert_guild_config(guild_id: Any, patch: Mapping[str, Any]) -> GuildRuntimeConfig:
     gid = _fallback_guild_id(guild_id)
+    key = _cache_key(gid)
+    previous = _CONFIG_CACHE.get(key)
     config = await _run_db(f"upsert guild config async guild={gid}", lambda: _db_upsert_guild_config_sync(gid, patch))
+    source = _safe_str(config.get("source"), "unknown").lower()
+
+    if source.startswith("unavailable:"):
+        if previous:
+            _debug(
+                f"DB config write unavailable guild={gid}; preserving prior cached source="
+                f"{_safe_str(previous.get('source'), 'unknown')}"
+            )
+            return GuildRuntimeConfig(previous)
+        _debug(f"DB config write unavailable guild={gid}; returning safe fallback without caching source={source}")
+        return GuildRuntimeConfig(config)
+
     clear_guild_config_cache(gid)
-    _CONFIG_CACHE[_cache_key(gid)] = dict(config)
-    _CONFIG_CACHE_TS[_cache_key(gid)] = _now()
+    _CONFIG_CACHE[key] = dict(config)
+    _CONFIG_CACHE_TS[key] = _now()
     return GuildRuntimeConfig(config)
 
 
