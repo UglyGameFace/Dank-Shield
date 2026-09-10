@@ -36,6 +36,8 @@ INVITE_RE = re.compile(
 
 _POLICY_CACHE: dict[int, tuple[float, Any, dict[str, Any]]] = {}
 _POLICY_CACHE_TTL_SECONDS = 8.0
+_GUILD_VANITY_CACHE: dict[int, tuple[float, str]] = {}
+_GUILD_VANITY_CACHE_TTL_SECONDS = 300.0
 _DECISION_TRACE: dict[tuple[int, int, int], "InviteDecision"] = {}
 _DECISION_TRACE_ORDER: list[tuple[int, int, int]] = []
 _DECISION_TRACE_LIMIT = 750
@@ -395,39 +397,64 @@ def _spam_invite_burst_action(settings: Mapping[str, Any]) -> str:
     return aliases.get(raw, "observe")
 
 
+async def _guild_vanity_code(guild: discord.Guild) -> str:
+    """Return this guild's vanity code without a REST call per message."""
+
+    try:
+        static_code = normalize_invite_code(getattr(guild, "vanity_url_code", None))
+        if static_code:
+            return static_code
+    except Exception:
+        pass
+
+    gid = int(getattr(guild, "id", 0) or 0)
+    now = time.monotonic()
+    if gid > 0:
+        cached = _GUILD_VANITY_CACHE.get(gid)
+        if cached is not None:
+            saved_at, code = cached
+            if now - float(saved_at) <= _GUILD_VANITY_CACHE_TTL_SECONDS:
+                return str(code or "")
+
+    code = ""
+    try:
+        vanity_invite = await guild.vanity_invite()
+        code = normalize_invite_code(getattr(vanity_invite, "code", None))
+    except Exception:
+        code = ""
+
+    if gid > 0:
+        _GUILD_VANITY_CACHE[gid] = (now, code)
+    return code
+
+
 async def _guild_invite_codes(guild: discord.Guild) -> set[str]:
     codes: set[str] = set()
+    shared_getter_completed = False
     try:
         from stoney_verify import spam_guard
 
         getter = getattr(spam_guard, "_fetch_guild_invite_codes", None)
         if callable(getter):
-            codes.update(str(code).lower() for code in await getter(guild) if _safe_str(code))
+            fetched = await getter(guild)
+            shared_getter_completed = True
+            codes.update(str(code).lower() for code in fetched if _safe_str(code))
     except Exception:
-        pass
+        shared_getter_completed = False
 
-    # The Spam Guard helper already owns a five-minute guild invite-list cache.
-    # Avoid immediately issuing the exact same REST call again when it returned
-    # one or more known codes. An empty set remains ambiguous (real empty list or
-    # transient fetch failure), so preserve the old direct fallback in that case.
-    if not codes:
+    # Spam Guard already owns a five-minute guild.invites() cache. A completed
+    # empty snapshot is still useful: immediately repeating the same REST call
+    # adds load but no independent safety evidence. Only fall back directly if
+    # the shared getter itself could not run at all.
+    if not shared_getter_completed:
         try:
             codes.update(str(inv.code).lower() for inv in await guild.invites() if getattr(inv, "code", None))
         except Exception:
             pass
-    try:
-        vanity = getattr(guild, "vanity_url_code", None)
-        if vanity:
-            codes.add(str(vanity).lower())
-    except Exception:
-        pass
-    try:
-        vanity_invite = await guild.vanity_invite()
-        vanity_code = getattr(vanity_invite, "code", None)
-        if vanity_code:
-            codes.add(str(vanity_code).lower())
-    except Exception:
-        pass
+
+    vanity = await _guild_vanity_code(guild)
+    if vanity:
+        codes.add(vanity)
     return codes
 
 
