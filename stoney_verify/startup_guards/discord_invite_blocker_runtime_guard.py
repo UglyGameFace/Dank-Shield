@@ -9,6 +9,7 @@ Live invite ownership now belongs to the guaranteed listener installed from
 second live listener or owns separate sweep state.
 """
 
+import time
 from typing import Any
 
 import discord
@@ -22,6 +23,7 @@ from stoney_verify import invite_policy_engine as policy
 from stoney_verify import invite_reconciliation_runtime as recovery
 
 _INSTALLED = False
+_SPLASH_LAST_AT: dict[tuple[int, int], float] = {}
 
 
 def _log(message: str) -> None:
@@ -41,6 +43,13 @@ async def _send_invite_shield_splash(
 
     try:
         guild = channel.guild
+        key = (int(guild.id), int(channel.id))
+        now = time.monotonic()
+        last = float(_SPLASH_LAST_AT.get(key, 0.0) or 0.0)
+        if now - last < 12.0:
+            return
+        _SPLASH_LAST_AT[key] = now
+
         me = guild.me
         if not isinstance(me, discord.Member):
             return
