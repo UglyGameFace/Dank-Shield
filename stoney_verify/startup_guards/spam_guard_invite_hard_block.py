@@ -3,9 +3,11 @@ from __future__ import annotations
 """Legacy Spam Guard invite hard-block compatibility shim.
 
 The old version of this module deleted Discord invites directly and could make
-Spam Guard look like it was deleting posts even when Invite Shield was OFF.  The
-only live runtime listener now lives in ``discord_invite_blocker_runtime_guard``
-and every delete must be approved by ``invite_policy_engine``.
+Spam Guard look like it was deleting posts even when Invite Shield was OFF.
+Production live invite ownership now belongs to the guaranteed listener created
+from ``stoney_verify.globals``; missed-message recovery belongs to
+``stoney_verify.invite_reconciliation_runtime``. This shim keeps only legacy
+entrypoints and every delete still requires ``invite_policy_engine`` approval.
 """
 
 import discord
@@ -52,7 +54,7 @@ async def _modlog(guild: discord.Guild, message: discord.Message, codes: list[st
 async def _hard_block_invite_message(message: discord.Message) -> None:
     """Compatibility entrypoint used by older imports.
 
-    It delegates to the central runtime.  Spam Guard-only mode cannot delete a
+    It delegates to the central runtime. Spam Guard-only mode cannot delete a
     single invite link through this shim.
     """
 
