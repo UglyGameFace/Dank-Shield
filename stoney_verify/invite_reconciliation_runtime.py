@@ -30,6 +30,12 @@ _CHANNEL_SWEEP_TASKS: dict[tuple[int, int], asyncio.Task[Any]] = {}
 _RECONCILE_TASK: asyncio.Task[Any] | None = None
 
 
+async def _sleep(seconds: float) -> None:
+    """Local sleep boundary so tests never monkeypatch asyncio globally."""
+
+    await asyncio.sleep(seconds)
+
+
 def _log(message: str) -> None:
     try:
         print(f"🧹 invite_reconcile {message}")
@@ -223,7 +229,7 @@ async def _reconcile_all(bot: Any, *, reason: str) -> None:
     global _RECONCILE_TASK
     try:
         if reason == "ready":
-            await asyncio.sleep(_READY_DELAY_SECONDS)
+            await _sleep(_READY_DELAY_SECONDS)
 
         deferred: list[Any] = []
         for guild in list(getattr(bot, "guilds", []) or []):
@@ -238,7 +244,7 @@ async def _reconcile_all(bot: Any, *, reason: str) -> None:
                 )
 
         if deferred:
-            await asyncio.sleep(_POLICY_RETRY_DELAY_SECONDS)
+            await _sleep(_POLICY_RETRY_DELAY_SECONDS)
             for guild in deferred:
                 try:
                     await _reconcile_guild(
@@ -313,9 +319,9 @@ async def _sweep_channel(channel: Any, *, reason: str) -> None:
 
 
 async def _delayed_channel_sweep(channel: Any, *, reason: str) -> None:
-    await asyncio.sleep(1.5)
+    await _sleep(1.5)
     await _sweep_channel(channel, reason=reason)
-    await asyncio.sleep(8.5)
+    await _sleep(8.5)
     await _sweep_channel(channel, reason=f"{reason}-second-pass")
 
 
