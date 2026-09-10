@@ -208,6 +208,129 @@ def test_catalog_shape_drift_is_not_hidden_by_current_version() -> None:
     assert categories._catalog_reconcile_needed(rows) is True
 
 
+def test_completed_selection_enablement_drift_requires_reconciliation() -> None:
+    rows = categories.catalog_category_rows()
+    cfg = {
+        "ticket_category_setup_version": categories.CATEGORY_SETUP_VERSION,
+        "ticket_category_setup_required": False,
+        "ticket_category_setup_selected_keys": ["verification", "bug", "support"],
+    }
+
+    assert categories._catalog_reconcile_needed(rows) is False
+    assert categories._saved_selection_reconcile_needed(rows, cfg) is True
+
+    for row in rows:
+        key = categories.canonical_category_key(row)
+        row["is_enabled"] = key in {"verification", "bug", "support"}
+        row["is_default"] = key == "support"
+
+    assert categories._saved_selection_reconcile_needed(rows, cfg) is False
+
+
+def test_completed_selection_json_string_is_still_authoritative() -> None:
+    cfg = {
+        "ticket_category_setup_version": categories.CATEGORY_SETUP_VERSION,
+        "ticket_category_setup_required": False,
+        "ticket_category_setup_selected_keys": '["verification", "technical-support", "support"]',
+    }
+    assert categories._configured_selected_keys(cfg) == (
+        "verification",
+        "bug",
+        "support",
+    )
+
+
+def test_unfinished_setup_does_not_apply_saved_selection_repair() -> None:
+    rows = categories.catalog_category_rows()
+    cfg = {
+        "ticket_category_setup_version": categories.CATEGORY_SETUP_VERSION,
+        "ticket_category_setup_required": True,
+        "ticket_category_setup_selected_keys": ["verification", "bug", "support"],
+    }
+    assert categories._saved_selection_reconcile_needed(rows, cfg) is False
+
+
+def test_custom_only_completed_setup_can_repair_managed_pollution() -> None:
+    rows = categories.catalog_category_rows()
+    rows.append(
+        {
+            "id": "custom-1",
+            "slug": "clan_application",
+            "name": "Clan Application",
+            "button_label": "Clan Application",
+            "is_enabled": True,
+            "is_default": True,
+            "managed_by_dank": False,
+            "sort_order": 5,
+        }
+    )
+    cfg = {
+        "ticket_category_setup_version": categories.CATEGORY_SETUP_VERSION,
+        "ticket_category_setup_required": False,
+        "ticket_category_setup_selected_keys": [],
+    }
+    assert categories._saved_selection_reconcile_needed(rows, cfg) is True
+
+    for row in rows:
+        if row.get("managed_by_dank"):
+            row["is_enabled"] = False
+            row["is_default"] = False
+    assert categories._saved_selection_reconcile_needed(rows, cfg) is False
+
+
+def test_empty_completed_selection_without_custom_rows_fails_safe() -> None:
+    rows = categories.catalog_category_rows()
+    cfg = {
+        "ticket_category_setup_version": categories.CATEGORY_SETUP_VERSION,
+        "ticket_category_setup_required": False,
+        "ticket_category_setup_selected_keys": [],
+    }
+    assert categories._saved_selection_reconcile_needed(rows, cfg) is False
+
+
+def test_ensure_state_reconciles_completed_selection_drift_per_guild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guild_id = 987654321
+    cfg = {
+        "guild_id": str(guild_id),
+        "ticket_category_setup_version": categories.CATEGORY_SETUP_VERSION,
+        "ticket_category_setup_required": False,
+        "ticket_category_setup_selected_keys": ["verification", "bug", "support"],
+    }
+    before = categories.catalog_category_rows()
+    after = categories.catalog_category_rows()
+    for row in after:
+        key = categories.canonical_category_key(row)
+        row["is_enabled"] = key in {"verification", "bug", "support"}
+        row["is_default"] = key == "support"
+
+    reconciled = False
+    requested_guilds: list[int] = []
+
+    monkeypatch.setattr(categories, "_fetch_config_sync", lambda gid: dict(cfg))
+
+    def fetch_rows(gid: int):
+        assert gid == guild_id
+        return [dict(row) for row in (after if reconciled else before)]
+
+    def sync_rows(gid: int):
+        nonlocal reconciled
+        requested_guilds.append(gid)
+        reconciled = True
+        return []
+
+    monkeypatch.setattr(categories, "_fetch_rows_sync", fetch_rows)
+    monkeypatch.setattr(categories, "_sync_managed_categories_sync", sync_rows)
+    monkeypatch.setattr(categories, "_claim_reconcile_window", lambda gid: gid == guild_id)
+
+    state = categories.ensure_category_setup_state_sync(guild_id)
+
+    assert requested_guilds == [guild_id]
+    assert set(state.selected_keys) == {"verification", "bug", "support"}
+    assert set(_keys(state.active_rows)) == {"verification", "bug", "support"}
+
+
 def test_reconcile_window_debounces_repeated_menu_opens() -> None:
     categories._RECONCILE_NOT_BEFORE.clear()
     assert categories._claim_reconcile_window(1234, now=100.0) is True
