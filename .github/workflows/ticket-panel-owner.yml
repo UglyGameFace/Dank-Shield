@@ -8,6 +8,7 @@ on:
       - "stoney_verify/commands_ext/public_ticket_panel_clean.py"
       - "tests/test_public_ticket_panel_single_owner.py"
       - "tests/test_ticket_panel_native_restart_runtime.py"
+      - "tests/test_ticket_panel_guild_category_source.py"
       - "tests/test_restart_panel_single_owner_static.py"
       - ".github/workflows/ticket-panel-owner.yml"
   push:
@@ -19,6 +20,7 @@ on:
       - "stoney_verify/commands_ext/public_ticket_panel_clean.py"
       - "tests/test_public_ticket_panel_single_owner.py"
       - "tests/test_ticket_panel_native_restart_runtime.py"
+      - "tests/test_ticket_panel_guild_category_source.py"
       - "tests/test_restart_panel_single_owner_static.py"
       - ".github/workflows/ticket-panel-owner.yml"
 
@@ -55,6 +57,7 @@ jobs:
             stoney_verify/commands_ext/public_ticket_panel_clean.py \
             tests/test_public_ticket_panel_single_owner.py \
             tests/test_ticket_panel_native_restart_runtime.py \
+            tests/test_ticket_panel_guild_category_source.py \
             tests/test_restart_panel_single_owner_static.py
 
       - name: Run focused ticket panel regressions
@@ -65,4 +68,5 @@ jobs:
           python -m pytest -q --tb=short \
             tests/test_public_ticket_panel_single_owner.py \
             tests/test_ticket_panel_native_restart_runtime.py \
+            tests/test_ticket_panel_guild_category_source.py \
             tests/test_restart_panel_single_owner_static.py
