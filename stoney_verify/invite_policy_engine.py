@@ -405,10 +405,16 @@ async def _guild_invite_codes(guild: discord.Guild) -> set[str]:
             codes.update(str(code).lower() for code in await getter(guild) if _safe_str(code))
     except Exception:
         pass
-    try:
-        codes.update(str(inv.code).lower() for inv in await guild.invites() if getattr(inv, "code", None))
-    except Exception:
-        pass
+
+    # The Spam Guard helper already owns a five-minute guild invite-list cache.
+    # Avoid immediately issuing the exact same REST call again when it returned
+    # one or more known codes. An empty set remains ambiguous (real empty list or
+    # transient fetch failure), so preserve the old direct fallback in that case.
+    if not codes:
+        try:
+            codes.update(str(inv.code).lower() for inv in await guild.invites() if getattr(inv, "code", None))
+        except Exception:
+            pass
     try:
         vanity = getattr(guild, "vanity_url_code", None)
         if vanity:
@@ -443,39 +449,33 @@ async def _invite_code_belongs_to_guild(guild: discord.Guild, code: str) -> tupl
     except Exception:
         pass
 
+    # The shared resolver already calls discord.py fetch_invite and caches the
+    # target guild id per invite code. Reuse that result directly rather than
+    # calling fetch_invite a second time to rediscover the same target.
     try:
-        from stoney_verify.startup_guards.invite_shield_sanitize_shared import invite_code_belongs_to_guild
+        from stoney_verify.startup_guards.invite_shield_sanitize_shared import fetch_invite_guild_id
 
-        if await invite_code_belongs_to_guild(guild, clean):
-            return "internal", current_guild_id
-    except Exception:
-        pass
-
-    # Prefer discord.py's public client API for target lookup.
-    try:
-        state = getattr(guild, "_state", None)
-        get_client = getattr(state, "_get_client", None)
-        client = get_client() if callable(get_client) else None
-        fetch_invite = getattr(client, "fetch_invite", None)
-
-        if callable(fetch_invite):
+        resolved_id = int(await fetch_invite_guild_id(clean) or 0)
+        if resolved_id > 0:
+            target_id = str(resolved_id)
+            target_name = ""
             try:
-                invite_obj = await fetch_invite(clean, with_counts=False, with_expiration=False)
-            except TypeError:
-                invite_obj = await fetch_invite(clean)
+                state = getattr(guild, "_state", None)
+                get_client = getattr(state, "_get_client", None)
+                client = get_client() if callable(get_client) else None
+                get_guild = getattr(client, "get_guild", None)
+                target_guild = get_guild(resolved_id) if callable(get_guild) else None
+                target_name = str(getattr(target_guild, "name", "") or "")
+            except Exception:
+                target_name = ""
 
-            target_guild = getattr(invite_obj, "guild", None)
-            target_id = str(getattr(target_guild, "id", "") or "")
-            target_name = str(getattr(target_guild, "name", "") or "")
-
-            if target_id and target_id == current_guild_id:
+            if target_id == current_guild_id:
                 return "internal", target_name or target_id
-            if target_id:
-                return "external", target_name or target_id
+            return "external", target_name or target_id
     except Exception:
         pass
 
-    # Low-level fallback if client.fetch_invite is unavailable.
+    # Low-level fallback if the shared/public resolver could not prove a target.
     try:
         invite = await guild._state.http.get_invite(clean, with_counts=False, with_expiration=False)  # type: ignore[attr-defined]
         target = invite.get("guild") if isinstance(invite, dict) else None
