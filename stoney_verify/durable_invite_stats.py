@@ -46,6 +46,7 @@ _RECENT_EVENTS: dict[str, tuple[float, int]] = {}
 _PENDING: dict[str, "PendingInviteEvent"] = {}
 _REFRESH_TASKS: dict[int, asyncio.Task[Any]] = {}
 _LAST_REFRESH_AT: dict[int, float] = {}
+_LAST_DURABLE_COUNT: dict[int, int] = {}
 _RETRY_TASK: Optional[asyncio.Task[Any]] = None
 _RECOVERY_TASK: Optional[asyncio.Task[Any]] = None
 _OUTBOX_FILE_LOCK = threading.Lock()
@@ -211,6 +212,21 @@ def _source_for_decision(decision: Any) -> str:
     source = str(getattr(decision, "source", "invite-policy") or "invite-policy").strip()
     rule = str(getattr(decision, "rule_id", "") or "").strip()
     return f"{source}:{rule}"[:180]
+
+
+def _is_bulk_recovery_source(source: str) -> bool:
+    """Only startup/resume all-channel recovery defers compatibility mirroring."""
+
+    return str(source or "").startswith("auto-reconcile:")
+
+
+def _remember_durable_count(guild_id: int, count: int) -> int:
+    gid = int(guild_id)
+    value = max(0, int(count))
+    previous = max(0, int(_LAST_DURABLE_COUNT.get(gid, 0) or 0))
+    remembered = max(previous, value)
+    _LAST_DURABLE_COUNT[gid] = remembered
+    return remembered
 
 
 def _outbox_path() -> Path:
@@ -405,8 +421,6 @@ def _preferred_config_bucket(row: Mapping[str, Any]) -> str:
         bucket = _mapping(raw.get(bucket_name))
         if COUNTS_KEY in bucket or FALLBACK_EVENTS_KEY in bucket:
             return bucket_name
-    # When no bucket owns either stats key, start in the canonical modern
-    # settings bucket rather than promoting unrelated metadata/config values.
     if "settings" in raw:
         return "settings"
     for bucket_name in _CONFIG_JSON_BUCKETS:
@@ -578,6 +592,7 @@ def _record_with_config_cas_sync(event: PendingInviteEvent, max_attempts: int = 
         raise last_error
     raise RuntimeError("No compatible guild-config table accepted invite stats CAS")
 
+
 def _write_event_sync(event: PendingInviteEvent) -> InviteStatWriteResult:
     try:
         return _execute_with_retry(
@@ -623,12 +638,15 @@ async def read_invites_blocked(guild_id: int) -> Optional[int]:
     if gid <= 0:
         return None
     try:
-        return await asyncio.to_thread(
+        count = await asyncio.to_thread(
             _execute_with_retry,
             "read durable invite count",
             lambda: _read_durable_count_sync(gid),
             3,
         )
+        if count is not None:
+            _remember_durable_count(gid, count)
+        return count
     except Exception as exc:
         if not _rpc_or_table_missing(exc):
             _warn(
@@ -729,6 +747,7 @@ async def _retry_pending_loop() -> None:
                     result = await asyncio.to_thread(_write_event_sync, event)
                     _PENDING.pop(event_hash, None)
                     _RECENT_EVENTS[event_hash] = (time.monotonic(), result.invites_blocked)
+                    _remember_durable_count(event.guild_id, result.invites_blocked)
                     await _persist_outbox_async()
                     await _sync_compatibility_count(event.guild_id, result.invites_blocked)
                     _log(
@@ -770,6 +789,8 @@ async def record_deleted_invite_decision(message: Any, decision: Any) -> InviteS
 
     event_hash = event_hash_for_message(message)
     blocked_count = blocked_invite_count(decision)
+    source = _source_for_decision(decision)
+    bulk_recovery = _is_bulk_recovery_source(source)
     _prune_recent()
     recent = _RECENT_EVENTS.get(event_hash)
     if recent is not None:
@@ -796,13 +817,16 @@ async def record_deleted_invite_decision(message: Any, decision: Any) -> InviteS
                 backend="recent_event_cache",
             )
 
-        seed_count = await _legacy_invite_count(guild_id)
+        if bulk_recovery and guild_id in _LAST_DURABLE_COUNT:
+            seed_count = int(_LAST_DURABLE_COUNT[guild_id])
+        else:
+            seed_count = await _legacy_invite_count(guild_id)
         event = PendingInviteEvent(
             event_hash=event_hash,
             guild_id=guild_id,
             blocked_count=blocked_count,
             seed_count=seed_count,
-            source=_source_for_decision(decision),
+            source=source,
         )
         try:
             result = await asyncio.to_thread(_write_event_sync, event)
@@ -823,12 +847,16 @@ async def record_deleted_invite_decision(message: Any, decision: Any) -> InviteS
             )
 
         _RECENT_EVENTS[event_hash] = (time.monotonic(), result.invites_blocked)
-        _PENDING.pop(event_hash, None)
-        await _persist_outbox_async()
-        await _sync_compatibility_count(guild_id, result.invites_blocked)
+        _remember_durable_count(guild_id, result.invites_blocked)
+        removed_pending = _PENDING.pop(event_hash, None) is not None
+        if removed_pending:
+            await _persist_outbox_async()
+        if not bulk_recovery:
+            await _sync_compatibility_count(guild_id, result.invites_blocked)
         _log(
             f"recorded guild={guild_id} event={event_hash[:12]} blocked={blocked_count} "
-            f"total={result.invites_blocked} applied={result.applied} backend={result.backend}"
+            f"total={result.invites_blocked} applied={result.applied} backend={result.backend} "
+            f"compat_sync={'deferred' if bulk_recovery else 'immediate'}"
         )
         return result
 
@@ -853,6 +881,7 @@ async def reconcile_guild(guild_id: int) -> Optional[int]:
         return None
     if count is None:
         return None
+    _remember_durable_count(gid, count)
     await _sync_compatibility_count(gid, count)
     return count
 
@@ -920,7 +949,6 @@ def _schedule_startup_recovery() -> bool:
 
 
 async def _on_ready() -> None:
-    # Return quickly; repeated ready events share one recovery task.
     _schedule_startup_recovery()
 
 
