@@ -24,20 +24,20 @@ An already-posted Dank Shield **Create Ticket** panel must remain usable after b
 - PR #190 was merged to `main` as `0a9dc169d222c89634267a701dd0de4022f621ae` and deployed to Discloud app `1777867264417`.
 - Production startup logs proved the deployed runtime registered successfully with `ticket_panel_runtime ready persistent_view=True fallback_listener=True` before the Discord gateway became ready.
 - Production also registered the legacy ticket action views, connected to the Discord gateway, completed ticket startup sync/backfill, and showed no ticket-panel traceback in the captured startup logs.
-- The captured production logs did not contain click-level telemetry, so they cannot distinguish among: Discord/event-loop delivery delay, persistent-view callback success, fallback takeover, or a handler return without acknowledgement.
+- The captured production logs did not contain click-level telemetry, so they cannot distinguish among: Discord/event-loop delivery delay, an earlier component route acknowledging the interaction, fallback takeover, or a handler return without acknowledgement.
 
 ## Current execution path under investigation
 
 `Discord clean Create Ticket button (sv:ticket:panel:create:clean:v1)`
 → discord.py component event
-→ persistent `PublicCreateTicketPanelView`
+→ registered component routing, including persistent `PublicCreateTicketPanelView`
 → existing `_handle_panel_button`
 → immediate defer in `_handle_panel_button_core`
 → existing ticket setup/category flow
 
 Independent recovery route:
 `on_interaction` for the same clean custom ID
-→ 150 ms grace period for persistent-view dispatch
+→ 150 ms grace period for earlier component dispatch
 → if already acknowledged, stop
 → otherwise delegate to canonical `handle_public_ticket_panel_click`
 
@@ -55,11 +55,11 @@ The canonical handler's existing interaction-ID lock remains the duplicate-suppr
 
 - Added narrow `ticket_panel_trace` logging only for the canonical clean Create Ticket custom ID.
 - The runtime now records `listener_received` with interaction age, acknowledgement state, interaction ID, guild ID, and user ID.
-- After the 150 ms persistent-view grace period it records either `persistent_ack_observed` or `fallback_dispatch`.
+- After the 150 ms component-dispatch grace period it records either `ack_observed_before_fallback` or `fallback_dispatch` without claiming which earlier route consumed the interaction.
 - After canonical fallback handling returns it records `fallback_return` with the final acknowledgement state and listener elapsed time.
 - Fallback exceptions record `fallback_exception` before the existing warning.
 - No ticket creation, setup, permission, category, numbering, persistence, or menu business logic was changed.
-- Added focused tests proving the trace distinguishes persistent acknowledgement from fallback recovery and remains silent for unrelated component IDs.
+- Added focused tests proving the trace distinguishes an earlier acknowledgement from fallback recovery and remains silent for unrelated component IDs.
 
 ## Validation / results
 
@@ -75,11 +75,11 @@ Current telemetry branch validation is pending exact-head GitHub Actions.
 
 ## How live telemetry will identify the next root cause
 
-- `listener_received age_ms < 3000` + `persistent_ack_observed` means Discord delivered promptly and the persistent callback acknowledged; a client-visible timeout would then point outside the registered ticket route and needs exact interaction timing/client evidence.
-- `listener_received age_ms < 3000` + `fallback_dispatch` + `fallback_return response_done=True` means persistent dispatch missed the click but the independent fallback recovered it within the interaction window.
-- `listener_received age_ms >= 3000` means the interaction reached the bot too late for a normal acknowledgement, strongly implicating process-wide event-loop/gateway delay rather than ticket database/setup work.
+- `listener_received age_ms < 3000` + `ack_observed_before_fallback` means Discord delivered promptly and some registered component route acknowledged before fallback. A client-visible timeout would then require exact interaction/client evidence before blaming the ticket handler.
+- `listener_received age_ms < 3000` + `fallback_dispatch` + `fallback_return response_done=True` means no earlier route acknowledged during the grace period and the independent fallback recovered the interaction within the interaction window.
+- `listener_received age_ms >= 3000` means the interaction reached the listener too late for a normal acknowledgement, strongly implicating process-wide event-loop/gateway delay rather than ticket database/setup work.
 - `fallback_return response_done=False` means the canonical path returned without consuming the interaction and provides a concrete handler/lock path to inspect next.
-- No `listener_received` line for a tested click means the bot process did not receive/dispatch that component event to the registered listener, which narrows the investigation to Discord routing/session/runtime behavior rather than ticket business logic.
+- No `listener_received` line for a tested click means the bot process did not dispatch that clean component event to the registered listener, which narrows the investigation to Discord routing/session/runtime behavior rather than ticket business logic.
 
 ## Cleanup / conflicts
 
