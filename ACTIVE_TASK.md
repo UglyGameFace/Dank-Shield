@@ -9,7 +9,7 @@
 
 ## Outcome required
 
-Dank Shield must keep one central invite-delete policy, delete blocked invites live, recover missed blocked invites automatically, preserve allowed/same-server invites, remain fail-safe during transient persistence failures, and perform recovery without unnecessary database/disk/API amplification or misleading runtime-health telemetry.
+Dank Shield must keep one central invite-delete policy, delete blocked invites live, recover missed blocked invites automatically, preserve allowed/same-server invites, remain fail-safe during transient persistence failures, and perform recovery without unnecessary database/disk/Discord-API amplification or misleading runtime-health telemetry.
 
 ## Production acceptance from PR #194
 
@@ -39,7 +39,15 @@ Each successful historical delete went through the correct durable event ledger,
 
 The compatibility mirror also schedules a forced security-stats display refresh. That display updates changed stats voice-channel names with `channel.edit(name=...)`. During the 99-message startup recovery, repeated coalesced refreshes therefore formed a plausible source of the observed long Discord `PATCH /channels/...` 429. The hardening must reduce that amplification without changing one-event-per-delete durability.
 
-### 3. Recovery summaries could hide channel warnings
+### 3. Central invite classification duplicated Discord lookups
+
+`invite_policy_engine._guild_invite_codes()` first called Spam Guard's five-minute cached `_fetch_guild_invite_codes()` and then immediately called `guild.invites()` again even when the cached helper had already returned known own-server codes.
+
+For individual invite classification, `_invite_code_belongs_to_guild()` then called the shared `invite_shield_sanitize_shared` resolver, which already uses and caches `bot.fetch_invite()` by invite code, and after a non-local result called `fetch_invite()` a second time to rediscover the target guild.
+
+That duplicate REST work is especially wasteful during historical recovery where many matched messages are classified back-to-back.
+
+### 4. Recovery summaries could hide channel warnings
 
 `scan_channel_invites()` can return a warning string for a channel-level scan problem without necessarily incrementing the numeric `failed` counter. Aggregating only `failed=0` could therefore overstate a clean recovery. Event recovery also omitted the existing `allowed` count from its log, making safe allow-path acceptance harder to observe.
 
@@ -63,6 +71,16 @@ The compatibility mirror also schedules a forced security-stats display refresh.
 - Retry-outbox persistence is no longer rewritten after a normal successful event unless an actual pending entry was removed.
 - Retry-persisted events still rewrite the outbox and still mirror their successful durable result.
 
+### Discord invite lookup efficiency
+
+- The central policy now trusts Spam Guard's cached own-code result when it contains known codes instead of immediately repeating `guild.invites()`.
+- If the cached result is empty, the old direct `guild.invites()` fallback is retained because the existing helper uses an empty set for both a genuine empty invite list and a fetch failure.
+- Individual invite target classification now reuses `invite_shield_sanitize_shared.fetch_invite_guild_id()`, which already performs and caches the public `fetch_invite()` lookup.
+- A resolved target ID equal to the current guild remains internal; a different nonzero target remains external.
+- Target names are recovered from the bot's existing guild cache when available, without another network request.
+- If the shared resolver cannot prove a target, the existing low-level HTTP `get_invite` fallback remains in place.
+- No allow/block policy semantics were changed to achieve the request reduction.
+
 ### Reconciliation observability
 
 - Guild summaries now include `warnings=<channel count>` in addition to `failed`.
@@ -76,6 +94,8 @@ The compatibility mirror also schedules a forced security-stats display refresh.
 - `globals` remains the single live invite-enforcement owner.
 - `invite_reconciliation_runtime` remains the single missed-message recovery owner.
 - Same-server invites, explicit allowed codes/channels/roles/users, exemptions, Link Shield, Invite Shield, protected-poster rules, and Spam Guard burst semantics are unchanged.
+- The own-invite direct fallback still exists when the shared cached own-code result is empty/ambiguous.
+- The low-level per-code target lookup still exists when the shared cached target resolver cannot prove a guild.
 - Every successful delete still creates one durable event identity based on guild/channel/message and still uses the existing database ledger.
 - No new Supabase table, RPC, or migration is required.
 - The durable counter remains monotonic exactly as the existing SQL RPC already enforces with `greatest(existing, seed)` plus `on conflict (event_hash) do nothing`.
@@ -86,6 +106,7 @@ The compatibility mirror also schedules a forced security-stats display refresh.
 
 - `tests/test_process_health_memory_195.py` checks that current Linux RSS and peak RSS are distinct and clearly labeled.
 - `tests/test_durable_invite_stats_recovery_195.py` checks pass-local bulk seed reuse, the first-event legacy floor, deferred bulk compatibility mirroring, unchanged immediate live mirroring, no pointless outbox rewrite on ordinary success, required outbox rewrite when a pending entry is removed, one final bulk flush, and pass-local seed cleanup on success/failure.
+- `tests/test_invite_policy_lookup_efficiency_195.py` checks that a populated Spam Guard own-code cache avoids a duplicate guild invite-list call, an empty cache retains the direct list fallback, shared target-ID resolution classifies external and same-server invites without a second client `fetch_invite`, and unresolved shared lookup still uses the low-level same-server fallback.
 - `tests/test_invite_runtime_reconcile_194.py` now also checks one final bulk stats flush, warning accounting, and event-recovery allowed telemetry while preserving all PR #194 ownership/permission/concurrency/retry coverage.
 
 ## Validation required
@@ -93,6 +114,7 @@ The compatibility mirror also schedules a forced security-stats display refresh.
 Before merge:
 
 - focused DS-INVITE-035 regressions;
+- existing invite policy/link safety regressions;
 - durable invite-stat existing regressions;
 - process-health telemetry regression;
 - Python compileall;
@@ -112,7 +134,8 @@ Require:
 - a same-server or explicitly allowed invite produces event-recovery telemetry with `allowed>0` and remains present;
 - a blocked external invite still produces `invite_live_enforcer ... deleted=True`;
 - transient persistence failure continues to defer/retry rather than converting a known configured guild into a fresh authoritative unconfigured state;
-- no repeated startup burst of security-stats channel edits attributable to historical invite-count increments.
+- no repeated startup burst of security-stats channel edits attributable to historical invite-count increments;
+- no routine duplicate `guild.invites()` / `fetch_invite()` requests for invite classifications already covered by the existing caches.
 
 ## Suspended / backlog
 
@@ -123,4 +146,4 @@ Require:
 
 ## Next step
 
-Run focused and full validation on one exact head, merge PR #195 only after every gate is green, then perform the production checks above.
+Freeze one exact code-and-record head, require the complete PR workflow gate plus final scope/diff/review checks, squash-merge PR #195 only when that exact head is green, then perform the production checks above.
