@@ -171,6 +171,19 @@ async def test_empty_policy_load_shape_is_treated_as_unavailable(monkeypatch) ->
 
 
 @pytest.mark.asyncio
+async def test_unavailable_guild_config_source_is_treated_as_unavailable(monkeypatch) -> None:
+    guild = FakeGuild(657)
+
+    async def unavailable_policy(_guild, *, refresh=False):
+        assert refresh is True
+        return {"source": "unavailable:db_read_failed"}, {"invite_shield_enabled": True}
+
+    monkeypatch.setattr(runtime.policy, "load_invite_policy", unavailable_policy)
+
+    assert await runtime._guild_reconciliation_enabled(guild) is None
+
+
+@pytest.mark.asyncio
 async def test_reconcile_all_retries_policy_unavailable_guild_once(monkeypatch) -> None:
     guild = FakeGuild(656)
     bot = SimpleNamespace(guilds=[guild])
