@@ -1,104 +1,88 @@
 # ACTIVE TASK
 
-## DS-TICKET-034 — Restore public Create Ticket interaction after restart
+## DS-INVITE-035 — Restore automatic missed-invite reconciliation
 
-**Status:** LIVE INTERACTION FIXED — HISTORICAL TICKET-CHOICE RECOVERY + RESET-SAFETY PATCH IN VALIDATION
-**Branch:** `fix/ticket-category-reset-preserve-history`
-**Base:** `66432eaf9dfa06655e14a925cad78ef8b96e010b` (`main`, merged PR #192)
+**Status:** IMPLEMENTING / VALIDATION PENDING  
+**Branch:** `fix/invite-reconcile-runtime-194`  
+**Base:** `95c9585949eb6f8692538c0b3830c1e2d1b5aba2` (`main`, merged PR #193)  
 **Started:** 2026-09-10
 
 ## Outcome required
 
-An already-posted Dank Shield **Create Ticket** panel must remain usable after bot restart, acknowledge Discord on time, and show the server's own configured ticket choices without duplicate visible options. One guild's ticket configuration must never leak into, overwrite, or destructively reset another guild's menu.
+Dank Shield must continue deleting blocked Discord invite links live, and must also recover blocked invite messages that were missed during a restart, reconnect, transient live-enforcement failure, or short event gap. Recovery must reuse the same central invite policy as live enforcement so same-server invites, exemptions, allowed channels/roles/users, and Link/Invite Shield settings cannot disagree between live and historical messages.
 
-## Production evidence
+## Scope
 
-- The original 2026-06-11 Create Ticket panel now opens successfully.
-- PR #191 production telemetry proved Discord delivers the interaction promptly and the fallback acknowledges it inside the response window.
-- PR #192 production telemetry now proves the canonical per-guild loader itself is returning exactly three active keys for guild `1514374173517152418`: `['appeal', 'report', 'support']`.
-- Therefore the remaining problem is no longer menu routing or duplicate rendering. The active persisted ticket-choice state for this guild has already been reduced to the safe starter trio.
+`real production boot path -> live invite listener -> central invite policy -> bounded delayed channel recovery -> ready/resume all-channel reconciliation -> permission checks -> central delete helper -> durable invite stats/modlog`
 
-## Newly proven root cause
+No ticket redesign, Server Design work, join-context schema repair, general memory optimization, or unrelated moderation changes belong in this task.
 
-The v2 SQL function `require_dank_ticket_category_setup()` contains a destructive asymmetry that the Python fallback does not:
+## Findings / root cause
 
-- when `p_reset_to_starter=true`, it correctly reduces the live managed `ticket_categories.is_enabled` rows to `report`, `appeal`, and `support` while review is required;
-- but it also overwrites `guild_configs.ticket_category_setup_selected_keys` with an empty JSON array;
-- that erases the last owner-confirmed managed selection, so later canonical reconciliation has no authoritative saved keys to restore;
-- the Python fallback `_mark_required_fallback_sync()` already preserves the saved selection, proving the SQL behavior is the divergent path.
+Production logs prove `invite_live_enforcer` is deleting newly observed invites successfully, but contain no fallback-sweep or server-wide reconciliation telemetry.
 
-This explains why PR #192 could correctly repair live-row drift when saved keys survive, yet this guild still resolves to the starter trio: the SQL safety reset can erase the saved selection itself.
+The repository contains the missing recovery pieces, but they are not on the real boot path:
 
-## Current execution/recovery path
+- `stoney_verify/invite_policy_engine.py` is the authoritative invite decision/delete implementation and already exposes `scan_channel_invites()`.
+- `stoney_verify/startup_guards/discord_invite_blocker_runtime_guard.py` contains delayed recent-history sweeps, but the broad startup-guard loader is dormant during normal production boot.
+- `stoney_verify/globals.py` installs the guaranteed live `on_message` enforcer directly, which explains the production `invite_live_enforcer` logs. That path performs live deletion only.
+- `/dank cleanup invites` can manually scan old messages, and Protection Center can scan a selected channel, but neither provides automatic server-wide restart/reconnect recovery.
+- Therefore blocked invites missed while the live event path was unavailable can remain until staff manually run cleanup.
 
-`Create Ticket`
-→ canonical per-guild category service
-→ current persisted rows resolve to starter trio
-→ no guessing or hard-coded guild menu
-→ recover the guild's prior Ticket Choices from `guild_config_versions`
-→ explicit per-guild preview/confirm restore
-→ canonical category service dedupe/reconciliation
-→ production menu acceptance
+## Implementation
 
-Future safety:
+- Add a native `stoney_verify.invite_reconciliation_runtime` service with no independent delete policy.
+- Install it explicitly from `main.py`, which is the actual Discloud entrypoint.
+- Keep the proven globals live enforcer as the live delete owner.
+- After an invite-related create/edit event, schedule a short delayed history rescan of the same channel so a transient live-delete failure can be recovered.
+- On Discord `on_ready` and `on_resumed`, run a bounded reconciliation over every text channel where the bot has View Channel, Read Message History, and Manage Messages.
+- Reuse `invite_policy_engine.scan_channel_invites()` for every historical decision/deletion.
+- Scan at most 250 recent messages per channel on ready/resume and 75 on event-triggered recovery.
+- Bound reconciliation concurrency to 2 channels and coalesce repeated ready/resume or per-channel sweeps.
+- Skip automatic history reads when no currently configured invite-delete feature can approve deletion.
 
-`require_dank_ticket_category_setup(guild)`
-→ may temporarily show starter rows while review is required
-→ **must preserve `ticket_category_setup_selected_keys`**
-→ setup remains `required=true`, version `0`, so preserved keys are recovery evidence only and do not silently bypass required review
-→ user confirmation later replaces them with the newly chosen selection.
+## Compatibility / safety invariants
 
-## Changes in this branch
-
-- Added migration `20260910163000_preserve_ticket_category_selection_on_review.sql` redefining `require_dank_ticket_category_setup()` so a forced starter-row review no longer clears `ticket_category_setup_selected_keys`.
-- Kept every SQL update scoped to the single supplied `p_guild_id`.
-- Kept the function service-role-only.
-- Registered the new migration in direct-DSN startup after the v2 selection and v3 repair migrations.
-- Added focused regressions proving selection preservation, per-guild SQL filters, service-role-only execution, migration order, Python fallback parity, and that preserved keys do not become authoritative while setup is still required.
-- Expanded the dedicated Ticket Panel CI gate to include this migration and test suite.
-
-## Multi-guild safety
-
-- No all-guild reset was added.
-- The new migration changes function behavior globally but every invocation still mutates only `p_guild_id`.
-- Preserved keys remain scoped to the same guild's `guild_configs` row.
-- Existing history snapshots are already keyed by `guild_id` and ticket-choice restores validate that a selected version belongs to the same guild.
-- Current production recovery for guild `1514374173517152418` must use only that guild's Ticket Choices history.
+- The central invite policy remains the only authority allowed to approve an invite deletion.
+- Same-server invite behavior is unchanged.
+- Exempt user/role/channel and explicitly allowed invite-code behavior is unchanged.
+- Link Shield and Invite Shield policy semantics are unchanged.
+- Durable invite statistics still record through the existing central delete helper.
+- The live globals enforcer is not removed in this task because production already proves it works.
+- No new Supabase tables or migrations are required for invite reconciliation.
+- Ticket subsystem files and the PR #190-#193 fixes are untouched.
 
 ## Validation required
 
-- focused reset-preservation tests
-- ticket category setup/selection tests
-- ticket panel single-owner/restart tests
-- migration bootstrap/order tests
-- full Dank Shield unit suite
-- compileall and diff check
-- managed-category SQL smoke/repair checks
-- public setup/command/invite/safety audits
-- final PR diff and review-thread inspection
+- regression proving the real `main.py` installs reconciliation before app startup;
+- regression proving the recovery runtime calls the central scanner and never directly deletes messages;
+- install-idempotence regression;
+- permission-gated all-channel reconciliation regression;
+- disabled-policy no-scan regression;
+- event-triggered recent-history rescan regression;
+- invite extraction/safety audit;
+- invite policy/durable stats regressions;
+- compileall;
+- full pytest if executable in the available environment;
+- diff check / changed-file scope;
+- conflict-marker and accidental-secret inspection;
+- final exact-head SHA check.
 
-## Production acceptance remaining
+## Cleanup / conflicts
 
-1. Merge/deploy the reset-safety migration only after exact-head CI is green.
-2. Use **Backups & History → Ticket Choices** in guild `1514374173517152418` to inspect the prior per-guild snapshots rather than inventing category names.
-3. Restore the correct prior Ticket Choices version with the existing preview + confirmation flow, which automatically backs up the current state first.
-4. Press the original June 11 Create Ticket panel again and confirm the expected categories return with no repeated visible label.
-5. Open the ticket panel in at least one other guild and confirm its own category set remains independent.
+The dormant sweep-capable startup guard and the guaranteed live globals listener overlap historically, but this task does not activate a second delete listener. The new runtime is recovery-only and delegates all deletion to the central policy scanner. A broader startup-guard migration remains separate work unless it becomes necessary for correctness.
 
-## Backlog
+## Suspended / backlog
 
-- **Server Design setup regression / full audit requested:** after DS-TICKET-034 production acceptance, immediately move to the Server Design wizard. Investigate why **Reset All Design Overrides** snaps back into saved Rule Locks and audit the entire design setup path top to bottom: persistence, reset semantics, stale UI/session state, routing, preview/save behavior, restart behavior, per-guild isolation, and setup usability.
+- **DS-TICKET-034 production acceptance:** PR #193 is merged. Historical Ticket Choices restore/cross-guild live acceptance remains pending and is suspended while DS-INVITE-035 is active.
+- **Join-context Supabase schema mismatch:** production reports missing `entry_confidence` in `guild_members` and `member_joins`; investigate separately after this task.
+- **Dank setup interaction/RSS spike:** production RSS rose sharply during setup interactions; investigate separately unless validation proves it shares this task's root cause.
+- **Server Design setup regression/full audit:** preserve prior backlog item after ticket acceptance.
 
 ## Blockers / risks
 
-- The current guild's previously selected keys may already have been erased by the old SQL function. Code cannot safely infer them from the starter trio.
-- The repository's durable Ticket Choices history exists specifically for this case and must be used as evidence.
-- If no historical Ticket Choices snapshot contains the expected menu, the owner must explicitly choose the desired categories again through Ticket Choices setup. Do not silently enable the global catalog.
+Automatic reconciliation is deliberately bounded to recent history so reconnect recovery cannot hammer Discord across every channel. Very old invite messages outside the automatic window remain available to the existing manual `/dank cleanup invites all_text_channels:true` deep scan. Production acceptance must confirm the automatic window is sufficient for the observed missed-message case.
 
 ## Next step
 
-Run exact-head validation for this branch. If green, merge/deploy, then recover the user's prior Ticket Choices from that guild's own history and complete cross-guild production acceptance. Only then close DS-TICKET-034 and activate the Server Design audit.
-
----
-
-PR #190 restored restart-safe interaction registration. PR #191 proved the live dispatch path. PR #192 removed the second menu source and added saved-selection/live-row drift reconciliation. This branch fixes the deeper destructive SQL reset that could erase the saved selection itself and protects every guild from the same failure mode going forward.
+Implement the native recovery runtime and boot wiring, run the focused invite regressions and repository validation, inspect the final diff, then open a focused PR. After deployment, require `invite_reconcile` ready/resume telemetry and verify a deliberately missed blocked invite is removed without staff running manual cleanup.
