@@ -16,14 +16,20 @@ RUNTIME = Path("stoney_verify/ticket_panel_runtime.py").read_text(encoding="utf-
 
 
 class FakeBot:
-    def __init__(self) -> None:
+    def __init__(self, *, fail_view: bool = False, fail_listener: bool = False) -> None:
         self.views: list[object] = []
         self.listeners: list[tuple[object, str]] = []
+        self.fail_view = fail_view
+        self.fail_listener = fail_listener
 
     def add_view(self, view: object) -> None:
+        if self.fail_view:
+            raise RuntimeError("view registration failed")
         self.views.append(view)
 
     def add_listener(self, listener: object, name: str) -> None:
+        if self.fail_listener:
+            raise RuntimeError("listener registration failed")
         self.listeners.append((listener, name))
 
 
@@ -69,6 +75,30 @@ def test_runtime_install_is_idempotent(monkeypatch) -> None:
     assert len(fake_bot.listeners) == 1
 
 
+def test_runtime_remains_operational_when_primary_view_registration_fails(monkeypatch) -> None:
+    fake_bot = FakeBot(fail_view=True)
+    monkeypatch.setattr(panel, "PublicCreateTicketPanelView", lambda: object())
+
+    assert runtime.install_public_ticket_panel_runtime(fake_bot, strict=True) is True
+    status = runtime.ticket_panel_runtime_status()
+    assert status["persistent_view_registered"] is False
+    assert status["fallback_listener_registered"] is True
+    assert "view registration failed" in status["error"]
+    assert len(fake_bot.listeners) == 1
+
+
+def test_strict_runtime_fails_closed_when_no_interaction_path_can_register(monkeypatch) -> None:
+    fake_bot = FakeBot(fail_view=True, fail_listener=True)
+    monkeypatch.setattr(panel, "PublicCreateTicketPanelView", lambda: object())
+
+    with pytest.raises(RuntimeError, match="no registered interaction handler"):
+        runtime.install_public_ticket_panel_runtime(fake_bot, strict=True)
+    status = runtime.ticket_panel_runtime_status()
+    assert status["ready"] is False
+    assert "view registration failed" in status["error"]
+    assert "listener registration failed" in status["error"]
+
+
 def test_fallback_only_delegates_clean_ticket_custom_id(monkeypatch) -> None:
     async def scenario() -> None:
         calls: list[object] = []
@@ -80,8 +110,11 @@ def test_fallback_only_delegates_clean_ticket_custom_id(monkeypatch) -> None:
             calls.append(interaction)
 
         class Response:
+            def __init__(self, done: bool = False) -> None:
+                self.done = done
+
             def is_done(self) -> bool:
-                return False
+                return self.done
 
         monkeypatch.setattr(runtime.asyncio, "sleep", no_sleep)
         monkeypatch.setattr(panel, "handle_public_ticket_panel_click", fake_handler)
@@ -91,6 +124,11 @@ def test_fallback_only_delegates_clean_ticket_custom_id(monkeypatch) -> None:
             data={"custom_id": panel.PANEL_BUTTON_CUSTOM_ID},
             response=Response(),
         )
+        already_acknowledged = SimpleNamespace(
+            type=discord.InteractionType.component,
+            data={"custom_id": panel.PANEL_BUTTON_CUSTOM_ID},
+            response=Response(done=True),
+        )
         unrelated = SimpleNamespace(
             type=discord.InteractionType.component,
             data={"custom_id": "something:else"},
@@ -98,6 +136,7 @@ def test_fallback_only_delegates_clean_ticket_custom_id(monkeypatch) -> None:
         )
 
         await runtime._ticket_panel_fallback_listener(unrelated)
+        await runtime._ticket_panel_fallback_listener(already_acknowledged)
         await runtime._ticket_panel_fallback_listener(clean)
         assert calls == [clean]
 
