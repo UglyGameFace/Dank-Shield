@@ -61,3 +61,40 @@ def test_completed_selection_repair_still_requires_completed_setup() -> None:
         "support",
     )
     assert categories._saved_selection_reconcile_needed(rows, cfg) is False
+
+
+def test_history_restore_wrapper_realigns_selection_and_setup_state() -> None:
+    text = MIGRATION.read_text(encoding="utf-8")
+    assert "restore_ticket_categories_snapshot_rows_only" in text
+    assert "create or replace function public.restore_ticket_categories_snapshot" in text
+    assert "ticket_category_setup_required = false" in text
+    assert "ticket_category_setup_version = 2" in text
+    assert "ticket_category_setup_selected_keys = to_jsonb(selected_keys)" in text
+    assert "selection_aligned" in text
+    assert "enabled_count" in text
+    assert "ticket choice restore must leave at least one enabled category" in text
+
+
+def test_history_restore_derives_builtins_from_slug_not_custom_name() -> None:
+    text = MIGRATION.read_text(encoding="utf-8")
+    assert "public.dank_ticket_category_key(tc.slug, null)" in text
+    assert "public.dank_ticket_category_key(tc.slug, tc.name)" not in text
+    assert 'owner-created custom row named "Support" custom' in text
+
+
+def test_history_restore_is_atomic_per_guild_and_private() -> None:
+    text = MIGRATION.read_text(encoding="utf-8")
+    assert "restored := public.restore_ticket_categories_snapshot_rows_only" in text
+    assert "where tc.guild_id::text = btrim(p_guild_id)" in text
+    assert "where gc.guild_id::text = btrim(p_guild_id)" in text
+    assert "guild config not found for ticket choice restore" in text
+    assert "revoke all on function public.restore_ticket_categories_snapshot(text, jsonb)" in text
+    assert "grant execute on function public.restore_ticket_categories_snapshot(text, jsonb) to service_role" in text
+    assert "revoke all on function public.restore_ticket_categories_snapshot_rows_only" in text
+
+
+def test_history_upgrade_is_idempotent_and_optional_when_history_not_installed() -> None:
+    text = MIGRATION.read_text(encoding="utf-8")
+    assert "to_regprocedure('public.restore_ticket_categories_snapshot_rows_only(text,jsonb)') is null" in text
+    assert "to_regprocedure('public.restore_ticket_categories_snapshot(text,jsonb)') is not null" in text
+    assert "if to_regprocedure('public.restore_ticket_categories_snapshot_rows_only(text,jsonb)') is not null then" in text
