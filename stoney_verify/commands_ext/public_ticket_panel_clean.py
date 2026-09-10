@@ -20,6 +20,7 @@ from discord import app_commands
 
 from .common import _staff_check, reply_once
 from stoney_verify.panel_lifecycle import public_panel_lifecycle_text
+from stoney_verify.tickets_new import managed_category_service as managed_categories
 from stoney_verify.tickets_new.counter_allocator import reserve_next_ticket_number as reserve_persistent_ticket_number
 
 _PANEL_VIEW_REGISTERED = False
@@ -37,14 +38,10 @@ _INTERACTION_TTL_SECONDS = 90.0
 PANEL_BUTTON_CUSTOM_ID = "sv:ticket:panel:create:clean:v1"
 PANEL_BUTTON_CUSTOM_IDS = {PANEL_BUTTON_CUSTOM_ID}
 
-DEFAULT_ROWS: Tuple[Dict[str, Any], ...] = (
-    {"slug": "verification", "name": "Verification", "description": "Help with verification or approval issues.", "sort_order": 10},
-    {"slug": "support", "name": "Support", "description": "General help from staff.", "sort_order": 20, "is_default": True},
-    {"slug": "report", "name": "Report a Member", "description": "Report a member or server issue.", "sort_order": 30},
-    {"slug": "appeal", "name": "Appeal", "description": "Appeal a moderation action or access restriction.", "sort_order": 40},
-    {"slug": "bug", "name": "Bug Report", "description": "Report a bot or server workflow issue.", "sort_order": 50},
-    {"slug": "question", "name": "Other Question", "description": "Ask something that does not fit the other options.", "sort_order": 60},
-)
+# Keep compatibility for callers/tests that still reference DEFAULT_ROWS, but
+# derive it from the one managed category catalog instead of maintaining a
+# second hard-coded ticket menu in this module.
+DEFAULT_ROWS: Tuple[Dict[str, Any], ...] = tuple(managed_categories.starter_category_rows())
 
 TICKET_REQUIRED_COLUMNS: Tuple[str, ...] = (
     "guild_id",
@@ -267,89 +264,61 @@ def _row_slug(row: Dict[str, Any]) -> str:
     return _slug(row.get("slug") or row.get("category_slug") or row.get("name") or row.get("title") or "support")
 
 
-def _canon_key(raw: Any) -> str:
-    text = _slug(raw)
-    if "verify" in text or "verification" in text:
-        return "verification"
-    if "support" in text or "help" in text or "general" in text:
-        return "support"
-    if "report" in text:
-        return "report"
-    if "appeal" in text or "ban" in text or "mute" in text or "timeout" in text:
-        return "appeal"
-    if "bug" in text or "technical" in text or "issue" in text:
-        return "bug"
-    if "question" in text or "other" in text or "custom" in text:
-        return "question"
-    return text or "support"
-
-
 def _row_name(row: Dict[str, Any]) -> str:
-    raw = _safe_str(row.get("button_label") or row.get("name") or row.get("display_name") or row.get("title") or _row_slug(row), "Support")
-    key = _canon_key(f"{_row_slug(row)} {raw}")
-    labels = {"verification": "Verification", "support": "Support", "report": "Report a Member", "appeal": "Appeal", "bug": "Bug Report", "question": "Other Question"}
-    return labels.get(key, raw[:100])
+    raw = _safe_str(
+        row.get("button_label")
+        or row.get("name")
+        or row.get("display_name")
+        or row.get("title")
+        or _row_slug(row),
+        "Support",
+    )
+    return raw[:100]
 
 
 def _row_desc(row: Dict[str, Any]) -> str:
     raw = _safe_str(row.get("description") or row.get("intake_type") or "", "")
-    key = _canon_key(f"{_row_slug(row)} {_row_name(row)}")
-    descriptions = {
-        "verification": "Help with verification or approval issues.",
-        "support": "General help from staff.",
-        "report": "Report a member or server issue.",
-        "appeal": "Appeal a moderation action or access restriction.",
-        "bug": "Report a bot or server workflow issue.",
-        "question": "Ask something that does not fit the other options.",
-    }
-    return descriptions.get(key, raw[:100] if raw else "Open a support ticket.")
-
-
-def _row_sort(row: Dict[str, Any]) -> int:
-    return _safe_int(row.get("sort_order", row.get("position", 999)), 999)
+    return raw[:100] if raw else "Open a support ticket."
 
 
 def _canon(row: Dict[str, Any]) -> str:
-    return _canon_key(f"{_row_slug(row)} {_safe_str(row.get('name') or row.get('title') or '')}")
+    try:
+        return _safe_str(managed_categories.canonical_category_key(row), "support")
+    except Exception:
+        return _row_slug(row)
 
 
 def _rows(raw: Any) -> List[Dict[str, Any]]:
-    if not isinstance(raw, list):
-        return [dict(x) for x in DEFAULT_ROWS]
-    out: List[Dict[str, Any]] = []
-    seen: set[str] = set()
-    for item in raw:
-        if not isinstance(item, dict):
-            continue
-        if item.get("is_enabled") is False or item.get("enabled") is False:
-            continue
-        row = dict(item)
-        key = _canon(row)
-        if key in seen:
-            continue
-        seen.add(key)
-        row["slug"] = _row_slug(row)
-        row["name"] = _row_name(row)
-        row["description"] = _row_desc(row)
-        out.append(row)
-    if not out:
-        out = [dict(x) for x in DEFAULT_ROWS]
-    return sorted(out, key=lambda r: (_row_sort(r), _row_name(r).lower()))[:25]
+    source = raw if isinstance(raw, list) else []
+    rows = managed_categories.dedupe_category_rows(
+        source,
+        enabled_only=True,
+        fallback=True,
+    )
+    return [dict(row) for row in rows[:25]]
 
 
 async def _load_rows(guild: discord.Guild) -> Tuple[List[Dict[str, Any]], str]:
-    sb = _sb()
-    if sb is None:
-        return [dict(x) for x in DEFAULT_ROWS], "Using default ticket categories because Supabase is unavailable."
-
-    def sync() -> Tuple[List[Dict[str, Any]], str]:
-        try:
-            resp = sb.table("ticket_categories").select("*").eq("guild_id", str(guild.id)).order("sort_order").execute()
-            return _rows(getattr(resp, "data", None) or []), ""
-        except Exception as e:
-            return [dict(x) for x in DEFAULT_ROWS], f"Using default ticket categories because `ticket_categories` could not be read: {type(e).__name__}: {_short(e, 220)}"
-
-    return await _to_thread(sync, ([dict(x) for x in DEFAULT_ROWS], "Using default ticket categories because loading failed."))
+    guild_id = int(guild.id)
+    try:
+        state = await managed_categories.ensure_category_setup_state(guild_id)
+        rows = _rows(list(state.active_rows or []))
+        warning = ""
+        if bool(getattr(state, "required", False)):
+            reason = _safe_str(getattr(state, "reason", ""), "Ticket category choices need owner confirmation.")
+            warning = f"Ticket category setup needs owner confirmation: {reason}"
+        _log(
+            "loaded canonical ticket choices "
+            f"guild={guild_id} count={len(rows)} "
+            f"keys={[managed_categories.canonical_category_key(row) for row in rows]}"
+        )
+        return rows, warning
+    except Exception as e:
+        fallback = [dict(row) for row in managed_categories.starter_category_rows()]
+        return fallback, (
+            "Using starter ticket categories because the canonical per-server "
+            f"category state could not be loaded: {type(e).__name__}: {_short(e, 220)}"
+        )
 
 
 def _ticket_number_from_channel(ch: discord.TextChannel) -> int:
@@ -851,7 +820,8 @@ async def _handle_panel_button_core(i: discord.Interaction) -> None:
     try:
         rows, warning = await asyncio.wait_for(_load_rows(guild), timeout=6.0)
     except asyncio.TimeoutError:
-        rows, warning = [dict(x) for x in DEFAULT_ROWS], "Ticket category loading timed out; using fallback categories."
+        rows = [dict(row) for row in managed_categories.starter_category_rows()]
+        warning = "Ticket category loading timed out; using starter categories."
     session_id = _new_menu_session(guild.id, member.id)
     embed = discord.Embed(title="Create Ticket", description="Choose the type of ticket you want to open.", color=discord.Color.blurple())
     embed.set_footer(text="Pick a category. You can review it before anything is created. Newest menu wins.")

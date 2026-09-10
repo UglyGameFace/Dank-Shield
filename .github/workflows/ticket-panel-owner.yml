@@ -6,8 +6,12 @@ on:
       - "stoney_verify/commands.py"
       - "stoney_verify/ticket_panel_runtime.py"
       - "stoney_verify/commands_ext/public_ticket_panel_clean.py"
+      - "stoney_verify/startup_guards/ticket_category_setup_guard.py"
+      - "stoney_verify/tickets_new/managed_category_service.py"
       - "tests/test_public_ticket_panel_single_owner.py"
       - "tests/test_ticket_panel_native_restart_runtime.py"
+      - "tests/test_ticket_panel_guild_category_source.py"
+      - "tests/test_ticket_category_setup_selection.py"
       - "tests/test_restart_panel_single_owner_static.py"
       - ".github/workflows/ticket-panel-owner.yml"
   push:
@@ -17,8 +21,12 @@ on:
       - "stoney_verify/commands.py"
       - "stoney_verify/ticket_panel_runtime.py"
       - "stoney_verify/commands_ext/public_ticket_panel_clean.py"
+      - "stoney_verify/startup_guards/ticket_category_setup_guard.py"
+      - "stoney_verify/tickets_new/managed_category_service.py"
       - "tests/test_public_ticket_panel_single_owner.py"
       - "tests/test_ticket_panel_native_restart_runtime.py"
+      - "tests/test_ticket_panel_guild_category_source.py"
+      - "tests/test_ticket_category_setup_selection.py"
       - "tests/test_restart_panel_single_owner_static.py"
       - ".github/workflows/ticket-panel-owner.yml"
 
@@ -47,14 +55,18 @@ jobs:
           pip install -q -r requirements.txt
           pip install -q pytest
 
-      - name: Compile ticket panel runtime and canonical owner
+      - name: Compile ticket panel runtime and category authority
         run: |
           python -m py_compile \
             stoney_verify/commands.py \
             stoney_verify/ticket_panel_runtime.py \
             stoney_verify/commands_ext/public_ticket_panel_clean.py \
+            stoney_verify/startup_guards/ticket_category_setup_guard.py \
+            stoney_verify/tickets_new/managed_category_service.py \
             tests/test_public_ticket_panel_single_owner.py \
             tests/test_ticket_panel_native_restart_runtime.py \
+            tests/test_ticket_panel_guild_category_source.py \
+            tests/test_ticket_category_setup_selection.py \
             tests/test_restart_panel_single_owner_static.py
 
       - name: Run focused ticket panel regressions
@@ -65,4 +77,6 @@ jobs:
           python -m pytest -q --tb=short \
             tests/test_public_ticket_panel_single_owner.py \
             tests/test_ticket_panel_native_restart_runtime.py \
+            tests/test_ticket_panel_guild_category_source.py \
+            tests/test_ticket_category_setup_selection.py \
             tests/test_restart_panel_single_owner_static.py
