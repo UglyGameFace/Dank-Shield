@@ -41,11 +41,11 @@ The compatibility mirror also schedules a forced security-stats display refresh.
 
 ### 3. Central invite classification duplicated Discord lookups
 
-`invite_policy_engine._guild_invite_codes()` first called Spam Guard's five-minute cached `_fetch_guild_invite_codes()` and then immediately called `guild.invites()` again even when the cached helper had already returned known own-server codes.
+`invite_policy_engine._guild_invite_codes()` called Spam Guard's five-minute cached `_fetch_guild_invite_codes()` and then repeated `guild.invites()`. A completed empty cached snapshot also caused the central policy to repeat the same REST call, defeating the cache for servers with no ordinary invite codes or an already-observed fetch failure.
 
-For individual invite classification, `_invite_code_belongs_to_guild()` then called the shared `invite_shield_sanitize_shared` resolver, which already uses and caches `bot.fetch_invite()` by invite code, and after a non-local result called `fetch_invite()` a second time to rediscover the target guild.
+The same helper also called `guild.vanity_invite()` for every matched invite classification. During a historical cleanup, that could create another per-message REST stream even though vanity identity is stable and per-code target resolution already exists.
 
-That duplicate REST work is especially wasteful during historical recovery where many matched messages are classified back-to-back.
+For individual invite classification, `_invite_code_belongs_to_guild()` called the shared `invite_shield_sanitize_shared` resolver, which already uses and caches `bot.fetch_invite()` by invite code, and after a non-local result called `fetch_invite()` a second time to rediscover the target guild.
 
 ### 4. Recovery summaries could hide channel warnings
 
@@ -73,9 +73,11 @@ That duplicate REST work is especially wasteful during historical recovery where
 
 ### Discord invite lookup efficiency
 
-- The central policy now trusts Spam Guard's cached own-code result when it contains known codes instead of immediately repeating `guild.invites()`.
-- If the cached result is empty, the old direct `guild.invites()` fallback is retained because the existing helper uses an empty set for both a genuine empty invite list and a fetch failure.
-- Individual invite target classification now reuses `invite_shield_sanitize_shared.fetch_invite_guild_id()`, which already performs and caches the public `fetch_invite()` lookup.
+- A successfully completed Spam Guard own-code snapshot is trusted even when it is empty, so the central policy does not immediately repeat the exact same `guild.invites()` call.
+- Direct `guild.invites()` remains as a compatibility fallback when the shared getter itself cannot run or raises out to the caller.
+- `guild.vanity_url_code` is used immediately when Discord already supplied it.
+- The `guild.vanity_invite()` fallback is cached per guild for five minutes instead of being requested for every matched historical message.
+- Individual invite target classification reuses `invite_shield_sanitize_shared.fetch_invite_guild_id()`, which already performs and caches the public `fetch_invite()` lookup.
 - A resolved target ID equal to the current guild remains internal; a different nonzero target remains external.
 - Target names are recovered from the bot's existing guild cache when available, without another network request.
 - If the shared resolver cannot prove a target, the existing low-level HTTP `get_invite` fallback remains in place.
@@ -94,7 +96,8 @@ That duplicate REST work is especially wasteful during historical recovery where
 - `globals` remains the single live invite-enforcement owner.
 - `invite_reconciliation_runtime` remains the single missed-message recovery owner.
 - Same-server invites, explicit allowed codes/channels/roles/users, exemptions, Link Shield, Invite Shield, protected-poster rules, and Spam Guard burst semantics are unchanged.
-- The own-invite direct fallback still exists when the shared cached own-code result is empty/ambiguous.
+- The regular own-invite lookup still runs through Spam Guard's cached `guild.invites()` path, and direct list fallback remains if that shared getter cannot execute.
+- Vanity codes remain covered by the gateway-provided vanity code, a bounded REST fallback cache, per-code public resolver, and low-level per-code fallback.
 - The low-level per-code target lookup still exists when the shared cached target resolver cannot prove a guild.
 - Every successful delete still creates one durable event identity based on guild/channel/message and still uses the existing database ledger.
 - No new Supabase table, RPC, or migration is required.
@@ -106,8 +109,8 @@ That duplicate REST work is especially wasteful during historical recovery where
 
 - `tests/test_process_health_memory_195.py` checks that current Linux RSS and peak RSS are distinct and clearly labeled.
 - `tests/test_durable_invite_stats_recovery_195.py` checks pass-local bulk seed reuse, the first-event legacy floor, deferred bulk compatibility mirroring, unchanged immediate live mirroring, no pointless outbox rewrite on ordinary success, required outbox rewrite when a pending entry is removed, one final bulk flush, and pass-local seed cleanup on success/failure.
-- `tests/test_invite_policy_lookup_efficiency_195.py` checks that a populated Spam Guard own-code cache avoids a duplicate guild invite-list call, an empty cache retains the direct list fallback, shared target-ID resolution classifies external and same-server invites without a second client `fetch_invite`, and unresolved shared lookup still uses the low-level same-server fallback.
-- `tests/test_invite_runtime_reconcile_194.py` now also checks one final bulk stats flush, warning accounting, and event-recovery allowed telemetry while preserving all PR #194 ownership/permission/concurrency/retry coverage.
+- `tests/test_invite_policy_lookup_efficiency_195.py` checks populated and empty shared own-code snapshots do not trigger duplicate list fetches, direct list fallback remains when the shared getter cannot run, vanity REST fallback is cached, gateway vanity avoids REST entirely, shared target-ID resolution classifies external and same-server invites without a second client `fetch_invite`, and unresolved shared lookup still uses the low-level same-server fallback.
+- `tests/test_invite_runtime_reconcile_194.py` checks one final bulk stats flush, warning accounting, and event-recovery allowed telemetry while preserving all PR #194 ownership/permission/concurrency/retry coverage.
 
 ## Validation required
 
@@ -135,7 +138,7 @@ Require:
 - a blocked external invite still produces `invite_live_enforcer ... deleted=True`;
 - transient persistence failure continues to defer/retry rather than converting a known configured guild into a fresh authoritative unconfigured state;
 - no repeated startup burst of security-stats channel edits attributable to historical invite-count increments;
-- no routine duplicate `guild.invites()` / `fetch_invite()` requests for invite classifications already covered by the existing caches.
+- no per-message repetition of guild invite-list, vanity invite, or public invite-target requests when the bounded caches already cover them.
 
 ## Suspended / backlog
 
