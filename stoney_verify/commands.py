@@ -22,6 +22,19 @@ except Exception:
         return None
 
 
+# The public Create Ticket button is an interaction runtime, not a slash-command
+# profile feature. Install it independently so already-posted persistent panels
+# cannot be orphaned by command profile selection or an unrelated registrar
+# failure during startup.
+try:
+    from .ticket_panel_runtime import (
+        install_public_ticket_panel_runtime as _install_public_ticket_panel_runtime,
+    )
+except Exception as e:
+    print(f"❌ commands.py could not import ticket panel runtime: {repr(e)}")
+    raise RuntimeError("Dank Shield ticket panel runtime import failed closed.") from e
+
+
 # Ticket security is intentionally loaded outside the tolerant command-module
 # registrar. The general registrar may log and continue when an optional command
 # module fails; this security scope is mandatory and must abort startup instead.
@@ -145,6 +158,12 @@ except Exception as e:
 # Register split slash commands
 # ============================================================
 _register_public_ticket_security_scope_strict(bot.tree)
+
+try:
+    _install_public_ticket_panel_runtime(bot, strict=True)
+except Exception as e:
+    print(f"❌ commands.py ticket panel runtime install failed: {repr(e)}")
+    raise
 
 try:
     register_all_commands(bot, bot.tree)

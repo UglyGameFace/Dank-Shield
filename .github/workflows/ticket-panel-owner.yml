@@ -3,15 +3,23 @@ name: Ticket Panel Single Owner
 on:
   pull_request:
     paths:
+      - "stoney_verify/commands.py"
+      - "stoney_verify/ticket_panel_runtime.py"
       - "stoney_verify/commands_ext/public_ticket_panel_clean.py"
       - "tests/test_public_ticket_panel_single_owner.py"
+      - "tests/test_ticket_panel_native_restart_runtime.py"
+      - "tests/test_restart_panel_single_owner_static.py"
       - ".github/workflows/ticket-panel-owner.yml"
   push:
     branches:
       - main
     paths:
+      - "stoney_verify/commands.py"
+      - "stoney_verify/ticket_panel_runtime.py"
       - "stoney_verify/commands_ext/public_ticket_panel_clean.py"
       - "tests/test_public_ticket_panel_single_owner.py"
+      - "tests/test_ticket_panel_native_restart_runtime.py"
+      - "tests/test_restart_panel_single_owner_static.py"
       - ".github/workflows/ticket-panel-owner.yml"
 
 permissions:
@@ -39,14 +47,22 @@ jobs:
           pip install -q -r requirements.txt
           pip install -q pytest
 
-      - name: Compile canonical ticket panel owner
+      - name: Compile ticket panel runtime and canonical owner
         run: |
           python -m py_compile \
+            stoney_verify/commands.py \
+            stoney_verify/ticket_panel_runtime.py \
             stoney_verify/commands_ext/public_ticket_panel_clean.py \
-            tests/test_public_ticket_panel_single_owner.py
+            tests/test_public_ticket_panel_single_owner.py \
+            tests/test_ticket_panel_native_restart_runtime.py \
+            tests/test_restart_panel_single_owner_static.py
 
-      - name: Run focused single-owner regressions
+      - name: Run focused ticket panel regressions
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
-        run: python -m pytest tests/test_public_ticket_panel_single_owner.py -q --tb=short
+        run: |
+          python -m pytest -q --tb=short \
+            tests/test_public_ticket_panel_single_owner.py \
+            tests/test_ticket_panel_native_restart_runtime.py \
+            tests/test_restart_panel_single_owner_static.py
