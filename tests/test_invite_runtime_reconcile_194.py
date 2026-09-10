@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -124,6 +125,48 @@ async def test_reconcile_guild_scans_only_channels_with_required_permissions(mon
         "failed": 0,
         "deferred": 0,
     }
+
+
+@pytest.mark.asyncio
+async def test_reconcile_guild_bounds_created_channel_work(monkeypatch) -> None:
+    guild = FakeGuild(790)
+    guild.text_channels = [FakeChannel(guild, channel_id, allowed=True) for channel_id in range(20, 25)]
+    runtime._LAST_GUILD_RECONCILE_AT.clear()
+
+    async def enabled(_guild):
+        return True
+
+    active = 0
+    max_active = 0
+    calls: list[int] = []
+
+    async def scan(channel, *, limit, repost_mixed, source):
+        nonlocal active, max_active
+        assert limit == 250
+        assert repost_mixed is True
+        assert source == "auto-reconcile:ready"
+        active += 1
+        max_active = max(max_active, active)
+        calls.append(channel.id)
+        await asyncio.sleep(0)
+        active -= 1
+        return {
+            "checked": 1,
+            "matched": 0,
+            "allowed": 0,
+            "deleted": 0,
+            "failed": 0,
+        }
+
+    monkeypatch.setattr(runtime, "_guild_reconciliation_enabled", enabled)
+    monkeypatch.setattr(runtime.policy, "scan_channel_invites", scan)
+
+    result = await runtime._reconcile_guild(guild, reason="ready", force=True)
+
+    assert sorted(calls) == [20, 21, 22, 23, 24]
+    assert max_active <= runtime._RECONCILE_CONCURRENCY
+    assert result["channels"] == 5
+    assert result["checked"] == 5
 
 
 @pytest.mark.asyncio
