@@ -2,7 +2,7 @@
 
 ## DS-TICKET-034 — Restore public Create Ticket interaction after restart
 
-**Status:** PRODUCTION RUNTIME REGISTERED — LIVE CLICK DISPATCH TELEMETRY IN VALIDATION
+**Status:** CODE VALIDATION GREEN — FINAL RECORD HEAD CI PENDING; LIVE TELEMETRY DEPLOYMENT PENDING
 **Branch:** `investigate/ticket-panel-live-dispatch-telemetry`
 **Base:** `0a9dc169d222c89634267a701dd0de4022f621ae` (`main`, merged PR #190)
 **Started:** 2026-09-10
@@ -71,7 +71,19 @@ Merged/deployed implementation evidence:
 - Production startup proof: `ticket_panel_runtime ready persistent_view=True fallback_listener=True`.
 - Production gateway connection succeeded and health heartbeat remained healthy in the captured log window.
 
-Current telemetry branch validation is pending exact-head GitHub Actions.
+Telemetry implementation head `dd3a8a48de006833a5c387dbc072a800e95f41a9` passed every PR workflow before this record-only update:
+
+- **Ticket Panel Single Owner #26:** success; focused compile succeeded and **22 passed, 1 warning**.
+- **Dank Shield CI #1777:** success; `git diff --check`, compileall, **1140 passed, 9 warnings**, standalone tool checks, public setup/command/invite/safety audits, Smart Auto-Detect audit, role-truth audit, event-boundary audit, managed-category SQL smoke test, and claim-first ticket security all passed.
+- **Application Command Size Diagnostics #826:** success.
+- **Ticket Owner Emergency Override #348:** success.
+- **Profile Runtime Diagnostics #631:** success.
+- **Dank Design Regression CI #104:** success.
+- Branch comparison at that validated implementation head was **8 commits ahead, 0 behind `main`**, with the final diff limited to exactly three scoped files: `ACTIVE_TASK.md`, `stoney_verify/ticket_panel_runtime.py`, and `tests/test_ticket_panel_native_restart_runtime.py`.
+- Final diff inspection found no conflict markers, no second ticket-creation implementation, and no unrelated product behavior changes.
+- PR #191 had no review threads or submitted reviews.
+
+This ACTIVE_TASK update is intentionally record-only. Its exact resulting head must pass the same PR gates before merge so repository validation remains exact-head rather than ceremonial paperwork pretending to be engineering.
 
 ## How live telemetry will identify the next root cause
 
@@ -92,7 +104,7 @@ Current telemetry branch validation is pending exact-head GitHub Actions.
 ## Blockers / risks
 
 - There is no direct Discloud connector in this conversation, so live deployment/log collection still runs through the user's Termux session.
-- The current telemetry branch must pass focused and full repository validation before another production deployment.
+- This final record-only head must finish exact-head repository validation before PR #191 is merged.
 - Production acceptance must use the existing June 11 panel. Reposting it would not test the original persistent-message path.
 
 ## Backlog
@@ -101,7 +113,7 @@ Current telemetry branch validation is pending exact-head GitHub Actions.
 
 ## Next step
 
-Validate the telemetry branch on GitHub Actions, inspect the exact diff for accidental behavior changes, merge only if green, deploy that exact main head to Discloud app `1777867264417`, press the existing June 11 **Create Ticket** button once, and immediately capture the `ticket_panel_trace` lines. Use those trace stages and `age_ms` values to identify the failing layer before making any further functional change.
+Wait for the final record-only head to pass the exact PR gates, re-check **0 behind `main`**, re-check the final diff/reviews, update PR #191 with final evidence, mark it ready, and merge. Then deploy the resulting exact `main` head to Discloud app `1777867264417`, press the existing June 11 **Create Ticket** button once, and immediately capture the `ticket_panel_trace` lines. Use those trace stages and `age_ms` values to identify the failing layer before making any further functional change.
 
 ---
 
