@@ -2,9 +2,9 @@
 
 ## DS-INVITE-035 — Restore automatic missed-invite reconciliation
 
-**Status:** IMPLEMENTING / VALIDATION PENDING  
-**Branch:** `fix/invite-reconcile-runtime-194`  
-**Base:** `95c9585949eb6f8692538c0b3830c1e2d1b5aba2` (`main`, merged PR #193)  
+**Status:** IMPLEMENTING / VALIDATION PENDING
+**Branch:** `fix/invite-reconcile-runtime-194`
+**Base:** `95c9585949eb6f8692538c0b3830c1e2d1b5aba2` (`main`, merged PR #193)
 **Started:** 2026-09-10
 
 ## Outcome required
