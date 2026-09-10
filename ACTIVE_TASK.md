@@ -9,7 +9,7 @@
 
 ## Outcome required
 
-Dank Shield must keep one central invite-delete policy, delete blocked invites live, recover missed blocked invites automatically, preserve allowed/same-server invites, remain fail-safe during transient persistence failures, and perform recovery without unnecessary database/disk amplification or misleading runtime-health telemetry.
+Dank Shield must keep one central invite-delete policy, delete blocked invites live, recover missed blocked invites automatically, preserve allowed/same-server invites, remain fail-safe during transient persistence failures, and perform recovery without unnecessary database/disk/API amplification or misleading runtime-health telemetry.
 
 ## Production acceptance from PR #194
 
@@ -29,7 +29,7 @@ Core DS-INVITE-035 production behavior therefore passed. Remaining work is harde
 
 `stoney_verify/startup_guards/process_health.py` reported `resource.getrusage(...).ru_maxrss` as `rss≈...`. On Linux that value is the process lifetime **peak** RSS, not current resident memory. The production screenshot therefore could not prove a live memory leak: tasks fell from roughly 58 to 13 while the displayed RSS stayed near 313 MB because the metric itself cannot fall.
 
-### 2. Bulk invite recovery amplified persistence work
+### 2. Bulk invite recovery amplified persistence and display work
 
 Each successful historical delete went through the correct durable event ledger, but `record_deleted_invite_decision()` also:
 
@@ -37,7 +37,7 @@ Each successful historical delete went through the correct durable event ledger,
 - mirrored the durable total back into guild config after every event;
 - rewrote the retry-outbox file after every normal successful event even when nothing had been pending.
 
-For the 99-message production recovery this could create hundreds of redundant persistence/disk operations around the 99 durable event writes that actually matter.
+The compatibility mirror also schedules a forced security-stats display refresh. That display updates changed stats voice-channel names with `channel.edit(name=...)`. During the 99-message startup recovery, repeated coalesced refreshes therefore formed a plausible source of the observed long Discord `PATCH /channels/...` 429. The hardening must reduce that amplification without changing one-event-per-delete durability.
 
 ### 3. Recovery summaries could hide channel warnings
 
@@ -53,8 +53,10 @@ For the 99-message production recovery this could create hundreds of redundant p
 
 ### Durable invite-stat efficiency
 
-- Added a per-guild last-known durable invite total used only to seed **bulk `auto-reconcile:*`** events after the first event in that recovery pass.
-- The first bulk event still reads the legacy compatibility seed; later events reuse the authoritative totals returned by the durable RPC.
+- Added a **pass-local per-guild bulk recovery seed** used only after the first successful `auto-reconcile:*` durable event in that recovery pass.
+- The first bulk event still reads the legacy compatibility seed, preserving the previous compatibility floor.
+- Later events in the same recovery pass reuse the authoritative durable total returned by the previous successful write, eliminating repeated legacy seed reads without carrying a generic process-wide count cache.
+- The pass-local seed is cleared when the one final bulk reconciliation finishes, including failure cleanup.
 - Every deleted message still records its own replay-safe durable event. Deduplication and the SQL event ledger are unchanged.
 - Bulk startup/resume recovery defers the legacy compatibility-counter mirror until the guild scan finishes, then performs one authoritative durable-count reconciliation.
 - Normal `globals_live_enforcer` writes retain immediate compatibility sync behavior.
@@ -83,7 +85,7 @@ For the 99-message production recovery this could create hundreds of redundant p
 ## Regression coverage
 
 - `tests/test_process_health_memory_195.py` checks that current Linux RSS and peak RSS are distinct and clearly labeled.
-- `tests/test_durable_invite_stats_recovery_195.py` checks bulk seed reuse, deferred bulk compatibility mirroring, unchanged immediate live mirroring, no pointless outbox rewrite on ordinary success, required outbox rewrite when a pending entry is removed, and authoritative durable-count remembrance.
+- `tests/test_durable_invite_stats_recovery_195.py` checks pass-local bulk seed reuse, the first-event legacy floor, deferred bulk compatibility mirroring, unchanged immediate live mirroring, no pointless outbox rewrite on ordinary success, required outbox rewrite when a pending entry is removed, one final bulk flush, and pass-local seed cleanup on success/failure.
 - `tests/test_invite_runtime_reconcile_194.py` now also checks one final bulk stats flush, warning accounting, and event-recovery allowed telemetry while preserving all PR #194 ownership/permission/concurrency/retry coverage.
 
 ## Validation required
@@ -105,11 +107,12 @@ Before merge:
 Require:
 
 - `rss_current` and `rss_peak` both visible on Linux heartbeats so post-startup memory can actually be judged;
-- `stats_flush` once after a bulk recovery that deleted historical invites, rather than a compatibility mirror for every event;
+- `stats_flush` once after a bulk recovery that deleted historical invites, rather than a compatibility/display mirror for every event;
 - recovery summary `warnings=0` on healthy channels;
 - a same-server or explicitly allowed invite produces event-recovery telemetry with `allowed>0` and remains present;
 - a blocked external invite still produces `invite_live_enforcer ... deleted=True`;
-- transient persistence failure continues to defer/retry rather than converting a known configured guild into a fresh authoritative unconfigured state.
+- transient persistence failure continues to defer/retry rather than converting a known configured guild into a fresh authoritative unconfigured state;
+- no repeated startup burst of security-stats channel edits attributable to historical invite-count increments.
 
 ## Suspended / backlog
 
@@ -120,4 +123,4 @@ Require:
 
 ## Next step
 
-Open the hardening PR, run focused and full validation on one exact head, merge only after every gate is green, then perform the production checks above.
+Run focused and full validation on one exact head, merge PR #195 only after every gate is green, then perform the production checks above.
