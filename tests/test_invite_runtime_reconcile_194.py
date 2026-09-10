@@ -186,7 +186,7 @@ async def test_reconcile_all_retries_policy_unavailable_guild_once(monkeypatch) 
         return None
 
     monkeypatch.setattr(runtime, "_reconcile_guild", reconcile)
-    monkeypatch.setattr(runtime.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(runtime, "_sleep", no_sleep)
     runtime._RECONCILE_TASK = None
 
     await runtime._reconcile_all(bot, reason="ready")
