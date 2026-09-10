@@ -84,7 +84,7 @@ def _trace(
 async def _ticket_panel_fallback_listener(
     interaction: discord.Interaction,
 ) -> None:
-    """Handle a clean-panel click only when persistent-view dispatch missed it."""
+    """Handle a clean-panel click only when earlier component dispatch missed it."""
     started = time.monotonic()
     try:
         if interaction.type is not discord.InteractionType.component:
@@ -94,16 +94,16 @@ async def _ticket_panel_fallback_listener(
 
         _trace(interaction, "listener_received")
 
-        # Give discord.py's persistent view the first chance to acknowledge the
-        # interaction.  The canonical handler has its own interaction-id lock,
-        # so this listener cannot create a duplicate ticket/menu if both paths
-        # happen to wake at nearly the same time.
+        # Give discord.py's registered component handlers the first chance to
+        # acknowledge the interaction. The canonical handler has its own
+        # interaction-id lock, so this listener cannot create a duplicate
+        # ticket/menu if another route wakes at nearly the same time.
         await asyncio.sleep(0.15)
         elapsed_ms = int(round((time.monotonic() - started) * 1000.0))
         if _response_done(interaction):
             _trace(
                 interaction,
-                "persistent_ack_observed",
+                "ack_observed_before_fallback",
                 elapsed_ms=elapsed_ms,
             )
             return
