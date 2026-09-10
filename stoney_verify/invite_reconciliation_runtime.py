@@ -68,13 +68,26 @@ def _cfg_enabled(cfg: Any, key: str, default: bool = False) -> bool:
         return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
+def _config_source(cfg: Any) -> str:
+    try:
+        if hasattr(cfg, "get"):
+            value = cfg.get("source")
+            if value is not None:
+                return str(value).strip().lower()
+    except Exception:
+        pass
+    try:
+        return str(getattr(cfg, "source", "") or "").strip().lower()
+    except Exception:
+        return ""
+
+
 async def _guild_reconciliation_enabled(guild: Any) -> bool | None:
     """Return True/False for known policy state, or None when it is unavailable.
 
     This is only a work-avoidance preflight. The central policy engine still
-    decides every individual message action. ``load_invite_policy`` deliberately
-    degrades to ``(None, {})`` when both backing reads fail, so that shape must
-    not be mistaken for a confirmed OFF state during a transient DB outage.
+    decides every individual message action. A transient/unavailable config must
+    not be mistaken for a confirmed OFF state during a database outage.
     """
 
     try:
@@ -84,6 +97,14 @@ async def _guild_reconciliation_enabled(guild: Any) -> bool | None:
         _log(
             f"policy_preflight_failed guild={getattr(guild, 'id', 0)} "
             f"error={type(exc).__name__}: {str(exc)[:160]}"
+        )
+        return None
+
+    config_source = _config_source(cfg)
+    if config_source.startswith("unavailable:"):
+        _log(
+            f"policy_preflight_unavailable guild={getattr(guild, 'id', 0)} "
+            f"config_source={config_source} action=defer"
         )
         return None
 
