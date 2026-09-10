@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import discord
+import pytest
 
 from stoney_verify import ticket_panel_runtime as runtime
 from stoney_verify.commands_ext import public_ticket_panel_clean as panel
@@ -34,8 +35,16 @@ def _reset_runtime_state() -> None:
     panel._PANEL_FALLBACK_LISTENER_REGISTERED = False
 
 
-def test_runtime_installs_persistent_view_and_independent_fallback(monkeypatch) -> None:
+@pytest.fixture(autouse=True)
+def _isolated_runtime_state():
     _reset_runtime_state()
+    try:
+        yield
+    finally:
+        _reset_runtime_state()
+
+
+def test_runtime_installs_persistent_view_and_independent_fallback(monkeypatch) -> None:
     fake_bot = FakeBot()
     sentinel_view = object()
     monkeypatch.setattr(panel, "PublicCreateTicketPanelView", lambda: sentinel_view)
@@ -51,7 +60,6 @@ def test_runtime_installs_persistent_view_and_independent_fallback(monkeypatch) 
 
 
 def test_runtime_install_is_idempotent(monkeypatch) -> None:
-    _reset_runtime_state()
     fake_bot = FakeBot()
     monkeypatch.setattr(panel, "PublicCreateTicketPanelView", lambda: object())
 
