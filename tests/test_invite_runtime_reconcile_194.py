@@ -46,7 +46,7 @@ class FakeGuild:
 
 def test_main_installs_native_invite_reconciliation_before_app_run() -> None:
     text = (ROOT / "main.py").read_text(encoding="utf-8")
-    install_at = text.index("_install_invite_reconciliation_runtime()")
+    install_at = text.index("    _install_invite_reconciliation_runtime()\n")
     app_at = text.index("from stoney_verify.app import run")
     assert install_at < app_at
 
