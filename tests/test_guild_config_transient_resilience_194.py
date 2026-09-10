@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -41,8 +42,7 @@ def test_db_read_failure_is_distinct_from_genuine_unconfigured_guild(monkeypatch
     assert all(value is None for key, value in cfg.items() if key.endswith("_id"))
 
 
-@pytest.mark.asyncio
-async def test_refresh_preserves_stale_known_good_config_when_db_is_unavailable(monkeypatch) -> None:
+def test_refresh_preserves_stale_known_good_config_when_db_is_unavailable(monkeypatch) -> None:
     gid = 234
     key = guild_config._cache_key(gid)
     old_timestamp = datetime.now(timezone.utc) - timedelta(minutes=5)
@@ -64,7 +64,7 @@ async def test_refresh_preserves_stale_known_good_config_when_db_is_unavailable(
 
     monkeypatch.setattr(guild_config, "_run_db", unavailable)
 
-    cfg = await guild_config.get_guild_config(gid, refresh=True)
+    cfg = asyncio.run(guild_config.get_guild_config(gid, refresh=True))
 
     assert cfg["source"] == "supabase:guild_configs"
     assert cfg["automod_block_invites"] is True
@@ -72,8 +72,7 @@ async def test_refresh_preserves_stale_known_good_config_when_db_is_unavailable(
     assert guild_config._CONFIG_CACHE_TS[key] == old_timestamp
 
 
-@pytest.mark.asyncio
-async def test_unavailable_read_without_cache_is_never_cached(monkeypatch) -> None:
+def test_unavailable_read_without_cache_is_never_cached(monkeypatch) -> None:
     gid = 345
     key = guild_config._cache_key(gid)
 
@@ -84,15 +83,14 @@ async def test_unavailable_read_without_cache_is_never_cached(monkeypatch) -> No
 
     monkeypatch.setattr(guild_config, "_run_db", unavailable)
 
-    cfg = await guild_config.get_guild_config(gid, refresh=True)
+    cfg = asyncio.run(guild_config.get_guild_config(gid, refresh=True))
 
     assert cfg["source"] == "unavailable:supabase_none"
     assert key not in guild_config._CONFIG_CACHE
     assert key not in guild_config._CONFIG_CACHE_TS
 
 
-@pytest.mark.asyncio
-async def test_genuine_unconfigured_result_remains_cacheable(monkeypatch) -> None:
+def test_genuine_unconfigured_result_remains_cacheable(monkeypatch) -> None:
     gid = 456
     key = guild_config._cache_key(gid)
 
@@ -107,15 +105,14 @@ async def test_genuine_unconfigured_result_remains_cacheable(monkeypatch) -> Non
 
     monkeypatch.setattr(guild_config, "_run_db", unconfigured)
 
-    cfg = await guild_config.get_guild_config(gid, refresh=True)
+    cfg = asyncio.run(guild_config.get_guild_config(gid, refresh=True))
 
     assert cfg["source"] == "unconfigured:isolated_public_fallback"
     assert guild_config._CONFIG_CACHE[key]["source"] == cfg["source"]
     assert key in guild_config._CONFIG_CACHE_TS
 
 
-@pytest.mark.asyncio
-async def test_unavailable_write_preserves_previous_cached_truth(monkeypatch) -> None:
+def test_unavailable_write_preserves_previous_cached_truth(monkeypatch) -> None:
     gid = 567
     key = guild_config._cache_key(gid)
     guild_config._CONFIG_CACHE[key] = {
@@ -136,7 +133,7 @@ async def test_unavailable_write_preserves_previous_cached_truth(monkeypatch) ->
 
     monkeypatch.setattr(guild_config, "_run_db", unavailable)
 
-    cfg = await guild_config.upsert_guild_config(gid, {"automod_block_invites": False})
+    cfg = asyncio.run(guild_config.upsert_guild_config(gid, {"automod_block_invites": False}))
 
     assert cfg["source"] == "supabase:guild_configs"
     assert cfg["automod_block_invites"] is True
