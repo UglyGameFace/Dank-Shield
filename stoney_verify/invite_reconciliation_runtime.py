@@ -192,6 +192,35 @@ def _empty_totals() -> dict[str, int]:
     }
 
 
+async def _flush_bulk_recovery_stats(guild_id: int, *, reason: str) -> None:
+    """Mirror one final durable total after an all-channel recovery scan.
+
+    Individual recovery deletes remain durable immediately. The legacy visible
+    compatibility counter is deliberately mirrored once at the end instead of
+    after every deleted historical message.
+    """
+
+    gid = int(guild_id)
+    if gid <= 0:
+        return
+    try:
+        from stoney_verify import durable_invite_stats
+
+        known = int(getattr(durable_invite_stats, "_LAST_DURABLE_COUNT", {}).get(gid, 0) or 0)
+        if known <= 0:
+            return
+        count = await durable_invite_stats.reconcile_guild(gid)
+        if count is None:
+            _log(f"stats_flush_deferred guild={gid} reason={reason} durable_count=unavailable")
+            return
+        _log(f"stats_flush guild={gid} reason={reason} durable_count={int(count)}")
+    except Exception as exc:
+        _log(
+            f"stats_flush_failed guild={gid} reason={reason} "
+            f"error={type(exc).__name__}: {str(exc)[:170]}"
+        )
+
+
 async def _reconcile_guild(guild: Any, *, reason: str, force: bool = False) -> dict[str, int]:
     gid = int(getattr(guild, "id", 0) or 0)
     totals = _empty_totals()
@@ -243,6 +272,9 @@ async def _reconcile_guild(guild: Any, *, reason: str, force: bool = False) -> d
                     f"channel_warning guild={gid} reason={reason} "
                     f"warning={warning[:220]}"
                 )
+
+    if totals["deleted"] > 0:
+        await _flush_bulk_recovery_stats(gid, reason=reason)
 
     _LAST_GUILD_RECONCILE_AT[gid] = time.monotonic()
     _log(
