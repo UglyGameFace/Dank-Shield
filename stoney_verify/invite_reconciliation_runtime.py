@@ -17,6 +17,7 @@ import discord
 from stoney_verify import invite_policy_engine as policy
 
 _READY_DELAY_SECONDS = 3.0
+_POLICY_RETRY_DELAY_SECONDS = 15.0
 _GUILD_RECONCILE_COOLDOWN_SECONDS = 120.0
 _CHANNEL_SWEEP_COOLDOWN_SECONDS = 8.0
 _AUTO_HISTORY_LIMIT = 250
@@ -61,11 +62,13 @@ def _cfg_enabled(cfg: Any, key: str, default: bool = False) -> bool:
         return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
-async def _guild_reconciliation_enabled(guild: Any) -> bool:
-    """Return whether a historical scan can currently lead to an invite delete.
+async def _guild_reconciliation_enabled(guild: Any) -> bool | None:
+    """Return True/False for known policy state, or None when it is unavailable.
 
     This is only a work-avoidance preflight. The central policy engine still
-    decides every individual message action.
+    decides every individual message action. ``load_invite_policy`` deliberately
+    degrades to ``(None, {})`` when both backing reads fail, so that shape must
+    not be mistaken for a confirmed OFF state during a transient DB outage.
     """
 
     try:
@@ -76,7 +79,14 @@ async def _guild_reconciliation_enabled(guild: Any) -> bool:
             f"policy_preflight_failed guild={getattr(guild, 'id', 0)} "
             f"error={type(exc).__name__}: {str(exc)[:160]}"
         )
-        return False
+        return None
+
+    if cfg is None and not settings:
+        _log(
+            f"policy_preflight_unavailable guild={getattr(guild, 'id', 0)} "
+            "action=defer"
+        )
+        return None
 
     invite_shield = (
         _cfg_enabled(cfg, "automod_block_invites")
@@ -90,7 +100,6 @@ async def _guild_reconciliation_enabled(guild: Any) -> bool:
         or _setting_enabled(settings, "automod_block_links")
     )
 
-    protected_rule = False
     try:
         protected_rule = bool(policy._protected_poster_rule_enabled(settings))  # type: ignore[attr-defined]
     except Exception:
@@ -142,9 +151,8 @@ async def _scan_channel(channel: Any, *, limit: int, source: str) -> dict[str, A
         }
 
 
-async def _reconcile_guild(guild: Any, *, reason: str, force: bool = False) -> dict[str, int]:
-    gid = int(getattr(guild, "id", 0) or 0)
-    totals = {
+def _empty_totals() -> dict[str, int]:
+    return {
         "channels": 0,
         "skipped_permission": 0,
         "checked": 0,
@@ -152,7 +160,13 @@ async def _reconcile_guild(guild: Any, *, reason: str, force: bool = False) -> d
         "allowed": 0,
         "deleted": 0,
         "failed": 0,
+        "deferred": 0,
     }
+
+
+async def _reconcile_guild(guild: Any, *, reason: str, force: bool = False) -> dict[str, int]:
+    gid = int(getattr(guild, "id", 0) or 0)
+    totals = _empty_totals()
     if gid <= 0:
         return totals
 
@@ -161,7 +175,12 @@ async def _reconcile_guild(guild: Any, *, reason: str, force: bool = False) -> d
     if not force and previous and now - previous < _GUILD_RECONCILE_COOLDOWN_SECONDS:
         return totals
 
-    if not await _guild_reconciliation_enabled(guild):
+    enabled = await _guild_reconciliation_enabled(guild)
+    if enabled is None:
+        totals["deferred"] = 1
+        _log(f"deferred guild={gid} reason={reason} policy=unavailable")
+        return totals
+    if not enabled:
         _LAST_GUILD_RECONCILE_AT[gid] = now
         _log(f"skipped guild={gid} reason={reason} delete_path=disabled")
         return totals
@@ -205,14 +224,33 @@ async def _reconcile_all(bot: Any, *, reason: str) -> None:
     try:
         if reason == "ready":
             await asyncio.sleep(_READY_DELAY_SECONDS)
+
+        deferred: list[Any] = []
         for guild in list(getattr(bot, "guilds", []) or []):
             try:
-                await _reconcile_guild(guild, reason=reason)
+                result = await _reconcile_guild(guild, reason=reason)
+                if int(result.get("deferred") or 0):
+                    deferred.append(guild)
             except Exception as exc:
                 _log(
                     f"guild_failed guild={getattr(guild, 'id', 0)} reason={reason} "
                     f"error={type(exc).__name__}: {str(exc)[:170]}"
                 )
+
+        if deferred:
+            await asyncio.sleep(_POLICY_RETRY_DELAY_SECONDS)
+            for guild in deferred:
+                try:
+                    await _reconcile_guild(
+                        guild,
+                        reason=f"{reason}-policy-retry",
+                        force=True,
+                    )
+                except Exception as exc:
+                    _log(
+                        f"guild_retry_failed guild={getattr(guild, 'id', 0)} reason={reason} "
+                        f"error={type(exc).__name__}: {str(exc)[:170]}"
+                    )
     finally:
         _RECONCILE_TASK = None
 
@@ -248,7 +286,7 @@ async def _sweep_channel(channel: Any, *, reason: str) -> None:
         bot_member = getattr(guild, "me", None)
         if not _channel_can_reconcile(channel, bot_member):
             return
-        if not await _guild_reconciliation_enabled(guild):
+        if await _guild_reconciliation_enabled(guild) is not True:
             return
 
         result = await _scan_channel(
@@ -385,7 +423,7 @@ def install_invite_reconciliation(bot: Any) -> bool:
 
 __all__ = [
     "install_invite_reconciliation",
-    "_guild_reconcile_enabled",
+    "_guild_reconciliation_enabled",
     "_reconcile_guild",
     "_schedule_channel_sweep",
 ]
