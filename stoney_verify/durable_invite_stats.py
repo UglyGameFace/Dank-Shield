@@ -46,7 +46,7 @@ _RECENT_EVENTS: dict[str, tuple[float, int]] = {}
 _PENDING: dict[str, "PendingInviteEvent"] = {}
 _REFRESH_TASKS: dict[int, asyncio.Task[Any]] = {}
 _LAST_REFRESH_AT: dict[int, float] = {}
-_LAST_DURABLE_COUNT: dict[int, int] = {}
+_BULK_RECOVERY_SEED: dict[int, int] = {}
 _RETRY_TASK: Optional[asyncio.Task[Any]] = None
 _RECOVERY_TASK: Optional[asyncio.Task[Any]] = None
 _OUTBOX_FILE_LOCK = threading.Lock()
@@ -218,15 +218,6 @@ def _is_bulk_recovery_source(source: str) -> bool:
     """Only startup/resume all-channel recovery defers compatibility mirroring."""
 
     return str(source or "").startswith("auto-reconcile:")
-
-
-def _remember_durable_count(guild_id: int, count: int) -> int:
-    gid = int(guild_id)
-    value = max(0, int(count))
-    previous = max(0, int(_LAST_DURABLE_COUNT.get(gid, 0) or 0))
-    remembered = max(previous, value)
-    _LAST_DURABLE_COUNT[gid] = remembered
-    return remembered
 
 
 def _outbox_path() -> Path:
@@ -638,15 +629,12 @@ async def read_invites_blocked(guild_id: int) -> Optional[int]:
     if gid <= 0:
         return None
     try:
-        count = await asyncio.to_thread(
+        return await asyncio.to_thread(
             _execute_with_retry,
             "read durable invite count",
             lambda: _read_durable_count_sync(gid),
             3,
         )
-        if count is not None:
-            _remember_durable_count(gid, count)
-        return count
     except Exception as exc:
         if not _rpc_or_table_missing(exc):
             _warn(
@@ -747,7 +735,6 @@ async def _retry_pending_loop() -> None:
                     result = await asyncio.to_thread(_write_event_sync, event)
                     _PENDING.pop(event_hash, None)
                     _RECENT_EVENTS[event_hash] = (time.monotonic(), result.invites_blocked)
-                    _remember_durable_count(event.guild_id, result.invites_blocked)
                     await _persist_outbox_async()
                     await _sync_compatibility_count(event.guild_id, result.invites_blocked)
                     _log(
@@ -817,8 +804,8 @@ async def record_deleted_invite_decision(message: Any, decision: Any) -> InviteS
                 backend="recent_event_cache",
             )
 
-        if bulk_recovery and guild_id in _LAST_DURABLE_COUNT:
-            seed_count = int(_LAST_DURABLE_COUNT[guild_id])
+        if bulk_recovery and guild_id in _BULK_RECOVERY_SEED:
+            seed_count = int(_BULK_RECOVERY_SEED[guild_id])
         else:
             seed_count = await _legacy_invite_count(guild_id)
         event = PendingInviteEvent(
@@ -847,7 +834,11 @@ async def record_deleted_invite_decision(message: Any, decision: Any) -> InviteS
             )
 
         _RECENT_EVENTS[event_hash] = (time.monotonic(), result.invites_blocked)
-        _remember_durable_count(guild_id, result.invites_blocked)
+        if bulk_recovery:
+            _BULK_RECOVERY_SEED[guild_id] = max(
+                int(_BULK_RECOVERY_SEED.get(guild_id, 0) or 0),
+                int(result.invites_blocked),
+            )
         removed_pending = _PENDING.pop(event_hash, None) is not None
         if removed_pending:
             await _persist_outbox_async()
@@ -881,9 +872,22 @@ async def reconcile_guild(guild_id: int) -> Optional[int]:
         return None
     if count is None:
         return None
-    _remember_durable_count(gid, count)
     await _sync_compatibility_count(gid, count)
     return count
+
+
+async def finish_bulk_recovery(guild_id: int) -> Optional[int]:
+    """Flush a bulk recovery's durable total once and clear its pass-local seed."""
+
+    gid = int(guild_id)
+    if gid <= 0:
+        return None
+    if gid not in _BULK_RECOVERY_SEED:
+        return None
+    try:
+        return await reconcile_guild(gid)
+    finally:
+        _BULK_RECOVERY_SEED.pop(gid, None)
 
 
 async def _run_startup_recovery() -> None:
@@ -990,6 +994,7 @@ __all__ = [
     "PendingInviteEvent",
     "blocked_invite_count",
     "event_hash_for_message",
+    "finish_bulk_recovery",
     "install",
     "read_invites_blocked",
     "reconcile_guild",
