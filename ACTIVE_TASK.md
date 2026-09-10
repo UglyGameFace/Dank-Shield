@@ -2,7 +2,7 @@
 
 ## DS-INVITE-035 — Restore automatic missed-invite reconciliation
 
-**Status:** IMPLEMENTED / EXACT-HEAD VALIDATION PENDING
+**Status:** CODE COMPLETE / PRE-MERGE VALIDATION GREEN / PRODUCTION ACCEPTANCE PENDING
 **Branch:** `fix/invite-reconcile-runtime-194`
 **Base:** `95c9585949eb6f8692538c0b3830c1e2d1b5aba2` (`main`, merged PR #193)
 **Started:** 2026-09-10
@@ -53,7 +53,7 @@ Therefore an invite missed while the live event path was unavailable could remai
 - `on_ready` and `on_resumed` reconcile every eligible text channel where the bot has View Channel, Read Message History, and Manage Messages.
 - All historical decisions/deletes go through `invite_policy_engine.scan_channel_invites()`.
 - Automatic scans are capped at 250 recent messages per channel on ready/resume and 75 on live-event recovery.
-- Reconciliation concurrency is capped at 2 channels and duplicate guild/channel work is coalesced.
+- Reconciliation work is processed in true batches capped at 2 channels; duplicate guild/channel work is coalesced.
 - Unavailable policy/config state defers reconciliation rather than being treated as OFF; one bounded retry occurs after 15 seconds.
 - Added a local sleep boundary so async tests never monkeypatch Python's global `asyncio.sleep`.
 - `guild_config` now distinguishes `unavailable:*` from genuine `unconfigured:*` state.
@@ -62,6 +62,8 @@ Therefore an invite missed while the live event path was unavailable could remai
 - Genuine successful no-row/unconfigured results remain cacheable exactly as before.
 - Unavailable writes preserve prior cached truth instead of replacing it with a false fallback.
 - Refactored `discord_invite_blocker_runtime_guard` into a compatibility bridge: it no longer owns sweep task/cooldown state or installs a second live listener; recovery delegates to `invite_reconciliation_runtime` while `_enforce_message` remains for the one legacy direct caller.
+- Corrected the legacy Spam Guard invite shim's ownership documentation so it no longer claims the historical guard is the live owner.
+- Reworked PR async regressions to use built-in `asyncio.run()` so they run under the repository's existing plain-`pytest` CI contract without adding a new test dependency.
 
 ## Compatibility / safety invariants
 
@@ -85,6 +87,7 @@ Therefore an invite missed while the live event path was unavailable could remai
 - legacy guard delegation with no second listener/sweep state;
 - idempotent listener installation;
 - permission-gated all-channel recovery;
+- true maximum channel concurrency of 2;
 - disabled-policy no-scan behavior;
 - unavailable-policy defer/no cooldown;
 - empty-policy and `unavailable:*` config handling;
@@ -99,19 +102,26 @@ Therefore an invite missed while the live event path was unavailable could remai
 - genuine unconfigured results remaining cacheable;
 - failed writes preserving previous cached truth.
 
-## Validation required
+## Validation evidence
 
-- focused invite/reconciliation regressions;
-- transient guild-config resilience regressions;
-- invite extraction/safety and central-policy audits;
-- durable invite stats regressions;
-- compileall and committed-diff whitespace check;
-- repository full pytest suite;
-- existing setup/command/invite/role/event-boundary audits;
-- changed-file scope and conflict-marker inspection;
-- review-thread inspection;
-- current-main/mergeability check;
-- final exact-head SHA verification.
+Code-bearing head `4371b8a4d0fbef3df9374ce7e1c4ef1f60eb5009` completed the full pre-merge validation gate:
+
+- all five PR workflows green: Dank Shield CI, Dank Design Regression CI, Application Command Size Diagnostics, Ticket Owner Emergency Override, and Profile Runtime Diagnostics;
+- Dank Shield CI full repository suite: **1177 passed, 9 warnings** on CPython 3.11 / Ubuntu;
+- committed-diff whitespace check passed;
+- `compileall` passed;
+- standalone `tools/test_*.py` checks passed;
+- public setup, command surface, command friction, invite permissions, setup safety, Smart Auto-Detect, role truth, and event-boundary audits passed;
+- managed-category SQL smoke test passed;
+- claim-first ticket security passed;
+- changed-file scope review shows only the active invite/config/runtime/tests/task-record files and no ticket subsystem edits;
+- branch was 0 commits behind `main` at code-head review;
+- pull-request review threads were empty;
+- reviewed diff contained no conflict markers, direct recovery delete path, or unrelated welcome-card change.
+
+Termux independent focused validation on the same code-bearing head reported **18 passed, 3 warnings** for the two PR #194 regression files. A full Termux run reported **1176 passed, 1 failed** under Python 3.14 / ARM; the single failure was an unrelated welcome-card bright-pixel rendering threshold and did not reproduce in the repository's Python 3.11 Ubuntu CI, where all 1177 tests passed. No welcome-card code is changed by this task.
+
+Any record-only commit after the code-bearing validation remains subject to the same exact-head workflow gate before merge.
 
 ## Cleanup / conflicts
 
@@ -132,4 +142,4 @@ After merge/deploy, require `🧹 invite_reconcile` ready/resume telemetry. Veri
 
 ## Next step
 
-Run exact-head CI and repository validation on the final branch head. If every code-side gate is green, update PR #194 with exact validation evidence and mark it ready for review. Production acceptance remains the final runtime gate after deployment.
+Require every PR workflow to pass on the current record-updated branch head. Once green, mark PR #194 ready and merge. Production acceptance remains the final runtime gate after deployment.
