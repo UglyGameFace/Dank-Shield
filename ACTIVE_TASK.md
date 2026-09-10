@@ -2,44 +2,58 @@
 
 ## DS-INVITE-035 — Restore automatic missed-invite reconciliation
 
-**Status:** IMPLEMENTING / VALIDATION PENDING
+**Status:** IMPLEMENTED / EXACT-HEAD VALIDATION PENDING
 **Branch:** `fix/invite-reconcile-runtime-194`
 **Base:** `95c9585949eb6f8692538c0b3830c1e2d1b5aba2` (`main`, merged PR #193)
 **Started:** 2026-09-10
 
 ## Outcome required
 
-Dank Shield must continue deleting blocked Discord invite links live, and must also recover blocked invite messages that were missed during a restart, reconnect, transient live-enforcement failure, or short event gap. Recovery must reuse the same central invite policy as live enforcement so same-server invites, exemptions, allowed channels/roles/users, and Link/Invite Shield settings cannot disagree between live and historical messages.
+Dank Shield must keep deleting blocked Discord invites live and automatically recover blocked invite messages missed during restart, reconnect, transient persistence failure, or a short event gap. Recovery must reuse the same central invite policy as live enforcement so same-server invites, exemptions, allowed channels/roles/users, and Link/Invite Shield settings cannot disagree between live and historical messages.
 
 ## Scope
 
-`real production boot path -> live invite listener -> central invite policy -> bounded delayed channel recovery -> ready/resume all-channel reconciliation -> permission checks -> central delete helper -> durable invite stats/modlog`
+`production boot -> live invite listener -> guild/policy persistence -> central invite policy -> delayed channel recovery -> ready/resume all-channel reconciliation -> permission checks -> central delete helper -> durable stats/modlog`
 
 No ticket redesign, Server Design work, join-context schema repair, general memory optimization, or unrelated moderation changes belong in this task.
 
-## Findings / root cause
+## Proven root causes
 
-Production logs prove `invite_live_enforcer` is deleting newly observed invites successfully, but contain no fallback-sweep or server-wide reconciliation telemetry.
+Production logs prove `invite_live_enforcer` still deletes newly observed invites, but showed no recovery-sweep/server-wide reconciliation telemetry and also showed transient Supabase 504s.
 
-The repository contains the missing recovery pieces, but they are not on the real boot path:
+### 1. Recovery code was not on the production boot path
 
 - `stoney_verify/invite_policy_engine.py` is the authoritative invite decision/delete implementation and already exposes `scan_channel_invites()`.
 - `stoney_verify/startup_guards/discord_invite_blocker_runtime_guard.py` contains delayed recent-history sweeps, but the broad startup-guard loader is dormant during normal production boot.
-- `stoney_verify/globals.py` installs the guaranteed live `on_message` enforcer directly, which explains the production `invite_live_enforcer` logs. That path performs live deletion only.
-- `/dank cleanup invites` can manually scan old messages, and Protection Center can scan a selected channel, but neither provides automatic server-wide restart/reconnect recovery.
-- Therefore blocked invites missed while the live event path was unavailable can remain until staff manually run cleanup.
+- `stoney_verify/globals.py` directly installs the guaranteed live `on_message` enforcer. That explains the production `invite_live_enforcer` logs, but this path performs live deletion only.
+- `/dank cleanup invites` and Protection Center history scans require staff action and do not repair a missed live window automatically.
 
-## Implementation
+Therefore an invite missed while the live event path was unavailable could remain indefinitely without manual cleanup.
 
-- Add a native `stoney_verify.invite_reconciliation_runtime` service with no independent delete policy.
-- Install it explicitly from `main.py`, which is the actual Discloud entrypoint.
-- Keep the proven globals live enforcer as the live delete owner.
-- After an invite-related create/edit event, schedule a short delayed history rescan of the same channel so a transient live-delete failure can be recovered.
-- On Discord `on_ready` and `on_resumed`, run a bounded reconciliation over every text channel where the bot has View Channel, Read Message History, and Manage Messages.
-- Reuse `invite_policy_engine.scan_channel_invites()` for every historical decision/deletion.
-- Scan at most 250 recent messages per channel on ready/resume and 75 on event-triggered recovery.
-- Bound reconciliation concurrency to 2 channels and coalesce repeated ready/resume or per-channel sweeps.
-- Skip automatic history reads when no currently configured invite-delete feature can approve deletion.
+### 2. Transient guild-config reads could poison the live policy cache
+
+- `guild_config` retries transient database errors, but after exhausted reads it previously fell through to the same `unconfigured:isolated_public_fallback` object used for a genuine no-row guild.
+- `get_guild_config()` then cached that false unconfigured result for 60 seconds.
+- A transient Supabase 504 could therefore temporarily make an existing guild appear unconfigured and make a configured live invite-blocking feature appear OFF.
+- `spam_guard.get_spam_settings()` already preserves cached/default runtime state on unavailable reads, so the divergent weak point was guild-config persistence semantics.
+
+## Implemented changes
+
+- Added native `stoney_verify.invite_reconciliation_runtime` with no independent delete policy.
+- Installed it explicitly from real Discloud entrypoint `main.py` before app startup.
+- Kept the proven globals live enforcer as the live delete owner.
+- Invite-related creates/edits schedule a bounded delayed rescan of that channel.
+- `on_ready` and `on_resumed` reconcile every eligible text channel where the bot has View Channel, Read Message History, and Manage Messages.
+- All historical decisions/deletes go through `invite_policy_engine.scan_channel_invites()`.
+- Automatic scans are capped at 250 recent messages per channel on ready/resume and 75 on live-event recovery.
+- Reconciliation concurrency is capped at 2 channels and duplicate guild/channel work is coalesced.
+- Unavailable policy/config state defers reconciliation rather than being treated as OFF; one bounded retry occurs after 15 seconds.
+- Added a local sleep boundary so async tests never monkeypatch Python's global `asyncio.sleep`.
+- `guild_config` now distinguishes `unavailable:*` from genuine `unconfigured:*` state.
+- Transient/unavailable reads preserve any stale known-good guild config without refreshing its cache timestamp.
+- Cold-start unavailable reads return a safe isolated fallback but are never cached as authoritative.
+- Genuine successful no-row/unconfigured results remain cacheable exactly as before.
+- Unavailable writes preserve prior cached truth instead of replacing it with a false fallback.
 
 ## Compatibility / safety invariants
 
@@ -47,42 +61,65 @@ The repository contains the missing recovery pieces, but they are not on the rea
 - Same-server invite behavior is unchanged.
 - Exempt user/role/channel and explicitly allowed invite-code behavior is unchanged.
 - Link Shield and Invite Shield policy semantics are unchanged.
-- Durable invite statistics still record through the existing central delete helper.
-- The live globals enforcer is not removed in this task because production already proves it works.
-- No new Supabase tables or migrations are required for invite reconciliation.
-- Ticket subsystem files and the PR #190-#193 fixes are untouched.
+- Durable invite statistics still use the existing central delete helper.
+- No duplicate live delete listener is activated.
+- Public guild config isolation remains enforced; unavailable fallbacks cannot inherit another guild's environment IDs.
+- A genuine unconfigured guild remains distinguishable from a failed database read.
+- No new Supabase tables or migrations are required.
+- Ticket subsystem changes from PRs #190-#193 remain untouched.
+
+## Regression coverage
+
+`tests/test_invite_runtime_reconcile_194.py` covers:
+- real production boot wiring;
+- central-scanner-only recovery ownership;
+- idempotent listener installation;
+- permission-gated all-channel recovery;
+- disabled-policy no-scan behavior;
+- unavailable-policy defer/no cooldown;
+- empty-policy and `unavailable:*` config handling;
+- one bounded policy retry;
+- event-triggered recent-history recovery.
+
+`tests/test_guild_config_transient_resilience_194.py` covers:
+- unavailable config classification;
+- transient DB failure vs genuine unconfigured state;
+- stale known-good preservation on forced refresh;
+- cold-start unavailable reads never entering the cache;
+- genuine unconfigured results remaining cacheable;
+- failed writes preserving previous cached truth.
 
 ## Validation required
 
-- regression proving the real `main.py` installs reconciliation before app startup;
-- regression proving the recovery runtime calls the central scanner and never directly deletes messages;
-- install-idempotence regression;
-- permission-gated all-channel reconciliation regression;
-- disabled-policy no-scan regression;
-- event-triggered recent-history rescan regression;
-- invite extraction/safety audit;
-- invite policy/durable stats regressions;
-- compileall;
-- full pytest if executable in the available environment;
-- diff check / changed-file scope;
-- conflict-marker and accidental-secret inspection;
-- final exact-head SHA check.
+- focused invite/reconciliation regressions;
+- transient guild-config resilience regressions;
+- invite extraction/safety and central-policy audits;
+- durable invite stats regressions;
+- compileall and committed-diff whitespace check;
+- repository full pytest suite;
+- existing setup/command/invite/role/event-boundary audits;
+- changed-file scope and conflict-marker inspection;
+- review-thread inspection;
+- current-main/mergeability check;
+- final exact-head SHA verification.
 
 ## Cleanup / conflicts
 
-The dormant sweep-capable startup guard and the guaranteed live globals listener overlap historically, but this task does not activate a second delete listener. The new runtime is recovery-only and delegates all deletion to the central policy scanner. A broader startup-guard migration remains separate work unless it becomes necessary for correctness.
+The dormant sweep-capable startup guard and the guaranteed globals live listener overlap historically, but this task does not activate another live delete owner. The new runtime is recovery-only. A broader startup-guard migration remains separate work unless required for correctness.
+
+The guild-config change is shared code, but it is in the active invite execution path and directly fixes the transient 504 failure mode observed in production. Its behavior change is limited to unavailable reads/writes; authoritative DB results and genuine no-row behavior retain their previous semantics.
 
 ## Suspended / backlog
 
-- **DS-TICKET-034 production acceptance:** PR #193 is merged. Historical Ticket Choices restore/cross-guild live acceptance remains pending and is suspended while DS-INVITE-035 is active.
-- **Join-context Supabase schema mismatch:** production reports missing `entry_confidence` in `guild_members` and `member_joins`; investigate separately after this task.
-- **Dank setup interaction/RSS spike:** production RSS rose sharply during setup interactions; investigate separately unless validation proves it shares this task's root cause.
-- **Server Design setup regression/full audit:** preserve prior backlog item after ticket acceptance.
+- **DS-TICKET-034 production acceptance:** PR #193 merged; historical Ticket Choices restore/cross-guild live acceptance remains suspended.
+- **Join-context Supabase schema mismatch:** production reports missing `entry_confidence` in `guild_members` and `member_joins`.
+- **Dank setup interaction/RSS spike:** production RSS rose sharply during setup interactions.
+- **Server Design setup regression/full audit:** preserve after ticket acceptance.
 
-## Blockers / risks
+## Production acceptance remaining
 
-Automatic reconciliation is deliberately bounded to recent history so reconnect recovery cannot hammer Discord across every channel. Very old invite messages outside the automatic window remain available to the existing manual `/dank cleanup invites all_text_channels:true` deep scan. Production acceptance must confirm the automatic window is sufficient for the observed missed-message case.
+After merge/deploy, require `🧹 invite_reconcile` ready/resume telemetry. Verify a blocked invite deliberately left within the bounded history window is removed automatically without staff cleanup, while a permitted/same-server invite remains untouched. Also verify a transient persistence interruption no longer converts a known configured guild into a fresh `unconfigured` cache entry.
 
 ## Next step
 
-Implement the native recovery runtime and boot wiring, run the focused invite regressions and repository validation, inspect the final diff, then open a focused PR. After deployment, require `invite_reconcile` ready/resume telemetry and verify a deliberately missed blocked invite is removed without staff running manual cleanup.
+Run exact-head CI and repository validation on the final branch head. If every code-side gate is green, update PR #194 with exact validation evidence and mark it ready for review. Production acceptance remains the final runtime gate after deployment.
