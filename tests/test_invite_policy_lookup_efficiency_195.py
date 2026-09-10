@@ -45,10 +45,19 @@ class FakeState:
 
 
 class FakeGuild:
-    def __init__(self, guild_id: int = 123, *, invite_codes=None, state=None) -> None:
+    def __init__(
+        self,
+        guild_id: int = 123,
+        *,
+        invite_codes=None,
+        state=None,
+        static_vanity=None,
+        vanity_result=None,
+    ) -> None:
         self.id = int(guild_id)
-        self.vanity_url_code = None
+        self.vanity_url_code = static_vanity
         self._invite_codes = list(invite_codes or [])
+        self._vanity_result = vanity_result
         self.invites_calls = 0
         self.vanity_calls = 0
         self._state = state or FakeState()
@@ -59,10 +68,15 @@ class FakeGuild:
 
     async def vanity_invite(self):
         self.vanity_calls += 1
-        return SimpleNamespace(code=None)
+        return SimpleNamespace(code=self._vanity_result)
+
+
+def _reset_lookup_state() -> None:
+    policy._GUILD_VANITY_CACHE.clear()
 
 
 def test_guild_invite_codes_reuses_spam_cache_without_duplicate_list_fetch(monkeypatch) -> None:
+    _reset_lookup_state()
     guild = FakeGuild(invite_codes=["should-not-be-read"])
 
     async def cached(_guild):
@@ -76,8 +90,9 @@ def test_guild_invite_codes_reuses_spam_cache_without_duplicate_list_fetch(monke
     assert guild.invites_calls == 0
 
 
-def test_guild_invite_codes_keeps_direct_fallback_when_cache_is_empty(monkeypatch) -> None:
-    guild = FakeGuild(invite_codes=["FallbackCode"])
+def test_completed_empty_spam_snapshot_does_not_repeat_same_list_fetch(monkeypatch) -> None:
+    _reset_lookup_state()
+    guild = FakeGuild(invite_codes=["should-not-be-read"])
 
     async def empty_cache(_guild):
         return set()
@@ -86,8 +101,56 @@ def test_guild_invite_codes_keeps_direct_fallback_when_cache_is_empty(monkeypatc
 
     result = asyncio.run(policy._guild_invite_codes(guild))
 
+    assert result == set()
+    assert guild.invites_calls == 0
+
+
+def test_direct_invite_list_fallback_remains_when_shared_getter_cannot_run(monkeypatch) -> None:
+    _reset_lookup_state()
+    guild = FakeGuild(invite_codes=["FallbackCode"])
+
+    async def broken_getter(_guild):
+        raise RuntimeError("shared getter unavailable")
+
+    monkeypatch.setattr(spam_guard, "_fetch_guild_invite_codes", broken_getter)
+
+    result = asyncio.run(policy._guild_invite_codes(guild))
+
     assert result == {"fallbackcode"}
     assert guild.invites_calls == 1
+
+
+def test_vanity_fallback_is_cached_instead_of_requested_per_message(monkeypatch) -> None:
+    _reset_lookup_state()
+    guild = FakeGuild(guild_id=321, vanity_result="MyVanity")
+
+    async def empty_cache(_guild):
+        return set()
+
+    monkeypatch.setattr(spam_guard, "_fetch_guild_invite_codes", empty_cache)
+
+    first = asyncio.run(policy._guild_invite_codes(guild))
+    second = asyncio.run(policy._guild_invite_codes(guild))
+
+    assert first == {"myvanity"}
+    assert second == {"myvanity"}
+    assert guild.invites_calls == 0
+    assert guild.vanity_calls == 1
+
+
+def test_gateway_vanity_code_avoids_vanity_rest_call(monkeypatch) -> None:
+    _reset_lookup_state()
+    guild = FakeGuild(guild_id=322, static_vanity="GatewayVanity", vanity_result="unused")
+
+    async def empty_cache(_guild):
+        return set()
+
+    monkeypatch.setattr(spam_guard, "_fetch_guild_invite_codes", empty_cache)
+
+    result = asyncio.run(policy._guild_invite_codes(guild))
+
+    assert result == {"gatewayvanity"}
+    assert guild.vanity_calls == 0
 
 
 def test_target_resolver_classifies_external_without_second_client_fetch(monkeypatch) -> None:
