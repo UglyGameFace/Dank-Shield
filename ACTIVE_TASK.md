@@ -89,7 +89,8 @@ Required validation:
 
 ## Backlog
 
-- None. Do not add global category resets or hard-coded guild-specific menu data without database evidence.
+- **Server Design setup regression / full audit requested:** the Server Design wizard appears to snap back to **Rule Locks** after **Reset All Design Overrides** instead of keeping/resetting the intended design state. User reports the overall server design remains wrong and wants a top-to-bottom audit of setup so guild owners can configure their own server reliably. Screenshots show the Design Center with Rule Locks active, the destructive reset confirmation modal, and a saved Rule Locks summary immediately afterward. Treat as a separate implementation task after DS-TICKET-034 unless explicitly force-switched. Audit must cover state persistence, reset semantics, page routing, preview/save behavior, per-guild isolation, restart behavior, stale component/session state, and all design setup flows before declaring complete.
+- Do not add global category resets or hard-coded guild-specific menu data without database evidence.
 
 ## Next step
 
