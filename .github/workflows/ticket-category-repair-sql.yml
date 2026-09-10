@@ -5,16 +5,20 @@ on:
     paths:
       - "supabase/migrations/20260807215900_prepare_managed_ticket_category_repair.sql"
       - "supabase/migrations/20260807220000_repair_managed_ticket_category_duplicates.sql"
+      - "supabase/migrations/20260910163000_preserve_ticket_category_selection_on_review.sql"
       - "stoney_verify/tickets_new/managed_category_service.py"
       - "stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py"
+      - "tests/test_ticket_category_reset_preserves_selection.py"
       - ".github/workflows/ticket-category-repair-sql.yml"
   push:
     branches: [main]
     paths:
       - "supabase/migrations/20260807215900_prepare_managed_ticket_category_repair.sql"
       - "supabase/migrations/20260807220000_repair_managed_ticket_category_duplicates.sql"
+      - "supabase/migrations/20260910163000_preserve_ticket_category_selection_on_review.sql"
       - "stoney_verify/tickets_new/managed_category_service.py"
       - "stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py"
+      - "tests/test_ticket_category_reset_preserves_selection.py"
       - ".github/workflows/ticket-category-repair-sql.yml"
   workflow_dispatch:
 
@@ -78,18 +82,25 @@ jobs:
           );
 
           insert into public.guild_configs(guild_id)
-          values ('selected-guild'), ('custom-guild');
+          values
+            ('selected-guild'),
+            ('custom-guild'),
+            ('reset-guild'),
+            ('history-guild'),
+            ('history-custom-guild'),
+            ('untouched-guild');
+
           insert into public.ticket_categories(
             guild_id, slug, name, description, intake_type, sort_order, is_default, is_enabled
-          ) values (
-            'custom-guild','clan_application','Clan Application',
-            'Owner-created custom category.','custom',5,true,true
-          );
+          ) values
+          ('custom-guild','clan_application','Clan Application','Owner-created custom category.','custom',5,true,true),
+          ('history-custom-guild','creator_portfolio','Creator Portfolio','Owner-created historical category.','custom',5,true,true);
           SQL
 
-      - name: Install v2 and save real owner selections
+      - name: Install version history and v2 selection schema
         shell: bash
         run: |
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260720_guild_config_version_history.sql
           psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260802042000_ticket_category_setup_selection.sql
           psql -v ON_ERROR_STOP=1 <<'SQL'
           select * from public.save_dank_ticket_category_selection(
@@ -97,6 +108,15 @@ jobs:
           );
           select * from public.save_dank_ticket_category_selection(
             'custom-guild', array[]::text[], 'owner-2', 'Owner Two'
+          );
+          select * from public.save_dank_ticket_category_selection(
+            'reset-guild', array['verification','bug','partnership']::text[], 'owner-3', 'Owner Three'
+          );
+          select * from public.save_dank_ticket_category_selection(
+            'untouched-guild', array['account-access','support']::text[], 'owner-4', 'Owner Four'
+          );
+          select * from public.save_dank_ticket_category_selection(
+            'history-custom-guild', array[]::text[], 'owner-5', 'Owner Five'
           );
           SQL
 
@@ -138,7 +158,7 @@ jobs:
           );
           SQL
 
-      - name: Apply preflight and v3 repair twice
+      - name: Apply preflight, v3 repair, and selection preservation twice
         shell: bash
         run: |
           set -euo pipefail
@@ -146,6 +166,7 @@ jobs:
             echo "Repair pass ${pass}"
             psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260807215900_prepare_managed_ticket_category_repair.sql
             psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260807220000_repair_managed_ticket_category_duplicates.sql
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260910163000_preserve_ticket_category_selection_on_review.sql
           done
 
       - name: Verify repair, idempotency, and preservation
@@ -245,6 +266,156 @@ jobs:
             if custom_guild_managed_enabled <> 0 or custom_guild_alive is not true then
               raise exception 'custom-only guild changed: managed %, custom %',
                 custom_guild_managed_enabled, custom_guild_alive;
+            end if;
+          end $$;
+          SQL
+
+      - name: Verify forced review preserves the owner selection
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          select public.require_dank_ticket_category_setup(
+            'reset-guild', 'CI forced review', true
+          );
+
+          do $$
+          declare
+            live_keys text[];
+            saved_keys text[];
+            setup_version integer;
+            setup_required boolean;
+            untouched_keys text[];
+          begin
+            select array_agg(managed_category_key order by managed_category_key)
+              into live_keys
+              from public.ticket_categories
+             where guild_id='reset-guild'
+               and managed_by_dank=true
+               and is_enabled=true;
+            if live_keys <> array['appeal','report','support']::text[] then
+              raise exception 'forced review did not use safe starters: %', live_keys;
+            end if;
+
+            select ticket_category_setup_version, ticket_category_setup_required,
+                   (select array_agg(v order by v)
+                      from jsonb_array_elements_text(ticket_category_setup_selected_keys) x(v))
+              into setup_version, setup_required, saved_keys
+              from public.guild_configs
+             where guild_id='reset-guild';
+            if setup_version <> 0 or setup_required is not true then
+              raise exception 'forced review state wrong: version %, required %', setup_version, setup_required;
+            end if;
+            if saved_keys <> array['bug','partnership','verification']::text[] then
+              raise exception 'forced review erased owner selection: %', saved_keys;
+            end if;
+
+            select array_agg(managed_category_key order by managed_category_key)
+              into untouched_keys
+              from public.ticket_categories
+             where guild_id='untouched-guild'
+               and managed_by_dank=true
+               and is_enabled=true;
+            if untouched_keys <> array['account-access','support']::text[] then
+              raise exception 'another guild changed during forced review: %', untouched_keys;
+            end if;
+          end $$;
+          SQL
+
+      - name: Verify history restore realigns canonical guild selection
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            saved_rows jsonb;
+            custom_saved_rows jsonb;
+            restore_result jsonb;
+            restored_keys text[];
+            selected_keys text[];
+            setup_version integer;
+            setup_required boolean;
+            untouched_keys text[];
+            custom_enabled integer;
+            custom_selected_count integer;
+          begin
+            -- Build a non-starter historical state, then deliberately replace it.
+            perform * from public.save_dank_ticket_category_selection(
+              'history-guild', array['verification','bug','partnership']::text[], 'history-owner', 'History Owner'
+            );
+            select jsonb_agg(to_jsonb(tc) order by tc.sort_order, tc.slug, tc.id)
+              into saved_rows
+              from public.ticket_categories tc
+             where tc.guild_id='history-guild';
+
+            perform * from public.save_dank_ticket_category_selection(
+              'history-guild', array['appeal','report','support']::text[], 'history-owner', 'History Owner'
+            );
+
+            restore_result := public.restore_ticket_categories_snapshot(
+              'history-guild', saved_rows
+            );
+            if coalesce((restore_result ->> 'selection_aligned')::boolean, false) is not true then
+              raise exception 'history restore did not report selection alignment: %', restore_result;
+            end if;
+
+            select array_agg(managed_category_key order by managed_category_key)
+              into restored_keys
+              from public.ticket_categories
+             where guild_id='history-guild'
+               and managed_by_dank=true
+               and is_enabled=true;
+            if restored_keys <> array['bug','partnership','verification']::text[] then
+              raise exception 'history rows were not restored: %', restored_keys;
+            end if;
+
+            select ticket_category_setup_version, ticket_category_setup_required,
+                   (select array_agg(v order by v)
+                      from jsonb_array_elements_text(ticket_category_setup_selected_keys) x(v))
+              into setup_version, setup_required, selected_keys
+              from public.guild_configs
+             where guild_id='history-guild';
+            if setup_version <> 2 or setup_required is true then
+              raise exception 'history restore left setup misaligned: version %, required %', setup_version, setup_required;
+            end if;
+            if selected_keys <> array['bug','partnership','verification']::text[] then
+              raise exception 'history restore config keys differ from restored rows: %', selected_keys;
+            end if;
+
+            -- A custom-only historical menu is valid with zero managed keys.
+            select jsonb_agg(to_jsonb(tc) order by tc.sort_order, tc.slug, tc.id)
+              into custom_saved_rows
+              from public.ticket_categories tc
+             where tc.guild_id='history-custom-guild';
+            perform * from public.save_dank_ticket_category_selection(
+              'history-custom-guild', array['support']::text[], 'history-owner', 'History Owner'
+            );
+            restore_result := public.restore_ticket_categories_snapshot(
+              'history-custom-guild', custom_saved_rows
+            );
+            select count(*) into custom_enabled
+              from public.ticket_categories
+             where guild_id='history-custom-guild'
+               and managed_by_dank=false
+               and slug='creator_portfolio'
+               and is_enabled=true;
+            select jsonb_array_length(ticket_category_setup_selected_keys)
+              into custom_selected_count
+              from public.guild_configs
+             where guild_id='history-custom-guild';
+            if custom_enabled <> 1 or custom_selected_count <> 0 then
+              raise exception 'custom-only history restore was not preserved: enabled %, selected %',
+                custom_enabled, custom_selected_count;
+            end if;
+
+            -- The wrapper may not mutate any other guild while restoring one.
+            select array_agg(managed_category_key order by managed_category_key)
+              into untouched_keys
+              from public.ticket_categories
+             where guild_id='untouched-guild'
+               and managed_by_dank=true
+               and is_enabled=true;
+            if untouched_keys <> array['account-access','support']::text[] then
+              raise exception 'history restore leaked across guilds: %', untouched_keys;
             end if;
           end $$;
           SQL
