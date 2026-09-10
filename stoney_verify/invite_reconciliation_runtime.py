@@ -187,6 +187,7 @@ def _empty_totals() -> dict[str, int]:
         "allowed": 0,
         "deleted": 0,
         "failed": 0,
+        "warnings": 0,
         "deferred": 0,
     }
 
@@ -235,13 +236,20 @@ async def _reconcile_guild(guild: Any, *, reason: str, force: bool = False) -> d
             totals["channels"] += 1
             for key in ("checked", "matched", "allowed", "deleted", "failed"):
                 totals[key] += int(result.get(key) or 0)
+            warning = str(result.get("warning") or "").strip()
+            if warning:
+                totals["warnings"] += 1
+                _log(
+                    f"channel_warning guild={gid} reason={reason} "
+                    f"warning={warning[:220]}"
+                )
 
     _LAST_GUILD_RECONCILE_AT[gid] = time.monotonic()
     _log(
         f"guild={gid} reason={reason} channels={totals['channels']} "
         f"skipped_permission={totals['skipped_permission']} checked={totals['checked']} "
         f"matched={totals['matched']} allowed={totals['allowed']} "
-        f"deleted={totals['deleted']} failed={totals['failed']}"
+        f"deleted={totals['deleted']} failed={totals['failed']} warnings={totals['warnings']}"
     )
     return totals
 
@@ -322,13 +330,16 @@ async def _sweep_channel(channel: Any, *, reason: str) -> None:
             source=f"live-recovery:{reason}",
         )
         matched = int(result.get("matched") or 0)
+        allowed = int(result.get("allowed") or 0)
         deleted = int(result.get("deleted") or 0)
         failed = int(result.get("failed") or 0)
-        if matched or deleted or failed:
+        warning = str(result.get("warning") or "").strip()
+        if matched or allowed or deleted or failed or warning:
+            warning_text = f" warning={warning[:180]!r}" if warning else ""
             _log(
                 f"channel={cid} guild={gid} reason={reason} "
                 f"checked={int(result.get('checked') or 0)} matched={matched} "
-                f"deleted={deleted} failed={failed}"
+                f"allowed={allowed} deleted={deleted} failed={failed}{warning_text}"
             )
     finally:
         try:
