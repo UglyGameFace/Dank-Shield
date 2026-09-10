@@ -206,10 +206,10 @@ async def _flush_bulk_recovery_stats(guild_id: int, *, reason: str) -> None:
     try:
         from stoney_verify import durable_invite_stats
 
-        known = int(getattr(durable_invite_stats, "_LAST_DURABLE_COUNT", {}).get(gid, 0) or 0)
-        if known <= 0:
+        active_seeds = getattr(durable_invite_stats, "_BULK_RECOVERY_SEED", {})
+        if gid not in active_seeds:
             return
-        count = await durable_invite_stats.reconcile_guild(gid)
+        count = await durable_invite_stats.finish_bulk_recovery(gid)
         if count is None:
             _log(f"stats_flush_deferred guild={gid} reason={reason} durable_count=unavailable")
             return
