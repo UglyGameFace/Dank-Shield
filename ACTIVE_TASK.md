@@ -1,108 +1,91 @@
 # ACTIVE TASK
 
-## DS-DESIGN-033 — Fix separator, editor, reset correctness and remove redundant Dank Design paths
+## DS-TICKET-034 — Restore public Create Ticket interaction after restart
 
-**Status:** COMPLETE — IMPLEMENTATION + PRE-MERGE EXACT-HEAD VALIDATION GREEN
-**Branch:** `fix/ds-design-033-editor-separator-reset-correctness`
-**Base:** `656ee13d02e54614c9f6f7a34d69008f2a0943e1` (`main`, merged DS-DESIGN-032)
-**Started:** 2026-09-05
-**Completed:** 2026-09-06
+**Status:** IMPLEMENTATION COMPLETE — VALIDATION PENDING
+**Branch:** `fix/ticket-panel-persistent-runtime-timeout`
+**Base:** `b4550f255fe8e7d46944b141f33324a7ad01d255` (`main`, merged PR #189)
+**Started:** 2026-09-10
 
 ## Outcome required
 
-Make Dank Design behave exactly like its UI says and leave one understandable execution path for each job. A selected separator must become the saved desired separator, category/channel editors must preview the correct native scoped plan, Reset must remove the authority the user expects, and dead compatibility/runtime-patch-era code must not remain around as a second apparent owner.
+An already-posted Dank Shield **Create Ticket** panel must remain usable after bot restart regardless of slash-command profile selection or an unrelated command-registration failure. Clicking the public button must reach the existing canonical ticket handler quickly enough to acknowledge Discord, without introducing a second ticket-creation implementation or weakening ticket safety checks.
 
-## User-reported failures
+## User-reported failure
 
-- Channel separators selected in Dank Design were not working/sticking correctly.
-- Category Editor behavior was incorrect.
-- Locks did not appear to lift when trying to reset/remove them.
-- Full Dank Design pass requested for redundant code after the correctness repair.
+- Existing public support panel displays **The application didn't respond in time** when **Create Ticket** is pressed.
+- The affected panel was posted on 2026-06-11 and uses the same clean persistent custom ID still used by current code, so a stale button-ID mismatch is not the cause.
 
-## Root causes confirmed
+## Findings / root cause
 
-- [x] Separator-only Apply changed live names without saving the selected separator into authoritative design settings/rules.
-- [x] Saved lock generation could ignore a user-selected separator because `_current_format_lock()` could derive `separator_id` from the theme and revive the old separator.
-- [x] Category/Channel `Preview Fixes` depended on retired runtime magic instead of explicitly using the native scoped plan service.
-- [x] Reset/remove behavior was fragmented across overlapping authorities, so removing one row could leave another exact/category/global/protection authority active while the UI implied the item was unlocked.
-- [x] Reset All did not clear normalized-name `protection_rules`.
-- [x] Separator-only planning did not correctly honor exact-item protection/cumulative protection modes.
-- [x] Exact manual names could immediately fight a newly applied separator.
-- [x] Category Editor could repair children while preserving the selected category header even when its saved design required a category-name repair.
-- [x] Retired startup guards/shims, historical mutation scripts, and public-looking legacy Design owners remained physically present after earlier consolidation.
-- [x] A later regression-test rewrite drifted away from the native service contracts: it called a nonexistent separator API, passed obsolete reset arguments, expected the wrong reset return shape, and monkeypatched a nonexistent `plan_service.legacy` attribute. Those test contracts were restored to the production service APIs rather than changing production to satisfy invalid tests.
+- `commands_ext.public_ticket_panel_clean` remains the authoritative ticket creation owner.
+- Its button callback enters `_handle_panel_button_core`, which immediately defers the Discord interaction before database/setup work. If that callback is dispatched, the normal path acknowledges promptly.
+- The clean panel's persistent `bot.add_view(PublicCreateTicketPanelView())` registration was coupled to `register_public_ticket_panel_clean`, which itself only runs through the selectable/tolerant slash-command module loader.
+- Therefore an already-posted clean panel could be left with no runtime handler after restart when that command module was not selected or command registration failed before reaching it.
+- The old `tickets_new.panel.TicketPanelView` only covers legacy `ticket_create` messages and cannot dispatch the clean `sv:ticket:panel:create:clean:v1` button.
+- Basic Verify already uses the correct structural pattern: install the interaction runtime independently from slash-command registration before login.
 
-## Final execution path
+## Execution path
 
-- [x] `/dank home` → **Server Design** is the canonical public doorway.
-- [x] **Design Entire Server** → settings → preview → consolidated V2 Apply.
-- [x] **Change Separators Only** → saved separator state → preview → consolidated V2 Apply → transactional separator authority persistence.
-- [x] **Edit One Category / Channel** → exact item editor → native scoped planner for Preview Fixes.
-- [x] **Custom Format** → exact category/channel saved rule.
-- [x] **Fix Inconsistent Names** → read-only scan / Smart Repair → native plan/confidence services.
-- [x] **Saved Rules & Protection** → remove one rule / reset item / reset all with explicit authority semantics.
-- [x] **Undo Last Apply** → consolidated transactional undo path.
-- [x] Legacy Studio is compatibility/backend only for still-used exact-item, saved-rule, separator and rollback primitives.
+`Discord clean Create Ticket button (sv:ticket:panel:create:clean:v1)`
+→ persistent `PublicCreateTicketPanelView`
+→ `handle_public_ticket_panel_click`
+→ `_handle_panel_button`
+→ immediate defer in `_handle_panel_button_core`
+→ existing open-ticket/setup/category checks
+→ category picker / confirm
+→ existing canonical ticket creation path
 
-## Changes landed
+Independent delayed fallback:
+`on_interaction` for the same clean custom ID
+→ wait 150 ms for persistent-view dispatch
+→ stop if already acknowledged
+→ canonical `handle_public_ticket_panel_click`
 
-- [x] Added `server_design_rule_service.py` as the pure saved-rule/separator/reset authority.
-- [x] Separator-only Apply saves the chosen separator transactionally and updates exact-name rows touched by the reviewed batch.
-- [x] Explicit saved separators outrank theme defaults when locks are built/synchronized.
-- [x] Category/Channel `Preview Fixes` routes through native scoped planning with confidence evaluated after scope filtering.
-- [x] Category repair includes the selected category header when its saved design requires repair while child channels retain safe category-local repair.
-- [x] Added `Reset This Category`, `Reset This Channel`, and complete `Reset All Design Overrides` semantics.
-- [x] Corrected exact-item/cumulative protection handling for separator-only planning.
-- [x] Replaced misleading one-rule “Unlock” wording with explicit remove/reset language.
-- [x] Removed retired design startup guards/shims, historical one-shot mutation scripts, duplicate registration/runtime-magic ownership paths, the competing legacy Home/Apply implementation, and dead legacy Design UI owners/helpers.
-- [x] Removed obsolete V2 compatibility-help bridge used only by dead legacy menus.
-- [x] Updated legacy recovery guidance to `/dank home` → **Server Design**.
-- [x] Added permanent redundancy audit coverage so retired owners/submenus cannot silently return.
-- [x] Repaired drifted regression tests back to the native `server_design_rule_service` and `server_design_plan_service` contracts.
-- [x] Final guarded cleanup deleted its own temporary workflow/helper after validation.
+The canonical handler's existing interaction-ID lock remains the duplicate-suppression authority.
 
-## Redundancy ownership result
+## Changes
 
-- `public_design_studio_v2.py` — one public workflow/home/apply owner.
-- `public_design_studio.py` — compatibility/backend primitives only; no public registration/home/apply/Doctor/Start Here/Advanced Tools ownership.
-- `public_design_bridge.py` / `public_design_group.py` — routing/registration only.
-- `server_design_plan_service.py` — native plan authority.
-- `server_design_rule_service.py` — saved rule/separator/reset authority.
-- `server_design_apply_service.py` — transactional Apply/Undo authority.
-- Majority/confidence/studio services — analysis/rendering helpers with no startup/runtime monkey patches.
-- Retired design guards, historical mutators, and temporary cleanup machinery — physically removed.
+- Added `stoney_verify/ticket_panel_runtime.py` as a runtime-binding module only. It does not create channels, allocate tickets, or own business logic.
+- It installs both the canonical persistent clean panel view and a delayed clean-ID-only fallback listener.
+- Runtime installation is idempotent and reports ready/degraded/unavailable state.
+- `stoney_verify/commands.py` now installs the public ticket panel runtime strictly after mandatory ticket security bootstrap and before the selectable general command registrar.
+- The existing `public_ticket_panel_clean` registrar remains compatible and sees the runtime registration flags, so it does not register a second persistent view.
+- Added `tests/test_ticket_panel_native_restart_runtime.py` covering primary registration, independent fallback registration, idempotency, clean-ID filtering, canonical delegation, and startup ordering.
+- Test runtime globals are reset automatically so the new tests do not leak registration state into unrelated tests.
 
-## Validation
+## Validation / results
 
-- [x] Separator persistence, scoped editor repair, reset semantics, protection handling, consolidated ownership, and rollback-owner retirement have focused regression coverage.
-- [x] Guarded cleanup workflow `34045911729` succeeded before publishing cleanup commit `154bbe1671c14f24f6a12e69af101822a9d3493e`.
-- [x] Guarded cleanup focused suite: **63 passed, 1 warning**.
-- [x] Redundancy audit: `public_registrar=1 retired_runtime=0 historical_mutators=0 runtime_magic=0 dead_submenus=0 dead_owners=0 native_plan=yes consolidated_apply=yes compatibility_boundary=ui_only`.
-- [x] Smart Auto-Detect audit: `category_local=yes raw_separator_identity=yes deterministic=yes keep_existing_exact=yes runtime_patch=no native_flow=yes`.
-- [x] Cleanup commit removed **722** lines of dead legacy code in the validated migration and deleted the temporary cleanup workflow/helper.
-- [x] Bot-authored cleanup head `154bbe1671c14f24f6a12e69af101822a9d3493e` produced `action_required` PR checks with no jobs, confirming the repository's contributor-authored validation requirement rather than a product/test failure.
-- [x] Contributor-authored validation head `7d91f44d269ac6a2b13e29dac1f52a7cb8258109` passed all six required PR workflows: Ticket Owner Emergency Override, Application Command Size Diagnostics, Dank Design Regression CI, Ticket Category Menu Sanity, Profile Runtime Diagnostics, and Dank Shield CI.
-- [x] Dedicated Dank Design Regression CI on `7d91f44d269ac6a2b13e29dac1f52a7cb8258109`: **86 passed, 1 warning**, compilation and both Design audits green.
-- [x] Full Dank Shield CI on `7d91f44d269ac6a2b13e29dac1f52a7cb8258109`: **1130 passed, 9 warnings**, `git diff --check`, compileall, standalone tool checks, public setup/command/invite/safety audits, Smart Auto-Detect audit, role-truth audit, event-boundary audit, managed-category SQL smoke test, and claim-first ticket security all green.
-- [x] Branch comparison at the validated head was **0 behind `main`** and the 40-file diff remained scoped to DS-DESIGN-033 implementation, tests, audits/workflow, removals, and task bookkeeping.
-- [x] Final reviewed PR patch contained no unresolved review threads, temporary cleanup workflow/helper, conflict markers, debug artifacts, or obvious committed `ghp_`, `sk-`, or `xoxb-` credential prefixes.
+Pending exact-head validation. Required gates:
+
+- new native restart-runtime regression tests;
+- existing public ticket panel single-owner and restart compatibility tests;
+- ticket panel/category audits and ticket security tests;
+- compile/import/static checks used by the repository;
+- full Dank Shield pytest/CI;
+- diff/scope review, conflict-marker and accidental-secret checks;
+- final exact-head SHA and 0-behind-main recheck.
 
 ## Cleanup / conflicts
 
-- The invalid regression-test rewrite was repaired to match established production service contracts; production behavior was not altered to satisfy nonexistent APIs.
-- Dead legacy owners were removed only after AST reference checks proved they were not executable dependencies outside the compatibility backend.
-- Temporary migration workflow/helper deleted themselves after focused tests, audits, compilation, and `git diff --check` passed.
-- No unrelated feature area is part of this task.
+- No second ticket creation implementation was added.
+- Legacy `ticket_create` compatibility remains intact and separate from the clean custom ID.
+- The new fallback delegates to the clean owner and uses the owner's existing interaction-ID lock rather than introducing another duplicate/rate-limit mechanism.
+- No unrelated Dank Design behavior is being changed.
 
 ## Blockers / risks
 
-- No known product blocker remains.
-- This completion-record commit is intentionally the final branch mutation. It must pass the same six required workflows on its own exact SHA before PR #189 is marked ready or merged.
+- Repository access is available, but there is no Discloud runtime/deployment connector in this conversation. Production logs and live deployment must therefore be verified externally after code/CI validation.
+- If production still times out after the clean runtime is proven registered, the remaining likely class is process-wide event-loop/gateway starvation; that requires live runtime timing/log evidence and must not be guessed into this patch.
 
 ## Backlog
 
-- None for DS-DESIGN-033.
+- None added. Process-wide gateway/event-loop starvation is not included unless production acceptance proves the registered handler is still missing Discord's acknowledgement window.
 
 ## Next step
 
-Validate all six required PR workflows on this final completion-record SHA, re-check that the branch remains 0 behind `main` and mergeable, update the PR description with final evidence, mark PR #189 ready, and merge only if that exact final head remains green.
+Run exact-head PR validation. If all repository gates pass, review the final diff and CI evidence, then deploy and test the existing June 11 panel without reposting it. Do not call the task complete until that production click is acknowledged and opens the category flow.
+
+---
+
+Previous completed task record: DS-DESIGN-033 was completed and merged in PR #189 before this task began; its full record remains available in git history at base `b4550f255fe8e7d46944b141f33324a7ad01d255`.
