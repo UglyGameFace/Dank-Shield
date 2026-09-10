@@ -24,13 +24,17 @@ FILES = [
 
 CHECKS = {
     "stoney_verify/commands_ext/public_ticket_panel_clean.py": [
-        'sb.table("ticket_categories").select("*")',
+        "managed_category_service as managed_categories",
+        "ensure_category_setup_state(guild_id)",
+        "dedupe_category_rows",
+        "starter_category_rows",
         "TicketSelectView(rows, member.id, session_id)",
         "reserve_persistent_ticket_number",
         "return await reserve_persistent_ticket_number",
         "_PANEL_INTERACTION_LOCKS",
         "_MENU_SESSIONS",
         "Newest menu wins.",
+        "loaded canonical ticket choices",
     ],
     "stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py": [
         'MIGRATION_FILE = "20260802042000_ticket_category_setup_selection.sql"',
@@ -165,6 +169,16 @@ def main() -> int:
             if snippet not in data:
                 print(f"{path} missing {snippet}", file=sys.stderr)
                 return 1
+
+    clean_panel_text = (
+        ROOT / "stoney_verify/commands_ext/public_ticket_panel_clean.py"
+    ).read_text(encoding="utf-8")
+    if 'table("ticket_categories")' in clean_panel_text:
+        print(
+            "clean ticket panel bypasses canonical managed category service",
+            file=sys.stderr,
+        )
+        return 1
 
     startup_text = (ROOT / "stoney_verify/startup_guards/__init__.py").read_text(encoding="utf-8")
     for snippet in FORBIDDEN_STARTUP_GUARDS:
