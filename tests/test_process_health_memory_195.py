@@ -34,7 +34,10 @@ def test_ru_maxrss_is_labeled_peak_not_current() -> None:
     current_body = source[current_start:peak_start]
     peak_body = source[peak_start:snapshot_start]
 
-    assert "ru_maxrss" not in current_body
+    # The current-RSS function may document why ru_maxrss is unsuitable, but it
+    # must never call the peak-RSS API to obtain its current value.
+    assert "resource.getrusage" not in current_body
+    assert "resource.getrusage" in peak_body
     assert "ru_maxrss" in peak_body
     assert 'rss_current≈' in source
     assert 'rss_peak≈' in source
