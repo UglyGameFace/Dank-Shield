@@ -214,27 +214,27 @@ async def _reconcile_guild(guild: Any, *, reason: str, force: bool = False) -> d
 
     bot_member = getattr(guild, "me", None)
     channels = list(getattr(guild, "text_channels", []) or [])
-    semaphore = asyncio.Semaphore(_RECONCILE_CONCURRENCY)
 
     async def run(channel: Any) -> tuple[bool, dict[str, Any]]:
         if not _channel_can_reconcile(channel, bot_member):
             return False, {}
-        async with semaphore:
-            result = await _scan_channel(
-                channel,
-                limit=_AUTO_HISTORY_LIMIT,
-                source=f"auto-reconcile:{reason}",
-            )
-            return True, result
+        result = await _scan_channel(
+            channel,
+            limit=_AUTO_HISTORY_LIMIT,
+            source=f"auto-reconcile:{reason}",
+        )
+        return True, result
 
-    results = await asyncio.gather(*(run(channel) for channel in channels))
-    for eligible, result in results:
-        if not eligible:
-            totals["skipped_permission"] += 1
-            continue
-        totals["channels"] += 1
-        for key in ("checked", "matched", "allowed", "deleted", "failed"):
-            totals[key] += int(result.get(key) or 0)
+    for start in range(0, len(channels), _RECONCILE_CONCURRENCY):
+        batch = channels[start : start + _RECONCILE_CONCURRENCY]
+        results = await asyncio.gather(*(run(channel) for channel in batch))
+        for eligible, result in results:
+            if not eligible:
+                totals["skipped_permission"] += 1
+                continue
+            totals["channels"] += 1
+            for key in ("checked", "matched", "allowed", "deleted", "failed"):
+                totals[key] += int(result.get(key) or 0)
 
     _LAST_GUILD_RECONCILE_AT[gid] = time.monotonic()
     _log(
