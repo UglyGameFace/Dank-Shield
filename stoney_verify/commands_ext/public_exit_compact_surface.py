@@ -57,7 +57,7 @@ def _install_final_layers(bot: Any, tree: Any) -> dict[str, Any]:
         )
 
     children = sorted(str(getattr(item, "name", "")) for item in dank_group.commands)
-    expected_children = ["home", "purge", "upload"]
+    expected_children = ["home", "purge", "setup", "upload"]
     if children != expected_children:
         raise RuntimeError(
             f"final /dank children mismatch expected={expected_children} actual={children}"

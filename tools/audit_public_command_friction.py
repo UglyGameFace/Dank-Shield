@@ -147,7 +147,7 @@ def main() -> int:
         failures.append(
             f"canonical global surface mismatch: count={PUBLIC_GLOBAL_COMMAND_COUNT} names={PUBLIC_GLOBAL_COMMAND_NAMES!r}"
         )
-    if PUBLIC_DANK_CHILDREN != frozenset({"home", "purge", "upload"}):
+    if PUBLIC_DANK_CHILDREN != frozenset({"home", "purge", "setup", "upload"}):
         failures.append(f"canonical /dank children mismatch: {sorted(PUBLIC_DANK_CHILDREN)!r}")
 
     for path in (
@@ -226,7 +226,7 @@ def main() -> int:
     final_text = read(FINAL_SURFACE)
     for marker in (
         "install_direct_purge_group()",
-        'expected_children = ["home", "purge", "upload"]',
+        'expected_children = ["home", "purge", "setup", "upload"]',
         "DANK_PAYLOAD_SAFETY_LIMIT",
         "dank_payload_size(tree)",
     ):

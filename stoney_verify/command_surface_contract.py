@@ -25,8 +25,9 @@ PUBLIC_GLOBAL_COMMAND_COUNT = len(PUBLIC_GLOBAL_COMMAND_NAMES)
 # work is reached from the Home mega menu; Upload is retained because a Discord
 # button cannot provide an attachment field. Purge is the intentional direct
 # destructive-action exception so staff can reach both message purge and
-# inactive-member purge without digging through nested menus.
-PUBLIC_DANK_CHILDREN: frozenset[str] = frozenset({"home", "purge", "upload"})
+# inactive-member purge without digging through nested menus. Setup is the
+# intentional first-run/admin doorway for server owners onboarding the bot.
+PUBLIC_DANK_CHILDREN: frozenset[str] = frozenset({"home", "purge", "setup", "upload"})
 
 # Advanced, migration, repair, legacy, and redundant direct aliases that must
 # not be exposed as direct /dank children after final public compaction. Their
@@ -64,7 +65,6 @@ PUBLIC_HIDDEN_DANK_CHILDREN: frozenset[str] = frozenset(
         "setup-verify-ids",
         "tickettool-check",
         # Former normal-product shortcuts now owned by the Home mega menu.
-        "setup",
         "overview",
         "status",
         "diagnostics",
