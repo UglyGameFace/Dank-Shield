@@ -12,6 +12,41 @@ def _reset_ticket_state() -> None:
     panel._MENU_SESSIONS.clear()
 
 
+def test_ticket_type_selection_transitions_to_confirm_view(monkeypatch) -> None:
+    async def scenario() -> None:
+        _reset_ticket_state()
+        owner = SimpleNamespace(id=1212)
+        guild = SimpleNamespace(id=3434)
+        interaction = SimpleNamespace(guild=guild, user=owner)
+        captured: dict[str, object] = {}
+
+        monkeypatch.setattr(panel, "_member_from_interaction", lambda _i: owner)
+        monkeypatch.setattr(panel, "_menu_session_current", lambda *_args: True)
+
+        async def capture_transition(_interaction, **kwargs) -> None:
+            captured.update(kwargs)
+
+        monkeypatch.setattr(panel, "_edit_or_reply", capture_transition)
+
+        rows = [
+            {"slug": "appeal", "name": "Appeal"},
+            {"slug": "report-member", "name": "Report a Member"},
+            {"slug": "support", "name": "Support"},
+        ]
+        select = panel.TicketSelect(rows, owner.id, "session-select")
+        select._values = ["support"]
+        await select.callback(interaction)
+
+        assert captured["content"] == "Confirm this ticket type."
+        assert isinstance(captured["view"], panel.TicketConfirmView)
+        confirm_view = captured["view"]
+        assert confirm_view.row["slug"] == "support"
+        assert confirm_view.owner_id == owner.id
+        assert confirm_view.session_id == "session-select"
+
+    asyncio.run(scenario())
+
+
 def test_confirm_acknowledges_before_slow_ticket_creation(monkeypatch) -> None:
     async def scenario() -> None:
         _reset_ticket_state()
