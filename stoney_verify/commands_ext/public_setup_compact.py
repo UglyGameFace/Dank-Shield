@@ -3,8 +3,8 @@ from __future__ import annotations
 """Deterministic runtime installer for the public ``/dank setup`` presentation.
 
 The canonical setup behavior lives in ``public_setup_recommend`` and
-``public_setup_solid``.  This compatibility module owns one thing only: applying
-presentation layers in one stable order.  Older code applied compact setup late
+``public_setup_solid``. This compatibility module owns one thing only: applying
+presentation layers in one stable order. Older code applied compact setup late
 and could silently erase the guided-test bindings, leaving Discord with a mixed
 view/callback graph.
 """
@@ -24,7 +24,7 @@ async def _canonical_plan_route(self, interaction):
     await _implementation.setup._open_choose_setup_type(interaction)
 
 
-# Never freeze a stale plan callback into compact views.  Entitlement/recovery
+# Never freeze a stale plan callback into compact views. Entitlement/recovery
 # layers may replace the canonical route during startup.
 _implementation.CompactSetupHomeView._plan = _canonical_plan_route
 _implementation.CompactManagerView._plan = _canonical_plan_route
@@ -80,17 +80,20 @@ def _assert_runtime_ownership() -> None:
 def apply_public_setup_runtime() -> None:
     """Install the complete setup presentation in one deterministic order.
 
-    Re-running is intentional and safe.  Compact binds the canonical setup
+    Re-running is intentional and safe. Compact binds the canonical setup
     presentation first, guided testing is then reasserted last, and navigation /
-    health contracts are applied after both.  No guild configuration or Discord
+    health contracts are applied after both. No guild configuration or Discord
     resources are created here.
     """
 
     _implementation._PATCHED = False
     _original_apply_compact_setup_patch()
 
-    # Guided testing must be the last presentation owner.  Its installer is
-    # intentionally re-entrant so a late compact rebind can never erase it.
+    # Guided testing must be the last presentation owner. The guided installer
+    # historically used a one-shot flag, so clear it before every final-runtime
+    # reassertion. This prevents a late compact pass from leaving old labels and
+    # callbacks active while guided code remains loaded but inert.
+    _guided._PATCHED = False
     _guided.apply_guided_test_patch()
 
     install_custom_service_navigation_compat()
