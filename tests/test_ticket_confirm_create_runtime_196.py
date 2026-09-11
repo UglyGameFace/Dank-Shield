@@ -189,7 +189,13 @@ def test_counter_allocator_failure_is_user_visible_and_creates_no_channel(monkey
         monkeypatch.setattr(panel, "_create_synced_ticket_channel", create_channel)
         monkeypatch.setattr(panel, "_ephemeral", capture_reply)
 
-        await panel._create_ticket(interaction, {"slug": "support", "name": "Support"})
+        # Production installs a ticket-form wrapper around _create_ticket. Marking
+        # this row completed models the post-modal path and keeps this regression
+        # focused on persistent-number failure regardless of full-suite order.
+        await panel._create_ticket(
+            interaction,
+            {"slug": "support", "name": "Support", "_form_completed": True},
+        )
 
         assert channel_create_calls == 0
         assert replies
