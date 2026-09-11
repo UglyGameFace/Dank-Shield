@@ -61,6 +61,7 @@ def test_runtime_uses_central_scanner_and_has_ready_resume_recovery() -> None:
     assert "_AUTO_HISTORY_LIMIT = 250" in text
     assert "_EVENT_HISTORY_LIMIT = 75" in text
     assert "_POLICY_RETRY_DELAY_SECONDS = 15.0" in text
+    assert "await _flush_bulk_recovery_stats(gid, reason=reason)" in text
 
 
 def test_legacy_invite_guard_delegates_instead_of_owning_second_runtime() -> None:
@@ -95,6 +96,7 @@ def test_reconcile_guild_scans_only_channels_with_required_permissions(monkeypat
         return True
 
     calls: list[tuple[int, int, str, bool]] = []
+    flushes: list[tuple[int, str]] = []
 
     async def scan(channel, *, limit, repost_mixed, source):
         calls.append((channel.id, limit, source, repost_mixed))
@@ -106,12 +108,17 @@ def test_reconcile_guild_scans_only_channels_with_required_permissions(monkeypat
             "failed": 0,
         }
 
+    async def flush(guild_id: int, *, reason: str) -> None:
+        flushes.append((guild_id, reason))
+
     monkeypatch.setattr(runtime, "_guild_reconciliation_enabled", enabled)
     monkeypatch.setattr(runtime.policy, "scan_channel_invites", scan)
+    monkeypatch.setattr(runtime, "_flush_bulk_recovery_stats", flush)
 
     result = asyncio.run(runtime._reconcile_guild(guild, reason="ready", force=True))
 
     assert calls == [(11, 250, "auto-reconcile:ready", True)]
+    assert flushes == [(123, "ready")]
     assert result == {
         "channels": 1,
         "skipped_permission": 1,
@@ -120,8 +127,39 @@ def test_reconcile_guild_scans_only_channels_with_required_permissions(monkeypat
         "allowed": 1,
         "deleted": 1,
         "failed": 0,
+        "warnings": 0,
         "deferred": 0,
     }
+
+
+def test_reconcile_guild_counts_scan_warnings_even_without_failed_count(monkeypatch) -> None:
+    guild = FakeGuild(124)
+    guild.text_channels = [FakeChannel(guild, 21, allowed=True)]
+    runtime._LAST_GUILD_RECONCILE_AT.clear()
+
+    async def enabled(_guild):
+        return True
+
+    async def scan(_channel, *, limit, repost_mixed, source):
+        assert limit == 250
+        assert repost_mixed is True
+        assert source == "auto-reconcile:ready"
+        return {
+            "checked": 0,
+            "matched": 0,
+            "allowed": 0,
+            "deleted": 0,
+            "failed": 0,
+            "warning": "history fetch failed",
+        }
+
+    monkeypatch.setattr(runtime, "_guild_reconciliation_enabled", enabled)
+    monkeypatch.setattr(runtime.policy, "scan_channel_invites", scan)
+
+    result = asyncio.run(runtime._reconcile_guild(guild, reason="ready", force=True))
+
+    assert result["failed"] == 0
+    assert result["warnings"] == 1
 
 
 def test_reconcile_guild_bounds_created_channel_work(monkeypatch) -> None:
@@ -163,6 +201,7 @@ def test_reconcile_guild_bounds_created_channel_work(monkeypatch) -> None:
     assert max_active <= runtime._RECONCILE_CONCURRENCY
     assert result["channels"] == 5
     assert result["checked"] == 5
+    assert result["warnings"] == 0
 
 
 def test_reconcile_skips_history_when_no_delete_feature_is_enabled(monkeypatch) -> None:
@@ -253,7 +292,7 @@ def test_reconcile_all_retries_policy_unavailable_guild_once(monkeypatch) -> Non
     assert calls == [("ready", False), ("ready-policy-retry", True)]
 
 
-def test_event_recovery_rescans_recent_channel_history(monkeypatch) -> None:
+def test_event_recovery_rescans_recent_channel_history(monkeypatch, capsys) -> None:
     guild = FakeGuild(789)
     channel = guild.text_channels[0]
     runtime._LAST_CHANNEL_SWEEP_AT.clear()
@@ -266,7 +305,14 @@ def test_event_recovery_rescans_recent_channel_history(monkeypatch) -> None:
 
     async def scan(ch, *, limit, repost_mixed, source):
         calls.append((ch.id, limit, source))
-        return {"checked": 7, "matched": 1, "allowed": 0, "deleted": 1, "failed": 0}
+        return {
+            "checked": 7,
+            "matched": 2,
+            "allowed": 1,
+            "deleted": 1,
+            "failed": 0,
+            "warning": None,
+        }
 
     monkeypatch.setattr(runtime, "_guild_reconciliation_enabled", enabled)
     monkeypatch.setattr(runtime.policy, "scan_channel_invites", scan)
@@ -274,3 +320,5 @@ def test_event_recovery_rescans_recent_channel_history(monkeypatch) -> None:
     asyncio.run(runtime._sweep_channel(channel, reason="create"))
 
     assert calls == [(11, 75, "live-recovery:create")]
+    output = capsys.readouterr().out
+    assert "matched=2 allowed=1 deleted=1 failed=0" in output

@@ -172,18 +172,80 @@ async def _ping_external_watchdog() -> bool:
     return False
 
 
-def _memory_snapshot() -> str:
+def _proc_status_rss_mb(text: str) -> float | None:
+    """Parse current resident memory from Linux /proc/self/status."""
+
+    try:
+        for line in str(text or "").splitlines():
+            if not line.startswith("VmRSS:"):
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                return None
+            value = float(parts[1])
+            if value <= 0:
+                return None
+            unit = parts[2].lower() if len(parts) > 2 else "kb"
+            if unit == "kb":
+                return value / 1024.0
+            if unit == "mb":
+                return value
+            if unit == "gb":
+                return value * 1024.0
+            return None
+    except Exception:
+        pass
+    return None
+
+
+def _current_rss_mb() -> float | None:
+    """Return current resident memory where the host exposes it.
+
+    Linux/Discloud exposes current RSS through procfs. ``ru_maxrss`` is not used
+    here because it is a lifetime high-water mark and therefore cannot show
+    memory being released after startup work finishes.
+    """
+
+    if sys.platform.startswith("linux"):
+        try:
+            value = _proc_status_rss_mb(Path("/proc/self/status").read_text(encoding="utf-8"))
+            if value is not None:
+                return value
+        except Exception:
+            pass
+        try:
+            fields = Path("/proc/self/statm").read_text(encoding="utf-8").split()
+            resident_pages = int(fields[1]) if len(fields) > 1 else 0
+            page_size = int(os.sysconf("SC_PAGE_SIZE"))
+            if resident_pages > 0 and page_size > 0:
+                return (resident_pages * page_size) / (1024.0 * 1024.0)
+        except Exception:
+            pass
+    return None
+
+
+def _peak_rss_mb() -> float | None:
+    """Return the process lifetime RSS high-water mark when available."""
+
     try:
         import resource
 
-        rss_kb = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss or 0)
-        if rss_kb > 10_000_000:
-            mb = rss_kb / (1024 * 1024)
-        else:
-            mb = rss_kb / 1024
-        return f"rss≈{mb:.1f}MB"
+        raw = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss or 0)
+        if raw <= 0:
+            return None
+        if sys.platform == "darwin":
+            return raw / (1024.0 * 1024.0)
+        return raw / 1024.0
     except Exception:
-        return "rss=unknown"
+        return None
+
+
+def _memory_snapshot() -> str:
+    current = _current_rss_mb()
+    peak = _peak_rss_mb()
+    current_text = "unknown" if current is None else f"{current:.1f}MB"
+    peak_text = "unknown" if peak is None else f"{peak:.1f}MB"
+    return f"rss_current≈{current_text} rss_peak≈{peak_text}"
 
 
 def _operation_queue_snapshot() -> str:
