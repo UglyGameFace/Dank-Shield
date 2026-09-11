@@ -30,6 +30,37 @@ _GAME_INTAKE_TYPES = {
     "service_question",
 }
 
+# Setup presets are shortcuts only. The multi-select remains authoritative and
+# owners can choose any combination from the complete managed catalog.
+_COMMUNITY_CORE_PRESET_KEYS: tuple[str, ...] = (
+    "verification",
+    "appeal",
+    "report",
+    "staff-complaint",
+    "bug",
+    "question",
+    "support",
+)
+_SERVICE_GAMING_PRESET_KEYS: tuple[str, ...] = (
+    "verification",
+    "account-access",
+    "payments-refunds",
+    "appeal",
+    "report",
+    "staff-complaint",
+    "bug",
+    "cod-services",
+    "game-services",
+    "service-request",
+    "vouch-referral",
+    "partnership",
+    "question",
+    "support",
+)
+_ALL_MANAGED_PRESET_KEYS: tuple[str, ...] = tuple(
+    str(row["category_key"]) for row in service.CATEGORY_CATALOG
+)
+
 
 def _log(message: str) -> None:
     try:
@@ -219,6 +250,37 @@ class CategorySetupManagerView(discord.ui.View):
 
         if state is not None and not db_error:
             self.add_item(ManagedCategorySelection(state))
+
+            core = discord.ui.Button(
+                label="Community Core",
+                emoji="🛡️",
+                style=discord.ButtonStyle.secondary,
+                custom_id="dank_ticket_category_setup:preset_core",
+                row=1,
+            )
+            core.callback = self._use_core_preset
+            self.add_item(core)
+
+            service_gaming = discord.ui.Button(
+                label="Service + Gaming",
+                emoji="🎮",
+                style=discord.ButtonStyle.primary,
+                custom_id="dank_ticket_category_setup:preset_service_gaming",
+                row=1,
+            )
+            service_gaming.callback = self._use_service_gaming_preset
+            self.add_item(service_gaming)
+
+            all_builtins = discord.ui.Button(
+                label=f"All {len(_ALL_MANAGED_PRESET_KEYS)} Built-ins",
+                emoji="📚",
+                style=discord.ButtonStyle.secondary,
+                custom_id="dank_ticket_category_setup:preset_all",
+                row=1,
+            )
+            all_builtins.callback = self._use_all_preset
+            self.add_item(all_builtins)
+
             custom_rows = _custom_rows_from_state(state)
             if custom_rows:
                 self.add_item(
@@ -226,16 +288,16 @@ class CategorySetupManagerView(discord.ui.View):
                         custom_rows,
                         action="edit",
                         placeholder="✏️ Edit a custom ticket choice",
-                        row=1,
+                        row=2,
                     )
                 )
 
                 custom_only = discord.ui.Button(
-                    label="Use Custom Choices Only",
+                    label="Custom Only",
                     emoji="🧩",
                     style=discord.ButtonStyle.secondary,
                     custom_id="dank_ticket_category_setup:custom_only",
-                    row=2,
+                    row=1,
                 )
                 custom_only.callback = self._use_custom_only
                 self.add_item(custom_only)
@@ -284,6 +346,62 @@ class CategorySetupManagerView(discord.ui.View):
         from ..commands_ext import public_setup_solid as solid
 
         return await solid._require_setup_permission(interaction)
+
+    async def _apply_managed_preset(
+        self,
+        interaction: discord.Interaction,
+        keys: Iterable[str],
+        *,
+        title: str,
+        summary: str,
+    ) -> None:
+        from ..commands_ext import public_setup_solid as solid
+
+        if not await self._allowed(interaction):
+            return
+        state = await _save_selection(interaction, tuple(keys))
+        if state is None or interaction.guild is None:
+            return
+        embed, view = await _build_category_manager_payload(
+            interaction.guild,
+            title=title,
+            state=state,
+        )
+        embed.add_field(name="Preset Applied", value=summary, inline=False)
+        await solid._edit_or_followup(interaction, embed=embed, view=view)
+
+    async def _use_core_preset(self, interaction: discord.Interaction) -> None:
+        await self._apply_managed_preset(
+            interaction,
+            _COMMUNITY_CORE_PRESET_KEYS,
+            title="✅ Community Core Ticket Menu Saved",
+            summary=(
+                "Enabled the common moderation and support choices. You can still "
+                "fine-tune the exact list with the multi-select above."
+            ),
+        )
+
+    async def _use_service_gaming_preset(self, interaction: discord.Interaction) -> None:
+        await self._apply_managed_preset(
+            interaction,
+            _SERVICE_GAMING_PRESET_KEYS,
+            title="✅ Service + Gaming Ticket Menu Saved",
+            summary=(
+                "Enabled the broader service/gaming set, including account/payment "
+                "help, legacy COD modding, game services, referrals, and partnerships."
+            ),
+        )
+
+    async def _use_all_preset(self, interaction: discord.Interaction) -> None:
+        await self._apply_managed_preset(
+            interaction,
+            _ALL_MANAGED_PRESET_KEYS,
+            title="✅ Full Ticket Catalog Saved",
+            summary=(
+                f"Enabled all {len(_ALL_MANAGED_PRESET_KEYS)} built-in choices. "
+                "Use the multi-select anytime to hide categories this server does not need."
+            ),
+        )
 
     async def _use_custom_only(self, interaction: discord.Interaction) -> None:
         from ..commands_ext import public_setup_solid as solid
@@ -383,8 +501,9 @@ async def _build_category_manager_payload(
             name="⚠️ Setup Required",
             value=(
                 f"{state.reason or 'Confirm this server’s ticket choices.'}\n\n"
-                "A small temporary menu is active so support is not completely "
-                "blocked. Setup remains unfinished until an admin saves a selection."
+                "Your last known selection stays visible while review is required. "
+                "If no trustworthy prior selection exists, the safe starter choices stay "
+                "active until an admin saves the server's real selection."
             )[:1024],
             inline=False,
         )
@@ -403,9 +522,9 @@ async def _build_category_manager_payload(
     embed.add_field(
         name="How to Save",
         value=(
-            "Use the multi-select to choose every built-in option you want. "
-            "Servers with custom choices can press **Use Custom Choices Only** "
-            "to keep every built-in option off."
+            "Use the multi-select for an exact per-server list, or use **Community Core**, "
+            "**Service + Gaming**, or **All Built-ins** as a shortcut. Servers with custom "
+            "choices can use **Custom Only** to keep every built-in option off."
         ),
         inline=False,
     )
@@ -477,9 +596,9 @@ async def _legacy_public_load_rows(guild: discord.Guild) -> List[Dict[str, Any]]
 def _cod_questions(intake_mod: Any) -> List[Dict[str, Any]]:
     make = getattr(intake_mod, "_make_question")
     return [
-        make(key="cod_game", label="Which COD game?", placeholder="BO2, BO3, MWIII, BO6, BO7, Warzone, Zombies, etc.", style="short", max_length=180, row=0),
-        make(key="cod_service", label="What COD question or service do you need help with?", placeholder="Describe what you need. Do not include passwords or private credentials.", style="paragraph", max_length=1000, row=1),
-        make(key="cod_platform", label="Platform / account type", placeholder="Xbox, PlayStation, PC, Steam, Battle.net, Activision, etc.", style="short", max_length=180, row=2),
+        make(key="cod_game", label="Which legacy COD title?", placeholder="BO1, BO2, BO3, WaW, MW2, MW3, Ghosts, Zombies, etc.", style="short", max_length=180, row=0),
+        make(key="cod_service", label="Which modding service do you need?", placeholder="Modded/challenge lobby, unlocks, recovery, RGH/JTAG, Zombies help, etc. Do not include passwords.", style="paragraph", max_length=1000, row=1),
+        make(key="cod_platform", label="Platform / account type", placeholder="Xbox, PlayStation, or PC; include console/account type if relevant.", style="short", max_length=180, row=2),
     ]
 
 

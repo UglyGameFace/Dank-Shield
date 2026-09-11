@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import discord
 
 from stoney_verify.commands_ext import public_setup_recommend as recommend
 from stoney_verify.commands_ext import public_setup_solid as solid
@@ -544,3 +545,118 @@ def test_cod_default_form_is_legacy_modding_specific() -> None:
     assert "rgh/jtag" in joined
     assert "warzone" not in joined
     assert "modding service" in labels
+
+
+
+def test_owner_setup_exposes_full_catalog_and_optional_presets() -> None:
+    rows = categories.catalog_category_rows()
+    state = categories.CategorySetupState(
+        rows=rows,
+        active_rows=[row for row in rows if row["category_key"] == "support"],
+        selected_keys=("support",),
+        required=False,
+        reason="",
+        version=categories.CATEGORY_SETUP_VERSION,
+    )
+    view = setup_guard.CategorySetupManagerView(state=state)
+    custom_ids = {str(getattr(child, "custom_id", "")) for child in view.children}
+
+    assert "dank_ticket_category_setup:preset_core" in custom_ids
+    assert "dank_ticket_category_setup:preset_service_gaming" in custom_ids
+    assert "dank_ticket_category_setup:preset_all" in custom_ids
+
+    selector = next(child for child in view.children if isinstance(child, setup_guard.ManagedCategorySelection))
+    assert len(selector.options) == len(categories.CATEGORY_CATALOG) == 16
+    assert {option.value for option in selector.options} == {
+        row["category_key"] for row in categories.CATEGORY_CATALOG
+    }
+    assert {option.value for option in selector.options if option.default} == {"support"}
+
+
+def test_setup_presets_are_catalog_subsets_not_global_forcing() -> None:
+    all_keys = tuple(row["category_key"] for row in categories.CATEGORY_CATALOG)
+    assert setup_guard._ALL_MANAGED_PRESET_KEYS == all_keys
+    assert set(setup_guard._COMMUNITY_CORE_PRESET_KEYS) < set(all_keys)
+    assert set(setup_guard._SERVICE_GAMING_PRESET_KEYS) < set(all_keys)
+    assert "cod-services" not in setup_guard._COMMUNITY_CORE_PRESET_KEYS
+    assert "cod-services" in setup_guard._SERVICE_GAMING_PRESET_KEYS
+    assert "content-media" not in setup_guard._SERVICE_GAMING_PRESET_KEYS
+    assert "giveaway-reward" not in setup_guard._SERVICE_GAMING_PRESET_KEYS
+
+
+def test_custom_setup_keeps_custom_only_and_custom_editor_off_preset_row() -> None:
+    custom = {
+        "id": "custom-1",
+        "slug": "clan_application",
+        "name": "Clan Application",
+        "is_enabled": True,
+        "is_default": True,
+        "managed_by_dank": False,
+    }
+    rows = [*categories.catalog_category_rows(), custom]
+    state = categories.CategorySetupState(
+        rows=rows,
+        active_rows=[custom],
+        selected_keys=(),
+        required=False,
+        reason="",
+        version=categories.CATEGORY_SETUP_VERSION,
+    )
+    view = setup_guard.CategorySetupManagerView(state=state)
+    custom_ids = {str(getattr(child, "custom_id", "")) for child in view.children}
+    assert "dank_ticket_category_setup:custom_only" in custom_ids
+    custom_editor = next(
+        child for child in view.children
+        if str(getattr(child, "placeholder", "")) == "✏️ Edit a custom ticket choice"
+    )
+    assert custom_editor.row == 2
+
+
+def test_community_core_preset_saves_only_that_subset(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        rows = categories.catalog_category_rows()
+        initial = categories.CategorySetupState(
+            rows=rows,
+            active_rows=[row for row in rows if row["category_key"] == "support"],
+            selected_keys=("support",),
+            required=True,
+            reason="Review choices.",
+            version=0,
+        )
+        captured: list[tuple[str, ...]] = []
+
+        async def fake_save(interaction: Any, selected_keys: Any):
+            keys = tuple(selected_keys)
+            captured.append(keys)
+            return categories.CategorySetupState(
+                rows=rows,
+                active_rows=[row for row in rows if row["category_key"] in set(keys)],
+                selected_keys=keys,
+                required=False,
+                reason="",
+                version=categories.CATEGORY_SETUP_VERSION,
+            )
+
+        async def fake_payload(guild: Any, **kwargs: Any):
+            return discord.Embed(title="saved"), object()
+
+        async def fake_edit(*args: Any, **kwargs: Any) -> None:
+            return None
+
+        view = setup_guard.CategorySetupManagerView(state=initial)
+
+        async def allowed(interaction: Any) -> bool:
+            return True
+
+        monkeypatch.setattr(view, "_allowed", allowed)
+        monkeypatch.setattr(setup_guard, "_save_selection", fake_save)
+        monkeypatch.setattr(setup_guard, "_build_category_manager_payload", fake_payload)
+        monkeypatch.setattr(solid, "_edit_or_followup", fake_edit)
+
+        interaction = SimpleNamespace(guild=SimpleNamespace(id=1234))
+        await view._use_core_preset(interaction)
+
+        assert captured == [setup_guard._COMMUNITY_CORE_PRESET_KEYS]
+        assert set(captured[0]) != set(setup_guard._ALL_MANAGED_PRESET_KEYS)
+
+    asyncio.run(scenario())
