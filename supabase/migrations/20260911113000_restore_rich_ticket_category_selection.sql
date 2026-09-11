@@ -76,74 +76,86 @@ begin
         return recovered;
     end if;
 
-    -- Never overwrite surviving owner evidence.  Recovery exists only for
-    -- guilds whose older safety reset already erased the selection field.
+    -- Surviving owner evidence is authoritative.  Validate it against the
+    -- current catalog and use it to realign row flags; never replace it from
+    -- history.  History is consulted only when the old reset erased the field.
     if jsonb_typeof(current_selected) = 'array'
        and jsonb_array_length(current_selected) > 0 then
-        return recovered;
-    end if;
-
-    if to_regclass('public.guild_config_versions') is null then
-        return recovered;
-    end if;
-
-    -- The old reset updated ticket rows and then wrote guild_configs in the
-    -- same transaction.  PostgreSQL now() is transaction-stable, so every
-    -- intermediate row-trigger snapshot from that destructive reset shares the
-    -- reset timestamp.  Recover the last ticket snapshot strictly *before* it,
-    -- not an intermediate partially-reset snapshot.
-    select v.created_at
-      into destructive_reset_at
-      from public.guild_config_versions v
-     where v.guild_id = btrim(p_guild_id)
-       and v.config_table in ('guild_configs', 'guild_config')
-       and coalesce((v.snapshot ->> 'ticket_category_setup_required')::boolean, false) = true
-       and coalesce(v.snapshot ->> 'ticket_category_setup_required_reason', '')
-           ilike '%previous setup enabled duplicate or excessive%'
-     order by v.created_at desc, v.version_id desc
-     limit 1;
-
-    if destructive_reset_at is null then
-        return recovered;
-    end if;
-
-    select v.snapshot -> 'rows'
-      into historical_rows
-      from public.guild_config_versions v
-     where v.guild_id = btrim(p_guild_id)
-       and v.config_table = 'ticket_categories'
-       and v.created_at < destructive_reset_at
-     order by v.created_at desc, v.version_id desc
-     limit 1;
-
-    if historical_rows is null then
-        return recovered;
-    end if;
-
-    select coalesce(array_agg(distinct resolved.category_key order by resolved.category_key), array[]::text[])
-      into recovered
-      from jsonb_array_elements(coalesce(historical_rows, '[]'::jsonb)) item
-     cross join lateral (
-        select public.dank_ticket_category_key(item ->> 'slug', null) as category_key
-     ) resolved
-     where coalesce((item ->> 'is_enabled')::boolean, true) = true
-       and resolved.category_key is not null
-       and exists (
+        select coalesce(array_agg(distinct chosen.value order by chosen.value), array[]::text[])
+          into recovered
+          from jsonb_array_elements_text(current_selected) chosen(value)
+         where exists (
             select 1
               from public.dank_ticket_category_catalog() catalog
-             where catalog.category_key = resolved.category_key
-       );
+             where catalog.category_key = chosen.value
+         );
 
-    if coalesce(array_length(recovered, 1), 0) < 1 then
-        return array[]::text[];
+        if coalesce(array_length(recovered, 1), 0) < 1 then
+            return array[]::text[];
+        end if;
+    else
+        if to_regclass('public.guild_config_versions') is null then
+            return recovered;
+        end if;
+
+        -- The old reset updated ticket rows and then wrote guild_configs in the
+        -- same transaction.  PostgreSQL now() is transaction-stable, so every
+        -- intermediate row-trigger snapshot from that destructive reset shares the
+        -- reset timestamp.  Recover the last ticket snapshot strictly *before* it,
+        -- not an intermediate partially-reset snapshot.
+        select v.created_at
+          into destructive_reset_at
+          from public.guild_config_versions v
+         where v.guild_id = btrim(p_guild_id)
+           and v.config_table in ('guild_configs', 'guild_config')
+           and coalesce((v.snapshot ->> 'ticket_category_setup_required')::boolean, false) = true
+           and coalesce(v.snapshot ->> 'ticket_category_setup_required_reason', '')
+               ilike '%previous setup enabled duplicate or excessive%'
+         order by v.created_at desc, v.version_id desc
+         limit 1;
+
+        if destructive_reset_at is null then
+            return recovered;
+        end if;
+
+        select v.snapshot -> 'rows'
+          into historical_rows
+          from public.guild_config_versions v
+         where v.guild_id = btrim(p_guild_id)
+           and v.config_table = 'ticket_categories'
+           and v.created_at < destructive_reset_at
+         order by v.created_at desc, v.version_id desc
+         limit 1;
+
+        if historical_rows is null then
+            return recovered;
+        end if;
+
+        select coalesce(array_agg(distinct resolved.category_key order by resolved.category_key), array[]::text[])
+          into recovered
+          from jsonb_array_elements(coalesce(historical_rows, '[]'::jsonb)) item
+         cross join lateral (
+            select public.dank_ticket_category_key(item ->> 'slug', null) as category_key
+         ) resolved
+         where coalesce((item ->> 'is_enabled')::boolean, true) = true
+           and resolved.category_key is not null
+           and exists (
+                select 1
+                  from public.dank_ticket_category_catalog() catalog
+                 where catalog.category_key = resolved.category_key
+           );
+
+        if coalesce(array_length(recovered, 1), 0) < 1 then
+            return array[]::text[];
+        end if;
+
+        update public.guild_configs gc
+           set ticket_category_setup_selected_keys = to_jsonb(recovered),
+               updated_at = now()
+         where gc.guild_id::text = btrim(p_guild_id)
+           and coalesce(gc.ticket_category_setup_required, false) = true
+           and coalesce(gc.ticket_category_setup_selected_keys, '[]'::jsonb) = '[]'::jsonb;
     end if;
-
-    update public.guild_configs gc
-       set ticket_category_setup_selected_keys = to_jsonb(recovered),
-           updated_at = now()
-     where gc.guild_id::text = btrim(p_guild_id)
-       and coalesce(gc.ticket_category_setup_required, false) = true
-       and coalesce(gc.ticket_category_setup_selected_keys, '[]'::jsonb) = '[]'::jsonb;
 
     update public.ticket_categories tc
        set is_enabled = tc.managed_category_key = any(recovered),
