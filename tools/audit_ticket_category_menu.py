@@ -73,7 +73,7 @@ CHECKS = {
         "Single owner for ticket category catalog",
         "ManagedCategorySelection",
         "Choose every built-in ticket option this server should show",
-        "Use Custom Choices Only",
+        'custom_id="dank_ticket_category_setup:custom_only"',
         "_setup_category_load",
         "_seed_catalog_without_enabling_everything",
         "_clean_panel_load_rows",
