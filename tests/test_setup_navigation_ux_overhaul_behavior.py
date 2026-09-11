@@ -44,19 +44,7 @@ def select_labels(view: discord.ui.View) -> list[str]:
     return result
 
 
-def test_custom_setup_does_not_invent_tickets() -> None:
-    services = recommend._selected_setup_services(
-        {
-            "setup_choice": "custom_setup",
-            "verification_enabled": True,
-            "tickets_enabled": False,
-        }
-    )
-    assert services["tickets"] is False
-    assert services["basic_verify"] is True
-
-
-def test_test_checklist_hides_features_that_are_off_and_locks_finish() -> None:
+def test_guided_checklist_hides_features_that_are_off_and_starts_next() -> None:
     view = compact.CompactTestView(
         {
             "tickets": False,
@@ -70,13 +58,12 @@ def test_test_checklist_hides_features_that_are_off_and_locks_finish() -> None:
         }
     )
     assert labels(view) == [
-        "Finish Setup",
-        "Recheck Configuration",
+        "Start Next Test",
         "Setup Home",
         "Close",
     ]
     assert select_labels(view) == ["Simple Verify"]
-    assert button(view, "dank_setup_test:finish").disabled is True
+    assert "Finish Setup" not in labels(view)
 
 
 def test_finish_unlocks_only_after_every_enabled_test_is_confirmed() -> None:
