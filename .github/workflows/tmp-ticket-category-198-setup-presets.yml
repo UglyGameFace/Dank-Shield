@@ -63,3 +63,5 @@ jobs:
           git diff --cached --check
           git commit -m "feat: add per-server ticket category setup presets" || exit 0
           git push origin HEAD:fix/ticket-category-preserved-selection-198
+
+# Rerun after the menu audit was updated to validate stable component IDs.
