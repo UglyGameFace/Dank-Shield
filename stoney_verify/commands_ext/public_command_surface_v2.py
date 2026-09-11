@@ -87,8 +87,8 @@ def _home_embed() -> discord.Embed:
     embed.add_field(
         name="Tiny command surface",
         value=(
-            "`/dank home` is the main doorway. `/mod`, `/ticket`, `/tickets`, and `/verify` are optional "
-            "fast doorways to the same guided centers. `/dank upload` exists only because Discord "
+            "`/dank home` is the main doorway. New server owners can use `/dank setup` directly. "
+            "`/mod`, `/ticket`, `/tickets`, and `/verify` are optional fast doorways. `/dank upload` exists only because Discord "
             "buttons cannot provide a file-attachment field."
         ),
         inline=False,
@@ -364,6 +364,10 @@ def _standalone(name: str, description: str, callback: Any) -> app_commands.Comm
 
 
 def _compact_dank_children(tree: Any) -> int:
+    setup_command = dank_group.get_command("setup")
+    if not isinstance(setup_command, app_commands.Command):
+        raise RuntimeError("canonical /dank setup is unavailable before public compaction")
+
     for item in list(getattr(dank_group, "commands", []) or []):
         try:
             dank_group.remove_command(str(getattr(item, "name", "")))
@@ -371,6 +375,9 @@ def _compact_dank_children(tree: Any) -> int:
             pass
 
     dank_group.add_command(_standalone("home", "Open the complete Dank Shield control center.", open_compact_dank_home))
+    # Re-add the exact canonical setup command object. This preserves its existing
+    # permission checks, callback, and single-owner setup implementation.
+    dank_group.add_command(setup_command)
     upload = app_commands.Command(
         name="upload",
         description="Upload Join/Exit card artwork or a custom card font.",
@@ -426,7 +433,7 @@ def install_compact_public_surface_v2(bot: Any, tree: Any) -> dict[str, Any]:
         )
 
     dank_children = sorted(str(getattr(item, "name", "")) for item in dank_group.commands)
-    if dank_children != ["home", "upload"]:
+    if dank_children != ["home", "setup", "upload"]:
         raise RuntimeError(f"compact v2 /dank children mismatch: {dank_children}")
 
     _INSTALLED = True

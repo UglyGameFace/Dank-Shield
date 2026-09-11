@@ -51,7 +51,7 @@ def test_final_surface_reasserts_after_additive_registrar_drift() -> None:
 
     register_compact_exit_card_commands(commands_module.bot, commands_module.bot.tree)
 
-    assert _dank_children() == {"home", "purge", "upload"}
+    assert _dank_children() == {"home", "purge", "setup", "upload"}
     purge = dank_group.get_command("purge")
     assert isinstance(purge, app_commands.Group)
     assert {str(command.name) for command in purge.commands} == {"messages", "members"}

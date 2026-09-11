@@ -17,7 +17,7 @@ HARDENING = (ROOT / "supabase/migrations/20260905121500_community_tools_hardenin
 def test_home_routes_to_community_tools_without_expanding_dank_children() -> None:
     assert 'label="Community Tools"' in SURFACE
     assert "open_community_tools(interaction, replace_message=True)" in SURFACE
-    assert 'dank_children != ["home", "upload"]' in SURFACE
+    assert 'dank_children != ["home", "setup", "upload"]' in SURFACE
 
 
 def test_runtime_registration_is_idempotent_and_single_owner() -> None:

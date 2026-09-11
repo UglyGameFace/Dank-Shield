@@ -37,7 +37,7 @@ def main() -> int:
         )
     if PUBLIC_GLOBAL_COMMAND_NAMES != expected:
         errors.append(f"public global command names drifted: {PUBLIC_GLOBAL_COMMAND_NAMES!r}")
-    if PUBLIC_DANK_CHILDREN != frozenset({"home", "purge", "upload"}):
+    if PUBLIC_DANK_CHILDREN != frozenset({"home", "purge", "setup", "upload"}):
         errors.append(f"final /dank children drifted: {sorted(PUBLIC_DANK_CHILDREN)!r}")
 
     access = _read("stoney_verify/commands_ext/public_access_control.py")
@@ -71,7 +71,7 @@ def main() -> int:
     required_surface_markers = (
         "install_compact_public_surface_v2",
         'for retired_root in ("ticket-intake", "ticket-category", "ticket-panel")',
-        'dank_children != ["home", "upload"]',
+        'dank_children != ["home", "setup", "upload"]',
         'expected_roots = {"dank", "mod", "ticket", "tickets", "verify"}',
     )
     for marker in required_surface_markers:
@@ -83,7 +83,7 @@ def main() -> int:
         "compact_surface.install_compact_public_surface_v2(bot, tree)",
         "install_lifecycle_menu_compat()",
         "install_direct_purge_group()",
-        'expected_children = ["home", "purge", "upload"]',
+        'expected_children = ["home", "purge", "setup", "upload"]',
     )
     for marker in required_exit_markers:
         if marker not in exit_surface:
