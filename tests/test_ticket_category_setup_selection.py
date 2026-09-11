@@ -660,3 +660,99 @@ def test_community_core_preset_saves_only_that_subset(monkeypatch: pytest.Monkey
         assert set(captured[0]) != set(setup_guard._ALL_MANAGED_PRESET_KEYS)
 
     asyncio.run(scenario())
+
+
+
+def test_runtime_history_recovery_only_targets_old_starter_reset() -> None:
+    rows = categories.catalog_category_rows()
+    for row in rows:
+        key = row["category_key"]
+        row["is_enabled"] = key in categories.SAFE_STARTER_KEYS
+        row["is_default"] = key == "support"
+    cfg = {
+        "ticket_category_setup_required": True,
+        "ticket_category_setup_version": 0,
+        "ticket_category_setup_selected_keys": [],
+    }
+    assert categories._runtime_history_recovery_eligible(cfg, rows) is True
+
+    custom = {
+        "id": "custom-1",
+        "slug": "custom_help",
+        "name": "Custom Help",
+        "is_enabled": True,
+        "is_default": False,
+        "managed_by_dank": False,
+    }
+    assert categories._runtime_history_recovery_eligible(cfg, [*rows, custom]) is False
+    assert categories._runtime_history_recovery_eligible(
+        {**cfg, "ticket_category_setup_selected_keys": ["support"]}, rows
+    ) is False
+
+
+def test_historical_managed_keys_ignore_disabled_and_custom_rows() -> None:
+    snapshot = {
+        "rows": [
+            {"slug": "cod_services", "name": "COD Services", "is_enabled": True},
+            {"slug": "staff_complaint", "name": "Staff Complaint", "is_enabled": True},
+            {"slug": "partnership", "name": "Partnerships", "is_enabled": False},
+            {"slug": "clan_help", "name": "Support", "is_enabled": True, "managed_by_dank": False},
+        ]
+    }
+    assert categories._historical_managed_keys(snapshot) == (
+        "cod-services",
+        "staff-complaint",
+    )
+
+
+def test_erased_selection_runtime_recovery_keeps_review_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows = categories.catalog_category_rows()
+    for row in rows:
+        key = row["category_key"]
+        row["id"] = f"row-{key}"
+        row["is_enabled"] = key in categories.SAFE_STARTER_KEYS
+        row["is_default"] = key == "support"
+
+    before = {
+        "ticket_category_setup_required": True,
+        "ticket_category_setup_required_reason": "Old category review",
+        "ticket_category_setup_version": 0,
+        "ticket_category_setup_selected_keys": [],
+    }
+    recovered_cfg = {
+        **before,
+        "ticket_category_setup_selected_keys": [
+            "report", "staff-complaint", "cod-services", "partnership", "support"
+        ],
+    }
+    config_reads = iter([before, recovered_cfg])
+    persisted: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(categories, "_fetch_config_sync", lambda _gid: dict(next(config_reads)))
+    monkeypatch.setattr(categories, "_fetch_rows_sync", lambda _gid: [dict(row) for row in rows])
+    monkeypatch.setattr(categories, "_catalog_reconcile_needed", lambda _rows: False)
+    monkeypatch.setattr(categories, "_saved_selection_reconcile_needed", lambda _rows, _cfg: False)
+    monkeypatch.setattr(categories, "_claim_history_recovery_window", lambda _gid: True)
+    monkeypatch.setattr(
+        categories,
+        "_recover_erased_selection_keys_sync",
+        lambda _gid: ("report", "staff-complaint", "cod-services", "partnership", "support"),
+    )
+    monkeypatch.setattr(
+        categories,
+        "_persist_runtime_recovered_selection_sync",
+        lambda _gid, keys, _rows: persisted.append(tuple(keys)),
+    )
+
+    state = categories.ensure_category_setup_state_sync(1234)
+    assert persisted == [
+        ("report", "staff-complaint", "cod-services", "partnership", "support")
+    ]
+    assert state.required is True
+    assert state.version == 0
+    assert state.selected_keys == (
+        "report", "staff-complaint", "cod-services", "partnership", "support"
+    )
+    assert {categories.canonical_category_key(row) for row in state.active_rows if row.get("managed_by_dank")} == {
+        "report", "staff-complaint", "cod-services", "partnership", "support"
+    }

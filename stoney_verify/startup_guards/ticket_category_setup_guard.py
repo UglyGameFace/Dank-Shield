@@ -581,7 +581,7 @@ async def _clean_panel_load_rows(guild: discord.Guild) -> tuple[List[Dict[str, A
         state = await service.ensure_category_setup_state(guild.id)
         warning = ""
         if state.required:
-            warning = "This server is using a temporary safe ticket menu until an admin confirms its ticket choices."
+            warning = "This server's ticket choices are awaiting owner confirmation; the last trustworthy selection remains active."
         return list(state.active_rows), warning
     except Exception as exc:
         return service.starter_category_rows(), (
