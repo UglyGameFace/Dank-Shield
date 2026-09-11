@@ -73,11 +73,13 @@ def test_compact_home_uses_one_status_field_and_one_direct_area_picker(
     assert len(
         [child for child in view.children if isinstance(child, discord.ui.Select)]
     ) == 1
-    assert "Test Features" in [
+    button_text = [
         child.label
         for child in view.children
         if isinstance(child, discord.ui.Button)
     ]
+    assert "Start Guided Test" in button_text
+    assert "Test Features" not in button_text
 
 
 def test_health_check_hides_passing_wall_and_shows_only_next_problem(
@@ -138,7 +140,8 @@ def test_ready_configuration_check_does_not_claim_features_were_tested(
 
     assert embed.title == "✅ Configuration Check Passed"
     assert "does **not** claim" in str(embed.description)
-    assert "Test Features" in str(embed.fields[0].value)
+    assert "Start Guided Test" in str(embed.fields[0].value)
+    assert "Test Features" not in str(embed.fields[0].value)
 
 
 def test_ticket_menu_keeps_controls_but_removes_member_and_mapping_walls(
