@@ -1,152 +1,106 @@
 # ACTIVE TASK
 
-## DS-INVITE-035 — Invite reconciliation production hardening
+## DS-TICKET-036 — Repair ticket creation after category selection
 
-**Status:** PRODUCTION CORE ACCEPTANCE PASSED / HARDENING IMPLEMENTED / VALIDATION PENDING
-**Branch:** `fix/invite-reconcile-production-hardening-195`
-**Base:** `9b56271b175e0acdb7013835d2f4ed146adf5a1b` (`main`, squash merge of PR #194)
+**Status:** IMPLEMENTED / EXACT-HEAD VALIDATION PENDING
+**Branch:** `fix/ticket-confirm-create-runtime-196`
+**Base:** `b356440c5a1b8b345580a079ab41d947bab6db01` (`main`, squash merge of PR #195)
 **Started:** 2026-09-10
 
-## Outcome required
+## User-visible failure
 
-Dank Shield must keep one central invite-delete policy, delete blocked invites live, recover missed blocked invites automatically, preserve allowed/same-server invites, remain fail-safe during transient persistence failures, and perform recovery without unnecessary database/disk/Discord-API amplification or misleading runtime-health telemetry.
+The public **Create Ticket** button works and the private **Choose a ticket type** menu loads the configured choices (for example Appeal, Report a Member, and Support), but the flow can fail after category selection / Confirm so no ticket channel is created and the member receives no useful completion or failure response.
 
-## Production acceptance from PR #194
+## Authoritative execution path
 
-The first deployed build after PR #194 proved the previously missing recovery path is active:
+`PublicCreateTicketPanelView.create_ticket()` → `_handle_panel_button()` → `_handle_panel_button_core()` → `TicketSelect.callback()` → `TicketConfirmView.confirm()` → optional `DashboardTicketFormModal` → `_create_ticket()` → persistent ticket-number allocator → `_create_synced_ticket_channel()` → ticket DB row/opening message.
 
-- guild `1357215261001912320`: 37 eligible channels, 3,491 messages checked, 48 invite messages matched, 48 deleted, 0 failed;
-- guild `1514374173517152418`: 42 eligible channels, 2,315 messages checked, 51 invite messages matched, 51 deleted, 0 failed;
-- **99 historical blocked invite messages were removed automatically on ready without staff cleanup**;
-- a later live external invite was still deleted by the guaranteed `invite_live_enforcer`, proving live ownership remained intact after recovery;
-- guilds with no enabled invite-delete path were skipped rather than scanned needlessly.
+`stoney_verify/commands_ext/public_ticket_panel_clean.py` remains the single native owner for the public ticket panel flow. Do not restore retired runtime callback-rewrite guards.
 
-Core DS-INVITE-035 production behavior therefore passed. Remaining work is hardening and stronger acceptance telemetry, not restoration of the original missing feature.
+## Root causes proven from code
 
-## Production findings driving this hardening pass
+### 1. Confirm could miss Discord's interaction acknowledgement window
 
-### 1. Process-health RSS telemetry was mislabeled
+`TicketConfirmView.confirm()` performed `_ticket_setup_preflight()` before acknowledging the component interaction. That preflight can refresh guild config and perform several awaited lookups with timeouts of up to 6s/6s/4s. A slow persistence/config response can therefore outlive Discord's component response window and make Confirm appear dead.
 
-`stoney_verify/startup_guards/process_health.py` reported `resource.getrusage(...).ru_maxrss` as `rss≈...`. On Linux that value is the process lifetime **peak** RSS, not current resident memory. The production screenshot therefore could not prove a live memory leak: tasks fell from roughly 58 to 13 while the displayed RSS stayed near 313 MB because the metric itself cannot fall.
+The slow Confirm preflight was also redundant for creation safety: the initial Create Ticket path already preflights before showing the chooser, and `_create_ticket()` performs the authoritative active-category, staff-role, permissions, duplicate-open-ticket, numbering, and channel-create checks again at creation time.
 
-### 2. Bulk invite recovery amplified persistence and display work
+For form-enabled categories, the slow preflight was especially harmful because Discord requires the modal to be sent as the immediate interaction response; the modal submission later calls the same `_create_ticket()` safety path on a fresh interaction.
 
-Each successful historical delete went through the correct durable event ledger, but `record_deleted_invite_decision()` also:
+### 2. Persistent ticket-number failure could escape without a member-facing response
 
-- reread the legacy compatibility invite counter before every event;
-- mirrored the durable total back into guild config after every event;
-- rewrote the retry-outbox file after every normal successful event even when nothing had been pending.
+`_create_ticket()` called `_next_number()` outside its exception handling. The allocator deliberately fails closed if Supabase/counter reservation cannot guarantee a unique never-reused ticket number. That invariant is correct, but an allocator exception could bubble out before channel creation and leave the member with no useful error.
 
-The compatibility mirror also schedules a forced security-stats display refresh. That display updates changed stats voice-channel names with `channel.edit(name=...)`. During the 99-message startup recovery, repeated coalesced refreshes therefore formed a plausible source of the observed long Discord `PATCH /channels/...` 429. The hardening must reduce that amplification without changing one-event-per-delete durability.
+## Implemented repair
 
-### 3. Central invite classification duplicated Discord lookups
-
-`invite_policy_engine._guild_invite_codes()` called Spam Guard's five-minute cached `_fetch_guild_invite_codes()` and then repeated `guild.invites()`. A completed empty cached snapshot also caused the central policy to repeat the same REST call, defeating the cache for servers with no ordinary invite codes or an already-observed fetch failure.
-
-The same helper also called `guild.vanity_invite()` for every matched invite classification. During a historical cleanup, that could create another per-message REST stream even though vanity identity is stable and per-code target resolution already exists.
-
-For individual invite classification, `_invite_code_belongs_to_guild()` called the shared `invite_shield_sanitize_shared` resolver, which already uses and caches `bot.fetch_invite()` by invite code, and after a non-local result called `fetch_invite()` a second time to rediscover the target guild.
-
-### 4. Recovery summaries could hide channel warnings
-
-`scan_channel_invites()` can return a warning string for a channel-level scan problem without necessarily incrementing the numeric `failed` counter. Aggregating only `failed=0` could therefore overstate a clean recovery. Event recovery also omitted the existing `allowed` count from its log, making safe allow-path acceptance harder to observe.
-
-## Hardening implemented
-
-### Runtime memory truth
-
-- Linux current RSS is read from `/proc/self/status` (`VmRSS`) with `/proc/self/statm` fallback.
-- `ru_maxrss` remains available only as the explicitly labeled lifetime peak.
-- heartbeats, ready logs, signal logs, and process-exit logs now emit `rss_current≈... rss_peak≈...` instead of presenting peak as current memory.
-
-### Durable invite-stat efficiency
-
-- Added a **pass-local per-guild bulk recovery seed** used only after the first successful `auto-reconcile:*` durable event in that recovery pass.
-- The first bulk event still reads the legacy compatibility seed, preserving the previous compatibility floor.
-- Later events in the same recovery pass reuse the authoritative durable total returned by the previous successful write, eliminating repeated legacy seed reads without carrying a generic process-wide count cache.
-- The pass-local seed is cleared when the one final bulk reconciliation finishes, including failure cleanup.
-- Every deleted message still records its own replay-safe durable event. Deduplication and the SQL event ledger are unchanged.
-- Bulk startup/resume recovery defers the legacy compatibility-counter mirror until the guild scan finishes, then performs one authoritative durable-count reconciliation.
-- Normal `globals_live_enforcer` writes retain immediate compatibility sync behavior.
-- Retry-outbox persistence is no longer rewritten after a normal successful event unless an actual pending entry was removed.
-- Retry-persisted events still rewrite the outbox and still mirror their successful durable result.
-
-### Discord invite lookup efficiency
-
-- A successfully completed Spam Guard own-code snapshot is trusted even when it is empty, so the central policy does not immediately repeat the exact same `guild.invites()` call.
-- Direct `guild.invites()` remains as a compatibility fallback when the shared getter itself cannot run or raises out to the caller.
-- `guild.vanity_url_code` is used immediately when Discord already supplied it.
-- The `guild.vanity_invite()` fallback is cached per guild for five minutes instead of being requested for every matched historical message.
-- Individual invite target classification reuses `invite_shield_sanitize_shared.fetch_invite_guild_id()`, which already performs and caches the public `fetch_invite()` lookup.
-- A resolved target ID equal to the current guild remains internal; a different nonzero target remains external.
-- Target names are recovered from the bot's existing guild cache when available, without another network request.
-- If the shared resolver cannot prove a target, the existing low-level HTTP `get_invite` fallback remains in place.
-- No allow/block policy semantics were changed to achieve the request reduction.
-
-### Reconciliation observability
-
-- Guild summaries now include `warnings=<channel count>` in addition to `failed`.
-- Channel scan warnings are logged with guild/reason context.
-- Event recovery logs now include `allowed=<count>` so a deliberately posted same-server/allowed invite can be verified as surviving the policy path without introducing another decision engine.
-- A completed bulk recovery with deletes emits one `stats_flush` line containing the final durable invite total.
+- Removed the duplicate slow `_ticket_setup_preflight()` call from `TicketConfirmView.confirm()`.
+- Direct Confirm now consumes the current menu session, disables the view, and acknowledges the component immediately with **Opening your ticket…** before entering `_create_ticket()`.
+- Form-enabled Confirm opens the modal immediately without slow setup I/O first; modal submission still enters `_create_ticket()` and all authoritative safety checks.
+- `_create_ticket()` still revalidates active category, staff role, category permissions/privacy shape, and an existing open ticket before allocation/channel creation.
+- Persistent numbering remains mandatory and fail-closed; no Discord-channel-derived fallback number was introduced.
+- Ticket-number allocation exceptions are now caught and returned to the member as **Could not reserve a safe ticket number ... Nothing was created**.
+- Channel creation still cannot run unless a persistent number was successfully reserved.
+- Added compact production telemetry for ticket-type selection, Confirm mode, successful number reservation, and number-allocation failures.
 
 ## Safety invariants
 
-- `invite_policy_engine` remains the only authority allowed to approve an invite deletion.
-- `globals` remains the single live invite-enforcement owner.
-- `invite_reconciliation_runtime` remains the single missed-message recovery owner.
-- Same-server invites, explicit allowed codes/channels/roles/users, exemptions, Link Shield, Invite Shield, protected-poster rules, and Spam Guard burst semantics are unchanged.
-- The regular own-invite lookup still runs through Spam Guard's cached `guild.invites()` path, and direct list fallback remains if that shared getter cannot execute.
-- Vanity codes remain covered by the gateway-provided vanity code, a bounded REST fallback cache, per-code public resolver, and low-level per-code fallback.
-- The low-level per-code target lookup still exists when the shared cached target resolver cannot prove a guild.
-- Every successful delete still creates one durable event identity based on guild/channel/message and still uses the existing database ledger.
-- No new Supabase table, RPC, or migration is required.
-- The durable counter remains monotonic exactly as the existing SQL RPC already enforces with `greatest(existing, seed)` plus `on conflict (event_hash) do nothing`.
-- Failed durable writes still enter the retry outbox; no moderation delete is rolled back because a statistics write failed.
-- Welcome-card rendering and unrelated ticket/server-design code remain out of scope.
+- One native public ticket-panel owner remains.
+- Newest-menu/session ownership and per-member Confirm locking remain intact.
+- Duplicate ticket detection remains in `_create_ticket()`.
+- Ticket numbers remain persistent per guild and are never intentionally recycled from Discord channel state.
+- Active Tickets category privacy/staff/bot permission validation remains authoritative at creation time.
+- Requester permissions are applied only after the channel is created; failed requester permission setup still removes the partial channel.
+- Optional intake forms remain supported and submit into the same creation path.
+- Existing channel-create `discord.Forbidden` and generic exception reporting remain unchanged.
+- Invite reconciliation/hardening files from PRs #194/#195 are untouched by this task.
 
 ## Regression coverage
 
-- `tests/test_process_health_memory_195.py` checks that current Linux RSS and peak RSS are distinct and clearly labeled.
-- `tests/test_durable_invite_stats_recovery_195.py` checks pass-local bulk seed reuse, the first-event legacy floor, deferred bulk compatibility mirroring, unchanged immediate live mirroring, no pointless outbox rewrite on ordinary success, required outbox rewrite when a pending entry is removed, one final bulk flush, and pass-local seed cleanup on success/failure.
-- `tests/test_invite_policy_lookup_efficiency_195.py` checks populated and empty shared own-code snapshots do not trigger duplicate list fetches, direct list fallback remains when the shared getter cannot run, vanity REST fallback is cached, gateway vanity avoids REST entirely, shared target-ID resolution classifies external and same-server invites without a second client `fetch_invite`, and unresolved shared lookup still uses the low-level same-server fallback.
-- `tests/test_invite_runtime_reconcile_194.py` checks one final bulk stats flush, warning accounting, and event-recovery allowed telemetry while preserving all PR #194 ownership/permission/concurrency/retry coverage.
+`tests/test_ticket_confirm_create_runtime_196.py` covers:
 
-## Validation required
+- direct Confirm acknowledges Discord before ticket creation and does not run slow setup preflight first;
+- form Confirm opens the modal before any slow setup preflight and does not create until modal submission;
+- persistent counter allocation failure creates no channel and produces a member-visible error.
 
-Before merge:
+Existing ownership/restart regressions are also required:
 
-- focused DS-INVITE-035 regressions;
-- existing invite policy/link safety regressions;
-- durable invite-stat existing regressions;
-- process-health telemetry regression;
-- Python compileall;
-- committed diff whitespace;
-- invite/link safety audit;
+- `tests/test_public_ticket_panel_single_owner.py`
+- `tests/test_ticket_panel_native_restart_runtime.py`
+
+## Validation required before merge
+
+- focused DS-TICKET-036 tests;
+- existing public ticket-panel single-owner tests;
+- ticket native restart/persistence tests;
+- persistent ticket-counter regressions;
+- ticket category/menu/doctor audits;
+- Python compile check and committed diff whitespace check;
 - full repository pytest suite;
-- all PR workflows green on one exact head;
-- final base-drift/scope/diff/review-thread check.
+- every relevant PR workflow green on one exact head;
+- final base-drift, changed-file scope, diff, conflict-marker, and review-thread check.
 
-## Production acceptance after hardening deploy
+## Production acceptance after deploy
 
-Require:
+Require a clean end-to-end run from the existing public panel:
 
-- `rss_current` and `rss_peak` both visible on Linux heartbeats so post-startup memory can actually be judged;
-- `stats_flush` once after a bulk recovery that deleted historical invites, rather than a compatibility/display mirror for every event;
-- recovery summary `warnings=0` on healthy channels;
-- a same-server or explicitly allowed invite produces event-recovery telemetry with `allowed>0` and remains present;
-- a blocked external invite still produces `invite_live_enforcer ... deleted=True`;
-- transient persistence failure continues to defer/retry rather than converting a known configured guild into a fresh authoritative unconfigured state;
-- no repeated startup burst of security-stats channel edits attributable to historical invite-count increments;
-- no per-message repetition of guild invite-list, vanity invite, or public invite-target requests when the bounded caches already cover them.
+1. **Create Ticket** opens the chooser.
+2. Choosing Appeal / Report a Member / Support immediately transitions to the Confirm screen and emits `ticket type selected` telemetry.
+3. Direct **Confirm** immediately acknowledges with **Opening your ticket…** and emits `ticket confirm acknowledged ... mode=direct`.
+4. A successful allocation emits `ticket number reserved ... number=...` and creates exactly one `ticket-####` channel under the configured Active Tickets category.
+5. The requester can see/use the new channel and the opening message/actions appear.
+6. Form-enabled categories open their modal immediately; submitting the modal creates through the same safe path.
+7. Repeated/duplicate Confirm clicks do not create duplicate channels.
+8. If persistent numbering is unavailable, the member receives the explicit safe-number failure and no channel is created.
+9. No Discord `Unknown interaction` / expired-interaction failure occurs during the normal Confirm path.
 
 ## Suspended / backlog
 
-- **DS-TICKET-034 production acceptance:** historical Ticket Choices restore/cross-guild live acceptance remains suspended.
+- **DS-INVITE-035 final hardening production acceptance:** PR #195 is merged and post-merge CI is green; corrected RSS/invite hardening telemetry still needs observation after the Discloud build picks up that merge.
+- **DS-TICKET-034 production acceptance:** historical Ticket Choices restore/cross-guild live acceptance remains separate from this Confirm runtime repair.
 - **Join-context Supabase schema mismatch:** production previously reported missing `entry_confidence` in `guild_members` and `member_joins`.
-- **Generic memory optimization:** do not optimize allocations based on the old `ru_maxrss` high-water mark; first observe corrected current RSS after this hardening deploy.
-- **Server Design setup regression/full audit:** preserve for after current invite task closure.
+- **Generic memory optimization:** judge actual retained memory using corrected `rss_current`, not the old peak-only reading.
+- **Server Design setup regression/full audit:** remains backlog.
 
 ## Next step
 
-Freeze one exact code-and-record head, require the complete PR workflow gate plus final scope/diff/review checks, squash-merge PR #195 only when that exact head is green, then perform the production checks above.
+Open PR #196, freeze one exact code-and-record head, run the focused ticket gates plus full repository CI, review the final scoped diff, and squash-merge only after that exact head is green. Production acceptance follows on Discloud.
