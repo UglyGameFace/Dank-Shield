@@ -13,6 +13,14 @@ from typing import Any, Optional
 
 import discord
 
+# Ticket categories own the canonical category data/service layer. Install that
+# before compact presentation imports so compact captures the managed payload as
+# its underlying implementation instead of whichever historical owner happened
+# to import first.
+from stoney_verify.startup_guards import ticket_category_setup_guard as _ticket_category_guard
+
+_ticket_category_guard.apply()
+
 from stoney_verify.setup_ui import public_setup_compact as _implementation
 from stoney_verify.setup_ui import public_setup_guided_test as _guided
 from stoney_verify.setup_020_navigation_compat import (
@@ -257,18 +265,32 @@ def _install_response_integrity() -> None:
 
 def _assert_runtime_ownership() -> None:
     setup = _implementation.setup
+    solid = setup.solid
     checks = (
         (setup.ProductSetupHomeView is _guided.GuidedSetupHomeView, "ProductSetupHomeView"),
         (setup.SetupReviewView is _guided.GuidedReviewView, "SetupReviewView"),
         (setup.LaunchTestView is _guided.GuidedTestView, "LaunchTestView"),
         (setup._open_test_launch is _guided.open_guided_tests, "_open_test_launch"),
         (
-            _implementation.setup.solid._build_category_manager_payload
-            is _implementation._category_payload,
+            _implementation._ORIGINAL_CATEGORY_PAYLOAD
+            is _ticket_category_guard._build_category_manager_payload,
+            "ticket category service payload",
+        ),
+        (
+            solid._category_load is _ticket_category_guard._setup_category_load,
+            "ticket category loader",
+        ),
+        (
+            solid._seed_recommended_categories
+            is _ticket_category_guard._seed_catalog_without_enabling_everything,
+            "ticket category seed service",
+        ),
+        (
+            solid._build_category_manager_payload is _implementation._category_payload,
             "ticket category presentation",
         ),
         (
-            _implementation.setup.solid._edit_or_followup is _safe_setup_edit,
+            solid._edit_or_followup is _safe_setup_edit,
             "setup response routing",
         ),
     )
@@ -280,10 +302,19 @@ def _assert_runtime_ownership() -> None:
 def apply_public_setup_runtime() -> None:
     """Install the complete setup presentation in one deterministic order.
 
-    Re-running is intentional and safe. Compact binds the canonical setup
-    presentation first, guided testing is then reasserted last, navigation and
-    health contracts follow, and setup responses are pinned to one message.
+    Re-running is intentional and safe. The canonical ticket-category service
+    installs first, compact binds presentation over that service, guided testing
+    is reasserted last, navigation and health contracts follow, and setup
+    responses are pinned to one message.
     """
+
+    _ticket_category_guard.apply()
+    # Be deterministic even when a compatibility test imported the presentation
+    # module before this installer. Compact must wrap the canonical managed
+    # category payload, never a pre-guard historical payload.
+    _implementation._ORIGINAL_CATEGORY_PAYLOAD = (
+        _ticket_category_guard._build_category_manager_payload
+    )
 
     _implementation._PATCHED = False
     _original_apply_compact_setup_patch()
@@ -310,7 +341,7 @@ _implementation.apply_compact_setup_patch = apply_public_setup_runtime
 def _register_public_setup_runtime(bot, tree) -> None:
     _ = bot, tree
     apply_public_setup_runtime()
-    print("✅ public_setup_runtime: deterministic compact + guided setup active")
+    print("✅ public_setup_runtime: deterministic category + compact + guided setup active")
 
 
 _implementation.register_public_setup_compact_commands = _register_public_setup_runtime
