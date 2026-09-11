@@ -4,12 +4,14 @@ from __future__ import annotations
 
 The canonical setup behavior lives in ``public_setup_recommend`` and
 ``public_setup_solid``. This compatibility module owns one thing only: applying
-presentation layers in one stable order. Older code applied compact setup late
-and could silently erase the guided-test bindings, leaving Discord with a mixed
-view/callback graph.
+presentation layers in one stable order and keeping setup interaction responses
+on the panel that the owner actually clicked.
 """
 
 import sys
+from typing import Any, Optional
+
+import discord
 
 from stoney_verify.setup_ui import public_setup_compact as _implementation
 from stoney_verify.setup_ui import public_setup_guided_test as _guided
@@ -45,6 +47,140 @@ if not callable(_original_apply_compact_setup_patch):
     )
 
 
+def _setup_runtime_log(stage: str, interaction: Any, **details: Any) -> None:
+    try:
+        data = interaction.data if isinstance(interaction.data, dict) else {}
+        fields: dict[str, Any] = {
+            "stage": stage,
+            "interaction": int(getattr(interaction, "id", 0) or 0),
+            "guild": int(getattr(getattr(interaction, "guild", None), "id", 0) or 0),
+            "message": int(getattr(getattr(interaction, "message", None), "id", 0) or 0),
+            "user": int(getattr(getattr(interaction, "user", None), "id", 0) or 0),
+            "custom_id": str(data.get("custom_id") or ""),
+            "response_done": bool(interaction.response.is_done()),
+        }
+        fields.update(details)
+        print("🔎 setup_runtime " + " ".join(f"{key}={value}" for key, value in fields.items()))
+    except Exception:
+        pass
+
+
+async def _safe_setup_defer(interaction: discord.Interaction) -> None:
+    try:
+        if interaction.response.is_done():
+            return
+        await interaction.response.defer(thinking=False)
+        _setup_runtime_log("acknowledged", interaction)
+    except Exception as exc:
+        # Keep the historical fail-open behavior, but stop making acknowledgement
+        # failures invisible while we validate the live setup flow.
+        _setup_runtime_log(
+            "ack_failed",
+            interaction,
+            error=f"{type(exc).__name__}:{str(exc)[:180]}",
+        )
+
+
+async def _safe_setup_edit(
+    interaction: discord.Interaction,
+    *,
+    embed: discord.Embed,
+    view: Optional[discord.ui.View] = None,
+) -> None:
+    primary_error: Optional[Exception] = None
+    try:
+        if interaction.response.is_done():
+            await interaction.edit_original_response(embed=embed, view=view)
+            route = "edit_original_response"
+        else:
+            await interaction.response.edit_message(embed=embed, view=view)
+            route = "response.edit_message"
+        _setup_runtime_log("edit_ok", interaction, route=route)
+        return
+    except Exception as exc:
+        primary_error = exc
+        _setup_runtime_log(
+            "edit_failed",
+            interaction,
+            error=f"{type(exc).__name__}:{str(exc)[:180]}",
+        )
+
+    # A component action belongs to the message that was clicked. The old helper
+    # silently sent a second interactive ephemeral panel when the edit failed,
+    # leaving two live setup views that could show different state. Recover on
+    # the exact clicked message instead.
+    message = getattr(interaction, "message", None)
+    edit_message = getattr(message, "edit", None)
+    if message is not None and callable(edit_message):
+        try:
+            await edit_message(embed=embed, view=view)
+            _setup_runtime_log("direct_message_recovery_ok", interaction)
+            return
+        except Exception as exc:
+            _setup_runtime_log(
+                "direct_message_recovery_failed",
+                interaction,
+                error=f"{type(exc).__name__}:{str(exc)[:180]}",
+            )
+
+        notice = (
+            "⚠️ This setup screen could not update safely. Reopen `/dank setup` "
+            "to continue. No second setup panel was opened."
+        )
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(notice, ephemeral=True)
+            else:
+                await interaction.response.send_message(notice, ephemeral=True)
+            _setup_runtime_log("panel_fork_blocked", interaction)
+            return
+        except Exception as exc:
+            _setup_runtime_log(
+                "panel_fork_notice_failed",
+                interaction,
+                error=f"{type(exc).__name__}:{str(exc)[:180]}",
+            )
+            if primary_error is not None:
+                raise primary_error
+            raise
+
+    # Slash-command entrypoints do not have a clicked component message. A new
+    # private response/follow-up is correct for those callers.
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(
+                embed=embed,
+                view=view,
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            route = "followup.send"
+        else:
+            await interaction.response.send_message(
+                embed=embed,
+                view=view,
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            route = "response.send_message"
+        _setup_runtime_log("non_component_recovery_ok", interaction, route=route)
+    except Exception as exc:
+        _setup_runtime_log(
+            "non_component_recovery_failed",
+            interaction,
+            error=f"{type(exc).__name__}:{str(exc)[:180]}",
+        )
+        if primary_error is not None:
+            raise primary_error
+        raise
+
+
+def _install_response_integrity() -> None:
+    solid = _implementation.setup.solid
+    solid._safe_defer_update = _safe_setup_defer
+    solid._edit_or_followup = _safe_setup_edit
+
+
 def _assert_runtime_ownership() -> None:
     setup = _implementation.setup
     checks = (
@@ -57,6 +193,10 @@ def _assert_runtime_ownership() -> None:
             is _implementation._category_payload,
             "ticket category presentation",
         ),
+        (
+            _implementation.setup.solid._edit_or_followup is _safe_setup_edit,
+            "setup response routing",
+        ),
     )
     missing = [label for okay, label in checks if not okay]
     if missing:
@@ -67,9 +207,8 @@ def apply_public_setup_runtime() -> None:
     """Install the complete setup presentation in one deterministic order.
 
     Re-running is intentional and safe. Compact binds the canonical setup
-    presentation first, guided testing is then reasserted last, and navigation /
-    health contracts are applied after both. No guild configuration or Discord
-    resources are created here.
+    presentation first, guided testing is then reasserted last, navigation and
+    health contracts follow, and setup responses are pinned to one message.
     """
 
     _implementation._PATCHED = False
@@ -82,6 +221,7 @@ def apply_public_setup_runtime() -> None:
 
     install_custom_service_navigation_compat()
     install_voice_health_contract()
+    _install_response_integrity()
     _assert_runtime_ownership()
 
 
