@@ -1,0 +1,139 @@
+name: Temporary ticket confirm patch 196
+
+on:
+  push:
+    branches:
+      - fix/ticket-confirm-create-runtime-196
+
+permissions:
+  contents: write
+
+jobs:
+  patch-native-ticket-owner:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/ticket-confirm-create-runtime-196
+          fetch-depth: 0
+      - name: Patch native ticket owner
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('stoney_verify/commands_ext/public_ticket_panel_clean.py')
+          text = path.read_text(encoding='utf-8')
+
+          old_confirm = '''    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green, emoji="✅")
+              async def confirm(self, i: discord.Interaction, button: discord.ui.Button) -> None:
+                  _ = button
+                  guild = i.guild
+                  member = _member_from_interaction(i)
+                  if guild is None or member is None or int(member.id) != self.owner_id:
+                      return await _ephemeral(i, "Only the member who opened this ticket menu can use it.")
+                  key = _session_key(guild.id, member.id)
+                  lock = _CONFIRM_LOCKS.setdefault(key, asyncio.Lock())
+                  if lock.locked():
+                      return await _ephemeral(i, "Already opening that ticket. Please wait a second.")
+                  async with lock:
+                      if not _menu_session_current(guild.id, member.id, self.session_id):
+                          return await _stale_ticket_menu(i)
+                      _parent, _staff, blockers, warnings = await _ticket_setup_preflight(guild)
+                      if blockers:
+                          return await _ephemeral(i, "❌ Ticket setup needs repair before this can open.", embed=_setup_problem_embed(guild, blockers, warnings))
+                      questions = _form_questions(self.row)
+                      if questions:
+                          opened = await _open_form_modal(i, self.row, questions)
+                          if opened:
+                              _consume_menu_session(guild.id, member.id, self.session_id)
+                          return None
+                      if not _consume_menu_session(guild.id, member.id, self.session_id):
+                          return await _stale_ticket_menu(i)
+                      _disable_view(self)
+                      try:
+                          await i.response.edit_message(content="Opening your ticket…", embed=_category_embed(self.row), view=self)
+                      except Exception:
+                          pass
+                      await _create_ticket(i, self.row)
+          '''
+
+          # Keep indentation literal from the source. Build the exact block separately
+          # to avoid YAML indentation becoming part of the replacement string.
+          old_confirm = old_confirm.replace('              ', '    ', 1)
+          old_confirm = old_confirm.replace('\n                  ', '\n        ').replace('\n                      ', '\n            ').replace('\n                          ', '\n                ')
+
+          new_confirm = '''    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green, emoji="✅")
+              async def confirm(self, i: discord.Interaction, button: discord.ui.Button) -> None:
+                  _ = button
+                  guild = i.guild
+                  member = _member_from_interaction(i)
+                  if guild is None or member is None or int(member.id) != self.owner_id:
+                      return await _ephemeral(i, "Only the member who opened this ticket menu can use it.")
+                  key = _session_key(guild.id, member.id)
+                  lock = _CONFIRM_LOCKS.setdefault(key, asyncio.Lock())
+                  if lock.locked():
+                      return await _ephemeral(i, "Already opening that ticket. Please wait a second.")
+                  async with lock:
+                      if not _menu_session_current(guild.id, member.id, self.session_id):
+                          return await _stale_ticket_menu(i)
+                      questions = _form_questions(self.row)
+                      if questions:
+                          _log(f"ticket confirm acknowledged guild={guild.id} user={member.id} category={_row_slug(self.row)} mode=form")
+                          opened = await _open_form_modal(i, self.row, questions)
+                          if opened:
+                              _consume_menu_session(guild.id, member.id, self.session_id)
+                          return None
+                      if not _consume_menu_session(guild.id, member.id, self.session_id):
+                          return await _stale_ticket_menu(i)
+                      _disable_view(self)
+                      _log(f"ticket confirm acknowledged guild={guild.id} user={member.id} category={_row_slug(self.row)} mode=direct")
+                      await _edit_or_reply(i, content="Opening your ticket…", embed=_category_embed(self.row), view=self)
+                      await _create_ticket(i, self.row)
+          '''
+          new_confirm = new_confirm.replace('              ', '    ', 1)
+          new_confirm = new_confirm.replace('\n                  ', '\n        ').replace('\n                      ', '\n            ').replace('\n                          ', '\n                ')
+
+          if text.count(old_confirm) != 1:
+              raise SystemExit(f'confirm block match count={text.count(old_confirm)}; refusing patch')
+          text = text.replace(old_confirm, new_confirm, 1)
+
+          old_number = '''        number = await _next_number(guild, parent)
+          '''
+          new_number = '''        try:
+              number = await _next_number(guild, parent)
+          except Exception as e:
+              _warn(f"ticket number allocation failed guild={guild.id} user={owner.id}: {type(e).__name__}: {_short(e, 240)}")
+              return await _ephemeral(
+                  i,
+                  f"❌ Could not reserve a safe ticket number: `{type(e).__name__}: {_short(e, 180)}`. Nothing was created; please try again in a moment.",
+              )
+          _log(f"ticket number reserved guild={guild.id} user={owner.id} number={number} category={_row_slug(row)}")
+          '''
+          if text.count(old_number) != 1:
+              raise SystemExit(f'number block match count={text.count(old_number)}; refusing patch')
+          text = text.replace(old_number, new_number, 1)
+
+          old_select = '''        row = next((r for r in self.rows if _row_slug(r) == slug), {"slug": slug, "name": "Support"})
+              await _edit_or_reply(i, content="Confirm this ticket type.", embed=_category_embed(row), view=TicketConfirmView(self.rows, row, self.owner_id, self.session_id))
+          '''
+          new_select = '''        row = next((r for r in self.rows if _row_slug(r) == slug), {"slug": slug, "name": "Support"})
+              _log(f"ticket type selected guild={guild.id} user={member.id} category={_row_slug(row)}")
+              await _edit_or_reply(i, content="Confirm this ticket type.", embed=_category_embed(row), view=TicketConfirmView(self.rows, row, self.owner_id, self.session_id))
+          '''
+          old_select = old_select.replace('\n              ', '\n        ')
+          new_select = new_select.replace('\n              ', '\n        ')
+          if text.count(old_select) != 1:
+              raise SystemExit(f'select block match count={text.count(old_select)}; refusing patch')
+          text = text.replace(old_select, new_select, 1)
+
+          path.write_text(text, encoding='utf-8')
+          PY
+          git diff --check
+          git diff -- stoney_verify/commands_ext/public_ticket_panel_clean.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add stoney_verify/commands_ext/public_ticket_panel_clean.py
+          git commit -m 'fix: acknowledge ticket confirm before slow creation'
+          git push origin HEAD:fix/ticket-confirm-create-runtime-196
