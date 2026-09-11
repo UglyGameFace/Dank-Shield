@@ -223,15 +223,15 @@ DEFAULT_TEMPLATES: Dict[str, List[Dict[str, Any]]] = {
         {
             "key": "game",
             "label": "Which COD game?",
-            "placeholder": "BO2, BO3, MWIII, BO6, BO7, Warzone, Zombies, etc.",
+            "placeholder": "BO1, BO2, BO3, WaW, MW2, MW3, Ghosts, Zombies, etc.",
             "required": True,
             "style": "short",
             "max_length": 180,
         },
         {
             "key": "service",
-            "label": "What COD question or service do you need help with?",
-            "placeholder": "Describe what you need. Do not include passwords or private credentials.",
+            "label": "What legacy COD modding service do you need?",
+            "placeholder": "Modded/challenge lobby, unlocks, Zombies, recovery, RGH/JTAG, or related legacy-title help. Do not include passwords or private credentials.",
             "required": True,
             "style": "paragraph",
             "max_length": 1000,

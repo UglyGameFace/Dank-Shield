@@ -115,9 +115,9 @@ def test_custom_unknown_slug_is_not_claimed_only_because_visible_name_is_support
 
 def test_setup_and_catalog_versions_are_independent() -> None:
     assert categories.CATEGORY_SETUP_VERSION == 2
-    assert categories.MANAGED_CATALOG_VERSION == 3
+    assert categories.MANAGED_CATALOG_VERSION == 4
     rows = categories.catalog_category_rows()
-    assert {row["managed_catalog_version"] for row in rows} == {3}
+    assert {row["managed_catalog_version"] for row in rows} == {4}
     assert all(row["button_label"] == row["name"] for row in rows)
 
 
@@ -473,3 +473,74 @@ def test_single_runtime_owner_is_installed_on_every_picker_path() -> None:
         else setup_guard._build_category_manager_payload
     )
     assert solid._build_category_manager_payload is expected_payload_owner
+
+
+def test_review_state_restores_preserved_owner_selection() -> None:
+    rows = categories.catalog_category_rows()
+    for row in rows:
+        key = categories.canonical_category_key(row)
+        row["is_enabled"] = key in set(categories.SAFE_STARTER_KEYS)
+        row["is_default"] = key == "support"
+
+    cfg = {
+        "ticket_category_setup_required": True,
+        "ticket_category_setup_version": 0,
+        "ticket_category_setup_selected_keys": [
+            "report",
+            "staff-complaint",
+            "cod-services",
+            "partnership",
+            "support",
+        ],
+    }
+    state = categories._state_from_rows(cfg, rows)
+
+    assert state.required is True
+    assert state.selected_keys == (
+        "report",
+        "staff-complaint",
+        "cod-services",
+        "partnership",
+        "support",
+    )
+    assert set(_keys(state.active_rows)) == set(state.selected_keys)
+    assert {row["name"] for row in state.active_rows} >= {
+        "Report a Member",
+        "Report Staff",
+        "COD Modding Services",
+        "Partnerships",
+        "Support",
+    }
+
+
+def test_review_state_without_preserved_selection_stays_on_safe_starter() -> None:
+    rows = categories.catalog_category_rows()
+    cfg = {
+        "ticket_category_setup_required": True,
+        "ticket_category_setup_version": 0,
+        "ticket_category_setup_selected_keys": [],
+    }
+    state = categories._state_from_rows(cfg, rows)
+    assert set(_keys(state.active_rows)) == set(categories.SAFE_STARTER_KEYS)
+
+
+def test_catalog_restores_legacy_coding_and_staff_labels() -> None:
+    rows = {row["category_key"]: row for row in categories.CATEGORY_CATALOG}
+    assert rows["staff-complaint"]["name"] == "Report Staff"
+    assert rows["cod-services"]["name"] == "COD Modding Services"
+    cod_description = rows["cod-services"]["description"].lower()
+    assert "legacy" in cod_description
+    assert "rgh/jtag" in cod_description
+    assert "warzone" not in cod_description
+    assert rows["partnership"]["name"] == "Partnerships"
+    assert rows["report"]["name"] == "Report a Member"
+
+
+def test_cod_default_form_is_legacy_modding_specific() -> None:
+    questions = forms.DEFAULT_TEMPLATES["cod"]
+    joined = " ".join(str(item.get("placeholder") or "") for item in questions).lower()
+    labels = " ".join(str(item.get("label") or "") for item in questions).lower()
+    assert "bo2" in joined and "bo3" in joined and "waw" in joined
+    assert "rgh/jtag" in joined
+    assert "warzone" not in joined
+    assert "modding service" in labels

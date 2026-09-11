@@ -1,266 +1,4 @@
-from __future__ import annotations
-
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def replace_once(path: str, old: str, new: str) -> None:
-    target = ROOT / path
-    data = target.read_text(encoding="utf-8")
-    count = data.count(old)
-    if count != 1:
-        raise SystemExit(f"{path}: expected one match, found {count}: {old[:80]!r}")
-    target.write_text(data.replace(old, new, 1), encoding="utf-8")
-
-
-service = "stoney_verify/tickets_new/managed_category_service.py"
-replace_once(service, "MANAGED_CATALOG_VERSION = 3", "MANAGED_CATALOG_VERSION = 4")
-replace_once(
-    service,
-    '''    {
-        "category_key": "staff-complaint",
-        "slug": "staff_complaint",
-        "name": "Staff Complaint",
-        "description": "Complaints or escalation requests involving staff or moderator behavior.",
-        "intake_type": "report",
-        "sort_order": 60,
-        "is_default": False,
-    },''',
-    '''    {
-        "category_key": "staff-complaint",
-        "slug": "staff_complaint",
-        "name": "Report Staff",
-        "description": "Report or escalate staff, moderator, or administrator behavior.",
-        "intake_type": "report",
-        "sort_order": 60,
-        "is_default": False,
-    },''',
-)
-replace_once(
-    service,
-    '''    {
-        "category_key": "cod-services",
-        "slug": "cod_services",
-        "name": "COD Services",
-        "description": "Call of Duty, Warzone, Zombies, lobby, account, unlock, or service questions.",
-        "intake_type": "cod_services",
-        "sort_order": 80,
-        "is_default": False,
-    },''',
-    '''    {
-        "category_key": "cod-services",
-        "slug": "cod_services",
-        "name": "COD Modding Services",
-        "description": "Legacy Call of Duty modding services for older titles: modded/challenge lobbies, unlocks, Zombies, recoveries, RGH/JTAG, and related help.",
-        "intake_type": "cod_services",
-        "sort_order": 80,
-        "is_default": False,
-    },''',
-)
-replace_once(
-    service,
-    '''    "cod-services": "cod-services",
-    "cod-service": "cod-services",
-    "call-of-duty": "cod-services",
-    "call-of-duty-services": "cod-services",''',
-    '''    "cod-services": "cod-services",
-    "cod-service": "cod-services",
-    "cod-modding": "cod-services",
-    "cod-modding-services": "cod-services",
-    "legacy-cod-modding": "cod-services",
-    "call-of-duty": "cod-services",
-    "call-of-duty-services": "cod-services",''',
-)
-replace_once(
-    service,
-    '''def _state_from_rows(
-    cfg: Mapping[str, Any],
-    rows: Sequence[Mapping[str, Any]],
-) -> CategorySetupState:
-    active = dedupe_category_rows(rows, enabled_only=True, fallback=True)
-    selected = tuple(
-        canonical_category_key(row)
-        for row in active
-        if _managed(row) and canonical_category_key(row) in _CATALOG_BY_KEY
-    )
-    return CategorySetupState(
-        rows=dedupe_category_rows(rows, enabled_only=False, fallback=False),
-        active_rows=active,
-        selected_keys=tuple(dict.fromkeys(selected)),
-        required=_config_required(cfg),
-        reason=_config_reason(cfg),
-        version=_safe_int(_row_value(cfg, "ticket_category_setup_version", 0), 0),
-    )
-''',
-    '''def _state_from_rows(
-    cfg: Mapping[str, Any],
-    rows: Sequence[Mapping[str, Any]],
-) -> CategorySetupState:
-    all_rows = dedupe_category_rows(rows, enabled_only=False, fallback=False)
-    required = _config_required(cfg)
-    preserved = _configured_selected_keys(cfg) if required else ()
-
-    # A safety review may temporarily change persisted row enablement, but it
-    # must not erase a previously owner-confirmed member menu.  PR #193 began
-    # preserving those keys in guild_configs; use them while review is pending.
-    if preserved:
-        selected_set = set(preserved)
-        projected: List[Dict[str, Any]] = []
-        for row in all_rows:
-            key = canonical_category_key(row)
-            if _managed(row):
-                if key not in selected_set:
-                    continue
-                restored = dict(row)
-                restored["is_enabled"] = True
-                projected.append(restored)
-            elif _row_enabled(row):
-                projected.append(dict(row))
-        active = dedupe_category_rows(projected, enabled_only=True, fallback=True)
-        selected = tuple(
-            key for key in preserved
-            if any(
-                _managed(row) and canonical_category_key(row) == key
-                for row in active
-            )
-        )
-    else:
-        active = dedupe_category_rows(rows, enabled_only=True, fallback=True)
-        selected = tuple(
-            canonical_category_key(row)
-            for row in active
-            if _managed(row) and canonical_category_key(row) in _CATALOG_BY_KEY
-        )
-
-    return CategorySetupState(
-        rows=all_rows,
-        active_rows=active,
-        selected_keys=tuple(dict.fromkeys(selected)),
-        required=required,
-        reason=_config_reason(cfg),
-        version=_safe_int(_row_value(cfg, "ticket_category_setup_version", 0), 0),
-    )
-''',
-)
-
-forms = "stoney_verify/startup_guards/ticket_form_default_templates_guard.py"
-replace_once(
-    forms,
-    '''            "placeholder": "BO2, BO3, MWIII, BO6, BO7, Warzone, Zombies, etc.",''',
-    '''            "placeholder": "BO1, BO2, BO3, WaW, MW2, MW3, Ghosts, Zombies, etc.",''',
-)
-replace_once(
-    forms,
-    '''            "label": "What COD question or service do you need help with?",
-            "placeholder": "Describe what you need. Do not include passwords or private credentials.",''',
-    '''            "label": "What legacy COD modding service do you need?",
-            "placeholder": "Modded/challenge lobby, unlocks, Zombies, recovery, RGH/JTAG, or related legacy-title help. Do not include passwords or private credentials.",''',
-)
-
-schema = "stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py"
-replace_once(
-    schema,
-    '''PRESERVE_SELECTION_MIGRATION_FILE = "20260910163000_preserve_ticket_category_selection_on_review.sql"
-MIGRATION_FILES = (
-    MIGRATION_FILE,
-    REPAIR_PREP_MIGRATION_FILE,
-    REPAIR_MIGRATION_FILE,
-    PRESERVE_SELECTION_MIGRATION_FILE,
-)''',
-    '''PRESERVE_SELECTION_MIGRATION_FILE = "20260910163000_preserve_ticket_category_selection_on_review.sql"
-RICH_SELECTION_RECOVERY_MIGRATION_FILE = "20260911113000_restore_rich_ticket_category_selection.sql"
-MIGRATION_FILES = (
-    MIGRATION_FILE,
-    REPAIR_PREP_MIGRATION_FILE,
-    REPAIR_MIGRATION_FILE,
-    PRESERVE_SELECTION_MIGRATION_FILE,
-    RICH_SELECTION_RECOVERY_MIGRATION_FILE,
-)''',
-)
-replace_once(
-    schema,
-    '''            "ticket category selection v2 + stale-key preflight + managed catalog repair v3 + selection-preservation repair registered for direct-DSN startup"''',
-    '''            "ticket category selection v2 + stale-key preflight + managed catalog repair v4 + selection-preservation/history recovery registered for direct-DSN startup"''',
-)
-replace_once(
-    schema,
-    '''    "PRESERVE_SELECTION_MIGRATION_FILE",
-    "MIGRATION_FILES",''',
-    '''    "PRESERVE_SELECTION_MIGRATION_FILE",
-    "RICH_SELECTION_RECOVERY_MIGRATION_FILE",
-    "MIGRATION_FILES",''',
-)
-
-# Keep the static audit aligned with the canonical v4 catalog and migration.
-audit = "tools/audit_ticket_category_menu.py"
-replace_once(audit, '"MANAGED_CATALOG_VERSION = 3",', '"MANAGED_CATALOG_VERSION = 4",')
-replace_once(
-    audit,
-    '''    "supabase/migrations/20260807220000_repair_managed_ticket_category_duplicates.sql",
-]''',
-    '''    "supabase/migrations/20260807220000_repair_managed_ticket_category_duplicates.sql",
-    "supabase/migrations/20260911113000_restore_rich_ticket_category_selection.sql",
-]''',
-)
-replace_once(
-    audit,
-    '''        'REPAIR_MIGRATION_FILE = "20260807220000_repair_managed_ticket_category_duplicates.sql"',
-        "MIGRATION_FILES",
-        "stale-key preflight + managed catalog repair v3",''',
-    '''        'REPAIR_MIGRATION_FILE = "20260807220000_repair_managed_ticket_category_duplicates.sql"',
-        'RICH_SELECTION_RECOVERY_MIGRATION_FILE = "20260911113000_restore_rich_ticket_category_selection.sql"',
-        "MIGRATION_FILES",
-        "managed catalog repair v4",''',
-)
-insert_anchor = '''    "supabase/migrations/20260807220000_repair_managed_ticket_category_duplicates.sql": [
-        "catalog_version integer",
-        "false,3)",
-        "dank_ticket_category_repair_key",
-        "A reserved slug is stronger evidence than a stale stored key",
-        "Unknown custom slugs are never adopted from display name",
-        "use_saved_selection",
-        "cfg_version >= 2 and cfg_required = false",
-        "Repair every existing guild immediately",
-        "reconcile_dank_ticket_categories(null)",
-        "completed v2 selection is never invalidated",
-    ],
-'''
-if insert_anchor not in (ROOT / audit).read_text(encoding="utf-8"):
-    raise SystemExit("audit migration anchor missing")
-replace_once(
-    audit,
-    insert_anchor,
-    insert_anchor + '''    "supabase/migrations/20260911113000_restore_rich_ticket_category_selection.sql": [
-        "COD Modding Services",
-        "Report Staff",
-        "recover_dank_ticket_category_selection_from_history",
-        "guild_config_versions",
-        "ticket_category_setup_selected_keys",
-        "reconcile_dank_ticket_categories(null)",
-    ],
-''',
-)
-
-# Update and extend behavioral regression coverage.
-tests = "tests/test_ticket_category_setup_selection.py"
-replace_once(
-    tests,
-    '''    assert categories.MANAGED_CATALOG_VERSION == 3
-    rows = categories.catalog_category_rows()
-    assert {row["managed_catalog_version"] for row in rows} == {3}''',
-    '''    assert categories.MANAGED_CATALOG_VERSION == 4
-    rows = categories.catalog_category_rows()
-    assert {row["managed_catalog_version"] for row in rows} == {4}''',
-)
-test_data = (ROOT / tests).read_text(encoding="utf-8")
-append_marker = "\ndef test_review_state_restores_preserved_owner_selection() -> None:\n"
-if append_marker not in test_data:
-    test_data += '''\n\ndef test_review_state_restores_preserved_owner_selection() -> None:\n    rows = categories.catalog_category_rows()\n    for row in rows:\n        key = categories.canonical_category_key(row)\n        row["is_enabled"] = key in set(categories.SAFE_STARTER_KEYS)\n        row["is_default"] = key == "support"\n\n    cfg = {\n        "ticket_category_setup_required": True,\n        "ticket_category_setup_version": 0,\n        "ticket_category_setup_selected_keys": [\n            "report",\n            "staff-complaint",\n            "cod-services",\n            "partnership",\n            "support",\n        ],\n    }\n    state = categories._state_from_rows(cfg, rows)\n\n    assert state.required is True\n    assert state.selected_keys == (\n        "report",\n        "staff-complaint",\n        "cod-services",\n        "partnership",\n        "support",\n    )\n    assert set(_keys(state.active_rows)) == set(state.selected_keys)\n    assert {row["name"] for row in state.active_rows} >= {\n        "Report a Member",\n        "Report Staff",\n        "COD Modding Services",\n        "Partnerships",\n        "Support",\n    }\n\n\ndef test_review_state_without_preserved_selection_stays_on_safe_starter() -> None:\n    rows = categories.catalog_category_rows()\n    cfg = {\n        "ticket_category_setup_required": True,\n        "ticket_category_setup_version": 0,\n        "ticket_category_setup_selected_keys": [],\n    }\n    state = categories._state_from_rows(cfg, rows)\n    assert set(_keys(state.active_rows)) == set(categories.SAFE_STARTER_KEYS)\n\n\ndef test_catalog_restores_legacy_coding_and_staff_labels() -> None:\n    rows = {row["category_key"]: row for row in categories.CATEGORY_CATALOG}\n    assert rows["staff-complaint"]["name"] == "Report Staff"\n    assert rows["cod-services"]["name"] == "COD Modding Services"\n    cod_description = rows["cod-services"]["description"].lower()\n    assert "legacy" in cod_description\n    assert "rgh/jtag" in cod_description\n    assert "warzone" not in cod_description\n    assert rows["partnership"]["name"] == "Partnerships"\n    assert rows["report"]["name"] == "Report a Member"\n\n\ndef test_cod_default_form_is_legacy_modding_specific() -> None:\n    questions = forms.DEFAULT_TEMPLATES["cod"]\n    joined = " ".join(str(item.get("placeholder") or "") for item in questions).lower()\n    labels = " ".join(str(item.get("label") or "") for item in questions).lower()\n    assert "bo2" in joined and "bo3" in joined and "waw" in joined\n    assert "rgh/jtag" in joined\n    assert "warzone" not in joined\n    assert "modding service" in labels\n'''
-    (ROOT / tests).write_text(test_data, encoding="utf-8")
-
-migration = ROOT / "supabase/migrations/20260911113000_restore_rich_ticket_category_selection.sql"
-migration.write_text(r'''-- ============================================================
+-- ============================================================
 -- DS-TICKET-CAT-037 — restore rich ticket choices through review.
 --
 -- Fixes two production regressions:
@@ -271,8 +9,8 @@ migration.write_text(r'''-- ====================================================
 --
 -- This migration never invents a per-guild selection.  It first trusts an
 -- already-preserved guild_configs selection.  If that evidence was destroyed
--- by the older reset function, it may recover the latest richer enabled set
--- from that same guild's ticket_categories version history.  Guild isolation
+-- by the older reset function, it recovers the last ticket-category snapshot
+-- from before that exact destructive-reset transaction.  Guild isolation
 -- remains strict throughout.
 -- ============================================================
 
@@ -319,6 +57,7 @@ as $$
 declare
     current_selected jsonb := '[]'::jsonb;
     historical_rows jsonb;
+    destructive_reset_at timestamptz;
     recovered text[] := array[]::text[];
     default_key text;
 begin
@@ -348,21 +87,32 @@ begin
         return recovered;
     end if;
 
+    -- The old reset updated ticket rows and then wrote guild_configs in the
+    -- same transaction.  PostgreSQL now() is transaction-stable, so every
+    -- intermediate row-trigger snapshot from that destructive reset shares the
+    -- reset timestamp.  Recover the last ticket snapshot strictly *before* it,
+    -- not an intermediate partially-reset snapshot.
+    select v.created_at
+      into destructive_reset_at
+      from public.guild_config_versions v
+     where v.guild_id = btrim(p_guild_id)
+       and v.config_table in ('guild_configs', 'guild_config')
+       and coalesce((v.snapshot ->> 'ticket_category_setup_required')::boolean, false) = true
+       and coalesce(v.snapshot ->> 'ticket_category_setup_required_reason', '')
+           ilike '%previous setup enabled duplicate or excessive%'
+     order by v.created_at desc, v.version_id desc
+     limit 1;
+
+    if destructive_reset_at is null then
+        return recovered;
+    end if;
+
     select v.snapshot -> 'rows'
       into historical_rows
       from public.guild_config_versions v
      where v.guild_id = btrim(p_guild_id)
        and v.config_table = 'ticket_categories'
-       and exists (
-            select 1
-              from jsonb_array_elements(coalesce(v.snapshot -> 'rows', '[]'::jsonb)) item
-             cross join lateral (
-                select public.dank_ticket_category_key(item ->> 'slug', null) as category_key
-             ) resolved
-             where coalesce((item ->> 'is_enabled')::boolean, true) = true
-               and resolved.category_key is not null
-               and resolved.category_key not in ('report', 'appeal', 'support')
-       )
+       and v.created_at < destructive_reset_at
      order by v.created_at desc, v.version_id desc
      limit 1;
 
@@ -508,6 +258,13 @@ begin
                  where managed_row.guild_id::text = btrim(p_guild_id)
                    and managed_row.managed_by_dank = true
                    and managed_row.is_enabled = true;
+
+                update public.ticket_categories custom_row
+                   set is_default = false,
+                       updated_at = now()
+                 where custom_row.guild_id::text = btrim(p_guild_id)
+                   and custom_row.managed_by_dank = false
+                   and custom_row.is_default = true;
             end if;
         else
             update public.ticket_categories managed_row
@@ -570,6 +327,3 @@ revoke all on function public.require_dank_ticket_category_setup(text, text, boo
     from public, anon, authenticated;
 grant execute on function public.require_dank_ticket_category_setup(text, text, boolean)
     to service_role;
-''', encoding="utf-8")
-
-print("patched DS-TICKET-CAT-037 rich selection recovery")

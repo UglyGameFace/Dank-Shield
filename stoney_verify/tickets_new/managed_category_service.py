@@ -15,7 +15,7 @@ from ..globals import get_supabase
 # Setup selection and managed catalog repair are intentionally versioned
 # separately. A catalog repair must never force a valid owner through setup again.
 CATEGORY_SETUP_VERSION = 2
-MANAGED_CATALOG_VERSION = 3
+MANAGED_CATALOG_VERSION = 4
 SAFE_STARTER_KEYS: tuple[str, ...] = ("report", "appeal", "support")
 _RECONCILE_DEBOUNCE_SECONDS = 300.0
 _RECONCILE_RETRY_SECONDS = 30.0
@@ -74,8 +74,8 @@ CATEGORY_CATALOG: tuple[Dict[str, Any], ...] = (
     {
         "category_key": "staff-complaint",
         "slug": "staff_complaint",
-        "name": "Staff Complaint",
-        "description": "Complaints or escalation requests involving staff or moderator behavior.",
+        "name": "Report Staff",
+        "description": "Report or escalate staff, moderator, or administrator behavior.",
         "intake_type": "report",
         "sort_order": 60,
         "is_default": False,
@@ -92,8 +92,8 @@ CATEGORY_CATALOG: tuple[Dict[str, Any], ...] = (
     {
         "category_key": "cod-services",
         "slug": "cod_services",
-        "name": "COD Services",
-        "description": "Call of Duty, Warzone, Zombies, lobby, account, unlock, or service questions.",
+        "name": "COD Modding Services",
+        "description": "Legacy Call of Duty modding services for older titles: modded/challenge lobbies, unlocks, Zombies, recoveries, RGH/JTAG, and related help.",
         "intake_type": "cod_services",
         "sort_order": 80,
         "is_default": False,
@@ -204,6 +204,9 @@ _ALIAS_TO_KEY: Dict[str, str] = {
     "bug-technical-support": "bug",
     "cod-services": "cod-services",
     "cod-service": "cod-services",
+    "cod-modding": "cod-services",
+    "cod-modding-services": "cod-services",
+    "legacy-cod-modding": "cod-services",
     "call-of-duty": "cod-services",
     "call-of-duty-services": "cod-services",
     "game-services": "game-services",
@@ -881,17 +884,47 @@ def _state_from_rows(
     cfg: Mapping[str, Any],
     rows: Sequence[Mapping[str, Any]],
 ) -> CategorySetupState:
-    active = dedupe_category_rows(rows, enabled_only=True, fallback=True)
-    selected = tuple(
-        canonical_category_key(row)
-        for row in active
-        if _managed(row) and canonical_category_key(row) in _CATALOG_BY_KEY
-    )
+    all_rows = dedupe_category_rows(rows, enabled_only=False, fallback=False)
+    required = _config_required(cfg)
+    preserved = _configured_selected_keys(cfg) if required else ()
+
+    # A safety review may temporarily change persisted row enablement, but it
+    # must not erase a previously owner-confirmed member menu.  PR #193 began
+    # preserving those keys in guild_configs; use them while review is pending.
+    if preserved:
+        selected_set = set(preserved)
+        projected: List[Dict[str, Any]] = []
+        for row in all_rows:
+            key = canonical_category_key(row)
+            if _managed(row):
+                if key not in selected_set:
+                    continue
+                restored = dict(row)
+                restored["is_enabled"] = True
+                projected.append(restored)
+            elif _row_enabled(row):
+                projected.append(dict(row))
+        active = dedupe_category_rows(projected, enabled_only=True, fallback=True)
+        selected = tuple(
+            key for key in preserved
+            if any(
+                _managed(row) and canonical_category_key(row) == key
+                for row in active
+            )
+        )
+    else:
+        active = dedupe_category_rows(rows, enabled_only=True, fallback=True)
+        selected = tuple(
+            canonical_category_key(row)
+            for row in active
+            if _managed(row) and canonical_category_key(row) in _CATALOG_BY_KEY
+        )
+
     return CategorySetupState(
-        rows=dedupe_category_rows(rows, enabled_only=False, fallback=False),
+        rows=all_rows,
         active_rows=active,
         selected_keys=tuple(dict.fromkeys(selected)),
-        required=_config_required(cfg),
+        required=required,
         reason=_config_reason(cfg),
         version=_safe_int(_row_value(cfg, "ticket_category_setup_version", 0), 0),
     )
