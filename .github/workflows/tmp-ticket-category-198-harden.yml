@@ -21,19 +21,19 @@ jobs:
           ref: fix/ticket-category-preserved-selection-198
           fetch-depth: 0
 
-      - name: Apply hardening patch
-        run: python tools/_tmp_harden_ticket_category_198.py
-
-      - name: Remove temporary machinery
+      - name: Apply migration hardening
         run: |
-          rm -f tools/_tmp_harden_ticket_category_198.py
-          rm -f .github/workflows/tmp-ticket-category-198-harden.yml
+          python tools/_tmp_harden_ticket_category_198.py
+          git checkout -- .github/workflows/ticket-category-repair-sql.yml
 
-      - name: Commit hardened validation
+      - name: Remove temporary patch script
+        run: rm -f tools/_tmp_harden_ticket_category_198.py
+
+      - name: Commit migration hardening only
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --cached --check
-          git commit -m "test: validate v4 ticket category recovery in postgres" || exit 0
+          git commit -m "fix: realign preserved ticket category rows" || exit 0
           git push origin HEAD:fix/ticket-category-preserved-selection-198
