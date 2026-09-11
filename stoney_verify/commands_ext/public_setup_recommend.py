@@ -1397,7 +1397,6 @@ async def _open_existing_server(
         view=customization.FullChooseExistingView(parent=parent),
     )
 
-
 async def _open_create_missing(
     interaction: discord.Interaction,
 ) -> None:
@@ -3148,7 +3147,6 @@ async def _open_guided_one_item(
         ),
     )
 
-
 async def _open_guided_target(
     interaction: discord.Interaction,
     target: str,
@@ -4143,24 +4141,6 @@ async def _create_setup_test_ticket(
             ephemeral=True,
         )
 
-    state = await _launch_state(guild)
-
-    if not state.get("tickets"):
-        return await interaction.response.send_message(
-            (
-                "🎫 Tickets are OFF for this server. "
-                "Turn Tickets ON before creating a test ticket."
-            ),
-            ephemeral=True,
-        )
-
-    target, _title, _explanation, _requirement_key = (
-        await _guided_setup_target(guild)
-    )
-
-    if target != "ready":
-        return await _open_health_check(interaction)
-
     lock_key = (
         int(guild.id),
         int(member.id),
@@ -4181,14 +4161,29 @@ async def _create_setup_test_ticket(
         )
 
     async with lock:
-        try:
-            if not interaction.response.is_done():
-                await interaction.response.defer(
-                    ephemeral=True,
-                    thinking=True,
-                )
-        except Exception:
-            pass
+        await solid._safe_defer_update(interaction)
+
+        state = await _launch_state(guild)
+
+        if not state.get("tickets"):
+            return await interaction.followup.send(
+                (
+                    "🎫 Tickets are OFF for this server. "
+                    "Turn Tickets ON before creating a test ticket."
+                ),
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+        target, _title, _explanation, _requirement_key = (
+            await _guided_setup_target(guild)
+        )
+
+        if target != "ready":
+            return await _open_health_check(
+                interaction,
+                already_deferred=True,
+            )
 
         try:
             from stoney_verify.tickets_new.service import (
