@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+
+path = Path("stoney_verify/commands_ext/public_ticket_panel_clean.py")
+text = path.read_text(encoding="utf-8")
+
+start_marker = '    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green, emoji="✅")\n    async def confirm('
+end_marker = '\n    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, emoji="↩️")'
+start = text.find(start_marker)
+if start < 0:
+    raise SystemExit("Confirm method start marker missing; refusing patch")
+end = text.find(end_marker, start)
+if end < 0:
+    raise SystemExit("Confirm method end marker missing; refusing patch")
+
+new_confirm = '''    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green, emoji="✅")
+    async def confirm(self, i: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild = i.guild
+        member = _member_from_interaction(i)
+        if guild is None or member is None or int(member.id) != self.owner_id:
+            return await _ephemeral(i, "Only the member who opened this ticket menu can use it.")
+        key = _session_key(guild.id, member.id)
+        lock = _CONFIRM_LOCKS.setdefault(key, asyncio.Lock())
+        if lock.locked():
+            return await _ephemeral(i, "Already opening that ticket. Please wait a second.")
+        async with lock:
+            if not _menu_session_current(guild.id, member.id, self.session_id):
+                return await _stale_ticket_menu(i)
+            questions = _form_questions(self.row)
+            if questions:
+                _log(
+                    f"ticket confirm acknowledged guild={guild.id} user={member.id} "
+                    f"category={_row_slug(self.row)} mode=form"
+                )
+                opened = await _open_form_modal(i, self.row, questions)
+                if opened:
+                    _consume_menu_session(guild.id, member.id, self.session_id)
+                return None
+            if not _consume_menu_session(guild.id, member.id, self.session_id):
+                return await _stale_ticket_menu(i)
+            _disable_view(self)
+            _log(
+                f"ticket confirm acknowledged guild={guild.id} user={member.id} "
+                f"category={_row_slug(self.row)} mode=direct"
+            )
+            await _edit_or_reply(
+                i,
+                content="Opening your ticket…",
+                embed=_category_embed(self.row),
+                view=self,
+            )
+            await _create_ticket(i, self.row)
+'''
+text = text[:start] + new_confirm + text[end:]
+
+old_number = '        number = await _next_number(guild, parent)\n'
+if text.count(old_number) != 1:
+    raise SystemExit(f"number allocator match count={text.count(old_number)}; refusing patch")
+new_number = '''        try:
+            number = await _next_number(guild, parent)
+        except Exception as e:
+            _warn(
+                f"ticket number allocation failed guild={guild.id} user={owner.id}: "
+                f"{type(e).__name__}: {_short(e, 240)}"
+            )
+            return await _ephemeral(
+                i,
+                f"❌ Could not reserve a safe ticket number: "
+                f"`{type(e).__name__}: {_short(e, 180)}`. "
+                "Nothing was created; please try again in a moment.",
+            )
+        _log(
+            f"ticket number reserved guild={guild.id} user={owner.id} "
+            f"number={number} category={_row_slug(row)}"
+        )
+'''
+text = text.replace(old_number, new_number, 1)
+
+old_select = '''        row = next((r for r in self.rows if _row_slug(r) == slug), {"slug": slug, "name": "Support"})
+        await _edit_or_reply(i, content="Confirm this ticket type.", embed=_category_embed(row), view=TicketConfirmView(self.rows, row, self.owner_id, self.session_id))
+'''
+if text.count(old_select) != 1:
+    raise SystemExit(f"select transition match count={text.count(old_select)}; refusing patch")
+new_select = '''        row = next((r for r in self.rows if _row_slug(r) == slug), {"slug": slug, "name": "Support"})
+        _log(f"ticket type selected guild={guild.id} user={member.id} category={_row_slug(row)}")
+        await _edit_or_reply(i, content="Confirm this ticket type.", embed=_category_embed(row), view=TicketConfirmView(self.rows, row, self.owner_id, self.session_id))
+'''
+text = text.replace(old_select, new_select, 1)
+
+path.write_text(text, encoding="utf-8")
+print("patched native ticket owner")
