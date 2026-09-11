@@ -96,7 +96,9 @@ CHECKS = {
         "_MENU_SESSIONS",
         "_CONFIRM_LOCKS",
         "Newest menu wins.",
-        "Ticket setup needs repair before this can open.",
+        "Opening your ticket…",
+        "Could not reserve a safe ticket number",
+        "ticket confirm acknowledged",
     ],
 }
 
@@ -104,6 +106,27 @@ REMOVED_FILES = (
     "stoney_verify/startup_guards/public_ticket_confirm_hardening_guard.py",
     "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py",
 )
+
+
+def _audit_confirm_ack_order(panel_data: str) -> str:
+    start_marker = '    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green, emoji="✅")'
+    end_marker = '    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, emoji="↩️")'
+    start = panel_data.find(start_marker)
+    end = panel_data.find(end_marker, start + 1) if start >= 0 else -1
+    if start < 0 or end < 0:
+        return "could not isolate TicketConfirmView.confirm"
+    block = panel_data[start:end]
+    if "_ticket_setup_preflight(" in block:
+        return "TicketConfirmView.confirm performs slow setup preflight before creation/acknowledgement"
+    ack = block.find("await _edit_or_reply(")
+    create = block.find("await _create_ticket(")
+    if ack < 0 or create < 0 or ack > create:
+        return "direct Confirm must acknowledge with _edit_or_reply before _create_ticket"
+    questions = block.find("questions = _form_questions(self.row)")
+    modal = block.find("await _open_form_modal(")
+    if questions < 0 or modal < 0:
+        return "form-enabled Confirm must retain immediate modal path"
+    return ""
 
 
 def main() -> int:
@@ -128,6 +151,13 @@ def main() -> int:
             if snippet not in data:
                 print(f"{path} missing {snippet}", file=sys.stderr)
                 return 1
+
+    panel_data = (ROOT / "stoney_verify/commands_ext/public_ticket_panel_clean.py").read_text(encoding="utf-8")
+    confirm_error = _audit_confirm_ack_order(panel_data)
+    if confirm_error:
+        print(confirm_error, file=sys.stderr)
+        return 1
+
     wording = (ROOT / "stoney_verify/startup_guards/ticket_panel_doctor_production_wording.py").read_text(encoding="utf-8")
     if "public_ticket_confirm_hardening_guard" in wording:
         print("ticket doctor still attempts to import removed confirm shim", file=sys.stderr)
