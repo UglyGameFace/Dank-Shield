@@ -1,106 +1,123 @@
 # ACTIVE TASK
 
-## DS-TICKET-036 — Repair ticket creation after category selection
+## DS-TICKET-CAT-037 — Restore rich ticket choices through setup review
 
-**Status:** IMPLEMENTED / EXACT-HEAD VALIDATION PENDING
-**Branch:** `fix/ticket-confirm-create-runtime-196`
-**Base:** `b356440c5a1b8b345580a079ab41d947bab6db01` (`main`, squash merge of PR #195)
-**Started:** 2026-09-10
+**Status:** IMPLEMENTED / FOCUSED VALIDATION GREEN / FULL EXACT-HEAD CI PENDING
+**Branch:** `fix/ticket-category-preserved-selection-198`
+**Base:** `5d90ddcd8cbdde1233fdbdcac5faba2dd5194445` (`main`, squash merge of PR #197)
+**Started:** 2026-09-11
 
 ## User-visible failure
 
-The public **Create Ticket** button works and the private **Choose a ticket type** menu loads the configured choices (for example Appeal, Report a Member, and Support), but the flow can fail after category selection / Confirm so no ticket channel is created and the member receives no useful completion or failure response.
+The public Create Ticket panel is no longer limited by the interaction bugs repaired in PRs #196/#197, but a guild under ticket-category setup review can still show only the three safe starter choices: **Appeal**, **Report a Member**, and **Support**.
 
-## Authoritative execution path
+The affected production guild reports that the prior intended menu included richer categories such as **COD Modding Services** for older legacy Call of Duty titles only, **Partnerships**, **Report a Member**, and **Report Staff**.
 
-`PublicCreateTicketPanelView.create_ticket()` → `_handle_panel_button()` → `_handle_panel_button_core()` → `TicketSelect.callback()` → `TicketConfirmView.confirm()` → optional `DashboardTicketFormModal` → `_create_ticket()` → persistent ticket-number allocator → `_create_synced_ticket_channel()` → ticket DB row/opening message.
+## Authoritative category owner
 
-`stoney_verify/commands_ext/public_ticket_panel_clean.py` remains the single native owner for the public ticket panel flow. Do not restore retired runtime callback-rewrite guards.
+`stoney_verify/tickets_new/managed_category_service.py` is the canonical managed-category identity, reconciliation, setup-selection, and live-menu source. The repair must remain per guild, preserve owner-created custom categories, and must not enable every built-in category globally.
 
-## Root causes proven from code
+## Proven root causes
 
-### 1. Confirm could miss Discord's interaction acknowledgement window
+### 1. Preserved selection was stored but ignored while review was required
 
-`TicketConfirmView.confirm()` performed `_ticket_setup_preflight()` before acknowledging the component interaction. That preflight can refresh guild config and perform several awaited lookups with timeouts of up to 6s/6s/4s. A slow persistence/config response can therefore outlive Discord's component response window and make Confirm appear dead.
+PR #193 changed `require_dank_ticket_category_setup(...)` to preserve `guild_configs.ticket_category_setup_selected_keys` during future forced review. However, `_state_from_rows()` still derived `active_rows` and `selected_keys` only from the current `ticket_categories.is_enabled` flags.
 
-The slow Confirm preflight was also redundant for creation safety: the initial Create Ticket path already preflights before showing the chooser, and `_create_ticket()` performs the authoritative active-category, staff-role, permissions, duplicate-open-ticket, numbering, and channel-create checks again at creation time.
+A forced review had already reduced those row flags to the starter trio. Therefore the database could correctly retain the previous owner-confirmed selection while the member-facing menu ignored that evidence and still rendered only three choices.
 
-For form-enabled categories, the slow preflight was especially harmful because Discord requires the modal to be sent as the immediate interaction response; the modal submission later calls the same `_create_ticket()` safety path on a fresh interaction.
+### 2. Older destructive review reset could erase the saved selection entirely
 
-### 2. Persistent ticket-number failure could escape without a member-facing response
+The original category-selection migration reset managed rows to `report`, `appeal`, and `support` and replaced `ticket_category_setup_selected_keys` with an empty array when setup was invalidated. Guilds hit by that older path cannot be repaired only by reading the current config row.
 
-`_create_ticket()` called `_next_number()` outside its exception handling. The allocator deliberately fails closed if Supabase/counter reservation cannot guarantee a unique never-reused ticket number. That invariant is correct, but an allocator exception could bubble out before channel creation and leave the member with no useful error.
+Durable `guild_config_versions` history already stores per-guild `ticket_categories` snapshots. The older reset updated ticket rows and then guild config in the same database transaction, allowing the last ticket snapshot strictly before that reset transaction to be identified without using another guild's history or a partially-reset intermediate snapshot.
+
+### 3. Rich category wording drifted
+
+Historical repository evidence shows the COD category was intended for legacy COD modding/lobby services, including BO1/BO2/BO3, WaW, MW2/MW3, Ghosts, Zombies, modded/challenge lobbies, unlocks, recoveries, and RGH/JTAG. Later wording widened it into generic COD/Warzone/current-title support.
+
+The canonical staff category also drifted to the vague visible label **Staff Complaint** although the intended member-facing choice is **Report Staff**.
 
 ## Implemented repair
 
-- Removed the duplicate slow `_ticket_setup_preflight()` call from `TicketConfirmView.confirm()`.
-- Direct Confirm now consumes the current menu session, disables the view, and acknowledges the component immediately with **Opening your ticket…** before entering `_create_ticket()`.
-- Form-enabled Confirm opens the modal immediately without slow setup I/O first; modal submission still enters `_create_ticket()` and all authoritative safety checks.
-- `_create_ticket()` still revalidates active category, staff role, category permissions/privacy shape, and an existing open ticket before allocation/channel creation.
-- Persistent numbering remains mandatory and fail-closed; no Discord-channel-derived fallback number was introduced.
-- Ticket-number allocation exceptions are now caught and returned to the member as **Could not reserve a safe ticket number ... Nothing was created**.
-- Channel creation still cannot run unless a persistent number was successfully reserved.
-- Added compact production telemetry for ticket-type selection, Confirm mode, successful number reservation, and number-allocation failures.
+- Bumped the managed catalog to v4 without creating a second category owner.
+- Restored visible **COD Modding Services** wording and legacy-only COD intake guidance.
+- Restored visible **Report Staff** while preserving the existing `staff-complaint` internal key/routing compatibility.
+- Kept **Report a Member**, **Partnerships**, and the rest of the rich managed catalog distinct.
+- `_state_from_rows()` now projects a surviving owner-confirmed `ticket_category_setup_selected_keys` selection into the member-facing menu while setup review remains required.
+- Setup review remains required until an authorized owner/admin confirms it; restoring the menu does not falsely mark setup complete.
+- If the saved keys were erased by the older destructive reset, the new migration can recover only from the same guild's version history and only from the last ticket-category snapshot strictly before the identified destructive reset transaction.
+- History recovery refuses to overwrite any surviving saved selection.
+- Future `require_dank_ticket_category_setup(...)` calls preserve and keep the known managed selection enabled instead of collapsing it to the starter trio.
+- If no trustworthy prior selection exists, the safe starter behavior remains unchanged.
+- Enabled owner-created custom categories remain preserved and are not globally replaced or force-expanded.
+
+## Permanent changed files
+
+- `stoney_verify/tickets_new/managed_category_service.py`
+- `stoney_verify/startup_guards/ticket_form_default_templates_guard.py`
+- `stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py`
+- `supabase/migrations/20260911113000_restore_rich_ticket_category_selection.sql`
+- `tests/test_ticket_category_setup_selection.py`
+- `tools/audit_ticket_category_menu.py`
+- `ACTIVE_TASK.md`
+
+Temporary patch machinery was removed before PR creation.
+
+## Focused validation
+
+On Python 3.11.16 / Ubuntu 24.04:
+
+- changed Python files compile successfully;
+- `tests/test_ticket_category_setup_selection.py` + `tests/test_ticket_picker_legacy_default_reconciliation.py`: **38 passed, 1 warning**;
+- `tools/audit_ticket_category_menu.py`: **PASS**;
+- `git diff --check`: PASS before the validated implementation commit.
+
+New regressions prove:
+
+- required-review state restores a preserved managed selection instead of the starter trio;
+- required-review state with no preserved selection still falls back safely to the starter trio;
+- canonical labels include **Report a Member**, **Report Staff**, **COD Modding Services**, and **Partnerships**;
+- COD Modding Services uses legacy-title/modding guidance and does not advertise Warzone/current-title support.
 
 ## Safety invariants
 
-- One native public ticket-panel owner remains.
-- Newest-menu/session ownership and per-member Confirm locking remain intact.
-- Duplicate ticket detection remains in `_create_ticket()`.
-- Ticket numbers remain persistent per guild and are never intentionally recycled from Discord channel state.
-- Active Tickets category privacy/staff/bot permission validation remains authoritative at creation time.
-- Requester permissions are applied only after the channel is created; failed requester permission setup still removes the partial channel.
-- Optional intake forms remain supported and submit into the same creation path.
-- Existing channel-create `discord.Forbidden` and generic exception reporting remain unchanged.
-- Invite reconciliation/hardening files from PRs #194/#195 are untouched by this task.
-
-## Regression coverage
-
-`tests/test_ticket_confirm_create_runtime_196.py` covers:
-
-- direct Confirm acknowledges Discord before ticket creation and does not run slow setup preflight first;
-- form Confirm opens the modal before any slow setup preflight and does not create until modal submission;
-- persistent counter allocation failure creates no channel and produces a member-visible error.
-
-Existing ownership/restart regressions are also required:
-
-- `tests/test_public_ticket_panel_single_owner.py`
-- `tests/test_ticket_panel_native_restart_runtime.py`
+- No guild ID is hardcoded.
+- No global "enable all categories" migration is introduced.
+- Recovery reads and writes only the explicit guild being processed.
+- Non-empty surviving owner selection always wins over history recovery.
+- Historical recovery requires the older destructive-review evidence before restoring a pre-reset snapshot.
+- Unknown/custom rows are not adopted as managed categories by display name.
+- Setup remains required until explicitly confirmed.
+- PR #196 Confirm/create safety and PR #197 missed-select recovery remain untouched.
 
 ## Validation required before merge
 
-- focused DS-TICKET-036 tests;
-- existing public ticket-panel single-owner tests;
-- ticket native restart/persistence tests;
-- persistent ticket-counter regressions;
-- ticket category/menu/doctor audits;
-- Python compile check and committed diff whitespace check;
+- managed-category SQL migration smoke test, including repeat application/idempotency;
 - full repository pytest suite;
-- every relevant PR workflow green on one exact head;
-- final base-drift, changed-file scope, diff, conflict-marker, and review-thread check.
+- Ticket Category Menu Sanity and all other triggered exact-head workflows;
+- Python compile and committed-diff whitespace checks;
+- final compare against current `main` with zero base drift;
+- final scoped diff, conflict-marker, review-thread, and review-state inspection;
+- squash merge only after the exact final head is green.
 
 ## Production acceptance after deploy
 
-Require a clean end-to-end run from the existing public panel:
-
-1. **Create Ticket** opens the chooser.
-2. Choosing Appeal / Report a Member / Support immediately transitions to the Confirm screen and emits `ticket type selected` telemetry.
-3. Direct **Confirm** immediately acknowledges with **Opening your ticket…** and emits `ticket confirm acknowledged ... mode=direct`.
-4. A successful allocation emits `ticket number reserved ... number=...` and creates exactly one `ticket-####` channel under the configured Active Tickets category.
-5. The requester can see/use the new channel and the opening message/actions appear.
-6. Form-enabled categories open their modal immediately; submitting the modal creates through the same safe path.
-7. Repeated/duplicate Confirm clicks do not create duplicate channels.
-8. If persistent numbering is unavailable, the member receives the explicit safe-number failure and no channel is created.
-9. No Discord `Unknown interaction` / expired-interaction failure occurs during the normal Confirm path.
+1. Startup applies/recognizes the v4 category migration without SQL errors.
+2. A guild with a surviving saved selection shows that rich selection even while the setup-review notice remains.
+3. A guild whose old selection was erased is restored only when its own pre-reset version-history evidence exists.
+4. The affected ticket picker shows the recovered intended choices rather than only Appeal / Report a Member / Support. Expected historical names include **COD Modding Services**, **Partnerships**, **Report a Member**, and **Report Staff** when those were in the recovered selection.
+5. COD Modding Services intake asks about older/legacy titles and modding services, not Warzone/current-title general support.
+6. Create Ticket → category selection → Confirm → exactly one ticket channel still works through the #196/#197 runtime path.
+7. If no trustworthy saved/history selection exists, the starter trio remains rather than inventing a configuration.
 
 ## Suspended / backlog
 
-- **DS-INVITE-035 final hardening production acceptance:** PR #195 is merged and post-merge CI is green; corrected RSS/invite hardening telemetry still needs observation after the Discloud build picks up that merge.
-- **DS-TICKET-034 production acceptance:** historical Ticket Choices restore/cross-guild live acceptance remains separate from this Confirm runtime repair.
-- **Join-context Supabase schema mismatch:** production previously reported missing `entry_confidence` in `guild_members` and `member_joins`.
-- **Generic memory optimization:** judge actual retained memory using corrected `rss_current`, not the old peak-only reading.
+- **DS-TICKET-036 production acceptance:** PR #196 is merged; Confirm/create runtime still needs final deployed end-to-end acceptance together with this category repair.
+- **PR #197 production acceptance:** missed category-select recovery is merged and post-merge CI green; validate on the deployed build together with this task.
+- **DS-INVITE-035 final hardening acceptance:** merged; corrected RSS/invite telemetry remains a separate observation task.
+- **Join-context Supabase schema mismatch:** missing `entry_confidence` remains backlog.
 - **Server Design setup regression/full audit:** remains backlog.
 
 ## Next step
 
-Open PR #196, freeze one exact code-and-record head, run the focused ticket gates plus full repository CI, review the final scoped diff, and squash-merge only after that exact head is green. Production acceptance follows on Discloud.
+Open PR #198 on the validated branch, freeze an exact head, run the repository's real PostgreSQL migration smoke test plus full CI, perform final scope/review checks, and merge only after that exact head is green. Production acceptance follows on Discloud.
