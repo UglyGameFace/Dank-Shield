@@ -234,6 +234,112 @@ async def _profile_edit_or_send(
     await _safe_setup_edit(interaction, embed=embed, view=view)
 
 
+async def _ack_then_open_manager(interaction: discord.Interaction) -> None:
+    setup = _implementation.setup
+    if not await setup.solid._require_setup_permission(interaction):
+        return
+    if interaction.guild is None:
+        return await interaction.response.send_message(
+            "❌ This must be used inside a server.",
+            ephemeral=True,
+        )
+    await _safe_setup_defer(interaction)
+    original = getattr(_implementation, "_DANK_SETUP_ORIGINAL_OPEN_MANAGER")
+    await original(interaction)
+
+
+async def _ack_then_review_next(self: Any, interaction: discord.Interaction) -> None:
+    setup = _implementation.setup
+    if not await setup.solid._require_setup_permission(interaction):
+        return
+    if interaction.guild is None:
+        return await interaction.response.send_message(
+            "❌ This must be used inside a server.",
+            ephemeral=True,
+        )
+    await _safe_setup_defer(interaction)
+    original = getattr(
+        _implementation.CompactReviewView,
+        "_DANK_SETUP_ORIGINAL_REVIEW_NEXT",
+    )
+    await original(self, interaction)
+
+
+async def _ack_then_open_guided_target(
+    interaction: discord.Interaction,
+    target: str,
+    requirement_key: str = "",
+) -> None:
+    setup = _implementation.setup
+    if not await setup.solid._require_setup_permission(interaction):
+        return
+    if interaction.guild is None:
+        return await interaction.response.send_message(
+            "❌ This must be used inside a server.",
+            ephemeral=True,
+        )
+    await _safe_setup_defer(interaction)
+    original = getattr(setup, "_DANK_SETUP_ORIGINAL_OPEN_GUIDED_TARGET")
+    await original(interaction, target, requirement_key)
+
+
+async def _ack_then_open_timers_behavior(interaction: discord.Interaction) -> None:
+    setup = _implementation.setup
+    if not await setup.solid._require_setup_permission(interaction):
+        return
+    if interaction.guild is None:
+        return await interaction.response.send_message(
+            "❌ This must be used inside a server.",
+            ephemeral=True,
+        )
+    await _safe_setup_defer(interaction)
+    original = getattr(setup, "_DANK_SETUP_ORIGINAL_OPEN_TIMERS_BEHAVIOR")
+    await original(interaction)
+
+
+async def _ack_then_open_protection_options(interaction: discord.Interaction) -> None:
+    setup = _implementation.setup
+    if not await setup.solid._require_setup_permission(interaction):
+        return
+    if interaction.guild is None:
+        return await interaction.response.send_message(
+            "❌ This must be used inside a server.",
+            ephemeral=True,
+        )
+    await _safe_setup_defer(interaction)
+    original = getattr(setup, "_DANK_SETUP_ORIGINAL_OPEN_PROTECTION_OPTIONS")
+    await original(interaction)
+
+
+def _install_ack_integrity() -> None:
+    setup = _implementation.setup
+
+    if not hasattr(_implementation, "_DANK_SETUP_ORIGINAL_OPEN_MANAGER"):
+        _implementation._DANK_SETUP_ORIGINAL_OPEN_MANAGER = _implementation._open_manager
+    _implementation._open_manager = _ack_then_open_manager
+
+    if not hasattr(
+        _implementation.CompactReviewView,
+        "_DANK_SETUP_ORIGINAL_REVIEW_NEXT",
+    ):
+        _implementation.CompactReviewView._DANK_SETUP_ORIGINAL_REVIEW_NEXT = (
+            _implementation.CompactReviewView._next
+        )
+    _implementation.CompactReviewView._next = _ack_then_review_next
+
+    if not hasattr(setup, "_DANK_SETUP_ORIGINAL_OPEN_GUIDED_TARGET"):
+        setup._DANK_SETUP_ORIGINAL_OPEN_GUIDED_TARGET = setup._open_guided_target
+    setup._open_guided_target = _ack_then_open_guided_target
+
+    if not hasattr(setup, "_DANK_SETUP_ORIGINAL_OPEN_TIMERS_BEHAVIOR"):
+        setup._DANK_SETUP_ORIGINAL_OPEN_TIMERS_BEHAVIOR = setup._open_timers_behavior
+    setup._open_timers_behavior = _ack_then_open_timers_behavior
+
+    if not hasattr(setup, "_DANK_SETUP_ORIGINAL_OPEN_PROTECTION_OPTIONS"):
+        setup._DANK_SETUP_ORIGINAL_OPEN_PROTECTION_OPTIONS = setup._open_protection_options
+    setup._open_protection_options = _ack_then_open_protection_options
+
+
 def _install_feature_area_integrity() -> None:
     # Welcome setup historically deferred a setup-menu component and then sent a
     # second ephemeral interactive panel. Keep component navigation in-place,
@@ -289,9 +395,17 @@ def _assert_runtime_ownership() -> None:
             solid._build_category_manager_payload is _implementation._category_payload,
             "ticket category presentation",
         ),
+        (solid._edit_or_followup is _safe_setup_edit, "setup response routing"),
+        (_implementation._open_manager is _ack_then_open_manager, "manager acknowledgement"),
         (
-            solid._edit_or_followup is _safe_setup_edit,
-            "setup response routing",
+            _implementation.CompactReviewView._next is _ack_then_review_next,
+            "review acknowledgement",
+        ),
+        (setup._open_guided_target is _ack_then_open_guided_target, "guided acknowledgement"),
+        (setup._open_timers_behavior is _ack_then_open_timers_behavior, "timers acknowledgement"),
+        (
+            setup._open_protection_options is _ack_then_open_protection_options,
+            "protection acknowledgement",
         ),
     )
     missing = [label for okay, label in checks if not okay]
@@ -303,9 +417,10 @@ def apply_public_setup_runtime() -> None:
     """Install the complete setup presentation in one deterministic order.
 
     Re-running is intentional and safe. The canonical ticket-category service
-    installs first, compact binds presentation over that service, guided testing
-    is reasserted last, navigation and health contracts follow, and setup
-    responses are pinned to one message.
+    installs first, active component routes gain early acknowledgement, compact
+    binds presentation over those services, guided testing is reasserted last,
+    navigation and health contracts follow, and setup responses are pinned to
+    one message.
     """
 
     _ticket_category_guard.apply()
@@ -315,6 +430,8 @@ def apply_public_setup_runtime() -> None:
     _implementation._ORIGINAL_CATEGORY_PAYLOAD = (
         _ticket_category_guard._build_category_manager_payload
     )
+
+    _install_ack_integrity()
 
     _implementation._PATCHED = False
     _original_apply_compact_setup_patch()
