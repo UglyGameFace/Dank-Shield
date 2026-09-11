@@ -1,0 +1,57 @@
+name: Temporary DS-SETUP-038 patch
+
+on:
+  push:
+    branches:
+      - fix/public-dank-setup-entrypoint-199
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/public-dank-setup-entrypoint-199
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+      - name: Apply surgical setup entrypoint patch
+        run: python tools/_tmp_ds_setup_038_patch.py
+      - name: Compile changed runtime
+        run: python -m compileall -q stoney_verify/commands_ext/public_command_surface_v2.py stoney_verify/commands_ext/public_exit_compact_surface.py stoney_verify/command_surface_contract.py tests/test_public_dank_setup_entrypoint_199.py
+      - name: Run focused setup and command-surface regressions
+        run: |
+          python -m pytest -q \
+            tests/test_public_dank_setup_entrypoint_199.py \
+            tests/test_ui_first_dank_command_surface.py \
+            tests/test_command_ux_024_reassertion.py \
+            tests/test_welcome_card_live_command_tree.py \
+            tests/test_public_command_cleanup_contract_static.py \
+            tests/test_community_tools_surface.py
+      - name: Run command surface audits
+        run: |
+          python tools/audit_public_command_surface.py
+          python tools/audit_public_command_friction.py
+          python tools/test_public_status_command_surface_static.py
+          python tools/test_community_tools_static.py
+      - name: Check patch whitespace
+        run: git diff --check
+      - name: Commit permanent repair
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git status --short
+          git commit -m "DS-SETUP-038: restore public dank setup entrypoint"
+          git push origin HEAD:fix/public-dank-setup-entrypoint-199
