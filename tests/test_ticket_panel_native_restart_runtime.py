@@ -39,6 +39,7 @@ def _reset_runtime_state() -> None:
     runtime._RUNTIME_REGISTRATION_ERROR = ""
     panel._PANEL_VIEW_REGISTERED = False
     panel._PANEL_FALLBACK_LISTENER_REGISTERED = False
+    panel._MENU_SESSIONS.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -146,6 +147,123 @@ def test_fallback_only_delegates_clean_ticket_custom_id(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+def test_category_select_fallback_recovers_missed_temporary_view(monkeypatch, capsys) -> None:
+    async def scenario() -> None:
+        captured: dict[str, object] = {}
+
+        async def no_sleep(_seconds: float) -> None:
+            return None
+
+        class Response:
+            def __init__(self) -> None:
+                self.done = False
+                self.defer_calls = 0
+
+            def is_done(self) -> bool:
+                return self.done
+
+            async def defer(self) -> None:
+                self.defer_calls += 1
+                self.done = True
+
+        guild = SimpleNamespace(id=555)
+        user = SimpleNamespace(id=666)
+        session_id = panel._new_menu_session(guild.id, user.id)
+        rows = [{"slug": "support", "name": "Support"}]
+
+        async def fake_load_rows(_guild):
+            return rows, ""
+
+        class FakeSelect:
+            def __init__(self, loaded_rows, owner_id: int, loaded_session_id: str) -> None:
+                captured["rows"] = loaded_rows
+                captured["owner_id"] = owner_id
+                captured["session_id"] = loaded_session_id
+                self._values: list[str] = []
+
+            async def callback(self, interaction) -> None:
+                captured["interaction"] = interaction
+                captured["values"] = list(self._values)
+
+        monkeypatch.setattr(runtime.asyncio, "sleep", no_sleep)
+        monkeypatch.setattr(panel, "_load_rows", fake_load_rows)
+        monkeypatch.setattr(panel, "TicketSelect", FakeSelect)
+
+        response = Response()
+        interaction = SimpleNamespace(
+            id=401,
+            type=discord.InteractionType.component,
+            data={
+                "custom_id": "temporary-random-select-id",
+                "component_type": 3,
+                "values": ["support"],
+            },
+            response=response,
+            guild=guild,
+            user=user,
+            message=SimpleNamespace(
+                content="Choose a ticket type.",
+                embeds=[SimpleNamespace(title="Create Ticket")],
+            ),
+        )
+
+        await runtime._ticket_panel_fallback_listener(interaction)
+
+        assert response.defer_calls == 1
+        assert response.done is True
+        assert captured["owner_id"] == user.id
+        assert captured["session_id"] == session_id
+        assert captured["rows"] == rows
+        assert captured["values"] == ["support"]
+        assert captured["interaction"] is interaction
+
+    asyncio.run(scenario())
+    output = capsys.readouterr().out
+    assert "stage=category_listener_received interaction=401" in output
+    assert "stage=category_fallback_dispatch interaction=401" in output
+    assert "stage=category_fallback_return interaction=401" in output
+
+
+def test_category_select_fallback_yields_when_native_view_already_acknowledged(monkeypatch, capsys) -> None:
+    async def scenario() -> None:
+        async def no_sleep(_seconds: float) -> None:
+            return None
+
+        async def forbidden_load_rows(_guild):
+            raise AssertionError("fallback must not reload rows after native acknowledgement")
+
+        class Response:
+            def is_done(self) -> bool:
+                return True
+
+        monkeypatch.setattr(runtime.asyncio, "sleep", no_sleep)
+        monkeypatch.setattr(panel, "_load_rows", forbidden_load_rows)
+
+        interaction = SimpleNamespace(
+            id=402,
+            type=discord.InteractionType.component,
+            data={
+                "custom_id": "temporary-random-select-id",
+                "component_type": 3,
+                "values": ["support"],
+            },
+            response=Response(),
+            guild=SimpleNamespace(id=555),
+            user=SimpleNamespace(id=666),
+            message=SimpleNamespace(
+                content="Choose a ticket type.",
+                embeds=[SimpleNamespace(title="Create Ticket")],
+            ),
+        )
+        await runtime._ticket_panel_fallback_listener(interaction)
+
+    asyncio.run(scenario())
+    output = capsys.readouterr().out
+    assert "stage=category_listener_received interaction=402" in output
+    assert "stage=category_ack_observed_before_fallback interaction=402" in output
+    assert "category_fallback_dispatch" not in output
+
+
 def test_ticket_trace_distinguishes_early_ack_from_fallback(monkeypatch, capsys) -> None:
     async def scenario() -> None:
         async def no_sleep(_seconds: float) -> None:
@@ -196,13 +314,28 @@ def test_ticket_trace_is_scoped_to_clean_panel_id(monkeypatch, capsys) -> None:
             return None
 
         monkeypatch.setattr(runtime.asyncio, "sleep", no_sleep)
-        unrelated = SimpleNamespace(
+        unrelated_button = SimpleNamespace(
             id=301,
             type=discord.InteractionType.component,
             data={"custom_id": "unrelated:component"},
             response=SimpleNamespace(is_done=lambda: False),
         )
-        await runtime._ticket_panel_fallback_listener(unrelated)
+        unrelated_select = SimpleNamespace(
+            id=302,
+            type=discord.InteractionType.component,
+            data={
+                "custom_id": "unrelated:select",
+                "component_type": 3,
+                "values": ["support"],
+            },
+            response=SimpleNamespace(is_done=lambda: False),
+            message=SimpleNamespace(
+                content="Choose something else.",
+                embeds=[SimpleNamespace(title="Other Menu")],
+            ),
+        )
+        await runtime._ticket_panel_fallback_listener(unrelated_button)
+        await runtime._ticket_panel_fallback_listener(unrelated_select)
 
     asyncio.run(scenario())
     assert "ticket_panel_trace" not in capsys.readouterr().out
@@ -221,6 +354,7 @@ def test_runtime_delegates_to_canonical_owner_instead_of_creating_tickets() -> N
     assert "public_ticket_panel_clean as panel" in RUNTIME
     assert "panel.PublicCreateTicketPanelView()" in RUNTIME
     assert "panel.handle_public_ticket_panel_click(interaction)" in RUNTIME
+    assert "panel.TicketSelect(rows, user_id, session_id)" in RUNTIME
     assert "create_text_channel" not in RUNTIME
     assert "_create_ticket" not in RUNTIME
 
@@ -232,3 +366,6 @@ def test_runtime_trace_reports_delivery_age_and_ack_state_without_business_logic
     assert "ack_observed_before_fallback" in RUNTIME
     assert "fallback_dispatch" in RUNTIME
     assert "fallback_return" in RUNTIME
+    assert "category_listener_received" in RUNTIME
+    assert "category_fallback_dispatch" in RUNTIME
+    assert "category_fallback_return" in RUNTIME
