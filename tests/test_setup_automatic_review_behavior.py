@@ -43,7 +43,7 @@ def test_review_shows_fix_only_when_work_remains():
     labels = button_labels(view)
 
     assert "Fix Next Required Item" in labels
-    assert "Test Features" not in labels
+    assert "Start Guided Test" not in labels
     assert "All Features & Settings" not in labels
     assert "Change Setup Plan" not in labels
     assert "Setup Home" in labels
@@ -53,7 +53,8 @@ def test_review_shows_launch_only_when_ready():
     view = recommend.SetupReviewView(ready=True)
     labels = button_labels(view)
 
-    assert "Test Features" in labels
+    assert "Start Guided Test" in labels
+    assert "Test Features" not in labels
     assert "Fix Next Required Item" not in labels
     assert "All Features & Settings" not in labels
     assert "Change Setup Plan" not in labels
@@ -87,8 +88,11 @@ def test_ready_dispatch_opens_review_not_launch(
         forbidden_launch,
     )
 
+    # This test is about canonical target dispatch. Runtime acknowledgement is
+    # covered separately by test_setup_runtime_integrity.py.
+    dispatch = recommend._DANK_SETUP_ORIGINAL_OPEN_GUIDED_TARGET
     run(
-        recommend._open_guided_target(
+        dispatch(
             FakeInteraction(),
             "ready",
             "ready",
@@ -234,8 +238,8 @@ def test_launch_is_blocked_until_ready(
 @pytest.mark.parametrize(
     ("target_name", "main_label", "hidden_label"),
     (
-        ("ready", "Test Features", "Fix Next Required Item"),
-        ("roles", "Fix Next Required Item", "Test Features"),
+        ("ready", "Start Guided Test", "Fix Next Required Item"),
+        ("roles", "Fix Next Required Item", "Start Guided Test"),
     ),
 )
 def test_health_check_builds_correct_review_view(
