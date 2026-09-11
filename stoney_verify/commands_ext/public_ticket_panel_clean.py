@@ -580,7 +580,23 @@ async def _create_ticket(i: discord.Interaction, row: Dict[str, Any]) -> None:
             existing = None
         if existing:
             return await _ephemeral(i, f"You already have an open ticket: {existing.mention}")
-        number = await _next_number(guild, parent)
+        try:
+            number = await _next_number(guild, parent)
+        except Exception as e:
+            _warn(
+                f"ticket number allocation failed guild={guild.id} user={owner.id}: "
+                f"{type(e).__name__}: {_short(e, 240)}"
+            )
+            return await _ephemeral(
+                i,
+                f"❌ Could not reserve a safe ticket number: "
+                f"`{type(e).__name__}: {_short(e, 180)}`. "
+                "Nothing was created; please try again in a moment.",
+            )
+        _log(
+            f"ticket number reserved guild={guild.id} user={owner.id} "
+            f"number={number} category={_row_slug(row)}"
+        )
         try:
             channel = await _create_synced_ticket_channel(guild, owner, parent, row, number)
         except discord.Forbidden as e:
@@ -749,11 +765,12 @@ class TicketConfirmView(discord.ui.View):
         async with lock:
             if not _menu_session_current(guild.id, member.id, self.session_id):
                 return await _stale_ticket_menu(i)
-            _parent, _staff, blockers, warnings = await _ticket_setup_preflight(guild)
-            if blockers:
-                return await _ephemeral(i, "❌ Ticket setup needs repair before this can open.", embed=_setup_problem_embed(guild, blockers, warnings))
             questions = _form_questions(self.row)
             if questions:
+                _log(
+                    f"ticket confirm acknowledged guild={guild.id} user={member.id} "
+                    f"category={_row_slug(self.row)} mode=form"
+                )
                 opened = await _open_form_modal(i, self.row, questions)
                 if opened:
                     _consume_menu_session(guild.id, member.id, self.session_id)
@@ -761,10 +778,16 @@ class TicketConfirmView(discord.ui.View):
             if not _consume_menu_session(guild.id, member.id, self.session_id):
                 return await _stale_ticket_menu(i)
             _disable_view(self)
-            try:
-                await i.response.edit_message(content="Opening your ticket…", embed=_category_embed(self.row), view=self)
-            except Exception:
-                pass
+            _log(
+                f"ticket confirm acknowledged guild={guild.id} user={member.id} "
+                f"category={_row_slug(self.row)} mode=direct"
+            )
+            await _edit_or_reply(
+                i,
+                content="Opening your ticket…",
+                embed=_category_embed(self.row),
+                view=self,
+            )
             await _create_ticket(i, self.row)
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, emoji="↩️")
@@ -793,6 +816,7 @@ class TicketSelect(discord.ui.Select):
             return await _stale_ticket_menu(i)
         slug = _safe_str(self.values[0], "support")
         row = next((r for r in self.rows if _row_slug(r) == slug), {"slug": slug, "name": "Support"})
+        _log(f"ticket type selected guild={guild.id} user={member.id} category={_row_slug(row)}")
         await _edit_or_reply(i, content="Confirm this ticket type.", embed=_category_embed(row), view=TicketConfirmView(self.rows, row, self.owner_id, self.session_id))
 
 
