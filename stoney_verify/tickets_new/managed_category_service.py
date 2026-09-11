@@ -15,12 +15,16 @@ from ..globals import get_supabase
 # Setup selection and managed catalog repair are intentionally versioned
 # separately. A catalog repair must never force a valid owner through setup again.
 CATEGORY_SETUP_VERSION = 2
-MANAGED_CATALOG_VERSION = 3
+MANAGED_CATALOG_VERSION = 4
 SAFE_STARTER_KEYS: tuple[str, ...] = ("report", "appeal", "support")
 _RECONCILE_DEBOUNCE_SECONDS = 300.0
 _RECONCILE_RETRY_SECONDS = 30.0
 _RECONCILE_LOCK = threading.Lock()
 _RECONCILE_NOT_BEFORE: Dict[int, float] = {}
+_HISTORY_RECOVERY_DEBOUNCE_SECONDS = 300.0
+_HISTORY_RECOVERY_RETRY_SECONDS = 30.0
+_HISTORY_RECOVERY_NOT_BEFORE: Dict[int, float] = {}
+_DESTRUCTIVE_REVIEW_REASON_MARKER = "previous setup enabled duplicate or excessive"
 
 # One catalog owns database reconciliation, setup selection, and every live
 # ticket picker. Rows stay available globally, but only rows with is_enabled=true
@@ -74,8 +78,8 @@ CATEGORY_CATALOG: tuple[Dict[str, Any], ...] = (
     {
         "category_key": "staff-complaint",
         "slug": "staff_complaint",
-        "name": "Staff Complaint",
-        "description": "Complaints or escalation requests involving staff or moderator behavior.",
+        "name": "Report Staff",
+        "description": "Report or escalate staff, moderator, or administrator behavior.",
         "intake_type": "report",
         "sort_order": 60,
         "is_default": False,
@@ -92,8 +96,8 @@ CATEGORY_CATALOG: tuple[Dict[str, Any], ...] = (
     {
         "category_key": "cod-services",
         "slug": "cod_services",
-        "name": "COD Services",
-        "description": "Call of Duty, Warzone, Zombies, lobby, account, unlock, or service questions.",
+        "name": "COD Modding Services",
+        "description": "Legacy Call of Duty modding services for older titles: modded/challenge lobbies, unlocks, Zombies, recoveries, RGH/JTAG, and related help.",
         "intake_type": "cod_services",
         "sort_order": 80,
         "is_default": False,
@@ -204,6 +208,9 @@ _ALIAS_TO_KEY: Dict[str, str] = {
     "bug-technical-support": "bug",
     "cod-services": "cod-services",
     "cod-service": "cod-services",
+    "cod-modding": "cod-services",
+    "cod-modding-services": "cod-services",
+    "legacy-cod-modding": "cod-services",
     "call-of-duty": "cod-services",
     "call-of-duty-services": "cod-services",
     "game-services": "game-services",
@@ -877,21 +884,258 @@ def require_category_setup_sync(
         )
 
 
+def _claim_history_recovery_window(guild_id: int, *, now: float | None = None) -> bool:
+    current = time.monotonic() if now is None else float(now)
+    key = int(guild_id)
+    with _RECONCILE_LOCK:
+        if _HISTORY_RECOVERY_NOT_BEFORE.get(key, 0.0) > current:
+            return False
+        _HISTORY_RECOVERY_NOT_BEFORE[key] = current + _HISTORY_RECOVERY_DEBOUNCE_SECONDS
+        return True
+
+
+def _schedule_history_recovery_retry(guild_id: int, *, now: float | None = None) -> None:
+    current = time.monotonic() if now is None else float(now)
+    with _RECONCILE_LOCK:
+        _HISTORY_RECOVERY_NOT_BEFORE[int(guild_id)] = current + _HISTORY_RECOVERY_RETRY_SECONDS
+
+
+def _runtime_history_recovery_eligible(
+    cfg: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+) -> bool:
+    """Limit REST history recovery to the exact old starter-reset footprint.
+
+    Custom-only setups deliberately store an empty managed selection.  Never use
+    old history to widen those.  The runtime fallback is intentionally narrower
+    than the SQL migration: it only repairs a required-review guild with no
+    saved keys, no enabled custom rows, and exactly the old starter trio live.
+    """
+    if not _config_required(cfg) or _configured_selected_keys(cfg):
+        return False
+    if _enabled_custom_rows(rows):
+        return False
+    live_managed = {
+        canonical_category_key(row)
+        for row in rows
+        if _managed(row)
+        and _row_enabled(row)
+        and canonical_category_key(row) in _CATALOG_BY_KEY
+    }
+    return live_managed == set(SAFE_STARTER_KEYS)
+
+
+def _historical_managed_keys(snapshot: Mapping[str, Any]) -> tuple[str, ...]:
+    raw_rows = snapshot.get("rows")
+    if not isinstance(raw_rows, list):
+        return ()
+    selected: List[str] = []
+    for raw in raw_rows:
+        if not isinstance(raw, Mapping) or not _row_enabled(raw):
+            continue
+        key = canonical_category_key(raw)
+        if key in _CATALOG_BY_KEY and key not in selected:
+            selected.append(key)
+    return tuple(selected[:25])
+
+
+def _recover_erased_selection_keys_sync(guild_id: int) -> tuple[str, ...]:
+    """Recover an old destructive-reset selection using Supabase REST history.
+
+    This is the production fallback for deployments that have the version-history
+    table but no direct Postgres DSN capable of applying the v4 SQL migration.
+    It mirrors the migration's strict transaction-boundary rule: locate the
+    destructive guild-config snapshot, then use the newest ticket-category
+    snapshot whose timestamp is strictly earlier than that reset transaction.
+    """
+    from .. import config_history as history
+
+    sb = _supabase()
+    gid = str(int(guild_id))
+    candidates: List[Dict[str, Any]] = []
+    config_tables = tuple(dict.fromkeys((_config_table_name(), "guild_configs", "guild_config")))
+
+    for table_name in config_tables:
+        try:
+            response = (
+                sb.table(history.CONFIG_HISTORY_TABLE)
+                .select("version_id,guild_id,config_table,snapshot,created_at")
+                .eq("guild_id", gid)
+                .eq("config_table", table_name)
+                .order("created_at", desc=True)
+                .order("version_id", desc=True)
+                .limit(history.CONFIG_HISTORY_RETENTION)
+                .execute()
+            )
+        except Exception:
+            continue
+        for raw in getattr(response, "data", None) or []:
+            if not isinstance(raw, Mapping):
+                continue
+            snapshot = raw.get("snapshot")
+            if not isinstance(snapshot, Mapping):
+                continue
+            if not _safe_bool(_row_value(snapshot, "ticket_category_setup_required", False), False):
+                continue
+            reason = str(
+                _row_value(snapshot, "ticket_category_setup_required_reason", "") or ""
+            ).strip().lower()
+            if _DESTRUCTIVE_REVIEW_REASON_MARKER not in reason:
+                continue
+            row = dict(raw)
+            if str(row.get("created_at") or "").strip():
+                candidates.append(row)
+
+    if not candidates:
+        return ()
+    reset = max(
+        candidates,
+        key=lambda row: (
+            str(row.get("created_at") or ""),
+            _safe_int(row.get("version_id"), 0),
+        ),
+    )
+    reset_at = str(reset.get("created_at") or "").strip()
+    if not reset_at:
+        return ()
+
+    try:
+        response = (
+            sb.table(history.CONFIG_HISTORY_TABLE)
+            .select("version_id,guild_id,config_table,snapshot,created_at")
+            .eq("guild_id", gid)
+            .eq("config_table", history.TICKET_CATEGORIES_TABLE)
+            .lt("created_at", reset_at)
+            .order("created_at", desc=True)
+            .order("version_id", desc=True)
+            .limit(1)
+            .execute()
+        )
+    except Exception:
+        return ()
+
+    versions = getattr(response, "data", None) or []
+    if not versions or not isinstance(versions[0], Mapping):
+        return ()
+    snapshot = versions[0].get("snapshot")
+    if not isinstance(snapshot, Mapping):
+        return ()
+    return _historical_managed_keys(snapshot)
+
+
+def _persist_runtime_recovered_selection_sync(
+    guild_id: int,
+    keys: Sequence[str],
+    rows: Sequence[Mapping[str, Any]],
+) -> None:
+    selected = tuple(
+        key for key in dict.fromkeys(str(value) for value in keys)
+        if key in _CATALOG_BY_KEY
+    )
+    if not selected:
+        return
+
+    from ..commands_ext.public_setup_config_writer import upsert_guild_config_sync
+
+    upsert_guild_config_sync(
+        int(guild_id),
+        {
+            "ticket_category_setup_selected_keys": list(selected),
+            "__config_write_mode": "force",
+            "__config_write_source": "ticket category REST history recovery",
+            "__config_write_reason": "Recovered pre-reset ticket category selection from same-guild version history.",
+        },
+    )
+
+    # The saved keys are sufficient for member-facing projection.  Realign live
+    # row flags best-effort as well so setup, database state, and the picker tell
+    # the same story even before the SQL migration is installed.
+    sb = _supabase()
+    if "support" in selected:
+        default_key = "support"
+    else:
+        default_key = min(
+            selected,
+            key=lambda key: (
+                _safe_int(_CATALOG_BY_KEY[key].get("sort_order"), 999),
+                key,
+            ),
+        )
+    for row in rows:
+        if not _managed(row):
+            continue
+        key = canonical_category_key(row)
+        row_id = str(row.get("id") or "").strip()
+        if not row_id or key not in _CATALOG_BY_KEY:
+            continue
+        enabled = key in selected
+        try:
+            sb.table("ticket_categories").update(
+                {
+                    "is_enabled": enabled,
+                    "is_default": enabled and key == default_key,
+                }
+            ).eq("id", row_id).execute()
+        except Exception:
+            # Projection from the durably saved keys still keeps the menu safe;
+            # the normal reconcile path can repair row flags later.
+            continue
+
+    try:
+        print(
+            "🗂️ ticket_category_history_recovery "
+            f"guild={int(guild_id)} source=rest_version_history "
+            f"recovered={','.join(selected)} setup_required=true"
+        )
+    except Exception:
+        pass
+
+
 def _state_from_rows(
     cfg: Mapping[str, Any],
     rows: Sequence[Mapping[str, Any]],
 ) -> CategorySetupState:
-    active = dedupe_category_rows(rows, enabled_only=True, fallback=True)
-    selected = tuple(
-        canonical_category_key(row)
-        for row in active
-        if _managed(row) and canonical_category_key(row) in _CATALOG_BY_KEY
-    )
+    all_rows = dedupe_category_rows(rows, enabled_only=False, fallback=False)
+    required = _config_required(cfg)
+    preserved = _configured_selected_keys(cfg) if required else ()
+
+    # A safety review may temporarily change persisted row enablement, but it
+    # must not erase a previously owner-confirmed member menu.  PR #193 began
+    # preserving those keys in guild_configs; use them while review is pending.
+    if preserved:
+        selected_set = set(preserved)
+        projected: List[Dict[str, Any]] = []
+        for row in all_rows:
+            key = canonical_category_key(row)
+            if _managed(row):
+                if key not in selected_set:
+                    continue
+                restored = dict(row)
+                restored["is_enabled"] = True
+                projected.append(restored)
+            elif _row_enabled(row):
+                projected.append(dict(row))
+        active = dedupe_category_rows(projected, enabled_only=True, fallback=True)
+        selected = tuple(
+            key for key in preserved
+            if any(
+                _managed(row) and canonical_category_key(row) == key
+                for row in active
+            )
+        )
+    else:
+        active = dedupe_category_rows(rows, enabled_only=True, fallback=True)
+        selected = tuple(
+            canonical_category_key(row)
+            for row in active
+            if _managed(row) and canonical_category_key(row) in _CATALOG_BY_KEY
+        )
+
     return CategorySetupState(
-        rows=dedupe_category_rows(rows, enabled_only=False, fallback=False),
+        rows=all_rows,
         active_rows=active,
         selected_keys=tuple(dict.fromkeys(selected)),
-        required=_config_required(cfg),
+        required=required,
         reason=_config_reason(cfg),
         version=_safe_int(_row_value(cfg, "ticket_category_setup_version", 0), 0),
     )
@@ -929,6 +1173,24 @@ def ensure_category_setup_state_sync(guild_id: int) -> CategorySetupState:
             )
             cfg = _fetch_config_sync(guild_id)
             rows = _fetch_rows_sync(guild_id)
+            required = _config_required(cfg)
+
+    # Older review migrations could erase the saved managed keys entirely.
+    # Recover that exact starter-reset footprint from same-guild REST history so
+    # production does not depend on a direct Postgres DSN to regain its menu.
+    if (
+        required
+        and _runtime_history_recovery_eligible(cfg, rows)
+        and _claim_history_recovery_window(guild_id)
+    ):
+        try:
+            recovered = _recover_erased_selection_keys_sync(guild_id)
+            if recovered:
+                _persist_runtime_recovered_selection_sync(guild_id, recovered, rows)
+                cfg = _fetch_config_sync(guild_id)
+                rows = _fetch_rows_sync(guild_id)
+        except Exception:
+            _schedule_history_recovery_retry(guild_id)
 
     return _state_from_rows(cfg, rows)
 

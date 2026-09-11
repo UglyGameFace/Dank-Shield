@@ -1,0 +1,245 @@
+name: Ticket Category Rich Recovery SQL
+
+on:
+  pull_request:
+    paths:
+      - "supabase/migrations/20260911113000_restore_rich_ticket_category_selection.sql"
+      - "stoney_verify/tickets_new/managed_category_service.py"
+      - "stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py"
+      - "stoney_verify/startup_guards/ticket_form_default_templates_guard.py"
+      - "tests/test_ticket_category_setup_selection.py"
+      - ".github/workflows/ticket-category-rich-recovery-sql.yml"
+  push:
+    branches: [main]
+    paths:
+      - "supabase/migrations/20260911113000_restore_rich_ticket_category_selection.sql"
+      - "stoney_verify/tickets_new/managed_category_service.py"
+      - "stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py"
+      - "stoney_verify/startup_guards/ticket_form_default_templates_guard.py"
+      - "tests/test_ticket_category_setup_selection.py"
+      - ".github/workflows/ticket-category-rich-recovery-sql.yml"
+  workflow_dispatch:
+
+jobs:
+  rich-recovery-sql:
+    name: Preserved and historical rich selection recovery
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare historical schema
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          create extension if not exists pgcrypto;
+          do $$
+          begin
+            if not exists (select 1 from pg_roles where rolname='anon') then create role anon; end if;
+            if not exists (select 1 from pg_roles where rolname='authenticated') then create role authenticated; end if;
+            if not exists (select 1 from pg_roles where rolname='service_role') then create role service_role; end if;
+          end $$;
+
+          create table public.guild_configs (
+            guild_id text primary key,
+            updated_at timestamptz not null default now()
+          );
+          create table public.ticket_categories (
+            id uuid primary key default gen_random_uuid(),
+            guild_id text not null,
+            slug text not null,
+            name text not null,
+            description text,
+            intake_type text not null default 'general',
+            match_keywords jsonb not null default '[]'::jsonb,
+            button_label text,
+            sort_order integer not null default 999,
+            is_default boolean not null default false,
+            is_enabled boolean not null default true,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now()
+          );
+
+          insert into public.guild_configs(guild_id)
+          values ('preserved-guild'), ('erased-guild'), ('untouched-guild');
+          SQL
+
+      - name: Install history and original v2 category setup
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260720_guild_config_version_history.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260802042000_ticket_category_setup_selection.sql
+
+      - name: Reproduce preserved and destructive-review states
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          select * from public.save_dank_ticket_category_selection(
+            'preserved-guild',
+            array['report','staff-complaint','cod-services','partnership','support']::text[],
+            'owner-preserved', 'Preserved Owner'
+          );
+          select * from public.save_dank_ticket_category_selection(
+            'erased-guild',
+            array['report','staff-complaint','cod-services','partnership','support']::text[],
+            'owner-erased', 'Erased Owner'
+          );
+          select * from public.save_dank_ticket_category_selection(
+            'untouched-guild',
+            array['account-access','support']::text[],
+            'owner-untouched', 'Untouched Owner'
+          );
+
+          -- This is the old destructive v2 path: row flags collapse to starters
+          -- and the saved selection is erased. Version history must be the only
+          -- recovery evidence for this guild.
+          select public.require_dank_ticket_category_setup(
+            'erased-guild',
+            'The previous setup enabled duplicate or excessive built-in ticket choices. Choose only what this server needs.',
+            true
+          );
+          SQL
+
+      - name: Upgrade through v3 and preservation migration
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260807215900_prepare_managed_ticket_category_repair.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260807220000_repair_managed_ticket_category_duplicates.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260910163000_preserve_ticket_category_selection_on_review.sql
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          -- The preservation migration keeps these saved keys, but its older
+          -- row-reset behavior still collapses live flags to the starter trio.
+          -- The v4 migration must realign them without falsely completing setup.
+          select public.require_dank_ticket_category_setup(
+            'preserved-guild', 'CI preserved-selection review', true
+          );
+          SQL
+
+      - name: Apply v4 rich recovery twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pass in 1 2; do
+            echo "v4 recovery pass ${pass}"
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260911113000_restore_rich_ticket_category_selection.sql
+          done
+
+      - name: Verify rich selections, labels, isolation, and idempotency
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            preserved_live text[];
+            preserved_saved text[];
+            preserved_required boolean;
+            erased_live text[];
+            erased_saved text[];
+            erased_required boolean;
+            untouched_live text[];
+            cod_name text;
+            cod_description text;
+            staff_name text;
+            report_name text;
+            partnership_name text;
+            wrong_versions integer;
+          begin
+            select array_agg(managed_category_key order by managed_category_key)
+              into preserved_live
+              from public.ticket_categories
+             where guild_id='preserved-guild'
+               and managed_by_dank=true and is_enabled=true;
+            select ticket_category_setup_required,
+                   (select array_agg(v order by v)
+                      from jsonb_array_elements_text(ticket_category_setup_selected_keys) x(v))
+              into preserved_required, preserved_saved
+              from public.guild_configs where guild_id='preserved-guild';
+            if preserved_live <> array['cod-services','partnership','report','staff-complaint','support']::text[] then
+              raise exception 'surviving saved selection did not realign live rows: %', preserved_live;
+            end if;
+            if preserved_saved <> preserved_live or preserved_required is not true then
+              raise exception 'preserved guild review state is wrong: saved %, required %', preserved_saved, preserved_required;
+            end if;
+
+            select array_agg(managed_category_key order by managed_category_key)
+              into erased_live
+              from public.ticket_categories
+             where guild_id='erased-guild'
+               and managed_by_dank=true and is_enabled=true;
+            select ticket_category_setup_required,
+                   (select array_agg(v order by v)
+                      from jsonb_array_elements_text(ticket_category_setup_selected_keys) x(v))
+              into erased_required, erased_saved
+              from public.guild_configs where guild_id='erased-guild';
+            if erased_live <> array['cod-services','partnership','report','staff-complaint','support']::text[] then
+              raise exception 'historical rich selection was not recovered: %', erased_live;
+            end if;
+            if erased_saved <> erased_live or erased_required is not true then
+              raise exception 'historical recovery config state is wrong: saved %, required %', erased_saved, erased_required;
+            end if;
+
+            select array_agg(managed_category_key order by managed_category_key)
+              into untouched_live
+              from public.ticket_categories
+             where guild_id='untouched-guild'
+               and managed_by_dank=true and is_enabled=true;
+            if untouched_live <> array['account-access','support']::text[] then
+              raise exception 'recovery leaked into untouched guild: %', untouched_live;
+            end if;
+
+            select name, description into cod_name, cod_description
+              from public.ticket_categories
+             where guild_id='preserved-guild' and managed_category_key='cod-services';
+            select name into staff_name
+              from public.ticket_categories
+             where guild_id='preserved-guild' and managed_category_key='staff-complaint';
+            select name into report_name
+              from public.ticket_categories
+             where guild_id='preserved-guild' and managed_category_key='report';
+            select name into partnership_name
+              from public.ticket_categories
+             where guild_id='preserved-guild' and managed_category_key='partnership';
+
+            if cod_name <> 'COD Modding Services'
+               or position('Legacy Call of Duty modding services' in cod_description) = 0
+               or position('Warzone' in cod_description) > 0 then
+              raise exception 'COD legacy identity drifted: % / %', cod_name, cod_description;
+            end if;
+            if staff_name <> 'Report Staff' then
+              raise exception 'staff label drifted: %', staff_name;
+            end if;
+            if report_name <> 'Report a Member' then
+              raise exception 'member report label drifted: %', report_name;
+            end if;
+            if partnership_name <> 'Partnerships' then
+              raise exception 'partnership label drifted: %', partnership_name;
+            end if;
+
+            select count(*) into wrong_versions
+              from public.ticket_categories
+             where managed_by_dank=true
+               and managed_catalog_version is distinct from 4;
+            if wrong_versions <> 0 then
+              raise exception '% managed rows were not reconciled to catalog v4', wrong_versions;
+            end if;
+          end $$;
+          SQL

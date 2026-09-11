@@ -20,6 +20,7 @@ FILES = [
     "supabase/migrations/20260802042000_ticket_category_setup_selection.sql",
     "supabase/migrations/20260807215900_prepare_managed_ticket_category_repair.sql",
     "supabase/migrations/20260807220000_repair_managed_ticket_category_duplicates.sql",
+    "supabase/migrations/20260911113000_restore_rich_ticket_category_selection.sql",
 ]
 
 CHECKS = {
@@ -40,12 +41,13 @@ CHECKS = {
         'MIGRATION_FILE = "20260802042000_ticket_category_setup_selection.sql"',
         'REPAIR_PREP_MIGRATION_FILE = "20260807215900_prepare_managed_ticket_category_repair.sql"',
         'REPAIR_MIGRATION_FILE = "20260807220000_repair_managed_ticket_category_duplicates.sql"',
+        'RICH_SELECTION_RECOVERY_MIGRATION_FILE = "20260911113000_restore_rich_ticket_category_selection.sql"',
         "MIGRATION_FILES",
-        "stale-key preflight + managed catalog repair v3",
+        "managed catalog repair v4",
     ],
     "stoney_verify/tickets_new/managed_category_service.py": [
         "CATEGORY_SETUP_VERSION = 2",
-        "MANAGED_CATALOG_VERSION = 3",
+        "MANAGED_CATALOG_VERSION = 4",
         "SAFE_STARTER_KEYS",
         "CATEGORY_CATALOG",
         "canonical_category_key",
@@ -71,7 +73,7 @@ CHECKS = {
         "Single owner for ticket category catalog",
         "ManagedCategorySelection",
         "Choose every built-in ticket option this server should show",
-        "Use Custom Choices Only",
+        'custom_id="dank_ticket_category_setup:custom_only"',
         "_setup_category_load",
         "_seed_catalog_without_enabling_everything",
         "_clean_panel_load_rows",
@@ -118,6 +120,14 @@ CHECKS = {
         "Repair every existing guild immediately",
         "reconcile_dank_ticket_categories(null)",
         "completed v2 selection is never invalidated",
+    ],
+    "supabase/migrations/20260911113000_restore_rich_ticket_category_selection.sql": [
+        "COD Modding Services",
+        "Report Staff",
+        "recover_dank_ticket_category_selection_from_history",
+        "guild_config_versions",
+        "ticket_category_setup_selected_keys",
+        "reconcile_dank_ticket_categories(null)",
     ],
     "stoney_verify/startup_guards/__init__.py": [
         "auto_schema_bootstrap",

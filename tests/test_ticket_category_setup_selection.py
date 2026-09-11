@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import discord
 
 from stoney_verify.commands_ext import public_setup_recommend as recommend
 from stoney_verify.commands_ext import public_setup_solid as solid
@@ -115,9 +116,9 @@ def test_custom_unknown_slug_is_not_claimed_only_because_visible_name_is_support
 
 def test_setup_and_catalog_versions_are_independent() -> None:
     assert categories.CATEGORY_SETUP_VERSION == 2
-    assert categories.MANAGED_CATALOG_VERSION == 3
+    assert categories.MANAGED_CATALOG_VERSION == 4
     rows = categories.catalog_category_rows()
-    assert {row["managed_catalog_version"] for row in rows} == {3}
+    assert {row["managed_catalog_version"] for row in rows} == {4}
     assert all(row["button_label"] == row["name"] for row in rows)
 
 
@@ -473,3 +474,285 @@ def test_single_runtime_owner_is_installed_on_every_picker_path() -> None:
         else setup_guard._build_category_manager_payload
     )
     assert solid._build_category_manager_payload is expected_payload_owner
+
+
+def test_review_state_restores_preserved_owner_selection() -> None:
+    rows = categories.catalog_category_rows()
+    for row in rows:
+        key = categories.canonical_category_key(row)
+        row["is_enabled"] = key in set(categories.SAFE_STARTER_KEYS)
+        row["is_default"] = key == "support"
+
+    cfg = {
+        "ticket_category_setup_required": True,
+        "ticket_category_setup_version": 0,
+        "ticket_category_setup_selected_keys": [
+            "report",
+            "staff-complaint",
+            "cod-services",
+            "partnership",
+            "support",
+        ],
+    }
+    state = categories._state_from_rows(cfg, rows)
+
+    assert state.required is True
+    assert state.selected_keys == (
+        "report",
+        "staff-complaint",
+        "cod-services",
+        "partnership",
+        "support",
+    )
+    assert set(_keys(state.active_rows)) == set(state.selected_keys)
+    assert {row["name"] for row in state.active_rows} >= {
+        "Report a Member",
+        "Report Staff",
+        "COD Modding Services",
+        "Partnerships",
+        "Support",
+    }
+
+
+def test_review_state_without_preserved_selection_stays_on_safe_starter() -> None:
+    rows = categories.catalog_category_rows()
+    cfg = {
+        "ticket_category_setup_required": True,
+        "ticket_category_setup_version": 0,
+        "ticket_category_setup_selected_keys": [],
+    }
+    state = categories._state_from_rows(cfg, rows)
+    assert set(_keys(state.active_rows)) == set(categories.SAFE_STARTER_KEYS)
+
+
+def test_catalog_restores_legacy_coding_and_staff_labels() -> None:
+    rows = {row["category_key"]: row for row in categories.CATEGORY_CATALOG}
+    assert rows["staff-complaint"]["name"] == "Report Staff"
+    assert rows["cod-services"]["name"] == "COD Modding Services"
+    cod_description = rows["cod-services"]["description"].lower()
+    assert "legacy" in cod_description
+    assert "rgh/jtag" in cod_description
+    assert "warzone" not in cod_description
+    assert rows["partnership"]["name"] == "Partnerships"
+    assert rows["report"]["name"] == "Report a Member"
+
+
+def test_cod_default_form_is_legacy_modding_specific() -> None:
+    questions = forms.DEFAULT_TEMPLATES["cod"]
+    joined = " ".join(str(item.get("placeholder") or "") for item in questions).lower()
+    labels = " ".join(str(item.get("label") or "") for item in questions).lower()
+    assert "bo2" in joined and "bo3" in joined and "waw" in joined
+    assert "rgh/jtag" in joined
+    assert "warzone" not in joined
+    assert "modding service" in labels
+
+
+
+def test_owner_setup_exposes_full_catalog_and_optional_presets() -> None:
+    rows = categories.catalog_category_rows()
+    state = categories.CategorySetupState(
+        rows=rows,
+        active_rows=[row for row in rows if row["category_key"] == "support"],
+        selected_keys=("support",),
+        required=False,
+        reason="",
+        version=categories.CATEGORY_SETUP_VERSION,
+    )
+    view = setup_guard.CategorySetupManagerView(state=state)
+    custom_ids = {str(getattr(child, "custom_id", "")) for child in view.children}
+
+    assert "dank_ticket_category_setup:preset_core" in custom_ids
+    assert "dank_ticket_category_setup:preset_service_gaming" in custom_ids
+    assert "dank_ticket_category_setup:preset_all" in custom_ids
+
+    selector = next(child for child in view.children if isinstance(child, setup_guard.ManagedCategorySelection))
+    assert len(selector.options) == len(categories.CATEGORY_CATALOG) == 16
+    assert {option.value for option in selector.options} == {
+        row["category_key"] for row in categories.CATEGORY_CATALOG
+    }
+    assert {option.value for option in selector.options if option.default} == {"support"}
+
+
+def test_setup_presets_are_catalog_subsets_not_global_forcing() -> None:
+    all_keys = tuple(row["category_key"] for row in categories.CATEGORY_CATALOG)
+    assert setup_guard._ALL_MANAGED_PRESET_KEYS == all_keys
+    assert set(setup_guard._COMMUNITY_CORE_PRESET_KEYS) < set(all_keys)
+    assert set(setup_guard._SERVICE_GAMING_PRESET_KEYS) < set(all_keys)
+    assert "cod-services" not in setup_guard._COMMUNITY_CORE_PRESET_KEYS
+    assert "cod-services" in setup_guard._SERVICE_GAMING_PRESET_KEYS
+    assert "content-media" not in setup_guard._SERVICE_GAMING_PRESET_KEYS
+    assert "giveaway-reward" not in setup_guard._SERVICE_GAMING_PRESET_KEYS
+
+
+def test_custom_setup_keeps_custom_only_and_custom_editor_off_preset_row() -> None:
+    custom = {
+        "id": "custom-1",
+        "slug": "clan_application",
+        "name": "Clan Application",
+        "is_enabled": True,
+        "is_default": True,
+        "managed_by_dank": False,
+    }
+    rows = [*categories.catalog_category_rows(), custom]
+    state = categories.CategorySetupState(
+        rows=rows,
+        active_rows=[custom],
+        selected_keys=(),
+        required=False,
+        reason="",
+        version=categories.CATEGORY_SETUP_VERSION,
+    )
+    view = setup_guard.CategorySetupManagerView(state=state)
+    custom_ids = {str(getattr(child, "custom_id", "")) for child in view.children}
+    assert "dank_ticket_category_setup:custom_only" in custom_ids
+    custom_editor = next(
+        child for child in view.children
+        if str(getattr(child, "placeholder", "")) == "✏️ Edit a custom ticket choice"
+    )
+    assert custom_editor.row == 2
+
+
+def test_community_core_preset_saves_only_that_subset(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        rows = categories.catalog_category_rows()
+        initial = categories.CategorySetupState(
+            rows=rows,
+            active_rows=[row for row in rows if row["category_key"] == "support"],
+            selected_keys=("support",),
+            required=True,
+            reason="Review choices.",
+            version=0,
+        )
+        captured: list[tuple[str, ...]] = []
+
+        async def fake_save(interaction: Any, selected_keys: Any):
+            keys = tuple(selected_keys)
+            captured.append(keys)
+            return categories.CategorySetupState(
+                rows=rows,
+                active_rows=[row for row in rows if row["category_key"] in set(keys)],
+                selected_keys=keys,
+                required=False,
+                reason="",
+                version=categories.CATEGORY_SETUP_VERSION,
+            )
+
+        async def fake_payload(guild: Any, **kwargs: Any):
+            return discord.Embed(title="saved"), object()
+
+        async def fake_edit(*args: Any, **kwargs: Any) -> None:
+            return None
+
+        view = setup_guard.CategorySetupManagerView(state=initial)
+
+        async def allowed(interaction: Any) -> bool:
+            return True
+
+        monkeypatch.setattr(view, "_allowed", allowed)
+        monkeypatch.setattr(setup_guard, "_save_selection", fake_save)
+        monkeypatch.setattr(setup_guard, "_build_category_manager_payload", fake_payload)
+        monkeypatch.setattr(solid, "_edit_or_followup", fake_edit)
+
+        interaction = SimpleNamespace(guild=SimpleNamespace(id=1234))
+        await view._use_core_preset(interaction)
+
+        assert captured == [setup_guard._COMMUNITY_CORE_PRESET_KEYS]
+        assert set(captured[0]) != set(setup_guard._ALL_MANAGED_PRESET_KEYS)
+
+    asyncio.run(scenario())
+
+
+
+def test_runtime_history_recovery_only_targets_old_starter_reset() -> None:
+    rows = categories.catalog_category_rows()
+    for row in rows:
+        key = row["category_key"]
+        row["is_enabled"] = key in categories.SAFE_STARTER_KEYS
+        row["is_default"] = key == "support"
+    cfg = {
+        "ticket_category_setup_required": True,
+        "ticket_category_setup_version": 0,
+        "ticket_category_setup_selected_keys": [],
+    }
+    assert categories._runtime_history_recovery_eligible(cfg, rows) is True
+
+    custom = {
+        "id": "custom-1",
+        "slug": "custom_help",
+        "name": "Custom Help",
+        "is_enabled": True,
+        "is_default": False,
+        "managed_by_dank": False,
+    }
+    assert categories._runtime_history_recovery_eligible(cfg, [*rows, custom]) is False
+    assert categories._runtime_history_recovery_eligible(
+        {**cfg, "ticket_category_setup_selected_keys": ["support"]}, rows
+    ) is False
+
+
+def test_historical_managed_keys_ignore_disabled_and_custom_rows() -> None:
+    snapshot = {
+        "rows": [
+            {"slug": "cod_services", "name": "COD Services", "is_enabled": True},
+            {"slug": "staff_complaint", "name": "Staff Complaint", "is_enabled": True},
+            {"slug": "partnership", "name": "Partnerships", "is_enabled": False},
+            {"slug": "clan_help", "name": "Support", "is_enabled": True, "managed_by_dank": False},
+        ]
+    }
+    assert categories._historical_managed_keys(snapshot) == (
+        "cod-services",
+        "staff-complaint",
+    )
+
+
+def test_erased_selection_runtime_recovery_keeps_review_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows = categories.catalog_category_rows()
+    for row in rows:
+        key = row["category_key"]
+        row["id"] = f"row-{key}"
+        row["is_enabled"] = key in categories.SAFE_STARTER_KEYS
+        row["is_default"] = key == "support"
+
+    before = {
+        "ticket_category_setup_required": True,
+        "ticket_category_setup_required_reason": "Old category review",
+        "ticket_category_setup_version": 0,
+        "ticket_category_setup_selected_keys": [],
+    }
+    recovered_cfg = {
+        **before,
+        "ticket_category_setup_selected_keys": [
+            "report", "staff-complaint", "cod-services", "partnership", "support"
+        ],
+    }
+    config_reads = iter([before, recovered_cfg])
+    persisted: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(categories, "_fetch_config_sync", lambda _gid: dict(next(config_reads)))
+    monkeypatch.setattr(categories, "_fetch_rows_sync", lambda _gid: [dict(row) for row in rows])
+    monkeypatch.setattr(categories, "_catalog_reconcile_needed", lambda _rows: False)
+    monkeypatch.setattr(categories, "_saved_selection_reconcile_needed", lambda _rows, _cfg: False)
+    monkeypatch.setattr(categories, "_claim_history_recovery_window", lambda _gid: True)
+    monkeypatch.setattr(
+        categories,
+        "_recover_erased_selection_keys_sync",
+        lambda _gid: ("report", "staff-complaint", "cod-services", "partnership", "support"),
+    )
+    monkeypatch.setattr(
+        categories,
+        "_persist_runtime_recovered_selection_sync",
+        lambda _gid, keys, _rows: persisted.append(tuple(keys)),
+    )
+
+    state = categories.ensure_category_setup_state_sync(1234)
+    assert persisted == [
+        ("report", "staff-complaint", "cod-services", "partnership", "support")
+    ]
+    assert state.required is True
+    assert state.version == 0
+    assert state.selected_keys == (
+        "report", "staff-complaint", "cod-services", "partnership", "support"
+    )
+    assert {categories.canonical_category_key(row) for row in state.active_rows if row.get("managed_by_dank")} == {
+        "report", "staff-complaint", "cod-services", "partnership", "support"
+    }

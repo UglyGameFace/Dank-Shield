@@ -36,10 +36,13 @@ def test_preservation_migration_stays_per_guild_and_service_role_only() -> None:
 def test_direct_dsn_bootstrap_registers_preservation_after_repairs() -> None:
     assert schema_guard.PRESERVE_SELECTION_MIGRATION_FILE == MIGRATION.name
     files = list(schema_guard.MIGRATION_FILES)
-    assert files[-1] == schema_guard.PRESERVE_SELECTION_MIGRATION_FILE
     assert files.index(schema_guard.REPAIR_MIGRATION_FILE) < files.index(
         schema_guard.PRESERVE_SELECTION_MIGRATION_FILE
     )
+    assert files.index(schema_guard.PRESERVE_SELECTION_MIGRATION_FILE) < files.index(
+        schema_guard.RICH_SELECTION_RECOVERY_MIGRATION_FILE
+    )
+    assert files[-1] == schema_guard.RICH_SELECTION_RECOVERY_MIGRATION_FILE
 
 
 def test_python_fallback_already_preserves_saved_selection() -> None:
