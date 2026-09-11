@@ -72,8 +72,7 @@ async def _safe_setup_defer(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=False)
         _setup_runtime_log("acknowledged", interaction)
     except Exception as exc:
-        # Keep the historical fail-open behavior, but stop making acknowledgement
-        # failures invisible while we validate the live setup flow.
+        # Preserve fail-open behavior but make acknowledgement failures visible.
         _setup_runtime_log(
             "ack_failed",
             interaction,
@@ -107,8 +106,7 @@ async def _safe_setup_edit(
 
     # A component action belongs to the message that was clicked. The old helper
     # silently sent a second interactive ephemeral panel when the edit failed,
-    # leaving two live setup views that could show different state. Recover on
-    # the exact clicked message instead.
+    # leaving two live setup views that could show different state.
     message = getattr(interaction, "message", None)
     edit_message = getattr(message, "edit", None)
     if message is not None and callable(edit_message):
@@ -175,6 +173,82 @@ async def _safe_setup_edit(
         raise
 
 
+async def _open_welcome_setup_in_place(interaction: discord.Interaction) -> None:
+    from stoney_verify import welcome_setup_ui as welcome
+
+    original = getattr(welcome, "_dank_setup_original_open_welcome_setup", None)
+    # Standalone/slash callers have no setup message to replace, so preserve the
+    # canonical standalone behavior there.
+    if getattr(interaction, "message", None) is None and callable(original):
+        await original(interaction)
+        return
+    if not await welcome._require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return
+    await _safe_setup_defer(interaction)
+    config = await welcome.get_guild_config(guild.id, refresh=True)
+    await _safe_setup_edit(
+        interaction,
+        embed=await welcome._welcome_embed(guild, config),
+        view=welcome.WelcomeSetupView(owner_id=interaction.user.id, config=config),
+    )
+
+
+async def _open_profile_setup_in_place(interaction: discord.Interaction) -> None:
+    from stoney_verify import profile_card_setup_ui as profile
+
+    original = getattr(profile, "_dank_setup_original_open_profile_card_setup", None)
+    if getattr(interaction, "message", None) is None and callable(original):
+        await original(interaction)
+        return
+    if not await profile._require_setup_permission(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return
+    await _safe_setup_defer(interaction)
+    config = await profile.get_guild_config(guild.id, refresh=True)
+    await _safe_setup_edit(
+        interaction,
+        embed=profile._setup_embed(guild, config),
+        view=profile.ProfileCardSetupView(owner_id=interaction.user.id, config=config),
+    )
+
+
+async def _profile_edit_or_send(
+    interaction: discord.Interaction,
+    *,
+    embed: discord.Embed,
+    view: discord.ui.View,
+) -> None:
+    await _safe_setup_edit(interaction, embed=embed, view=view)
+
+
+def _install_feature_area_integrity() -> None:
+    # Welcome setup historically deferred a setup-menu component and then sent a
+    # second ephemeral interactive panel. Keep component navigation in-place,
+    # while preserving its standalone behavior for non-component entrypoints.
+    from stoney_verify import welcome_setup_ui as welcome
+
+    if not hasattr(welcome, "_dank_setup_original_open_welcome_setup"):
+        welcome._dank_setup_original_open_welcome_setup = welcome.open_welcome_setup
+    welcome.open_welcome_setup = _open_welcome_setup_in_place
+
+    # Profile setup already tries to edit in-place, but its helper could fall
+    # back to another interactive follow-up. Route both the entrypoint and its
+    # refresh/toggle helper through the same setup response owner.
+    from stoney_verify import profile_card_setup_ui as profile
+    from stoney_verify import profile_card_setup_ui_core as profile_core
+
+    if not hasattr(profile, "_dank_setup_original_open_profile_card_setup"):
+        profile._dank_setup_original_open_profile_card_setup = profile.open_profile_card_setup
+    profile.open_profile_card_setup = _open_profile_setup_in_place
+    profile._edit_or_send = _profile_edit_or_send
+    profile_core._edit_or_send = _profile_edit_or_send
+
+
 def _install_response_integrity() -> None:
     solid = _implementation.setup.solid
     solid._safe_defer_update = _safe_setup_defer
@@ -222,6 +296,7 @@ def apply_public_setup_runtime() -> None:
     install_custom_service_navigation_compat()
     install_voice_health_contract()
     _install_response_integrity()
+    _install_feature_area_integrity()
     _assert_runtime_ownership()
 
 
