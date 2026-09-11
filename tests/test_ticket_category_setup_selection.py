@@ -432,7 +432,7 @@ def test_guided_ticket_choice_step_opens_the_category_selector(
     monkeypatch.setattr(recommend, "_open_ticket_menu", open_ticket_menu)
 
     asyncio.run(
-        recommend._open_guided_target(
+        recommend._DANK_SETUP_ORIGINAL_OPEN_GUIDED_TARGET(
             SimpleNamespace(),
             "ticket_choices",
             "ticket_choices",
