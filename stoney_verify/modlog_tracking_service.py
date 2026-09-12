@@ -259,6 +259,33 @@ async def _require(
         return False
 
 
+async def _defer_setup_update(
+    interaction: discord.Interaction,
+) -> None:
+    from stoney_verify.commands_ext import (
+        public_setup_solid as solid,
+    )
+
+    await solid._safe_defer_update(interaction)
+
+
+async def _edit_setup_panel(
+    interaction: discord.Interaction,
+    *,
+    embed: discord.Embed,
+    view: discord.ui.View,
+) -> None:
+    from stoney_verify.commands_ext import (
+        public_setup_solid as solid,
+    )
+
+    await solid._edit_or_followup(
+        interaction,
+        embed=embed,
+        view=view,
+    )
+
+
 async def _tracking_embed(
     guild: discord.Guild,
 ) -> discord.Embed:
@@ -384,6 +411,7 @@ class TrackButton(discord.ui.Button):
                 ephemeral=True,
             )
 
+        await _defer_setup_update(interaction)
         cfg = await _load_cfg(guild)
         enabled = _saved(cfg)
 
@@ -397,7 +425,8 @@ class TrackButton(discord.ui.Button):
             enabled,
             interaction.user,
         )
-        await interaction.response.edit_message(
+        await _edit_setup_panel(
+            interaction,
             embed=await _tracking_embed(guild),
             view=ModlogTrackingView(
                 guild,
@@ -458,6 +487,7 @@ class ModlogTrackingView(discord.ui.View):
         ):
             return
 
+        await _defer_setup_update(interaction)
         enabled = set(DEFAULT_ON)
 
         await _save_cfg(
@@ -465,7 +495,8 @@ class ModlogTrackingView(discord.ui.View):
             enabled,
             interaction.user,
         )
-        await interaction.response.edit_message(
+        await _edit_setup_panel(
+            interaction,
             embed=await _tracking_embed(guild),
             view=ModlogTrackingView(
                 guild,
@@ -493,6 +524,7 @@ class ModlogTrackingView(discord.ui.View):
         ):
             return
 
+        await _defer_setup_update(interaction)
         enabled: set[str] = set()
 
         await _save_cfg(
@@ -500,7 +532,8 @@ class ModlogTrackingView(discord.ui.View):
             enabled,
             interaction.user,
         )
-        await interaction.response.edit_message(
+        await _edit_setup_panel(
+            interaction,
             embed=await _tracking_embed(guild),
             view=ModlogTrackingView(
                 guild,
@@ -592,9 +625,11 @@ async def open_modlog_tracking(
             ephemeral=True,
         )
 
+    await _defer_setup_update(interaction)
     cfg = await _load_cfg(guild)
 
-    await interaction.response.edit_message(
+    await _edit_setup_panel(
+        interaction,
         embed=await _tracking_embed(guild),
         view=ModlogTrackingView(
             guild,

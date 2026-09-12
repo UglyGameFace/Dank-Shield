@@ -29,6 +29,12 @@ async def open_design_studio_from_setup(interaction: discord.Interaction) -> Non
         if guild is None:
             return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
 
+        # Studio is an intentional separate tool surface, but its config read can
+        # hit storage. Acknowledge the component before that work so Discord never
+        # leaves the setup button looking pressed-but-dead.
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+
         options = await design._load_design_options(int(guild.id))  # type: ignore[attr-defined]
         embed = design._home_embed(guild, options)  # type: ignore[attr-defined]
         embed.add_field(

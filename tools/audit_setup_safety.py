@@ -4,6 +4,8 @@ from __future__ import annotations
 
 The permanent setup audit focuses on architecture and high-risk regressions:
 - canonical public setup owners remain present and unambiguous;
+- the final runtime always applies category service -> compact -> guided;
+- component response recovery never forks a second setup panel;
 - normal setup screens do not expose destructive recovery actions;
 - retired setup UX monkey-patch wrappers do not return;
 - verification timers are owned natively by the setup module;
@@ -39,8 +41,17 @@ SETUP_FILES = [
     ROOT / "stoney_verify" / "commands_ext" / "public_setup_full_customization.py",
     ROOT / "stoney_verify" / "commands_ext" / "public_setup_recovery.py",
     ROOT / "stoney_verify" / "commands_ext" / "public_setup_cleanup.py",
+    ROOT / "stoney_verify" / "commands_ext" / "public_setup_compact.py",
+    ROOT / "stoney_verify" / "commands_ext" / "public_design_bridge.py",
+    ROOT / "stoney_verify" / "setup_ui" / "public_setup_compact.py",
+    ROOT / "stoney_verify" / "setup_ui" / "public_setup_guided_test.py",
+    ROOT / "stoney_verify" / "welcome_setup_ui.py",
+    ROOT / "stoney_verify" / "profile_card_setup_ui.py",
+    ROOT / "stoney_verify" / "profile_card_setup_ui_core.py",
+    ROOT / "stoney_verify" / "modlog_tracking_service.py",
     ROOT / "stoney_verify" / "config_history_ui.py",
     ROOT / "stoney_verify" / "setup_service_state.py",
+    ROOT / "stoney_verify" / "startup_guards" / "ticket_category_setup_guard.py",
     ROOT / "stoney_verify" / "startup_guards" / "setup_feature_health_scoreboard.py",
     ROOT / "stoney_verify" / "startup_guards" / "setup_scoreboard_command.py",
     ROOT / "stoney_verify" / "startup_guards" / "verification_idle_kick_feature.py",
@@ -149,6 +160,80 @@ def _assert_exact_button_owners(
             )
 
     return inventories
+
+
+def _assert_runtime_integrity(failures: list[str]) -> None:
+    runtime = ROOT / "stoney_verify" / "commands_ext" / "public_setup_compact.py"
+    guided = ROOT / "stoney_verify" / "setup_ui" / "public_setup_guided_test.py"
+    interaction_handlers = ROOT / "stoney_verify" / "interaction_handlers.py"
+
+    runtime_text = _read(runtime)
+    guided_text = _read(guided)
+    handler_text = _read(interaction_handlers)
+
+    ordered_markers = (
+        "_ticket_category_guard.apply()",
+        "_original_apply_compact_setup_patch()",
+        "_guided.apply_guided_test_patch()",
+        "install_custom_service_navigation_compat()",
+        "install_voice_health_contract()",
+        "_install_response_integrity()",
+        "_assert_runtime_ownership()",
+    )
+    positions = [runtime_text.find(marker) for marker in ordered_markers]
+    if any(position < 0 for position in positions):
+        failures.append(
+            "final setup runtime is missing one or more deterministic ownership stages"
+        )
+    elif positions != sorted(positions):
+        failures.append(
+            "final setup runtime order must be category service -> compact -> guided -> "
+            "navigation/health -> response integrity -> ownership assertion"
+        )
+
+    required_runtime_markers = (
+        "_implementation._ORIGINAL_CATEGORY_PAYLOAD =",
+        "_implementation._category_payload",
+        "_safe_setup_defer",
+        "_safe_setup_edit",
+        "direct_message_recovery_ok",
+        "direct_message_recovery_failed",
+        "panel_fork_blocked",
+        "No second setup panel was opened.",
+        "_open_welcome_setup_in_place",
+        "_open_profile_setup_in_place",
+        "_ack_then_open_manager",
+        "_ack_then_review_next",
+        "_ack_then_open_guided_target",
+        "_ack_then_open_timers_behavior",
+        "_ack_then_open_protection_options",
+    )
+    for marker in required_runtime_markers:
+        if marker not in runtime_text:
+            failures.append(
+                f"final setup runtime is missing integrity marker `{marker}`"
+            )
+
+    guided_markers = (
+        'item.label = "Start Guided Test"',
+        '"Start Next Test"',
+        '"Mark Passed & Continue"',
+        '"Back to Test List"',
+        "guided_health_embed",
+        "guided_help_embed",
+    )
+    for marker in guided_markers:
+        if marker not in guided_text:
+            failures.append(
+                f"guided setup presentation is missing final marker `{marker}`"
+            )
+
+    # The generic legacy interaction router must never claim /dank setup custom
+    # IDs. Setup interactions belong to the view callback graph exclusively.
+    if '"dank_setup' in handler_text or "'dank_setup" in handler_text:
+        failures.append(
+            "generic interaction_handlers.py must not claim dank_setup custom IDs"
+        )
 
 
 def _assert_native_setup_ux_owners(failures: list[str]) -> None:
@@ -480,6 +565,7 @@ def main() -> int:
     failures: list[str] = []
     _assert_python_parseable(failures)
     _assert_no_private_markers(failures)
+    _assert_runtime_integrity(failures)
     _assert_native_setup_ux_owners(failures)
     _assert_native_verification_timer_controls(failures)
     _assert_idle_kick_is_per_guild_and_off_by_default(failures)

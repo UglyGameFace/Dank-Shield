@@ -63,13 +63,14 @@ def test_started_home_exposes_direct_area_picker_without_manage_hop() -> None:
     assert len(select_labels(view)) == 9
 
 
-def test_ready_home_calls_real_feature_testing_by_name() -> None:
+def test_ready_home_calls_final_guided_feature_testing_by_name() -> None:
     view = compact.CompactSetupHomeView(
         ready=True,
         started=True,
         completed=False,
     )
-    assert labels(view)[0] == "Test Features"
+    assert labels(view)[0] == "Start Guided Test"
+    assert "Test Features" not in labels(view)
     assert "Check Configuration" in labels(view)
 
 
@@ -103,7 +104,7 @@ def test_feature_picker_does_not_repeat_areas_as_buttons() -> None:
     ) == 1
 
 
-def test_test_screen_hides_disabled_features_and_explains_finish_gate() -> None:
+def test_guided_test_screen_hides_disabled_features_and_starts_next_test() -> None:
     view = compact.CompactTestView(
         {
             "tickets": False,
@@ -117,22 +118,15 @@ def test_test_screen_hides_disabled_features_and_explains_finish_gate() -> None:
         }
     )
     assert labels(view) == [
-        "Finish Setup",
-        "Recheck Configuration",
+        "Start Next Test",
         "Setup Home",
         "Close",
     ]
     assert select_labels(view) == ["Simple Verify"]
-    finish = next(
-        child
-        for child in view.children
-        if isinstance(child, discord.ui.Button)
-        and child.label == "Finish Setup"
-    )
-    assert finish.disabled is True
+    assert "Finish Setup" not in labels(view)
 
 
-def test_feature_test_pages_expose_only_relevant_direct_actions() -> None:
+def test_feature_test_pages_expose_only_relevant_guided_actions() -> None:
     tickets = compact.FeatureTestView(
         {"tickets": True},
         frozenset(),
@@ -152,19 +146,19 @@ def test_feature_test_pages_expose_only_relevant_direct_actions() -> None:
     assert labels(tickets) == [
         "Post / Refresh Ticket Panel",
         "Create Test Ticket",
-        "Mark Tested",
-        "Back to Checklist",
+        "Mark Passed & Continue",
+        "Back to Test List",
         "Close",
     ]
     assert labels(verify) == [
         "Post / Refresh Verify Panel",
-        "Mark Tested",
-        "Back to Checklist",
+        "Mark Passed & Continue",
+        "Back to Test List",
         "Close",
     ]
     assert labels(logs) == [
-        "Mark Tested",
-        "Back to Checklist",
+        "Mark Passed & Continue",
+        "Back to Test List",
         "Close",
     ]
 

@@ -449,11 +449,15 @@ class WelcomeSetupView(discord.ui.View):
                 interaction,
                 content="❌ Use this inside a server.",
             )
+
+        from .commands_ext import public_setup_solid as solid
+
+        await solid._safe_defer_update(interaction)
         config = await get_guild_config(guild.id, refresh=True)
-        await interaction.response.edit_message(
+        await solid._edit_or_followup(
+            interaction,
             embed=await _welcome_embed(guild, config),
             view=WelcomeSetupView(owner_id=self.owner_id, config=config),
-            allowed_mentions=discord.AllowedMentions.none(),
         )
 
     @discord.ui.button(

@@ -19,9 +19,14 @@ class FakeResponse:
     def __init__(self) -> None:
         self.sent: dict[str, Any] = {}
         self.edited = False
+        self.deferred = False
 
     def is_done(self) -> bool:
-        return False
+        return self.deferred or bool(self.sent)
+
+    async def defer(self, **kwargs: Any) -> None:
+        assert kwargs == {"ephemeral": True, "thinking": True}
+        self.deferred = True
 
     async def send_message(self, **kwargs: Any) -> None:
         self.sent.update(kwargs)
@@ -32,8 +37,11 @@ class FakeResponse:
 
 
 class FakeFollowup:
+    def __init__(self) -> None:
+        self.sent: dict[str, Any] = {}
+
     async def send(self, **kwargs: Any) -> None:
-        raise AssertionError("fresh setup interaction should use response.send_message")
+        self.sent.update(kwargs)
 
 
 class FakeInteraction:
@@ -51,6 +59,7 @@ def test_setup_design_bridge_opens_same_consolidated_ephemeral_panel(monkeypatch
         return True
 
     async def load_options(guild_id: int) -> dict[str, Any]:
+        assert interaction.response.deferred is True
         assert guild_id == 4242
         return {"theme_id": "gothic_clean", "strength": 2}
 
@@ -70,12 +79,14 @@ def test_setup_design_bridge_opens_same_consolidated_ephemeral_panel(monkeypatch
 
     run(bridge.open_design_studio_from_setup(interaction))
 
+    assert interaction.response.deferred is True
     assert interaction.response.edited is False
-    assert interaction.response.sent["ephemeral"] is True
-    assert isinstance(interaction.response.sent["embed"], discord.Embed)
-    assert isinstance(interaction.response.sent["view"], FakeDesignHomeView)
+    assert interaction.response.sent == {}
+    assert interaction.followup.sent["ephemeral"] is True
+    assert isinstance(interaction.followup.sent["embed"], discord.Embed)
+    assert isinstance(interaction.followup.sent["view"], FakeDesignHomeView)
 
-    embed = interaction.response.sent["embed"]
+    embed = interaction.followup.sent["embed"]
     assert embed.title == "🎨 Dank Design Studio"
     opened_from_setup = next(field for field in embed.fields if str(field.name) == "Opened from Setup")
     assert "exact same Dank Design Studio" in str(opened_from_setup.value)

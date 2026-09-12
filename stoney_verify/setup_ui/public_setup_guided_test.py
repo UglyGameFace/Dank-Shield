@@ -16,6 +16,8 @@ from . import public_setup_compact as compact
 
 setup = compact.setup
 _PATCHED = False
+_ORIGINAL_HEALTH_EMBED = compact._health_embed
+_ORIGINAL_HELP_EMBED = compact._help_embed
 
 
 def next_pending_test_key(
@@ -37,6 +39,30 @@ def _position(state: dict[str, Any], key: str) -> tuple[int, int]:
         return keys.index(key) + 1, len(keys)
     except ValueError:
         return 0, len(keys)
+
+
+async def guided_health_embed(guild: discord.Guild) -> discord.Embed:
+    embed = await _ORIGINAL_HEALTH_EMBED(guild)
+    for index, field in enumerate(list(embed.fields)):
+        value = str(field.value).replace("Test Features", "Start Guided Test")
+        if value != str(field.value):
+            embed.set_field_at(
+                index,
+                name=str(field.name),
+                value=value,
+                inline=bool(field.inline),
+            )
+    return embed
+
+
+def guided_help_embed() -> discord.Embed:
+    embed = _ORIGINAL_HELP_EMBED()
+    if embed.description:
+        embed.description = str(embed.description).replace(
+            "**Test Features**",
+            "**Start Guided Test**",
+        )
+    return embed
 
 
 class GuidedSetupHomeView(compact.CompactSetupHomeView):
@@ -351,6 +377,8 @@ def apply_guided_test_patch() -> None:
     compact.CompactReviewView = GuidedReviewView
     compact.CompactTestView = GuidedTestView
     compact.FeatureTestView = GuidedFeatureTestView
+    compact._health_embed = guided_health_embed
+    compact._help_embed = guided_help_embed
     compact._render_tests = render_guided_tests
     compact._open_tests = open_guided_tests
     compact._open_feature_test = open_guided_feature_test
@@ -358,6 +386,7 @@ def apply_guided_test_patch() -> None:
     setup.ProductSetupHomeView = GuidedSetupHomeView
     setup.SetupReviewView = GuidedReviewView
     setup.LaunchTestView = GuidedTestView
+    setup._build_plain_setup_health_embed = guided_health_embed
     setup._open_test_launch = open_guided_tests
 
     _PATCHED = True
@@ -369,6 +398,8 @@ __all__ = [
     "GuidedSetupHomeView",
     "GuidedTestView",
     "apply_guided_test_patch",
+    "guided_health_embed",
+    "guided_help_embed",
     "next_pending_test_key",
     "open_guided_feature_test",
     "open_guided_tests",
