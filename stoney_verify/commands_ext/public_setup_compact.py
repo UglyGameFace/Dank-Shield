@@ -363,13 +363,16 @@ def _install_feature_area_integrity() -> None:
     profile_core._edit_or_send = _profile_edit_or_send
 
 
-def _install_response_integrity() -> None:
+def _install_response_integrity_impl() -> None:
     solid = _implementation.setup.solid
     solid._safe_defer_update = _safe_setup_defer
     solid._edit_or_followup = _safe_setup_edit
 
 
-def _assert_runtime_ownership() -> None:
+_install_response_integrity = _install_response_integrity_impl
+
+
+def _assert_runtime_ownership_impl() -> None:
     setup = _implementation.setup
     solid = setup.solid
     checks = (
@@ -411,6 +414,9 @@ def _assert_runtime_ownership() -> None:
     missing = [label for okay, label in checks if not okay]
     if missing:
         raise RuntimeError("public setup runtime ownership drift: " + ", ".join(missing))
+
+
+_assert_runtime_ownership = _assert_runtime_ownership_impl
 
 
 def apply_public_setup_runtime() -> None:
