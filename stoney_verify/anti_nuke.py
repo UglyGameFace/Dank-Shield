@@ -327,8 +327,8 @@ def _dangerous_hierarchy_blockers(
     """Return dangerous roles that make containment impossible by hierarchy.
 
     Explicitly trusted roles and roles held only by trusted actors are not blockers.
-    Managed integration roles are excluded here because role ordering alone cannot
-    repair them; incidents still report them if a live actor cannot be contained.
+    Managed dangerous roles are blockers for untrusted actors because Discord does
+    not let Dank Shield strip managed roles during containment.
     """
 
     top_role = getattr(member, "top_role", None)
@@ -345,13 +345,15 @@ def _dangerous_hierarchy_blockers(
 
         role_name = str(getattr(role, "name", "dangerous-role") or "dangerous-role")
         if _role_is_default(role):
-            blockers.append(f"@everyone grants dangerous permissions")
-            continue
-        if _role_is_managed(role):
+            blockers.append("@everyone grants dangerous permissions")
             continue
 
         role_members = list(getattr(role, "members", []) or [])
         if role_members and all(is_trusted_actor(guild, found, settings) for found in role_members):
+            continue
+
+        if _role_is_managed(role):
+            blockers.append(f"managed @{role_name} cannot be stripped")
             continue
 
         try:
@@ -431,10 +433,11 @@ def _aggregate_threshold(settings: Mapping[str, Any]) -> int:
 
 
 def _trigger_ready(guild_id: int, actor_id: int, action_key: str) -> bool:
-    now = time.monotonic()
     key = (int(guild_id), int(actor_id), str(action_key))
-    last = _TRIGGER_COOLDOWNS.get(key, 0.0)
-    return now - last >= _TRIGGER_COOLDOWN_SECONDS
+    last = _TRIGGER_COOLDOWNS.get(key)
+    if last is None:
+        return True
+    return time.monotonic() - last >= _TRIGGER_COOLDOWN_SECONDS
 
 
 def _mark_triggered(guild_id: int, actor_id: int, action_key: str) -> None:
