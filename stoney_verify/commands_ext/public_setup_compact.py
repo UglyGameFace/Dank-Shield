@@ -369,7 +369,7 @@ def _install_response_integrity() -> None:
     solid._edit_or_followup = _safe_setup_edit
 
 
-def _assert_runtime_ownership() -> None:
+def _assert_runtime_ownership_impl() -> None:
     setup = _implementation.setup
     solid = setup.solid
     checks = (
@@ -411,6 +411,9 @@ def _assert_runtime_ownership() -> None:
     missing = [label for okay, label in checks if not okay]
     if missing:
         raise RuntimeError("public setup runtime ownership drift: " + ", ".join(missing))
+
+
+_assert_runtime_ownership = _assert_runtime_ownership_impl
 
 
 def apply_public_setup_runtime() -> None:
