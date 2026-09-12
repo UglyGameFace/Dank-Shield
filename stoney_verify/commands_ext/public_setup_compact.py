@@ -363,10 +363,13 @@ def _install_feature_area_integrity() -> None:
     profile_core._edit_or_send = _profile_edit_or_send
 
 
-def _install_response_integrity() -> None:
+def _install_response_integrity_impl() -> None:
     solid = _implementation.setup.solid
     solid._safe_defer_update = _safe_setup_defer
     solid._edit_or_followup = _safe_setup_edit
+
+
+_install_response_integrity = _install_response_integrity_impl
 
 
 def _assert_runtime_ownership_impl() -> None:
