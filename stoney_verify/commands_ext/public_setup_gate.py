@@ -200,12 +200,17 @@ def register_public_setup_gate(bot, tree) -> None:
     # This module registers after the setup owners. Apply the presentation patch
     # here so there is still exactly one /dank setup command and one callback graph.
     from .public_setup_compact import apply_compact_setup_patch
+    from .public_runtime_ux_repairs import apply_runtime_ux_repairs
 
     apply_compact_setup_patch()
+    apply_runtime_ux_repairs()
     count = _patch_all()
     _PATCHED = count > 0
     try:
-        print(f"✅ public_setup_gate: setup readiness gate active patched_modules={count} compact_setup=true")
+        print(
+            f"✅ public_setup_gate: setup readiness gate active patched_modules={count} "
+            "compact_setup=true runtime_ux_repairs=true"
+        )
     except Exception:
         pass
 
