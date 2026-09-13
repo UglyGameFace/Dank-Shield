@@ -1,0 +1,143 @@
+name: Hostile Actor Reputation SQL
+
+on:
+  pull_request:
+    paths:
+      - supabase/migrations/20260913163000_hostile_actor_reputation.sql
+      - .github/workflows/hostile-actor-reputation-sql.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  migration-smoke-test:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGPASSWORD: postgres
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGDATABASE: postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Supabase-compatible roles
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+            if not exists (select 1 from pg_roles where rolname = 'anon') then
+              create role anon nologin;
+            end if;
+            if not exists (select 1 from pg_roles where rolname = 'authenticated') then
+              create role authenticated nologin;
+            end if;
+            if not exists (select 1 from pg_roles where rolname = 'service_role') then
+              create role service_role nologin bypassrls;
+            end if;
+          end
+          $$;
+          SQL
+
+      - name: Apply migration twice
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260913163000_hostile_actor_reputation.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260913163000_hostile_actor_reputation.sql
+
+      - name: Verify durable reputation schema and lifecycle
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            found_active boolean;
+            found_count integer;
+          begin
+            if to_regclass('public.guild_security_actor_reputation') is null then
+              raise exception 'guild_security_actor_reputation table missing';
+            end if;
+
+            if not (
+              select c.relrowsecurity
+              from pg_class c
+              join pg_namespace n on n.oid = c.relnamespace
+              where n.nspname = 'public'
+                and c.relname = 'guild_security_actor_reputation'
+            ) then
+              raise exception 'row level security is not enabled';
+            end if;
+
+            insert into public.guild_security_actor_reputation (
+              guild_id, user_id, active, classification, source,
+              is_bot, incident_count, related_user_id, last_reason
+            ) values (
+              123, 55, true, 'confirmed_destructive_actor', 'antinuke',
+              true, 1, null, 'first incident'
+            );
+
+            insert into public.guild_security_actor_reputation (
+              guild_id, user_id, active, classification, source,
+              is_bot, incident_count, related_user_id, last_reason
+            ) values (
+              123, 55, false, 'confirmed_destructive_actor', 'owner_clear',
+              true, 2, null, 'cleared after review'
+            )
+            on conflict (guild_id, user_id) do update set
+              active = excluded.active,
+              source = excluded.source,
+              incident_count = excluded.incident_count,
+              last_reason = excluded.last_reason;
+
+            select active, incident_count
+              into found_active, found_count
+              from public.guild_security_actor_reputation
+             where guild_id = 123 and user_id = 55;
+
+            if found_active is distinct from false or found_count <> 2 then
+              raise exception 'reputation lifecycle upsert failed: active=% count=%', found_active, found_count;
+            end if;
+
+            if to_regclass('public.idx_guild_security_actor_reputation_active') is null then
+              raise exception 'active reputation index missing';
+            end if;
+            if to_regclass('public.idx_guild_security_actor_reputation_related') is null then
+              raise exception 'related identity index missing';
+            end if;
+          end
+          $$;
+          SQL
+
+      - name: Verify service-role-only access
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+            if has_table_privilege('anon', 'public.guild_security_actor_reputation', 'select') then
+              raise exception 'anon unexpectedly has reputation table access';
+            end if;
+            if has_table_privilege('authenticated', 'public.guild_security_actor_reputation', 'select') then
+              raise exception 'authenticated unexpectedly has reputation table access';
+            end if;
+            if not has_table_privilege('service_role', 'public.guild_security_actor_reputation', 'select')
+               or not has_table_privilege('service_role', 'public.guild_security_actor_reputation', 'insert')
+               or not has_table_privilege('service_role', 'public.guild_security_actor_reputation', 'update')
+               or not has_table_privilege('service_role', 'public.guild_security_actor_reputation', 'delete') then
+              raise exception 'service_role is missing required reputation table privileges';
+            end if;
+          end
+          $$;
+          SQL
