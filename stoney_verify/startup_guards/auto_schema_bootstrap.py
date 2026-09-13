@@ -27,6 +27,7 @@ _BOOTSTRAP_MIGRATION_FILES = (
     "20260910163000_preserve_ticket_category_selection_on_review.sql",
     "20260911113000_restore_rich_ticket_category_selection.sql",
     "20260913154500_canonical_runtime_schema_authority.sql",
+    "20260913160000_reconcile_guild_member_role_state_constraint.sql",
 )
 _BOOTSTRAP_MIGRATION_PATTERNS = (
     "*ticket_counter*.sql",
