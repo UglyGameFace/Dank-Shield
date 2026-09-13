@@ -36,11 +36,11 @@ All 13 applicable PR workflows completed successfully on that exact implementati
 
 The prior full-suite attempt produced `1367 passed / 2 failed`; both failures were stale test-ownership assertions. After those assertions were pointed at the canonical migration, the exact implementation head completed green.
 
-This commit changes only this task record. No runtime code, migration SQL, test behavior, dependency, or workflow logic changes here. The resulting record-only head must still finish green before PR #205 is marked ready.
+This task-record commit changes documentation only. No runtime code, migration SQL, test behavior, dependency, or workflow logic changes here. The resulting record-only head must still finish green before PR #205 is marked ready.
 
 ## Final scope / conflicts
 
-- final implementation diff before this record update was 19 task-scoped files;
+- final implementation diff before the task-record update was 19 task-scoped files;
 - no unresolved review threads;
 - branch was 0 commits behind the inspected base;
 - AntiNuke and unrelated product behavior were untouched;
