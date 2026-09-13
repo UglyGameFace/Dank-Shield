@@ -8,7 +8,6 @@ creation.
 """
 
 import asyncio
-import os
 import re
 import time
 import uuid
@@ -112,10 +111,6 @@ def _slug(v: Any) -> str:
 
 def _now_iso() -> str:
     return discord.utils.utcnow().astimezone(timezone.utc).isoformat()
-
-
-def _db_url_present() -> bool:
-    return any(_safe_str(os.getenv(k)) for k in ("SUPABASE_DB_URL", "DATABASE_URL", "POSTGRES_URL", "POSTGRES_PRISMA_URL"))
 
 
 def _sb() -> Any:
@@ -1018,8 +1013,8 @@ async def _health_lines(guild: discord.Guild) -> Tuple[List[str], List[str], Lis
         ok.append("Supabase `tickets` table has required ticket columns.")
     else:
         blockers.append(f"Supabase `tickets` missing table/required columns: {tic_msg}")
-    if (not cat_ok or not tic_ok) and not _db_url_present():
-        warnings.append("Auto-create/repair missing tables requires `SUPABASE_DB_URL` or `DATABASE_URL` in Discloud.")
+    if not cat_ok or not tic_ok:
+        warnings.append("Database schema is not ready. Apply the committed Supabase migrations referenced by schema health; runtime startup will not alter production schema.")
     return blockers, warnings, ok
 
 

@@ -58,17 +58,20 @@ def test_runtime_allocator_uses_the_persistent_counter() -> None:
     assert "_db_max_ticket_number_sync" in allocator
 
 
-def test_bootstrap_executes_the_complete_counter_migration_chain() -> None:
+def test_startup_only_references_counter_migrations_as_guidance() -> None:
     bootstrap = _text(BOOTSTRAP)
-    schema_sql = bootstrap.split('SCHEMA_SQL = r"""', 1)[1].split('"""', 1)[0]
+    lowered = bootstrap.lower()
 
-    assert "reserve_ticket_number" not in schema_sql
-    assert "create table if not exists public.ticket_counters" not in schema_sql
+    assert 'schema_sql = ""' in lowered
+    assert "psycopg.connect" not in lowered
+    assert "cur.execute(" not in lowered
+    assert "execute(migration.read_text" not in lowered
     assert "_BOOTSTRAP_MIGRATION_PATTERNS" in bootstrap
     assert '"*ticket_counter*.sql"' in bootstrap
     assert "sorted(migrations_dir.glob(pattern))" in bootstrap
     assert "_required_bootstrap_migrations" in bootstrap
-    assert "Required bootstrap migration pattern matched nothing" in bootstrap
+    assert "Required migration pattern matched nothing" in bootstrap
+    assert "Resolve migration guidance without executing any SQL" in bootstrap
 
 
 def test_postgres_smoke_proves_legacy_218_continues_at_219() -> None:

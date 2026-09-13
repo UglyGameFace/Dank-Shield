@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 FILES = [
     "stoney_verify/commands_ext/public_ticket_panel_clean.py",
+    "stoney_verify/startup_guards/auto_schema_bootstrap.py",
     "stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py",
     "stoney_verify/startup_guards/ticket_category_setup_guard.py",
     "stoney_verify/startup_guards/ticket_form_default_templates_guard.py",
@@ -43,7 +44,16 @@ CHECKS = {
         'REPAIR_MIGRATION_FILE = "20260807220000_repair_managed_ticket_category_duplicates.sql"',
         'RICH_SELECTION_RECOVERY_MIGRATION_FILE = "20260911113000_restore_rich_ticket_category_selection.sql"',
         "MIGRATION_FILES",
-        "managed catalog repair v4",
+        "Migration execution belongs to the Supabase migration pipeline",
+        "return True",
+    ],
+    "stoney_verify/startup_guards/auto_schema_bootstrap.py": [
+        '"20260802042000_ticket_category_setup_selection.sql"',
+        '"20260807215900_prepare_managed_ticket_category_repair.sql"',
+        '"20260807220000_repair_managed_ticket_category_duplicates.sql"',
+        '"20260911113000_restore_rich_ticket_category_selection.sql"',
+        "Resolve migration guidance without executing any SQL",
+        'SCHEMA_SQL = ""',
     ],
     "stoney_verify/tickets_new/managed_category_service.py": [
         "CATEGORY_SETUP_VERSION = 2",
@@ -182,6 +192,16 @@ def main() -> int:
             if snippet not in data:
                 print(f"{path} missing {snippet}", file=sys.stderr)
                 return 1
+
+    compat_text = (
+        ROOT / "stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py"
+    ).read_text(encoding="utf-8")
+    if "from . import auto_schema_bootstrap" in compat_text or "bootstrap._BOOTSTRAP_MIGRATION_FILES" in compat_text:
+        print("ticket category compatibility manifest still mutates schema bootstrap ownership", file=sys.stderr)
+        return 1
+    if "\napply()\n" in compat_text:
+        print("ticket category compatibility manifest still has an import-time apply side effect", file=sys.stderr)
+        return 1
 
     clean_panel_text = (
         ROOT / "stoney_verify/commands_ext/public_ticket_panel_clean.py"

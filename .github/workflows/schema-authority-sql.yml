@@ -1,0 +1,253 @@
+name: Schema Authority SQL
+
+on:
+  pull_request:
+    paths:
+      - "supabase/migrations/**"
+      - "stoney_verify/startup_guards/**"
+      - "tests/test_schema_authority.py"
+      - ".github/workflows/schema-authority-sql.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "supabase/migrations/**"
+      - "stoney_verify/startup_guards/**"
+      - "tests/test_schema_authority.py"
+      - ".github/workflows/schema-authority-sql.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  canonical-schema:
+    name: Canonical schema migration smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dank_shield
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dank_shield"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: dank_shield
+      MIGRATION: supabase/migrations/20260913154500_canonical_runtime_schema_authority.sql
+      ROLE_STATE_RECONCILE: supabase/migrations/20260913160000_reconcile_guild_member_role_state_constraint.sql
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Apply canonical migration chain twice on a fresh database
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pass in 1 2; do
+            psql -v ON_ERROR_STOP=1 -f "$MIGRATION"
+            psql -v ON_ERROR_STOP=1 -f "$ROLE_STATE_RECONCILE"
+          done
+
+      - name: Verify fresh current contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            required_table text;
+          begin
+            foreach required_table in array array[
+              'tickets',
+              'ticket_notes',
+              'ticket_messages',
+              'activity_feed_events',
+              'guild_members',
+              'member_joins',
+              'member_events',
+              'member_activity_scan_locks',
+              'member_cleanup_settings'
+            ] loop
+              if to_regclass('public.' || required_table) is null then
+                raise exception 'missing canonical table: %', required_table;
+              end if;
+            end loop;
+
+            if not exists (
+              select 1
+              from pg_constraint c
+              join pg_class t on t.oid = c.conrelid
+              join pg_namespace n on n.oid = t.relnamespace
+              where n.nspname = 'public'
+                and t.relname = 'guild_members'
+                and c.conname = 'guild_members_role_state_check'
+                and c.convalidated
+            ) then
+              raise exception 'fresh guild_members role_state constraint is missing or unvalidated';
+            end if;
+          end $$;
+
+          insert into public.tickets (
+            guild_id, user_id, channel_id, ticket_number, category_id,
+            matched_category_slug, category_override, panel_message_id,
+            last_activity_at
+          ) values (
+            'guild-1', 'user-1', 'channel-1', 1, 'category-1',
+            'support', false, 'panel-message-1', now()
+          );
+
+          insert into public.ticket_notes (
+            ticket_id, staff_id, staff_name, content, is_pinned
+          ) select id::text, 'staff-1', 'Staff', 'note', true
+          from public.tickets where channel_id = 'channel-1';
+
+          insert into public.ticket_messages (
+            ticket_id, author_id, author_name, content, message_type, attachments, source
+          ) select id::text, 'staff-1', 'Staff', 'message', 'staff', '[]'::jsonb, 'ci'
+          from public.tickets where channel_id = 'channel-1';
+
+          insert into public.activity_feed_events (
+            guild_id, event_family, event_type, source, actor_user_id,
+            actor_name, target_user_id, channel_id, ticket_id, title,
+            description, metadata, meta, search_text
+          ) select
+            'guild-1', 'ticket', 'ticket_created', 'ci', 'staff-1',
+            'Staff', 'user-1', channel_id, id::text, 'Ticket Created',
+            'created in schema smoke test', '{}'::jsonb, '{}'::jsonb, 'ticket created'
+          from public.tickets where channel_id = 'channel-1';
+
+          insert into public.guild_members (
+            guild_id, user_id, username, display_name, entry_method,
+            join_source, entry_truth_quality, entry_confidence, role_state,
+            risk_score, risk_level, risk_reasons, suspicion_flags
+          ) values (
+            'guild-1', 'user-1', 'user', 'User', 'invite',
+            'invite', 'confirmed', 95, 'verified_ok',
+            0, 'low', '[]'::jsonb, '[]'::jsonb
+          );
+
+          insert into public.member_joins (
+            guild_id, user_id, username, joined_at, entry_method, join_source,
+            entry_truth_quality, entry_confidence, risk_score, risk_level,
+            risk_reasons, suspicion_flags
+          ) values (
+            'guild-1', 'user-1', 'user', now(), 'invite', 'invite',
+            'confirmed', 95, 0, 'low', '[]'::jsonb, '[]'::jsonb
+          );
+
+          insert into public.member_events (
+            guild_id, user_id, actor_id, actor_name, event_type, title,
+            reason, metadata
+          ) values (
+            'guild-1', 'user-1', 'staff-1', 'Staff', 'member_joined',
+            'Member Joined', 'ci', '{}'::jsonb
+          );
+          SQL
+
+      - name: Replay over legacy partial schema, duplicates, and dirty role state
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          drop schema public cascade;
+          create schema public;
+
+          create table public.tickets (
+            id uuid primary key default gen_random_uuid(),
+            guild_id text not null,
+            ticket_number integer,
+            channel_id text,
+            discord_thread_id text
+          );
+          insert into public.tickets (guild_id, ticket_number)
+          values ('legacy-guild', 7), ('legacy-guild', 7);
+
+          create table public.guild_members (
+            id uuid primary key default gen_random_uuid(),
+            guild_id text not null,
+            user_id text not null,
+            unique (guild_id, user_id)
+          );
+
+          create table public.member_joins (
+            id uuid primary key default gen_random_uuid(),
+            guild_id text not null,
+            user_id text not null
+          );
+          SQL
+
+          psql -v ON_ERROR_STOP=1 -f "$MIGRATION"
+
+          # Simulate a legacy runtime-created row that predates the role-state
+          # constraint. Reconciliation must preserve it while constraining new writes.
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          insert into public.guild_members (guild_id, user_id, role_state)
+          values ('legacy-guild', 'dirty-role-user', 'Legacy State With Spaces');
+          SQL
+
+          psql -v ON_ERROR_STOP=1 -f "$ROLE_STATE_RECONCILE"
+          psql -v ON_ERROR_STOP=1 -f "$MIGRATION"
+          psql -v ON_ERROR_STOP=1 -f "$ROLE_STATE_RECONCILE"
+
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+            if not exists (
+              select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'tickets'
+                and column_name = 'panel_message_id'
+            ) then
+              raise exception 'legacy tickets table was not enriched';
+            end if;
+
+            if not exists (
+              select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'member_joins'
+                and column_name = 'entry_confidence'
+            ) then
+              raise exception 'legacy member_joins table was not enriched';
+            end if;
+
+            if to_regclass('public.uq_tickets_guild_ticket_number') is not null then
+              raise exception 'duplicate historical ticket numbers must not receive a unique index';
+            end if;
+
+            if not exists (
+              select 1
+              from pg_constraint c
+              join pg_class t on t.oid = c.conrelid
+              join pg_namespace n on n.oid = t.relnamespace
+              where n.nspname = 'public'
+                and t.relname = 'guild_members'
+                and c.conname = 'guild_members_role_state_check'
+                and not c.convalidated
+            ) then
+              raise exception 'legacy dirty role_state history should retain a NOT VALID constraint';
+            end if;
+          end $$;
+
+          insert into public.guild_members (guild_id, user_id, role_state)
+          values ('legacy-guild', 'valid-new-role-user', 'cosmetic_only');
+          SQL
+
+          if psql -v ON_ERROR_STOP=1 <<'SQL'
+          insert into public.guild_members (guild_id, user_id, role_state)
+          values ('legacy-guild', 'invalid-new-role-user', 'Still Invalid');
+          SQL
+          then
+            echo "new invalid role_state unexpectedly bypassed the reconciled check constraint" >&2
+            exit 1
+          fi

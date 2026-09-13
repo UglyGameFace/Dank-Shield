@@ -1,124 +1,56 @@
 # ACTIVE TASK
 
-## DS-SEC-041 — Persistent hostile actor / AntiNuke re-entry containment
+## DS-CLEANUP-001 — Canonical schema authority consolidation
 
-**Status:** IMPLEMENTATION COMPLETE / FINAL PR-HEAD RECHECK AFTER BOOKKEEPING UPDATE
-**Branch:** `fix/persistent-hostile-actor-reentry`
-**Base:** `91bce1e3a72b16e079f99febb6519b3144c36955` (`main`, merge of PR #203)
-**PR:** #206
+**Status:** IMPLEMENTATION COMPLETE — validated; final record-only head must remain green before merge
+**Branch:** `cleanup/schema-authority-consolidation`
+**Base:** `91bce1e3a72b16e079f99febb6519b3144c36955` (`main`)
+**PR:** #205
 
 ## Outcome
 
-A Discord identity that crosses confirmed AntiNuke containment must not return as a fresh actor after a kick, reinvite, bot re-add, process restart, or ordinary SpamGuard bot exclusion. Exact Discord IDs are authoritative. Human alt propagation is allowed only from hard identity evidence, never heuristic name/profile similarity.
+Committed files under `supabase/migrations/` are now the schema-mutation authority for this area. Runtime startup performs read-only readiness checks and migration guidance only.
 
-## Root cause / findings
+## Root cause
 
-- Canonical AntiNuke containment treated a successful kick as definitive containment.
-- No guild-scoped hostile identity disposition survived leave/rejoin/reinvite.
-- SpamGuard intentionally rejects bot-authored messages before its counters and settings path.
-- RaidGuard/member-risk intentionally excludes Discord bots from human alt scoring.
-- Member history existed, but AntiNuke did not consume it as a durable hostile-identity enforcement decision.
-- The tested GANG Nuker flow could therefore keep its Discord bot process alive, be reinvited, reacquire guild access, and resume destructive actions unless the Discord identity itself remained contained.
-
-## Execution path
-
-1. AntiNuke attributes a destructive actor and calls `_contain_actor`.
-2. The hostile-actor runtime records the guild/user ID before containment.
-3. Containment attempts a ban first; the canonical kick/role-strip path remains the fallback if Discord denies the ban.
-4. Rejoin checks exact hostile ID before ordinary join heuristics.
-5. Previously confirmed hostile bots bypass the normal SpamGuard bot exemption through a reputation prefilter.
-6. Bot-add audit handling checks the target bot ID before the normal untrusted-bot path, including owner re-adds.
-7. Human linked accounts inherit containment only when verified identity proof or a staff-confirmed duplicate link points to an active hostile ID.
-8. Ready-time reconciliation checks already-present members after a restart.
+Schema ownership was split across committed migrations, runtime DDL in startup guards, import-time migration registration, a standalone SQL file, and direct-database repair guidance. That made fresh installs, upgrades, and diagnostics depend on different authorities.
 
 ## Changes
 
-- `stoney_verify/anti_nuke_hostile_actor_runtime.py`
-  - durable Supabase + local outage-continuity reputation store;
-  - exact-ID re-entry enforcement;
-  - ban-first confirmed AntiNuke containment with canonical fallback;
-  - Ban Members readiness requirement bridge;
-  - known-hostile bot-add interception;
-  - SpamGuard-independent known-hostile message backstop;
-  - hard-proof linked-alt inheritance;
-  - ready-time reconciliation;
-  - explicit `clear_hostile_reputation()` API for audited owner/admin integration.
-- `supabase/migrations/20260913163000_hostile_actor_reputation.sql`
-  - guild-scoped durable reputation table, active disposition, incident count, hard-link parent, explicit clear metadata, service-role-only access.
-- `.github/workflows/hostile-actor-reputation-sql.yml`
-  - PostgreSQL 16 migration idempotency, RLS/index, lifecycle, and service-role-only access smoke coverage.
-- `main.py`
-  - installs hostile reputation after AntiNuke gateway/finalizer/incident policy is finalized.
-- `tests/test_antinuke_hostile_actor_runtime.py`
-  - persistence, ban-first containment, fallback, permission readiness, exact rejoin, explicit-clear precedence, hard-proof alt inheritance, known-hostile bot message backstop, alert-only behavior, and owner re-add regressions.
-- `tests/test_antinuke_finalizer_runtime.py`
-  - asserts the hostile runtime is installed in the required startup order before app import.
+- converted `auto_schema_bootstrap.py` and `operation_queue_schema_guard.py` to read-only diagnostics;
+- neutralized import-time mutation in `ticket_category_schema_bootstrap_guard.py`;
+- added `20260913154500_canonical_runtime_schema_authority.sql`;
+- added `20260913160000_reconcile_guild_member_role_state_constraint.sql`;
+- removed obsolete `supabase/2026-05-08_runtime_stability_schema.sql`;
+- removed the runtime `psycopg` dependency and obsolete direct-database bootstrap guidance;
+- updated ticket-panel and doctor guidance to committed-migration-only repair instructions;
+- moved affected schema assertions to migration-owned tests;
+- added Schema Authority SQL CI for fresh, replay, legacy-partial, duplicate-ticket, and role-state compatibility paths;
+- corrected stale ticket guardrail tests to point at the canonical migration owner.
 
-## Validation / results
+## Validation
 
-Runtime code head `1b946b6b622f2b1b45d1d967aa4376ed3dbe7369` passed the complete validation gate before this bookkeeping-only update:
+Validated implementation head: `b94950beb09ae84d6a2c6b2184991e9bfb41301a`.
 
-- `Dank Shield CI` run #2014: **SUCCESS**.
-  - committed diff whitespace: success;
-  - Python compile: success;
-  - full unit-test suite: success;
-  - standalone tool checks: success;
-  - setup/public-command/invite/setup-safety/design/role-truth/event-boundary audits: success;
-  - managed-category SQL smoke: success;
-  - claim-first ticket security: success.
-- `Hostile Actor Reputation SQL` run #3: **SUCCESS**.
-- `Dank Design Regression CI` run #297: **SUCCESS**.
-- `Application Command Size Diagnostics` run #1044: **SUCCESS**.
-- `Profile Runtime Diagnostics` run #803: **SUCCESS**.
-- `Ticket Owner Emergency Override` run #585: **SUCCESS**.
-- Local clone execution was unavailable in this session; GitHub Actions is the authoritative validation path used here.
+All 13 applicable PR workflows completed successfully on that exact implementation head, including Dank Shield CI, Schema Authority SQL, Ticket Counter SQL, Ticket Panel Single Owner, Ticket Panel Doctor Sanity, Ticket Category Menu Sanity, Ticket Category Repair SQL, Ticket Category Rich Recovery SQL, Ticket Owner Emergency Override, Application Command Size Diagnostics, Profile Runtime Diagnostics, DS Backlog 027 Validation, and Dank Design Regression CI.
 
-This task-record update contains no runtime, migration, or test behavior change. The resulting PR head must still finish its own exact-head workflow rerun before PR #206 is marked ready.
+The prior full-suite attempt produced `1367 passed / 2 failed`; both failures were stale test-ownership assertions. After those assertions were pointed at the canonical migration, the exact implementation head completed green.
 
-## Cleanup / conflicts
+This task-record commit changes documentation only. No runtime code, migration SQL, test behavior, dependency, or workflow logic changes here. The resulting record-only head must still finish green before PR #205 is marked ready.
 
-- Compared base `91bce1e3a72b16e079f99febb6519b3144c36955` through validated code head `1b946b6b622f2b1b45d1d967aa4376ed3dbe7369`: branch was 16 commits ahead and 0 behind before this bookkeeping update.
-- Runtime diff was reviewed after CI: seven task-owned files only; no unrelated product changes were introduced.
-- No conflict markers, secrets, generated artifacts, debug bypasses, or placeholder implementation remain in the task diff.
-- Accidental temporary branch files created while opening the draft PR were deleted before implementation continued.
-- No other open AntiNuke/SpamGuard/security PR overlaps this task; PR #206 is the matching active implementation PR.
-- The GANG Nuker screenshots are treated only as defensive evidence of persistent/modular attack behavior. No tool-specific fingerprinting or offensive recreation was added.
+## Final scope / conflicts
 
-## Compatibility review
+- final implementation diff before the task-record update was 19 task-scoped files;
+- no unresolved review threads;
+- branch was 0 commits behind the inspected base;
+- AntiNuke and unrelated product behavior were untouched;
+- broader startup monkey-patch cleanup remains a separate Phase 2 task;
+- `member_joins` re-invite semantics remain backlogged rather than being silently redesigned here.
 
-- Existing AntiNuke alert mode remains alert-only; durable reputation does not silently turn alert mode into containment.
-- AntiNuke disabled state remains disabled; known-hostile presence is surfaced but not automatically removed.
-- Canonical kick/role-strip containment remains the fallback when Discord rejects a ban.
-- Guild owners and Dank Shield itself remain protected from self-containment paths.
-- Human alt inheritance requires hard identity evidence and does not promote username/profile heuristics into punishment proof.
-- The existing member lifecycle router does not remove the hostile-reputation join listener.
-- Production already has a main-push Supabase migration workflow; after merge, the new migration is eligible for the normal dry-run + `db push` production path.
+## Deployment note
 
-## Blockers / risks
-
-- The Supabase migration must actually succeed in production after merge for cross-host durable reputation. The local mirror is outage continuity, not a substitute for the shared database.
-- Discord hierarchy/permissions can still block ban/kick containment; readiness now requires Ban Members for contain mode and incident output retains fallback/blocker visibility.
-- Discord guild owners cannot themselves be banned/contained by a bot.
-- No repository test can substitute for the final live Discord adversarial retest against the real GANG Nuker account after deployment.
-- Structural server restore remains a separate recovery-system concern and is not part of this active task.
-
-## Backlog
-
-- Structural channel/role/server-state backup and restoration after destructive deletion remains separate from actor containment.
+Production migration remains an explicit deployment step through the existing Supabase migration pipeline. Runtime no longer applies schema changes itself. The earlier hosted Supabase Preview comment predates the later migration additions, so repository SQL/CI validation is the current evidence for this PR.
 
 ## Next step
 
-Verify the workflow rerun on the bookkeeping-only PR head. If every required workflow remains green, update PR #206 metadata and mark it ready for review. Do not merge until the owner explicitly approves the merge.
-
-## Definition of done
-
-- confirmed destructive actors persist by guild + Discord ID across restart/rejoin/reinvite;
-- confirmed actors are ban-first contained with safe fallback;
-- a previously hostile bot cannot regain an operational foothold merely because bot messages are normally excluded from SpamGuard;
-- owner re-add of a known hostile bot is detected and the target remains contained;
-- only hard identity proof can propagate hostile status to another human account;
-- targeted tests, full Dank Shield CI, compile/static checks, and exact-head workflow checks are green;
-- migration and startup wiring are reviewed;
-- final diff contains no placeholders, temp files, unrelated changes, secrets, or conflict artifacts;
-- PR metadata reflects actual validated state before readiness/merge;
-- production migration/deploy and live adversarial retest remain explicit post-merge acceptance checks rather than being falsely claimed from CI alone.
+Let the record-only final head complete CI. If green, update PR #205 validation notes and mark it ready for review. Merge remains a separate explicit action.
