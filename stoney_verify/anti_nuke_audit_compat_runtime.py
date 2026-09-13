@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Compatibility coverage for Discord audit events newer than discord.py enums."""
 
+import re
 from typing import Any, Mapping
 
 import discord
@@ -13,8 +14,10 @@ _INSTALL_FLAG = "_dank_antinuke_audit_compat_installed"
 _ACTION_FLAG = "_dank_antinuke_audit_compat_action_patched"
 _ROUTE_FLAG = "_dank_antinuke_audit_compat_route_patched"
 
+# Discord documents action_type 192/193, while discord.py 2.7.1 does not yet
+# expose named AuditLogAction enum members for them.
 _RAW_ACTION_NAMES = {
-    "192": "voice_channel_status_update",
+    "192": "voice_channel_status_create",
     "193": "voice_channel_status_delete",
 }
 
@@ -37,8 +40,8 @@ def _patch_action_names() -> bool:
     self_action._action_name = self_name  # noqa: SLF001
     guardian._ACTIONS.update(  # noqa: SLF001
         {
-            "voice_channel_status_update": (
-                "Voice-channel status mutation",
+            "voice_channel_status_create": (
+                "Voice-channel status creation",
                 "antinuke_channel_delete_threshold",
                 "voice_status",
                 1,
@@ -52,12 +55,12 @@ def _patch_action_names() -> bool:
         }
     )
     guardian._PANIC_WEIGHTS.update(  # noqa: SLF001
-        {"voice_channel_status_update": 1, "voice_channel_status_delete": 1}
+        {"voice_channel_status_create": 1, "voice_channel_status_delete": 1}
     )
     guardian._PANIC_ACTIONS = frozenset(guardian._PANIC_WEIGHTS)  # noqa: SLF001
     self_action._PROTECTED_ACTIONS = frozenset(  # noqa: SLF001
         set(self_action._PROTECTED_ACTIONS)  # noqa: SLF001
-        | {"voice_channel_status_update", "voice_channel_status_delete"}
+        | {"voice_channel_status_create", "voice_channel_status_delete"}
     )
     setattr(guardian, _ACTION_FLAG, True)
     return True
@@ -74,8 +77,6 @@ def _patch_self_action_route() -> bool:
             return spec
         method = str(getattr(route, "method", "") or "").strip().upper()
         path = self_action._route_path(route)  # noqa: SLF001
-        import re
-
         match = re.fullmatch(r"/channels/(\d+)/voice-status", path)
         if match and method == "PUT":
             channel_id = int(match.group(1))
@@ -84,7 +85,7 @@ def _patch_self_action_route() -> bool:
             action = (
                 "voice_channel_status_delete"
                 if status is None
-                else "voice_channel_status_update"
+                else "voice_channel_status_create"
             )
             return self_action._spec(  # noqa: SLF001
                 (action,),
