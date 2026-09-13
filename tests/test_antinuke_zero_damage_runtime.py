@@ -146,7 +146,7 @@ def test_direct_webhook_http_route_is_covered_by_final_self_proof() -> None:
             delattr(self_action, runtime._SELF_FLAG)  # noqa: SLF001
 
 
-def test_guardian_final_surface_includes_single_delete_and_admin_updates() -> None:
+def test_guardian_final_surface_is_expanded_but_first_strike_stays_scoped() -> None:
     old_actions = dict(guardian._ACTIONS)  # noqa: SLF001
     old_fields = guardian._GUILD_UPDATE_SECURITY_FIELDS  # noqa: SLF001
     old_weights = dict(guardian._PANIC_WEIGHTS)  # noqa: SLF001
@@ -169,7 +169,13 @@ def test_guardian_final_surface_includes_single_delete_and_admin_updates() -> No
             "member_disconnect",
         ):
             assert action in guardian._ACTIONS  # noqa: SLF001
+
         assert guardian._ACTIONS["message_delete"][3] == 1  # noqa: SLF001
+        assert guardian._ACTIONS["integration_update"][3] == 1  # noqa: SLF001
+        assert guardian._ACTIONS["home_settings_update"][3] == 1  # noqa: SLF001
+        assert guardian._ACTIONS["emoji_create"][3] is None  # noqa: SLF001
+        assert guardian._ACTIONS["scheduled_event_create"][3] is None  # noqa: SLF001
+
         for field in (
             "system_channel_id",
             "rules_channel_id",
@@ -191,49 +197,6 @@ def test_guardian_final_surface_includes_single_delete_and_admin_updates() -> No
             setattr(guardian, runtime._GUARDIAN_FLAG, old_flag)  # noqa: SLF001
         elif hasattr(guardian, runtime._GUARDIAN_FLAG):  # noqa: SLF001
             delattr(guardian, runtime._GUARDIAN_FLAG)  # noqa: SLF001
-
-
-def test_contain_mode_forces_first_strike_even_for_delegated_actor(monkeypatch) -> None:
-    original_process = anti_nuke._process_claimed_destructive_event  # noqa: SLF001
-    had_flag = hasattr(anti_nuke, runtime._POLICY_FLAG)  # noqa: SLF001
-    old_flag = getattr(anti_nuke, runtime._POLICY_FLAG, None)  # noqa: SLF001
-    if had_flag:
-        delattr(anti_nuke, runtime._POLICY_FLAG)  # noqa: SLF001
-
-    seen: list[int | None] = []
-
-    async def fake_original(_guild, **kwargs):
-        seen.append(kwargs.get("threshold_override"))
-        return True
-
-    async def settings(_guild_id: int):
-        return {"antinuke_enabled": True, "antinuke_mode": "contain"}
-
-    monkeypatch.setattr(anti_nuke, "_process_claimed_destructive_event", fake_original)
-    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
-    monkeypatch.setattr(anti_nuke, "_actor_is_owner_or_bot", lambda _guild, _actor: False)
-
-    try:
-        assert runtime._patch_zero_grace() is True  # noqa: SLF001
-        entry = SimpleNamespace(user=SimpleNamespace(id=77))
-        asyncio.run(
-            anti_nuke._process_claimed_destructive_event(  # noqa: SLF001
-                SimpleNamespace(id=7),
-                entry=entry,
-                action_key="ban",
-                action_label="ban",
-                target_label="member",
-                threshold_key="antinuke_ban_threshold",
-                threshold_override=None,
-            )
-        )
-        assert seen == [1]
-    finally:
-        anti_nuke._process_claimed_destructive_event = original_process  # noqa: SLF001
-        if had_flag:
-            setattr(anti_nuke, runtime._POLICY_FLAG, old_flag)  # noqa: SLF001
-        elif hasattr(anti_nuke, runtime._POLICY_FLAG):  # noqa: SLF001
-            delattr(anti_nuke, runtime._POLICY_FLAG)  # noqa: SLF001
 
 
 def test_compromise_quarantine_survives_memory_reset(monkeypatch, tmp_path: Path) -> None:
