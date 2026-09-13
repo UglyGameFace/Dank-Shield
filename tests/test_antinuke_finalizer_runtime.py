@@ -101,6 +101,7 @@ def test_main_installs_protection_layers_in_order_before_app_import() -> None:
         "    _install_anti_nuke_lockdown_runtime()\n"
         "    _install_anti_nuke_self_action_runtime()\n"
         "    _install_anti_nuke_zero_damage_runtime()\n"
+        "    _install_anti_nuke_readiness_gate_runtime()\n"
         "    from stoney_verify.app import run as _run_dank_shield"
     )
     assert expected in source
