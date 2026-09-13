@@ -78,9 +78,49 @@ def _install_invite_reconciliation_runtime() -> None:
         )
 
 
+def _install_anti_nuke_gateway_runtime() -> None:
+    """Attach the AntiNuke audit gateway fast path before Discord login."""
+
+    try:
+        from stoney_verify.globals import bot
+        from stoney_verify.anti_nuke_gateway_runtime import (
+            install_anti_nuke_gateway_runtime,
+        )
+
+        if not install_anti_nuke_gateway_runtime(bot):
+            print("ℹ️ AntiNuke gateway runtime was already installed; duplicate skipped")
+    except Exception as exc:
+        print(
+            "⚠️ AntiNuke gateway runtime install failed; "
+            "canonical Discord-event/REST protection remains active: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
+def _install_anti_nuke_finalizer_runtime() -> None:
+    """Finalize AntiNuke readiness truth and gateway listener ownership."""
+
+    try:
+        from stoney_verify.globals import bot
+        from stoney_verify.anti_nuke_finalizer_runtime import (
+            install_anti_nuke_finalizer_runtime,
+        )
+
+        if not install_anti_nuke_finalizer_runtime(bot):
+            print("ℹ️ AntiNuke finalizer runtime was already installed; duplicate skipped")
+    except Exception as exc:
+        print(
+            "⚠️ AntiNuke finalizer runtime install failed; "
+            "existing AntiNuke protection remains active: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
 def main() -> None:
     _sleep_before_import_if_discord_login_backoff_active()
     _install_invite_reconciliation_runtime()
+    _install_anti_nuke_gateway_runtime()
+    _install_anti_nuke_finalizer_runtime()
     from stoney_verify.app import run as _run_dank_shield
 
     _run_dank_shield()
