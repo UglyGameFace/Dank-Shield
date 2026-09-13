@@ -8,8 +8,11 @@ This guard addresses the exact log patterns seen in production:
 - transient Discord 5xx/no-healthy-upstream errors while sending modlogs
 - bursty channel edits during ticket close/rename flows
 
-It does not change business rules. It only serializes and retries Discord API
-calls in places where Discord itself is telling us to slow down.
+It does not change business rules. It serializes and retries Discord API calls in
+places where Discord itself is telling us to slow down. Security-critical callers
+may mark an audit request as priority; those requests remain serialized and still
+honor real 429 backoff, but they do not sit behind the generic six-second spacing
+used for non-urgent audit lookups.
 """
 
 import asyncio
@@ -87,7 +90,21 @@ def _is_retryable_discord_error(error: BaseException) -> bool:
     except Exception:
         pass
     text = repr(error).lower()
-    return any(marker in text for marker in ("no healthy upstream", "service unavailable", "temporarily unavailable", "gateway timeout", "bad gateway", "rate limited", "429", "503", "502", "504"))
+    return any(
+        marker in text
+        for marker in (
+            "no healthy upstream",
+            "service unavailable",
+            "temporarily unavailable",
+            "gateway timeout",
+            "bad gateway",
+            "rate limited",
+            "429",
+            "503",
+            "502",
+            "504",
+        )
+    )
 
 
 def _retry_after(error: BaseException, fallback: float) -> float:
@@ -100,7 +117,11 @@ def _retry_after(error: BaseException, fallback: float) -> float:
     return float(fallback)
 
 
-async def _sleep_until_allowed(last_map: dict[int, float], key: int, gap_seconds: float) -> None:
+async def _sleep_until_allowed(
+    last_map: dict[int, float],
+    key: int,
+    gap_seconds: float,
+) -> None:
     try:
         now = time.monotonic()
         last = float(last_map.get(int(key), 0.0) or 0.0)
@@ -111,23 +132,44 @@ async def _sleep_until_allowed(last_map: dict[int, float], key: int, gap_seconds
         pass
 
 
-async def _guarded_audit_logs(self: discord.Guild, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
-    """Serialize audit-log requests per guild and back off after 429s."""
+async def _guarded_audit_logs(
+    self: discord.Guild,
+    *args: Any,
+    **kwargs: Any,
+) -> AsyncIterator[Any]:
+    """Serialize audit requests and back off after 429s.
+
+    ``_dank_priority`` is an internal-only marker consumed here before the request
+    reaches discord.py. Priority requests skip only our artificial generic spacing;
+    they still share the guild lock and still honor the post-429 cooldown.
+    """
+
     if _ORIGINAL_GUILD_AUDIT_LOGS is None:
         return
 
+    priority = bool(kwargs.pop("_dank_priority", False))
     guild_id = int(getattr(self, "id", 0) or 0)
     lock = _AUDIT_LOCKS[guild_id]
     async with lock:
         now = time.monotonic()
         last_429 = float(_AUDIT_LAST_RATE_LIMIT.get(guild_id, 0.0) or 0.0)
         if last_429 > 0:
-            wait_429 = (last_429 + _audit_after_429_cooldown_seconds()) - now
+            wait_429 = (
+                last_429 + _audit_after_429_cooldown_seconds()
+            ) - now
             if wait_429 > 0:
-                _warn(f"audit-log cooldown after 429 guild={guild_id} wait={wait_429:.1f}s")
+                _warn(
+                    "audit-log cooldown after 429 "
+                    f"guild={guild_id} wait={wait_429:.1f}s"
+                )
                 await asyncio.sleep(wait_429)
 
-        await _sleep_until_allowed(_AUDIT_LAST_CALL, guild_id, _audit_cooldown_seconds())
+        if not priority:
+            await _sleep_until_allowed(
+                _AUDIT_LAST_CALL,
+                guild_id,
+                _audit_cooldown_seconds(),
+            )
         _AUDIT_LAST_CALL[guild_id] = time.monotonic()
 
         try:
@@ -138,12 +180,20 @@ async def _guarded_audit_logs(self: discord.Guild, *args: Any, **kwargs: Any) ->
             status = int(getattr(e, "status", 0) or 0)
             if status == 429 or "429" in repr(e):
                 _AUDIT_LAST_RATE_LIMIT[guild_id] = time.monotonic()
-                _warn(f"audit-log 429 captured guild={guild_id}; callers will use fallback/cached data")
+                _warn(
+                    "audit-log 429 captured "
+                    f"guild={guild_id}; callers will use fallback/cached data"
+                )
                 return
             raise
 
 
-async def _retrying_send(original, self: Any, *args: Any, **kwargs: Any) -> Any:
+async def _retrying_send(
+    original,
+    self: Any,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
     attempts = _send_retry_attempts()
     last_error: Optional[BaseException] = None
     for attempt in range(1, attempts + 1):
@@ -155,18 +205,31 @@ async def _retrying_send(original, self: Any, *args: Any, **kwargs: Any) -> Any:
                 raise
             wait_for = _retry_after(e, min(2.0 * attempt, 8.0))
             channel_id = getattr(self, "id", "unknown")
-            _warn(f"send retry channel={channel_id} attempt={attempt}/{attempts} wait={wait_for:.1f}s error={type(e).__name__}")
+            _warn(
+                "send retry "
+                f"channel={channel_id} attempt={attempt}/{attempts} "
+                f"wait={wait_for:.1f}s error={type(e).__name__}"
+            )
             await asyncio.sleep(wait_for)
     if last_error is not None:
         raise last_error
     return None
 
 
-async def _retrying_channel_edit(original, self: Any, *args: Any, **kwargs: Any) -> Any:
+async def _retrying_channel_edit(
+    original,
+    self: Any,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
     channel_id = int(getattr(self, "id", 0) or 0)
     lock = _CHANNEL_EDIT_LOCKS[channel_id]
     async with lock:
-        await _sleep_until_allowed(_CHANNEL_LAST_EDIT, channel_id, _channel_edit_gap_seconds())
+        await _sleep_until_allowed(
+            _CHANNEL_LAST_EDIT,
+            channel_id,
+            _channel_edit_gap_seconds(),
+        )
         _CHANNEL_LAST_EDIT[channel_id] = time.monotonic()
         attempts = 3
         last_error: Optional[BaseException] = None
@@ -178,7 +241,11 @@ async def _retrying_channel_edit(original, self: Any, *args: Any, **kwargs: Any)
                 if attempt >= attempts or not _is_retryable_discord_error(e):
                     raise
                 wait_for = _retry_after(e, min(2.0 * attempt, 8.0))
-                _warn(f"channel edit retry channel={channel_id} attempt={attempt}/{attempts} wait={wait_for:.1f}s error={type(e).__name__}")
+                _warn(
+                    "channel edit retry "
+                    f"channel={channel_id} attempt={attempt}/{attempts} "
+                    f"wait={wait_for:.1f}s error={type(e).__name__}"
+                )
                 await asyncio.sleep(wait_for)
         if last_error is not None:
             raise last_error
@@ -187,7 +254,11 @@ async def _retrying_channel_edit(original, self: Any, *args: Any, **kwargs: Any)
 
 def _patch_send_method(cls: Any, attr_name: str = "send") -> None:
     original = getattr(cls, attr_name, None)
-    if not callable(original) or getattr(original, "_discord_api_safety_wrapped", False):
+    if not callable(original) or getattr(
+        original,
+        "_discord_api_safety_wrapped",
+        False,
+    ):
         return
 
     async def _wrapped(self: Any, *args: Any, **kwargs: Any) -> Any:
@@ -202,7 +273,11 @@ def _patch_send_method(cls: Any, attr_name: str = "send") -> None:
 
 def _patch_edit_method(cls: Any, attr_name: str = "edit") -> None:
     original = getattr(cls, attr_name, None)
-    if not callable(original) or getattr(original, "_discord_api_safety_wrapped", False):
+    if not callable(original) or getattr(
+        original,
+        "_discord_api_safety_wrapped",
+        False,
+    ):
         return
 
     async def _wrapped(self: Any, *args: Any, **kwargs: Any) -> Any:
@@ -221,28 +296,48 @@ def install_discord_api_safety() -> None:
         return
 
     original_audit = getattr(discord.Guild, "audit_logs", None)
-    if callable(original_audit) and not getattr(original_audit, "_discord_api_safety_wrapped", False):
+    if callable(original_audit) and not getattr(
+        original_audit,
+        "_discord_api_safety_wrapped",
+        False,
+    ):
         _ORIGINAL_GUILD_AUDIT_LOGS = original_audit
         try:
-            setattr(_guarded_audit_logs, "_discord_api_safety_wrapped", True)
+            setattr(
+                _guarded_audit_logs,
+                "_discord_api_safety_wrapped",
+                True,
+            )
         except Exception:
             pass
         discord.Guild.audit_logs = _guarded_audit_logs  # type: ignore[method-assign]
 
-    for cls in (discord.TextChannel, discord.Thread, discord.DMChannel):
+    for cls in (
+        discord.TextChannel,
+        discord.Thread,
+        discord.DMChannel,
+    ):
         try:
             _patch_send_method(cls)
         except Exception as e:
             _warn(f"failed patching {cls}.send: {e!r}")
 
-    for cls in (discord.TextChannel, discord.VoiceChannel, discord.StageChannel, discord.CategoryChannel):
+    for cls in (
+        discord.TextChannel,
+        discord.VoiceChannel,
+        discord.StageChannel,
+        discord.CategoryChannel,
+    ):
         try:
             _patch_edit_method(cls)
         except Exception as e:
             _warn(f"failed patching {cls}.edit: {e!r}")
 
     _PATCHED = True
-    _log("active; audit logs serialized, Discord sends retried, channel edits queued")
+    _log(
+        "active; audit logs serialized, Discord sends retried, "
+        "channel edits queued"
+    )
 
 
 install_discord_api_safety()
