@@ -105,6 +105,84 @@ def test_normal_contain_does_not_force_trusted_structural_threshold(monkeypatch)
         _restore_flag(anti_nuke, policy._PROCESS_FLAG, had, old)  # noqa: SLF001
 
 
+def test_guardian_policy_restores_normal_trust_and_reapplies_strict(monkeypatch) -> None:
+    state = {policy.STRICT_LOCKDOWN_KEY: False}
+    seen_overrides: list[int | None] = []
+    seen_actor_ids: list[int] = []
+
+    async def settings(_guild_id: int):
+        return {
+            "antinuke_enabled": True,
+            "antinuke_mode": "contain",
+            **state,
+        }
+
+    async def base_process(_guild, _entry, _actor, _action_name, spec):
+        seen_overrides.append(spec[3])
+
+    async def base_rollback(_guild, _entry, actor, _action_name):
+        seen_actor_ids.append(int(actor.id))
+        return "ok"
+
+    fake_guardian = SimpleNamespace(
+        _ACTIONS={
+            "channel_delete": (
+                "Channel deletion",
+                "antinuke_channel_delete_threshold",
+                "channel_delete",
+                1,
+            )
+        },
+        _rollback_untrusted_overwrite=base_rollback,
+        _rollback_untrusted_automod=base_rollback,
+        _process=base_process,
+    )
+    fake_lockdown = SimpleNamespace(
+        _STRICT_GUARDIAN_ACTIONS=frozenset({"channel_delete"})
+    )
+    fake_zero = SimpleNamespace(_STRICT_ACTIONS=frozenset({"channel_delete"}))
+
+    monkeypatch.setattr(policy, "guardian", fake_guardian)
+    monkeypatch.setattr(policy, "lockdown", fake_lockdown)
+    monkeypatch.setattr(policy, "zero_damage", fake_zero)
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
+    monkeypatch.setattr(
+        anti_nuke,
+        "_actor_is_owner_or_bot",
+        lambda _guild, _actor: False,
+    )
+
+    assert policy._patch_guardian_policy() is True  # noqa: SLF001
+    assert fake_guardian._ACTIONS["channel_delete"][3] is None
+
+    guild = SimpleNamespace(id=7)
+    actor = SimpleNamespace(id=77, roles=[])
+    spec = fake_guardian._ACTIONS["channel_delete"]
+
+    asyncio.run(
+        fake_guardian._process(guild, object(), actor, "channel_delete", spec)
+    )
+    asyncio.run(
+        fake_guardian._rollback_untrusted_overwrite(
+            guild, object(), actor, "overwrite_update"
+        )
+    )
+    assert seen_overrides == [None]
+    assert seen_actor_ids == [77]
+
+    state[policy.STRICT_LOCKDOWN_KEY] = True
+    asyncio.run(
+        fake_guardian._process(guild, object(), actor, "channel_delete", spec)
+    )
+    asyncio.run(
+        fake_guardian._rollback_untrusted_overwrite(
+            guild, object(), actor, "overwrite_update"
+        )
+    )
+    assert seen_overrides == [None, 1]
+    assert seen_actor_ids == [77, 0]
+
+
 def test_health_message_does_not_invent_bot_permission_failures() -> None:
     message = policy._health_message(  # noqa: SLF001
         "Strict Lockdown was not enabled. Readiness blockers:",
