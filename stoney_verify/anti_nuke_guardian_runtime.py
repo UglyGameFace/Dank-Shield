@@ -82,6 +82,8 @@ _PANIC_UNTIL: dict[int, float] = {}
 _INSTALL_FLAG = "_dank_antinuke_guardian_installed"
 _OVERWRITE_ACTIONS = ("overwrite_create", "overwrite_update", "overwrite_delete")
 _AUTOMOD_ACTIONS = ("automod_rule_create", "automod_rule_update", "automod_rule_delete")
+_CREATION_ROLLBACK_ACTIONS = ("channel_create", "webhook_create")
+_CREATION_ROLLBACK_DONE: dict[int, float] = {}
 
 
 class _EntryProxy:
@@ -344,6 +346,101 @@ async def _rollback_untrusted_automod(guild: discord.Guild, entry: Any, actor: A
     return ""
 
 
+def _prune_creation_rollback_done() -> None:
+    now = time.monotonic()
+    ttl = float(getattr(anti_nuke, "_AUDIT_DEDUPE_TTL_SECONDS", 90.0) or 90.0)
+    for entry_id, seen_at in list(_CREATION_ROLLBACK_DONE.items()):
+        if now - seen_at > ttl:
+            _CREATION_ROLLBACK_DONE.pop(entry_id, None)
+
+
+async def _resolve_created_channel(guild: discord.Guild, entry: Any) -> Optional[Any]:
+    target = getattr(entry, "target", None)
+    if callable(getattr(target, "delete", None)):
+        return target
+    target_id = _target_id(entry)
+    if target_id is None:
+        return None
+    getter = getattr(guild, "get_channel", None)
+    if callable(getter):
+        try:
+            channel = getter(target_id)
+        except Exception:
+            channel = None
+        if channel is not None:
+            return channel
+    fetcher = getattr(guild, "fetch_channel", None)
+    if callable(fetcher):
+        try:
+            return await fetcher(target_id)
+        except Exception:
+            return None
+    return None
+
+
+async def _resolve_created_webhook(guild: discord.Guild, entry: Any) -> Optional[Any]:
+    target = getattr(entry, "target", None)
+    if callable(getattr(target, "delete", None)):
+        return target
+    target_id = _target_id(entry)
+    if target_id is None:
+        return None
+    loader = getattr(guild, "webhooks", None)
+    if not callable(loader):
+        return None
+    try:
+        webhooks = list(await loader())
+    except Exception:
+        return None
+    for webhook in webhooks:
+        if _safe_int(getattr(webhook, "id", 0), 0) == target_id:
+            return webhook
+    return None
+
+
+async def _rollback_untrusted_creation(guild: discord.Guild, entry: Any, actor: Any, action_name: str) -> str:
+    """Remove resources created by an undelegated destructive actor exactly once.
+
+    This rollback intentionally has its own short-lived dedupe. Enforcement dedupe
+    may already be claimed by the native REST fallback before the audit gateway event
+    arrives; cleanup must still occur without punishing the same actor twice.
+    """
+
+    if action_name not in _CREATION_ROLLBACK_ACTIONS:
+        return ""
+    settings = await anti_nuke.get_antinuke_settings(int(guild.id))
+    if not settings["antinuke_enabled"] or settings["antinuke_mode"] != "contain":
+        return ""
+    if anti_nuke._actor_is_owner_or_bot(guild, actor) or anti_nuke._actor_is_configured_trusted(actor, settings):  # noqa: SLF001
+        return ""
+
+    entry_id = _safe_int(getattr(entry, "id", 0), 0)
+    lock_key = (int(guild.id), f"rollback-create:{entry_id or action_name}")
+    lock = anti_nuke._lock_for(anti_nuke._AUDIT_CLAIM_LOCKS, lock_key)  # noqa: SLF001
+    async with lock:
+        _prune_creation_rollback_done()
+        if entry_id > 0 and entry_id in _CREATION_ROLLBACK_DONE:
+            return ""
+        try:
+            if action_name == "channel_create":
+                channel = await _resolve_created_channel(guild, entry)
+                if channel is None:
+                    return "channel rollback unavailable: created channel could not be resolved"
+                await channel.delete(reason="Dank Shield AntiNuke rollback: unauthorized channel creation")
+                result = "deleted unauthorized newly created channel"
+            else:
+                webhook = await _resolve_created_webhook(guild, entry)
+                if webhook is None:
+                    return "webhook rollback unavailable: created webhook could not be resolved"
+                await webhook.delete(reason="Dank Shield AntiNuke rollback: unauthorized webhook creation")
+                result = "deleted unauthorized newly created webhook"
+        except Exception as exc:
+            return f"creation rollback failed safely: {type(exc).__name__}"
+        if entry_id > 0:
+            _CREATION_ROLLBACK_DONE[entry_id] = time.monotonic()
+        return result
+
+
 def _generic_role_update(entry: Any) -> bool:
     before = getattr(entry, "before", None)
     after = getattr(entry, "after", None)
@@ -509,6 +606,8 @@ async def _rest_reconcile(guild: discord.Guild, entry: Any, action_name: str, sp
     if claimed is None:
         return
     found_entry, actor = claimed
+    if action_name in _CREATION_ROLLBACK_ACTIONS:
+        await _rollback_untrusted_creation(guild, found_entry, actor, action_name)
     if action_name in _OVERWRITE_ACTIONS:
         await _rollback_untrusted_overwrite(guild, found_entry, actor, action_name)
     if action_name in _AUTOMOD_ACTIONS:
@@ -610,6 +709,8 @@ async def _on_audit_log_entry_create(entry: discord.AuditLogEntry) -> None:
         await _rest_reconcile(guild, entry, action_name, spec)
         return
     claimed = _EntryProxy(entry, actor)
+    if action_name in _CREATION_ROLLBACK_ACTIONS:
+        await _rollback_untrusted_creation(guild, claimed, actor, action_name)
     if anti_nuke._consume_audit_entry(claimed):  # noqa: SLF001
         return
     if action_name in _OVERWRITE_ACTIONS:
@@ -627,7 +728,7 @@ def install_anti_nuke_guardian_runtime(bot: discord.Client) -> bool:
     setattr(bot, _INSTALL_FLAG, True)
     moderation = bool(getattr(getattr(bot, "intents", None), "moderation", False))
     if moderation:
-        print("🛡️ AntiNuke guardian active: broad audit coverage, overwrite/AutoMod rollback, high-impact guild filtering, and weighted coordinated panic enabled")
+        print("🛡️ AntiNuke guardian active: broad audit coverage, overwrite/AutoMod/creation rollback, high-impact guild filtering, and weighted coordinated panic enabled")
     else:
         print("⚠️ AntiNuke guardian installed without moderation intent; native/REST coverage remains but broad gateway coverage may be unavailable")
     return True
