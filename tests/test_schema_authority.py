@@ -6,6 +6,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SUPABASE_ROOT = ROOT / "supabase"
 MIGRATION = SUPABASE_ROOT / "migrations" / "20260913154500_canonical_runtime_schema_authority.sql"
+ROLE_STATE_RECONCILIATION = (
+    SUPABASE_ROOT
+    / "migrations"
+    / "20260913160000_reconcile_guild_member_role_state_constraint.sql"
+)
 AUTO_GUARD = ROOT / "stoney_verify" / "startup_guards" / "auto_schema_bootstrap.py"
 QUEUE_GUARD = ROOT / "stoney_verify" / "startup_guards" / "operation_queue_schema_guard.py"
 CATEGORY_COMPAT = ROOT / "stoney_verify" / "startup_guards" / "ticket_category_schema_bootstrap_guard.py"
@@ -59,6 +64,17 @@ def test_canonical_runtime_schema_has_committed_migration_ownership() -> None:
     assert "duplicate historical ticket numbers" in sql
     assert "duplicate historical channel ids" in sql
     assert "duplicate historical thread ids" in sql
+
+
+def test_post_canonical_role_state_contract_reconciles_fresh_and_dirty_history() -> None:
+    sql = _text(ROLE_STATE_RECONCILIATION).lower()
+
+    assert "guild_members_role_state_check" in sql
+    assert "role_state ~ '^[a-z][a-z0-9_]{0,63}$'" in sql
+    assert "not valid" in sql
+    assert "validate constraint guild_members_role_state_check" in sql
+    assert "legacy rows contain nonconforming role_state values" in sql
+    assert "drop constraint if exists guild_members_role_state_check" in sql
 
 
 def test_runtime_schema_guards_are_read_only() -> None:
