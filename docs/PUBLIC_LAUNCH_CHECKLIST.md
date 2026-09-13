@@ -1,6 +1,6 @@
 # Dank Shield Public Launch Checklist
 
-_Last updated: 2026-06-12_
+_Last updated: 2026-09-13_
 
 This checklist is the public-release gate for the Dank Shield bot runtime and the Vercel dashboard handoff. Do not invite the bot broadly until every blocker section passes in a fresh server.
 
@@ -102,7 +102,7 @@ DANK_SERVER_ENV_IDS_ENABLED=false
 BOT_DISPLAY_NAME=Dank Shield
 ```
 
-Optional schema bootstrap may warn if no direct Postgres URL exists. That is acceptable as long as Supabase REST is configured and optional tables are readable.
+Database schema mutation is deployment work, not bot-startup work. Apply committed files under `supabase/migrations/` through the Supabase migration workflow/CLI before release. Runtime schema-health warnings are read-only and should point to the required migration rather than attempting repair.
 
 ## Minimum invite permissions
 
