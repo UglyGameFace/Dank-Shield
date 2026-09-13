@@ -167,41 +167,48 @@ _ACTIONS: dict[str, tuple[str, str, str, Optional[int]]] = {
     ),
 }
 
-# Panic is narrower than general monitoring on purpose. These are the surfaces where
-# several actors operating together is a strong nuke/authority-takeover signal.
-_PANIC_ACTIONS = frozenset(
-    {
-        "bot_add",
-        "channel_create",
-        "channel_delete",
-        "overwrite_create",
-        "overwrite_update",
-        "overwrite_delete",
-        "role_create",
-        "role_update",
-        "role_delete",
-        "ban",
-        "unban",
-        "kick",
-        "member_prune",
-        "webhook_create",
-        "webhook_update",
-        "webhook_delete",
-        "emoji_delete",
-        "integration_delete",
-        "sticker_delete",
-        "scheduled_event_delete",
-        "app_command_permission_update",
-        "automod_rule_create",
-        "automod_rule_update",
-        "automod_rule_delete",
-    }
-)
+# Guild panic is weighted rather than raw-count based. This keeps coordinated
+# structural destruction extremely sensitive without turning two moderators handling
+# a raid into the thing Dank Shield removes from the server.
+_PANIC_WEIGHTS: dict[str, int] = {
+    "bot_add": 4,
+    "channel_create": 2,
+    "channel_delete": 3,
+    "overwrite_create": 3,
+    "overwrite_update": 3,
+    "overwrite_delete": 3,
+    "role_create": 2,
+    "role_update": 3,
+    "role_delete": 3,
+    "ban": 1,
+    "unban": 1,
+    "kick": 1,
+    "member_prune": 4,
+    "invite_delete": 2,
+    "webhook_create": 2,
+    "webhook_update": 2,
+    "webhook_delete": 3,
+    "emoji_delete": 2,
+    "integration_delete": 3,
+    "sticker_delete": 2,
+    "scheduled_event_delete": 2,
+    "app_command_permission_update": 3,
+    "automod_rule_create": 1,
+    "automod_rule_update": 3,
+    "automod_rule_delete": 4,
+}
+_PANIC_ACTIONS = frozenset(_PANIC_WEIGHTS)
+_PANIC_MODERATION_ACTIONS = frozenset({"ban", "unban", "kick"})
 _PANIC_WINDOW_SECONDS = 10.0
-_PANIC_EVENT_THRESHOLD = 3
+_PANIC_SCORE_THRESHOLD = 7
+_PANIC_HIGH_RISK_MIN_EVENTS = 2
+_PANIC_MODERATION_EVENT_THRESHOLD = 12
 _PANIC_ACTOR_THRESHOLD = 2
 _PANIC_HOLD_SECONDS = 60.0
-_PANIC_EVENTS: dict[int, Deque[tuple[float, int, Any]]] = defaultdict(deque)
+_PANIC_EVENTS: dict[
+    int,
+    Deque[tuple[float, int, Any, str, int]],
+] = defaultdict(deque)
 _PANIC_UNTIL: dict[int, float] = {}
 _INSTALL_FLAG = "_dank_antinuke_guardian_installed"
 _OVERWRITE_ACTIONS = ("overwrite_create", "overwrite_update", "overwrite_delete")
@@ -321,10 +328,34 @@ def _generic_role_update(entry: Any) -> bool:
     return False
 
 
+def _role_update_panic_weight(entry: Any) -> int:
+    before = getattr(entry, "before", None)
+    after = getattr(entry, "after", None)
+    if before is None or after is None:
+        return 1
+    if anti_nuke.dangerous_permissions_changed(before, after):
+        return 4
+    old_position = getattr(before, "position", None)
+    new_position = getattr(after, "position", None)
+    if old_position != new_position and (
+        old_position is not None or new_position is not None
+    ):
+        return 4
+    return 1
+
+
+def _panic_weight(action_name: str, entry: Any = None) -> int:
+    if action_name == "role_update" and entry is not None:
+        return _role_update_panic_weight(entry)
+    return max(0, int(_PANIC_WEIGHTS.get(str(action_name), 0)))
+
+
 def _panic_state(
     guild: discord.Guild,
     actor: Any,
     action_name: str,
+    *,
+    entry: Any = None,
 ) -> tuple[bool, bool, list[Any]]:
     guild_id = int(guild.id)
     now = time.monotonic()
@@ -338,17 +369,39 @@ def _panic_state(
     if actor_id <= 0:
         return active, False, []
 
+    weight = _panic_weight(action_name, entry)
+    if weight <= 0:
+        return active, False, []
+
     window = _PANIC_EVENTS[guild_id]
     cutoff = now - _PANIC_WINDOW_SECONDS
     while window and window[0][0] < cutoff:
         window.popleft()
-    window.append((now, actor_id, actor))
-    actors = {seen_id: seen_actor for _seen_at, seen_id, seen_actor in window}
-    triggered = (
-        not active
-        and len(window) >= _PANIC_EVENT_THRESHOLD
-        and len(actors) >= _PANIC_ACTOR_THRESHOLD
+    window.append((now, actor_id, actor, action_name, weight))
+
+    actors = {
+        seen_id: seen_actor
+        for _seen_at, seen_id, seen_actor, _seen_action, _seen_weight in window
+    }
+    score = sum(seen_weight for *_prefix, seen_weight in window)
+    moderation_events = sum(
+        1
+        for _seen_at, _seen_id, _seen_actor, seen_action, _seen_weight in window
+        if seen_action in _PANIC_MODERATION_ACTIONS
     )
+    high_risk_events = sum(
+        1
+        for _seen_at, _seen_id, _seen_actor, seen_action, seen_weight in window
+        if seen_action not in _PANIC_MODERATION_ACTIONS and seen_weight >= 2
+    )
+
+    enough_actors = len(actors) >= _PANIC_ACTOR_THRESHOLD
+    weighted_attack = (
+        score >= _PANIC_SCORE_THRESHOLD
+        and high_risk_events >= _PANIC_HIGH_RISK_MIN_EVENTS
+    )
+    moderation_flood = moderation_events >= _PANIC_MODERATION_EVENT_THRESHOLD
+    triggered = not active and enough_actors and (weighted_attack or moderation_flood)
     if triggered:
         _PANIC_UNTIL[guild_id] = now + _PANIC_HOLD_SECONDS
         active = True
@@ -428,12 +481,15 @@ async def _post_panic_incident(
         target_label=target_label,
         response_label=response,
         count_label=(
-            f"{int(_PANIC_WINDOW_SECONDS)}s guild window • "
-            f"{_PANIC_EVENT_THRESHOLD}+ actions • {_PANIC_ACTOR_THRESHOLD}+ actors"
+            f"{int(_PANIC_WINDOW_SECONDS)}s weighted guild window • "
+            f"score {_PANIC_SCORE_THRESHOLD}+ with {_PANIC_HIGH_RISK_MIN_EVENTS}+ "
+            f"high-risk events, or {_PANIC_MODERATION_EVENT_THRESHOLD}+ moderation actions • "
+            f"{_PANIC_ACTOR_THRESHOLD}+ actors"
         ),
         details=(
-            "Guild-wide circuit breaker prevents several delegated operators from "
-            "splitting one attack below separate per-user thresholds."
+            "Guild-wide circuit breaker weights structural destruction more heavily "
+            "than ordinary moderation so distributed nukes cannot hide behind "
+            "separate per-user thresholds."
         ),
     )
 
@@ -547,7 +603,10 @@ async def _process(
 ) -> None:
     label, threshold_key, counter_key, override = spec
     panic_active, panic_triggered, observed = _panic_state(
-        guild, actor, action_name
+        guild,
+        actor,
+        action_name,
+        entry=entry,
     )
     handled = await anti_nuke._process_claimed_destructive_event(  # noqa: SLF001
         guild,
@@ -585,7 +644,12 @@ async def _handle_bot_add(
         return
 
     target = getattr(entry, "target", None)
-    panic_active, panic_triggered, observed = _panic_state(guild, actor, "bot_add")
+    panic_active, panic_triggered, observed = _panic_state(
+        guild,
+        actor,
+        "bot_add",
+        entry=entry,
+    )
     response = "Alert-only mode: newly added bot was left in the server."
 
     if settings["antinuke_mode"] == "contain":
@@ -715,7 +779,7 @@ def install_anti_nuke_guardian_runtime(bot: discord.Client) -> bool:
     if moderation:
         print(
             "🛡️ AntiNuke guardian active: broad audit coverage, overwrite fallback, "
-            "and coordinated panic enabled"
+            "and weighted coordinated panic enabled"
         )
     else:
         print(
