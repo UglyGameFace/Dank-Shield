@@ -23,7 +23,6 @@ _INSTALL_FLAG = "_dank_antinuke_zero_damage_runtime_installed"
 _SELF_FLAG = "_dank_antinuke_zero_damage_self_patched"
 _GUARDIAN_FLAG = "_dank_antinuke_zero_damage_guardian_patched"
 _HEALTH_FLAG = "_dank_antinuke_zero_damage_health_patched"
-_POLICY_FLAG = "_dank_antinuke_zero_damage_policy_patched"
 
 SUPPORTED_DISCORD_PY = "2.7.1"
 _QUARANTINE_VERSION = 1
@@ -89,13 +88,6 @@ _GUILD_FIELDS = frozenset({
     "owner", "vanity_url_code",
 })
 
-_REQUIRED_PERMISSION_GROUPS = (
-    (("manage_messages",), "Manage Messages"),
-    (("manage_threads",), "Manage Threads"),
-    (("manage_events",), "Manage Events"),
-    (("manage_expressions", "manage_emojis_and_stickers"), "Manage Expressions"),
-)
-
 
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
@@ -106,23 +98,38 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
+def _safe_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return bool(default)
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
 def _enabled_contain(settings: Mapping[str, Any] | None) -> bool:
     if not isinstance(settings, Mapping):
         return False
-    enabled = settings.get("antinuke_enabled", False)
-    if not isinstance(enabled, bool):
-        enabled = str(enabled or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
-    return bool(enabled) and str(settings.get("antinuke_mode") or "contain").strip().lower() == "contain"
+    return _safe_bool(settings.get("antinuke_enabled"), False) and str(
+        settings.get("antinuke_mode") or "contain"
+    ).strip().lower() == "contain"
 
 
 def _state_path() -> Path:
-    raw = str(os.getenv("DANK_ANTINUKE_COMPROMISE_STATE_FILE") or "data/antinuke_compromise_quarantine.json").strip()
+    raw = str(
+        os.getenv("DANK_ANTINUKE_COMPROMISE_STATE_FILE")
+        or "data/antinuke_compromise_quarantine.json"
+    ).strip()
     return Path(raw or "data/antinuke_compromise_quarantine.json")
 
 
 def _quarantine_seconds() -> int:
     try:
-        value = int(str(os.getenv("DANK_ANTINUKE_COMPROMISE_QUARANTINE_SECONDS") or _QUARANTINE_TTL_SECONDS))
+        value = int(
+            str(
+                os.getenv("DANK_ANTINUKE_COMPROMISE_QUARANTINE_SECONDS")
+                or _QUARANTINE_TTL_SECONDS
+            )
+        )
     except Exception:
         value = _QUARANTINE_TTL_SECONDS
     return max(300, min(86400, value))
@@ -153,32 +160,57 @@ def _write_local(guild_id: int, action_name: str, until: int) -> None:
             "detected_at": int(time.time()),
         }
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+        tmp.write_text(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
         os.replace(tmp, path)
 
 
 def _local_active(guild_id: int) -> bool:
     with _QUARANTINE_LOCK:
         raw = _load_state().get("guilds", {}).get(str(int(guild_id)))
-    return isinstance(raw, Mapping) and _safe_int(raw.get("until"), 0) > int(time.time())
+    return (
+        isinstance(raw, Mapping)
+        and _safe_bool(raw.get("active"), False)
+        and _safe_int(raw.get("until"), 0) > int(time.time())
+    )
 
 
 async def _persist_quarantine(guild_id: int, action_name: str) -> int:
+    """Persist locally before ejection and mirror to DB without delaying response."""
+
     gid = int(guild_id)
     until = int(time.time()) + _quarantine_seconds()
     try:
         _write_local(gid, action_name, until)
     except Exception as exc:
-        print(f"🚨 AntiNuke local compromise quarantine write failed guild={gid} error={type(exc).__name__}: {exc}")
+        print(
+            "🚨 AntiNuke local compromise quarantine write failed "
+            f"guild={gid} error={type(exc).__name__}: {exc}"
+        )
+
+    async def mirror() -> None:
+        try:
+            await guild_config.upsert_guild_config(
+                gid,
+                {
+                    _Q_ACTIVE: True,
+                    _Q_UNTIL: until,
+                    _Q_ACTION: str(action_name or "unknown")[:100],
+                    _Q_AT: int(time.time()),
+                },
+            )
+        except Exception as exc:
+            print(
+                "⚠️ AntiNuke DB compromise quarantine write failed "
+                f"guild={gid} error={type(exc).__name__}: {exc}"
+            )
+
     try:
-        await guild_config.upsert_guild_config(gid, {
-            _Q_ACTIVE: True,
-            _Q_UNTIL: until,
-            _Q_ACTION: str(action_name or "unknown")[:100],
-            _Q_AT: int(time.time()),
-        })
-    except Exception as exc:
-        print(f"⚠️ AntiNuke DB compromise quarantine write failed guild={gid} error={type(exc).__name__}: {exc}")
+        asyncio.create_task(mirror(), name=f"dank-antinuke-quarantine-{gid}")
+    except Exception:
+        await mirror()
     return until
 
 
@@ -190,7 +222,9 @@ async def quarantine_active(guild_id: int) -> bool:
         cfg = await guild_config.get_guild_config(gid, refresh=True)
     except Exception:
         return False
-    return bool(cfg.get(_Q_ACTIVE)) and _safe_int(cfg.get(_Q_UNTIL), 0) > int(time.time())
+    return _safe_bool(cfg.get(_Q_ACTIVE), False) and _safe_int(
+        cfg.get(_Q_UNTIL), 0
+    ) > int(time.time())
 
 
 async def _settings_fail_closed(guild_id: int) -> dict[str, Any]:
@@ -203,13 +237,25 @@ async def _settings_fail_closed(guild_id: int) -> dict[str, Any]:
         except Exception:
             snapshot = None
         if isinstance(snapshot, Mapping):
-            print(f"🛡️ AntiNuke self-compromise check using durable snapshot guild={gid} error={type(exc).__name__}")
+            print(
+                "🛡️ AntiNuke self-compromise check using durable snapshot "
+                f"guild={gid} error={type(exc).__name__}"
+            )
             return dict(snapshot)
-        print(f"🚨 AntiNuke self-compromise state unavailable; failing closed guild={gid} error={type(exc).__name__}")
+        print(
+            "🚨 AntiNuke self-compromise state unavailable; failing closed "
+            f"guild={gid} error={type(exc).__name__}"
+        )
         return {"antinuke_enabled": True, "antinuke_mode": "contain"}
 
 
-async def _warn_owner(bot: discord.Client, guild: Any, action_name: str, *, failed: bool) -> None:
+async def _warn_owner(
+    bot: discord.Client,
+    guild: Any,
+    action_name: str,
+    *,
+    failed: bool,
+) -> None:
     owner_id = _safe_int(getattr(guild, "owner_id", 0), 0)
     if owner_id <= 0:
         return
@@ -225,18 +271,27 @@ async def _warn_owner(bot: discord.Client, guild: Any, action_name: str, *, fail
     sender = getattr(user, "send", None)
     if not callable(sender):
         return
-    state = "Self-ejection failed and will be retried automatically." if failed else "I am removing my bot identity from the server immediately."
+    state = (
+        "Self-ejection failed and will be retried automatically."
+        if failed
+        else "I am removing my bot identity from the server immediately."
+    )
     try:
         await sender(
-            "🚨 Dank Shield detected an unverified protected action attributed to its own bot identity "
-            f"(`{action_name}`). {state} Rotate the Discord bot credential before re-adding Dank Shield. "
-            "A temporary durable quarantine blocks immediate re-entry."
+            "🚨 Dank Shield detected an unverified protected action attributed to its "
+            f"own bot identity (`{action_name}`). {state} Rotate the Discord bot "
+            "credential before re-adding Dank Shield. A temporary durable quarantine "
+            "blocks immediate re-entry."
         )
     except Exception:
         pass
 
 
-async def attempt_quarantine_ejection(bot: discord.Client, guild: Any, action_name: str) -> bool:
+async def attempt_quarantine_ejection(
+    bot: discord.Client,
+    guild: Any,
+    action_name: str,
+) -> bool:
     gid = _safe_int(getattr(guild, "id", 0), 0)
     if gid <= 0 or gid in _EJECTION_IN_PROGRESS:
         return False
@@ -254,26 +309,37 @@ async def attempt_quarantine_ejection(bot: discord.Client, guild: Any, action_na
             try:
                 await leave()
                 self_action._COMPROMISE_GUILDS.add(gid)  # noqa: SLF001
-                print(f"🛡️ AntiNuke fail-closed self-ejection completed guild={gid} action={action_name} attempt={attempt}")
+                print(
+                    "🛡️ AntiNuke fail-closed self-ejection completed "
+                    f"guild={gid} action={action_name} attempt={attempt}"
+                )
                 return True
             except Exception as exc:
                 last_error = exc
                 if attempt < 3:
                     await asyncio.sleep(0.35 * attempt)
         self_action._COMPROMISE_GUILDS.discard(gid)  # noqa: SLF001
-        print(f"🚨 AntiNuke CRITICAL self-ejection failed after retries guild={gid} action={action_name} error={last_error}")
+        print(
+            "🚨 AntiNuke CRITICAL self-ejection failed after retries "
+            f"guild={gid} action={action_name} error={last_error}"
+        )
         await _warn_owner(bot, guild, action_name, failed=True)
         return False
     finally:
         _EJECTION_IN_PROGRESS.discard(gid)
 
 
-async def _unmatched_self_action(bot: discord.Client, guild: Any, entry: Any, action_name: str) -> None:
+async def _unmatched_self_action(
+    bot: discord.Client,
+    guild: Any,
+    entry: Any,
+    action_name: str,
+) -> None:
     gid = _safe_int(getattr(guild, "id", 0), 0)
     if gid <= 0:
         return
     settings = await _settings_fail_closed(gid)
-    if not bool(settings.get("antinuke_enabled")):
+    if not _safe_bool(settings.get("antinuke_enabled"), False):
         return
     if str(settings.get("antinuke_mode") or "contain").strip().lower() != "contain":
         try:
@@ -284,7 +350,9 @@ async def _unmatched_self_action(bot: discord.Client, guild: Any, entry: Any, ac
                 action_label=f"Unmatched self-attributed audit action: {action_name}",
                 target_label=str(getattr(entry, "target", None) or "Unknown"),
                 response_label="Alert-only mode: no self-ejection was performed.",
-                details="No valid one-time authorization matched this running process.",
+                details=(
+                    "No valid one-time authorization matched this running process."
+                ),
             )
         except Exception:
             pass
@@ -298,7 +366,11 @@ def _patch_self_action() -> bool:
         return False
     original = self_action._request_spec  # noqa: SLF001
 
-    def request_spec(bot: discord.Client, route: Any, kwargs: Mapping[str, Any]):
+    def request_spec(
+        bot: discord.Client,
+        route: Any,
+        kwargs: Mapping[str, Any],
+    ):
         spec = original(bot, route, kwargs)
         if spec is not None:
             return spec
@@ -307,14 +379,21 @@ def _patch_self_action() -> bool:
         match = re.fullmatch(r"/webhooks/(\d+)(?:/[^/]+)?", path)
         if match and method in {"PATCH", "DELETE"}:
             action = "webhook_update" if method == "PATCH" else "webhook_delete"
-            return self_action._spec((action,), 0, self_action._id_key(match.group(1)))  # noqa: SLF001
+            return self_action._spec(  # noqa: SLF001
+                (action,), 0, self_action._id_key(match.group(1))  # noqa: SLF001
+            )
         match = re.fullmatch(r"/guilds/(\d+)/onboarding", path)
         if match and method in {"PUT", "PATCH"}:
-            return self_action._spec(("onboarding_create", "onboarding_update"), int(match.group(1)))  # noqa: SLF001
+            return self_action._spec(  # noqa: SLF001
+                ("onboarding_create", "onboarding_update"),
+                int(match.group(1)),
+            )
         return None
 
     self_action._request_spec = request_spec  # noqa: SLF001
-    self_action._PROTECTED_ACTIONS = frozenset(set(self_action._PROTECTED_ACTIONS) | set(_EXTENDED_ACTIONS))  # noqa: SLF001
+    self_action._PROTECTED_ACTIONS = frozenset(  # noqa: SLF001
+        set(self_action._PROTECTED_ACTIONS) | set(_EXTENDED_ACTIONS)  # noqa: SLF001
+    )
     self_action._unmatched_self_action = _unmatched_self_action  # noqa: SLF001
     setattr(self_action, _SELF_FLAG, True)
     return True
@@ -328,40 +407,23 @@ def _patch_guardian() -> bool:
         spec = guardian._ACTIONS.get(name)  # noqa: SLF001
         if spec is not None:
             label, threshold_key, counter_key, _override = spec
-            guardian._ACTIONS[name] = (label, threshold_key, counter_key, 1)  # noqa: SLF001
-    guardian._GUILD_UPDATE_SECURITY_FIELDS = frozenset(set(guardian._GUILD_UPDATE_SECURITY_FIELDS) | set(_GUILD_FIELDS))  # noqa: SLF001
-    guardian._PANIC_WEIGHTS.update({name: (4 if name in _STRICT_ACTIONS else 2) for name in _EXTENDED_ACTIONS})  # noqa: SLF001
+            guardian._ACTIONS[name] = (  # noqa: SLF001
+                label,
+                threshold_key,
+                counter_key,
+                1,
+            )
+    guardian._GUILD_UPDATE_SECURITY_FIELDS = frozenset(  # noqa: SLF001
+        set(guardian._GUILD_UPDATE_SECURITY_FIELDS) | set(_GUILD_FIELDS)  # noqa: SLF001
+    )
+    guardian._PANIC_WEIGHTS.update(  # noqa: SLF001
+        {name: (4 if name in _STRICT_ACTIONS else 2) for name in _EXTENDED_ACTIONS}
+    )
     guardian._PANIC_ACTIONS = frozenset(guardian._PANIC_WEIGHTS)  # noqa: SLF001
-    guardian._PANIC_SEVERE_ACTIONS = frozenset(set(guardian._PANIC_SEVERE_ACTIONS) | set(_STRICT_ACTIONS))  # noqa: SLF001
+    guardian._PANIC_SEVERE_ACTIONS = frozenset(  # noqa: SLF001
+        set(guardian._PANIC_SEVERE_ACTIONS) | set(_STRICT_ACTIONS)  # noqa: SLF001
+    )
     setattr(guardian, _GUARDIAN_FLAG, True)
-    return True
-
-
-def _patch_zero_grace() -> bool:
-    if bool(getattr(anti_nuke, _POLICY_FLAG, False)):
-        return False
-    original = anti_nuke._process_claimed_destructive_event  # noqa: SLF001
-
-    async def wrapped(guild: Any, *, entry: Any, action_key: str, action_label: str, target_label: str, threshold_key: str, threshold_override: Optional[int] = None) -> bool:
-        try:
-            settings = await anti_nuke.get_antinuke_settings(int(guild.id))
-        except Exception:
-            settings = None
-        actor = getattr(entry, "user", None)
-        if _enabled_contain(settings) and not anti_nuke._actor_is_owner_or_bot(guild, actor):  # noqa: SLF001
-            threshold_override = 1
-        return await original(
-            guild,
-            entry=entry,
-            action_key=action_key,
-            action_label=action_label,
-            target_label=target_label,
-            threshold_key=threshold_key,
-            threshold_override=threshold_override,
-        )
-
-    anti_nuke._process_claimed_destructive_event = wrapped  # noqa: SLF001
-    setattr(anti_nuke, _POLICY_FLAG, True)
     return True
 
 
@@ -370,24 +432,31 @@ def _patch_health(bot: discord.Client) -> bool:
         return False
     original = anti_nuke.antinuke_permission_health
 
-    def wrapped(guild: Any, settings: Optional[Mapping[str, Any]] = None) -> list[str]:
+    def wrapped(
+        guild: Any,
+        settings: Optional[Mapping[str, Any]] = None,
+    ) -> list[str]:
         missing = list(original(guild, settings))
         clean = anti_nuke.normalize_antinuke_settings(settings or {})
         if not _enabled_contain(clean):
             return missing
-        permissions = getattr(getattr(guild, "me", None), "guild_permissions", None)
-        if permissions is not None:
-            admin = bool(getattr(permissions, "administrator", False))
-            for names, label in _REQUIRED_PERMISSION_GROUPS:
-                if admin or any(bool(getattr(permissions, name, False)) for name in names):
-                    continue
-                if label not in missing:
-                    missing.append(label)
         if str(getattr(discord, "__version__", "") or "") != SUPPORTED_DISCORD_PY:
             missing.append(f"discord.py {SUPPORTED_DISCORD_PY} runtime contract")
-        if not bool(getattr(getattr(bot, "http", None), self_action._HTTP_PATCH_FLAG, False)):  # noqa: SLF001
+        if not bool(
+            getattr(
+                getattr(bot, "http", None),
+                self_action._HTTP_PATCH_FLAG,  # noqa: SLF001
+                False,
+            )
+        ):
             missing.append("AntiNuke self-action HTTP proof")
-        if not bool(getattr(discord.Webhook, self_action._WEBHOOK_PATCH_FLAG, False)):  # noqa: SLF001
+        if not bool(
+            getattr(
+                discord.Webhook,
+                self_action._WEBHOOK_PATCH_FLAG,  # noqa: SLF001
+                False,
+            )
+        ):
             missing.append("AntiNuke webhook self-action proof")
         return list(dict.fromkeys(missing))
 
@@ -400,7 +469,11 @@ async def _reconcile_quarantine(bot: discord.Client) -> None:
     for guild in list(getattr(bot, "guilds", []) or []):
         gid = _safe_int(getattr(guild, "id", 0), 0)
         if gid > 0 and await quarantine_active(gid):
-            await attempt_quarantine_ejection(bot, guild, "durable compromise quarantine")
+            await attempt_quarantine_ejection(
+                bot,
+                guild,
+                "durable compromise quarantine",
+            )
 
 
 def install_anti_nuke_zero_damage_runtime(bot: discord.Client) -> bool:
@@ -408,7 +481,6 @@ def install_anti_nuke_zero_damage_runtime(bot: discord.Client) -> bool:
         return False
     self_patched = _patch_self_action()
     guardian_patched = _patch_guardian()
-    policy_patched = _patch_zero_grace()
     health_patched = _patch_health(bot)
 
     async def on_ready() -> None:
@@ -417,7 +489,11 @@ def install_anti_nuke_zero_damage_runtime(bot: discord.Client) -> bool:
     async def on_guild_join(guild: Any) -> None:
         gid = _safe_int(getattr(guild, "id", 0), 0)
         if gid > 0 and await quarantine_active(gid):
-            await attempt_quarantine_ejection(bot, guild, "durable compromise quarantine")
+            await attempt_quarantine_ejection(
+                bot,
+                guild,
+                "durable compromise quarantine",
+            )
 
     bot.add_listener(on_ready, "on_ready")
     bot.add_listener(on_guild_join, "on_guild_join")
@@ -426,7 +502,7 @@ def install_anti_nuke_zero_damage_runtime(bot: discord.Client) -> bool:
         "🛡️ AntiNuke zero-damage audit hardening active: "
         f"self={'hardened' if self_patched else 'ready'}; "
         f"surface={'expanded' if guardian_patched else 'ready'}; "
-        f"first-strike={'strict' if policy_patched else 'ready'}; "
+        "strict-actions=guardian-scoped; "
         f"health={'strict' if health_patched else 'ready'}; "
         f"discord.py={SUPPORTED_DISCORD_PY}"
     )
