@@ -19,216 +19,57 @@ import discord
 from . import anti_nuke
 
 
-# label, saved threshold key, canonical counter key, optional hard override.
-# Keep normal member-facing creation activity out of first-strike AntiNuke. The
-# surfaces below either require meaningful administrative authority or destroy /
-# weaken server state.
 _ACTIONS: dict[str, tuple[str, str, str, Optional[int]]] = {
-    "guild_update": (
-        "Server identity/security mutation",
-        "antinuke_channel_delete_threshold",
-        "channel_update",
-        None,
-    ),
-    "channel_create": (
-        "Channel creation",
-        "antinuke_channel_delete_threshold",
-        "channel_create",
-        None,
-    ),
-    "channel_update": (
-        "Channel settings mutation",
-        "antinuke_channel_delete_threshold",
-        "channel_update",
-        None,
-    ),
-    "channel_delete": (
-        "Channel deletion",
-        "antinuke_channel_delete_threshold",
-        "channel_delete",
-        None,
-    ),
-    "overwrite_create": (
-        "Channel overwrite creation",
-        "antinuke_channel_delete_threshold",
-        "channel_update",
-        None,
-    ),
-    "overwrite_update": (
-        "Channel overwrite mutation",
-        "antinuke_channel_delete_threshold",
-        "channel_update",
-        None,
-    ),
-    "overwrite_delete": (
-        "Channel overwrite deletion",
-        "antinuke_channel_delete_threshold",
-        "channel_update",
-        None,
-    ),
-    "role_delete": (
-        "Role deletion",
-        "antinuke_role_delete_threshold",
-        "role_delete",
-        None,
-    ),
+    "guild_update": ("Server identity/security mutation", "antinuke_channel_delete_threshold", "channel_update", None),
+    "channel_create": ("Channel creation", "antinuke_channel_delete_threshold", "channel_create", None),
+    "channel_update": ("Channel settings mutation", "antinuke_channel_delete_threshold", "channel_update", None),
+    "channel_delete": ("Channel deletion", "antinuke_channel_delete_threshold", "channel_delete", None),
+    "overwrite_create": ("Channel overwrite creation", "antinuke_channel_delete_threshold", "channel_update", None),
+    "overwrite_update": ("Channel overwrite mutation", "antinuke_channel_delete_threshold", "channel_update", None),
+    "overwrite_delete": ("Channel overwrite deletion", "antinuke_channel_delete_threshold", "channel_update", None),
+    "role_delete": ("Role deletion", "antinuke_role_delete_threshold", "role_delete", None),
     "ban": ("Member ban", "antinuke_ban_threshold", "ban", None),
     "unban": ("Ban-list removal", "antinuke_ban_threshold", "ban", None),
     "kick": ("Member kick", "antinuke_kick_threshold", "kick", None),
-    "member_prune": (
-        "Member prune",
-        "antinuke_kick_threshold",
-        "member_prune",
-        1,
-    ),
-    "invite_delete": (
-        "Invite deletion",
-        "antinuke_channel_delete_threshold",
-        "channel_delete",
-        None,
-    ),
-    "webhook_create": (
-        "Webhook creation",
-        "antinuke_webhook_create_threshold",
-        "webhook_create",
-        None,
-    ),
-    "webhook_update": (
-        "Webhook mutation",
-        "antinuke_webhook_create_threshold",
-        "webhook_update",
-        None,
-    ),
-    "webhook_delete": (
-        "Webhook deletion",
-        "antinuke_webhook_create_threshold",
-        "webhook_delete",
-        None,
-    ),
-    "emoji_delete": (
-        "Emoji deletion",
-        "antinuke_channel_delete_threshold",
-        "channel_delete",
-        None,
-    ),
-    "integration_delete": (
-        "Integration deletion",
-        "antinuke_role_delete_threshold",
-        "role_update",
-        None,
-    ),
-    "sticker_delete": (
-        "Sticker deletion",
-        "antinuke_channel_delete_threshold",
-        "channel_delete",
-        None,
-    ),
-    "scheduled_event_delete": (
-        "Scheduled-event cancellation",
-        "antinuke_channel_delete_threshold",
-        "channel_delete",
-        None,
-    ),
-    "thread_delete": (
-        "Thread/forum-post deletion",
-        "antinuke_channel_delete_threshold",
-        "channel_delete",
-        None,
-    ),
-    "app_command_permission_update": (
-        "Application-command permission mutation",
-        "antinuke_role_delete_threshold",
-        "role_update",
-        None,
-    ),
-    "soundboard_sound_delete": (
-        "Soundboard deletion",
-        "antinuke_channel_delete_threshold",
-        "channel_delete",
-        None,
-    ),
-    "automod_rule_create": (
-        "Discord AutoMod rule creation",
-        "antinuke_role_delete_threshold",
-        "role_update",
-        None,
-    ),
-    "automod_rule_update": (
-        "Discord AutoMod rule mutation",
-        "antinuke_role_delete_threshold",
-        "role_update",
-        None,
-    ),
-    "automod_rule_delete": (
-        "Discord AutoMod rule deletion",
-        "antinuke_role_delete_threshold",
-        "role_delete",
-        None,
-    ),
+    "member_prune": ("Member prune", "antinuke_kick_threshold", "member_prune", 1),
+    "invite_delete": ("Invite deletion", "antinuke_channel_delete_threshold", "channel_delete", None),
+    "webhook_create": ("Webhook creation", "antinuke_webhook_create_threshold", "webhook_create", None),
+    "webhook_update": ("Webhook mutation", "antinuke_webhook_create_threshold", "webhook_update", None),
+    "webhook_delete": ("Webhook deletion", "antinuke_webhook_create_threshold", "webhook_delete", None),
+    "emoji_delete": ("Emoji deletion", "antinuke_channel_delete_threshold", "channel_delete", None),
+    "integration_delete": ("Integration deletion", "antinuke_role_delete_threshold", "role_update", None),
+    "sticker_delete": ("Sticker deletion", "antinuke_channel_delete_threshold", "channel_delete", None),
+    "scheduled_event_delete": ("Scheduled-event cancellation", "antinuke_channel_delete_threshold", "channel_delete", None),
+    "thread_delete": ("Thread/forum-post deletion", "antinuke_channel_delete_threshold", "channel_delete", None),
+    "app_command_permission_update": ("Application-command permission mutation", "antinuke_role_delete_threshold", "role_update", None),
+    "soundboard_sound_delete": ("Soundboard deletion", "antinuke_channel_delete_threshold", "channel_delete", None),
+    "automod_rule_create": ("Discord AutoMod rule creation", "antinuke_role_delete_threshold", "role_update", None),
+    "automod_rule_update": ("Discord AutoMod rule mutation", "antinuke_role_delete_threshold", "role_update", None),
+    "automod_rule_delete": ("Discord AutoMod rule deletion", "antinuke_role_delete_threshold", "role_delete", None),
 }
 
-_GUILD_UPDATE_SECURITY_FIELDS = frozenset(
-    {
-        "name",
-        "icon",
-        "banner",
-        "splash",
-        "discovery_splash",
-        "vanity_url_code",
-        "description",
-        "verification_level",
-        "explicit_content_filter",
-        "mfa_level",
-        "owner",
-    }
-)
+_GUILD_UPDATE_SECURITY_FIELDS = frozenset({
+    "name", "icon", "banner", "splash", "discovery_splash", "vanity_url_code",
+    "description", "verification_level", "explicit_content_filter", "mfa_level", "owner",
+})
 
 _PANIC_WEIGHTS: dict[str, int] = {
-    "guild_update": 4,
-    "bot_add": 4,
-    "channel_create": 2,
-    "channel_delete": 3,
-    "overwrite_create": 3,
-    "overwrite_update": 3,
-    "overwrite_delete": 3,
-    "role_create": 2,
-    "role_update": 3,
-    "role_delete": 3,
-    "ban": 1,
-    "unban": 1,
-    "kick": 1,
-    "member_prune": 4,
-    "invite_delete": 2,
-    "webhook_create": 2,
-    "webhook_update": 2,
-    "webhook_delete": 3,
-    "emoji_delete": 2,
-    "integration_delete": 3,
-    "sticker_delete": 2,
-    "scheduled_event_delete": 2,
-    "app_command_permission_update": 3,
-    "automod_rule_create": 1,
-    "automod_rule_update": 3,
-    "automod_rule_delete": 4,
+    "guild_update": 4, "bot_add": 4, "channel_create": 2, "channel_delete": 3,
+    "overwrite_create": 3, "overwrite_update": 3, "overwrite_delete": 3,
+    "role_create": 2, "role_update": 3, "role_delete": 3, "ban": 1,
+    "unban": 1, "kick": 1, "member_prune": 4, "invite_delete": 2,
+    "webhook_create": 2, "webhook_update": 2, "webhook_delete": 3,
+    "emoji_delete": 2, "integration_delete": 3, "sticker_delete": 2,
+    "scheduled_event_delete": 2, "app_command_permission_update": 3,
+    "automod_rule_create": 1, "automod_rule_update": 3, "automod_rule_delete": 4,
 }
 _PANIC_ACTIONS = frozenset(_PANIC_WEIGHTS)
 _PANIC_MODERATION_ACTIONS = frozenset({"ban", "unban", "kick"})
-_PANIC_SEVERE_ACTIONS = frozenset(
-    {
-        "guild_update",
-        "bot_add",
-        "channel_delete",
-        "overwrite_create",
-        "overwrite_update",
-        "overwrite_delete",
-        "role_delete",
-        "member_prune",
-        "webhook_delete",
-        "integration_delete",
-        "app_command_permission_update",
-        "automod_rule_delete",
-    }
-)
+_PANIC_SEVERE_ACTIONS = frozenset({
+    "guild_update", "bot_add", "channel_delete", "overwrite_create", "overwrite_update",
+    "overwrite_delete", "role_delete", "member_prune", "webhook_delete",
+    "integration_delete", "app_command_permission_update", "automod_rule_delete",
+})
 _PANIC_WINDOW_SECONDS = 10.0
 _PANIC_SCORE_THRESHOLD = 7
 _PANIC_HIGH_RISK_MIN_EVENTS = 2
@@ -240,6 +81,7 @@ _PANIC_EVENTS: dict[int, Deque[tuple[float, int, Any, str, int]]] = defaultdict(
 _PANIC_UNTIL: dict[int, float] = {}
 _INSTALL_FLAG = "_dank_antinuke_guardian_installed"
 _OVERWRITE_ACTIONS = ("overwrite_create", "overwrite_update", "overwrite_delete")
+_AUTOMOD_ACTIONS = ("automod_rule_create", "automod_rule_update", "automod_rule_delete")
 
 
 class _EntryProxy:
@@ -300,8 +142,7 @@ def _target_label(action_name: str, entry: Any) -> str:
     name = str(getattr(target, "name", "") or getattr(target, "code", "") or target or "Unknown")
     if action_name == "guild_update":
         fields = _guild_update_security_fields(entry)
-        suffix = ", ".join(fields[:6]) if fields else "identity/security"
-        return f"Server settings • {suffix}"
+        return "Server settings • " + (", ".join(fields[:6]) if fields else "identity/security")
     if action_name.startswith("overwrite_") or action_name.startswith("channel_"):
         return f"#{name} (`{target_id}`)" if target_id else f"#{name}"
     if action_name.startswith("role_"):
@@ -395,45 +236,23 @@ async def _resolve_overwrite_principal(guild: discord.Guild, entry: Any) -> Opti
     return None
 
 
-async def _rollback_untrusted_overwrite(
-    guild: discord.Guild,
-    entry: Any,
-    actor: Any,
-    action_name: str,
-) -> str:
-    """Undo an undelegated overwrite mutation in contain mode.
-
-    Delegated operators retain normal administrative allowances. An undelegated
-    actor is already a first-strike violation, so leaving their permission mutation
-    behind after containing them would preserve attacker-created authority.
-    """
-
+async def _rollback_untrusted_overwrite(guild: discord.Guild, entry: Any, actor: Any, action_name: str) -> str:
     settings = await anti_nuke.get_antinuke_settings(int(guild.id))
     if not settings["antinuke_enabled"] or settings["antinuke_mode"] != "contain":
         return ""
-    if anti_nuke._actor_is_owner_or_bot(guild, actor):  # noqa: SLF001
+    if anti_nuke._actor_is_owner_or_bot(guild, actor) or anti_nuke._actor_is_configured_trusted(actor, settings):  # noqa: SLF001
         return ""
-    if anti_nuke._actor_is_configured_trusted(actor, settings):  # noqa: SLF001
-        return ""
-
     channel = await _resolve_overwrite_channel(guild, entry)
     principal = await _resolve_overwrite_principal(guild, entry)
     if channel is None or principal is None:
         return "overwrite rollback unavailable: target could not be resolved"
-
     try:
         if action_name == "overwrite_create":
-            await channel.set_permissions(
-                principal,
-                overwrite=None,
-                reason="Dank Shield AntiNuke rollback: unauthorized overwrite creation",
-            )
+            await channel.set_permissions(principal, overwrite=None, reason="Dank Shield AntiNuke rollback: unauthorized overwrite creation")
             return "removed unauthorized newly created overwrite"
-
         before = getattr(entry, "before", None)
         if before is None:
             return "overwrite rollback unavailable: audit before-state missing"
-
         current_overwrite = channel.overwrites_for(principal)
         current_allow, current_deny = current_overwrite.pair()
         restore_allow = getattr(before, "allow", current_allow)
@@ -442,16 +261,87 @@ async def _rollback_untrusted_overwrite(
             restore_allow = current_allow
         if not isinstance(restore_deny, discord.Permissions):
             restore_deny = current_deny
-
         restored = discord.PermissionOverwrite.from_pair(restore_allow, restore_deny)
-        await channel.set_permissions(
-            principal,
-            overwrite=restored,
-            reason="Dank Shield AntiNuke rollback: unauthorized overwrite mutation",
-        )
+        await channel.set_permissions(principal, overwrite=restored, reason="Dank Shield AntiNuke rollback: unauthorized overwrite mutation")
         return "restored overwrite to its audited previous state"
     except Exception as exc:
         return f"overwrite rollback failed safely: {type(exc).__name__}"
+
+
+async def _resolve_automod_rule(guild: discord.Guild, entry: Any) -> Optional[Any]:
+    target = getattr(entry, "target", None)
+    if callable(getattr(target, "delete", None)) or callable(getattr(target, "edit", None)):
+        return target
+    target_id = _target_id(entry)
+    if target_id is None:
+        return None
+    fetcher = getattr(guild, "fetch_automod_rule", None)
+    if callable(fetcher):
+        try:
+            return await fetcher(target_id)
+        except Exception:
+            return None
+    return None
+
+
+async def _rollback_untrusted_automod(guild: discord.Guild, entry: Any, actor: Any, action_name: str) -> str:
+    """Undo undelegated native Discord AutoMod mutations when audit state permits."""
+
+    settings = await anti_nuke.get_antinuke_settings(int(guild.id))
+    if not settings["antinuke_enabled"] or settings["antinuke_mode"] != "contain":
+        return ""
+    if anti_nuke._actor_is_owner_or_bot(guild, actor) or anti_nuke._actor_is_configured_trusted(actor, settings):  # noqa: SLF001
+        return ""
+
+    before = getattr(entry, "before", None)
+    try:
+        if action_name == "automod_rule_create":
+            rule = await _resolve_automod_rule(guild, entry)
+            if rule is None or not callable(getattr(rule, "delete", None)):
+                return "AutoMod rollback unavailable: created rule could not be resolved"
+            await rule.delete(reason="Dank Shield AntiNuke rollback: unauthorized AutoMod rule creation")
+            return "deleted unauthorized newly created AutoMod rule"
+
+        if action_name == "automod_rule_update":
+            rule = await _resolve_automod_rule(guild, entry)
+            if rule is None or not callable(getattr(rule, "edit", None)) or before is None:
+                return "AutoMod rollback unavailable: rule or before-state missing"
+            kwargs: dict[str, Any] = {}
+            for name in ("name", "event_type", "actions", "trigger", "enabled", "exempt_roles", "exempt_channels"):
+                if hasattr(before, name):
+                    value = getattr(before, name)
+                    if value is not None:
+                        kwargs[name] = value
+            if not kwargs:
+                return "AutoMod rollback unavailable: no restorable fields in audit entry"
+            kwargs["reason"] = "Dank Shield AntiNuke rollback: unauthorized AutoMod rule mutation"
+            await rule.edit(**kwargs)
+            return "restored unauthorized AutoMod mutation from audit before-state"
+
+        if action_name == "automod_rule_delete":
+            if before is None:
+                return "AutoMod rollback unavailable: deleted rule before-state missing"
+            required = {
+                "name": getattr(before, "name", None),
+                "event_type": getattr(before, "event_type", None),
+                "trigger": getattr(before, "trigger", None),
+                "actions": getattr(before, "actions", None),
+            }
+            if any(value is None for value in required.values()):
+                return "AutoMod rollback unavailable: deleted rule definition incomplete"
+            creator = getattr(guild, "create_automod_rule", None)
+            if not callable(creator):
+                return "AutoMod rollback unavailable: guild cannot recreate rules"
+            kwargs = dict(required)
+            kwargs["enabled"] = bool(getattr(before, "enabled", False))
+            kwargs["exempt_roles"] = list(getattr(before, "exempt_roles", []) or [])
+            kwargs["exempt_channels"] = list(getattr(before, "exempt_channels", []) or [])
+            kwargs["reason"] = "Dank Shield AntiNuke rollback: unauthorized AutoMod rule deletion"
+            await creator(**kwargs)
+            return "recreated unauthorizedly deleted AutoMod rule from audit before-state"
+    except Exception as exc:
+        return f"AutoMod rollback failed safely: {type(exc).__name__}"
+    return ""
 
 
 def _generic_role_update(entry: Any) -> bool:
@@ -621,6 +511,8 @@ async def _rest_reconcile(guild: discord.Guild, entry: Any, action_name: str, sp
     found_entry, actor = claimed
     if action_name in _OVERWRITE_ACTIONS:
         await _rollback_untrusted_overwrite(guild, found_entry, actor, action_name)
+    if action_name in _AUTOMOD_ACTIONS:
+        await _rollback_untrusted_automod(guild, found_entry, actor, action_name)
     await _process(guild, found_entry, actor, action_name, spec)
 
 
@@ -722,6 +614,8 @@ async def _on_audit_log_entry_create(entry: discord.AuditLogEntry) -> None:
         return
     if action_name in _OVERWRITE_ACTIONS:
         await _rollback_untrusted_overwrite(guild, claimed, actor, action_name)
+    if action_name in _AUTOMOD_ACTIONS:
+        await _rollback_untrusted_automod(guild, claimed, actor, action_name)
     await _process(guild, claimed, actor, action_name, spec)
 
 
@@ -733,7 +627,7 @@ def install_anti_nuke_guardian_runtime(bot: discord.Client) -> bool:
     setattr(bot, _INSTALL_FLAG, True)
     moderation = bool(getattr(getattr(bot, "intents", None), "moderation", False))
     if moderation:
-        print("🛡️ AntiNuke guardian active: broad audit coverage, overwrite rollback, high-impact guild filtering, and weighted coordinated panic enabled")
+        print("🛡️ AntiNuke guardian active: broad audit coverage, overwrite/AutoMod rollback, high-impact guild filtering, and weighted coordinated panic enabled")
     else:
         print("⚠️ AntiNuke guardian installed without moderation intent; native/REST coverage remains but broad gateway coverage may be unavailable")
     return True
