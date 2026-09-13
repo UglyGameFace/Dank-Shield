@@ -357,6 +357,26 @@ async def _send_ephemeral(interaction: discord.Interaction, content: str = "", *
     await safe_send_interaction(interaction, content=content, ephemeral=True, action_name="protection.ephemeral", **kwargs)
 
 
+async def _require_antinuke_owner(interaction: discord.Interaction) -> bool:
+    """Keep AntiNuke's disarm/trust/threshold controls at the guild-owner root."""
+
+    guild = interaction.guild
+    if guild is None:
+        await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        return False
+
+    user_id = int(getattr(interaction.user, "id", 0) or 0)
+    if user_id != int(getattr(guild, "owner_id", 0) or 0):
+        await _send_ephemeral(
+            interaction,
+            "❌ Only the **server owner** can change AntiNuke status, response mode, trusted exemptions, or detection thresholds. "
+            "This prevents a compromised delegated admin from disarming server protection before an attack.",
+        )
+        return False
+
+    return True
+
+
 async def _guard_protection_action(
     interaction: discord.Interaction,
     action_name: str,
@@ -448,6 +468,7 @@ def _protection_embed(guild: discord.Guild, cfg: Any, spam: dict[str, Any], spam
         value=(
             f"**Enabled:** {'✅ Yes' if antinuke['antinuke_enabled'] else '⚪ No — opt in when ready'}\n"
             f"**Mode:** `{antinuke['antinuke_mode']}`\n"
+            "**Control:** `server owner only`\n"
             f"**Permission health:** {'✅ Ready' if not antinuke_missing else '❌ Missing: ' + ', '.join(antinuke_missing)}\n"
             f"**Window:** `{antinuke['antinuke_window_seconds']}s` • "
             f"**Channel deletes:** `{antinuke['antinuke_channel_delete_threshold']}` • "
@@ -463,7 +484,7 @@ def _protection_embed(guild: discord.Guild, cfg: Any, spam: dict[str, Any], spam
     embed.add_field(
         name="What buttons do",
         value=(
-            "**AntiNuke** = destructive-action protection, containment mode, trusted exemptions, and thresholds.\n"
+            "**AntiNuke** = owner-only destructive-action protection, containment mode, trusted exemptions, and thresholds.\n"
             "**Edit Spam Guard** = message speed, duplicate messages, invite-flood threshold, timeout length.\n"
             "**Invite Blocker** = live ON/OFF for Discord invite links.\n"
             "**Block All Links** = stop every URL.\n"
@@ -813,7 +834,7 @@ async def _send_updated_protection_snapshot(
 
 
 async def _toggle_antinuke(interaction: discord.Interaction) -> None:
-    if not await _require_setup_permission(interaction):
+    if not await _require_antinuke_owner(interaction):
         return
 
     guild = interaction.guild
@@ -838,7 +859,7 @@ async def _toggle_antinuke(interaction: discord.Interaction) -> None:
                 + ", ".join(missing)
                 + "**.\n\n"
                 "AntiNuke needs **View Audit Log** to prove who performed destructive actions. "
-                "Contain mode also needs **Manage Roles** so Dank Shield can remove manageable dangerous roles. "
+                "Contain mode also needs **Manage Roles** and **Kick Members** for definitive containment. "
                 "Administrator is **not required**.",
             )
             return
@@ -859,7 +880,7 @@ async def _toggle_antinuke(interaction: discord.Interaction) -> None:
 
 
 async def _toggle_antinuke_mode(interaction: discord.Interaction) -> None:
-    if not await _require_setup_permission(interaction):
+    if not await _require_antinuke_owner(interaction):
         return
 
     guild = interaction.guild
@@ -883,7 +904,7 @@ async def _toggle_antinuke_mode(interaction: discord.Interaction) -> None:
                 "❌ AntiNuke mode was **not changed**. Missing: **"
                 + ", ".join(missing)
                 + "**.\n"
-                "Use **Alert** mode without Manage Roles, or grant only the missing permission. "
+                "Use **Alert** mode without containment permissions, or grant only the missing permissions. "
                 "Administrator is not required.",
             )
             return
@@ -926,7 +947,7 @@ class AntiNukeTrustedIdsModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         async def action() -> None:
-            if not await _require_setup_permission(interaction):
+            if not await _require_antinuke_owner(interaction):
                 return
 
             guild = interaction.guild
@@ -1013,7 +1034,7 @@ class AntiNukeThresholdsModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         async def action() -> None:
-            if not await _require_setup_permission(interaction):
+            if not await _require_antinuke_owner(interaction):
                 return
 
             guild = interaction.guild
@@ -1079,7 +1100,7 @@ class AntiNukeThresholdsModal(discord.ui.Modal):
 
 
 async def _open_antinuke_trusted_modal(interaction: discord.Interaction) -> None:
-    if not await _require_setup_permission(interaction):
+    if not await _require_antinuke_owner(interaction):
         return
 
     guild = interaction.guild
@@ -1092,7 +1113,7 @@ async def _open_antinuke_trusted_modal(interaction: discord.Interaction) -> None
 
 
 async def _open_antinuke_thresholds_modal(interaction: discord.Interaction) -> None:
-    if not await _require_setup_permission(interaction):
+    if not await _require_antinuke_owner(interaction):
         return
 
     guild = interaction.guild
