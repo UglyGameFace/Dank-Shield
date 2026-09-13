@@ -48,23 +48,18 @@ FORCE_VERIFY_LOG_CHANNEL_ID=
 DANK_TICKET_OVERFLOW_CATEGORY_IDS=
 ```
 
-## Supabase DB URL
+## Supabase schema ownership
 
-The bot can run with only Supabase REST values:
+The bot runtime uses the Supabase REST API:
 
 ```env
 SUPABASE_URL=...
 SUPABASE_SERVICE_ROLE_KEY=...
 ```
 
-`SUPABASE_DB_URL` / `DATABASE_URL` is only needed for automatic schema bootstrap. Many hosts cannot reach Supabase direct IPv6 Postgres, so leave it blank unless you are using the Supabase pooler or a reachable Postgres connection.
+Do not configure `SUPABASE_DB_URL`, `DATABASE_URL`, `POSTGRES_URL`, or `POSTGRES_PRISMA_URL` for bot-startup schema repair. Dank Shield startup is read-only with respect to database structure. Schema creation, repair, and upgrades are owned by committed files under `supabase/migrations/` and the Supabase migration deployment workflow/CLI.
 
-```env
-SUPABASE_DB_URL=
-DATABASE_URL=
-```
-
-Use the SQL files under `supabase/migrations/` to create or repair tables when direct DB bootstrap is not available.
+Before deploying a bot version that contains new migrations, verify the migration chain and apply it through the deployment pipeline. If runtime schema health reports a missing table or column, treat that as a deployment/configuration error and apply the referenced committed migration. Do not expect the bot process to modify production schema.
 
 ## Startup health lines to expect
 
@@ -96,13 +91,7 @@ Former roots such as `/ticket-intake`, `/ticket-category`, and `/ticket-panel` a
 
 Advanced repair/setup aliases such as direct `/dank setup-review`, `/dank db-check`, and `/dank setup-access` are also not part of the normal public profile. Their functionality belongs inside the guided mega-menu/diagnostics surfaces unless an explicit admin/development profile selects an advanced registrar.
 
-Optional schema health should show either:
-
-```text
-optional_schema_health optional tables readable
-```
-
-or exact migration guidance for missing optional tables.
+Schema health should show either successful read-only readiness or exact migration guidance for missing tables/columns. It must never report that a direct database URL will auto-repair production schema.
 
 ## Public setup flow
 
