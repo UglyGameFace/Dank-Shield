@@ -46,17 +46,20 @@ jobs:
       PGPASSWORD: postgres
       PGDATABASE: dank_shield
       MIGRATION: supabase/migrations/20260913154500_canonical_runtime_schema_authority.sql
+      ROLE_STATE_RECONCILE: supabase/migrations/20260913160000_reconcile_guild_member_role_state_constraint.sql
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Apply canonical migration twice on a fresh database
+      - name: Apply canonical migration chain twice on a fresh database
         shell: bash
         run: |
           set -euo pipefail
-          psql -v ON_ERROR_STOP=1 -f "$MIGRATION"
-          psql -v ON_ERROR_STOP=1 -f "$MIGRATION"
+          for pass in 1 2; do
+            psql -v ON_ERROR_STOP=1 -f "$MIGRATION"
+            psql -v ON_ERROR_STOP=1 -f "$ROLE_STATE_RECONCILE"
+          done
 
       - name: Verify fresh current contracts
         shell: bash
@@ -82,6 +85,19 @@ jobs:
                 raise exception 'missing canonical table: %', required_table;
               end if;
             end loop;
+
+            if not exists (
+              select 1
+              from pg_constraint c
+              join pg_class t on t.oid = c.conrelid
+              join pg_namespace n on n.oid = t.relnamespace
+              where n.nspname = 'public'
+                and t.relname = 'guild_members'
+                and c.conname = 'guild_members_role_state_check'
+                and c.convalidated
+            ) then
+              raise exception 'fresh guild_members role_state constraint is missing or unvalidated';
+            end if;
           end $$;
 
           insert into public.tickets (
@@ -115,11 +131,12 @@ jobs:
 
           insert into public.guild_members (
             guild_id, user_id, username, display_name, entry_method,
-            join_source, entry_truth_quality, entry_confidence, risk_score,
-            risk_level, risk_reasons, suspicion_flags
+            join_source, entry_truth_quality, entry_confidence, role_state,
+            risk_score, risk_level, risk_reasons, suspicion_flags
           ) values (
             'guild-1', 'user-1', 'user', 'User', 'invite',
-            'invite', 'confirmed', 95, 0, 'low', '[]'::jsonb, '[]'::jsonb
+            'invite', 'confirmed', 95, 'verified_ok',
+            0, 'low', '[]'::jsonb, '[]'::jsonb
           );
 
           insert into public.member_joins (
@@ -140,7 +157,7 @@ jobs:
           );
           SQL
 
-      - name: Replay over legacy partial schema and duplicate ticket history
+      - name: Replay over legacy partial schema, duplicates, and dirty role state
         shell: bash
         run: |
           set -euo pipefail
@@ -173,7 +190,17 @@ jobs:
           SQL
 
           psql -v ON_ERROR_STOP=1 -f "$MIGRATION"
+
+          # Simulate a legacy runtime-created row that predates the role-state
+          # constraint. Reconciliation must preserve it while constraining new writes.
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          insert into public.guild_members (guild_id, user_id, role_state)
+          values ('legacy-guild', 'dirty-role-user', 'Legacy State With Spaces');
+          SQL
+
+          psql -v ON_ERROR_STOP=1 -f "$ROLE_STATE_RECONCILE"
           psql -v ON_ERROR_STOP=1 -f "$MIGRATION"
+          psql -v ON_ERROR_STOP=1 -f "$ROLE_STATE_RECONCILE"
 
           psql -v ON_ERROR_STOP=1 <<'SQL'
           do $$
@@ -197,5 +224,30 @@ jobs:
             if to_regclass('public.uq_tickets_guild_ticket_number') is not null then
               raise exception 'duplicate historical ticket numbers must not receive a unique index';
             end if;
+
+            if not exists (
+              select 1
+              from pg_constraint c
+              join pg_class t on t.oid = c.conrelid
+              join pg_namespace n on n.oid = t.relnamespace
+              where n.nspname = 'public'
+                and t.relname = 'guild_members'
+                and c.conname = 'guild_members_role_state_check'
+                and not c.convalidated
+            ) then
+              raise exception 'legacy dirty role_state history should retain a NOT VALID constraint';
+            end if;
           end $$;
+
+          insert into public.guild_members (guild_id, user_id, role_state)
+          values ('legacy-guild', 'valid-new-role-user', 'cosmetic_only');
           SQL
+
+          if psql -v ON_ERROR_STOP=1 <<'SQL'
+          insert into public.guild_members (guild_id, user_id, role_state)
+          values ('legacy-guild', 'invalid-new-role-user', 'Still Invalid');
+          SQL
+          then
+            echo "new invalid role_state unexpectedly bypassed the reconciled check constraint" >&2
+            exit 1
+          fi
