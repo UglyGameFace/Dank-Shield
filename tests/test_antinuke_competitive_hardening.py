@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import discord
+from discord.audit_logs import AuditLogChanges
+
 from stoney_verify import anti_nuke
 from stoney_verify import anti_nuke_gateway_runtime as gateway
 from stoney_verify import anti_nuke_guardian_runtime as guardian
@@ -13,6 +16,7 @@ class FakeGuild:
         self.id = guild_id
         self.owner_id = 999999
         self.members: dict[int, object] = {}
+        self.roles: dict[int, object] = {}
 
     def get_member(self, user_id: int):
         return self.members.get(int(user_id))
@@ -21,6 +25,9 @@ class FakeGuild:
         if int(user_id) not in self.members:
             raise LookupError(user_id)
         return self.members[int(user_id)]
+
+    def get_role(self, role_id: int):
+        return self.roles.get(int(role_id))
 
 
 class FakeEntry:
@@ -131,6 +138,42 @@ def test_role_position_change_is_high_risk_for_panic() -> None:
         after=SimpleNamespace(name="Staff", position=7, permissions=SimpleNamespace()),
     )
     assert guardian._panic_weight("role_update", entry) == 4
+
+
+def test_discordpy_member_role_add_maps_to_after_roles() -> None:
+    guild = FakeGuild()
+    role = SimpleNamespace(id=701, name="Moderator")
+    guild.roles[role.id] = role
+    entry = SimpleNamespace(
+        action=discord.AuditLogAction.member_role_update,
+        guild=guild,
+    )
+
+    changes = AuditLogChanges(
+        entry,
+        [{"key": "$add", "new_value": [{"id": str(role.id), "name": role.name}]}],
+    )
+
+    assert getattr(changes.before, "roles", []) == []
+    assert [found.id for found in changes.after.roles] == [role.id]
+
+
+def test_discordpy_member_role_remove_maps_to_before_roles() -> None:
+    guild = FakeGuild()
+    role = SimpleNamespace(id=702, name="Trusted")
+    guild.roles[role.id] = role
+    entry = SimpleNamespace(
+        action=discord.AuditLogAction.member_role_update,
+        guild=guild,
+    )
+
+    changes = AuditLogChanges(
+        entry,
+        [{"key": "$remove", "new_value": [{"id": str(role.id), "name": role.name}]}],
+    )
+
+    assert [found.id for found in changes.before.roles] == [role.id]
+    assert getattr(changes.after, "roles", []) == []
 
 
 def test_sparse_gateway_actor_resolves_from_user_id_member_cache() -> None:
