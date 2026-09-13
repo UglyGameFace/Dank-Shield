@@ -642,6 +642,11 @@ def antinuke_permission_health(
         ):
             missing.append("Kick Members")
         if not bool(
+            getattr(permissions, "manage_channels", False)
+            or getattr(permissions, "administrator", False)
+        ):
+            missing.append("Manage Channels")
+        if not bool(
             getattr(permissions, "manage_webhooks", False)
             or getattr(permissions, "administrator", False)
         ):
