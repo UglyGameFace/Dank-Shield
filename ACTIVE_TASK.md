@@ -2,81 +2,137 @@
 
 ## DS-SEC-039 — Repair AntiNuke enforcement reliability
 
-**Status:** IMPLEMENTED / FINAL EXACT-HEAD VALIDATION PENDING / COMPETITIVE RED-TEAM BLOCKERS OPEN
+**Status:** IMPLEMENTED / FINAL EXACT-HEAD VALIDATION PENDING
 **Branch:** `fix/antinuke-enforcement-reliability`
 **Base:** `c0c99798caec2773894d6e014b6ba7e34275b3fa` (`main`, merge of PR #201)
+**Implementation candidate before this bookkeeping commit:** `ee3d99d979e84161e63a39b167ee7c3379a5089a`
 **Started:** 2026-09-12
 
-## User-visible failure
+## Objective
 
-Dank Shield AntiNuke was enabled but failed to stop a destructive server attack reliably. The original implementation could allow several destructive actions before reacting, counted action types separately, performed remote config work on the attack path, depended on narrow audit correlation, and could report containment readiness without proving that Discord would let Dank Shield neutralize the attacker.
+Make Dank Shield AntiNuke difficult to evade through mixed destructive actions, low-and-slow behavior, compromised delegated operators, audit-log latency/races, Discord hierarchy, channel overwrites, sparse gateway attribution, or coordinated multi-actor attacks. Prevention and containment are the scope of this task. Structural backup/restore is explicitly out of scope for the product constraint on this task and must not be implied by the AntiNuke claim.
 
-## Authoritative root causes
+## Original production failure
 
-- Destructive defaults reacted too late and mixed attacks could stay below per-action thresholds.
-- Audit lookup was too narrow and could be delayed by the generic audit-log safety spacing.
-- Concurrent targetless audit claims could race and reuse the same audit entry.
-- Containment readiness checked permissions more than effective hierarchy/managed-role authority.
-- Channel/category overwrites and harmless-looking high roles could preserve destructive authority even after visible dangerous roles were stripped.
-- Failed containment started cooldown too early in the old path.
-- Trusted users/roles behaved too much like blanket exemptions instead of delegated operators with an emergency ceiling.
-- A compromised delegated operator could evade short-window thresholds with low-and-slow bans, kicks, structural mutations, role stripping, or timeouts.
-- AntiNuke mutations and configuration restore paths could otherwise give delegated admins a route to weaken owner-defined security state.
-- Event coverage did not fully represent webhook updates/deletes, pruning, bot additions, dangerous role creation, channel creation/overwrite mutation, role removal, timeout abuse, or destructive permission reductions.
+AntiNuke could allow several destructive actions before reacting, counted attack types too independently, forced remote config work on the hot path, relied on narrow audit correlation, did not prove containment authority, treated trusted operators too much like exemptions, and lacked broad coverage for several current Discord administrative attack surfaces.
 
-## Implementation
+## Canonical ownership
 
-- Kept one canonical native `stoney_verify/anti_nuke.py` runtime; no parallel AntiNuke policy engine was introduced.
-- Lowered safe defaults to channels/roles `2`, bans/kicks `3`, webhooks `2` in the existing `15s` window.
-- Unknown/untrusted destructive actors now use first-strike containment; configured trusted users/roles are delegated operators, not unlimited exemptions.
-- Added actor-wide mixed destructive-action counting plus a 10-minute delegated long-horizon emergency ceiling that cannot be raised above 8 destructive actions even if short-window thresholds are configured higher.
-- Extended the long-horizon set across channel/role create-update-delete activity, bans, kicks, pruning, role stripping, member timeouts, and webhook mutations.
-- Removed forced DB refreshes from the destructive-event hot path; saved settings flow through the existing guild-config cache/upsert authority.
-- Widened REST audit correlation to 50 entries / 30 seconds with retries, exact target matching where Discord exposes a target, audit-entry dedupe, and atomic claim locks.
-- Security-priority AntiNuke audit reads bypass only the guard's artificial six-second generic spacing while still sharing the guild audit lock and respecting real Discord 429 backoff.
-- Added per-actor containment locks.
-- Containment is definitive: kick the proven malicious actor first; if Discord blocks removal, strip every manageable non-default role as fallback and keep the incident retryable.
-- Contain-mode readiness now requires View Audit Log, Manage Roles, and Kick Members and reports dangerous `@everyone`, managed roles, effective member hierarchy, and dangerous channel/category overwrite blockers.
+- `stoney_verify/anti_nuke.py` is the single policy, counter, trust, containment, readiness, and incident authority.
+- `stoney_verify/anti_nuke_gateway_runtime.py` is the production audit-gateway compatibility/fast-path entrypoint.
+- `stoney_verify/anti_nuke_guardian_runtime.py` is transport/classification support for the broader audit surface and guild-wide panic accounting; it does not own a second punishment policy.
+- Native Discord-event + REST correlation remains fallback where appropriate.
+- Gateway and REST paths share canonical audit-entry dedupe/claim state so one Discord audit entry cannot be enforced twice.
+
+## Implemented hardening
+
+- Safe destructive defaults: channels/roles `2`, bans/kicks `3`, webhooks `2`, existing `15s` short window.
+- Unknown/untrusted destructive actors use first-strike containment on guarded AntiNuke actions.
+- Configured trusted users/roles are delegated operators, not blanket immunity. They retain saved short-window limits plus a 10-minute hard emergency ceiling capped at 8 destructive actions.
+- Mixed destructive actions share an actor-wide burst budget.
+- Long-horizon counting covers channel/role create-update-delete activity, bans, kicks, pruning, role stripping, member timeouts, and webhook mutation.
+- Config reads use the existing cache on the attack path instead of forced remote refreshes.
+- REST audit correlation searches 50 recent entries / 30 seconds with retries, exact target matching where available, freshness checks, dedupe, and atomic claim locks.
+- Security-priority audit reads bypass only Dank Shield's artificial generic audit spacing; they still share the guild audit lock and honor Discord 429 backoff.
+- Sparse gateway audit entries resolve the executor from `user_id`/member state before consumption; unresolved evidence is left available for REST reconciliation instead of being consumed-and-dropped.
+- Per-actor containment locks prevent concurrent duplicate containment.
+- Definitive containment kicks the proven malicious actor first. If Discord blocks removal, every manageable non-default role is stripped as fallback, and partial/failed containment remains retryable.
+- Contain-mode readiness requires View Audit Log, Manage Roles, and Kick Members and reports dangerous `@everyone`, managed roles, effective member hierarchy, and dangerous channel/category overwrite blockers.
 - `moderate_members` is treated as a dangerous containment-risk permission.
-- Preserved immediate rollback/containment for dangerous role permission escalation, dangerous/trusted-exemption role grants, dangerous role creation, and untrusted bot addition.
-- Added detection for member role stripping, member timeout application/extension, channel creation, channel overwrite mutation, non-dangerous role creation flooding, and destructive role-permission reduction/mutation through the same canonical threshold engine.
-- Webhook create/update/delete share the canonical destructive engine; member prune falls back from kick attribution and triggers immediately.
-- AntiNuke configuration mutations are server-owner-only.
-- Final configuration restore confirmation is server-owner-only because restores can change AntiNuke/security state.
-- Added `stoney_verify/anti_nuke_gateway_runtime.py` as a transport-only fast path using Discord audit-log gateway entries before REST propagation where possible. It shares the canonical audit-entry dedupe registry and feeds the same policy/counter/containment engine rather than owning a second policy tree.
-- Gateway fast path covers channel creation/deletion, role deletion, bans, kicks, prune, webhook create/update/delete, dangerous role creation, ordinary role-creation counting, and untrusted bot addition. REST/event correlation remains fallback for existing native listeners.
-- Regression coverage proves gateway and REST cannot enforce the same audit entry twice and harmless-looking role creation is not consumed-and-dropped.
+- AntiNuke configuration mutation is server-owner-only.
+- Configuration-history restore confirmation is server-owner-only because a restore can alter AntiNuke/security state.
 
-## Competitive red-team findings — merge blockers
+## Gateway-fast authority protection
 
-A comparison against current Wick documentation, current Vetox published protection coverage, Discord's authoritative audit-log event surface, and capability classes advertised by a real public nuker implementation found that the branch is not yet defensibly superior overall.
+- Dangerous role permission escalation uses gateway audit evidence when available, attempts immediate permission rollback, then contains the executor.
+- Dangerous or AntiNuke-trusted-exemption role grants use gateway evidence, attempt immediate target-role rollback, then contain the executor.
+- Member role-removal abuse and timeout extension use claimed gateway evidence directly when available.
+- Dangerous role creation keeps immediate rollback/containment.
+- Untrusted bot additions remove the new bot and contain the inviter on the gateway fast path.
+- discord.py `$add` / `$remove` member-role audit normalization is covered by regression tests.
 
-1. **Channel overwrite attribution mismatch.** `on_guild_channel_update` detects overwrite changes but currently asks the audit log for `channel_update`. Discord/discord.py records explicit permission overwrite actions as `overwrite_create`, `overwrite_update`, and `overwrite_delete`. The current path can therefore miss or misattribute the exact permission mutation it claims to protect. Gateway fast-path coverage also does not yet claim those overwrite actions directly.
-2. **No guild-wide panic/circuit breaker.** Current burst and long-horizon accounting is per actor. Several compromised delegated operators can distribute destructive actions across identities. Wick publicly documents a Panic Mode that locks down the server once a nuke is detected. Dank Shield needs an independent guild-wide destructive budget / emergency state so coordinated multi-actor activity cannot stay beneath every per-actor ceiling.
-3. **Administrative coverage breadth trails documented competitors.** Vetox publicly documents protection for server rename/icon changes, invite deletion, emoji/sticker deletion, and scheduled-event cancellation in addition to the core actions. Wick documents vanity protection. Discord exposes authoritative audit actions for `guild_update`, invites, emojis, stickers, scheduled events, AutoMod rule mutation/deletion, permission overwrites, threads, integrations, and more. Dank Shield must classify the destructive subset intentionally instead of leaving them unmonitored.
-4. **Real nuker parity gap: expressions.** A public nuker implementation advertises mass channel/role deletion, mass bans, webhook deletion, mass channel/role/category creation, and mass emoji deletion. Dank Shield now covers the other major classes, but emoji/expression deletion remains an uncovered first move.
-5. **Recovery still loses to Wick.** Wick publicly documents Panic Mode plus structural imaging/backup restore. Dank Shield currently has strong prevention and configuration history, but not equivalent server-structure snapshot/restore. Prevention can be superior only if recovery is treated as a separate explicit product capability rather than implied.
-6. **Role-position/hierarchy mutation requires explicit review.** The current role-update listener exits when dangerous permission bits did not change, so pure role-position mutation is not counted. Discord role hierarchy is itself the authority boundary for whether a bot can kick/strip a member. This needs an explicit threat-model decision and tests rather than accidental omission.
-7. **Native security-control deletion needs coverage.** Discord exposes AutoMod rule create/update/delete audit actions. A compromised administrator can weaken Discord's own protective rules before attacking. Dank Shield should treat destructive AutoMod rule mutation/deletion as security-state tampering.
+## Broad prevention surface
 
-## Security model / hard platform limits
+The guardian intentionally classifies destructive/security-sensitive Discord audit actions including:
 
-Dank Shield can aggressively contain any attributable non-owner actor that Discord allows the bot to act on. It cannot contain the guild owner, override Discord hierarchy/managed-role restrictions, manufacture missing audit-log attribution, defend the server if Dank Shield's own bot token is compromised, or act while Discord itself is unavailable/rate-limiting the required API. Readiness and incident output must surface those limits rather than pretending protection is healthy.
+- server settings / identity mutation (`guild_update`);
+- channel create/update/delete;
+- explicit channel overwrite create/update/delete;
+- role create/update/delete, including hierarchy/position mutation;
+- bans, unbans, kicks, and pruning;
+- member role stripping and timeout abuse through the authority fast path;
+- bot additions;
+- webhook create/update/delete;
+- invite deletion;
+- emoji and sticker deletion;
+- integration deletion;
+- scheduled-event cancellation;
+- thread deletion;
+- application-command permission mutation;
+- soundboard deletion;
+- Discord AutoMod rule create/update/delete.
 
-A previously loaded guild keeps stale cached config through a database outage. A totally cold process with no cache and no reachable authoritative database cannot safely invent the prior AntiNuke policy; durable cold-start security-state recovery is intentionally left for the persistence/DR remediation task.
+Benign member-facing creation/update activity such as ordinary invite creation, emoji creation, sticker creation, or scheduled-event creation is intentionally not made first-strike AntiNuke evidence merely to inflate a feature count.
 
-## Validation already established on predecessor heads
+## Channel-overwrite ownership fix
 
-Earlier exact/predecessor runs established compile, managed-category SQL smoke, claim-first ticket security, command-size diagnostics, Dank Design regressions, ticket owner emergency override, and profile runtime diagnostics. Those runs do **not** count as final validation after later AntiNuke hardening changed the branch head.
+Discord records permission overwrite changes as explicit overwrite audit actions, not generic channel updates. Production installation now retires the old native overwrite listener that queried the wrong audit bucket and installs one target-correct owner using `overwrite_create`, `overwrite_update`, and `overwrite_delete`, with channel-ID matching and security-priority REST fallback.
 
-## Definition of done / final validation required
+## Coordinated multi-actor panic
 
-- Competitive red-team blockers above are resolved or explicitly separated into a later recovery product task where they are not prevention bypasses.
-- Focused AntiNuke behavior, adversarial bypass, definitive containment, race/event-coverage, owner-control, audit-priority, readiness, extended-evasion, and gateway-runtime tests pass on one final exact head.
-- Python compile/static checks and the repository's standalone audits pass on that same exact head.
-- Full repository CI passes on that same exact head.
-- Diff/scope review confirms every changed file is either native AntiNuke runtime, required owner/security bypass closure, API-safety support for AntiNuke attribution, tests, or task bookkeeping.
-- Main/base drift is rechecked before readiness/merge.
-- No duplicate AntiNuke policy engine, temporary bypass, stale compatibility path, or conflicting enforcement owner remains.
-- PR description is updated to the final exact head and actual changed-file scope.
-- Merge only after exact-head green; then verify post-merge `main` CI and deployment/production acceptance before closing DS-SEC-039.
+- Guild-wide panic uses a 10-second weighted destructive-action window across executors.
+- Structural and authority-changing events carry higher weights than routine moderation.
+- Ban/kick/unban activity uses a much higher distributed flood threshold so normal multi-moderator raid response does not itself trigger panic.
+- Role-position or dangerous-permission mutation is weighted more heavily than cosmetic role edits.
+- A severe fast path closes the score-six evasion case: two different actors performing two high-confidence structural/security destructions in the guild window trigger panic immediately even if the broader weighted score has not yet reached its threshold.
+- Severe actions include channel deletion, overwrite creation/update/deletion, role deletion, bot addition, member prune, webhook deletion, integration deletion, application-command permission mutation, and AutoMod rule deletion.
+- Ordinary channel/role creation and routine bans/kicks are deliberately excluded from the severe two-actor fast path.
+- Once panic is active, delegated allowances are suspended for guarded activity and observed peer executors are contained through the canonical containment primitive.
+- This design intentionally does not imitate Wick's reversible global role stripping because this product does not currently provide the backup/restore state required to make that destructive lockdown safely reversible.
+
+## Competitive red-team result
+
+The prevention/containment comparison was refreshed against current Wick documentation, current Vetox published protection coverage, Discord's authoritative audit-log surface, and publicly advertised nuke capability classes.
+
+### Resolved gaps
+
+1. Channel overwrite attribution mismatch — **resolved** with explicit overwrite audit actions and one production owner.
+2. Distributed multi-admin evasion — **resolved** with weighted guild panic plus the two-actor severe fast path.
+3. Server identity, expression, invite, scheduled-event, integration, thread, command-permission, and AutoMod destruction gaps — **resolved** in the guarded audit surface.
+4. Role-position/hierarchy mutation omission — **resolved** and weighted as high risk when position changes.
+5. Sparse gateway executor loss / consume-and-drop — **resolved** with actor resolution before evidence consumption and REST reconciliation fallback.
+6. Gateway latency on dangerous role escalation, sensitive role grants/removals, timeout abuse, bot additions, and dangerous role creation — **resolved** with specialized fast paths.
+7. Over-broad first-strike coverage for benign creation activity — **resolved** by excluding low-risk member-facing creation/update actions from AntiNuke first-strike classification.
+
+### Defensible prevention advantages
+
+- Vetox publicly lists 21 monitored administrative action types; Dank Shield now covers that published destructive set plus overwrite mutation, AutoMod security-rule tampering, command-permission mutation, integration/thread/soundboard destruction, unban abuse, timeout abuse, role stripping, hierarchy mutation, and guild-wide coordinated panic.
+- Wick publicly documents Trusted Admins and Extra Owners as completely immune. Dank Shield does **not** give configured trusted operators unlimited immunity; delegated operators remain bounded by short-window thresholds, a 10-minute hard ceiling, and guild-wide panic.
+- Dank Shield uses gateway audit delivery plus target-correct REST fallback and shared dedupe for high-confidence evidence, while keeping one canonical containment policy.
+- Dangerous authority escalation is rolled back and the executor contained immediately instead of waiting for a broad nuke threshold.
+
+### Explicit non-claim
+
+Dank Shield does **not** currently provide Wick-equivalent structural snapshot/restore or reversible global role lockdown. Backup/recovery is excluded from this task by product constraint. The superiority claim for DS-SEC-039 is therefore limited to **prevention/containment behavior and monitored destructive/security surfaces**, not post-damage structural restoration.
+
+## Hard platform limits
+
+Dank Shield cannot contain the physical guild owner, override Discord hierarchy or managed-role restrictions, manufacture audit attribution Discord did not provide, defend against compromise of Dank Shield's own bot token, or act while Discord itself is unavailable/rate-limiting required APIs. These must remain visible limits, not be represented as healthy containment.
+
+A previously loaded guild preserves stale cached config through a database outage. A totally cold process with no cache and no reachable authoritative database cannot safely invent the prior AntiNuke policy; durable cold-start security-state recovery remains part of the later persistence/DR remediation work.
+
+## Regression coverage
+
+Focused coverage now includes AntiNuke behavior, adversarial bypasses, definitive containment, race/event coverage, owner control, audit priority, readiness edge cases, extended evasion, gateway runtime, guardian panic, competitive hardening, gateway authority escalation, severe multi-actor coordination, and configuration-history security behavior.
+
+## Definition of done / final validation
+
+- No further prevention bypass is identified in the current competitor/nuker comparison outside the explicit backup/recovery non-scope.
+- Python compile and committed-diff checks pass on one final exact head.
+- Full repository unit tests and standalone audits pass on that same exact head.
+- All companion PR workflows pass on that same exact head.
+- Changed-file scope remains entirely AntiNuke runtime, required owner/security bypass closure, API-safety support, focused regressions, or task bookkeeping.
+- `main` base drift is rechecked before readiness/merge.
+- No duplicate AntiNuke policy engine, duplicate overwrite attribution owner, temporary bypass, or unresolved review thread remains.
+- PR description is updated to the final exact head and actual scope without changing code.
+- Mark ready and merge only after the final exact-head gate is green; then verify merged `main` CI and production/deployment acceptance before closing DS-SEC-039.
