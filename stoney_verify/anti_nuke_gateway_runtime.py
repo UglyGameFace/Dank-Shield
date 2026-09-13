@@ -522,12 +522,29 @@ async def _on_audit_log_entry_create(entry: discord.AuditLogEntry) -> None:
 
 
 def install_anti_nuke_gateway_runtime(bot: discord.Client) -> bool:
-    """Install exactly one guardian-backed audit listener set on production."""
+    """Install exactly one guardian-backed audit listener set on production.
+
+    The native pre-guardian overwrite listener queried the generic ``channel_update``
+    audit bucket for permission overwrite mutations. Retire it at install time so
+    overwrite events have one target-correct attribution owner.
+    """
 
     if bool(getattr(bot, _INSTALL_FLAG, False)) or bool(
         getattr(bot, guardian._INSTALL_FLAG, False)  # noqa: SLF001
     ):
         return False
+
+    remover = getattr(bot, "remove_listener", None)
+    legacy_overwrite_listener = getattr(
+        anti_nuke,
+        "antinuke_on_guild_channel_update",
+        None,
+    )
+    if callable(remover) and callable(legacy_overwrite_listener):
+        try:
+            remover(legacy_overwrite_listener, "on_guild_channel_update")
+        except Exception:
+            pass
 
     bot.add_listener(_on_audit_log_entry_create, "on_audit_log_entry_create")
     bot.add_listener(
@@ -541,7 +558,7 @@ def install_anti_nuke_gateway_runtime(bot: discord.Client) -> bool:
     if moderation:
         print(
             "🛡️ AntiNuke guardian gateway active with broad audit coverage, "
-            "authority rollback, and target-correct overwrite fallback"
+            "authority rollback, weighted panic, and target-correct overwrite ownership"
         )
     else:
         print(
