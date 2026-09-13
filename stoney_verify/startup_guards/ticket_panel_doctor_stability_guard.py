@@ -263,8 +263,8 @@ async def _stable_health_lines(panel_mod: Any, guild: discord.Guild) -> Tuple[Li
         ok.append("Supabase ticket table is readable.")
     else:
         blockers.append(f"Supabase ticket table check failed: {tic_msg}")
-    if (not cat_ok or not tic_ok) and not panel_mod._db_url_present():
-        warnings.append("Auto-repair needs SUPABASE_DB_URL or DATABASE_URL in Discloud.")
+    if not cat_ok or not tic_ok:
+        warnings.append("Database schema is not ready. Apply the committed Supabase migrations referenced by schema health; runtime startup will not alter production schema.")
 
     return blockers, warnings, ok
 
