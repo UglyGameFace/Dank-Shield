@@ -170,6 +170,24 @@ def _install_anti_nuke_lockdown_runtime() -> None:
         )
 
 
+def _install_anti_nuke_self_provenance_runtime() -> None:
+    """Distinguish local Dank Shield mutations from stolen-token activity."""
+
+    try:
+        from stoney_verify.globals import bot
+        from stoney_verify.anti_nuke_self_provenance_runtime import (
+            install_anti_nuke_self_provenance_runtime,
+        )
+
+        if not install_anti_nuke_self_provenance_runtime(bot):
+            print("🚨 AntiNuke self-provenance runtime could not install completely")
+    except Exception as exc:
+        print(
+            "🚨 AntiNuke self-provenance runtime install failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
 def main() -> None:
     _sleep_before_import_if_discord_login_backoff_active()
     _install_invite_reconciliation_runtime()
@@ -178,6 +196,7 @@ def main() -> None:
     _install_anti_nuke_incident_runtime()
     _install_hostile_actor_runtime()
     _install_anti_nuke_lockdown_runtime()
+    _install_anti_nuke_self_provenance_runtime()
     from stoney_verify.app import run as _run_dank_shield
 
     _run_dank_shield()
