@@ -37,6 +37,7 @@ DANGEROUS_PERMISSION_NAMES: tuple[str, ...] = (
     "ban_members",
     "kick_members",
     "manage_webhooks",
+    "moderate_members",
 )
 
 _DESTRUCTIVE_THRESHOLD_KEYS: tuple[str, ...] = (
@@ -60,17 +61,27 @@ _AUDIT_SEARCH_LIMIT = 50
 _AUDIT_LOOKUP_RETRIES = 4
 
 _AGGREGATE_ACTION_KEY = "__destructive__"
-_SLOW_BURN_ACTION_KEY = "__structural_slow_burn__"
+_SLOW_BURN_ACTION_KEY = "__delegated_long_horizon__"
 _SLOW_BURN_ACTIONS = frozenset(
     {
+        "channel_create",
+        "channel_update",
         "channel_delete",
+        "role_create",
+        "role_update",
         "role_delete",
+        "member_role_remove",
+        "member_timeout",
+        "ban",
+        "kick",
+        "member_prune",
         "webhook_create",
         "webhook_update",
         "webhook_delete",
     }
 )
 _SLOW_BURN_WINDOW_SECONDS = 600
+_DELEGATED_SLOW_BURN_CEILING = 8
 _CONTAINMENT_COOLDOWN_KEY = "__containment__"
 
 
@@ -296,6 +307,22 @@ def dangerous_permissions_added(before: Any, after: Any) -> list[str]:
     return added
 
 
+def dangerous_permissions_changed(before: Any, after: Any) -> list[str]:
+    changed: list[str] = []
+    before_permissions = getattr(before, "permissions", before)
+    after_permissions = getattr(after, "permissions", after)
+    for name in DANGEROUS_PERMISSION_NAMES:
+        try:
+            old = bool(getattr(before_permissions, name, False))
+            new = bool(getattr(after_permissions, name, False))
+        except Exception:
+            old = False
+            new = False
+        if old != new:
+            changed.append(name)
+    return changed
+
+
 def role_has_dangerous_permissions(role: Any) -> bool:
     permissions = getattr(role, "permissions", None)
     if permissions is None:
@@ -422,6 +449,31 @@ def _member_is_manageable_by_bot(
     return _role_is_below(member_top, bot_top)
 
 
+def _member_timeout_until(member: Any) -> Optional[datetime]:
+    for attr_name in ("timed_out_until", "communication_disabled_until"):
+        try:
+            value = getattr(member, attr_name, None)
+        except Exception:
+            value = None
+        if not isinstance(value, datetime):
+            continue
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    return None
+
+
+def _timeout_was_extended(before: Any, after: Any) -> bool:
+    now = datetime.now(timezone.utc)
+    before_until = _member_timeout_until(before)
+    after_until = _member_timeout_until(after)
+    if after_until is None or after_until <= now:
+        return False
+    if before_until is None or before_until <= now:
+        return True
+    return after_until > before_until
+
+
 def _dangerous_hierarchy_blockers(
     guild: discord.Guild,
     member: Any,
@@ -509,7 +561,6 @@ def _dangerous_overwrite_blockers(
             if not _overwrite_grants_dangerous_permissions(overwrite):
                 continue
 
-            # Member-specific overwrite.
             if hasattr(target, "roles") and hasattr(target, "top_role"):
                 if _actor_is_owner_or_bot(guild, target):
                     continue
@@ -521,7 +572,6 @@ def _dangerous_overwrite_blockers(
                     )
                 continue
 
-            # Role overwrite.
             role = target
             role_name = str(getattr(role, "name", "role") or "role")
             if _role_is_default(role):
@@ -643,7 +693,10 @@ def _aggregate_threshold(settings: Mapping[str, Any]) -> int:
 
 
 def _slow_burn_threshold(settings: Mapping[str, Any]) -> int:
-    return max(4, _aggregate_threshold(settings) * 2)
+    return min(
+        _DELEGATED_SLOW_BURN_CEILING,
+        max(4, _aggregate_threshold(settings) * 2),
+    )
 
 
 def _trigger_ready(
@@ -1066,8 +1119,6 @@ async def _process_claimed_destructive_event(
     elif delegated_trust:
         threshold = int(settings[threshold_key])
     else:
-        # Unknown/untrusted actors get no free destructive action. Configured
-        # trusted operators use the owner's saved burst limits instead.
         threshold = 1
 
     count = _record_action(
@@ -1172,7 +1223,7 @@ async def _process_claimed_destructive_event(
         )
     if slow_triggered:
         trigger_source.append(
-            "structural slow-burn "
+            "delegated long-horizon "
             f"{_SLOW_BURN_WINDOW_SECONDS}s {slow_count}/{slow_threshold}"
         )
 
@@ -1430,6 +1481,83 @@ async def _handle_member_dangerous_role_grant(
     )
 
 
+async def _handle_member_role_removal(
+    before: discord.Member,
+    after: discord.Member,
+) -> None:
+    before_roles = {
+        int(role.id): role
+        for role in list(getattr(before, "roles", []) or [])
+        if not _role_is_default(role)
+    }
+    after_ids = {
+        int(role.id)
+        for role in list(getattr(after, "roles", []) or [])
+    }
+    removed_roles = [
+        role for role_id, role in before_roles.items() if role_id not in after_ids
+    ]
+    if not removed_roles:
+        return
+
+    guild = after.guild
+    settings = await get_antinuke_settings(int(guild.id))
+    if not settings["antinuke_enabled"]:
+        return
+
+    entry = await _claim_recent_audit_entry(
+        guild,
+        "member_role_update",
+        target_id=int(after.id),
+    )
+    if entry is None:
+        return
+
+    await _process_claimed_destructive_event(
+        guild,
+        entry=entry,
+        action_key="member_role_remove",
+        action_label="Member role removal",
+        target_label=(
+            f"{after.mention} (`{after.id}`) • removed: "
+            + ", ".join(str(getattr(role, "name", role.id)) for role in removed_roles[:10])
+        ),
+        threshold_key="antinuke_role_delete_threshold",
+    )
+
+
+async def _handle_member_timeout(
+    before: discord.Member,
+    after: discord.Member,
+) -> None:
+    if not _timeout_was_extended(before, after):
+        return
+
+    guild = after.guild
+    settings = await get_antinuke_settings(int(guild.id))
+    if not settings["antinuke_enabled"]:
+        return
+
+    entry = await _claim_recent_audit_entry(
+        guild,
+        "member_update",
+        target_id=int(after.id),
+    )
+    if entry is None:
+        return
+
+    until = _member_timeout_until(after)
+    until_label = until.isoformat() if until is not None else "unknown"
+    await _process_claimed_destructive_event(
+        guild,
+        entry=entry,
+        action_key="member_timeout",
+        action_label="Member timeout applied or extended",
+        target_label=f"{after.mention} (`{after.id}`) • until {until_label}",
+        threshold_key="antinuke_kick_threshold",
+    )
+
+
 async def _handle_dangerous_role_create(role: discord.Role) -> None:
     if not role_has_dangerous_permissions(role):
         return
@@ -1614,6 +1742,43 @@ async def _handle_webhook_change(
     )
 
 
+@bot.listen("on_guild_channel_create")
+async def antinuke_on_guild_channel_create(
+    channel: discord.abc.GuildChannel,
+) -> None:
+    await _handle_threshold_event(
+        channel.guild,
+        audit_action="channel_create",
+        action_key="channel_create",
+        action_label="Channel creation burst",
+        target_id=int(channel.id),
+        target_label=(
+            f"#{getattr(channel, 'name', 'created-channel')} (`{channel.id}`)"
+        ),
+        threshold_key="antinuke_channel_delete_threshold",
+    )
+
+
+@bot.listen("on_guild_channel_update")
+async def antinuke_on_guild_channel_update(
+    before: discord.abc.GuildChannel,
+    after: discord.abc.GuildChannel,
+) -> None:
+    if getattr(before, "overwrites", None) == getattr(after, "overwrites", None):
+        return
+    await _handle_threshold_event(
+        after.guild,
+        audit_action="channel_update",
+        action_key="channel_update",
+        action_label="Channel permission overwrite mutation",
+        target_id=int(after.id),
+        target_label=(
+            f"#{getattr(after, 'name', 'updated-channel')} (`{after.id}`)"
+        ),
+        threshold_key="antinuke_channel_delete_threshold",
+    )
+
+
 @bot.listen("on_guild_channel_delete")
 async def antinuke_on_guild_channel_delete(
     channel: discord.abc.GuildChannel,
@@ -1697,7 +1862,18 @@ async def antinuke_on_webhooks_update(
 
 @bot.listen("on_guild_role_create")
 async def antinuke_on_guild_role_create(role: discord.Role) -> None:
-    await _handle_dangerous_role_create(role)
+    if role_has_dangerous_permissions(role):
+        await _handle_dangerous_role_create(role)
+        return
+    await _handle_threshold_event(
+        role.guild,
+        audit_action="role_create",
+        action_key="role_create",
+        action_label="Role creation burst",
+        target_id=int(role.id),
+        target_label=f"@{role.name} (`{role.id}`)",
+        threshold_key="antinuke_role_delete_threshold",
+    )
 
 
 @bot.listen("on_guild_role_update")
@@ -1705,7 +1881,22 @@ async def antinuke_on_guild_role_update(
     before: discord.Role,
     after: discord.Role,
 ) -> None:
-    await _handle_role_permission_escalation(before, after)
+    added = dangerous_permissions_added(before, after)
+    if added:
+        await _handle_role_permission_escalation(before, after)
+        return
+    changed = dangerous_permissions_changed(before, after)
+    if not changed:
+        return
+    await _handle_threshold_event(
+        after.guild,
+        audit_action="role_update",
+        action_key="role_update",
+        action_label="Dangerous role permission reduction or mutation",
+        target_id=int(after.id),
+        target_label=f"@{after.name} (`{after.id}`) • changed: {', '.join(changed)}",
+        threshold_key="antinuke_role_delete_threshold",
+    )
 
 
 @bot.listen("on_member_update")
@@ -1714,6 +1905,8 @@ async def antinuke_on_member_update(
     after: discord.Member,
 ) -> None:
     await _handle_member_dangerous_role_grant(before, after)
+    await _handle_member_role_removal(before, after)
+    await _handle_member_timeout(before, after)
 
 
 @bot.listen("on_member_join")
@@ -1726,6 +1919,7 @@ __all__ = [
     "DANGEROUS_PERMISSION_NAMES",
     "antinuke_permission_health",
     "dangerous_permissions_added",
+    "dangerous_permissions_changed",
     "get_antinuke_settings",
     "is_trusted_actor",
     "normalize_antinuke_settings",
