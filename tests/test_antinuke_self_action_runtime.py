@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from stoney_verify import anti_nuke
 from stoney_verify import anti_nuke_self_action_runtime as runtime
+from stoney_verify import anti_nuke_zero_damage_runtime as hardening
 
 
 class FakeHTTP:
@@ -210,26 +211,43 @@ def test_other_actor_and_disabled_antinuke_do_not_trigger_self_ejection(monkeypa
 
 def test_route_classifier_covers_webhook_message_and_authority_mutations() -> None:
     bot = FakeBot()
+    original_request_spec = runtime._request_spec  # noqa: SLF001
+    original_actions = runtime._PROTECTED_ACTIONS  # noqa: SLF001
+    original_unmatched = runtime._unmatched_self_action  # noqa: SLF001
+    had_flag = hasattr(runtime, hardening._SELF_FLAG)  # noqa: SLF001
+    old_flag = getattr(runtime, hardening._SELF_FLAG, None)  # noqa: SLF001
+    if had_flag:
+        delattr(runtime, hardening._SELF_FLAG)  # noqa: SLF001
 
-    webhook = runtime._request_spec(bot, FakeRoute("DELETE", "/webhooks/444"), {})  # noqa: SLF001
-    assert webhook is not None
-    assert webhook.actions == frozenset({"webhook_delete"})
-    assert webhook.target_key == "id:444"
+    try:
+        assert hardening._patch_self_action() is True  # noqa: SLF001
+        webhook = runtime._request_spec(bot, FakeRoute("DELETE", "/webhooks/444"), {})  # noqa: SLF001
+        assert webhook is not None
+        assert webhook.actions == frozenset({"webhook_delete"})
+        assert webhook.target_key == "id:444"
 
-    bulk = runtime._request_spec(  # noqa: SLF001
-        bot,
-        FakeRoute("POST", "/channels/123/messages/bulk-delete"),
-        {"json": {"messages": [1, 2]}},
-    )
-    assert bulk is not None
-    assert bulk.actions == frozenset({"message_bulk_delete"})
+        bulk = runtime._request_spec(  # noqa: SLF001
+            bot,
+            FakeRoute("POST", "/channels/123/messages/bulk-delete"),
+            {"json": {"messages": [1, 2]}},
+        )
+        assert bulk is not None
+        assert bulk.actions == frozenset({"message_bulk_delete"})
 
-    role_grant = runtime._request_spec(  # noqa: SLF001
-        bot,
-        FakeRoute("PUT", "/guilds/7/members/88/roles/99"),
-        {},
-    )
-    assert role_grant is not None
-    assert role_grant.actions == frozenset({"member_role_update"})
-    assert role_grant.guild_id == 7
-    assert role_grant.target_key == "id:88"
+        role_grant = runtime._request_spec(  # noqa: SLF001
+            bot,
+            FakeRoute("PUT", "/guilds/7/members/88/roles/99"),
+            {},
+        )
+        assert role_grant is not None
+        assert role_grant.actions == frozenset({"member_role_update"})
+        assert role_grant.guild_id == 7
+        assert role_grant.target_key == "id:88"
+    finally:
+        runtime._request_spec = original_request_spec  # noqa: SLF001
+        runtime._PROTECTED_ACTIONS = original_actions  # noqa: SLF001
+        runtime._unmatched_self_action = original_unmatched  # noqa: SLF001
+        if had_flag:
+            setattr(runtime, hardening._SELF_FLAG, old_flag)  # noqa: SLF001
+        elif hasattr(runtime, hardening._SELF_FLAG):  # noqa: SLF001
+            delattr(runtime, hardening._SELF_FLAG)  # noqa: SLF001
