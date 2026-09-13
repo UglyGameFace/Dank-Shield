@@ -14,7 +14,7 @@ Dank Shield AntiNuke was enabled but failed to stop a destructive server attack 
 ## Authoritative root causes
 
 - Destructive defaults reacted too late and mixed attacks could stay below per-action thresholds.
-- Audit lookup was too narrow and could be delayed by the generic audit-log safety spacing.
+- Audit lookup was too narrow and could be delayed by generic audit-log safety spacing or REST propagation latency.
 - Concurrent targetless audit claims could race and reuse the same audit entry.
 - Containment readiness checked permissions more than effective hierarchy/managed-role authority.
 - Channel/category overwrites and harmless-looking high roles could preserve destructive authority even after visible dangerous roles were stripped.
@@ -26,14 +26,18 @@ Dank Shield AntiNuke was enabled but failed to stop a destructive server attack 
 
 ## Implementation
 
-- Kept one canonical native `stoney_verify/anti_nuke.py` runtime; no parallel AntiNuke engine or duplicate listener tree was introduced.
+- Kept `stoney_verify/anti_nuke.py` as the single canonical AntiNuke policy, counter, trust, readiness, containment, and incident owner.
+- Added `stoney_verify/anti_nuke_gateway_runtime.py` only as a transport fast path. It installs `on_audit_log_entry_create` before Discord login and feeds high-confidence audit entries into the canonical engine without waiting for REST propagation.
+- The gateway fast path and existing Discord-event/REST fallback share the canonical seen-audit-entry registry, so one Discord audit entry cannot be enforced twice.
+- The gateway adapter does not mutate canonical thresholds or slow-burn policy. It covers high-confidence channel create/delete, role delete, ban, kick, prune, and webhook create/update/delete actions directly; dangerous role creation and untrusted bot addition preserve their immediate rollback/containment semantics.
+- Harmless-looking role creation received on the gateway path still enters the canonical delegated long-horizon budget instead of being consumed and dropped.
 - Lowered safe defaults to channels/roles `2`, bans/kicks `3`, webhooks `2` in the existing `15s` window.
 - Unknown/untrusted destructive actors now use first-strike containment; configured trusted users/roles are delegated operators, not unlimited exemptions.
 - Added actor-wide mixed destructive-action counting plus a 10-minute delegated long-horizon emergency ceiling that cannot be raised above 8 destructive actions even if short-window thresholds are configured higher.
 - Extended the long-horizon set across channel/role create-update-delete activity, bans, kicks, pruning, role stripping, member timeouts, and webhook mutations.
 - Removed forced DB refreshes from the destructive-event hot path; saved settings flow through the existing guild-config cache/upsert authority.
-- Widened audit correlation to 50 entries / 30 seconds with retries, exact target matching where Discord exposes a target, audit-entry dedupe, and atomic claim locks.
-- Security-priority AntiNuke audit reads bypass only the guard's artificial six-second generic spacing while still sharing the guild audit lock and respecting real Discord 429 backoff.
+- Widened REST audit correlation to 50 entries / 30 seconds with retries, exact target matching where Discord exposes a target, audit-entry dedupe, and atomic claim locks.
+- Security-priority AntiNuke REST reads bypass only the guard's artificial six-second generic spacing while still sharing the guild audit lock and respecting real Discord 429 backoff.
 - Added per-actor containment locks.
 - Containment is definitive: kick the proven malicious actor first; if Discord blocks removal, strip every manageable non-default role as fallback and keep the incident retryable.
 - Contain-mode readiness now requires View Audit Log, Manage Roles, and Kick Members and reports dangerous `@everyone`, managed roles, effective member hierarchy, and dangerous channel/category overwrite blockers.
@@ -43,10 +47,38 @@ Dank Shield AntiNuke was enabled but failed to stop a destructive server attack 
 - Webhook create/update/delete share the canonical destructive engine; member prune falls back from kick attribution and triggers immediately.
 - AntiNuke configuration mutations are server-owner-only.
 - Final configuration restore confirmation is server-owner-only because restores can change AntiNuke/security state.
+- Added focused gateway regressions proving install idempotency, moderation-intent availability, direct canonical dispatch without REST lookup, shared dedupe, channel-create coverage, harmless-role-create preservation, dangerous-role-create routing, and pre-login boot installation.
 
 ## Security model / hard platform limits
 
 Dank Shield can aggressively contain any attributable non-owner actor that Discord allows the bot to act on. It cannot contain the guild owner, override Discord hierarchy/managed-role restrictions, manufacture missing audit-log attribution, defend the server if Dank Shield's own bot token is compromised, or act while Discord itself is unavailable/rate-limiting the required API. Readiness and incident output must surface those limits rather than pretending protection is healthy.
+
+Guild-config reads preserve a previously cached configuration when Supabase becomes unavailable. On a completely cold process start with no cached state and no reachable authoritative database, Dank Shield cannot safely invent a guild's prior AntiNuke policy; durable cold-start security-state recovery belongs to the later persistence/DR remediation task rather than being hidden behind guessed settings.
+
+## Final changed-file scope
+
+Runtime/security:
+- `main.py`
+- `stoney_verify/anti_nuke.py`
+- `stoney_verify/anti_nuke_gateway_runtime.py`
+- `stoney_verify/commands_ext/public_protection_center.py`
+- `stoney_verify/config_history_ui.py`
+- `stoney_verify/startup_guards/discord_api_safety.py`
+
+Regression coverage:
+- `tests/test_antinuke_adversarial_bypass.py`
+- `tests/test_antinuke_audit_priority.py`
+- `tests/test_antinuke_behavior.py`
+- `tests/test_antinuke_definitive_containment.py`
+- `tests/test_antinuke_extended_evasion_coverage.py`
+- `tests/test_antinuke_gateway_runtime.py`
+- `tests/test_antinuke_owner_control.py`
+- `tests/test_antinuke_race_and_event_coverage.py`
+- `tests/test_antinuke_readiness_edge_cases.py`
+- `tests/test_config_history_ui_behavior.py`
+
+Bookkeeping:
+- `ACTIVE_TASK.md`
 
 ## Validation already established on predecessor heads
 
@@ -54,11 +86,11 @@ Earlier exact/predecessor runs established compile, managed-category SQL smoke, 
 
 ## Definition of done / final validation required
 
-- Focused AntiNuke behavior, adversarial bypass, definitive containment, race/event-coverage, owner-control, audit-priority, readiness, and extended-evasion tests pass on one final exact head.
+- Focused AntiNuke behavior, adversarial bypass, definitive containment, race/event-coverage, owner-control, audit-priority, readiness, extended-evasion, and gateway-runtime tests pass on one final exact head.
 - Python compile/static checks and the repository's standalone audits pass on that same exact head.
 - Full repository CI passes on that same exact head.
-- Diff/scope review confirms every changed file is either native AntiNuke runtime, required owner/security bypass closure, API-safety support for AntiNuke attribution, tests, or task bookkeeping.
+- Diff/scope review confirms every changed file is either native AntiNuke runtime, gateway transport, required owner/security bypass closure, API-safety support for AntiNuke attribution, tests, or task bookkeeping.
 - Main/base drift is rechecked before readiness/merge.
-- No duplicate AntiNuke listeners, parallel guards, temporary bypasses, stale compatibility path, or conflicting enforcement owner remains.
-- PR description is updated to the final exact head and actual changed-file scope.
+- No second AntiNuke policy engine, duplicate enforcement ownership, temporary bypass, stale compatibility path, or conflicting security authority remains.
+- PR description matches the final exact head and actual changed-file scope.
 - Merge only after exact-head green; then verify post-merge `main` CI and deployment/production acceptance before closing DS-SEC-039.
