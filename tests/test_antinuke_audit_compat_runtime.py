@@ -36,11 +36,11 @@ def test_raw_voice_status_audit_values_are_named_and_guarded() -> None:
 
     try:
         assert runtime._patch_action_names() is True  # noqa: SLF001
-        update = SimpleNamespace(action=192)
-        delete = SimpleNamespace(action=193)
-        assert guardian._action_name(update) == "voice_channel_status_update"  # noqa: SLF001
-        assert guardian._action_name(delete) == "voice_channel_status_delete"  # noqa: SLF001
-        assert "voice_channel_status_update" in guardian._ACTIONS  # noqa: SLF001
+        created = SimpleNamespace(action=192)
+        deleted = SimpleNamespace(action=193)
+        assert guardian._action_name(created) == "voice_channel_status_create"  # noqa: SLF001
+        assert guardian._action_name(deleted) == "voice_channel_status_delete"  # noqa: SLF001
+        assert "voice_channel_status_create" in guardian._ACTIONS  # noqa: SLF001
         assert "voice_channel_status_delete" in self_action._PROTECTED_ACTIONS  # noqa: SLF001
     finally:
         guardian._action_name = old_guardian_name  # noqa: SLF001
@@ -66,14 +66,14 @@ def test_voice_status_local_request_gets_self_action_spec() -> None:
 
     try:
         assert runtime._patch_self_action_route() is True  # noqa: SLF001
-        updated = self_action._request_spec(  # noqa: SLF001
+        created = self_action._request_spec(  # noqa: SLF001
             FakeBot(),
             FakeRoute("PUT", "/channels/123/voice-status"),
             {"json": {"status": "Raid lobby"}},
         )
-        assert updated is not None
-        assert updated.actions == frozenset({"voice_channel_status_update"})
-        assert updated.target_key == "id:123"
+        assert created is not None
+        assert created.actions == frozenset({"voice_channel_status_create"})
+        assert created.target_key == "id:123"
 
         deleted = self_action._request_spec(  # noqa: SLF001
             FakeBot(),
