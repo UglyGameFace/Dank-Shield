@@ -2,16 +2,17 @@ from __future__ import annotations
 
 """Final AntiNuke lockdown invariants.
 
-This runtime closes control-plane and audit-surface gaps that are dangerous only
-when the pieces are considered together.  It deliberately runs after the
-hostile-identity runtime so durable reputation remains authoritative.
+This runtime closes control-plane and structural-destruction gaps that only become
+obvious when the existing AntiNuke layers are considered together. It installs
+after durable hostile-identity enforcement so reputation remains authoritative.
 
-Discord still has one physical boundary this code cannot remove: the guild owner
-cannot be kicked, banned, or role-stripped by a bot.  Owner-originated destructive
-activity is therefore made first-strike observable, while every delegated actor
-loses destructive trust grace in contain mode.
+The policy deliberately distinguishes ordinary moderation from structural
+security changes. Trusted moderators keep bounded ban/kick/timeout behavior, but
+contain mode gives no grace to server-structure deletion, permission-overwrite
+corruption, destructive AutoMod mutation, or bulk message purge.
 """
 
+from types import SimpleNamespace
 from typing import Any, Iterable, Mapping, Optional
 
 import discord
@@ -58,122 +59,61 @@ _CONTROL_ROLE_LIST_KEYS = (
 )
 _CONTAINER_KEYS = ("settings", "config", "metadata", "meta")
 
+# These permissions can destroy durable guild content that the original readiness
+# model did not classify as dangerous.
 _EXTRA_DANGEROUS_PERMISSIONS = (
     "manage_messages",
     "manage_threads",
     "manage_events",
     "manage_expressions",
     "manage_emojis_and_stickers",
-    "move_members",
-    "mute_members",
-    "deafen_members",
 )
 
-# action -> (label, configured threshold key, aggregate counter key, override)
+# Canonical processor keys that always become first-strike in contain mode. Keep
+# routine moderation (ban/kick/timeout/member-role cleanup) on its existing bounded
+# thresholds so AntiNuke does not punish a moderator for doing ordinary work.
+_STRICT_PROCESS_ACTION_KEYS = frozenset(
+    {
+        "channel_delete",
+        "role_delete",
+        "webhook_delete",
+        "message_bulk_delete",
+    }
+)
+
+# Guardian action names whose exact audit semantics prove a structural/security
+# mutation even when their canonical counter key is shared with benign updates.
+_STRICT_GUARDIAN_ACTIONS = frozenset(
+    {
+        "guild_update",
+        "channel_delete",
+        "overwrite_create",
+        "overwrite_update",
+        "overwrite_delete",
+        "role_delete",
+        "member_prune",
+        "webhook_update",
+        "webhook_delete",
+        "integration_delete",
+        "app_command_permission_update",
+        "automod_rule_update",
+        "automod_rule_delete",
+        "message_bulk_delete",
+    }
+)
+
+# discord.py exposes a dedicated bulk-delete audit event. Single moderator message
+# deletion remains ordinary moderation; bulk purge is the destructive surface.
 _EXTRA_AUDIT_ACTIONS: dict[str, tuple[str, str, str, Optional[int]]] = {
-    "message_delete": (
-        "Message deletion",
-        "antinuke_channel_delete_threshold",
-        "message_delete",
-        None,
-    ),
     "message_bulk_delete": (
         "Bulk message deletion",
         "antinuke_channel_delete_threshold",
-        "message_delete",
-        1,
-    ),
-    "integration_create": (
-        "Integration creation",
-        "antinuke_role_delete_threshold",
-        "integration_update",
-        None,
-    ),
-    "integration_update": (
-        "Integration mutation",
-        "antinuke_role_delete_threshold",
-        "integration_update",
-        None,
-    ),
-    "invite_create": (
-        "Invite creation",
-        "antinuke_channel_delete_threshold",
-        "invite_create",
-        None,
-    ),
-    "emoji_update": (
-        "Emoji mutation",
-        "antinuke_channel_delete_threshold",
-        "expression_update",
-        None,
-    ),
-    "sticker_update": (
-        "Sticker mutation",
-        "antinuke_channel_delete_threshold",
-        "expression_update",
-        None,
-    ),
-    "scheduled_event_update": (
-        "Scheduled-event mutation",
-        "antinuke_channel_delete_threshold",
-        "event_update",
-        None,
-    ),
-    "thread_update": (
-        "Thread/forum-post mutation",
-        "antinuke_channel_delete_threshold",
-        "thread_update",
-        None,
-    ),
-    "stage_instance_delete": (
-        "Stage instance deletion",
-        "antinuke_channel_delete_threshold",
-        "channel_delete",
-        1,
-    ),
-    "member_move": (
-        "Member voice move",
-        "antinuke_kick_threshold",
-        "member_move",
-        None,
-    ),
-    "member_disconnect": (
-        "Member voice disconnect",
-        "antinuke_kick_threshold",
-        "member_move",
-        None,
-    ),
-}
-
-_EXTRA_PANIC_WEIGHTS: dict[str, int] = {
-    "message_delete": 2,
-    "message_bulk_delete": 4,
-    "integration_create": 3,
-    "integration_update": 3,
-    "invite_create": 1,
-    "emoji_update": 1,
-    "sticker_update": 1,
-    "scheduled_event_update": 2,
-    "thread_update": 2,
-    "stage_instance_delete": 2,
-    "member_move": 1,
-    "member_disconnect": 1,
-}
-_EXTRA_SEVERE_ACTIONS = frozenset(
-    {
         "message_bulk_delete",
-        "integration_create",
-        "integration_update",
-        "stage_instance_delete",
-    }
-)
-_EXTRA_SLOW_BURN_COUNTERS = frozenset(
-    {
-        spec[2]
-        for spec in _EXTRA_AUDIT_ACTIONS.values()
-        if spec[2]
-    }
-)
+        1,
+    ),
+}
+_EXTRA_PANIC_WEIGHTS = {"message_bulk_delete": 4}
+_EXTRA_SEVERE_ACTIONS = frozenset({"message_bulk_delete"})
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -266,7 +206,7 @@ def _sanitize_security_snapshot(
     snapshot: Mapping[str, Any],
     current: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Preserve live security-root values during generic history restore."""
+    """Preserve live AntiNuke/control-plane values during generic restore."""
 
     safe = dict(snapshot or {})
     live = dict(current or {})
@@ -280,30 +220,23 @@ def _sanitize_security_snapshot(
             safe.pop(key, None)
 
     for container in _CONTAINER_KEYS:
-        saved_nested_raw = safe.get(container)
-        live_nested_raw = live.get(container)
-        if not isinstance(saved_nested_raw, Mapping) and not isinstance(
-            live_nested_raw, Mapping
-        ):
+        saved_raw = safe.get(container)
+        live_raw = live.get(container)
+        if not isinstance(saved_raw, Mapping) and not isinstance(live_raw, Mapping):
             continue
-
-        saved_nested = (
-            dict(saved_nested_raw) if isinstance(saved_nested_raw, Mapping) else {}
-        )
-        live_nested = (
-            dict(live_nested_raw) if isinstance(live_nested_raw, Mapping) else {}
-        )
-        security_keys = {
+        saved = dict(saved_raw) if isinstance(saved_raw, Mapping) else {}
+        current_nested = dict(live_raw) if isinstance(live_raw, Mapping) else {}
+        protected = {
             str(key)
-            for key in set(saved_nested) | set(live_nested)
+            for key in set(saved) | set(current_nested)
             if _is_protected_restore_key(key)
         }
-        for key in security_keys:
-            if key in live_nested:
-                saved_nested[key] = live_nested[key]
+        for key in protected:
+            if key in current_nested:
+                saved[key] = current_nested[key]
             else:
-                saved_nested.pop(key, None)
-        safe[container] = saved_nested
+                saved.pop(key, None)
+        safe[container] = saved
 
     return safe
 
@@ -334,8 +267,9 @@ def _enabled_contain(settings: Mapping[str, Any] | None) -> bool:
             "on",
             "enabled",
         }
-    mode = str(settings.get("antinuke_mode") or "contain").strip().lower()
-    return bool(enabled) and mode == "contain"
+    return bool(enabled) and str(
+        settings.get("antinuke_mode") or "contain"
+    ).strip().lower() == "contain"
 
 
 def _patch_config_history_restore() -> bool:
@@ -360,11 +294,8 @@ def _patch_config_history_restore() -> bool:
         reason: str,
     ) -> dict[str, Any]:
         safe_version = dict(version or {})
-        raw_snapshot = history._row_dict(safe_version.get("snapshot"))  # noqa: SLF001
-        safe_version["snapshot"] = _sanitize_security_snapshot(
-            raw_snapshot,
-            current,
-        )
+        snapshot = history._row_dict(safe_version.get("snapshot"))  # noqa: SLF001
+        safe_version["snapshot"] = _sanitize_security_snapshot(snapshot, current)
         result = original_full(
             guild_id,
             version_id,
@@ -391,6 +322,7 @@ def _patch_config_history_restore() -> bool:
         labels = dict(plan.get("item_labels") or {})
         for key in set(blocked_changed) | set(blocked_missing):
             labels.pop(key, None)
+
         sections: dict[str, list[str]] = {}
         for section, keys in dict(plan.get("core_sections") or {}).items():
             allowed, _blocked = _filter_restore_items(list(keys or []))
@@ -454,25 +386,9 @@ def _patch_anti_nuke_policy(anti_nuke: Any, bot: discord.Client) -> bool:
     if bool(getattr(anti_nuke, _POLICY_PATCH_FLAG, False)):
         return False
 
-    original_trust = anti_nuke._actor_is_configured_trusted  # noqa: SLF001
     original_get = anti_nuke.get_antinuke_settings
+    original_process = anti_nuke._process_claimed_destructive_event  # noqa: SLF001
     original_health = anti_nuke.antinuke_permission_health
-
-    def strict_trust(
-        actor: Any,
-        settings: Mapping[str, Any],
-        *,
-        ignore_role_ids: Optional[set[int]] = None,
-    ) -> bool:
-        if _enabled_contain(settings):
-            return False
-        return bool(
-            original_trust(
-                actor,
-                settings,
-                ignore_role_ids=ignore_role_ids,
-            )
-        )
 
     async def protected_get(
         guild_id: int,
@@ -498,6 +414,32 @@ def _patch_anti_nuke_policy(anti_nuke: Any, bot: discord.Client) -> bool:
             )
         return settings
 
+    async def strict_structural_process(
+        guild: discord.Guild,
+        *,
+        entry: Any,
+        action_key: str,
+        action_label: str,
+        target_label: str,
+        threshold_key: str,
+        threshold_override: Optional[int] = None,
+    ) -> bool:
+        try:
+            settings = await protected_get(int(guild.id))
+        except Exception:
+            settings = None
+        if _enabled_contain(settings) and action_key in _STRICT_PROCESS_ACTION_KEYS:
+            threshold_override = 1
+        return await original_process(
+            guild,
+            entry=entry,
+            action_key=action_key,
+            action_label=action_label,
+            target_label=target_label,
+            threshold_key=threshold_key,
+            threshold_override=threshold_override,
+        )
+
     def lockdown_health(
         guild: discord.Guild,
         settings: Optional[Mapping[str, Any]] = None,
@@ -520,26 +462,66 @@ def _patch_anti_nuke_policy(anti_nuke: Any, bot: discord.Client) -> bool:
             ]
         )
     )
-    anti_nuke._SLOW_BURN_ACTIONS = frozenset(  # noqa: SLF001
-        set(anti_nuke._SLOW_BURN_ACTIONS) | set(_EXTRA_SLOW_BURN_COUNTERS)  # noqa: SLF001
-    )
-    anti_nuke._actor_is_configured_trusted = strict_trust  # noqa: SLF001
     anti_nuke.get_antinuke_settings = protected_get
+    anti_nuke._process_claimed_destructive_event = strict_structural_process  # noqa: SLF001
     anti_nuke.antinuke_permission_health = lockdown_health
     setattr(anti_nuke, _POLICY_PATCH_FLAG, True)
     return True
 
 
-def _patch_guardian_surface(guardian: Any) -> bool:
+def _rollback_actor_proxy() -> Any:
+    """Actor shape that is never owner/trusted; rollback target still comes from entry."""
+
+    return SimpleNamespace(id=0, roles=[])
+
+
+def _patch_guardian_surface(guardian: Any, anti_nuke: Any) -> bool:
     if bool(getattr(guardian, _GUARDIAN_PATCH_FLAG, False)):
         return False
 
     guardian._ACTIONS.update(_EXTRA_AUDIT_ACTIONS)  # noqa: SLF001
+    for action_name in _STRICT_GUARDIAN_ACTIONS:
+        spec = guardian._ACTIONS.get(action_name)  # noqa: SLF001
+        if spec is None:
+            continue
+        label, threshold_key, counter_key, _override = spec
+        guardian._ACTIONS[action_name] = (  # noqa: SLF001
+            label,
+            threshold_key,
+            counter_key,
+            1,
+        )
+
     guardian._PANIC_WEIGHTS.update(_EXTRA_PANIC_WEIGHTS)  # noqa: SLF001
     guardian._PANIC_ACTIONS = frozenset(guardian._PANIC_WEIGHTS)  # noqa: SLF001
     guardian._PANIC_SEVERE_ACTIONS = frozenset(  # noqa: SLF001
         set(guardian._PANIC_SEVERE_ACTIONS) | set(_EXTRA_SEVERE_ACTIONS)  # noqa: SLF001
     )
+
+    original_overwrite = guardian._rollback_untrusted_overwrite  # noqa: SLF001
+    original_automod = guardian._rollback_untrusted_automod  # noqa: SLF001
+
+    async def strict_overwrite(guild, entry, actor, action_name):
+        settings = await anti_nuke.get_antinuke_settings(int(guild.id))
+        if (
+            _enabled_contain(settings)
+            and not anti_nuke._actor_is_owner_or_bot(guild, actor)  # noqa: SLF001
+        ):
+            actor = _rollback_actor_proxy()
+        return await original_overwrite(guild, entry, actor, action_name)
+
+    async def strict_automod(guild, entry, actor, action_name):
+        settings = await anti_nuke.get_antinuke_settings(int(guild.id))
+        if (
+            action_name in {"automod_rule_update", "automod_rule_delete"}
+            and _enabled_contain(settings)
+            and not anti_nuke._actor_is_owner_or_bot(guild, actor)  # noqa: SLF001
+        ):
+            actor = _rollback_actor_proxy()
+        return await original_automod(guild, entry, actor, action_name)
+
+    guardian._rollback_untrusted_overwrite = strict_overwrite  # noqa: SLF001
+    guardian._rollback_untrusted_automod = strict_automod  # noqa: SLF001
     setattr(guardian, _GUARDIAN_PATCH_FLAG, True)
     return True
 
@@ -596,9 +578,7 @@ def _patch_bot_add_guardian(
         if not bool(settings.get("antinuke_enabled")):
             return await original(guild, entry, actor)
 
-        # Durable hostile reputation outranks every allowlist.  A previously
-        # confirmed destructive bot may never become safe merely because its ID
-        # was later added to trusted users.
+        # Durable hostile reputation outranks the bot allowlist.
         try:
             reputation = await hostile.get_actor_reputation(
                 int(guild.id),
@@ -660,7 +640,7 @@ def _patch_bot_add_guardian(
 
 
 def install_anti_nuke_lockdown_runtime(bot: discord.Client) -> bool:
-    """Install AntiNuke's final no-grace security invariants once."""
+    """Install AntiNuke's final structural no-grace invariants once."""
 
     if bool(getattr(bot, _INSTALL_FLAG, False)):
         return False
@@ -672,7 +652,7 @@ def install_anti_nuke_lockdown_runtime(bot: discord.Client) -> bool:
 
     history_patched = _patch_config_history_restore()
     policy_patched = _patch_anti_nuke_policy(anti_nuke, bot)
-    guardian_patched = _patch_guardian_surface(guardian)
+    guardian_patched = _patch_guardian_surface(guardian, anti_nuke)
     owner_patched = _patch_owner_first_strike(incident)
     bot_add_patched = _patch_bot_add_guardian(guardian, anti_nuke, hostile)
 
@@ -680,14 +660,12 @@ def install_anti_nuke_lockdown_runtime(bot: discord.Client) -> bool:
     print(
         "🛡️ AntiNuke lockdown active: security-history restore guard="
         f"{'patched' if history_patched else 'already active'}; "
-        f"delegated destructive trust={'removed' if policy_patched else 'already removed'}; "
-        f"audit surface={'expanded' if guardian_patched else 'already expanded'}; "
+        f"structural first-strike={'active' if policy_patched else 'already active'}; "
+        f"audit/rollback surface={'hardened' if guardian_patched else 'already hardened'}; "
         f"owner first-strike={'active' if owner_patched else 'already active'}; "
         f"owner bot-add allowlist={'active' if bot_add_patched else 'already active'}"
     )
     return True
 
 
-__all__ = [
-    "install_anti_nuke_lockdown_runtime",
-]
+__all__ = ["install_anti_nuke_lockdown_runtime"]
