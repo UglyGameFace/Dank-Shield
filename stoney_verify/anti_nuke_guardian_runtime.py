@@ -25,7 +25,7 @@ from . import anti_nuke
 # weaken server state.
 _ACTIONS: dict[str, tuple[str, str, str, Optional[int]]] = {
     "guild_update": (
-        "Server identity/settings mutation",
+        "Server identity/security mutation",
         "antinuke_channel_delete_threshold",
         "channel_update",
         None,
@@ -167,10 +167,29 @@ _ACTIONS: dict[str, tuple[str, str, str, Optional[int]]] = {
     ),
 }
 
+# Only high-impact guild updates belong in AntiNuke. Routine AFK, widget,
+# notification, locale, and system-channel changes remain ordinary administration.
+_GUILD_UPDATE_SECURITY_FIELDS = frozenset(
+    {
+        "name",
+        "icon",
+        "banner",
+        "splash",
+        "discovery_splash",
+        "vanity_url_code",
+        "description",
+        "verification_level",
+        "explicit_content_filter",
+        "mfa_level",
+        "owner",
+    }
+)
+
 # Guild panic is weighted rather than raw-count based. This keeps coordinated
 # structural destruction extremely sensitive without turning two moderators handling
 # a raid into the thing Dank Shield removes from the server.
 _PANIC_WEIGHTS: dict[str, int] = {
+    "guild_update": 4,
     "bot_add": 4,
     "channel_create": 2,
     "channel_delete": 3,
@@ -205,6 +224,7 @@ _PANIC_MODERATION_ACTIONS = frozenset({"ban", "unban", "kick"})
 # Ordinary moderation and creation-only activity intentionally stay out.
 _PANIC_SEVERE_ACTIONS = frozenset(
     {
+        "guild_update",
         "bot_add",
         "channel_delete",
         "overwrite_create",
@@ -268,6 +288,25 @@ def _target_id(entry: Any) -> Optional[int]:
     return value if value > 0 else None
 
 
+def _changed_diff_fields(entry: Any, fields: frozenset[str]) -> list[str]:
+    before = getattr(entry, "before", None)
+    after = getattr(entry, "after", None)
+    if before is None or after is None:
+        return []
+
+    changed: list[str] = []
+    for name in sorted(fields):
+        old = getattr(before, name, None)
+        new = getattr(after, name, None)
+        if old != new and (old is not None or new is not None):
+            changed.append(name)
+    return changed
+
+
+def _guild_update_security_fields(entry: Any) -> list[str]:
+    return _changed_diff_fields(entry, _GUILD_UPDATE_SECURITY_FIELDS)
+
+
 def _target_label(action_name: str, entry: Any) -> str:
     target = getattr(entry, "target", None)
     target_id = _safe_int(getattr(target, "id", 0), 0)
@@ -278,7 +317,9 @@ def _target_label(action_name: str, entry: Any) -> str:
         or "Unknown"
     )
     if action_name == "guild_update":
-        return "Server identity/settings"
+        fields = _guild_update_security_fields(entry)
+        suffix = ", ".join(fields[:6]) if fields else "identity/security"
+        return f"Server settings • {suffix}"
     if action_name.startswith("overwrite_") or action_name.startswith("channel_"):
         return f"#{name} (`{target_id}`)" if target_id else f"#{name}"
     if action_name.startswith("role_"):
@@ -778,6 +819,10 @@ async def _on_audit_log_entry_create(entry: discord.AuditLogEntry) -> None:
         await _handle_bot_add(guild, claimed, actor)
         return
 
+    if action_name == "guild_update":
+        if not _guild_update_security_fields(entry):
+            return
+
     if action_name == "role_update":
         if not _generic_role_update(entry):
             return
@@ -814,7 +859,7 @@ def install_anti_nuke_guardian_runtime(bot: discord.Client) -> bool:
     if moderation:
         print(
             "🛡️ AntiNuke guardian active: broad audit coverage, overwrite fallback, "
-            "and weighted coordinated panic enabled"
+            "high-impact guild filtering, and weighted coordinated panic enabled"
         )
     else:
         print(
