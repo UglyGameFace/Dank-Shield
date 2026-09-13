@@ -2,108 +2,55 @@
 
 ## DS-CLEANUP-001 — Canonical schema authority consolidation
 
-**Status:** IMPLEMENTATION COMPLETE — final exact-head validation pending
+**Status:** IMPLEMENTATION COMPLETE — validated; final record-only head must remain green before merge
 **Branch:** `cleanup/schema-authority-consolidation`
 **Base:** `91bce1e3a72b16e079f99febb6519b3144c36955` (`main`)
-**PR:** #205 — draft until final exact-head validation is green
+**PR:** #205
 
 ## Outcome
 
-Make committed files under `supabase/migrations/` the sole authority for database schema mutation. Runtime startup may inspect schema readiness and report precise migration guidance, but it must not create/alter database objects or execute migration SQL.
+Committed files under `supabase/migrations/` are now the schema-mutation authority for this area. Runtime startup performs read-only readiness checks and migration guidance only.
 
-## Scope
+## Root cause
 
-- remove runtime DDL/direct-Postgres migration execution from schema startup guards;
-- preserve read-only runtime readiness diagnostics and migration-path guidance;
-- eliminate import-time cross-module migration registration side effects;
-- promote bootstrap-only/current application schema contracts into the canonical migration chain;
-- remove obsolete standalone schema SQL and direct-DSN runtime configuration/documentation;
-- move affected schema assertions to migration-owned tests;
-- add SQL/runtime regressions that enforce the new authority boundary.
-
-Broader startup-guard/monkey-patch consolidation is intentionally backlogged. Separate read-only health modules may remain when they own distinct diagnostics, but none may mutate schema.
-
-## Findings / root cause
-
-- `stoney_verify/startup_guards/auto_schema_bootstrap.py` embedded DDL and executed selected migrations at runtime when a direct DSN was present.
-- `stoney_verify/startup_guards/operation_queue_schema_guard.py` independently embedded operation-queue DDL/security SQL and executed it at runtime.
-- `stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py` mutated another startup module's private migration tuple at import time.
-- several core/current tables and columns had no complete canonical creation path under `supabase/migrations/`; runtime bootstrap or the standalone `supabase/2026-05-08_runtime_stability_schema.sql` supplied part of that missing authority.
-- ticket health/doctor output still advertised the retired direct-DSN auto-repair path.
-- `psycopg` was present only to support runtime schema mutation.
-
-## Execution path
-
-Before:
-
-application startup -> schema startup guards -> direct DSN detection -> runtime DDL / selected migration execution -> REST health checks.
-
-After:
-
-migration deployment pipeline -> committed `supabase/migrations/` schema changes;
-application startup -> REST/read-only readiness probes -> actionable migration guidance only.
+Schema ownership was split across committed migrations, runtime DDL in startup guards, import-time migration registration, a standalone SQL file, and direct-database repair guidance. That made fresh installs, upgrades, and diagnostics depend on different authorities.
 
 ## Changes
 
-- `auto_schema_bootstrap.py` is now read-only and reports migration guidance; `SCHEMA_SQL` remains an empty compatibility symbol.
-- `operation_queue_schema_guard.py` is now read-only and reports the committed queue migrations instead of executing DDL.
-- `ticket_category_schema_bootstrap_guard.py` is an inert compatibility manifest; it no longer mutates `auto_schema_bootstrap` at import time.
-- added `supabase/migrations/20260913154500_canonical_runtime_schema_authority.sql` for previously bootstrap-owned/current runtime contracts.
-- added `.github/workflows/schema-authority-sql.yml` covering fresh apply, repeat apply, legacy partial schema, and duplicate historical ticket data.
-- removed obsolete `supabase/2026-05-08_runtime_stability_schema.sql`; schema-changing SQL directly under `supabase/` is now regression-tested as forbidden.
-- removed the runtime `psycopg` dependency and direct-DSN schema-bootstrap settings/guidance from `.env.example` and production docs.
-- removed stale direct-DSN auto-repair advice from canonical ticket-panel health and the doctor compatibility copy.
-- converted ticket/schema/counter tests and category audit expectations to the migration-only authority model.
+- converted `auto_schema_bootstrap.py` and `operation_queue_schema_guard.py` to read-only diagnostics;
+- neutralized import-time mutation in `ticket_category_schema_bootstrap_guard.py`;
+- added `20260913154500_canonical_runtime_schema_authority.sql`;
+- added `20260913160000_reconcile_guild_member_role_state_constraint.sql`;
+- removed obsolete `supabase/2026-05-08_runtime_stability_schema.sql`;
+- removed the runtime `psycopg` dependency and obsolete direct-database bootstrap guidance;
+- updated ticket-panel and doctor guidance to committed-migration-only repair instructions;
+- moved affected schema assertions to migration-owned tests;
+- added Schema Authority SQL CI for fresh, replay, legacy-partial, duplicate-ticket, and role-state compatibility paths;
+- corrected stale ticket guardrail tests to point at the canonical migration owner.
 
-## Validation / results
+## Validation
 
-Green evidence already observed on implementation heads before the final bookkeeping commit:
+Validated implementation head: `b94950beb09ae84d6a2c6b2184991e9bfb41301a`.
 
-- Schema Authority SQL: fresh DB + second application + legacy partial schema + duplicate historical ticket data passed;
-- Ticket Counter SQL passed;
-- Ticket Panel Single Owner passed;
-- Ticket Panel Doctor Sanity passed;
-- Ticket Category Menu Sanity passed after its obsolete bootstrap-wording assertion was updated;
-- Ticket Category Repair SQL passed;
-- Ticket Category Rich Recovery SQL passed;
-- DS Backlog 027 Validation passed;
-- Dank Design Regression CI passed;
-- Application Command Size Diagnostics passed;
-- Profile Runtime Diagnostics passed on prior implementation head;
-- compile/diff checks reached green stages on prior implementation heads.
+All 13 applicable PR workflows completed successfully on that exact implementation head, including Dank Shield CI, Schema Authority SQL, Ticket Counter SQL, Ticket Panel Single Owner, Ticket Panel Doctor Sanity, Ticket Category Menu Sanity, Ticket Category Repair SQL, Ticket Category Rich Recovery SQL, Ticket Owner Emergency Override, Application Command Size Diagnostics, Profile Runtime Diagnostics, DS Backlog 027 Validation, and Dank Design Regression CI.
 
-**Required before completion claim:** all applicable workflows must finish green on the final exact PR head after this task-record update. Prior-head green runs are supporting evidence only.
+The prior full-suite attempt produced `1367 passed / 2 failed`; both failures were stale test-ownership assertions. After those assertions were pointed at the canonical migration, the exact implementation head completed green.
 
-## Cleanup / conflicts
+This commit changes only this task record. No runtime code, migration SQL, test behavior, dependency, or workflow logic changes here. The resulting record-only head must still finish green before PR #205 is marked ready.
 
-- no runtime schema guard in this affected area retains direct `psycopg` DDL/migration execution;
-- no standalone schema-changing SQL remains directly under `supabase/`;
-- direct-DSN schema repair is no longer advertised to operators or ticket-health users;
-- category compatibility metadata remains temporarily because category audits/tests import it, but it has no database or cross-module import side effect;
-- broader startup monkey-patch removal is outside this task and remains backlogged;
-- AntiNuke and all unrelated product behavior remain untouched.
+## Final scope / conflicts
 
-## Blockers / risks
+- final implementation diff before this record update was 19 task-scoped files;
+- no unresolved review threads;
+- branch was 0 commits behind the inspected base;
+- AntiNuke and unrelated product behavior were untouched;
+- broader startup monkey-patch cleanup remains a separate Phase 2 task;
+- `member_joins` re-invite semantics remain backlogged rather than being silently redesigned here.
 
-- final exact-head GitHub Actions validation is still pending;
-- applying the new canonical migration to production remains a deployment action through the existing Supabase migration pipeline, not something this PR performs from bot runtime;
-- no claim of completion or merge readiness until exact-head CI is green and the final PR diff is rechecked.
+## Deployment note
 
-## Backlog (not active)
-
-Remaining master-audit cleanup areas include guild re-invite state continuity, authorization boundaries, protection-role authority, outage semantics, verification durability, role discovery, ticket compatibility/UX, and broader startup monkey-patch reduction. They remain separate tasks under the single-active-task lock.
+Production migration remains an explicit deployment step through the existing Supabase migration pipeline. Runtime no longer applies schema changes itself. The earlier hosted Supabase Preview comment predates the later migration additions, so repository SQL/CI validation is the current evidence for this PR.
 
 ## Next step
 
-Validate the final exact PR head, inspect any failures as task regressions until disproven, recheck the complete diff/changed-file scope, update PR #205 validation notes, and only then consider marking the PR ready.
-
-## Definition of done
-
-- no startup path in the affected schema area performs DDL or executes migration SQL;
-- `supabase/migrations/` is the sole committed schema-mutation authority;
-- runtime health diagnostics remain actionable and non-destructive;
-- affected callers/tests/tooling/docs are reconciled without stale direct-DSN repair behavior;
-- fresh and legacy migration smoke paths pass;
-- exact-head targeted/full CI is green;
-- final diff contains no unrelated, temporary, debug, conflict, or secret-bearing changes;
-- remaining deployment risks/limitations are recorded before merge.
+Let the record-only final head complete CI. If green, update PR #205 validation notes and mark it ready for review. Merge remains a separate explicit action.
