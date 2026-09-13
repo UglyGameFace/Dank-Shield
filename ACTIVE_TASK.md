@@ -2,54 +2,65 @@
 
 ## DS-SEC-041 — AntiNuke zero-destruction hardening
 
-**Status:** IN PROGRESS
-**Branch:** `fix/antinuke-zero-destruction-hardening`
-**Base:** `33d0b735f4eb7004682d74f4ca789f5f9eb5068c` (`main`, merge of PR #207)
+**Status:** IN PROGRESS — SELF-PROVENANCE FOLLOW-UP AFTER PR #208
+**Branch:** `fix/antinuke-self-provenance-guard`
+**Base:** `83ba250abffc621d398f9b2f8efc728e06b0c1d3` (`main`, merge of PR #208)
 
 ## Outcome
 
-Close the remaining AntiNuke control-plane and destructive-surface bypasses found after the hostile-actor re-entry repair. With AntiNuke enabled in contain mode, delegated actors must not receive destructive-action grace, generic configuration restore must not be able to disarm or retarget AntiNuke/security-control settings, newly added bots must follow an explicit allowlist even when the guild owner performs the add, and the audit gateway must classify the remaining high-impact Discord administrative surfaces.
+Finish the remaining AntiNuke trust-boundary hardening after PR #208. The structural/configuration bypasses found in the first audit are now merged. The remaining high-value gap is Dank Shield's own Discord identity: Discord attributes requests made with the bot token to Dank Shield itself, while the canonical AntiNuke treats that identity as trusted. The runtime must be able to distinguish administrative mutations initiated by this running process from an externally issued request using a stolen bot token, without causing Dank Shield to attack its own legitimate setup/repair work.
 
-## Confirmed findings
+## Completed in PR #208
 
-- PR #207 is merged and the production Supabase migration deployment completed successfully.
-- Generic Configuration History restore can currently restore `antinuke_*` values even though direct AntiNuke mutation is guild-owner only.
-- Configured trusted AntiNuke users/roles currently receive destructive thresholds and rollback exemptions in contain mode.
-- The broad audit guardian does not currently classify message delete/bulk-delete and several integration/expression/event/thread/stage authority events.
-- Server-control role IDs are not automatically treated as AntiNuke-sensitive role grants.
-- A first-time unknown bot added by the physical guild owner is currently exempt from the normal untrusted-bot removal path.
-- Discord's physical guild owner remains an unavoidable platform authority boundary; Dank Shield can detect owner-originated destruction immediately but cannot ban/kick/role-strip the owner.
+- generic full/selective Configuration History restore can no longer roll back protected AntiNuke/server-control security values;
+- contain mode removes configured-trust grace for structural/security destruction while preserving bounded ordinary moderation;
+- server-control roles are security-sensitive without becoming implicit AntiNuke trust exemptions;
+- dangerous permission coverage includes message/thread/event/expression authority;
+- bulk message purge is classified as a severe first-strike action;
+- owner-added bots require explicit bot-ID trust, with durable hostile reputation taking precedence;
+- owner-originated destructive activity is surfaced on first strike;
+- exact-head compile, focused regressions, full unit suite, and repository audit gates passed before merge.
+
+## Remaining confirmed gap
+
+- `_actor_is_owner_or_bot()` treats Dank Shield's own bot identity as an absolute trust root.
+- That is correct for normal self-generated setup/repair mutations, but Discord uses the same identity when a stolen bot token is used externally.
+- Audit actor identity alone therefore cannot distinguish legitimate local bot work from token-compromise activity.
+- Discord does not provide a bot API that lets a running bot rotate/revoke its own token, so token compromise remains a platform-root boundary. The defensive goal is immediate attribution, rollback where Discord exposes reversible state, owner/out-of-band warning, and elimination of silent self-exemption.
 
 ## Implementation scope
 
-1. Add a final AntiNuke lockdown runtime after hostile-identity installation.
-2. Preserve live AntiNuke and server-control security keys across generic full/selective Configuration History restores.
-3. Remove configured-trust destructive grace while AntiNuke is enabled in contain mode.
-4. Automatically treat configured server-control roles as protected AntiNuke role IDs at runtime.
-5. Expand dangerous-permission and audit-action coverage, including message purge and remaining high-impact administrative surfaces.
-6. Require explicit bot-ID trust for owner-added bots while contain mode is active; known-hostile reputation still takes precedence over trust.
-7. Make guild-owner compromise detection first-strike so the platform boundary is surfaced immediately.
-8. Add focused regression tests plus full exact-head CI and diff cleanup before readiness.
+1. Add a self-action provenance runtime after the existing lockdown layer.
+2. Mark locally initiated high-impact Discord REST mutations with one-time in-process provenance IDs in the audit-log reason.
+3. Keep a short-lived one-time ledger binding provenance IDs to the expected audit action/target so copied or stale reasons cannot simply be replayed.
+4. Replace/wrap the canonical audit listener so a Dank Shield-authored audit entry is trusted only when its provenance is valid.
+5. Treat missing, invalid, mismatched, or replayed provenance on a protected self-attributed action as suspected bot-token compromise.
+6. Reuse existing AntiNuke rollback paths where safe and available, including created channel/webhook removal, overwrite rollback, AutoMod rollback, and sensitive role-grant/permission rollback.
+7. Alert the guild owner directly as well as the normal incident/modlog path when suspected bot-token compromise is detected.
+8. Preserve ordinary non-self AntiNuke behavior and sparse-attribution recovery.
+9. Add focused tests for valid provenance, replay/mismatch rejection, self-attributed compromise handling, disabled-mode behavior, sparse recovery dispatch, and startup ordering.
+10. Run full exact-head CI and diff cleanup before readiness.
 
 ## Safety / scope
 
-- No offensive tooling or destructive test code is added.
+- No offensive tooling, destructive test payloads, token extraction, or bypass instructions are added.
 - No direct changes to `main`.
-- Existing durable hostile-identity enforcement remains authoritative and must not be weakened.
-- Generic backup creation remains allowed; only restoring security-root values through the generic history path is blocked/preserved.
-- Legitimate trusted bot IDs remain explicitly configurable, but a known-hostile ID cannot become safe merely by being trusted.
+- Existing hostile-identity, owner-compromise, configuration-lockdown, and structural first-strike protections remain authoritative.
+- Provenance IDs are random, one-time, short-lived, and kept only in process memory. They are not a replacement for Discord token rotation after an actual compromise.
+- A compromised physical guild owner and a stolen Dank Shield bot token remain Discord platform-root boundaries; this work removes silent trust and maximizes detection/rollback but does not claim an impossible pre-action veto over those roots.
 
 ## Definition of done
 
-- generic full and selective restores cannot change protected AntiNuke/security-control values;
-- contain mode gives no destructive threshold/rollback exemption to configured trusted actors;
-- owner-added unapproved bots are removed while explicitly trusted non-hostile bots are allowed;
-- message purge plus the audited high-impact administrative surfaces are classified by the guardian;
-- control-role grants are treated as security-sensitive;
-- owner destructive activity alerts on the first attributed action;
-- focused tests, compile/static checks, and the full exact-head Dank Shield CI pass;
-- PR diff contains no unrelated changes and `ACTIVE_TASK.md` records final validation evidence.
+- locally initiated protected bot mutations are recognized without false AntiNuke incidents;
+- an externally issued protected mutation attributed to Dank Shield without valid live provenance is never silently trusted;
+- provenance cannot be reused after consumption and mismatched action/target use is rejected;
+- reversible self-attributed destructive actions use the existing rollback paths where safe;
+- suspected self-token compromise produces a critical AntiNuke incident plus owner warning;
+- sparse audit recovery still reaches the same provenance decision;
+- existing AntiNuke tests remain green and new focused regressions cover the trust boundary;
+- full exact-head Dank Shield CI and repository audit gates pass;
+- PR diff contains no unrelated changes and final validation evidence is recorded without creating another self-invalidating code commit.
 
 ## Next step
 
-Implement the lockdown runtime and focused tests on this branch, open a draft PR, then validate and clean the exact head before marking it ready.
+Implement the self-action provenance runtime and focused regressions on this branch, then open a draft PR and validate the exact head before marking it ready.
