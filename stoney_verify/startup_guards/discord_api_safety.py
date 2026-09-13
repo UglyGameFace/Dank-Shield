@@ -37,6 +37,8 @@ _CHANNEL_LAST_EDIT: dict[int, float] = {}
 _SECURITY_PRIORITY_AUDIT_LIMIT = 50
 _SECURITY_PRIORITY_AUDIT_ACTION_NAMES = frozenset(
     {
+        "channel_create",
+        "channel_update",
         "channel_delete",
         "role_delete",
         "ban",
@@ -44,6 +46,7 @@ _SECURITY_PRIORITY_AUDIT_ACTION_NAMES = frozenset(
         "member_prune",
         "role_update",
         "member_role_update",
+        "member_update",
         "role_create",
         "bot_add",
         "webhook_create",
