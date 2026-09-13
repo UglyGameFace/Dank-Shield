@@ -185,7 +185,11 @@ def test_permission_health_blocks_unmanageable_dangerous_role_hierarchy() -> Non
     admin_role.members = [attacker]
     me = SimpleNamespace(
         top_role=bot_top,
-        guild_permissions=FakePermissions(view_audit_log=True, manage_roles=True),
+        guild_permissions=FakePermissions(
+            view_audit_log=True,
+            manage_roles=True,
+            kick_members=True,
+        ),
     )
     guild = SimpleNamespace(id=1, owner_id=999, me=me, roles=[admin_role])
     settings = anti_nuke.normalize_antinuke_settings({"antinuke_enabled": True})
@@ -200,7 +204,8 @@ def test_permission_health_blocks_unmanageable_dangerous_role_hierarchy() -> Non
             "antinuke_trusted_role_ids": [admin_role.id],
         }
     )
-    assert anti_nuke.antinuke_permission_health(guild, trusted) == []
+    trusted_blockers = anti_nuke.antinuke_permission_health(guild, trusted)
+    assert any("Role hierarchy" in item and "@Administrator" in item for item in trusted_blockers)
 
 
 def test_mass_delete_threshold_contains_once_and_logs(monkeypatch) -> None:
@@ -218,7 +223,9 @@ def test_mass_delete_threshold_contains_once_and_logs(monkeypatch) -> None:
     incidents: list[dict] = []
 
     async def fake_settings(_guild_id: int):
-        return anti_nuke.normalize_antinuke_settings({"antinuke_enabled": True})
+        return anti_nuke.normalize_antinuke_settings(
+            {"antinuke_enabled": True, "antinuke_trusted_user_ids": [actor.id]}
+        )
 
     async def fake_audit(_guild, _action_name, *, target_id=None, retries=3):
         _ = retries
@@ -284,6 +291,7 @@ def test_mixed_destructive_actions_share_actor_wide_threshold(monkeypatch) -> No
             "antinuke_ban_threshold": 3,
             "antinuke_kick_threshold": 3,
             "antinuke_webhook_create_threshold": 3,
+            "antinuke_trusted_user_ids": [actor.id],
         }
     )
 
@@ -362,7 +370,9 @@ def test_failed_containment_does_not_start_cooldown(monkeypatch) -> None:
     incidents: list[dict] = []
 
     async def fake_settings(_guild_id: int):
-        return anti_nuke.normalize_antinuke_settings({"antinuke_enabled": True})
+        return anti_nuke.normalize_antinuke_settings(
+            {"antinuke_enabled": True, "antinuke_trusted_user_ids": [actor.id]}
+        )
 
     async def fake_audit(_guild, _action_name, *, target_id=None, retries=3):
         _ = retries
@@ -471,13 +481,17 @@ def test_unattributed_destructive_event_never_contains(monkeypatch) -> None:
 
 def test_native_antinuke_registers_expected_discord_listeners() -> None:
     expected = {
+        anti_nuke.antinuke_on_guild_channel_create,
+        anti_nuke.antinuke_on_guild_channel_update,
         anti_nuke.antinuke_on_guild_channel_delete,
+        anti_nuke.antinuke_on_guild_role_create,
         anti_nuke.antinuke_on_guild_role_delete,
         anti_nuke.antinuke_on_member_ban,
         anti_nuke.antinuke_on_member_remove,
         anti_nuke.antinuke_on_webhooks_update,
         anti_nuke.antinuke_on_guild_role_update,
         anti_nuke.antinuke_on_member_update,
+        anti_nuke.antinuke_on_member_join,
     }
     registered = set()
     extra_events = getattr(bot, "extra_events", {}) or {}
