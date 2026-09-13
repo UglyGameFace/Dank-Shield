@@ -38,13 +38,7 @@ def _managed_role_is_safely_containable(guild: discord.Guild, role: Any) -> bool
 
 
 def _patch_managed_role_readiness() -> bool:
-    """Ignore managed-role blockers only when every dangerous holder is containable.
-
-    Discord-managed bot/integration roles cannot be stripped directly, but that does
-    not make them automatically fatal to containment. If Dank Shield outranks every
-    non-owner holder, it can remove the holder itself. A managed role still blocks
-    readiness when any dangerous holder cannot be managed by Dank Shield.
-    """
+    """Ignore managed-role blockers only when every matching holder is containable."""
 
     if bool(getattr(anti_nuke, _MANAGED_ROLE_PATCH_FLAG, False)):
         return False
@@ -57,7 +51,8 @@ def _patch_managed_role_readiness() -> bool:
         settings: Mapping[str, Any],
     ) -> list[str]:
         blockers = list(original(guild, member, settings))
-        safe_managed_blockers: set[str] = set()
+        safe_labels: set[str] = set()
+        unsafe_labels: set[str] = set()
 
         for role in list(getattr(guild, "roles", []) or []):
             if not anti_nuke.role_has_dangerous_permissions(role):
@@ -66,19 +61,20 @@ def _patch_managed_role_readiness() -> bool:
                 continue
             if not anti_nuke._role_is_managed(role):  # noqa: SLF001
                 continue
-            if not _managed_role_is_safely_containable(guild, role):
-                continue
 
             role_name = str(
                 getattr(role, "name", "dangerous-role") or "dangerous-role"
             )
-            safe_managed_blockers.add(
-                f"managed @{role_name} cannot be stripped"
-            )
+            label = f"managed @{role_name} cannot be stripped"
+            if _managed_role_is_safely_containable(guild, role):
+                safe_labels.add(label)
+            else:
+                unsafe_labels.add(label)
 
-        if not safe_managed_blockers:
+        removable = safe_labels - unsafe_labels
+        if not removable:
             return blockers
-        return [item for item in blockers if item not in safe_managed_blockers]
+        return [item for item in blockers if item not in removable]
 
     anti_nuke._dangerous_hierarchy_blockers = wrapped  # noqa: SLF001
     setattr(anti_nuke, _MANAGED_ROLE_PATCH_FLAG, True)
@@ -95,7 +91,8 @@ def _patch_managed_overwrite_readiness() -> bool:
 
     def wrapped(guild: discord.Guild, bot_member: Any) -> list[str]:
         blockers = list(original(guild, bot_member))
-        removable: set[str] = set()
+        safe_labels: set[str] = set()
+        unsafe_labels: set[str] = set()
 
         for channel in list(getattr(guild, "channels", []) or []):
             overwrites = getattr(channel, "overwrites", None)
@@ -116,14 +113,18 @@ def _patch_managed_overwrite_readiness() -> bool:
                     continue
                 if not anti_nuke._role_is_managed(role):  # noqa: SLF001
                     continue
-                if not _managed_role_is_safely_containable(guild, role):
-                    continue
 
                 role_name = str(getattr(role, "name", "role") or "role")
-                removable.add(
-                    f"#{channel_name} grants dangerous permissions to unmanageable @{role_name}"
+                label = (
+                    f"#{channel_name} grants dangerous permissions to "
+                    f"unmanageable @{role_name}"
                 )
+                if _managed_role_is_safely_containable(guild, role):
+                    safe_labels.add(label)
+                else:
+                    unsafe_labels.add(label)
 
+        removable = safe_labels - unsafe_labels
         if not removable:
             return blockers
         return [item for item in blockers if item not in removable]
