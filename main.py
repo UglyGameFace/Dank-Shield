@@ -170,6 +170,24 @@ def _install_anti_nuke_lockdown_runtime() -> None:
         )
 
 
+def _install_anti_nuke_self_action_runtime() -> None:
+    """Prove sensitive Dank Shield audit actions originated in this process."""
+
+    try:
+        from stoney_verify.globals import bot
+        from stoney_verify.anti_nuke_self_action_runtime import (
+            install_anti_nuke_self_action_runtime,
+        )
+
+        if not install_anti_nuke_self_action_runtime(bot):
+            print("ℹ️ AntiNuke self-action proof was already installed; duplicate skipped")
+    except Exception as exc:
+        print(
+            "🚨 AntiNuke self-action proof install failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
 def main() -> None:
     _sleep_before_import_if_discord_login_backoff_active()
     _install_invite_reconciliation_runtime()
@@ -178,6 +196,7 @@ def main() -> None:
     _install_anti_nuke_incident_runtime()
     _install_hostile_actor_runtime()
     _install_anti_nuke_lockdown_runtime()
+    _install_anti_nuke_self_action_runtime()
     from stoney_verify.app import run as _run_dank_shield
 
     _run_dank_shield()
