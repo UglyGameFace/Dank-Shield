@@ -271,7 +271,7 @@ def test_unprovenanced_self_action_becomes_critical_incident(monkeypatch) -> Non
     assert len(consumed) == 1
     assert len(incidents) == 1
     assert incidents[0]["title"] == "🚨 AntiNuke Bot-Token Compromise Suspected"
-    assert "missing provenance" in str(incidents[0]["details"])
+    assert "Unprovenanced self-attributed action" in str(incidents[0]["action_label"])
 
 
 def test_disabled_antinuke_does_not_reclassify_self_action() -> None:
