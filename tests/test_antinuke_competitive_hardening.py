@@ -298,6 +298,121 @@ def test_two_critical_guild_updates_from_two_actors_trigger_panic() -> None:
     _reset()
 
 
+class FakeOverwriteChannel:
+    def __init__(self, channel_id: int, current: discord.PermissionOverwrite | None = None) -> None:
+        self.id = channel_id
+        self.name = "secure"
+        self.current = current or discord.PermissionOverwrite()
+        self.calls: list[dict] = []
+
+    def overwrites_for(self, _principal):
+        return self.current
+
+    async def set_permissions(self, principal, *, overwrite=None, reason=None):
+        self.calls.append(
+            {"principal": principal, "overwrite": overwrite, "reason": reason}
+        )
+        self.current = overwrite or discord.PermissionOverwrite()
+
+
+def _enabled_contain_settings(**patch):
+    return anti_nuke.normalize_antinuke_settings(
+        {"antinuke_enabled": True, "antinuke_mode": "contain", **patch}
+    )
+
+
+def test_undelegated_overwrite_create_is_rolled_back(monkeypatch) -> None:
+    guild = FakeGuild()
+    actor = _actor(801)
+    principal = SimpleNamespace(id=802, name="Raiders")
+    guild.roles[principal.id] = principal
+    channel = FakeOverwriteChannel(803)
+    entry = FakeEntry(9201, "overwrite_create", guild, actor=actor, target=channel)
+    entry.extra = principal
+
+    async def fake_settings(_guild_id):
+        return _enabled_contain_settings()
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", fake_settings)
+    result = asyncio.run(
+        guardian._rollback_untrusted_overwrite(
+            guild,
+            entry,
+            actor,
+            "overwrite_create",
+        )
+    )
+
+    assert "removed unauthorized" in result
+    assert channel.calls and channel.calls[-1]["overwrite"] is None
+
+
+def test_undelegated_overwrite_update_restores_before_pair(monkeypatch) -> None:
+    guild = FakeGuild()
+    actor = _actor(811)
+    principal = SimpleNamespace(id=812, name="Members")
+    guild.roles[principal.id] = principal
+    current = discord.PermissionOverwrite(manage_channels=True)
+    channel = FakeOverwriteChannel(813, current=current)
+    old_allow = discord.Permissions.none()
+    old_deny = discord.Permissions.none()
+    old_deny.manage_channels = True
+    entry = FakeEntry(
+        9202,
+        "overwrite_update",
+        guild,
+        actor=actor,
+        target=channel,
+        before=SimpleNamespace(allow=old_allow, deny=old_deny),
+    )
+    entry.extra = principal
+
+    async def fake_settings(_guild_id):
+        return _enabled_contain_settings()
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", fake_settings)
+    result = asyncio.run(
+        guardian._rollback_untrusted_overwrite(
+            guild,
+            entry,
+            actor,
+            "overwrite_update",
+        )
+    )
+
+    assert "restored overwrite" in result
+    restored = channel.calls[-1]["overwrite"]
+    allow, deny = restored.pair()
+    assert allow.manage_channels is False
+    assert deny.manage_channels is True
+
+
+def test_delegated_operator_overwrite_is_not_rolled_back(monkeypatch) -> None:
+    guild = FakeGuild()
+    actor = _actor(821)
+    principal = SimpleNamespace(id=822, name="Staff")
+    guild.roles[principal.id] = principal
+    channel = FakeOverwriteChannel(823)
+    entry = FakeEntry(9203, "overwrite_update", guild, actor=actor, target=channel)
+    entry.extra = principal
+
+    async def fake_settings(_guild_id):
+        return _enabled_contain_settings(antinuke_trusted_user_ids=[actor.id])
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", fake_settings)
+    result = asyncio.run(
+        guardian._rollback_untrusted_overwrite(
+            guild,
+            entry,
+            actor,
+            "overwrite_update",
+        )
+    )
+
+    assert result == ""
+    assert channel.calls == []
+
+
 class ListenerBot:
     def __init__(self) -> None:
         self.intents = SimpleNamespace(moderation=True)
