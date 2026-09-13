@@ -641,6 +641,10 @@ def test_main_installs_hostile_and_lockdown_independently_before_app_import() ->
         "    _install_anti_nuke_incident_runtime()\n"
         "    _install_hostile_actor_runtime()\n"
         "    _install_anti_nuke_lockdown_runtime()\n"
+        "    _install_anti_nuke_self_action_runtime()\n"
+        "    _install_anti_nuke_zero_damage_runtime()\n"
+        "    _install_anti_nuke_audit_compat_runtime()\n"
+        "    _install_anti_nuke_readiness_gate_runtime()\n"
         "    from stoney_verify.app import run as _run_dank_shield"
     )
     assert expected in source
