@@ -225,7 +225,7 @@ def _install_anti_nuke_audit_compat_runtime() -> None:
 
 
 def _install_anti_nuke_readiness_gate_runtime() -> None:
-    """Refuse contain mode while delegated AntiNuke-risk authority remains."""
+    """Attach the optional Strict Lockdown delegated-authority readiness gate."""
 
     try:
         from stoney_verify.globals import bot
@@ -238,6 +238,23 @@ def _install_anti_nuke_readiness_gate_runtime() -> None:
     except Exception as exc:
         print(
             "🚨 AntiNuke strict readiness gate install failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
+def _install_anti_nuke_product_policy_runtime() -> None:
+    """Finalize normal Contain vs optional Strict Lockdown after UI imports."""
+
+    try:
+        from stoney_verify.anti_nuke_product_policy_runtime import (
+            install_anti_nuke_product_policy_runtime,
+        )
+
+        if not install_anti_nuke_product_policy_runtime():
+            print("ℹ️ AntiNuke product policy runtime was already installed; duplicate skipped")
+    except Exception as exc:
+        print(
+            "🚨 AntiNuke product policy runtime install failed: "
             f"{type(exc).__name__}: {exc}"
         )
 
@@ -256,6 +273,7 @@ def main() -> None:
     _install_anti_nuke_readiness_gate_runtime()
     from stoney_verify.app import run as _run_dank_shield
 
+    _install_anti_nuke_product_policy_runtime()
     _run_dank_shield()
 
 
