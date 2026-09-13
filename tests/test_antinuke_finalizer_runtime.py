@@ -97,6 +97,7 @@ def test_main_installs_protection_layers_in_order_before_app_import() -> None:
         "    _install_anti_nuke_gateway_runtime()\n"
         "    _install_anti_nuke_finalizer_runtime()\n"
         "    _install_anti_nuke_incident_runtime()\n"
+        "    _install_hostile_actor_runtime()\n"
         "    from stoney_verify.app import run as _run_dank_shield"
     )
     assert expected in source
