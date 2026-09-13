@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from stoney_verify import anti_nuke
 from stoney_verify import anti_nuke_gateway_runtime as gateway
+from stoney_verify import anti_nuke_guardian_runtime as guardian
 from stoney_verify.globals import bot
 
 
@@ -32,6 +33,7 @@ class FakeEntry:
         self.action = SimpleNamespace(name=action_name)
         self.guild = guild or SimpleNamespace(id=123, owner_id=999)
         self.user = actor or SimpleNamespace(id=444, roles=[], mention="<@444>")
+        self.user_id = getattr(self.user, "id", None)
         self.target = target or SimpleNamespace(id=555, name="target")
 
 
@@ -41,26 +43,32 @@ def _reset_runtime_state() -> None:
     anti_nuke._SEEN_AUDIT_ENTRY_IDS.clear()
     anti_nuke._AUDIT_CLAIM_LOCKS.clear()
     anti_nuke._CONTAINMENT_LOCKS.clear()
+    guardian._PANIC_EVENTS.clear()
+    guardian._PANIC_UNTIL.clear()
 
 
-def test_install_adds_one_gateway_listener_without_mutating_canonical_policy() -> None:
+def test_install_adds_gateway_and_overwrite_fallback_without_mutating_policy() -> None:
     fake_bot = FakeBot()
     original_actions = anti_nuke._SLOW_BURN_ACTIONS
 
     installed = gateway.install_anti_nuke_gateway_runtime(fake_bot)
 
     assert installed is True
-    assert any(name == "on_audit_log_entry_create" for _cb, name in fake_bot.listeners)
+    names = [name for _cb, name in fake_bot.listeners]
+    assert names.count("on_audit_log_entry_create") == 1
+    assert names.count("on_guild_channel_update") == 1
     assert anti_nuke._SLOW_BURN_ACTIONS is original_actions
     assert gateway.install_anti_nuke_gateway_runtime(fake_bot) is False
-    assert len(fake_bot.listeners) == 1
+    assert len(fake_bot.listeners) == 2
 
 
 def test_production_bot_has_moderation_intent_for_audit_gateway() -> None:
     assert bool(getattr(bot.intents, "moderation", False)) is True
 
 
-def test_gateway_destructive_entry_uses_canonical_engine_without_rest_lookup(monkeypatch) -> None:
+def test_gateway_destructive_entry_uses_canonical_engine_without_rest_lookup(
+    monkeypatch,
+) -> None:
     _reset_runtime_state()
     guild = SimpleNamespace(id=321, owner_id=999)
     entry = FakeEntry(
@@ -172,6 +180,100 @@ def test_dangerous_role_create_routes_to_immediate_gateway_handler(monkeypatch) 
     assert calls == [7005]
     assert anti_nuke._audit_entry_seen(entry) is True
     _reset_runtime_state()
+
+
+def test_bot_add_gateway_removes_new_bot_and_contains_inviter(monkeypatch) -> None:
+    _reset_runtime_state()
+    kicked: list[int] = []
+    contained: list[int] = []
+    incidents: list[str] = []
+
+    async def fake_kick(member, *, reason=None):
+        kicked.append(int(member.id))
+
+    guild = SimpleNamespace(id=711, owner_id=999, kick=fake_kick)
+    actor = SimpleNamespace(id=444, roles=[], mention="<@444>")
+    target = SimpleNamespace(id=555, name="raid-bot", bot=True)
+    entry = FakeEntry(7006, "bot_add", guild=guild, actor=actor, target=target)
+
+    async def fake_settings(_guild_id: int):
+        return anti_nuke.normalize_antinuke_settings(
+            {"antinuke_enabled": True, "antinuke_mode": "contain"}
+        )
+
+    async def fake_contain(_guild, found_actor):
+        contained.append(int(found_actor.id))
+        return ["removed member from server"], []
+
+    async def fake_incident(_guild, **kwargs):
+        incidents.append(kwargs["title"])
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", fake_settings)
+    monkeypatch.setattr(guardian, "_contain_peer", fake_contain)
+    monkeypatch.setattr(anti_nuke, "_post_incident", fake_incident)
+
+    asyncio.run(gateway._on_audit_log_entry_create(entry))
+
+    assert kicked == [555]
+    assert contained == [444]
+    assert incidents == ["🚨 AntiNuke Untrusted Bot Added"]
+    assert anti_nuke._audit_entry_seen(entry) is True
+    _reset_runtime_state()
+
+
+def test_overwrite_fallback_uses_explicit_actions_and_channel_target(monkeypatch) -> None:
+    _reset_runtime_state()
+    calls: list[tuple[tuple[str, ...], int | None]] = []
+    guild = SimpleNamespace(id=812)
+    before = SimpleNamespace(id=91, guild=guild, overwrites={"role": "old"})
+    after = SimpleNamespace(id=91, guild=guild, overwrites={"role": "new"})
+
+    async def fake_settings(_guild_id: int):
+        return anti_nuke.normalize_antinuke_settings({"antinuke_enabled": True})
+
+    async def fake_claim(_guild, action_names, *, target_id=None, retries=3):
+        calls.append((tuple(action_names), target_id))
+        return None
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", fake_settings)
+    monkeypatch.setattr(guardian, "_claim_priority_entry", fake_claim)
+    monkeypatch.setattr(guardian.asyncio, "sleep", lambda *_args, **_kwargs: _noop())
+
+    asyncio.run(guardian._on_guild_channel_update_fallback(before, after))
+
+    assert calls == [(guardian._OVERWRITE_ACTIONS, 91)]
+    _reset_runtime_state()
+
+
+async def _noop() -> None:
+    return None
+
+
+def test_benign_member_facing_creation_actions_are_not_first_strike_guarded() -> None:
+    for action_name in (
+        "invite_create",
+        "invite_update",
+        "emoji_create",
+        "emoji_update",
+        "sticker_create",
+        "sticker_update",
+        "scheduled_event_create",
+        "scheduled_event_update",
+    ):
+        assert action_name not in guardian._ACTIONS
+
+
+def test_panic_covers_high_risk_creation_and_authority_paths() -> None:
+    expected = {
+        "bot_add",
+        "channel_create",
+        "role_create",
+        "webhook_create",
+        "automod_rule_create",
+        "overwrite_update",
+        "role_update",
+    }
+    assert expected.issubset(guardian._PANIC_ACTIONS)
 
 
 def test_main_installs_gateway_runtime_before_app_run() -> None:

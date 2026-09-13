@@ -2,11 +2,11 @@ from __future__ import annotations
 
 """Broad audit-surface guardian for the canonical AntiNuke engine.
 
-This module owns no independent punishment policy. It classifies security-sensitive
-Discord audit events, resolves sparse gateway attribution safely, and feeds those
-events into :mod:`stoney_verify.anti_nuke`. A short guild-wide circuit breaker also
-prevents several delegated operators from splitting one coordinated attack across
-separate per-user thresholds.
+This module owns no independent punishment policy. It classifies high-confidence
+security-sensitive Discord audit events, resolves sparse gateway attribution safely,
+and feeds them into :mod:`stoney_verify.anti_nuke`. A guild-wide circuit breaker
+also prevents several delegated operators from splitting one coordinated attack
+across separate per-user thresholds.
 """
 
 import asyncio
@@ -19,55 +19,182 @@ import discord
 from . import anti_nuke
 
 
-# label, saved threshold key, canonical counter key, optional hard override
+# label, saved threshold key, canonical counter key, optional hard override.
+# Keep normal member-facing creation activity out of first-strike AntiNuke. The
+# surfaces below either require meaningful administrative authority or destroy /
+# weaken server state.
 _ACTIONS: dict[str, tuple[str, str, str, Optional[int]]] = {
-    "guild_update": ("Server identity/settings mutation", "antinuke_channel_delete_threshold", "channel_update", None),
-    "channel_create": ("Channel creation", "antinuke_channel_delete_threshold", "channel_create", None),
-    "channel_update": ("Channel settings mutation", "antinuke_channel_delete_threshold", "channel_update", None),
-    "channel_delete": ("Channel deletion", "antinuke_channel_delete_threshold", "channel_delete", None),
-    "overwrite_create": ("Channel overwrite creation", "antinuke_channel_delete_threshold", "channel_update", None),
-    "overwrite_update": ("Channel overwrite mutation", "antinuke_channel_delete_threshold", "channel_update", None),
-    "overwrite_delete": ("Channel overwrite deletion", "antinuke_channel_delete_threshold", "channel_update", None),
-    "role_delete": ("Role deletion", "antinuke_role_delete_threshold", "role_delete", None),
+    "guild_update": (
+        "Server identity/settings mutation",
+        "antinuke_channel_delete_threshold",
+        "channel_update",
+        None,
+    ),
+    "channel_create": (
+        "Channel creation",
+        "antinuke_channel_delete_threshold",
+        "channel_create",
+        None,
+    ),
+    "channel_update": (
+        "Channel settings mutation",
+        "antinuke_channel_delete_threshold",
+        "channel_update",
+        None,
+    ),
+    "channel_delete": (
+        "Channel deletion",
+        "antinuke_channel_delete_threshold",
+        "channel_delete",
+        None,
+    ),
+    "overwrite_create": (
+        "Channel overwrite creation",
+        "antinuke_channel_delete_threshold",
+        "channel_update",
+        None,
+    ),
+    "overwrite_update": (
+        "Channel overwrite mutation",
+        "antinuke_channel_delete_threshold",
+        "channel_update",
+        None,
+    ),
+    "overwrite_delete": (
+        "Channel overwrite deletion",
+        "antinuke_channel_delete_threshold",
+        "channel_update",
+        None,
+    ),
+    "role_delete": (
+        "Role deletion",
+        "antinuke_role_delete_threshold",
+        "role_delete",
+        None,
+    ),
     "ban": ("Member ban", "antinuke_ban_threshold", "ban", None),
     "unban": ("Ban-list removal", "antinuke_ban_threshold", "ban", None),
     "kick": ("Member kick", "antinuke_kick_threshold", "kick", None),
-    "member_prune": ("Member prune", "antinuke_kick_threshold", "member_prune", 1),
-    "invite_create": ("Invite creation", "antinuke_channel_delete_threshold", "channel_update", None),
-    "invite_update": ("Invite mutation", "antinuke_channel_delete_threshold", "channel_update", None),
-    "invite_delete": ("Invite deletion", "antinuke_channel_delete_threshold", "channel_delete", None),
-    "webhook_create": ("Webhook creation", "antinuke_webhook_create_threshold", "webhook_create", None),
-    "webhook_update": ("Webhook mutation", "antinuke_webhook_create_threshold", "webhook_update", None),
-    "webhook_delete": ("Webhook deletion", "antinuke_webhook_create_threshold", "webhook_delete", None),
-    "emoji_create": ("Emoji creation", "antinuke_channel_delete_threshold", "channel_update", None),
-    "emoji_update": ("Emoji mutation", "antinuke_channel_delete_threshold", "channel_update", None),
-    "emoji_delete": ("Emoji deletion", "antinuke_channel_delete_threshold", "channel_delete", None),
-    "integration_delete": ("Integration deletion", "antinuke_role_delete_threshold", "role_update", None),
-    "sticker_create": ("Sticker creation", "antinuke_channel_delete_threshold", "channel_update", None),
-    "sticker_update": ("Sticker mutation", "antinuke_channel_delete_threshold", "channel_update", None),
-    "sticker_delete": ("Sticker deletion", "antinuke_channel_delete_threshold", "channel_delete", None),
-    "scheduled_event_create": ("Scheduled-event creation", "antinuke_channel_delete_threshold", "channel_update", None),
-    "scheduled_event_update": ("Scheduled-event mutation", "antinuke_channel_delete_threshold", "channel_update", None),
-    "scheduled_event_delete": ("Scheduled-event cancellation", "antinuke_channel_delete_threshold", "channel_delete", None),
-    "thread_delete": ("Thread/forum-post deletion", "antinuke_channel_delete_threshold", "channel_delete", None),
-    "app_command_permission_update": ("Application-command permission mutation", "antinuke_role_delete_threshold", "role_update", None),
-    "soundboard_sound_delete": ("Soundboard deletion", "antinuke_channel_delete_threshold", "channel_delete", None),
-    "automod_rule_create": ("Discord AutoMod rule creation", "antinuke_role_delete_threshold", "role_update", None),
-    "automod_rule_update": ("Discord AutoMod rule mutation", "antinuke_role_delete_threshold", "role_update", None),
-    "automod_rule_delete": ("Discord AutoMod rule deletion", "antinuke_role_delete_threshold", "role_delete", None),
-    "onboarding_prompt_delete": ("Onboarding prompt deletion", "antinuke_channel_delete_threshold", "channel_delete", None),
-    "onboarding_update": ("Server onboarding mutation", "antinuke_channel_delete_threshold", "channel_update", None),
-    "home_settings_update": ("Server guide mutation", "antinuke_channel_delete_threshold", "channel_update", None),
+    "member_prune": (
+        "Member prune",
+        "antinuke_kick_threshold",
+        "member_prune",
+        1,
+    ),
+    "invite_delete": (
+        "Invite deletion",
+        "antinuke_channel_delete_threshold",
+        "channel_delete",
+        None,
+    ),
+    "webhook_create": (
+        "Webhook creation",
+        "antinuke_webhook_create_threshold",
+        "webhook_create",
+        None,
+    ),
+    "webhook_update": (
+        "Webhook mutation",
+        "antinuke_webhook_create_threshold",
+        "webhook_update",
+        None,
+    ),
+    "webhook_delete": (
+        "Webhook deletion",
+        "antinuke_webhook_create_threshold",
+        "webhook_delete",
+        None,
+    ),
+    "emoji_delete": (
+        "Emoji deletion",
+        "antinuke_channel_delete_threshold",
+        "channel_delete",
+        None,
+    ),
+    "integration_delete": (
+        "Integration deletion",
+        "antinuke_role_delete_threshold",
+        "role_update",
+        None,
+    ),
+    "sticker_delete": (
+        "Sticker deletion",
+        "antinuke_channel_delete_threshold",
+        "channel_delete",
+        None,
+    ),
+    "scheduled_event_delete": (
+        "Scheduled-event cancellation",
+        "antinuke_channel_delete_threshold",
+        "channel_delete",
+        None,
+    ),
+    "thread_delete": (
+        "Thread/forum-post deletion",
+        "antinuke_channel_delete_threshold",
+        "channel_delete",
+        None,
+    ),
+    "app_command_permission_update": (
+        "Application-command permission mutation",
+        "antinuke_role_delete_threshold",
+        "role_update",
+        None,
+    ),
+    "soundboard_sound_delete": (
+        "Soundboard deletion",
+        "antinuke_channel_delete_threshold",
+        "channel_delete",
+        None,
+    ),
+    "automod_rule_create": (
+        "Discord AutoMod rule creation",
+        "antinuke_role_delete_threshold",
+        "role_update",
+        None,
+    ),
+    "automod_rule_update": (
+        "Discord AutoMod rule mutation",
+        "antinuke_role_delete_threshold",
+        "role_update",
+        None,
+    ),
+    "automod_rule_delete": (
+        "Discord AutoMod rule deletion",
+        "antinuke_role_delete_threshold",
+        "role_delete",
+        None,
+    ),
 }
 
+# Panic is narrower than general monitoring on purpose. These are the surfaces where
+# several actors operating together is a strong nuke/authority-takeover signal.
 _PANIC_ACTIONS = frozenset(
     {
-        "guild_update", "channel_delete", "overwrite_create", "overwrite_update", "overwrite_delete",
-        "role_update", "role_delete", "ban", "unban", "kick", "member_prune", "invite_delete",
-        "webhook_update", "webhook_delete", "emoji_delete", "integration_delete", "sticker_delete",
-        "scheduled_event_delete", "thread_delete", "app_command_permission_update",
-        "soundboard_sound_delete", "automod_rule_update", "automod_rule_delete",
-        "onboarding_prompt_delete", "onboarding_update", "home_settings_update",
+        "bot_add",
+        "channel_create",
+        "channel_delete",
+        "overwrite_create",
+        "overwrite_update",
+        "overwrite_delete",
+        "role_create",
+        "role_update",
+        "role_delete",
+        "ban",
+        "unban",
+        "kick",
+        "member_prune",
+        "webhook_create",
+        "webhook_update",
+        "webhook_delete",
+        "emoji_delete",
+        "integration_delete",
+        "sticker_delete",
+        "scheduled_event_delete",
+        "app_command_permission_update",
+        "automod_rule_create",
+        "automod_rule_update",
+        "automod_rule_delete",
     }
 )
 _PANIC_WINDOW_SECONDS = 10.0
@@ -77,6 +204,7 @@ _PANIC_HOLD_SECONDS = 60.0
 _PANIC_EVENTS: dict[int, Deque[tuple[float, int, Any]]] = defaultdict(deque)
 _PANIC_UNTIL: dict[int, float] = {}
 _INSTALL_FLAG = "_dank_antinuke_guardian_installed"
+_OVERWRITE_ACTIONS = ("overwrite_create", "overwrite_update", "overwrite_delete")
 
 
 class _EntryProxy:
@@ -116,7 +244,12 @@ def _target_id(entry: Any) -> Optional[int]:
 def _target_label(action_name: str, entry: Any) -> str:
     target = getattr(entry, "target", None)
     target_id = _safe_int(getattr(target, "id", 0), 0)
-    name = str(getattr(target, "name", "") or getattr(target, "code", "") or target or "Unknown")
+    name = str(
+        getattr(target, "name", "")
+        or getattr(target, "code", "")
+        or target
+        or "Unknown"
+    )
     if action_name == "guild_update":
         return "Server identity/settings"
     if action_name.startswith("overwrite_") or action_name.startswith("channel_"):
@@ -132,7 +265,9 @@ def _target_label(action_name: str, entry: Any) -> str:
 
 async def _resolve_actor(guild: discord.Guild, entry: Any) -> Optional[Any]:
     actor = getattr(entry, "user", None)
-    actor_id = _safe_int(getattr(actor, "id", 0), 0) or _safe_int(getattr(entry, "user_id", 0), 0)
+    actor_id = _safe_int(getattr(actor, "id", 0), 0) or _safe_int(
+        getattr(entry, "user_id", 0), 0
+    )
     if actor_id <= 0:
         return None
 
@@ -169,7 +304,16 @@ def _generic_role_update(entry: Any) -> bool:
         return False
     if anti_nuke.dangerous_permissions_changed(before, after):
         return True
-    for attr in ("position", "name", "hoist", "mentionable", "colour", "color", "icon", "unicode_emoji"):
+    for attr in (
+        "position",
+        "name",
+        "hoist",
+        "mentionable",
+        "colour",
+        "color",
+        "icon",
+        "unicode_emoji",
+    ):
         old = getattr(before, attr, None)
         new = getattr(after, attr, None)
         if old != new and (old is not None or new is not None):
@@ -177,11 +321,17 @@ def _generic_role_update(entry: Any) -> bool:
     return False
 
 
-def _panic_state(guild: discord.Guild, actor: Any, action_name: str) -> tuple[bool, bool, list[Any]]:
+def _panic_state(
+    guild: discord.Guild,
+    actor: Any,
+    action_name: str,
+) -> tuple[bool, bool, list[Any]]:
     guild_id = int(guild.id)
     now = time.monotonic()
     active = now < float(_PANIC_UNTIL.get(guild_id, 0.0) or 0.0)
-    if action_name not in _PANIC_ACTIONS or anti_nuke._actor_is_owner_or_bot(guild, actor):  # noqa: SLF001
+    if action_name not in _PANIC_ACTIONS or anti_nuke._actor_is_owner_or_bot(  # noqa: SLF001
+        guild, actor
+    ):
         return active, False, []
 
     actor_id = _safe_int(getattr(actor, "id", 0), 0)
@@ -194,7 +344,11 @@ def _panic_state(guild: discord.Guild, actor: Any, action_name: str) -> tuple[bo
         window.popleft()
     window.append((now, actor_id, actor))
     actors = {seen_id: seen_actor for _seen_at, seen_id, seen_actor in window}
-    triggered = not active and len(window) >= _PANIC_EVENT_THRESHOLD and len(actors) >= _PANIC_ACTOR_THRESHOLD
+    triggered = (
+        not active
+        and len(window) >= _PANIC_EVENT_THRESHOLD
+        and len(actors) >= _PANIC_ACTOR_THRESHOLD
+    )
     if triggered:
         _PANIC_UNTIL[guild_id] = now + _PANIC_HOLD_SECONDS
         active = True
@@ -206,9 +360,15 @@ def _clear_panic(guild_id: int) -> None:
     _PANIC_UNTIL.pop(int(guild_id), None)
 
 
-async def _contain_peer(guild: discord.Guild, actor: Any) -> tuple[list[str], list[str]]:
+async def _contain_peer(
+    guild: discord.Guild,
+    actor: Any,
+) -> tuple[list[str], list[str]]:
     actor_id = _safe_int(getattr(actor, "id", 0), 0)
-    lock = anti_nuke._lock_for(anti_nuke._CONTAINMENT_LOCKS, (int(guild.id), actor_id))  # noqa: SLF001
+    lock = anti_nuke._lock_for(  # noqa: SLF001
+        anti_nuke._CONTAINMENT_LOCKS,
+        (int(guild.id), actor_id),
+    )
     async with lock:
         return await anti_nuke._contain_actor(  # noqa: SLF001
             guild,
@@ -217,26 +377,178 @@ async def _contain_peer(guild: discord.Guild, actor: Any) -> tuple[list[str], li
         )
 
 
-async def _rest_reconcile(guild: discord.Guild, entry: Any, action_name: str, spec: tuple[str, str, str, Optional[int]]) -> None:
-    """Do not lose sparse gateway evidence; let canonical REST attribution retry it."""
+async def _contain_observed_peers(
+    guild: discord.Guild,
+    current_actor: Any,
+    observed: list[Any],
+) -> tuple[list[int], list[str]]:
+    current_id = _safe_int(getattr(current_actor, "id", 0), 0)
+    contained: list[int] = []
+    blocked: list[str] = []
+    for peer in observed:
+        peer_id = _safe_int(getattr(peer, "id", 0), 0)
+        if (
+            peer_id <= 0
+            or peer_id == current_id
+            or anti_nuke._actor_is_owner_or_bot(guild, peer)  # noqa: SLF001
+        ):
+            continue
+        removed, failures = await _contain_peer(guild, peer)
+        if removed and not failures:
+            contained.append(peer_id)
+        elif failures:
+            blocked.append(f"{peer_id}: {', '.join(failures)}")
+    return contained, blocked
 
-    label, threshold_key, counter_key, override = spec
-    await asyncio.sleep(0.35)
-    await anti_nuke._handle_threshold_event(  # noqa: SLF001
+
+async def _post_panic_incident(
+    guild: discord.Guild,
+    *,
+    actor: Any,
+    action_label: str,
+    target_label: str,
+    observed: list[Any],
+) -> None:
+    contained, blocked = await _contain_observed_peers(guild, actor, observed)
+    response = (
+        "Coordinated destructive burst detected across multiple executors. "
+        f"Delegated allowances are suspended for {int(_PANIC_HOLD_SECONDS)}s."
+    )
+    if contained:
+        response += " Peer actors contained: " + ", ".join(
+            str(value) for value in contained
+        ) + "."
+    if blocked:
+        response += " Peer blockers: " + " | ".join(blocked[:5]) + "."
+    await anti_nuke._post_incident(  # noqa: SLF001
         guild,
-        audit_action=action_name,
-        action_key=counter_key,
-        action_label=label,
-        target_id=_target_id(entry),
-        target_label=_target_label(action_name, entry),
-        threshold_key=threshold_key,
-        threshold_override=override,
+        title="🚨 AntiNuke Coordinated Panic",
+        actor=actor,
+        action_label=action_label,
+        target_label=target_label,
+        response_label=response,
+        count_label=(
+            f"{int(_PANIC_WINDOW_SECONDS)}s guild window • "
+            f"{_PANIC_EVENT_THRESHOLD}+ actions • {_PANIC_ACTOR_THRESHOLD}+ actors"
+        ),
+        details=(
+            "Guild-wide circuit breaker prevents several delegated operators from "
+            "splitting one attack below separate per-user thresholds."
+        ),
     )
 
 
-async def _process(guild: discord.Guild, entry: Any, actor: Any, action_name: str, spec: tuple[str, str, str, Optional[int]]) -> None:
+async def _claim_priority_entry(
+    guild: discord.Guild,
+    action_names: tuple[str, ...],
+    *,
+    target_id: Optional[int] = None,
+    retries: int = 3,
+) -> Optional[tuple[Any, Any]]:
+    """Claim fresh audit evidence without generic audit-log spacing.
+
+    This remains transport-only. The resulting evidence is still enforced by the
+    canonical AntiNuke policy engine.
+    """
+
+    names = tuple(str(name) for name in action_names if str(name))
+    if not names:
+        return None
+    key = (int(guild.id), "guardian:" + ",".join(sorted(names)))
+    lock = anti_nuke._lock_for(anti_nuke._AUDIT_CLAIM_LOCKS, key)  # noqa: SLF001
+
+    async with lock:
+        attempts = max(1, int(retries))
+        for attempt in range(1, attempts + 1):
+            candidates: list[tuple[Any, Any]] = []
+            for action_name in names:
+                action = anti_nuke._audit_action(action_name)  # noqa: SLF001
+                if action is None:
+                    continue
+                try:
+                    async for entry in guild.audit_logs(
+                        limit=anti_nuke._AUDIT_SEARCH_LIMIT,  # noqa: SLF001
+                        action=action,
+                        _dank_priority=True,
+                    ):
+                        if anti_nuke._audit_entry_seen(entry):  # noqa: SLF001
+                            continue
+                        if not anti_nuke._audit_entry_is_fresh(entry):  # noqa: SLF001
+                            continue
+                        if target_id is not None:
+                            found_target_id = _safe_int(
+                                getattr(getattr(entry, "target", None), "id", 0),
+                                0,
+                            )
+                            if found_target_id != int(target_id):
+                                continue
+                        actor = await _resolve_actor(guild, entry)
+                        if actor is None:
+                            continue
+                        candidates.append((entry, actor))
+                        break
+                except discord.Forbidden as exc:
+                    anti_nuke._log_audit_lookup_failure(  # noqa: SLF001
+                        guild,
+                        action_name,
+                        exc,
+                        attempt=attempt,
+                        retries=attempts,
+                    )
+                    return None
+                except Exception as exc:
+                    anti_nuke._log_audit_lookup_failure(  # noqa: SLF001
+                        guild,
+                        action_name,
+                        exc,
+                        attempt=attempt,
+                        retries=attempts,
+                    )
+
+            if candidates:
+                entry, actor = max(
+                    candidates,
+                    key=lambda item: _safe_int(getattr(item[0], "id", 0), 0),
+                )
+                if not anti_nuke._consume_audit_entry(entry):  # noqa: SLF001
+                    return _EntryProxy(entry, actor), actor
+
+            if attempt < attempts:
+                await asyncio.sleep(min(1.0, 0.3 * attempt))
+    return None
+
+
+async def _rest_reconcile(
+    guild: discord.Guild,
+    entry: Any,
+    action_name: str,
+    spec: tuple[str, str, str, Optional[int]],
+) -> None:
+    """Recover sparse gateway evidence without consuming-and-dropping it."""
+
+    await asyncio.sleep(0.35)
+    claimed = await _claim_priority_entry(
+        guild,
+        (action_name,),
+        target_id=_target_id(entry),
+    )
+    if claimed is None:
+        return
+    found_entry, actor = claimed
+    await _process(guild, found_entry, actor, action_name, spec)
+
+
+async def _process(
+    guild: discord.Guild,
+    entry: Any,
+    actor: Any,
+    action_name: str,
+    spec: tuple[str, str, str, Optional[int]],
+) -> None:
     label, threshold_key, counter_key, override = spec
-    panic_active, panic_triggered, observed = _panic_state(guild, actor, action_name)
+    panic_active, panic_triggered, observed = _panic_state(
+        guild, actor, action_name
+    )
     handled = await anti_nuke._process_claimed_destructive_event(  # noqa: SLF001
         guild,
         entry=entry,
@@ -249,40 +561,104 @@ async def _process(guild: discord.Guild, entry: Any, actor: Any, action_name: st
     if not handled:
         _clear_panic(int(guild.id))
         return
-    if not panic_triggered:
+    if panic_triggered:
+        await _post_panic_incident(
+            guild,
+            actor=actor,
+            action_label=label,
+            target_label=_target_label(action_name, entry),
+            observed=observed,
+        )
+
+
+async def _handle_bot_add(
+    guild: discord.Guild,
+    entry: Any,
+    actor: Any,
+) -> None:
+    """Remove an untrusted newly added bot before it can become a second executor."""
+
+    settings = await anti_nuke.get_antinuke_settings(int(guild.id))
+    if not settings["antinuke_enabled"]:
+        return
+    if anti_nuke._actor_is_owner_or_bot(guild, actor):  # noqa: SLF001
         return
 
-    current_id = _safe_int(getattr(actor, "id", 0), 0)
-    contained: list[int] = []
-    blocked: list[str] = []
-    for peer in observed:
-        peer_id = _safe_int(getattr(peer, "id", 0), 0)
-        if peer_id <= 0 or peer_id == current_id or anti_nuke._actor_is_owner_or_bot(guild, peer):  # noqa: SLF001
-            continue
-        removed, failures = await _contain_peer(guild, peer)
-        if removed and not failures:
-            contained.append(peer_id)
-        elif failures:
-            blocked.append(f"{peer_id}: {', '.join(failures)}")
+    target = getattr(entry, "target", None)
+    panic_active, panic_triggered, observed = _panic_state(guild, actor, "bot_add")
+    response = "Alert-only mode: newly added bot was left in the server."
 
-    response = (
-        f"Coordinated destructive burst detected across multiple executors. "
-        f"Delegated allowances are suspended for {int(_PANIC_HOLD_SECONDS)}s."
-    )
-    if contained:
-        response += " Peer actors contained: " + ", ".join(str(value) for value in contained) + "."
-    if blocked:
-        response += " Peer blockers: " + " | ".join(blocked[:5]) + "."
+    if settings["antinuke_mode"] == "contain":
+        removed_bot = False
+        try:
+            if target is not None:
+                await guild.kick(
+                    target,
+                    reason="Dank Shield AntiNuke rollback: untrusted bot addition",
+                )
+                removed_bot = True
+        except Exception:
+            removed_bot = False
+
+        removed_actor, blocked_actor = await _contain_peer(guild, actor)
+        response = (
+            "Removed the newly added bot."
+            if removed_bot
+            else "Could not remove the newly added bot."
+        )
+        if removed_actor:
+            response += " Inviter containment: " + ", ".join(removed_actor) + "."
+        if blocked_actor:
+            response += " Inviter blockers: " + ", ".join(blocked_actor) + "."
+
     await anti_nuke._post_incident(  # noqa: SLF001
         guild,
-        title="🚨 AntiNuke Coordinated Panic",
+        title="🚨 AntiNuke Untrusted Bot Added",
         actor=actor,
-        action_label=label,
-        target_label=_target_label(action_name, entry),
+        action_label="Bot added to server",
+        target_label=_target_label("bot_add", entry),
         response_label=response,
-        count_label=f"{int(_PANIC_WINDOW_SECONDS)}s guild window • {_PANIC_EVENT_THRESHOLD}+ actions • {_PANIC_ACTOR_THRESHOLD}+ actors",
-        details="Guild-wide circuit breaker prevents several delegated operators from splitting one attack below separate per-user thresholds.",
+        details="Gateway-fast rollback; REST propagation was not required.",
     )
+
+    if panic_active and panic_triggered:
+        await _post_panic_incident(
+            guild,
+            actor=actor,
+            action_label="Bot added to server",
+            target_label=_target_label("bot_add", entry),
+            observed=observed,
+        )
+
+
+async def _on_guild_channel_update_fallback(
+    before: discord.abc.GuildChannel,
+    after: discord.abc.GuildChannel,
+) -> None:
+    """Target-correct REST fallback for permission overwrite mutations."""
+
+    if getattr(before, "overwrites", None) == getattr(after, "overwrites", None):
+        return
+    guild = after.guild
+    settings = await anti_nuke.get_antinuke_settings(int(guild.id))
+    if not settings["antinuke_enabled"]:
+        return
+
+    await asyncio.sleep(0.2)
+    claimed = await _claim_priority_entry(
+        guild,
+        _OVERWRITE_ACTIONS,
+        target_id=int(after.id),
+        retries=2,
+    )
+    if claimed is None:
+        return
+    entry, actor = claimed
+    action_name = _action_name(entry)
+    spec = _ACTIONS.get(action_name)
+    if spec is None:
+        return
+    await _process(guild, entry, actor, action_name, spec)
 
 
 async def _on_audit_log_entry_create(entry: discord.AuditLogEntry) -> None:
@@ -291,10 +667,27 @@ async def _on_audit_log_entry_create(entry: discord.AuditLogEntry) -> None:
         return
 
     action_name = _action_name(entry)
+    if action_name == "bot_add":
+        actor = await _resolve_actor(guild, entry)
+        if actor is None:
+            # Do not consume sparse evidence. Native member-join + REST attribution
+            # remains available as the final fallback.
+            return
+        claimed = _EntryProxy(entry, actor)
+        if anti_nuke._consume_audit_entry(claimed):  # noqa: SLF001
+            return
+        await _handle_bot_add(guild, claimed, actor)
+        return
+
     if action_name == "role_update":
         if not _generic_role_update(entry):
             return
-        spec = ("Role hierarchy/settings mutation", "antinuke_role_delete_threshold", "role_update", None)
+        spec = (
+            "Role hierarchy/settings mutation",
+            "antinuke_role_delete_threshold",
+            "role_update",
+            None,
+        )
     else:
         spec = _ACTIONS.get(action_name)
     if spec is None:
@@ -315,13 +708,20 @@ def install_anti_nuke_guardian_runtime(bot: discord.Client) -> bool:
     if bool(getattr(bot, _INSTALL_FLAG, False)):
         return False
     bot.add_listener(_on_audit_log_entry_create, "on_audit_log_entry_create")
+    bot.add_listener(_on_guild_channel_update_fallback, "on_guild_channel_update")
     setattr(bot, _INSTALL_FLAG, True)
 
     moderation = bool(getattr(getattr(bot, "intents", None), "moderation", False))
     if moderation:
-        print("🛡️ AntiNuke guardian active: broad audit coverage and coordinated panic enabled")
+        print(
+            "🛡️ AntiNuke guardian active: broad audit coverage, overwrite fallback, "
+            "and coordinated panic enabled"
+        )
     else:
-        print("⚠️ AntiNuke guardian installed without moderation intent; native/REST coverage remains but broad gateway coverage may be unavailable")
+        print(
+            "⚠️ AntiNuke guardian installed without moderation intent; "
+            "native/REST coverage remains but broad gateway coverage may be unavailable"
+        )
     return True
 
 
