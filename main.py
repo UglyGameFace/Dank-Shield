@@ -152,6 +152,24 @@ def _install_hostile_actor_runtime() -> None:
         )
 
 
+def _install_anti_nuke_lockdown_runtime() -> None:
+    """Attach final AntiNuke lockdown independently after hostile reputation."""
+
+    try:
+        from stoney_verify.globals import bot
+        from stoney_verify.anti_nuke_lockdown_runtime import (
+            install_anti_nuke_lockdown_runtime,
+        )
+
+        if not install_anti_nuke_lockdown_runtime(bot):
+            print("ℹ️ AntiNuke lockdown runtime was already installed; duplicate skipped")
+    except Exception as exc:
+        print(
+            "🚨 AntiNuke lockdown runtime install failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
 def main() -> None:
     _sleep_before_import_if_discord_login_backoff_active()
     _install_invite_reconciliation_runtime()
@@ -159,6 +177,7 @@ def main() -> None:
     _install_anti_nuke_finalizer_runtime()
     _install_anti_nuke_incident_runtime()
     _install_hostile_actor_runtime()
+    _install_anti_nuke_lockdown_runtime()
     from stoney_verify.app import run as _run_dank_shield
 
     _run_dank_shield()

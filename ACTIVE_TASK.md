@@ -1,51 +1,55 @@
 # ACTIVE TASK
 
-## DS-DEPLOY-001 — Supabase migration replay after schema-authority merge
+## DS-SEC-041 — AntiNuke zero-destruction hardening
 
-**Status:** IMPLEMENTED ON BRANCH / VALIDATION PENDING
-**Branch:** `fix/supabase-out-of-order-migrations`
-**Base:** `29e8f3f23240bf4b587dff0fa6d11cfeca68c8b8` (`main`, merge of PR #205)
+**Status:** IN PROGRESS
+**Branch:** `fix/antinuke-zero-destruction-hardening`
+**Base:** `33d0b735f4eb7004682d74f4ca789f5f9eb5068c` (`main`, merge of PR #207)
 
 ## Outcome
 
-Production must apply all committed Supabase migrations introduced by PRs #205 and #206, including migrations whose timestamps sort before an already-applied later migration.
+Close the remaining AntiNuke control-plane and destructive-surface bypasses found after the hostile-actor re-entry repair. With AntiNuke enabled in contain mode, delegated actors must not receive destructive-action grace, generic configuration restore must not be able to disarm or retarget AntiNuke/security-control settings, newly added bots must follow an explicit allowlist even when the guild owner performs the add, and the audit gateway must classify the remaining high-impact Discord administrative surfaces.
 
-## Root cause
+## Confirmed findings
 
-The production migration workflow linked to Supabase successfully and confirmed repository/remote migration state, but `supabase db push --dry-run` refused to continue because these two committed migrations are pending before the already-applied `20260913163000` migration:
+- PR #207 is merged and the production Supabase migration deployment completed successfully.
+- Generic Configuration History restore can currently restore `antinuke_*` values even though direct AntiNuke mutation is guild-owner only.
+- Configured trusted AntiNuke users/roles currently receive destructive thresholds and rollback exemptions in contain mode.
+- The broad audit guardian does not currently classify message delete/bulk-delete and several integration/expression/event/thread/stage authority events.
+- Server-control role IDs are not automatically treated as AntiNuke-sensitive role grants.
+- A first-time unknown bot added by the physical guild owner is currently exempt from the normal untrusted-bot removal path.
+- Discord's physical guild owner remains an unavoidable platform authority boundary; Dank Shield can detect owner-originated destruction immediately but cannot ban/kick/role-strip the owner.
 
-- `20260913154500_canonical_runtime_schema_authority.sql`
-- `20260913160000_reconcile_guild_member_role_state_constraint.sql`
+## Implementation scope
 
-Supabase explicitly requires `--include-all` for this valid out-of-order replay case. Because the dry-run failed, the apply step was skipped.
-
-## Changes
-
-- `.github/workflows/deploy-supabase-migrations.yml`
-  - preview now runs `supabase db push --dry-run --include-all`;
-  - apply now runs `supabase db push --include-all`.
+1. Add a final AntiNuke lockdown runtime after hostile-identity installation.
+2. Preserve live AntiNuke and server-control security keys across generic full/selective Configuration History restores.
+3. Remove configured-trust destructive grace while AntiNuke is enabled in contain mode.
+4. Automatically treat configured server-control roles as protected AntiNuke role IDs at runtime.
+5. Expand dangerous-permission and audit-action coverage, including message purge and remaining high-impact administrative surfaces.
+6. Require explicit bot-ID trust for owner-added bots while contain mode is active; known-hostile reputation still takes precedence over trust.
+7. Make guild-owner compromise detection first-strike so the platform boundary is surfaced immediately.
+8. Add focused regression tests plus full exact-head CI and diff cleanup before readiness.
 
 ## Safety / scope
 
-- No migration SQL is being rewritten or reordered.
-- Existing migration history remains authoritative.
-- The workflow still performs a dry-run before any production apply.
-- Required secrets, project linking, and migration-list inspection remain unchanged.
-- No unrelated runtime or product code is modified.
-
-## Validation evidence
-
-Failed production run `34771377440` reached Supabase successfully, verified all required secrets, linked the production project, and listed migration history. It failed only at the preview step with Supabase's explicit instruction to rerun with `--include-all` for the two earlier pending migrations.
+- No offensive tooling or destructive test code is added.
+- No direct changes to `main`.
+- Existing durable hostile-identity enforcement remains authoritative and must not be weakened.
+- Generic backup creation remains allowed; only restoring security-root values through the generic history path is blocked/preserved.
+- Legitimate trusted bot IDs remain explicitly configurable, but a known-hostile ID cannot become safe merely by being trusted.
 
 ## Definition of done
 
-- exact-head PR CI is green;
-- merged workflow runs on `main`;
-- production `Deploy Supabase migrations` completes successfully;
-- remote migration status shows `20260913154500`, `20260913160000`, and `20260913163000` applied;
-- no other open PRs remain from this repair;
-- live Dank Shield deployment can then be adversarially retested against the known-hostile GANG Nuker re-entry scenario.
+- generic full and selective restores cannot change protected AntiNuke/security-control values;
+- contain mode gives no destructive threshold/rollback exemption to configured trusted actors;
+- owner-added unapproved bots are removed while explicitly trusted non-hostile bots are allowed;
+- message purge plus the audited high-impact administrative surfaces are classified by the guardian;
+- control-role grants are treated as security-sensitive;
+- owner destructive activity alerts on the first attributed action;
+- focused tests, compile/static checks, and the full exact-head Dank Shield CI pass;
+- PR diff contains no unrelated changes and `ACTIVE_TASK.md` records final validation evidence.
 
 ## Next step
 
-Open a focused PR, validate the exact head, merge only after green, then confirm the production migration run succeeds before declaring the repair complete.
+Implement the lockdown runtime and focused tests on this branch, open a draft PR, then validate and clean the exact head before marking it ready.
