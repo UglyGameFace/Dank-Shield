@@ -2,16 +2,11 @@ from __future__ import annotations
 
 """Durable hostile-actor reputation and re-entry enforcement.
 
-This runtime is the shared bridge between AntiNuke containment, member re-entry,
-SpamGuard's bot exclusions, and hard-proof alt identity evidence.
-
-The policy is deliberately narrow:
-- only a confirmed AntiNuke containment or a hard identity link to an already
-  confirmed hostile actor creates an active hostile disposition;
-- usernames, bot names, profile shape, and heuristic alt similarity never do;
-- the disposition is guild-scoped, keyed by Discord user ID, durable in
-  Supabase when available, and mirrored to local disk for outage continuity;
-- ordinary trusted/legitimate bots remain outside human SpamGuard heuristics.
+This module owns one narrow security fact: a guild-scoped Discord identity that
+has crossed confirmed AntiNuke containment remains hostile until an explicit
+clear is recorded. It bridges that fact into re-entry, bot-add, restart, and
+message backstop paths without turning ordinary bot accounts or heuristic alt
+similarity into automatic punishment evidence.
 """
 
 import asyncio
@@ -31,6 +26,7 @@ REPUTATION_TABLE = "guild_security_actor_reputation"
 _REPUTATION_VERSION = 1
 _INSTALL_FLAG = "_dank_hostile_actor_runtime_installed"
 _PATCH_FLAG = "_dank_hostile_actor_runtime_patched"
+_ORIGINAL_CONTAIN_ATTR = "_dank_hostile_original_contain_actor"
 _MEMORY: dict[tuple[int, int], dict[str, Any]] = {}
 _NEGATIVE_CACHE: dict[tuple[int, int], float] = {}
 _NEGATIVE_TTL_SECONDS = 60.0
@@ -84,20 +80,6 @@ def _empty_document() -> dict[str, Any]:
     return {"version": _REPUTATION_VERSION, "actors": {}}
 
 
-def _load_document_unlocked() -> dict[str, Any]:
-    path = _state_path()
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return _empty_document()
-    if not isinstance(payload, dict):
-        return _empty_document()
-    actors = payload.get("actors")
-    if not isinstance(actors, dict):
-        actors = {}
-    return {"version": _REPUTATION_VERSION, "actors": dict(actors)}
-
-
 def _record_key(guild_id: int, user_id: int) -> str:
     return f"{int(guild_id)}:{int(user_id)}"
 
@@ -110,10 +92,12 @@ def _normalize_record(
 ) -> Optional[dict[str, Any]]:
     if not isinstance(row, Mapping):
         return None
+
     gid = _safe_int(row.get("guild_id"), guild_id)
     uid = _safe_int(row.get("user_id"), user_id)
     if gid <= 0 or uid <= 0:
         return None
+
     return {
         "guild_id": gid,
         "user_id": uid,
@@ -128,13 +112,25 @@ def _normalize_record(
         "first_seen_at": _safe_text(row.get("first_seen_at"), _utcnow_iso()),
         "last_seen_at": _safe_text(row.get("last_seen_at"), _utcnow_iso()),
         "last_reason": _safe_text(row.get("last_reason")) or None,
-        "related_user_id": (
-            _safe_int(row.get("related_user_id"), 0) or None
-        ),
+        "related_user_id": _safe_int(row.get("related_user_id"), 0) or None,
         "cleared_at": _safe_text(row.get("cleared_at")) or None,
-        "cleared_by": _safe_text(row.get("cleared_by")) or None,
+        "cleared_by": _safe_int(row.get("cleared_by"), 0) or None,
         "clear_reason": _safe_text(row.get("clear_reason")) or None,
     }
+
+
+def _load_document_unlocked() -> dict[str, Any]:
+    path = _state_path()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return _empty_document()
+    if not isinstance(payload, dict):
+        return _empty_document()
+    actors = payload.get("actors")
+    if not isinstance(actors, dict):
+        actors = {}
+    return {"version": _REPUTATION_VERSION, "actors": dict(actors)}
 
 
 def _write_local_record(record: Mapping[str, Any]) -> bool:
@@ -142,6 +138,7 @@ def _write_local_record(record: Mapping[str, Any]) -> bool:
     uid = _safe_int(record.get("user_id"), 0)
     if gid <= 0 or uid <= 0:
         return False
+
     path = _state_path()
     tmp = path.with_name(path.name + ".tmp")
     try:
@@ -176,21 +173,22 @@ def _read_local_record(guild_id: int, user_id: int) -> Optional[dict[str, Any]]:
     return _normalize_record(raw, guild_id=gid, user_id=uid)
 
 
-def _local_active_records(guild_id: int) -> list[dict[str, Any]]:
+def _read_local_guild_records(guild_id: int) -> dict[int, dict[str, Any]]:
     gid = _safe_int(guild_id, 0)
     if gid <= 0:
-        return []
+        return {}
     with _FILE_LOCK:
         payload = _load_document_unlocked()
         rows = list((payload.get("actors") or {}).values())
-    out: list[dict[str, Any]] = []
+
+    out: dict[int, dict[str, Any]] = {}
     for raw in rows:
         if not isinstance(raw, Mapping):
             continue
         uid = _safe_int(raw.get("user_id"), 0)
         row = _normalize_record(raw, guild_id=gid, user_id=uid)
-        if row and row["guild_id"] == gid and row["active"]:
-            out.append(row)
+        if row is not None and row["guild_id"] == gid:
+            out[uid] = row
     return out
 
 
@@ -208,11 +206,15 @@ def _is_missing_table_error(exc: BaseException) -> bool:
     )
 
 
-def _fetch_db_record_sync(guild_id: int, user_id: int) -> tuple[str, Optional[dict[str, Any]]]:
+def _fetch_db_record_sync(
+    guild_id: int,
+    user_id: int,
+) -> tuple[str, Optional[dict[str, Any]]]:
     global _TABLE_AVAILABLE
     sb = get_supabase()
     if sb is None:
         return "unavailable", None
+
     try:
         result = (
             sb.table(REPUTATION_TABLE)
@@ -232,18 +234,22 @@ def _fetch_db_record_sync(guild_id: int, user_id: int) -> tuple[str, Optional[di
         return f"error:{type(exc).__name__}", None
 
 
-def _fetch_db_active_sync(guild_id: int) -> tuple[str, list[dict[str, Any]]]:
+def _fetch_db_guild_records_sync(
+    guild_id: int,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Fetch active and cleared rows so DB clears override stale local mirrors."""
+
     global _TABLE_AVAILABLE
     sb = get_supabase()
     if sb is None:
         return "unavailable", []
+
     try:
         result = (
             sb.table(REPUTATION_TABLE)
             .select("*")
             .eq("guild_id", int(guild_id))
-            .eq("active", True)
-            .limit(500)
+            .limit(1000)
             .execute()
         )
         _TABLE_AVAILABLE = True
@@ -261,6 +267,7 @@ def _upsert_db_record_sync(record: Mapping[str, Any]) -> bool:
     sb = get_supabase()
     if sb is None:
         return False
+
     payload = {
         "guild_id": int(record["guild_id"]),
         "user_id": int(record["user_id"]),
@@ -277,6 +284,7 @@ def _upsert_db_record_sync(record: Mapping[str, Any]) -> bool:
         "cleared_by": record.get("cleared_by"),
         "clear_reason": record.get("clear_reason"),
     }
+
     try:
         (
             sb.table(REPUTATION_TABLE)
@@ -309,18 +317,21 @@ async def get_actor_reputation(
     gid, uid = _key(guild_id, user_id)
     if gid <= 0 or uid <= 0:
         return None
-    cache_key = (gid, uid)
 
+    cache_key = (gid, uid)
     if not refresh:
         cached = _MEMORY.get(cache_key)
         if isinstance(cached, Mapping):
             return dict(cached)
         negative_at = _NEGATIVE_CACHE.get(cache_key)
-        if negative_at is not None and (time.monotonic() - negative_at) < _NEGATIVE_TTL_SECONDS:
+        if (
+            negative_at is not None
+            and time.monotonic() - negative_at < _NEGATIVE_TTL_SECONDS
+        ):
             return None
 
-    local = _read_local_record(gid, uid)
-    if not refresh and local is not None:
+    local = await asyncio.to_thread(_read_local_record, gid, uid)
+    if local is not None and not refresh:
         _MEMORY[cache_key] = dict(local)
         return dict(local)
 
@@ -330,12 +341,13 @@ async def get_actor_reputation(
         if normalized is not None:
             _MEMORY[cache_key] = dict(normalized)
             _NEGATIVE_CACHE.pop(cache_key, None)
-            _write_local_record(normalized)
+            await asyncio.to_thread(_write_local_record, normalized)
             return dict(normalized)
 
+    # Missing/unavailable DB state never silently erases a local security fact.
+    # Explicit clear uses an inactive row, so a real clear remains distinguishable
+    # from a transient table/config outage.
     if local is not None:
-        # A local confirmed disposition is intentionally fail-safe when the DB is
-        # absent/unavailable or an earlier DB write failed.
         _MEMORY[cache_key] = dict(local)
         return dict(local)
 
@@ -349,24 +361,20 @@ async def list_active_reputations(guild_id: int) -> list[dict[str, Any]]:
     if gid <= 0:
         return []
 
-    merged: dict[int, dict[str, Any]] = {
-        row["user_id"]: row for row in _local_active_records(gid)
-    }
-    status, rows = await asyncio.to_thread(_fetch_db_active_sync, gid)
+    merged = await asyncio.to_thread(_read_local_guild_records, gid)
+    status, rows = await asyncio.to_thread(_fetch_db_guild_records_sync, gid)
     if status == "ok":
         for raw in rows:
             uid = _safe_int(raw.get("user_id"), 0)
             normalized = _normalize_record(raw, guild_id=gid, user_id=uid)
             if normalized is None:
                 continue
+            merged[uid] = normalized
             _MEMORY[(gid, uid)] = dict(normalized)
-            _write_local_record(normalized)
-            if normalized["active"]:
-                merged[uid] = normalized
-            else:
-                merged.pop(uid, None)
+            _NEGATIVE_CACHE.pop((gid, uid), None)
+            await asyncio.to_thread(_write_local_record, normalized)
 
-    return list(merged.values())
+    return [dict(row) for row in merged.values() if row.get("active")]
 
 
 async def mark_confirmed_hostile(
@@ -416,9 +424,10 @@ async def mark_confirmed_hostile(
             "cleared_by": None,
             "clear_reason": None,
         }
+
         _MEMORY[cache_key] = dict(record)
         _NEGATIVE_CACHE.pop(cache_key, None)
-        _write_local_record(record)
+        await asyncio.to_thread(_write_local_record, record)
         await asyncio.to_thread(_upsert_db_record_sync, record)
         return dict(record)
 
@@ -439,15 +448,21 @@ async def clear_hostile_reputation(
         previous = await get_actor_reputation(gid, uid, refresh=True)
         if previous is None:
             return None
+
+        now = _utcnow_iso()
         record = dict(previous)
-        record["active"] = False
-        record["last_seen_at"] = _utcnow_iso()
-        record["cleared_at"] = _utcnow_iso()
-        record["cleared_by"] = str(_safe_int(cleared_by, 0)) if _safe_int(cleared_by, 0) > 0 else None
-        record["clear_reason"] = _safe_text(reason) or None
+        record.update(
+            {
+                "active": False,
+                "last_seen_at": now,
+                "cleared_at": now,
+                "cleared_by": _safe_int(cleared_by, 0) or None,
+                "clear_reason": _safe_text(reason) or None,
+            }
+        )
         _MEMORY[cache_key] = dict(record)
         _NEGATIVE_CACHE.pop(cache_key, None)
-        _write_local_record(record)
+        await asyncio.to_thread(_write_local_record, record)
         await asyncio.to_thread(_upsert_db_record_sync, record)
         return dict(record)
 
@@ -459,7 +474,10 @@ def _actor_id(actor: Any) -> int:
 
 
 def _is_owner(guild: discord.Guild, user_id: int) -> bool:
-    return int(user_id) > 0 and int(user_id) == _safe_int(getattr(guild, "owner_id", 0), 0)
+    return int(user_id) > 0 and int(user_id) == _safe_int(
+        getattr(guild, "owner_id", 0),
+        0,
+    )
 
 
 def _is_dank_bot(anti_nuke: Any, user_id: int) -> bool:
@@ -498,10 +516,50 @@ async def _ban_identity(
         return False, f"ban failed: {type(exc).__name__}"
 
 
+def _canonical_contain(anti_nuke: Any):
+    found = getattr(anti_nuke, _ORIGINAL_CONTAIN_ATTR, None)
+    if callable(found):
+        return found
+    return anti_nuke._contain_actor  # noqa: SLF001
+
+
+async def _post_reputation_incident(
+    anti_nuke: Any,
+    guild: discord.Guild,
+    *,
+    title: str,
+    actor: Any,
+    action_label: str,
+    target_label: str,
+    response_label: str,
+    details: str,
+) -> None:
+    try:
+        await anti_nuke._post_incident(  # noqa: SLF001
+            guild,
+            title=title,
+            actor=actor,
+            action_label=action_label,
+            target_label=target_label,
+            response_label=response_label,
+            details=details,
+        )
+    except Exception as exc:
+        try:
+            print(
+                "⚠️ hostile reputation incident logging failed "
+                f"guild={guild.id} error={type(exc).__name__}: {exc}"
+            )
+        except Exception:
+            pass
+
+
 async def _confirmed_hostile_link(
     member: discord.Member,
     raidguard: Any,
 ) -> Optional[dict[str, Any]]:
+    """Return only hard identity evidence linked to an active hostile ID."""
+
     if bool(getattr(member, "bot", False)):
         return None
 
@@ -522,10 +580,12 @@ async def _confirmed_hostile_link(
         if _safe_int(value, 0) > 0
     }
     candidates: list[tuple[int, str]] = []
+
     for row in list(hard.get("proof_matches") or []):
         other = _safe_int(row.get("user_id"), 0)
         if other > 0 and other != uid and other not in suppressed:
             candidates.append((other, "verified identity fingerprint"))
+
     for row in list(hard.get("manual_confirmed") or []):
         other = _safe_int(row.get("user_id"), 0)
         if other > 0 and other != uid and other not in suppressed:
@@ -552,6 +612,7 @@ async def _enforce_reputation_member(
     *,
     anti_nuke: Any,
     source: str,
+    settings: Optional[Mapping[str, Any]] = None,
 ) -> bool:
     guild = member.guild
     uid = int(member.id)
@@ -559,18 +620,14 @@ async def _enforce_reputation_member(
         return False
 
     try:
-        settings = await anti_nuke.get_antinuke_settings(int(guild.id))
+        current = dict(
+            settings
+            or await anti_nuke.get_antinuke_settings(int(guild.id))
+        )
     except Exception as exc:
         print(
             "🚨 hostile actor enforcement could not load AntiNuke settings "
             f"guild={guild.id} user={uid} error={type(exc).__name__}: {exc}"
-        )
-        return False
-
-    if not bool(settings.get("antinuke_enabled")):
-        print(
-            "🚨 known hostile identity present while AntiNuke is disabled "
-            f"guild={guild.id} user={uid} source={source}"
         )
         return False
 
@@ -579,7 +636,6 @@ async def _enforce_reputation_member(
         "confirmed_destructive_actor",
     )
     related = _safe_int(reputation.get("related_user_id"), 0)
-    target_label = f"{member} (`{uid}`)"
     details = (
         f"Persistent security reputation: {classification}. "
         "This decision is keyed by Discord user ID, not username."
@@ -587,8 +643,23 @@ async def _enforce_reputation_member(
     if related > 0:
         details += f" Hard identity evidence links this account to hostile ID {related}."
 
-    if str(settings.get("antinuke_mode") or "").lower() != "contain":
-        await anti_nuke._post_incident(  # noqa: SLF001
+    target_label = f"{member} (`{uid}`)"
+    if not bool(current.get("antinuke_enabled")):
+        await _post_reputation_incident(
+            anti_nuke,
+            guild,
+            title="🚨 Known Hostile Identity Present",
+            actor=member,
+            action_label=f"Known hostile identity observed ({source})",
+            target_label=target_label,
+            response_label="AntiNuke is disabled; no automatic removal was attempted.",
+            details=details,
+        )
+        return True
+
+    if str(current.get("antinuke_mode") or "").lower() != "contain":
+        await _post_reputation_incident(
+            anti_nuke,
             guild,
             title="🚨 Known Hostile Identity Re-entered",
             actor=member,
@@ -599,7 +670,7 @@ async def _enforce_reputation_member(
         )
         return True
 
-    banned, ban_result = await _ban_identity(
+    banned, response = await _ban_identity(
         guild,
         uid,
         member=member,
@@ -608,10 +679,10 @@ async def _enforce_reputation_member(
             f"({classification})"
         ),
     )
-    response = ban_result
     if not banned:
+        original_contain = _canonical_contain(anti_nuke)
         try:
-            removed, blocked = await anti_nuke._contain_actor(  # noqa: SLF001
+            removed, blocked = await original_contain(
                 guild,
                 member,
                 reason="Dank Shield security reputation re-entry containment",
@@ -623,7 +694,8 @@ async def _enforce_reputation_member(
         if blocked:
             response += " • blockers: " + ", ".join(blocked)
 
-    await anti_nuke._post_incident(  # noqa: SLF001
+    await _post_reputation_incident(
+        anti_nuke,
         guild,
         title="🛑 Known Hostile Identity Blocked",
         actor=member,
@@ -641,6 +713,7 @@ def _patch_antinuke(anti_nuke: Any) -> None:
 
     original_contain = anti_nuke._contain_actor  # noqa: SLF001
     original_health = anti_nuke.antinuke_permission_health
+    setattr(anti_nuke, _ORIGINAL_CONTAIN_ATTR, original_contain)
 
     async def durable_contain(
         guild: discord.Guild,
@@ -652,8 +725,8 @@ def _patch_antinuke(anti_nuke: Any) -> None:
         if actor_id <= 0 or _is_owner(guild, actor_id):
             return await original_contain(guild, actor, reason=reason)
 
-        member = actor if isinstance(actor, discord.Member) else None
-        if member is None:
+        member = actor
+        if member is None or _actor_id(member) <= 0:
             try:
                 member = guild.get_member(actor_id)
             except Exception:
@@ -674,7 +747,7 @@ def _patch_antinuke(anti_nuke: Any) -> None:
                 f"guild={guild.id} user={actor_id} error={type(exc).__name__}: {exc}"
             )
 
-        banned, _ = await _ban_identity(
+        banned, _result = await _ban_identity(
             guild,
             actor_id,
             member=member,
@@ -683,7 +756,6 @@ def _patch_antinuke(anti_nuke: Any) -> None:
         if banned:
             return ["banned member from server"], []
 
-        # Preserve canonical role-strip/kick fallback if Discord denies the ban.
         return await original_contain(guild, actor, reason=reason)
 
     def reputation_aware_health(
@@ -733,10 +805,21 @@ def _patch_guardian(guardian: Any, anti_nuke: Any) -> None:
             return await original(guild, entry, actor)
 
         settings = await anti_nuke.get_antinuke_settings(int(guild.id))
+        details = (
+            "The target Discord ID already has an active guild-scoped hostile "
+            "security disposition. Re-entry bypasses normal first-seen heuristics."
+        )
+
         if not settings.get("antinuke_enabled"):
-            print(
-                "🚨 known hostile bot was added while AntiNuke is disabled "
-                f"guild={guild.id} bot={target_id} actor={_actor_id(actor)}"
+            await _post_reputation_incident(
+                anti_nuke,
+                guild,
+                title="🚨 Known Hostile Bot Added While AntiNuke Is Off",
+                actor=actor,
+                action_label="Previously confirmed hostile bot added again",
+                target_label=f"{target} (`{target_id}`)",
+                response_label="AntiNuke is disabled; no automatic removal was attempted.",
+                details=details,
             )
             return
 
@@ -749,6 +832,27 @@ def _patch_guardian(guardian: Any, anti_nuke: Any) -> None:
                 reason="Dank Shield AntiNuke: previously confirmed hostile bot re-added",
             )
             response_parts.append(result)
+
+            if not banned and target is not None:
+                original_contain = _canonical_contain(anti_nuke)
+                try:
+                    removed_target, blocked_target = await original_contain(
+                        guild,
+                        target,
+                        reason="Dank Shield AntiNuke: known hostile bot re-entry fallback",
+                    )
+                except Exception as exc:
+                    removed_target, blocked_target = [], [
+                        f"target fallback failed: {type(exc).__name__}"
+                    ]
+                if removed_target:
+                    response_parts.append(
+                        "target fallback: " + ", ".join(removed_target)
+                    )
+                if blocked_target:
+                    response_parts.append(
+                        "target blockers: " + ", ".join(blocked_target)
+                    )
 
             actor_id = _actor_id(actor)
             if (
@@ -767,89 +871,27 @@ def _patch_guardian(guardian: Any, anti_nuke: Any) -> None:
                 if removed:
                     response_parts.append("inviter: " + ", ".join(removed))
                 if blocked:
-                    response_parts.append("inviter blockers: " + ", ".join(blocked))
-            if not banned and not response_parts:
-                response_parts.append("known hostile bot removal failed")
+                    response_parts.append(
+                        "inviter blockers: " + ", ".join(blocked)
+                    )
         else:
             response_parts.append(
                 "alert-only mode: known hostile bot was not automatically removed"
             )
 
-        await anti_nuke._post_incident(  # noqa: SLF001
+        await _post_reputation_incident(
+            anti_nuke,
             guild,
             title="🛑 Known Hostile Bot Re-add Detected",
             actor=actor,
             action_label="Previously confirmed hostile bot added again",
             target_label=f"{target} (`{target_id}`)",
             response_label=" • ".join(response_parts),
-            details=(
-                "The target Discord ID already had an active guild-scoped hostile "
-                "security disposition. Re-entry bypassed normal first-seen heuristics."
-            ),
+            details=details,
         )
 
     guardian._handle_bot_add = wrapped  # noqa: SLF001
     setattr(guardian, marker, True)
-
-
-def _patch_spam_guard(spam_guard: Any, anti_nuke: Any) -> None:
-    marker = "_dank_hostile_reputation_spam_patched"
-    if bool(getattr(spam_guard, marker, False)):
-        return
-
-    original_message = spam_guard.handle_incoming_spam_message
-    original_shield = spam_guard.record_invite_shield_block
-
-    async def wrapped_message(message: discord.Message) -> bool:
-        guild = getattr(message, "guild", None)
-        member = getattr(message, "author", None)
-        if guild is not None and isinstance(member, discord.Member):
-            reputation = await get_actor_reputation(
-                int(guild.id),
-                int(member.id),
-                refresh=False,
-            )
-            if reputation and reputation.get("active"):
-                try:
-                    await message.delete()
-                except Exception:
-                    pass
-                await _enforce_reputation_member(
-                    member,
-                    reputation,
-                    anti_nuke=anti_nuke,
-                    source="SpamGuard prefilter",
-                )
-                return True
-        return await original_message(message)
-
-    async def wrapped_shield(
-        message: discord.Message,
-        codes: list[str],
-        *,
-        source: str = "invite-shield",
-    ) -> bool:
-        guild = getattr(message, "guild", None)
-        member = getattr(message, "author", None)
-        if guild is not None and isinstance(member, discord.Member):
-            reputation = await get_actor_reputation(
-                int(guild.id),
-                int(member.id),
-                refresh=False,
-            )
-            if reputation and reputation.get("active"):
-                await _enforce_reputation_member(
-                    member,
-                    reputation,
-                    anti_nuke=anti_nuke,
-                    source=f"{source} reputation prefilter",
-                )
-                return True
-        return await original_shield(message, codes, source=source)
-
-    spam_guard.handle_incoming_spam_message = wrapped_message
-    spam_guard.record_invite_shield_block = wrapped_shield
-    setattr(spam_guard, marker, True)
 
 
 async def _on_member_join(member: discord.Member) -> None:
@@ -862,7 +904,14 @@ async def _on_member_join(member: discord.Member) -> None:
         return
 
     reputation = await get_actor_reputation(gid, uid, refresh=True)
-    if reputation is None or not reputation.get("active"):
+
+    # An inactive exact-ID row is an explicit clear. Do not immediately recreate
+    # it from older linked-identity evidence; only a new confirmed incident may
+    # reactivate that exact identity.
+    if reputation is not None and not reputation.get("active"):
+        return
+
+    if reputation is None:
         link = await _confirmed_hostile_link(member, raidguard)
         if link is not None:
             related_id = int(link["related_user_id"])
@@ -889,6 +938,47 @@ async def _on_member_join(member: discord.Member) -> None:
         )
 
 
+async def _on_message_known_hostile(message: discord.Message) -> None:
+    """Contain-mode backstop that is independent of SpamGuard's bot exclusion."""
+
+    from . import anti_nuke
+
+    guild = getattr(message, "guild", None)
+    member = getattr(message, "author", None)
+    if guild is None or member is None:
+        return
+
+    gid = _safe_int(getattr(guild, "id", 0), 0)
+    uid = _actor_id(member)
+    reputation = _MEMORY.get((gid, uid))
+    if not reputation or not reputation.get("active"):
+        return
+    if _is_owner(guild, uid) or _is_dank_bot(anti_nuke, uid):
+        return
+
+    try:
+        settings = await anti_nuke.get_antinuke_settings(gid)
+    except Exception:
+        return
+    if not bool(settings.get("antinuke_enabled")):
+        return
+    if str(settings.get("antinuke_mode") or "").lower() != "contain":
+        return
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    await _enforce_reputation_member(
+        member,
+        reputation,
+        anti_nuke=anti_nuke,
+        source="message security backstop",
+        settings=settings,
+    )
+
+
 async def _prewarm_and_reconcile(bot: discord.Client) -> None:
     from . import anti_nuke
 
@@ -907,42 +997,50 @@ async def _prewarm_and_reconcile(bot: discord.Client) -> None:
             user_id = _safe_int(row.get("user_id"), 0)
             if user_id <= 0:
                 continue
+
+            # Exact refresh lets a DB-backed clear override stale local state from
+            # another process before startup containment is attempted.
+            fresh = await get_actor_reputation(
+                int(guild.id),
+                user_id,
+                refresh=True,
+            )
+            if not fresh or not fresh.get("active"):
+                continue
+
             try:
                 member = guild.get_member(user_id)
             except Exception:
                 member = None
-            if not isinstance(member, discord.Member):
+            if member is None:
                 continue
+
             await _enforce_reputation_member(
                 member,
-                row,
+                fresh,
                 anti_nuke=anti_nuke,
                 source="startup reconciliation",
             )
 
 
 def install_hostile_actor_runtime(bot: discord.Client) -> bool:
-    """Install one authoritative hostile-identity bridge.
+    """Install the authoritative hostile-identity bridge once."""
 
-    Installation happens after the AntiNuke incident runtime so this wrapper sits
-    outside the existing config/outage and owner-compromise policy wrappers.
-    """
     if bool(getattr(bot, _INSTALL_FLAG, False)):
         return False
 
     from . import anti_nuke
     from . import anti_nuke_guardian_runtime as guardian
-    from . import spam_guard
 
     _patch_antinuke(anti_nuke)
     _patch_guardian(guardian, anti_nuke)
-    _patch_spam_guard(spam_guard, anti_nuke)
 
     adder = getattr(bot, "add_listener", None)
     if not callable(adder):
         return False
 
     adder(_on_member_join, "on_member_join")
+    adder(_on_message_known_hostile, "on_message")
 
     async def _on_ready_hostile_reconcile() -> None:
         await _prewarm_and_reconcile(bot)
@@ -951,8 +1049,9 @@ def install_hostile_actor_runtime(bot: discord.Client) -> bool:
     setattr(bot, _INSTALL_FLAG, True)
     print(
         "🛡️ Hostile actor reputation active: durable exact-ID containment, "
-        "known-hostile bot re-entry interception, SpamGuard prefilter bridge, "
-        "hard-proof linked-alt inheritance, and startup reconciliation enabled"
+        "known-hostile bot re-entry interception, message backstop independent "
+        "of SpamGuard bot exclusions, hard-proof linked-alt inheritance, and "
+        "startup reconciliation enabled"
     )
     return True
 
