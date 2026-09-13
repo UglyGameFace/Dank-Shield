@@ -37,6 +37,7 @@ def _guild(*, roles=None, channels=None):
     return SimpleNamespace(
         id=7,
         owner_id=999,
+        owner=SimpleNamespace(id=999),
         me=me,
         roles=[bot_role, *(roles or [])],
         channels=list(channels or []),
@@ -163,3 +164,25 @@ def test_save_gate_refuses_to_arm_when_delegated_authority_remains(monkeypatch) 
             setattr(anti_nuke, gate._SAVE_FLAG, old_flag)  # noqa: SLF001
         elif hasattr(anti_nuke, gate._SAVE_FLAG):  # noqa: SLF001
             delattr(anti_nuke, gate._SAVE_FLAG)  # noqa: SLF001
+
+
+def test_preexisting_unsafe_contain_mode_is_reported_once(monkeypatch) -> None:
+    guild = _guild()
+    incidents: list[dict] = []
+    gate._WARNED_GUILDS.clear()  # noqa: SLF001
+
+    async def settings(_guild_id: int, refresh: bool = False):
+        _ = refresh
+        return {"antinuke_enabled": True, "antinuke_mode": "contain"}
+
+    async def post(_guild, **kwargs):
+        incidents.append(kwargs)
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
+    monkeypatch.setattr(anti_nuke, "_post_incident", post)
+    monkeypatch.setattr(gate, "delegated_authority_blockers", lambda _guild: ["strict blocker"])
+
+    assert asyncio.run(gate._warn_preexisting_unsafe_guild(guild)) is True  # noqa: SLF001
+    assert asyncio.run(gate._warn_preexisting_unsafe_guild(guild)) is True  # noqa: SLF001
+    assert len(incidents) == 1
+    assert "Preventive Lockdown Required" in incidents[0]["title"]
