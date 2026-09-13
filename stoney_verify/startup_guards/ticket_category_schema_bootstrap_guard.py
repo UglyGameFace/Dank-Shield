@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-"""Register ticket-category migrations in direct-DSN bootstrap.
+"""Compatibility manifest for ticket-category migration ordering.
 
-The public runtime already owns category selection and migration-aware fallbacks.
-When the bot has a direct Postgres DSN, this registration makes the committed
-Supabase migrations run automatically during the existing one-shot schema
-bootstrap. Selection schema stays v2; the preflight safely releases historical
-key swaps before the separate v3 catalog repair canonicalizes every managed row.
-The final preservation migration keeps the last owner-confirmed selection when
-a guild is temporarily forced back into ticket-menu review mode.
+Historically this module mutated ``auto_schema_bootstrap`` at import time so the
+bot could execute category migrations from a direct database connection during
+startup. Runtime schema mutation is retired. The constants remain temporarily
+for audits/tests and migration-order references, while the read-only readiness
+guard owns its own diagnostic manifest explicitly.
 """
 
 MIGRATION_FILE = "20260802042000_ticket_category_setup_selection.sql"
@@ -26,32 +24,14 @@ MIGRATION_FILES = (
 
 
 def apply() -> bool:
-    try:
-        from . import auto_schema_bootstrap as bootstrap
-    except Exception as exc:
-        print(
-            "⚠️ ticket_category_schema_bootstrap_guard: "
-            f"auto schema bootstrap unavailable: {exc!r}"
-        )
-        return False
+    """Compatibility no-op.
 
-    existing = list(getattr(bootstrap, "_BOOTSTRAP_MIGRATION_FILES", ()) or ())
-    for migration in MIGRATION_FILES:
-        if migration not in existing:
-            existing.append(migration)
-    bootstrap._BOOTSTRAP_MIGRATION_FILES = tuple(existing)
-
-    try:
-        print(
-            "✅ ticket_category_schema_bootstrap_guard: "
-            "ticket category selection v2 + stale-key preflight + managed catalog repair v4 + selection-preservation/history recovery registered for direct-DSN startup"
-        )
-    except Exception:
-        pass
+    Migration execution belongs to the Supabase migration pipeline. Keeping this
+    callable avoids breaking older imports while guaranteeing that importing the
+    module cannot mutate another startup guard or the database.
+    """
     return True
 
-
-apply()
 
 __all__ = [
     "MIGRATION_FILE",
