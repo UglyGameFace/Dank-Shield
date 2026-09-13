@@ -171,7 +171,7 @@ def test_self_granted_trusted_role_is_treated_as_security_sensitive(monkeypatch)
     _reset_runtime_state()
 
 
-def test_legitimate_pretrusted_actor_can_grant_trusted_role(monkeypatch) -> None:
+def test_pretrusted_delegate_cannot_mint_another_trusted_exemption(monkeypatch) -> None:
     _reset_runtime_state()
     trusted = FakeRole(333, "Trusted", position=10)
     actor = FakeMember(555, roles=[trusted], top_role=trusted)
@@ -185,6 +185,7 @@ def test_legitimate_pretrusted_actor_can_grant_trusted_role(monkeypatch) -> None
         return anti_nuke.normalize_antinuke_settings(
             {
                 "antinuke_enabled": True,
+                "antinuke_mode": "alert",
                 "antinuke_trusted_role_ids": [trusted.id],
             }
         )
@@ -201,7 +202,8 @@ def test_legitimate_pretrusted_actor_can_grant_trusted_role(monkeypatch) -> None
 
     asyncio.run(anti_nuke._handle_member_dangerous_role_grant(before, after))
 
-    assert incidents == []
+    assert len(incidents) == 1
+    assert incidents[0]["title"] == "🚨 AntiNuke Security-Sensitive Role Grant"
     _reset_runtime_state()
 
 
@@ -261,7 +263,7 @@ def test_structural_slow_roll_triggers_even_when_short_window_is_evaded(monkeypa
 
     assert contain_calls == [777]
     assert len(incidents) == 1
-    assert "structural slow-burn" in incidents[0]["count_label"]
+    assert "delegated long-horizon" in incidents[0]["count_label"]
     _reset_runtime_state()
 
 
