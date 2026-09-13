@@ -224,7 +224,9 @@ def test_structural_slow_roll_triggers_even_when_short_window_is_evaded(monkeypa
     incidents: list[dict] = []
 
     async def fake_settings(_guild_id: int):
-        return anti_nuke.normalize_antinuke_settings({"antinuke_enabled": True})
+        return anti_nuke.normalize_antinuke_settings(
+            {"antinuke_enabled": True, "antinuke_trusted_user_ids": [actor.id]}
+        )
 
     async def fake_audit(_guild, _action, *, target_id=None, retries=4):
         _ = retries
