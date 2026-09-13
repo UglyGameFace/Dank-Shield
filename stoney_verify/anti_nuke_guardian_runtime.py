@@ -199,9 +199,29 @@ _PANIC_WEIGHTS: dict[str, int] = {
 }
 _PANIC_ACTIONS = frozenset(_PANIC_WEIGHTS)
 _PANIC_MODERATION_ACTIONS = frozenset({"ban", "unban", "kick"})
+# These are high-confidence destructive/security-state mutations. Two separate
+# executors doing two of these inside the guild window is enough to prove
+# coordination even when the weighted score has not reached the broader threshold.
+# Ordinary moderation and creation-only activity intentionally stay out.
+_PANIC_SEVERE_ACTIONS = frozenset(
+    {
+        "bot_add",
+        "channel_delete",
+        "overwrite_create",
+        "overwrite_update",
+        "overwrite_delete",
+        "role_delete",
+        "member_prune",
+        "webhook_delete",
+        "integration_delete",
+        "app_command_permission_update",
+        "automod_rule_delete",
+    }
+)
 _PANIC_WINDOW_SECONDS = 10.0
 _PANIC_SCORE_THRESHOLD = 7
 _PANIC_HIGH_RISK_MIN_EVENTS = 2
+_PANIC_SEVERE_EVENT_THRESHOLD = 2
 _PANIC_MODERATION_EVENT_THRESHOLD = 12
 _PANIC_ACTOR_THRESHOLD = 2
 _PANIC_HOLD_SECONDS = 60.0
@@ -394,14 +414,28 @@ def _panic_state(
         for _seen_at, _seen_id, _seen_actor, seen_action, seen_weight in window
         if seen_action not in _PANIC_MODERATION_ACTIONS and seen_weight >= 2
     )
+    severe_events = [
+        (seen_id, seen_action)
+        for _seen_at, seen_id, _seen_actor, seen_action, _seen_weight in window
+        if seen_action in _PANIC_SEVERE_ACTIONS
+    ]
+    severe_actors = {seen_id for seen_id, _seen_action in severe_events}
 
     enough_actors = len(actors) >= _PANIC_ACTOR_THRESHOLD
     weighted_attack = (
         score >= _PANIC_SCORE_THRESHOLD
         and high_risk_events >= _PANIC_HIGH_RISK_MIN_EVENTS
     )
+    severe_coordination = (
+        len(severe_events) >= _PANIC_SEVERE_EVENT_THRESHOLD
+        and len(severe_actors) >= _PANIC_ACTOR_THRESHOLD
+    )
     moderation_flood = moderation_events >= _PANIC_MODERATION_EVENT_THRESHOLD
-    triggered = not active and enough_actors and (weighted_attack or moderation_flood)
+    triggered = (
+        not active
+        and enough_actors
+        and (severe_coordination or weighted_attack or moderation_flood)
+    )
     if triggered:
         _PANIC_UNTIL[guild_id] = now + _PANIC_HOLD_SECONDS
         active = True
@@ -482,14 +516,15 @@ async def _post_panic_incident(
         response_label=response,
         count_label=(
             f"{int(_PANIC_WINDOW_SECONDS)}s weighted guild window • "
-            f"score {_PANIC_SCORE_THRESHOLD}+ with {_PANIC_HIGH_RISK_MIN_EVENTS}+ "
-            f"high-risk events, or {_PANIC_MODERATION_EVENT_THRESHOLD}+ moderation actions • "
-            f"{_PANIC_ACTOR_THRESHOLD}+ actors"
+            f"{_PANIC_SEVERE_EVENT_THRESHOLD}+ severe actions across "
+            f"{_PANIC_ACTOR_THRESHOLD}+ actors, or score {_PANIC_SCORE_THRESHOLD}+ "
+            f"with {_PANIC_HIGH_RISK_MIN_EVENTS}+ high-risk events, or "
+            f"{_PANIC_MODERATION_EVENT_THRESHOLD}+ moderation actions"
         ),
         details=(
-            "Guild-wide circuit breaker weights structural destruction more heavily "
-            "than ordinary moderation so distributed nukes cannot hide behind "
-            "separate per-user thresholds."
+            "Guild-wide circuit breaker immediately catches separate executors "
+            "performing high-confidence structural/security destruction while "
+            "keeping broader weighted thresholds for ordinary administrative work."
         ),
     )
 
