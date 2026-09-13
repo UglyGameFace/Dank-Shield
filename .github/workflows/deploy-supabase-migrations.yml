@@ -59,8 +59,8 @@ jobs:
 
       - name: Preview pending migrations
         shell: bash
-        run: supabase db push --dry-run
+        run: supabase db push --dry-run --include-all
 
       - name: Apply pending migrations
         shell: bash
-        run: supabase db push
+        run: supabase db push --include-all
