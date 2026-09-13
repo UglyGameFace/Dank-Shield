@@ -11,6 +11,7 @@ class FakePermissions:
             setattr(self, name, bool(values.get(name, False)))
         self.view_audit_log = bool(values.get("view_audit_log", False))
         self.manage_roles = bool(values.get("manage_roles", False))
+        self.kick_members = bool(values.get("kick_members", False))
 
 
 class FakeRole:
@@ -45,7 +46,11 @@ def test_managed_dangerous_role_blocks_containment_readiness() -> None:
     )
     me = SimpleNamespace(
         top_role=SimpleNamespace(id=100),
-        guild_permissions=FakePermissions(view_audit_log=True, manage_roles=True),
+        guild_permissions=FakePermissions(
+            view_audit_log=True,
+            manage_roles=True,
+            kick_members=True,
+        ),
     )
     guild = SimpleNamespace(
         id=1,
@@ -68,7 +73,11 @@ def test_managed_dangerous_role_blocks_containment_readiness() -> None:
             "antinuke_trusted_role_ids": [managed_admin.id],
         }
     )
-    assert anti_nuke.antinuke_permission_health(guild, trusted_settings) == []
+    trusted_blockers = anti_nuke.antinuke_permission_health(guild, trusted_settings)
+    assert any(
+        "managed @Managed Admin cannot be stripped" in item
+        for item in trusted_blockers
+    )
 
 
 def test_never_triggered_actor_is_ready_even_at_low_monotonic_time(monkeypatch) -> None:
