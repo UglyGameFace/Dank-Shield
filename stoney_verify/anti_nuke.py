@@ -306,6 +306,18 @@ def role_has_dangerous_permissions(role: Any) -> bool:
     )
 
 
+def _overwrite_grants_dangerous_permissions(overwrite: Any) -> bool:
+    """Return whether an overwrite explicitly grants an AntiNuke-risk permission."""
+
+    for name in DANGEROUS_PERMISSION_NAMES:
+        try:
+            if getattr(overwrite, name, None) is True:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _actor_role_ids(actor: Any) -> set[int]:
     out: set[int] = set()
     for role in list(getattr(actor, "roles", []) or []):
@@ -465,6 +477,86 @@ def _dangerous_hierarchy_blockers(
     return blockers
 
 
+def _dangerous_overwrite_blockers(
+    guild: discord.Guild,
+    bot_member: Any,
+) -> list[str]:
+    """Return dangerous channel/category overwrites that containment cannot revoke.
+
+    Channel permission overwrites can grant destructive power to an otherwise
+    harmless-looking role or member. A role-only readiness scan therefore is not
+    sufficient. We inspect the overwrite principals themselves and reject contain
+    mode when the bot could not remove the principal that carries the grant.
+    """
+
+    bot_top = getattr(bot_member, "top_role", None)
+    if bot_top is None:
+        return ["resolve Dank Shield top role for channel overwrites"]
+
+    blockers: list[str] = []
+    for channel in list(getattr(guild, "channels", []) or []):
+        overwrites = getattr(channel, "overwrites", None)
+        if not hasattr(overwrites, "items"):
+            continue
+        channel_name = str(getattr(channel, "name", "channel") or "channel")
+
+        try:
+            items = list(overwrites.items())
+        except Exception:
+            continue
+
+        for target, overwrite in items:
+            if not _overwrite_grants_dangerous_permissions(overwrite):
+                continue
+
+            # Member-specific overwrite.
+            if hasattr(target, "roles") and hasattr(target, "top_role"):
+                if _actor_is_owner_or_bot(guild, target):
+                    continue
+                if not _member_is_manageable_by_bot(guild, target):
+                    target_id = _safe_int(getattr(target, "id", 0), 0)
+                    blockers.append(
+                        f"#{channel_name} grants dangerous permissions directly "
+                        f"to member {target_id or 'unknown'} above Dank Shield"
+                    )
+                continue
+
+            # Role overwrite.
+            role = target
+            role_name = str(getattr(role, "name", "role") or "role")
+            if _role_is_default(role):
+                blockers.append(
+                    f"#{channel_name} grants dangerous permissions to @everyone"
+                )
+                continue
+
+            role_members = list(getattr(role, "members", []) or [])
+            untrusted_members = [
+                found
+                for found in role_members
+                if not _actor_is_owner_or_bot(guild, found)
+            ]
+            if not untrusted_members:
+                continue
+
+            if _role_is_managed(role) or not _role_is_below(role, bot_top):
+                blockers.append(
+                    f"#{channel_name} grants dangerous permissions to "
+                    f"unmanageable @{role_name}"
+                )
+                continue
+
+            for holder in untrusted_members:
+                if not _member_is_manageable_by_bot(guild, holder):
+                    holder_id = _safe_int(getattr(holder, "id", 0), 0)
+                    blockers.append(
+                        f"#{channel_name} grants dangerous permissions through "
+                        f"@{role_name} to member {holder_id or 'unknown'} above Dank Shield"
+                    )
+
+    return blockers
+
+
 def antinuke_permission_health(
     guild: discord.Guild,
     settings: Optional[Mapping[str, Any]] = None,
@@ -513,6 +605,14 @@ def antinuke_permission_health(
             missing.append(
                 f"Role hierarchy: move Dank Shield above {shown}"
             )
+
+        overwrite_blockers = _dangerous_overwrite_blockers(guild, member)
+        if overwrite_blockers:
+            unique = list(dict.fromkeys(overwrite_blockers))
+            shown = ", ".join(unique[:5])
+            if len(unique) > 5:
+                shown += f" (+{len(unique) - 5} more)"
+            missing.append(f"Channel overwrite containment: {shown}")
 
     return missing
 
@@ -773,13 +873,19 @@ async def _claim_recent_audit_entry_any(
     return None, None
 
 
-def _manageable_dangerous_roles(
+def _manageable_member_roles(
     guild: discord.Guild,
     actor: discord.Member,
 ) -> tuple[list[discord.Role], list[discord.Role]]:
+    """Split every non-default actor role into removable vs blocked roles.
+
+    Emergency containment cannot assume destructive power is visible in a role's
+    base permissions because channel/category overwrites can carry that power.
+    """
+
     me = getattr(guild, "me", None)
     if not isinstance(me, discord.Member):
-        return [], []
+        return [], list(getattr(actor, "roles", []) or [])
 
     member_manageable = _member_is_manageable_by_bot(guild, actor)
     removable: list[discord.Role] = []
@@ -788,8 +894,6 @@ def _manageable_dangerous_roles(
     for role in list(getattr(actor, "roles", []) or []):
         try:
             if _role_is_default(role):
-                continue
-            if not role_has_dangerous_permissions(role):
                 continue
             if (
                 not member_manageable
@@ -805,20 +909,43 @@ def _manageable_dangerous_roles(
     return removable, blocked
 
 
+def _manageable_dangerous_roles(
+    guild: discord.Guild,
+    actor: discord.Member,
+) -> tuple[list[discord.Role], list[discord.Role]]:
+    """Compatibility helper retained for focused tests and callers."""
+
+    removable, blocked = _manageable_member_roles(guild, actor)
+    return (
+        [role for role in removable if role_has_dangerous_permissions(role)],
+        [role for role in blocked if role_has_dangerous_permissions(role)],
+    )
+
+
 async def _contain_actor(
     guild: discord.Guild,
     actor: Any,
     *,
     reason: str,
 ) -> tuple[list[str], list[str]]:
+    """Definitively remove a proven malicious actor, with role stripping fallback.
+
+    Kicking is intentional here: a confirmed destructive actor can retain power
+    through member-specific or channel/category permission overwrites even after all
+    visibly dangerous base roles are removed. Removal from the guild neutralizes
+    those grants. If Discord hierarchy blocks the kick, strip every manageable role
+    as a best-effort fallback and report containment as incomplete so later events
+    keep retrying rather than starting the success cooldown.
+    """
+
     actor_id = _safe_int(
         actor if isinstance(actor, int) else getattr(actor, "id", 0),
         0,
     )
     if actor_id <= 0:
-        return [], []
+        return [], ["actor could not be resolved"]
     if actor_id == _safe_int(getattr(guild, "owner_id", 0), 0):
-        return [], []
+        return [], ["guild owner cannot be contained by Discord bots"]
 
     member = actor if isinstance(actor, discord.Member) else None
     if member is None:
@@ -827,19 +954,31 @@ async def _contain_actor(
         except Exception:
             member = None
     if not isinstance(member, discord.Member):
-        return [], []
+        return [], ["actor member could not be resolved"]
 
-    removable, blocked = _manageable_dangerous_roles(guild, member)
+    try:
+        await guild.kick(
+            member,
+            reason=f"{reason} • definitive AntiNuke containment",
+        )
+        return ["removed member from server"], []
+    except Exception:
+        pass
+
+    removable, blocked = _manageable_member_roles(guild, member)
+    removed: list[discord.Role] = []
     if removable:
         try:
             await member.remove_roles(*removable, reason=reason)
+            removed = list(removable)
         except Exception:
-            blocked = [*blocked, *removable]
-            removable = []
+            blocked = list(dict.fromkeys([*blocked, *removable]))
 
+    blocked_names = [str(getattr(role, "name", role)) for role in blocked]
+    blocked_names.append("member removal failed")
     return (
-        [str(role.name) for role in removable],
-        [str(role.name) for role in blocked],
+        [str(getattr(role, "name", role)) for role in removed],
+        list(dict.fromkeys(blocked_names)),
     )
 
 
@@ -1000,28 +1139,25 @@ async def _process_claimed_destructive_event(
     if settings["antinuke_mode"] == "alert":
         response = "Alert-only mode: no roles were changed."
     elif containment_succeeded:
-        response = (
-            "Contained actor by removing dangerous roles: "
-            + ", ".join(removed)
-        )
+        response = "Contained actor: " + ", ".join(removed)
     elif removed and blocked:
         response = (
             "Partial containment only. Removed: "
             + ", ".join(removed)
-            + ". Still blocked by higher/managed dangerous roles: "
+            + ". Still blocked by Discord hierarchy/managed authority: "
             + ", ".join(blocked)
             + ". Dank Shield will retry on the next attributed destructive action."
         )
     elif blocked:
         response = (
-            "Containment failed because the actor or dangerous roles outrank "
-            "Dank Shield, or Discord manages the role: "
+            "Containment failed because Discord would not let Dank Shield fully "
+            "neutralize the actor: "
             + ", ".join(blocked)
             + ". Dank Shield will retry on the next attributed destructive action."
         )
     else:
         response = (
-            "Containment could not remove a dangerous role from the actor. "
+            "Containment could not neutralize the actor. "
             "Dank Shield will retry on the next attributed destructive action."
         )
 
@@ -1154,14 +1290,10 @@ async def _handle_role_permission_escalation(
             )
 
         if removed:
-            rollback += (
-                " Removed dangerous actor roles: "
-                + ", ".join(removed)
-                + "."
-            )
+            rollback += " Containment actions: " + ", ".join(removed) + "."
         if blocked:
             rollback += (
-                " Could not remove actor roles because of hierarchy/managed roles: "
+                " Could not fully contain actor because of Discord authority: "
                 + ", ".join(blocked)
                 + "."
             )
@@ -1278,14 +1410,10 @@ async def _handle_member_dangerous_role_grant(
             )
 
         if removed_actor:
-            response += (
-                " Removed dangerous actor roles: "
-                + ", ".join(removed_actor)
-                + "."
-            )
+            response += " Containment actions: " + ", ".join(removed_actor) + "."
         if blocked_actor:
             response += (
-                " Could not remove actor roles because of hierarchy/managed roles: "
+                " Could not fully contain actor because of Discord authority: "
                 + ", ".join(blocked_actor)
                 + "."
             )
@@ -1362,14 +1490,10 @@ async def _handle_dangerous_role_create(role: discord.Role) -> None:
             )
         )
         if removed:
-            response += (
-                " Removed dangerous actor roles: "
-                + ", ".join(removed)
-                + "."
-            )
+            response += " Containment actions: " + ", ".join(removed) + "."
         if blocked:
             response += (
-                " Could not remove actor roles: "
+                " Could not fully contain actor: "
                 + ", ".join(blocked)
                 + "."
             )
@@ -1439,14 +1563,10 @@ async def _handle_bot_add(member: discord.Member) -> None:
             )
         )
         if removed:
-            response += (
-                " Removed dangerous inviter roles: "
-                + ", ".join(removed)
-                + "."
-            )
+            response += " Containment actions: " + ", ".join(removed) + "."
         if blocked:
             response += (
-                " Could not remove inviter roles: "
+                " Could not fully contain inviter: "
                 + ", ".join(blocked)
                 + "."
             )
