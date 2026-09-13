@@ -205,6 +205,99 @@ def test_sparse_gateway_evidence_is_not_consumed_before_rest_reconcile(monkeypat
     _reset()
 
 
+def test_routine_guild_update_is_ignored(monkeypatch) -> None:
+    _reset()
+    guild = FakeGuild()
+    actor = _actor(601)
+    processed: list[int] = []
+    entry = FakeEntry(
+        9101,
+        "guild_update",
+        guild,
+        actor=actor,
+        before=SimpleNamespace(afk_timeout=300),
+        after=SimpleNamespace(afk_timeout=600),
+    )
+
+    async def fake_process(*_args, **_kwargs):
+        processed.append(1)
+
+    monkeypatch.setattr(guardian, "_process", fake_process)
+    asyncio.run(guardian._on_audit_log_entry_create(entry))
+
+    assert processed == []
+    assert anti_nuke._audit_entry_seen(entry) is False
+    _reset()
+
+
+def test_identity_or_security_guild_update_is_enforced(monkeypatch) -> None:
+    _reset()
+    guild = FakeGuild()
+    actor = _actor(602)
+    processed: list[tuple[str, str]] = []
+    entry = FakeEntry(
+        9102,
+        "guild_update",
+        guild,
+        actor=actor,
+        before=SimpleNamespace(name="Safe Server", verification_level=3),
+        after=SimpleNamespace(name="Pwned", verification_level=0),
+    )
+
+    async def fake_process(_guild, found_entry, _actor, action_name, _spec):
+        processed.append((action_name, guardian._target_label(action_name, found_entry)))
+
+    monkeypatch.setattr(guardian, "_process", fake_process)
+    asyncio.run(guardian._on_audit_log_entry_create(entry))
+
+    assert processed and processed[0][0] == "guild_update"
+    assert "name" in processed[0][1]
+    assert "verification_level" in processed[0][1]
+    assert anti_nuke._audit_entry_seen(entry) is True
+    _reset()
+
+
+def test_two_critical_guild_updates_from_two_actors_trigger_panic() -> None:
+    _reset()
+    guild = FakeGuild()
+    first = _actor(603)
+    second = _actor(604)
+    first_entry = FakeEntry(
+        9103,
+        "guild_update",
+        guild,
+        actor=first,
+        before=SimpleNamespace(name="Server"),
+        after=SimpleNamespace(name="Defaced A"),
+    )
+    second_entry = FakeEntry(
+        9104,
+        "guild_update",
+        guild,
+        actor=second,
+        before=SimpleNamespace(icon="old"),
+        after=SimpleNamespace(icon="new"),
+    )
+
+    assert guardian._panic_state(
+        guild,
+        first,
+        "guild_update",
+        entry=first_entry,
+    )[1] is False
+    active, triggered, observed = guardian._panic_state(
+        guild,
+        second,
+        "guild_update",
+        entry=second_entry,
+    )
+
+    assert active is True
+    assert triggered is True
+    assert {actor.id for actor in observed} == {603, 604}
+    _reset()
+
+
 class ListenerBot:
     def __init__(self) -> None:
         self.intents = SimpleNamespace(moderation=True)
