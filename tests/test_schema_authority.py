@@ -4,10 +4,13 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MIGRATION = ROOT / "supabase" / "migrations" / "20260913154500_canonical_runtime_schema_authority.sql"
+SUPABASE_ROOT = ROOT / "supabase"
+MIGRATION = SUPABASE_ROOT / "migrations" / "20260913154500_canonical_runtime_schema_authority.sql"
 AUTO_GUARD = ROOT / "stoney_verify" / "startup_guards" / "auto_schema_bootstrap.py"
 QUEUE_GUARD = ROOT / "stoney_verify" / "startup_guards" / "operation_queue_schema_guard.py"
 CATEGORY_COMPAT = ROOT / "stoney_verify" / "startup_guards" / "ticket_category_schema_bootstrap_guard.py"
+TICKET_DOCTOR = ROOT / "stoney_verify" / "startup_guards" / "ticket_panel_doctor_stability_guard.py"
+TICKET_PANEL = ROOT / "stoney_verify" / "commands_ext" / "public_ticket_panel_clean.py"
 DEPLOY_WORKFLOW = ROOT / ".github" / "workflows" / "deploy-supabase-migrations.yml"
 
 
@@ -76,6 +79,23 @@ def test_runtime_schema_guards_are_read_only() -> None:
         for marker in forbidden:
             assert marker not in source, f"runtime schema mutation path returned in {path.name}: {marker}"
         assert 'schema_sql = ""' in source
+
+
+def test_runtime_health_does_not_advertise_retired_direct_dsn_repair() -> None:
+    for path in (TICKET_DOCTOR, TICKET_PANEL):
+        source = _text(path)
+        assert "SUPABASE_DB_URL" not in source
+        assert "POSTGRES_PRISMA_URL" not in source
+        assert "_db_url_present" not in source
+        assert "runtime startup will not alter production schema" in source
+
+
+def test_no_standalone_schema_sql_exists_outside_migration_chain() -> None:
+    standalone_sql = sorted(path.name for path in SUPABASE_ROOT.glob("*.sql"))
+    assert standalone_sql == [], (
+        "schema-changing SQL under supabase/ must live in supabase/migrations/: "
+        + ", ".join(standalone_sql)
+    )
 
 
 def test_category_compatibility_manifest_has_no_import_side_effect() -> None:
