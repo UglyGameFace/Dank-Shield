@@ -641,6 +641,11 @@ def antinuke_permission_health(
             or getattr(permissions, "administrator", False)
         ):
             missing.append("Kick Members")
+        if not bool(
+            getattr(permissions, "manage_webhooks", False)
+            or getattr(permissions, "administrator", False)
+        ):
+            missing.append("Manage Webhooks")
 
         hierarchy_blockers = _dangerous_hierarchy_blockers(
             guild,
