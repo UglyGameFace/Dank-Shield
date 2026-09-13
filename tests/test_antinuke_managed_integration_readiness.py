@@ -172,6 +172,45 @@ def test_managed_dangerous_holder_above_dank_shield_still_blocks_enablement() ->
     _with_managed_role_patch(run)
 
 
+def test_same_named_safe_role_cannot_hide_unsafe_managed_role() -> None:
+    def run() -> None:
+        dank_role = FakeRole(100, "Dank Shield", 50)
+        safe_role = FakeRole(
+            201,
+            "Integration",
+            20,
+            permissions=FakePermissions(administrator=True),
+            managed=True,
+        )
+        unsafe_role = FakeRole(
+            202,
+            "Integration",
+            80,
+            permissions=FakePermissions(administrator=True),
+            managed=True,
+        )
+        safe_member = SimpleNamespace(id=451, roles=[safe_role], top_role=safe_role)
+        unsafe_member = SimpleNamespace(id=452, roles=[unsafe_role], top_role=unsafe_role)
+        safe_role.members = [safe_member]
+        unsafe_role.members = [unsafe_member]
+        guild = SimpleNamespace(
+            id=5,
+            owner_id=999,
+            me=_healthy_bot_member(dank_role),
+            roles=[safe_role, unsafe_role, dank_role],
+            channels=[],
+        )
+
+        missing = anti_nuke.antinuke_permission_health(guild, _enabled_settings())
+
+        assert any(
+            "managed @Integration cannot be stripped" in item
+            for item in missing
+        )
+
+    _with_managed_role_patch(run)
+
+
 def test_managed_integration_overwrite_below_bot_does_not_block_enablement() -> None:
     def run() -> None:
         dank_role = FakeRole(100, "Dank Shield", 100)
