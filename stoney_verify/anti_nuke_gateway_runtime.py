@@ -8,6 +8,7 @@ retains one stable listener contract while all punishment still uses the canonic
 AntiNuke containment engine.
 """
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -109,6 +110,96 @@ def _timeout_extended(entry: Any) -> bool:
     if before_until.tzinfo is None:
         before_until = before_until.replace(tzinfo=timezone.utc)
     return after_until > before_until.astimezone(timezone.utc)
+
+
+async def _rollback_untrusted_webhook_create(
+    guild: discord.Guild,
+    entry: Any,
+    actor: Any,
+) -> str:
+    """Delete an undelegated newly-created webhook before its token can persist."""
+
+    settings = await anti_nuke.get_antinuke_settings(int(guild.id))
+    if not settings["antinuke_enabled"] or settings["antinuke_mode"] != "contain":
+        return ""
+    if anti_nuke._actor_is_owner_or_bot(guild, actor):  # noqa: SLF001
+        return ""
+    if anti_nuke._actor_is_configured_trusted(actor, settings):  # noqa: SLF001
+        return ""
+
+    target_id = _safe_int(getattr(getattr(entry, "target", None), "id", 0), 0)
+    if target_id <= 0:
+        return "webhook rollback unavailable: audit target ID missing"
+
+    loader = getattr(guild, "webhooks", None)
+    if not callable(loader):
+        return "webhook rollback unavailable: guild webhook API missing"
+
+    try:
+        hooks = list(await loader())
+    except Exception as exc:
+        return f"webhook rollback failed safely: {type(exc).__name__}"
+
+    webhook = next(
+        (
+            hook
+            for hook in hooks
+            if _safe_int(getattr(hook, "id", 0), 0) == target_id
+        ),
+        None,
+    )
+    if webhook is None or not callable(getattr(webhook, "delete", None)):
+        return "webhook rollback unavailable: created webhook could not be resolved"
+
+    try:
+        await webhook.delete(
+            reason="Dank Shield AntiNuke rollback: unauthorized webhook creation"
+        )
+        return "deleted unauthorized newly created webhook"
+    except Exception as exc:
+        return f"webhook rollback failed safely: {type(exc).__name__}"
+
+
+async def _handle_webhook_create(
+    guild: discord.Guild,
+    entry: Any,
+    actor: Any,
+) -> None:
+    """Rollback an unauthorized webhook then use the guardian/canonical engine."""
+
+    await _rollback_untrusted_webhook_create(guild, entry, actor)
+    spec = guardian._ACTIONS.get("webhook_create")  # noqa: SLF001
+    if spec is None:
+        return
+    await guardian._process(  # noqa: SLF001
+        guild,
+        entry,
+        actor,
+        "webhook_create",
+        spec,
+    )
+
+
+async def _recover_webhook_create_from_rest(
+    guild: discord.Guild,
+    gateway_entry: Any,
+) -> None:
+    """Recover sparse webhook-create attribution without consume-and-drop."""
+
+    await asyncio.sleep(0.35)
+    target_id = _safe_int(
+        getattr(getattr(gateway_entry, "target", None), "id", 0),
+        0,
+    )
+    claimed = await guardian._claim_priority_entry(  # noqa: SLF001
+        guild,
+        ("webhook_create",),
+        target_id=target_id if target_id > 0 else None,
+    )
+    if claimed is None:
+        return
+    entry, actor = claimed
+    await _handle_webhook_create(guild, entry, actor)
 
 
 async def _handle_role_create(guild: discord.Guild, entry: Any) -> None:
@@ -457,6 +548,20 @@ async def _handle_member_timeout(
 async def _on_audit_log_entry_create(entry: discord.AuditLogEntry) -> None:
     action_name = guardian._action_name(entry)  # noqa: SLF001
 
+    if action_name == "webhook_create":
+        guild = getattr(entry, "guild", None)
+        if guild is None:
+            return
+        actor = await guardian._resolve_actor(guild, entry)  # noqa: SLF001
+        if actor is None:
+            await _recover_webhook_create_from_rest(guild, entry)
+            return
+        claimed = guardian._EntryProxy(entry, actor)  # noqa: SLF001
+        if anti_nuke._consume_audit_entry(claimed):  # noqa: SLF001
+            return
+        await _handle_webhook_create(guild, claimed, actor)
+        return
+
     if action_name == "role_create":
         guild = getattr(entry, "guild", None)
         if guild is None:
@@ -558,7 +663,8 @@ def install_anti_nuke_gateway_runtime(bot: discord.Client) -> bool:
     if moderation:
         print(
             "🛡️ AntiNuke guardian gateway active with broad audit coverage, "
-            "authority rollback, weighted panic, and target-correct overwrite ownership"
+            "authority rollback, webhook revocation, weighted panic, and "
+            "target-correct overwrite ownership"
         )
     else:
         print(
