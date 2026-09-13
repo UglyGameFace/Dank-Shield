@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Require strict preventive readiness before AntiNuke contain mode can be armed."""
+"""Apply the delegated-authority readiness gate only to Strict Lockdown."""
 
 from typing import Any, Mapping, Optional
 
@@ -13,19 +13,35 @@ _INSTALL_FLAG = "_dank_antinuke_readiness_gate_installed"
 _HEALTH_FLAG = "_dank_antinuke_readiness_gate_health_patched"
 _SAVE_FLAG = "_dank_antinuke_readiness_gate_save_patched"
 _WARNED_GUILDS: set[int] = set()
+STRICT_LOCKDOWN_KEY = "antinuke_strict_lockdown"
+
+
+def _safe_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return bool(default)
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
 def _enabled_contain(settings: Mapping[str, Any] | None) -> bool:
     if not isinstance(settings, Mapping):
         return False
-    enabled = settings.get("antinuke_enabled", False)
-    if not isinstance(enabled, bool):
-        enabled = str(enabled or "").strip().lower() in {
-            "1", "true", "yes", "on", "enabled"
-        }
-    return bool(enabled) and str(
+    return _safe_bool(settings.get("antinuke_enabled"), False) and str(
         settings.get("antinuke_mode") or "contain"
     ).strip().lower() == "contain"
+
+
+def _strict_lockdown_requested(settings: Mapping[str, Any] | None) -> bool:
+    if not isinstance(settings, Mapping):
+        return False
+    return _safe_bool(settings.get(STRICT_LOCKDOWN_KEY), False) and str(
+        settings.get("antinuke_mode") or "contain"
+    ).strip().lower() == "contain"
+
+
+def _strict_lockdown_active(settings: Mapping[str, Any] | None) -> bool:
+    return _enabled_contain(settings) and _strict_lockdown_requested(settings)
 
 
 def _patch_health() -> bool:
@@ -39,7 +55,7 @@ def _patch_health() -> bool:
     ) -> list[str]:
         missing = list(original(guild, settings))
         clean = anti_nuke.normalize_antinuke_settings(settings or {})
-        if _enabled_contain(clean):
+        if _strict_lockdown_active(clean):
             missing.extend(delegated_authority_blockers(guild))
         return list(dict.fromkeys(missing))
 
@@ -61,12 +77,12 @@ def _patch_save(bot: discord.Client) -> bool:
         )
         getter = getattr(bot, "get_guild", None)
         guild = getter(gid) if callable(getter) else None
-        if guild is not None and _enabled_contain(candidate):
+        if guild is not None and _strict_lockdown_requested(candidate):
             blockers = delegated_authority_blockers(guild)
             if blockers:
                 raise RuntimeError(
-                    "AntiNuke contain mode cannot be armed while delegated "
-                    "AntiNuke-risk authority remains: " + "; ".join(blockers[:6])
+                    "Strict Lockdown cannot be enabled while delegated server "
+                    "authority remains: " + "; ".join(blockers[:6])
                 )
         return await original(gid, patch)
 
@@ -76,7 +92,7 @@ def _patch_save(bot: discord.Client) -> bool:
 
 
 async def _warn_preexisting_unsafe_guild(guild: discord.Guild) -> bool:
-    """Surface old contain-mode configs that predate the preventive gate."""
+    """Surface Strict Lockdown configs whose permission model no longer qualifies."""
 
     gid = int(guild.id)
     try:
@@ -85,12 +101,12 @@ async def _warn_preexisting_unsafe_guild(guild: discord.Guild) -> bool:
         settings = await anti_nuke.get_antinuke_settings(gid)
     except Exception as exc:
         print(
-            "🚨 AntiNuke strict-readiness reconciliation failed "
+            "Security strict-readiness reconciliation failed "
             f"guild={gid} error={type(exc).__name__}: {exc}"
         )
         return False
 
-    if not _enabled_contain(settings):
+    if not _strict_lockdown_active(settings):
         _WARNED_GUILDS.discard(gid)
         return False
 
@@ -100,7 +116,7 @@ async def _warn_preexisting_unsafe_guild(guild: discord.Guild) -> bool:
         return False
 
     print(
-        "🚨 AntiNuke contain mode predates strict preventive readiness "
+        "Security Strict Lockdown readiness blocked "
         f"guild={gid} blockers={' | '.join(blockers[:8])}"
     )
     if gid in _WARNED_GUILDS:
@@ -110,13 +126,13 @@ async def _warn_preexisting_unsafe_guild(guild: discord.Guild) -> bool:
     try:
         await anti_nuke._post_incident(  # noqa: SLF001
             guild,
-            title="🚨 AntiNuke Preventive Lockdown Required",
+            title="Security Strict Lockdown Readiness Required",
             actor=getattr(guild, "owner", None),
-            action_label="Existing contain mode has delegated destructive authority",
+            action_label="Strict Lockdown permission model needs attention",
             target_label="Server permission model",
             response_label=(
-                "AntiNuke remains active, but strict zero-damage readiness is not "
-                "satisfied until the listed delegated authority is removed."
+                "Normal containment remains available. Strict Lockdown stays "
+                "unready until the listed delegated authority is removed."
             ),
             details=" • ".join(blockers[:8]),
         )
@@ -153,13 +169,18 @@ def install_anti_nuke_readiness_gate_runtime(bot: discord.Client) -> bool:
     reconcile = _install_reconciliation_listeners(bot)
     setattr(bot, _INSTALL_FLAG, True)
     print(
-        "🔒 AntiNuke strict readiness gate active: contain mode requires no "
-        "delegated AntiNuke-risk authority; "
+        "Security readiness gate active: normal contain allows delegated staff; "
+        "Strict Lockdown requires delegated-risk cleanup; "
         f"health={'patched' if health else 'ready'}; "
         f"save={'patched' if save else 'ready'}; "
-        f"existing-config reconciliation={'active' if reconcile else 'unavailable'}"
+        f"reconciliation={'active' if reconcile else 'unavailable'}"
     )
     return True
 
 
-__all__ = ["install_anti_nuke_readiness_gate_runtime"]
+__all__ = [
+    "STRICT_LOCKDOWN_KEY",
+    "_strict_lockdown_active",
+    "_strict_lockdown_requested",
+    "install_anti_nuke_readiness_gate_runtime",
+]
