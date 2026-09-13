@@ -139,9 +139,10 @@ def test_category_compatibility_manifest_has_no_import_side_effect() -> None:
     assert "direct-dsn startup" not in lowered
 
 
-def test_schema_readiness_points_to_canonical_migration() -> None:
+def test_schema_readiness_points_to_canonical_migration_chain() -> None:
     source = _text(AUTO_GUARD)
     assert "20260913154500_canonical_runtime_schema_authority.sql" in source
+    assert "20260913160000_reconcile_guild_member_role_state_constraint.sql" in source
     assert "supabase/2026-05-08_runtime_stability_schema.sql" not in source
 
     for table in (
