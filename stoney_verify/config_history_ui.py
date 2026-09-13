@@ -141,6 +141,30 @@ async def _require_setup_permission(interaction: discord.Interaction) -> bool:
     return await require(interaction)
 
 
+async def _require_restore_owner(interaction: discord.Interaction) -> bool:
+    """Require the live guild owner for the destructive restore confirmation."""
+
+    if not await _require_setup_permission(interaction):
+        return False
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message(
+            "❌ This must be used inside a server.",
+            ephemeral=True,
+        )
+        return False
+    user_id = _safe_int(getattr(interaction.user, "id", 0), 0)
+    owner_id = _safe_int(getattr(guild, "owner_id", 0), 0)
+    if user_id <= 0 or user_id != owner_id:
+        await interaction.response.send_message(
+            "❌ Only the **server owner** can confirm a configuration restore. "
+            "Restores can change security controls such as AntiNuke, so delegated admins may review backups but cannot apply them.",
+            ephemeral=True,
+        )
+        return False
+    return True
+
+
 async def _safe_defer_update(interaction: discord.Interaction) -> None:
     from .commands_ext import public_setup_solid as solid
 
@@ -374,7 +398,7 @@ def _version_detail_embed(
         name="Restore Safety",
         value=(
             "The current configuration is backed up first. Restoring does **not** delete, recreate, or rename Discord roles or channels. "
-            "Only Dank Shield's selected saved settings or ticket choices are changed."
+            "Only Dank Shield's selected saved settings or ticket choices are changed. Final restore confirmation is server-owner-only because saved Core Settings can include security controls."
         ),
         inline=False,
     )
@@ -479,7 +503,7 @@ def _confirmation_embed(
     )
     embed.add_field(
         name="Final Confirmation",
-        value="Press **Confirm Restore** to continue, or **Cancel** to return without changing anything.",
+        value="Only the **server owner** can press **Confirm Restore**. Press **Cancel** to return without changing anything.",
         inline=False,
     )
     return embed
@@ -557,7 +581,6 @@ class ConfigHistoryView(discord.ui.View):
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _back_home(interaction)
-
 
     @discord.ui.button(
         label="Close",
@@ -696,7 +719,6 @@ class BackupContentsView(discord.ui.View):
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _back_home(interaction)
-
 
     @discord.ui.button(
         label="Close",
@@ -962,7 +984,6 @@ class SelectiveRestorePickerView(discord.ui.View):
         _ = button
         await open_config_version_detail(interaction, self.version_id)
 
-
     @discord.ui.button(
         label="Setup Home",
         emoji="🏠",
@@ -1012,7 +1033,7 @@ class RestoreConfigConfirmView(discord.ui.View):
     )
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        if not await _require_setup_permission(interaction):
+        if not await _require_restore_owner(interaction):
             return
         guild = interaction.guild
         if guild is None:
