@@ -43,6 +43,7 @@ def _reset_runtime(monkeypatch, tmp_path) -> None:
     runtime._MEMORY.clear()
     runtime._NEGATIVE_CACHE.clear()
     runtime._ACTOR_LOCKS.clear()
+    runtime._TABLE_AVAILABLE = None
     monkeypatch.setenv(
         "DANK_SECURITY_REPUTATION_FILE",
         str(tmp_path / "security_actor_reputation.json"),
@@ -79,7 +80,6 @@ def test_antinuke_containment_bans_and_records_confirmed_actor(monkeypatch, tmp_
     member = FakeMember(55, bot=True)
     guild = FakeGuild(member)
     member.guild = guild
-
     fallback_calls: list[int] = []
 
     async def fallback(_guild, actor, *, reason):
@@ -154,7 +154,7 @@ def test_antinuke_containment_keeps_canonical_fallback_when_ban_fails(
     assert saved is not None and saved["active"] is True
 
 
-def test_contain_readiness_requires_ban_members(monkeypatch) -> None:
+def test_contain_readiness_requires_ban_members() -> None:
     async def unused(*args, **kwargs):
         raise AssertionError("unused")
 
@@ -197,8 +197,8 @@ def test_exact_known_hostile_is_enforced_on_rejoin(monkeypatch) -> None:
 
     enforced: list[int] = []
 
-    async def enforce(found, row, *, anti_nuke, source):
-        _ = row, anti_nuke, source
+    async def enforce(found, row, *, anti_nuke, source, settings=None):
+        _ = row, anti_nuke, source, settings
         enforced.append(int(found.id))
         return True
 
@@ -207,6 +207,36 @@ def test_exact_known_hostile_is_enforced_on_rejoin(monkeypatch) -> None:
 
     asyncio.run(runtime._on_member_join(member))
     assert enforced == [55]
+
+
+def test_explicit_clear_is_not_recreated_from_old_alt_evidence(monkeypatch) -> None:
+    guild = FakeGuild()
+    member = FakeMember(66, guild, bot=False)
+    guild._member = member
+
+    async def reputation(_guild_id, _user_id, *, refresh=False):
+        _ = refresh
+        return {
+            "guild_id": 123,
+            "user_id": 66,
+            "active": False,
+            "classification": "confirmed_hostile_identity_link",
+            "cleared_by": 999,
+        }
+
+    async def should_not_link(*args, **kwargs):
+        _ = args, kwargs
+        raise AssertionError("cleared exact ID must not be re-inherited from old evidence")
+
+    async def should_not_enforce(*args, **kwargs):
+        _ = args, kwargs
+        raise AssertionError("cleared exact ID must not be enforced")
+
+    monkeypatch.setattr(runtime, "get_actor_reputation", reputation)
+    monkeypatch.setattr(runtime, "_confirmed_hostile_link", should_not_link)
+    monkeypatch.setattr(runtime, "_enforce_reputation_member", should_not_enforce)
+
+    asyncio.run(runtime._on_member_join(member))
 
 
 def test_only_hard_identity_link_inherits_hostile_disposition(monkeypatch) -> None:
@@ -250,8 +280,8 @@ def test_only_hard_identity_link_inherits_hostile_disposition(monkeypatch) -> No
 
     enforced: list[int] = []
 
-    async def enforce(found, row, *, anti_nuke, source):
-        _ = row, anti_nuke, source
+    async def enforce(found, row, *, anti_nuke, source, settings=None):
+        _ = row, anti_nuke, source, settings
         enforced.append(int(found.id))
         return True
 
@@ -266,39 +296,62 @@ def test_only_hard_identity_link_inherits_hostile_disposition(monkeypatch) -> No
     assert enforced == [66]
 
 
-def test_spamguard_prefilter_does_not_exempt_known_hostile_bot(monkeypatch) -> None:
+def test_db_clear_overrides_stale_local_active_record(monkeypatch) -> None:
+    active_local = {
+        55: {
+            "guild_id": 123,
+            "user_id": 55,
+            "active": True,
+            "classification": "confirmed_destructive_actor",
+            "source": "antinuke",
+            "incident_count": 1,
+        }
+    }
+    inactive_db = {
+        "guild_id": 123,
+        "user_id": 55,
+        "active": False,
+        "classification": "confirmed_destructive_actor",
+        "source": "owner_clear",
+        "incident_count": 1,
+        "cleared_by": 999,
+    }
+
+    monkeypatch.setattr(runtime, "_read_local_guild_records", lambda _gid: active_local)
+    monkeypatch.setattr(
+        runtime,
+        "_fetch_db_guild_records_sync",
+        lambda _gid: ("ok", [inactive_db]),
+    )
+    monkeypatch.setattr(runtime, "_write_local_record", lambda _row: True)
+    runtime._MEMORY.clear()
+
+    rows = asyncio.run(runtime.list_active_reputations(123))
+
+    assert rows == []
+    assert runtime._MEMORY[(123, 55)]["active"] is False
+
+
+def test_message_backstop_does_not_exempt_known_hostile_bot(monkeypatch) -> None:
+    from stoney_verify import anti_nuke
+
     guild = FakeGuild()
     member = FakeMember(55, guild, bot=True)
     guild._member = member
+    runtime._MEMORY[(123, 55)] = {
+        "guild_id": 123,
+        "user_id": 55,
+        "active": True,
+        "classification": "confirmed_destructive_actor",
+    }
 
-    original_calls: list[int] = []
-
-    async def original_message(message):
-        original_calls.append(int(message.author.id))
-        return False
-
-    async def original_shield(message, codes, *, source="invite-shield"):
-        _ = codes, source
-        original_calls.append(int(message.author.id))
-        return False
-
-    fake_spam = SimpleNamespace(
-        handle_incoming_spam_message=original_message,
-        record_invite_shield_block=original_shield,
-    )
-    fake_antinuke = SimpleNamespace()
-
-    async def reputation(_guild_id, _user_id, *, refresh=False):
-        _ = refresh
-        return {
-            "active": True,
-            "classification": "confirmed_destructive_actor",
-        }
+    async def settings(_guild_id):
+        return {"antinuke_enabled": True, "antinuke_mode": "contain"}
 
     enforced: list[int] = []
 
-    async def enforce(found, row, *, anti_nuke, source):
-        _ = row, anti_nuke, source
+    async def enforce(found, row, *, anti_nuke, source, settings=None):
+        _ = row, anti_nuke, source, settings
         enforced.append(int(found.id))
         return True
 
@@ -311,18 +364,44 @@ def test_spamguard_prefilter_does_not_exempt_known_hostile_bot(monkeypatch) -> N
         async def delete(self):
             self.deleted = True
 
-    monkeypatch.setattr(runtime.discord, "Member", FakeMember)
-    monkeypatch.setattr(runtime, "get_actor_reputation", reputation)
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
     monkeypatch.setattr(runtime, "_enforce_reputation_member", enforce)
 
-    runtime._patch_spam_guard(fake_spam, fake_antinuke)
     message = FakeMessage()
-    handled = asyncio.run(fake_spam.handle_incoming_spam_message(message))
+    asyncio.run(runtime._on_message_known_hostile(message))
 
-    assert handled is True
     assert message.deleted is True
     assert enforced == [55]
-    assert original_calls == []
+
+
+def test_message_backstop_respects_alert_only_mode(monkeypatch) -> None:
+    from stoney_verify import anti_nuke
+
+    guild = FakeGuild()
+    member = FakeMember(55, guild, bot=True)
+    runtime._MEMORY[(123, 55)] = {
+        "guild_id": 123,
+        "user_id": 55,
+        "active": True,
+        "classification": "confirmed_destructive_actor",
+    }
+
+    async def settings(_guild_id):
+        return {"antinuke_enabled": True, "antinuke_mode": "alert"}
+
+    class FakeMessage:
+        def __init__(self):
+            self.guild = guild
+            self.author = member
+            self.deleted = False
+
+        async def delete(self):
+            self.deleted = True
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
+    message = FakeMessage()
+    asyncio.run(runtime._on_message_known_hostile(message))
+    assert message.deleted is False
 
 
 def test_owner_readding_known_hostile_bot_is_still_blocked(monkeypatch) -> None:
