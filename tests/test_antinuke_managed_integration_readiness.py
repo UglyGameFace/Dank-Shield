@@ -19,6 +19,12 @@ class FakePermissions:
         self.administrator = bool(values.get("administrator", False))
 
 
+class FakeOverwrite:
+    def __init__(self, **values) -> None:
+        for name in anti_nuke.DANGEROUS_PERMISSION_NAMES:
+            setattr(self, name, values.get(name))
+
+
 class FakeRole:
     def __init__(
         self,
@@ -66,7 +72,7 @@ def _enabled_settings():
     )
 
 
-def _with_managed_patch(run):
+def _with_managed_role_patch(run):
     original = anti_nuke._dangerous_hierarchy_blockers  # noqa: SLF001
     had_flag = hasattr(anti_nuke, finalizer._MANAGED_ROLE_PATCH_FLAG)  # noqa: SLF001
     old_flag = getattr(anti_nuke, finalizer._MANAGED_ROLE_PATCH_FLAG, None)  # noqa: SLF001
@@ -81,6 +87,23 @@ def _with_managed_patch(run):
             setattr(anti_nuke, finalizer._MANAGED_ROLE_PATCH_FLAG, old_flag)  # noqa: SLF001
         elif hasattr(anti_nuke, finalizer._MANAGED_ROLE_PATCH_FLAG):  # noqa: SLF001
             delattr(anti_nuke, finalizer._MANAGED_ROLE_PATCH_FLAG)  # noqa: SLF001
+
+
+def _with_managed_overwrite_patch(run):
+    original = anti_nuke._dangerous_overwrite_blockers  # noqa: SLF001
+    had_flag = hasattr(anti_nuke, finalizer._MANAGED_OVERWRITE_PATCH_FLAG)  # noqa: SLF001
+    old_flag = getattr(anti_nuke, finalizer._MANAGED_OVERWRITE_PATCH_FLAG, None)  # noqa: SLF001
+    if had_flag:
+        delattr(anti_nuke, finalizer._MANAGED_OVERWRITE_PATCH_FLAG)  # noqa: SLF001
+    try:
+        assert finalizer._patch_managed_overwrite_readiness() is True  # noqa: SLF001
+        run()
+    finally:
+        anti_nuke._dangerous_overwrite_blockers = original  # noqa: SLF001
+        if had_flag:
+            setattr(anti_nuke, finalizer._MANAGED_OVERWRITE_PATCH_FLAG, old_flag)  # noqa: SLF001
+        elif hasattr(anti_nuke, finalizer._MANAGED_OVERWRITE_PATCH_FLAG):  # noqa: SLF001
+            delattr(anti_nuke, finalizer._MANAGED_OVERWRITE_PATCH_FLAG)  # noqa: SLF001
 
 
 def test_managed_integration_below_dank_shield_does_not_block_enablement() -> None:
@@ -112,7 +135,7 @@ def test_managed_integration_below_dank_shield_does_not_block_enablement() -> No
         assert not any("DISBOARD.org" in item for item in missing)
         assert missing == []
 
-    _with_managed_patch(run)
+    _with_managed_role_patch(run)
 
 
 def test_managed_dangerous_holder_above_dank_shield_still_blocks_enablement() -> None:
@@ -146,4 +169,76 @@ def test_managed_dangerous_holder_above_dank_shield_still_blocks_enablement() ->
             for item in missing
         )
 
-    _with_managed_patch(run)
+    _with_managed_role_patch(run)
+
+
+def test_managed_integration_overwrite_below_bot_does_not_block_enablement() -> None:
+    def run() -> None:
+        dank_role = FakeRole(100, "Dank Shield", 100)
+        managed_admin = FakeRole(
+            200,
+            "DISBOARD.org",
+            20,
+            managed=True,
+        )
+        integration_member = SimpleNamespace(
+            id=446,
+            roles=[managed_admin],
+            top_role=managed_admin,
+        )
+        managed_admin.members = [integration_member]
+        channel = SimpleNamespace(
+            name="staff",
+            overwrites={managed_admin: FakeOverwrite(manage_channels=True)},
+        )
+        guild = SimpleNamespace(
+            id=3,
+            owner_id=999,
+            me=_healthy_bot_member(dank_role),
+            roles=[managed_admin, dank_role],
+            channels=[channel],
+        )
+
+        missing = anti_nuke.antinuke_permission_health(guild, _enabled_settings())
+
+        assert not any("DISBOARD.org" in item for item in missing)
+        assert missing == []
+
+    _with_managed_overwrite_patch(run)
+
+
+def test_managed_integration_overwrite_above_bot_still_blocks_enablement() -> None:
+    def run() -> None:
+        dank_role = FakeRole(100, "Dank Shield", 50)
+        managed_admin = FakeRole(
+            200,
+            "High Integration",
+            80,
+            managed=True,
+        )
+        integration_member = SimpleNamespace(
+            id=447,
+            roles=[managed_admin],
+            top_role=managed_admin,
+        )
+        managed_admin.members = [integration_member]
+        channel = SimpleNamespace(
+            name="staff",
+            overwrites={managed_admin: FakeOverwrite(manage_channels=True)},
+        )
+        guild = SimpleNamespace(
+            id=4,
+            owner_id=999,
+            me=_healthy_bot_member(dank_role),
+            roles=[managed_admin, dank_role],
+            channels=[channel],
+        )
+
+        missing = anti_nuke.antinuke_permission_health(guild, _enabled_settings())
+
+        assert any(
+            "unmanageable @High Integration" in item
+            for item in missing
+        )
+
+    _with_managed_overwrite_patch(run)
