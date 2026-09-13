@@ -12,6 +12,7 @@ from .anti_nuke_readiness_strict import delegated_authority_blockers
 _INSTALL_FLAG = "_dank_antinuke_readiness_gate_installed"
 _HEALTH_FLAG = "_dank_antinuke_readiness_gate_health_patched"
 _SAVE_FLAG = "_dank_antinuke_readiness_gate_save_patched"
+_WARNED_GUILDS: set[int] = set()
 
 
 def _enabled_contain(settings: Mapping[str, Any] | None) -> bool:
@@ -74,17 +75,89 @@ def _patch_save(bot: discord.Client) -> bool:
     return True
 
 
+async def _warn_preexisting_unsafe_guild(guild: discord.Guild) -> bool:
+    """Surface old contain-mode configs that predate the preventive gate."""
+
+    gid = int(guild.id)
+    try:
+        settings = await anti_nuke.get_antinuke_settings(gid, refresh=True)
+    except TypeError:
+        settings = await anti_nuke.get_antinuke_settings(gid)
+    except Exception as exc:
+        print(
+            "🚨 AntiNuke strict-readiness reconciliation failed "
+            f"guild={gid} error={type(exc).__name__}: {exc}"
+        )
+        return False
+
+    if not _enabled_contain(settings):
+        _WARNED_GUILDS.discard(gid)
+        return False
+
+    blockers = delegated_authority_blockers(guild)
+    if not blockers:
+        _WARNED_GUILDS.discard(gid)
+        return False
+
+    print(
+        "🚨 AntiNuke contain mode predates strict preventive readiness "
+        f"guild={gid} blockers={' | '.join(blockers[:8])}"
+    )
+    if gid in _WARNED_GUILDS:
+        return True
+    _WARNED_GUILDS.add(gid)
+
+    try:
+        await anti_nuke._post_incident(  # noqa: SLF001
+            guild,
+            title="🚨 AntiNuke Preventive Lockdown Required",
+            actor=getattr(guild, "owner", None),
+            action_label="Existing contain mode has delegated destructive authority",
+            target_label="Server permission model",
+            response_label=(
+                "AntiNuke remains active, but strict zero-damage readiness is not "
+                "satisfied until the listed delegated authority is removed."
+            ),
+            details=" • ".join(blockers[:8]),
+        )
+    except Exception:
+        pass
+    return True
+
+
+def _install_reconciliation_listeners(bot: discord.Client) -> bool:
+    adder = getattr(bot, "add_listener", None)
+    if not callable(adder):
+        return False
+
+    async def on_ready() -> None:
+        for guild in list(getattr(bot, "guilds", []) or []):
+            await _warn_preexisting_unsafe_guild(guild)
+
+    async def on_guild_join(guild: discord.Guild) -> None:
+        await _warn_preexisting_unsafe_guild(guild)
+
+    try:
+        adder(on_ready, "on_ready")
+        adder(on_guild_join, "on_guild_join")
+    except Exception:
+        return False
+    return True
+
+
 def install_anti_nuke_readiness_gate_runtime(bot: discord.Client) -> bool:
     if bool(getattr(bot, _INSTALL_FLAG, False)):
         return False
     health = _patch_health()
     save = _patch_save(bot)
+    reconcile = _install_reconciliation_listeners(bot)
     setattr(bot, _INSTALL_FLAG, True)
     print(
         "🔒 AntiNuke strict readiness gate active: contain mode requires no "
         "delegated AntiNuke-risk authority; "
         f"health={'patched' if health else 'ready'}; "
-        f"save={'patched' if save else 'ready'}"
+        f"save={'patched' if save else 'ready'}; "
+        f"existing-config reconciliation={'active' if reconcile else 'unavailable'}"
     )
     return True
 
