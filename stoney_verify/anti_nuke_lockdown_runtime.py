@@ -23,6 +23,7 @@ _HISTORY_PATCH_FLAG = "_dank_antinuke_lockdown_history_patched"
 _GUARDIAN_PATCH_FLAG = "_dank_antinuke_lockdown_guardian_patched"
 _BOT_ADD_PATCH_FLAG = "_dank_antinuke_lockdown_bot_add_patched"
 _OWNER_PATCH_FLAG = "_dank_antinuke_lockdown_owner_first_strike_patched"
+_PROTECTED_CONTROL_ROLE_SETTINGS_KEY = "_dank_lockdown_protected_role_ids"
 
 _PROTECTED_SECURITY_PREFIXES = ("antinuke_", "anti_nuke_")
 _PROTECTED_SECURITY_KEYS = frozenset(
@@ -389,6 +390,7 @@ def _patch_anti_nuke_policy(anti_nuke: Any, bot: discord.Client) -> bool:
     original_get = anti_nuke.get_antinuke_settings
     original_process = anti_nuke._process_claimed_destructive_event  # noqa: SLF001
     original_health = anti_nuke.antinuke_permission_health
+    original_configured_trust = anti_nuke._actor_is_configured_trusted  # noqa: SLF001
 
     async def protected_get(
         guild_id: int,
@@ -401,18 +403,47 @@ def _patch_anti_nuke_policy(anti_nuke: Any, bot: discord.Client) -> bool:
         except TypeError:
             settings = dict(await original_get(gid))
 
+        explicit_trusted = set(
+            _safe_id_list(settings.get("antinuke_trusted_role_ids"))
+        )
         try:
             cfg = await guild_config.get_guild_config(gid, refresh=bool(refresh))
             protected_roles = _control_role_ids(cfg)
         except Exception:
             protected_roles = set()
 
+        implicit_protected = protected_roles - explicit_trusted
         if protected_roles:
-            existing = _safe_id_list(settings.get("antinuke_trusted_role_ids"))
             settings["antinuke_trusted_role_ids"] = list(
-                dict.fromkeys([*existing, *sorted(protected_roles)])
+                dict.fromkeys([*sorted(explicit_trusted), *sorted(protected_roles)])
             )
+        if implicit_protected:
+            settings[_PROTECTED_CONTROL_ROLE_SETTINGS_KEY] = sorted(implicit_protected)
+        else:
+            settings.pop(_PROTECTED_CONTROL_ROLE_SETTINGS_KEY, None)
         return settings
+
+    def configured_trust_without_implicit_control_roles(
+        actor: Any,
+        settings: Mapping[str, Any],
+        *,
+        ignore_role_ids: Optional[set[int]] = None,
+    ) -> bool:
+        ignored = {
+            _safe_int(value, 0)
+            for value in (ignore_role_ids or set())
+            if _safe_int(value, 0) > 0
+        }
+        ignored.update(
+            _safe_id_list(settings.get(_PROTECTED_CONTROL_ROLE_SETTINGS_KEY))
+        )
+        return bool(
+            original_configured_trust(
+                actor,
+                settings,
+                ignore_role_ids=ignored,
+            )
+        )
 
     async def strict_structural_process(
         guild: discord.Guild,
@@ -463,6 +494,9 @@ def _patch_anti_nuke_policy(anti_nuke: Any, bot: discord.Client) -> bool:
         )
     )
     anti_nuke.get_antinuke_settings = protected_get
+    anti_nuke._actor_is_configured_trusted = (  # noqa: SLF001
+        configured_trust_without_implicit_control_roles
+    )
     anti_nuke._process_claimed_destructive_event = strict_structural_process  # noqa: SLF001
     anti_nuke.antinuke_permission_health = lockdown_health
     setattr(anti_nuke, _POLICY_PATCH_FLAG, True)
