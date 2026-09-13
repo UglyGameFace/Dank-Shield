@@ -9,10 +9,9 @@ This guard addresses the exact log patterns seen in production:
 - bursty channel edits during ticket close/rename flows
 
 It does not change business rules. It serializes and retries Discord API calls in
-places where Discord itself is telling us to slow down. Security-critical callers
-may mark an audit request as priority; those requests remain serialized and still
-honor real 429 backoff, but they do not sit behind the generic six-second spacing
-used for non-urgent audit lookups.
+places where Discord itself is telling us to slow down. Security-critical AntiNuke
+audit reads remain serialized and honor real 429 backoff, but they do not sit behind
+the generic six-second spacing used for non-urgent audit lookups.
 """
 
 import asyncio
@@ -30,6 +29,28 @@ _AUDIT_LAST_CALL: dict[int, float] = {}
 _AUDIT_LAST_RATE_LIMIT: dict[int, float] = {}
 _CHANNEL_EDIT_LOCKS: DefaultDict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 _CHANNEL_LAST_EDIT: dict[int, float] = {}
+
+# AntiNuke deliberately searches 50 recent entries for these high-risk actions.
+# That request shape is the narrow contract that lets the existing API safety layer
+# distinguish live security attribution from ordinary logging/diagnostic lookups
+# without importing AntiNuke or creating another listener/runtime owner.
+_SECURITY_PRIORITY_AUDIT_LIMIT = 50
+_SECURITY_PRIORITY_AUDIT_ACTION_NAMES = frozenset(
+    {
+        "channel_delete",
+        "role_delete",
+        "ban",
+        "kick",
+        "member_prune",
+        "role_update",
+        "member_role_update",
+        "role_create",
+        "bot_add",
+        "webhook_create",
+        "webhook_update",
+        "webhook_delete",
+    }
+)
 
 
 def _log(message: str) -> None:
@@ -117,6 +138,27 @@ def _retry_after(error: BaseException, fallback: float) -> float:
     return float(fallback)
 
 
+def _audit_action_name(action: Any) -> str:
+    name = getattr(action, "name", None)
+    if name:
+        return str(name).strip().lower()
+    text = str(action or "").strip().lower()
+    if "." in text:
+        text = text.rsplit(".", 1)[-1]
+    return text
+
+
+def _is_security_priority_audit_request(kwargs: dict[str, Any]) -> bool:
+    try:
+        limit = int(kwargs.get("limit", 0) or 0)
+    except Exception:
+        limit = 0
+    if limit < _SECURITY_PRIORITY_AUDIT_LIMIT:
+        return False
+    action_name = _audit_action_name(kwargs.get("action"))
+    return action_name in _SECURITY_PRIORITY_AUDIT_ACTION_NAMES
+
+
 async def _sleep_until_allowed(
     last_map: dict[int, float],
     key: int,
@@ -139,15 +181,18 @@ async def _guarded_audit_logs(
 ) -> AsyncIterator[Any]:
     """Serialize audit requests and back off after 429s.
 
-    ``_dank_priority`` is an internal-only marker consumed here before the request
-    reaches discord.py. Priority requests skip only our artificial generic spacing;
-    they still share the guild lock and still honor the post-429 cooldown.
+    ``_dank_priority`` remains an internal escape hatch for future security callers
+    and is consumed here before the request reaches discord.py. Current AntiNuke
+    requests are also recognized by their 50-entry high-risk-action request shape.
+    Priority requests skip only our artificial generic spacing; they still share the
+    guild lock and still honor the post-429 cooldown.
     """
 
     if _ORIGINAL_GUILD_AUDIT_LOGS is None:
         return
 
-    priority = bool(kwargs.pop("_dank_priority", False))
+    explicit_priority = bool(kwargs.pop("_dank_priority", False))
+    priority = explicit_priority or _is_security_priority_audit_request(kwargs)
     guild_id = int(getattr(self, "id", 0) or 0)
     lock = _AUDIT_LOCKS[guild_id]
     async with lock:
