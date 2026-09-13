@@ -2,9 +2,9 @@
 
 ## DS-SEC-039-HF1 — Fix AntiNuke managed-integration readiness
 
-**Status:** IN PROGRESS / VALIDATION PENDING  
-**Branch:** `fix/antinuke-managed-role-readiness`  
-**Base:** `a70a82144e52d1057025ba2723bf87ce18638699` (`main`, merge of PR #202)  
+**Status:** IN PROGRESS / VALIDATION PENDING
+**Branch:** `fix/antinuke-managed-role-readiness`
+**Base:** `a70a82144e52d1057025ba2723bf87ce18638699` (`main`, merge of PR #202)
 **Started:** 2026-09-12
 
 ## Objective
@@ -40,6 +40,7 @@ The save layer preserves previous cached truth when the database is unavailable,
 - Added equivalent managed-role logic for dangerous channel-overwrite readiness.
 - Real blockers remain intact when any managed dangerous holder is at/above Dank Shield.
 - Empty managed roles and managed roles held only by safely removable actors no longer disable AntiNuke.
+- Duplicate managed-role names cannot make a safe role hide an unsafe role.
 - Kept View Audit Log, Manage Roles, Kick Members, Manage Channels, Manage Webhooks, Manage Server, hierarchy, owner, and Discord platform limits intact.
 
 ## Tests
@@ -48,6 +49,7 @@ The save layer preserves previous cached truth when the database is unavailable,
 
 - DISBOARD-style managed dangerous integration below Dank Shield does not block enablement;
 - dangerous managed integration above Dank Shield still blocks;
+- duplicate role names cannot hide an unsafe managed integration;
 - dangerous managed-role channel overwrite below Dank Shield does not block;
 - dangerous managed-role channel overwrite above Dank Shield still blocks.
 
@@ -63,4 +65,4 @@ Pending exact-head PR validation.
 
 ## Next step
 
-Open the hotfix PR, run full exact-head CI, review the final diff, merge only when green, then retest enabling AntiNuke before another destructive test.
+Run full exact-head CI, review the final diff, merge only when green, then retest enabling AntiNuke before another destructive test.
