@@ -235,6 +235,19 @@ def test_config_history_patch_filters_security_items_and_sanitizes_full_restore(
         )
 
 
+def _configured_trust(actor, settings, *, ignore_role_ids=None) -> bool:
+    ignored = {int(value) for value in (ignore_role_ids or set())}
+    trusted = {
+        int(value)
+        for value in settings.get("antinuke_trusted_role_ids", [])
+    } - ignored
+    actor_roles = {
+        int(role.id)
+        for role in list(getattr(actor, "roles", []) or [])
+    }
+    return bool(trusted.intersection(actor_roles))
+
+
 def test_structural_actions_become_first_strike_without_breaking_routine_moderation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -267,6 +280,7 @@ def test_structural_actions_become_first_strike_without_breaking_routine_moderat
     fake_antinuke = SimpleNamespace(
         get_antinuke_settings=original_get,
         _process_claimed_destructive_event=original_process,
+        _actor_is_configured_trusted=_configured_trust,
         antinuke_permission_health=lambda guild, settings=None: [],
         normalize_antinuke_settings=lambda settings: dict(settings or {}),
         DANGEROUS_PERMISSION_NAMES=("administrator", "manage_channels"),
@@ -285,9 +299,18 @@ def test_structural_actions_become_first_strike_without_breaking_routine_moderat
 
     settings = asyncio.run(fake_antinuke.get_antinuke_settings(1))
     assert settings["antinuke_trusted_role_ids"] == [7, 111, 222]
+    assert settings[lockdown._PROTECTED_CONTROL_ROLE_SETTINGS_KEY] == [111, 222]  # noqa: SLF001
     assert "manage_messages" in fake_antinuke.DANGEROUS_PERMISSION_NAMES
     assert "manage_threads" in fake_antinuke.DANGEROUS_PERMISSION_NAMES
     assert "move_members" not in fake_antinuke.DANGEROUS_PERMISSION_NAMES
+
+    explicit_actor = SimpleNamespace(roles=[SimpleNamespace(id=7)])
+    implicit_control_actor = SimpleNamespace(roles=[SimpleNamespace(id=111)])
+    assert fake_antinuke._actor_is_configured_trusted(explicit_actor, settings) is True
+    assert (
+        fake_antinuke._actor_is_configured_trusted(implicit_control_actor, settings)
+        is False
+    )
 
     guild = SimpleNamespace(id=1)
     common = {
@@ -314,6 +337,53 @@ def test_structural_actions_become_first_strike_without_breaking_routine_moderat
     )
 
     assert captured == [("channel_delete", 1), ("ban", None)]
+
+
+def test_control_role_explicitly_trusted_by_owner_remains_trusted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from stoney_verify import guild_config
+
+    async def original_get(_guild_id: int, *, refresh: bool = False):
+        _ = refresh
+        return {
+            "antinuke_enabled": True,
+            "antinuke_mode": "contain",
+            "antinuke_trusted_role_ids": [111],
+        }
+
+    async def original_process(_guild, **_kwargs):
+        return True
+
+    async def fake_cfg(_guild_id: int, *, refresh: bool = False):
+        _ = refresh
+        return {"settings": {"server_control_role_id": "111"}}
+
+    fake_antinuke = SimpleNamespace(
+        get_antinuke_settings=original_get,
+        _process_claimed_destructive_event=original_process,
+        _actor_is_configured_trusted=_configured_trust,
+        antinuke_permission_health=lambda guild, settings=None: [],
+        normalize_antinuke_settings=lambda settings: dict(settings or {}),
+        DANGEROUS_PERMISSION_NAMES=("administrator",),
+    )
+    fake_bot = SimpleNamespace(intents=SimpleNamespace(moderation=True))
+
+    monkeypatch.setattr(guild_config, "get_guild_config", fake_cfg)
+    monkeypatch.setattr(
+        fake_antinuke,
+        lockdown._POLICY_PATCH_FLAG,  # noqa: SLF001
+        False,
+        raising=False,
+    )
+
+    assert lockdown._patch_anti_nuke_policy(fake_antinuke, fake_bot) is True  # noqa: SLF001
+    settings = asyncio.run(fake_antinuke.get_antinuke_settings(1))
+
+    assert settings["antinuke_trusted_role_ids"] == [111]
+    assert lockdown._PROTECTED_CONTROL_ROLE_SETTINGS_KEY not in settings  # noqa: SLF001
+    actor = SimpleNamespace(roles=[SimpleNamespace(id=111)])
+    assert fake_antinuke._actor_is_configured_trusted(actor, settings) is True
 
 
 def test_control_roles_are_detected_from_nested_config() -> None:
@@ -556,10 +626,21 @@ def test_known_hostile_bot_reputation_outranks_trust_allowlist(
     assert original_calls == [55]
 
 
-def test_main_installs_lockdown_inside_hostile_runtime_before_app_import() -> None:
+def test_main_installs_hostile_and_lockdown_independently_before_app_import() -> None:
     source = Path("main.py").read_text(encoding="utf-8")
 
-    hostile_block = source.index("def _install_hostile_actor_runtime")
+    hostile_start = source.index("def _install_hostile_actor_runtime")
+    lockdown_start = source.index("def _install_anti_nuke_lockdown_runtime")
     app_import = source.index("from stoney_verify.app import run as _run_dank_shield")
-    assert hostile_block < app_import
-    assert "install_anti_nuke_lockdown_runtime" in source[hostile_block:app_import]
+
+    assert hostile_start < lockdown_start < app_import
+    assert "install_anti_nuke_lockdown_runtime" not in source[
+        hostile_start:lockdown_start
+    ]
+    expected = (
+        "    _install_anti_nuke_incident_runtime()\n"
+        "    _install_hostile_actor_runtime()\n"
+        "    _install_anti_nuke_lockdown_runtime()\n"
+        "    from stoney_verify.app import run as _run_dank_shield"
+    )
+    assert expected in source
