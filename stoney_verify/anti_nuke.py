@@ -315,29 +315,30 @@ def _actor_role_ids(actor: Any) -> set[int]:
     return out
 
 
-def is_trusted_actor(
-    guild: discord.Guild,
-    actor: Any,
-    settings: Mapping[str, Any],
-    *,
-    ignore_role_ids: Optional[set[int]] = None,
-) -> bool:
-    """Return whether an actor is explicitly exempted by policy.
-
-    ``ignore_role_ids`` prevents a same-event role grant from laundering an
-    actor into the trusted set before that grant itself is evaluated.
-    """
-
+def _actor_is_owner_or_bot(guild: discord.Guild, actor: Any) -> bool:
     actor_id = _safe_int(getattr(actor, "id", 0), 0)
     if actor_id <= 0:
         return False
     if actor_id == _safe_int(getattr(guild, "owner_id", 0), 0):
         return True
     try:
-        if getattr(bot, "user", None) is not None and actor_id == int(bot.user.id):
-            return True
+        return bool(
+            getattr(bot, "user", None) is not None
+            and actor_id == int(bot.user.id)
+        )
     except Exception:
-        pass
+        return False
+
+
+def _actor_is_configured_trusted(
+    actor: Any,
+    settings: Mapping[str, Any],
+    *,
+    ignore_role_ids: Optional[set[int]] = None,
+) -> bool:
+    actor_id = _safe_int(getattr(actor, "id", 0), 0)
+    if actor_id <= 0:
+        return False
 
     trusted_users = set(
         _safe_id_list(settings.get("antinuke_trusted_user_ids"))
@@ -354,6 +355,29 @@ def is_trusted_actor(
         _safe_id_list(settings.get("antinuke_trusted_role_ids"))
     ) - ignored
     return bool(trusted_roles.intersection(_actor_role_ids(actor)))
+
+
+def is_trusted_actor(
+    guild: discord.Guild,
+    actor: Any,
+    settings: Mapping[str, Any],
+    *,
+    ignore_role_ids: Optional[set[int]] = None,
+) -> bool:
+    """Compatibility trust helper.
+
+    Owner/bot are absolute roots. Configured trusted users/roles are delegated
+    operators, but AntiNuke's destructive-event engine still applies emergency
+    ceilings to them rather than treating them as infinitely exempt.
+    """
+
+    if _actor_is_owner_or_bot(guild, actor):
+        return True
+    return _actor_is_configured_trusted(
+        actor,
+        settings,
+        ignore_role_ids=ignore_role_ids,
+    )
 
 
 def _role_is_default(role: Any) -> bool:
@@ -397,14 +421,9 @@ def _dangerous_hierarchy_blockers(
     if top_role is None:
         return ["resolve Dank Shield top role"]
 
-    trusted_role_ids = set(
-        _safe_id_list(settings.get("antinuke_trusted_role_ids"))
-    )
     blockers: list[str] = []
-
     for role in list(getattr(guild, "roles", []) or []):
-        role_id = _safe_int(getattr(role, "id", 0), 0)
-        if role_id in trusted_role_ids or not role_has_dangerous_permissions(role):
+        if not role_has_dangerous_permissions(role):
             continue
 
         role_name = str(
@@ -416,7 +435,7 @@ def _dangerous_hierarchy_blockers(
 
         role_members = list(getattr(role, "members", []) or [])
         if role_members and all(
-            is_trusted_actor(guild, found, settings)
+            _actor_is_owner_or_bot(guild, found)
             for found in role_members
         ):
             continue
@@ -430,7 +449,7 @@ def _dangerous_hierarchy_blockers(
             continue
 
         for holder in role_members:
-            if is_trusted_actor(guild, holder, settings):
+            if _actor_is_owner_or_bot(guild, holder):
                 continue
             holder_top = getattr(holder, "top_role", None)
             if holder_top is None or not _role_is_below(holder_top, top_role):
@@ -475,6 +494,11 @@ def antinuke_permission_health(
             or getattr(permissions, "administrator", False)
         ):
             missing.append("Manage Roles")
+        if not bool(
+            getattr(permissions, "kick_members", False)
+            or getattr(permissions, "administrator", False)
+        ):
+            missing.append("Kick Members")
 
         hierarchy_blockers = _dangerous_hierarchy_blockers(
             guild,
@@ -687,11 +711,7 @@ async def _claim_recent_audit_entry(
     target_id: Optional[int] = None,
     retries: int = _AUDIT_LOOKUP_RETRIES,
 ) -> Optional[Any]:
-    """Atomically find and consume one audit entry for an event callback.
-
-    This prevents targetless events such as webhook updates from racing and
-    selecting the same audit entry in multiple concurrent callbacks.
-    """
+    """Atomically find and consume one audit entry for an event callback."""
 
     key = (int(guild.id), str(action_name))
     lock = _lock_for(_AUDIT_CLAIM_LOCKS, key)
@@ -803,9 +823,7 @@ async def _contain_actor(
     member = actor if isinstance(actor, discord.Member) else None
     if member is None:
         try:
-            member = guild.get_member(actor_id) or await guild.fetch_member(
-                actor_id
-            )
+            member = guild.get_member(actor_id) or await guild.fetch_member(actor_id)
         except Exception:
             member = None
     if not isinstance(member, discord.Member):
@@ -852,16 +870,8 @@ async def _post_incident(
         color=discord.Color.red(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(
-        name="Actor",
-        value=_actor_label(actor),
-        inline=False,
-    )
-    embed.add_field(
-        name="Detected",
-        value=action_label,
-        inline=False,
-    )
+    embed.add_field(name="Actor", value=_actor_label(actor), inline=False)
+    embed.add_field(name="Detected", value=action_label, inline=False)
     embed.add_field(
         name="Target",
         value=target_label[:1024] or "Unknown",
@@ -884,9 +894,7 @@ async def _post_incident(
             value=details[:1024],
             inline=False,
         )
-    embed.set_footer(
-        text="Dank Shield AntiNuke • audit-log attributed"
-    )
+    embed.set_footer(text="Dank Shield AntiNuke • audit-log attributed")
     await _post_modlog(guild, embed)
 
 
@@ -906,15 +914,22 @@ async def _process_claimed_destructive_event(
 
     actor = getattr(entry, "user", None)
     actor_id = _safe_int(getattr(actor, "id", 0), 0)
-    if actor_id <= 0 or is_trusted_actor(guild, actor, settings):
+    if actor_id <= 0:
+        return True
+    if _actor_is_owner_or_bot(guild, actor):
         return True
 
+    delegated_trust = _actor_is_configured_trusted(actor, settings)
     window_seconds = int(settings["antinuke_window_seconds"])
-    threshold = (
-        max(1, int(threshold_override))
-        if threshold_override is not None
-        else int(settings[threshold_key])
-    )
+
+    if threshold_override is not None:
+        threshold = max(1, int(threshold_override))
+    elif delegated_trust:
+        threshold = int(settings[threshold_key])
+    else:
+        # Unknown/untrusted actors get no free destructive action. Configured
+        # trusted operators use the owner's saved burst limits instead.
+        threshold = 1
 
     count = _record_action(
         int(guild.id),
@@ -928,7 +943,9 @@ async def _process_claimed_destructive_event(
         _AGGREGATE_ACTION_KEY,
         window_seconds=window_seconds,
     )
-    aggregate_threshold = _aggregate_threshold(settings)
+    aggregate_threshold = (
+        _aggregate_threshold(settings) if delegated_trust else 1
+    )
 
     category_triggered = count >= threshold
     aggregate_triggered = aggregate_count >= aggregate_threshold
@@ -963,17 +980,13 @@ async def _process_claimed_destructive_event(
 
         removed: list[str] = []
         blocked: list[str] = []
-        containment_succeeded = (
-            settings["antinuke_mode"] == "alert"
-        )
+        containment_succeeded = settings["antinuke_mode"] == "alert"
 
         if settings["antinuke_mode"] == "contain":
             removed, blocked = await _contain_actor(
                 guild,
                 actor,
-                reason=(
-                    f"Dank Shield AntiNuke containment: {action_label}"
-                ),
+                reason=f"Dank Shield AntiNuke containment: {action_label}",
             )
             containment_succeeded = bool(removed) and not blocked
 
@@ -997,16 +1010,14 @@ async def _process_claimed_destructive_event(
             + ", ".join(removed)
             + ". Still blocked by higher/managed dangerous roles: "
             + ", ".join(blocked)
-            + ". Dank Shield will retry on the next attributed "
-            "destructive action."
+            + ". Dank Shield will retry on the next attributed destructive action."
         )
     elif blocked:
         response = (
-            "Containment failed because the actor or dangerous roles "
-            "outrank Dank Shield, or Discord manages the role: "
+            "Containment failed because the actor or dangerous roles outrank "
+            "Dank Shield, or Discord manages the role: "
             + ", ".join(blocked)
-            + ". Dank Shield will retry on the next attributed "
-            "destructive action."
+            + ". Dank Shield will retry on the next attributed destructive action."
         )
     else:
         response = (
@@ -1015,20 +1026,18 @@ async def _process_claimed_destructive_event(
         )
 
     trigger_source: list[str] = []
+    if not delegated_trust:
+        trigger_source.append("untrusted actor • first-strike policy")
     if category_triggered:
-        trigger_source.append(
-            f"{action_key} {count}/{threshold}"
-        )
+        trigger_source.append(f"{action_key} {count}/{threshold}")
     if aggregate_triggered:
         trigger_source.append(
-            "mixed destructive actions "
-            f"{aggregate_count}/{aggregate_threshold}"
+            f"mixed destructive actions {aggregate_count}/{aggregate_threshold}"
         )
     if slow_triggered:
         trigger_source.append(
             "structural slow-burn "
-            f"{_SLOW_BURN_WINDOW_SECONDS}s "
-            f"{slow_count}/{slow_threshold}"
+            f"{_SLOW_BURN_WINDOW_SECONDS}s {slow_count}/{slow_threshold}"
         )
 
     await _post_incident(
@@ -1039,8 +1048,7 @@ async def _process_claimed_destructive_event(
         target_label=target_label,
         response_label=response,
         count_label=(
-            f"{window_seconds}s window • "
-            + " • ".join(trigger_source)
+            f"{window_seconds}s window • " + " • ".join(trigger_source)
         ),
     )
     return True
@@ -1105,12 +1113,10 @@ async def _handle_role_permission_escalation(
         return
 
     actor = getattr(entry, "user", None)
-    if is_trusted_actor(guild, actor, settings):
+    if _actor_is_owner_or_bot(guild, actor):
         return
 
-    rollback = (
-        "Alert-only mode: dangerous permission change was not reverted."
-    )
+    rollback = "Alert-only mode: dangerous permission change was not reverted."
     if settings["antinuke_mode"] == "contain":
         try:
             me = guild.me
@@ -1126,24 +1132,17 @@ async def _handle_role_permission_escalation(
                         "dangerous role permission escalation"
                     ),
                 )
-                rollback = (
-                    "Reverted the role permissions to their previous state."
-                )
+                rollback = "Reverted the role permissions to their previous state."
             else:
                 rollback = (
-                    "Could not revert the role because it is managed or "
-                    "above Dank Shield's role."
+                    "Could not revert the role because it is managed or above "
+                    "Dank Shield's role."
                 )
         except Exception as exc:
-            rollback = (
-                f"Role rollback failed safely: {type(exc).__name__}."
-            )
+            rollback = f"Role rollback failed safely: {type(exc).__name__}."
 
         actor_id = _safe_int(getattr(actor, "id", 0), 0)
-        lock = _lock_for(
-            _CONTAINMENT_LOCKS,
-            (int(guild.id), actor_id),
-        )
+        lock = _lock_for(_CONTAINMENT_LOCKS, (int(guild.id), actor_id))
         async with lock:
             removed, blocked = await _contain_actor(
                 guild,
@@ -1162,8 +1161,7 @@ async def _handle_role_permission_escalation(
             )
         if blocked:
             rollback += (
-                " Could not remove actor roles because of "
-                "hierarchy/managed roles: "
+                " Could not remove actor roles because of hierarchy/managed roles: "
                 + ", ".join(blocked)
                 + "."
             )
@@ -1173,8 +1171,7 @@ async def _handle_role_permission_escalation(
         title="🚨 AntiNuke Permission Escalation",
         actor=actor,
         action_label=(
-            "Dangerous permissions added to a role: "
-            + ", ".join(added)
+            "Dangerous permissions added to a role: " + ", ".join(added)
         ),
         target_label=f"@{after.name} (`{after.id}`)",
         response_label=rollback,
@@ -1196,10 +1193,7 @@ async def _handle_member_dangerous_role_grant(
     trusted_role_ids = set(
         _safe_id_list(settings.get("antinuke_trusted_role_ids"))
     )
-    before_ids = {
-        int(role.id)
-        for role in list(before.roles or [])
-    }
+    before_ids = {int(role.id) for role in list(before.roles or [])}
     new_roles = [
         role
         for role in list(after.roles or [])
@@ -1221,39 +1215,17 @@ async def _handle_member_dangerous_role_grant(
         return
 
     actor = getattr(entry, "user", None)
-    actor_id = _safe_int(getattr(actor, "id", 0), 0)
-    newly_granted_trusted_ids = {
-        int(role.id)
-        for role in new_roles
-        if int(role.id) in trusted_role_ids
-    }
-    ignore_for_actor = (
-        newly_granted_trusted_ids
-        if actor_id > 0 and actor_id == int(after.id)
-        else set()
-    )
-    if is_trusted_actor(
-        guild,
-        actor,
-        settings,
-        ignore_role_ids=ignore_for_actor,
-    ):
+    if _actor_is_owner_or_bot(guild, actor):
         return
 
     sensitive_names = ", ".join(
-        str(getattr(role, "name", role.id))
-        for role in new_roles
+        str(getattr(role, "name", role.id)) for role in new_roles
     )
-    response = (
-        "Alert-only mode: security-sensitive role grant was not reverted."
-    )
+    response = "Alert-only mode: security-sensitive role grant was not reverted."
 
     if settings["antinuke_mode"] == "contain":
         me = guild.me
-        target_manageable = _member_is_manageable_by_bot(
-            guild,
-            after,
-        )
+        target_manageable = _member_is_manageable_by_bot(guild, after)
         removable = [
             role
             for role in new_roles
@@ -1264,19 +1236,14 @@ async def _handle_member_dangerous_role_grant(
                 and _role_is_below(role, me.top_role)
             )
         ]
-        blocked = [
-            role
-            for role in new_roles
-            if role not in removable
-        ]
+        blocked = [role for role in new_roles if role not in removable]
 
         if removable:
             try:
                 await after.remove_roles(
                     *removable,
                     reason=(
-                        "Dank Shield AntiNuke rollback: "
-                        "security-sensitive role grant"
+                        "Dank Shield AntiNuke rollback: security-sensitive role grant"
                     ),
                 )
                 response = (
@@ -1289,30 +1256,24 @@ async def _handle_member_dangerous_role_grant(
                     "Security-sensitive role rollback failed safely: "
                     f"{type(exc).__name__}."
                 )
-                blocked = list(
-                    dict.fromkeys([*blocked, *removable])
-                )
+                blocked = list(dict.fromkeys([*blocked, *removable]))
                 removable = []
 
         if blocked:
             response += (
-                " Could not remove higher/managed roles or modify "
-                "the target member: "
+                " Could not remove higher/managed roles or modify the target member: "
                 + ", ".join(role.name for role in blocked)
                 + "."
             )
 
-        lock = _lock_for(
-            _CONTAINMENT_LOCKS,
-            (int(guild.id), actor_id),
-        )
+        actor_id = _safe_int(getattr(actor, "id", 0), 0)
+        lock = _lock_for(_CONTAINMENT_LOCKS, (int(guild.id), actor_id))
         async with lock:
             removed_actor, blocked_actor = await _contain_actor(
                 guild,
                 actor,
                 reason=(
-                    "Dank Shield AntiNuke containment: "
-                    "security-sensitive role grant"
+                    "Dank Shield AntiNuke containment: security-sensitive role grant"
                 ),
             )
 
@@ -1324,8 +1285,7 @@ async def _handle_member_dangerous_role_grant(
             )
         if blocked_actor:
             response += (
-                " Could not remove actor roles because of "
-                "hierarchy/managed roles: "
+                " Could not remove actor roles because of hierarchy/managed roles: "
                 + ", ".join(blocked_actor)
                 + "."
             )
@@ -1337,9 +1297,7 @@ async def _handle_member_dangerous_role_grant(
         action_label=(
             "Dangerous or trusted-exemption role(s) granted to a member"
         ),
-        target_label=(
-            f"{after.mention} (`{after.id}`) • {sensitive_names}"
-        ),
+        target_label=f"{after.mention} (`{after.id}`) • {sensitive_names}",
         response_label=response,
     )
 
@@ -1362,12 +1320,10 @@ async def _handle_dangerous_role_create(role: discord.Role) -> None:
         return
 
     actor = getattr(entry, "user", None)
-    if is_trusted_actor(guild, actor, settings):
+    if _actor_is_owner_or_bot(guild, actor):
         return
 
-    response = (
-        "Alert-only mode: newly created dangerous role was left unchanged."
-    )
+    response = "Alert-only mode: newly created dangerous role was left unchanged."
     if settings["antinuke_mode"] == "contain":
         deleted = False
         try:
@@ -1379,8 +1335,7 @@ async def _handle_dangerous_role_create(role: discord.Role) -> None:
             ):
                 await role.delete(
                     reason=(
-                        "Dank Shield AntiNuke rollback: "
-                        "dangerous role creation"
+                        "Dank Shield AntiNuke rollback: dangerous role creation"
                     )
                 )
                 deleted = True
@@ -1388,17 +1343,13 @@ async def _handle_dangerous_role_create(role: discord.Role) -> None:
             deleted = False
 
         actor_id = _safe_int(getattr(actor, "id", 0), 0)
-        lock = _lock_for(
-            _CONTAINMENT_LOCKS,
-            (int(guild.id), actor_id),
-        )
+        lock = _lock_for(_CONTAINMENT_LOCKS, (int(guild.id), actor_id))
         async with lock:
             removed, blocked = await _contain_actor(
                 guild,
                 actor,
                 reason=(
-                    "Dank Shield AntiNuke containment: "
-                    "dangerous role creation"
+                    "Dank Shield AntiNuke containment: dangerous role creation"
                 ),
             )
 
@@ -1406,8 +1357,8 @@ async def _handle_dangerous_role_create(role: discord.Role) -> None:
             "Deleted the newly created dangerous role."
             if deleted
             else (
-                "Could not delete the newly created dangerous role "
-                "because of Discord hierarchy/management."
+                "Could not delete the newly created dangerous role because of "
+                "Discord hierarchy/management."
             )
         )
         if removed:
@@ -1451,20 +1402,17 @@ async def _handle_bot_add(member: discord.Member) -> None:
         return
 
     actor = getattr(entry, "user", None)
-    if is_trusted_actor(guild, actor, settings):
+    if _actor_is_owner_or_bot(guild, actor):
         return
 
-    response = (
-        "Alert-only mode: newly added bot was left in the server."
-    )
+    response = "Alert-only mode: newly added bot was left in the server."
     if settings["antinuke_mode"] == "contain":
         removed_bot = False
         try:
             await guild.kick(
                 member,
                 reason=(
-                    "Dank Shield AntiNuke rollback: "
-                    "untrusted bot addition"
+                    "Dank Shield AntiNuke rollback: untrusted bot addition"
                 ),
             )
             removed_bot = True
@@ -1472,17 +1420,13 @@ async def _handle_bot_add(member: discord.Member) -> None:
             removed_bot = False
 
         actor_id = _safe_int(getattr(actor, "id", 0), 0)
-        lock = _lock_for(
-            _CONTAINMENT_LOCKS,
-            (int(guild.id), actor_id),
-        )
+        lock = _lock_for(_CONTAINMENT_LOCKS, (int(guild.id), actor_id))
         async with lock:
             removed, blocked = await _contain_actor(
                 guild,
                 actor,
                 reason=(
-                    "Dank Shield AntiNuke containment: "
-                    "untrusted bot addition"
+                    "Dank Shield AntiNuke containment: untrusted bot addition"
                 ),
             )
 
@@ -1490,8 +1434,8 @@ async def _handle_bot_add(member: discord.Member) -> None:
             "Removed the newly added bot."
             if removed_bot
             else (
-                "Could not remove the newly added bot. "
-                "Check Kick Members and role hierarchy immediately."
+                "Could not remove the newly added bot. Check Kick Members and "
+                "role hierarchy immediately."
             )
         )
         if removed:
@@ -1527,11 +1471,7 @@ async def _handle_webhook_change(
 
     action_name, entry = await _claim_recent_audit_entry_any(
         guild,
-        (
-            "webhook_create",
-            "webhook_update",
-            "webhook_delete",
-        ),
+        ("webhook_create", "webhook_update", "webhook_delete"),
     )
     if entry is None or action_name is None:
         return
@@ -1546,13 +1486,9 @@ async def _handle_webhook_change(
         guild,
         entry=entry,
         action_key=action_name,
-        action_label=labels.get(
-            action_name,
-            "Webhook administrative change",
-        ),
+        action_label=labels.get(action_name, "Webhook administrative change"),
         target_label=(
-            f"#{getattr(channel, 'name', 'channel')} "
-            f"(`{channel.id}`)"
+            f"#{getattr(channel, 'name', 'channel')} (`{channel.id}`)"
         ),
         threshold_key="antinuke_webhook_create_threshold",
     )
@@ -1569,17 +1505,14 @@ async def antinuke_on_guild_channel_delete(
         action_label="Mass channel deletion",
         target_id=int(channel.id),
         target_label=(
-            f"#{getattr(channel, 'name', 'deleted-channel')} "
-            f"(`{channel.id}`)"
+            f"#{getattr(channel, 'name', 'deleted-channel')} (`{channel.id}`)"
         ),
         threshold_key="antinuke_channel_delete_threshold",
     )
 
 
 @bot.listen("on_guild_role_delete")
-async def antinuke_on_guild_role_delete(
-    role: discord.Role,
-) -> None:
+async def antinuke_on_guild_role_delete(role: discord.Role) -> None:
     await _handle_threshold_event(
         role.guild,
         audit_action="role_delete",
@@ -1608,9 +1541,7 @@ async def antinuke_on_member_ban(
 
 
 @bot.listen("on_member_remove")
-async def antinuke_on_member_remove(
-    member: discord.Member,
-) -> None:
+async def antinuke_on_member_remove(member: discord.Member) -> None:
     handled = await _handle_threshold_event(
         member.guild,
         audit_action="kick",
@@ -1630,8 +1561,7 @@ async def antinuke_on_member_remove(
         action_label="Member prune triggered",
         target_id=None,
         target_label=(
-            f"prune event observed while {member} "
-            f"(`{member.id}`) left"
+            f"prune event observed while {member} (`{member.id}`) left"
         ),
         threshold_key="antinuke_kick_threshold",
         threshold_override=1,
@@ -1646,9 +1576,7 @@ async def antinuke_on_webhooks_update(
 
 
 @bot.listen("on_guild_role_create")
-async def antinuke_on_guild_role_create(
-    role: discord.Role,
-) -> None:
+async def antinuke_on_guild_role_create(role: discord.Role) -> None:
     await _handle_dangerous_role_create(role)
 
 
@@ -1669,9 +1597,7 @@ async def antinuke_on_member_update(
 
 
 @bot.listen("on_member_join")
-async def antinuke_on_member_join(
-    member: discord.Member,
-) -> None:
+async def antinuke_on_member_join(member: discord.Member) -> None:
     await _handle_bot_add(member)
 
 
