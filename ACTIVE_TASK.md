@@ -2,7 +2,7 @@
 
 ## DS-SEC-041 — Persistent hostile actor / AntiNuke re-entry containment
 
-**Status:** IMPLEMENTED ON DRAFT PR #206 / VALIDATION IN PROGRESS
+**Status:** IMPLEMENTATION COMPLETE / FINAL PR-HEAD RECHECK AFTER BOOKKEEPING UPDATE
 **Branch:** `fix/persistent-hostile-actor-reentry`
 **Base:** `91bce1e3a72b16e079f99febb6519b3144c36955` (`main`, merge of PR #203)
 **PR:** #206
@@ -17,8 +17,8 @@ A Discord identity that crosses confirmed AntiNuke containment must not return a
 - No guild-scoped hostile identity disposition survived leave/rejoin/reinvite.
 - SpamGuard intentionally rejects bot-authored messages before its counters and settings path.
 - RaidGuard/member-risk intentionally excludes Discord bots from human alt scoring.
-- Member history exists, but AntiNuke did not consume it as a durable hostile-identity enforcement decision.
-- The tested GANG Nuker flow can therefore keep its Discord bot process alive, be reinvited, reacquire guild access, and resume destructive actions unless the Discord identity itself remains contained.
+- Member history existed, but AntiNuke did not consume it as a durable hostile-identity enforcement decision.
+- The tested GANG Nuker flow could therefore keep its Discord bot process alive, be reinvited, reacquire guild access, and resume destructive actions unless the Discord identity itself remained contained.
 
 ## Execution path
 
@@ -39,34 +39,67 @@ A Discord identity that crosses confirmed AntiNuke containment must not return a
   - ban-first confirmed AntiNuke containment with canonical fallback;
   - Ban Members readiness requirement bridge;
   - known-hostile bot-add interception;
-  - SpamGuard / Invite Shield reputation prefilter before generic bot exclusion;
+  - SpamGuard-independent known-hostile message backstop;
   - hard-proof linked-alt inheritance;
   - ready-time reconciliation;
   - explicit `clear_hostile_reputation()` API for audited owner/admin integration.
 - `supabase/migrations/20260913163000_hostile_actor_reputation.sql`
   - guild-scoped durable reputation table, active disposition, incident count, hard-link parent, explicit clear metadata, service-role-only access.
+- `.github/workflows/hostile-actor-reputation-sql.yml`
+  - PostgreSQL 16 migration idempotency, RLS/index, lifecycle, and service-role-only access smoke coverage.
 - `main.py`
   - installs hostile reputation after AntiNuke gateway/finalizer/incident policy is finalized.
 - `tests/test_antinuke_hostile_actor_runtime.py`
-  - persistence, ban-first containment, fallback, permission readiness, exact rejoin, hard-proof alt inheritance, SpamGuard bot prefilter, and owner re-add regressions.
+  - persistence, ban-first containment, fallback, permission readiness, exact rejoin, explicit-clear precedence, hard-proof alt inheritance, known-hostile bot message backstop, alert-only behavior, and owner re-add regressions.
+- `tests/test_antinuke_finalizer_runtime.py`
+  - asserts the hostile runtime is installed in the required startup order before app import.
 
 ## Validation / results
 
-- Source implementation and focused tests committed to PR #206.
-- Exact-head GitHub Actions validation: pending.
-- Local clone/test execution is unavailable in this session because the container cannot resolve `github.com`; GitHub Actions is the authoritative validation path for this PR.
+Runtime code head `1b946b6b622f2b1b45d1d967aa4376ed3dbe7369` passed the complete validation gate before this bookkeeping-only update:
+
+- `Dank Shield CI` run #2014: **SUCCESS**.
+  - committed diff whitespace: success;
+  - Python compile: success;
+  - full unit-test suite: success;
+  - standalone tool checks: success;
+  - setup/public-command/invite/setup-safety/design/role-truth/event-boundary audits: success;
+  - managed-category SQL smoke: success;
+  - claim-first ticket security: success.
+- `Hostile Actor Reputation SQL` run #3: **SUCCESS**.
+- `Dank Design Regression CI` run #297: **SUCCESS**.
+- `Application Command Size Diagnostics` run #1044: **SUCCESS**.
+- `Profile Runtime Diagnostics` run #803: **SUCCESS**.
+- `Ticket Owner Emergency Override` run #585: **SUCCESS**.
+- Local clone execution was unavailable in this session; GitHub Actions is the authoritative validation path used here.
+
+This task-record update contains no runtime, migration, or test behavior change. The resulting PR head must still finish its own exact-head workflow rerun before PR #206 is marked ready.
 
 ## Cleanup / conflicts
 
+- Compared base `91bce1e3a72b16e079f99febb6519b3144c36955` through validated code head `1b946b6b622f2b1b45d1d967aa4376ed3dbe7369`: branch was 16 commits ahead and 0 behind before this bookkeeping update.
+- Runtime diff was reviewed after CI: seven task-owned files only; no unrelated product changes were introduced.
+- No conflict markers, secrets, generated artifacts, debug bypasses, or placeholder implementation remain in the task diff.
 - Accidental temporary branch files created while opening the draft PR were deleted before implementation continued.
-- No other open AntiNuke/SpamGuard/security PR overlaps this task; PR #206 is the only matching open PR found.
-- The GANG Nuker screenshot is treated only as defensive evidence of modular/persistent attack behavior. No tool-specific fingerprinting or offensive recreation is being added.
+- No other open AntiNuke/SpamGuard/security PR overlaps this task; PR #206 is the matching active implementation PR.
+- The GANG Nuker screenshots are treated only as defensive evidence of persistent/modular attack behavior. No tool-specific fingerprinting or offensive recreation was added.
+
+## Compatibility review
+
+- Existing AntiNuke alert mode remains alert-only; durable reputation does not silently turn alert mode into containment.
+- AntiNuke disabled state remains disabled; known-hostile presence is surfaced but not automatically removed.
+- Canonical kick/role-strip containment remains the fallback when Discord rejects a ban.
+- Guild owners and Dank Shield itself remain protected from self-containment paths.
+- Human alt inheritance requires hard identity evidence and does not promote username/profile heuristics into punishment proof.
+- The existing member lifecycle router does not remove the hostile-reputation join listener.
+- Production already has a main-push Supabase migration workflow; after merge, the new migration is eligible for the normal dry-run + `db push` production path.
 
 ## Blockers / risks
 
-- The Supabase migration must be applied in production for cross-host durable reputation. The local mirror is an outage fallback, not a substitute for the database migration.
-- Discord hierarchy/permissions can still block ban/kick containment; those paths must remain visible in incidents and readiness checks.
+- The Supabase migration must actually succeed in production after merge for cross-host durable reputation. The local mirror is outage continuity, not a substitute for the shared database.
+- Discord hierarchy/permissions can still block ban/kick containment; readiness now requires Ban Members for contain mode and incident output retains fallback/blocker visibility.
 - Discord guild owners cannot themselves be banned/contained by a bot.
+- No repository test can substitute for the final live Discord adversarial retest against the real GANG Nuker account after deployment.
 - Structural server restore remains a separate recovery-system concern and is not part of this active task.
 
 ## Backlog
@@ -75,7 +108,7 @@ A Discord identity that crosses confirmed AntiNuke containment must not return a
 
 ## Next step
 
-Run exact-head CI, inspect every failure against this task's execution path, fix only task-related regressions, then perform final diff/cleanup/conflict review before changing PR readiness.
+Verify the workflow rerun on the bookkeeping-only PR head. If every required workflow remains green, update PR #206 metadata and mark it ready for review. Do not merge until the owner explicitly approves the merge.
 
 ## Definition of done
 
@@ -87,4 +120,5 @@ Run exact-head CI, inspect every failure against this task's execution path, fix
 - targeted tests, full Dank Shield CI, compile/static checks, and exact-head workflow checks are green;
 - migration and startup wiring are reviewed;
 - final diff contains no placeholders, temp files, unrelated changes, secrets, or conflict artifacts;
-- PR metadata reflects actual validated state before readiness/merge.
+- PR metadata reflects actual validated state before readiness/merge;
+- production migration/deploy and live adversarial retest remain explicit post-merge acceptance checks rather than being falsely claimed from CI alone.
