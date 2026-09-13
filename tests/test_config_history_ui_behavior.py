@@ -57,7 +57,7 @@ class FakeResponse:
 
 class FakeInteraction:
     def __init__(self) -> None:
-        self.guild = SimpleNamespace(id=123, name="Test Guild")
+        self.guild = SimpleNamespace(id=123, name="Test Guild", owner_id=77)
         self.user = SimpleNamespace(id=77)
         self.response = FakeResponse()
 
@@ -374,6 +374,7 @@ def test_confirmation_lists_only_selected_items() -> None:
     assert "Partnerships" in rendered
     assert "Billing" not in rendered
     assert "Every unlisted current setting or ticket choice" in rendered
+    assert "server owner" in rendered
 
 
 def test_confirm_restore_calls_selective_service_only_after_confirmation(
@@ -449,6 +450,37 @@ def test_confirm_restore_calls_selective_service_only_after_confirmation(
     assert events[2][0] == "history"
     assert "1 Core Settings item" in events[2][1]
     assert events[2][2] is True
+
+
+def test_delegated_admin_cannot_confirm_configuration_restore(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    interaction = FakeInteraction()
+    interaction.user = SimpleNamespace(id=555)
+    restore_calls: list[Any] = []
+
+    async def allow(_interaction: Any) -> bool:
+        return True
+
+    async def must_not_restore(*args: Any, **kwargs: Any) -> None:
+        restore_calls.append((args, kwargs))
+
+    monkeypatch.setattr(ui, "_require_setup_permission", allow)
+    monkeypatch.setattr(ui, "restore_config_version_selective", must_not_restore)
+
+    view = ui.RestoreConfigConfirmView(
+        8,
+        mode=RESTORE_ALL,
+        plan=core_plan(),
+    )
+    run(find_button(view, "Confirm Restore").callback(interaction))
+
+    assert restore_calls == []
+    assert interaction.response.messages
+    args, kwargs = interaction.response.messages[-1]
+    rendered = " ".join(str(value) for value in args) + " " + str(kwargs.get("content", ""))
+    assert "server owner" in rendered.lower()
+    assert "antinuke" in rendered.lower()
 
 
 def test_restore_confirmation_has_only_confirm_and_cancel_actions() -> None:
