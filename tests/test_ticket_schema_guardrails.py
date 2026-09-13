@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MIGRATION = ROOT / "supabase" / "migrations" / "20260731141000_ticket_counter_durability.sql"
+MIGRATION = ROOT / "supabase" / "migrations" / "20260913154500_canonical_runtime_schema_authority.sql"
 BOOTSTRAP = ROOT / "stoney_verify" / "startup_guards" / "auto_schema_bootstrap.py"
 OPERATION_QUEUE_GUARD = ROOT / "stoney_verify" / "startup_guards" / "operation_queue_schema_guard.py"
 
