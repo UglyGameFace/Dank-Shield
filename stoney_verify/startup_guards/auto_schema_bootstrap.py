@@ -3,26 +3,30 @@ from __future__ import annotations
 """Read-only schema readiness guard.
 
 Committed files under ``supabase/migrations`` are the only schema mutation
-authority.  This module keeps its historical name for import compatibility, but
+authority. This module keeps its historical name for import compatibility, but
 startup no longer creates or alters database objects and never executes migration
-SQL.  It only probes the REST-visible schema and reports which committed
+SQL. It only probes the REST-visible schema and reports which committed
 migrations should be applied when required objects are missing.
 """
 
 import asyncio
 from pathlib import Path
-from typing import Any, Optional
-
-import discord
+from typing import Any
 
 _HAS_RUN = False
-_TASK: Optional[asyncio.Task] = None
 
-# Kept as migration guidance/compatibility metadata.  These files are resolved
-# and reported, never executed by runtime startup.
+# Migration guidance/compatibility metadata. These files are resolved and
+# reported, never executed by runtime startup. Category files are listed here
+# directly so the legacy category guard no longer mutates this module at import.
 _BOOTSTRAP_MIGRATION_FILES = (
     "20260711_member_activity_truth_ledger.sql",
+    "20260802042000_ticket_category_setup_selection.sql",
     "20260802225500_durable_invite_stats.sql",
+    "20260807215900_prepare_managed_ticket_category_repair.sql",
+    "20260807220000_repair_managed_ticket_category_duplicates.sql",
+    "20260910163000_preserve_ticket_category_selection_on_review.sql",
+    "20260911113000_restore_rich_ticket_category_selection.sql",
+    "20260913154500_canonical_runtime_schema_authority.sql",
 )
 _BOOTSTRAP_MIGRATION_PATTERNS = (
     "*ticket_counter*.sql",
@@ -30,6 +34,10 @@ _BOOTSTRAP_MIGRATION_PATTERNS = (
 
 # Compatibility symbol for older imports. Runtime DDL was intentionally removed.
 SCHEMA_SQL = ""
+
+_CANONICAL_RUNTIME_MIGRATION = (
+    "supabase/migrations/20260913154500_canonical_runtime_schema_authority.sql"
+)
 
 # table, lightweight REST projection, migration guidance
 _SCHEMA_PROBES: tuple[tuple[str, str, str], ...] = (
@@ -40,13 +48,48 @@ _SCHEMA_PROBES: tuple[tuple[str, str, str], ...] = (
     ),
     (
         "tickets",
-        "id,guild_id,ticket_number",
-        "supabase/migrations/20260430172000_ticket_panel_system.sql",
+        "id,guild_id,ticket_number,panel_message_id,last_activity_at",
+        _CANONICAL_RUNTIME_MIGRATION,
+    ),
+    (
+        "ticket_notes",
+        "id,ticket_id,staff_id,content,is_pinned",
+        _CANONICAL_RUNTIME_MIGRATION,
+    ),
+    (
+        "ticket_messages",
+        "id,ticket_id,author_id,message_type,attachments",
+        _CANONICAL_RUNTIME_MIGRATION,
+    ),
+    (
+        "activity_feed_events",
+        "id,guild_id,event_family,event_type,actor_user_id,metadata,meta",
+        _CANONICAL_RUNTIME_MIGRATION,
+    ),
+    (
+        "guild_members",
+        "id,guild_id,user_id,entry_method,join_source,entry_confidence",
+        _CANONICAL_RUNTIME_MIGRATION,
     ),
     (
         "member_joins",
-        "id,guild_id,user_id",
-        "supabase/2026-05-08_runtime_stability_schema.sql",
+        "id,guild_id,user_id,entry_method,join_source,entry_confidence",
+        _CANONICAL_RUNTIME_MIGRATION,
+    ),
+    (
+        "member_events",
+        "id,guild_id,user_id,event_type,metadata",
+        _CANONICAL_RUNTIME_MIGRATION,
+    ),
+    (
+        "member_activity_scan_locks",
+        "guild_id,user_id,active",
+        _CANONICAL_RUNTIME_MIGRATION,
+    ),
+    (
+        "member_cleanup_settings",
+        "guild_id,require_queue_confirmation,default_queue_limit",
+        _CANONICAL_RUNTIME_MIGRATION,
     ),
     (
         "member_activity_ledger",
@@ -112,7 +155,7 @@ def _classify_schema_error(exc: BaseException) -> str:
         "pgrst204" in text
         or "pgrst205" in text
         or "could not find the table" in text
-        or "could not find the" in text and "column" in text
+        or ("could not find the" in text and "column" in text)
         or "schema cache" in text
     ):
         return "missing_schema"
