@@ -111,11 +111,10 @@ def test_structural_multi_actor_attack_triggers_before_large_event_count() -> No
     second = _actor(302)
 
     assert guardian._panic_state(guild, first, "channel_delete")[1] is False
-    assert guardian._panic_state(guild, second, "role_delete")[1] is False
     active, triggered, observed = guardian._panic_state(
         guild,
-        first,
-        "invite_delete",
+        second,
+        "role_delete",
     )
 
     assert active is True
