@@ -188,6 +188,24 @@ def _install_anti_nuke_self_action_runtime() -> None:
         )
 
 
+def _install_anti_nuke_zero_damage_runtime() -> None:
+    """Install the final fail-closed AntiNuke audit and quarantine invariants."""
+
+    try:
+        from stoney_verify.globals import bot
+        from stoney_verify.anti_nuke_zero_damage_runtime import (
+            install_anti_nuke_zero_damage_runtime,
+        )
+
+        if not install_anti_nuke_zero_damage_runtime(bot):
+            print("ℹ️ AntiNuke zero-damage runtime was already installed; duplicate skipped")
+    except Exception as exc:
+        print(
+            "🚨 AntiNuke zero-damage runtime install failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
 def main() -> None:
     _sleep_before_import_if_discord_login_backoff_active()
     _install_invite_reconciliation_runtime()
@@ -197,6 +215,7 @@ def main() -> None:
     _install_hostile_actor_runtime()
     _install_anti_nuke_lockdown_runtime()
     _install_anti_nuke_self_action_runtime()
+    _install_anti_nuke_zero_damage_runtime()
     from stoney_verify.app import run as _run_dank_shield
 
     _run_dank_shield()
