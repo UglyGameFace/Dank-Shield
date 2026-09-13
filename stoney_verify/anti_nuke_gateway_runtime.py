@@ -20,6 +20,11 @@ from . import anti_nuke
 
 
 _DIRECT_DESTRUCTIVE_ACTIONS: dict[str, tuple[str, str, Optional[int]]] = {
+    "channel_create": (
+        "Channel creation burst",
+        "antinuke_channel_delete_threshold",
+        None,
+    ),
     "channel_delete": (
         "Mass channel deletion",
         "antinuke_channel_delete_threshold",
@@ -62,7 +67,6 @@ _DIRECT_DESTRUCTIVE_ACTIONS: dict[str, tuple[str, str, Optional[int]]] = {
     ),
 }
 
-_MEMBER_IMPACT_SLOW_BURN_ACTIONS = frozenset({"ban", "kick", "member_prune"})
 _INSTALL_FLAG = "_dank_antinuke_gateway_runtime_installed"
 
 
@@ -91,9 +95,9 @@ def _target_label(action_name: str, entry: Any) -> str:
     target_id = _safe_int(getattr(target, "id", 0), 0)
     target_name = str(getattr(target, "name", "") or target or "Unknown")
 
-    if action_name == "channel_delete":
+    if action_name in {"channel_create", "channel_delete"}:
         return f"#{target_name} (`{target_id}`)" if target_id else f"#{target_name}"
-    if action_name == "role_delete":
+    if action_name in {"role_create", "role_delete"}:
         return f"@{target_name} (`{target_id}`)" if target_id else f"@{target_name}"
     if action_name in {"ban", "kick"}:
         return f"{target_name} (`{target_id}`)" if target_id else target_name
@@ -122,62 +126,76 @@ async def _contain_actor(guild: discord.Guild, actor: Any, *, reason: str):
         )
 
 
-async def _handle_dangerous_role_create(
-    guild: discord.Guild,
-    entry: Any,
-) -> None:
+async def _handle_role_create(guild: discord.Guild, entry: Any) -> None:
     role = getattr(entry, "target", None)
-    if role is None or not anti_nuke.role_has_dangerous_permissions(role):
+    if role is None:
         return
 
-    settings = await anti_nuke.get_antinuke_settings(int(guild.id))
-    if not settings["antinuke_enabled"]:
-        return
+    # Dangerous role creation keeps the canonical immediate rollback semantics.
+    if anti_nuke.role_has_dangerous_permissions(role):
+        settings = await anti_nuke.get_antinuke_settings(int(guild.id))
+        if not settings["antinuke_enabled"]:
+            return
 
-    actor = getattr(entry, "user", None)
-    if anti_nuke._actor_is_owner_or_bot(guild, actor):  # noqa: SLF001
-        return
+        actor = getattr(entry, "user", None)
+        if anti_nuke._actor_is_owner_or_bot(guild, actor):  # noqa: SLF001
+            return
 
-    response = "Alert-only mode: newly created dangerous role was left unchanged."
-    if settings["antinuke_mode"] == "contain":
-        deleted = False
-        try:
-            me = getattr(guild, "me", None)
-            if (
-                isinstance(me, discord.Member)
-                and not bool(getattr(role, "managed", False))
-                and anti_nuke._role_is_below(role, me.top_role)  # noqa: SLF001
-            ):
-                await role.delete(
-                    reason="Dank Shield AntiNuke rollback: dangerous role creation"
-                )
-                deleted = True
-        except Exception:
+        response = "Alert-only mode: newly created dangerous role was left unchanged."
+        if settings["antinuke_mode"] == "contain":
             deleted = False
+            try:
+                me = getattr(guild, "me", None)
+                if (
+                    isinstance(me, discord.Member)
+                    and not bool(getattr(role, "managed", False))
+                    and anti_nuke._role_is_below(role, me.top_role)  # noqa: SLF001
+                ):
+                    await role.delete(
+                        reason="Dank Shield AntiNuke rollback: dangerous role creation"
+                    )
+                    deleted = True
+            except Exception:
+                deleted = False
 
-        removed, blocked = await _contain_actor(
+            removed, blocked = await _contain_actor(
+                guild,
+                actor,
+                reason="Dank Shield AntiNuke containment: dangerous role creation",
+            )
+            response = (
+                "Deleted the newly created dangerous role."
+                if deleted
+                else "Could not delete the newly created dangerous role."
+            )
+            if removed:
+                response += " Containment actions: " + ", ".join(removed) + "."
+            if blocked:
+                response += (
+                    " Could not fully contain actor: " + ", ".join(blocked) + "."
+                )
+
+        await anti_nuke._post_incident(  # noqa: SLF001
             guild,
-            actor,
-            reason="Dank Shield AntiNuke containment: dangerous role creation",
+            title="🚨 AntiNuke Dangerous Role Created",
+            actor=actor,
+            action_label="Dangerous role created",
+            target_label=_target_label("role_create", entry),
+            response_label=response,
+            details="Gateway audit fast path; REST audit lookup was not required.",
         )
-        response = (
-            "Deleted the newly created dangerous role."
-            if deleted
-            else "Could not delete the newly created dangerous role."
-        )
-        if removed:
-            response += " Containment actions: " + ", ".join(removed) + "."
-        if blocked:
-            response += " Could not fully contain actor: " + ", ".join(blocked) + "."
+        return
 
-    await anti_nuke._post_incident(  # noqa: SLF001
+    # Harmless-looking role creation is still part of the canonical delegated
+    # long-horizon budget. Do not consume-and-drop it just because its base
+    # permissions look benign.
+    await anti_nuke._process_claimed_destructive_event(  # noqa: SLF001
         guild,
-        title="🚨 AntiNuke Dangerous Role Created",
-        actor=actor,
-        action_label="Dangerous role created",
-        target_label=_target_label("role_delete", entry),
-        response_label=response,
-        details="Gateway audit fast path; REST audit lookup was not required.",
+        entry=entry,
+        action_key="role_create",
+        action_label="Role creation burst",
+        target_label=_target_label("role_create", entry),
+        threshold_key="antinuke_role_delete_threshold",
     )
 
 
@@ -250,7 +268,7 @@ async def _on_audit_log_entry_create(entry: discord.AuditLogEntry) -> None:
         return
 
     if is_role_create:
-        await _handle_dangerous_role_create(guild, entry)
+        await _handle_role_create(guild, entry)
         return
     if is_bot_add:
         await _handle_bot_add(guild, entry)
@@ -276,18 +294,12 @@ def install_anti_nuke_gateway_runtime(bot: discord.Client) -> bool:
     if bool(getattr(bot, _INSTALL_FLAG, False)):
         return False
 
-    # Trusted operators still get the configured short-window budget, but bans,
-    # kicks, and prunes now participate in the same ten-minute slow-roll ceiling as
-    # structural destruction. Unknown actors remain first-strike in the canonical
-    # engine.
-    anti_nuke._SLOW_BURN_ACTIONS = frozenset(  # noqa: SLF001
-        set(anti_nuke._SLOW_BURN_ACTIONS) | set(_MEMBER_IMPACT_SLOW_BURN_ACTIONS)
-    )
-
     bot.add_listener(_on_audit_log_entry_create, "on_audit_log_entry_create")
     setattr(bot, _INSTALL_FLAG, True)
 
-    moderation_intent = bool(getattr(getattr(bot, "intents", None), "moderation", False))
+    moderation_intent = bool(
+        getattr(getattr(bot, "intents", None), "moderation", False)
+    )
     if not moderation_intent:
         print(
             "⚠️ AntiNuke gateway runtime installed without moderation intent; "
