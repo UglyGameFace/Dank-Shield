@@ -135,19 +135,24 @@ def _install_anti_nuke_incident_runtime() -> None:
 
 
 def _install_hostile_actor_runtime() -> None:
-    """Attach durable hostile-identity enforcement after AntiNuke policy is final."""
+    """Attach durable hostile identity, then final AntiNuke lockdown invariants."""
 
     try:
         from stoney_verify.globals import bot
         from stoney_verify.anti_nuke_hostile_actor_runtime import (
             install_hostile_actor_runtime,
         )
+        from stoney_verify.anti_nuke_lockdown_runtime import (
+            install_anti_nuke_lockdown_runtime,
+        )
 
         if not install_hostile_actor_runtime(bot):
             print("ℹ️ Hostile actor reputation runtime was already installed; duplicate skipped")
+        if not install_anti_nuke_lockdown_runtime(bot):
+            print("ℹ️ AntiNuke lockdown runtime was already installed; duplicate skipped")
     except Exception as exc:
         print(
-            "🚨 Hostile actor reputation runtime install failed: "
+            "🚨 Hostile actor / AntiNuke lockdown runtime install failed: "
             f"{type(exc).__name__}: {exc}"
         )
 
