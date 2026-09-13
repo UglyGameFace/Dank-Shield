@@ -206,6 +206,24 @@ def _install_anti_nuke_zero_damage_runtime() -> None:
         )
 
 
+def _install_anti_nuke_audit_compat_runtime() -> None:
+    """Map Discord audit events newer than the pinned discord.py enum table."""
+
+    try:
+        from stoney_verify.globals import bot
+        from stoney_verify.anti_nuke_audit_compat_runtime import (
+            install_anti_nuke_audit_compat_runtime,
+        )
+
+        if not install_anti_nuke_audit_compat_runtime(bot):
+            print("ℹ️ AntiNuke audit compatibility runtime was already installed; duplicate skipped")
+    except Exception as exc:
+        print(
+            "🚨 AntiNuke audit compatibility install failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
 def _install_anti_nuke_readiness_gate_runtime() -> None:
     """Refuse contain mode while delegated AntiNuke-risk authority remains."""
 
@@ -234,6 +252,7 @@ def main() -> None:
     _install_anti_nuke_lockdown_runtime()
     _install_anti_nuke_self_action_runtime()
     _install_anti_nuke_zero_damage_runtime()
+    _install_anti_nuke_audit_compat_runtime()
     _install_anti_nuke_readiness_gate_runtime()
     from stoney_verify.app import run as _run_dank_shield
 
