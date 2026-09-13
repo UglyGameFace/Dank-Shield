@@ -91,11 +91,12 @@ def test_native_channel_create_fallback_is_preserved_without_gateway() -> None:
     assert bot.removed == []
 
 
-def test_main_installs_finalizer_after_gateway_before_app_import() -> None:
+def test_main_installs_protection_layers_in_order_before_app_import() -> None:
     source = Path("main.py").read_text(encoding="utf-8")
     expected = (
         "    _install_anti_nuke_gateway_runtime()\n"
         "    _install_anti_nuke_finalizer_runtime()\n"
+        "    _install_anti_nuke_incident_runtime()\n"
         "    from stoney_verify.app import run as _run_dank_shield"
     )
     assert expected in source

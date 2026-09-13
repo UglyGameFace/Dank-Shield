@@ -116,11 +116,30 @@ def _install_anti_nuke_finalizer_runtime() -> None:
         )
 
 
+def _install_anti_nuke_incident_runtime() -> None:
+    """Attach AntiNuke live-incident recovery after readiness finalization."""
+
+    try:
+        from stoney_verify.globals import bot
+        from stoney_verify.anti_nuke_incident_runtime import (
+            install_anti_nuke_incident_runtime,
+        )
+
+        if not install_anti_nuke_incident_runtime(bot):
+            print("⚠️ AntiNuke incident runtime could not replace the audit listener")
+    except Exception as exc:
+        print(
+            "🚨 AntiNuke incident runtime install failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
 def main() -> None:
     _sleep_before_import_if_discord_login_backoff_active()
     _install_invite_reconciliation_runtime()
     _install_anti_nuke_gateway_runtime()
     _install_anti_nuke_finalizer_runtime()
+    _install_anti_nuke_incident_runtime()
     from stoney_verify.app import run as _run_dank_shield
 
     _run_dank_shield()
