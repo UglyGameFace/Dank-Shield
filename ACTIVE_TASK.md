@@ -2,17 +2,18 @@
 
 ## Persistent interaction compatibility audit
 
-**Status:** VALIDATED — FINAL BOOKKEEPING HEAD REVALIDATION REQUIRED BEFORE PROTECTED MERGE
-**Branch:** `audit/persistent-interaction-compatibility`
-**Current base:** `0e75103d0a4da161241ed9500217db2d33402e8d`
-**Functional validated head:** `df1a9ab954cd8debc3d6bdba9872fe2c6635d63d`
-**PR:** #216 — `Harden persistent interaction restart compatibility`
+**Status:** COMPLETE — MERGED AND POST-MERGE VALIDATED
+**Implementation branch:** `audit/persistent-interaction-compatibility`
+**Implementation PR:** #216 — `Harden persistent interaction restart compatibility`
+**Final validated PR head:** `39c9e74c086b2e7039ba9052d473867adfbaebf8`
+**Canonical merge SHA:** `4c7d21eaf893f2ba6ad4079f4fea2a79cc96c4c9`
+**Closeout branch:** `chore/close-persistent-interaction-audit`
 
 ## Outcome
 
 Make every live persistent Discord interaction owner restart-safe, retryable after partial registration failure, and semantically bound to the exact persisted message being clicked so users cannot become stuck or accidentally act on newer state.
 
-## Scope
+## Scope completed
 
 - Live persistent views and stable `custom_id` ownership reachable from `stoney_verify/app.py`.
 - Transcript/ticket persistent view registration.
@@ -21,135 +22,141 @@ Make every live persistent Discord interaction owner restart-safe, retryable aft
 - Member Activity Notice persistent DM actions and worker/view registration.
 - Focused restart, stale-message, duplicate-owner, and retry regression coverage.
 
-Out of scope: AntiNuke behavior, schema changes, billing, broad setup redesign, dormant startup-guard activation, unrelated cleanup, and old modules without a live importer.
+Out of scope remained unchanged: AntiNuke behavior, schema redesign, billing, broad setup redesign, dormant startup-guard activation, unrelated cleanup, and old modules without a live importer.
 
-## Findings / root cause
+## Root causes fixed
 
-- `stoney_verify/transcripts.py` set `_TRANSCRIPT_VIEWS_REGISTERED = True` before four `add_view()` calls succeeded. A single startup failure therefore permanently suppressed retries even though the central interaction router intentionally steps aside for those stable ticket/verification component IDs.
-- `stoney_verify/tickets_new/panel.py` had the same premature aggregate-success bug across four persistent ticket views.
-- Spam Guard only marked aggregate success after the whole registry completed, but a retry re-added views that had already succeeded. It also registered both active and disabled renderings of `SpamIncidentRestoreView`; both share the same restore custom ID, creating duplicate callback ownership.
-- Member Activity Notice DM buttons resolved `_latest_pending_notice_for_user()` rather than the exact Discord message clicked. An old DM could therefore mutate a newer pending notice.
-- Member Activity Notice runtime used one `_NOTICE_WORKER_STARTED` flag set before persistent view or listener registration succeeded and silently swallowed `add_view()` failure, preventing safe retry after startup trouble.
-- Existing `dm_message_id` persistence already provided the correct compatibility key, so no per-notice dynamic custom IDs or new registry layer were required.
-
-## Execution path before repair
-
-1. Bot starts/reconnects and attempts persistent `add_view()` registration.
-2. A partial registration failure occurs.
-3. Transcript/ticket aggregate flags can still claim completion, or Spam Guard retries all prior successes.
-4. Stable components remain posted in Discord across process restarts.
-5. The central router intentionally excludes IDs owned by registered persistent views, so a missing owner can leave an otherwise valid old button dead.
-6. Member Activity Notice buttons separately look up the newest pending row rather than the row whose `dm_message_id` matches the clicked DM.
+- `stoney_verify/transcripts.py` set `_TRANSCRIPT_VIEWS_REGISTERED = True` before all persistent `add_view()` calls succeeded, suppressing retries after a partial startup failure.
+- `stoney_verify/tickets_new/panel.py` had the same premature aggregate-success problem across persistent ticket views.
+- Spam Guard retried already-successful persistent registrations after a partial failure and registered both active and disabled renderings of the same restore custom ID.
+- Member Activity Notice DM buttons resolved the newest pending notice instead of the exact Discord DM message clicked, allowing stale UI to target newer state.
+- Member Activity Notice runtime marked worker/view setup as started before persistent view or listener registration actually succeeded.
 
 ## Implemented
 
-- `transcripts.py`
+- `stoney_verify/transcripts.py`
   - Added per-view success keys.
   - Added `register_transcript_persistent_views()`.
   - Retry only missing views.
   - Aggregate success becomes true only when all required owners are registered.
-- `tickets_new/panel.py`
+- `stoney_verify/tickets_new/panel.py`
   - Added per-view success keys.
   - Added `register_ticket_persistent_views()`.
   - Retry only missing ticket views and mark aggregate success only when complete.
-- `spam_guard.py`
+- `stoney_verify/spam_guard.py`
   - Added per-view/page success keys.
   - Retry only missing Spam Guard panels.
-  - Register only active `SpamIncidentRestoreView(restored=False)` as the persistent callback owner; `restored=True` remains a disabled rendering state only.
-- `commands_ext/public_members_group.py`
+  - Register only active `SpamIncidentRestoreView(restored=False)` as the persistent callback owner; the restored/disabled view remains rendering-only.
+- `stoney_verify/commands_ext/public_members_group.py`
   - Added exact `dm_message_id` notice resolution.
-  - `I’m still active` and `I’m okay leaving` now fail closed for unmatched, resolved, or expired old messages instead of mutating a newer notice.
+  - Stale/resolved/expired notice DMs fail closed instead of mutating a newer notice.
   - `What is this?` resolves the exact historical notice represented by the clicked DM where available.
   - Split persistent DM-view registration state from worker-listener registration state.
   - Failed view registration remains retryable on ready.
-  - Failed listener attachment no longer silently marks the runtime installed.
-- Added `tests/test_persistent_interaction_compatibility.py` covering all confirmed defects.
+  - Failed listener attachment no longer silently marks runtime setup successful.
+- Added `tests/test_persistent_interaction_compatibility.py` covering the confirmed defects.
 
 ## Validation history
 
 Initial canonical-environment validation used Python 3.11.16 and the repository dependency set:
 
-- Supabase 2.x import smoke: passed.
-- `tests/test_persistent_interaction_compatibility.py`: 6 passed.
-- Related existing restart/persistence regressions: 23 passed.
-- `python -m compileall -q stoney_verify main.py tools tests`: passed.
-- `git diff --check`: passed.
+- Supabase 2.x import smoke — passed.
+- `tests/test_persistent_interaction_compatibility.py` — 6 passed.
+- Related existing restart/persistence regressions — 23 passed.
+- `python -m compileall -q stoney_verify main.py tools tests` — passed.
+- `git diff --check` — passed.
 
-GitHub-hosted one-shot repair validation run `34842302455` repeated the Python 3.11 dependency install, strict patch application, focused regressions, compile, and diff check successfully before committing the implementation. The temporary repair workflow removed itself and is absent from the PR tree/diff.
+GitHub-hosted one-shot repair validation run `34842302455` repeated the Python 3.11 dependency install, strict patch application, focused regressions, compile, and diff checks successfully. The temporary repair workflow removed itself and was absent from the final PR tree.
 
-### Superseded exact-head failure and correction
+### Superseded test-only failure
 
-Exact head `b5295bac128c0e0cf5e09cce45277bc2b19a6554` produced one full-suite failure with 1464 tests passing. The runtime implementation itself was correct. The new regression asserted the concrete class name `TicketPanelView`, but another test can import dormant `startup_guards/legacy_public_ticket_panel_disable.py`, which replaces that module symbol with `DisabledLegacyTicketPanelView` inside the shared test process. Both classes occupy the same single legacy-public registration slot.
+Exact head `b5295bac128c0e0cf5e09cce45277bc2b19a6554` produced one full-suite failure with 1464 tests passing. The runtime implementation was not the failure. The new regression asserted the concrete class name `TicketPanelView`, while another test can import dormant `startup_guards/legacy_public_ticket_panel_disable.py` and replace that module symbol with `DisabledLegacyTicketPanelView` in the shared test process.
 
-The correction changed only the regression assertion so it verifies the single registration slot and retry behavior regardless of which legitimate compatibility class currently owns the symbol. No runtime module changed in that correction.
+The correction changed only the regression assertion to verify the single legacy-public registration slot and retry semantics regardless of which valid compatibility class owns the symbol. No runtime module changed in that correction.
 
-## Final functional validation evidence
+## Final PR validation
 
-Functional exact head `df1a9ab954cd8debc3d6bdba9872fe2c6635d63d` is fully green.
+Functional exact head `df1a9ab954cd8debc3d6bdba9872fe2c6635d63d` passed the full implementation validation.
 
-### Dank Shield CI
+Final bookkeeping head `39c9e74c086b2e7039ba9052d473867adfbaebf8` was then revalidated from scratch before merge.
 
-Run #2100 / `34851504419` — **success**.
+On that exact final PR head:
 
-Required jobs:
-
-- `Python compile check` — success.
-  - committed diff whitespace — success.
-  - Python compile — success.
-  - full unit suite — **1465 passed, 9 warnings**.
-  - standalone `tools/test_*.py` checks — success.
-  - public setup text/isolation audit — success.
-  - canonical public command-surface audit — success.
-  - public command/startup-friction audit — success.
-  - public invite permissions audit — success.
-  - setup safety audit — success.
+- Dank Shield CI #2101 / `34852996633` — success.
+  - Python compile check — success.
+  - Full unit suite — success.
+  - Standalone `tools/test_*.py` checks — success.
+  - Public setup/isolation audit — success.
+  - Canonical public command-surface audit — success.
+  - Public command/startup-friction audit — success.
+  - Public invite permissions audit — success.
+  - Setup safety audit — success.
   - Dank Design Smart Auto-Detect audit — success.
-  - role-truth ownership audit — success.
-  - event-boundary ownership audit — success.
-- `Claim-first ticket security` — success.
-- `Managed category SQL smoke test` — success.
+  - Role-truth ownership audit — success.
+  - Event-boundary ownership audit — success.
+  - Claim-first ticket security — success.
+  - Managed category SQL smoke test — success.
+- Application Command Size Diagnostics #1119 / `34852996581` — success.
+- Dank Design Regression CI #369 / `34852996644` — success.
+- Ticket Owner Emergency Override #672 / `34852996589` — success.
+- Profile Runtime Diagnostics #875 / `34852996665` — success.
+- PR #216 remained mergeable with no unresolved review threads.
+- Final PR file scope remained exactly six files: this task record, four runtime modules, and the focused regression file.
 
-### Companion workflows
+## Merge and production acceptance
 
-All companion workflows on the same exact head succeeded:
+PR #216 was marked ready only after final exact-head validation and merged through protected `main` using expected-head guard `39c9e74c086b2e7039ba9052d473867adfbaebf8`.
 
-- Application Command Size Diagnostics #1118 / `34851504449` — success.
-- Dank Design Regression CI #368 / `34851504421` — success.
-- Ticket Owner Emergency Override #671 / `34851504460` — success.
-- Profile Runtime Diagnostics #874 / `34851504466` — success.
+Canonical merge:
 
-### PR integrity
+- `main`: `4c7d21eaf893f2ba6ad4079f4fea2a79cc96c4c9`
+- Merge commit is verified and has parents `0e75103d0a4da161241ed9500217db2d33402e8d` and final PR head `39c9e74c086b2e7039ba9052d473867adfbaebf8`.
+- `main` remains protected with required checks for `Python compile check`, `Claim-first ticket security`, and `Managed category SQL smoke test`.
 
-- PR #216 is mergeable.
-- No unresolved review threads.
-- Final compare against current `main` contains exactly six files:
-  - `ACTIVE_TASK.md`
-  - `stoney_verify/transcripts.py`
-  - `stoney_verify/tickets_new/panel.py`
-  - `stoney_verify/spam_guard.py`
-  - `stoney_verify/commands_ext/public_members_group.py`
-  - `tests/test_persistent_interaction_compatibility.py`
-- No temporary workflow, startup guard, root runtime patch, schema migration, monkey patch, generated file, or unrelated runtime change remains.
-- Current `main` is `0e75103d0a4da161241ed9500217db2d33402e8d` and remains protected with required GitHub Actions checks for `Python compile check`, `Claim-first ticket security`, and `Managed category SQL smoke test`.
+Post-merge acceptance on that exact canonical merge SHA:
 
-## Current-main integration
+- Dank Shield CI #2102 / `34857032006` — success.
+  - Python compile check — success.
+  - Full unit suite — success.
+  - Standalone tool checks — success.
+  - All public/static audits — success.
+  - Claim-first ticket security — success.
+  - Managed category SQL smoke test — success.
+- Ticket Owner Emergency Override #673 / `34857032034` — success.
 
-`main` advanced during this task through PR #214, bookkeeping PR #215, and bookkeeping PR #218. Their runtime changes did not overlap the four persistent-interaction implementation modules. PR #218 changed only `ACTIVE_TASK.md`. The audit branch integrated each current-main advance while preserving the persistent-interaction runtime blobs and final six-file scope.
+## Production promotion ordering
+
+Release governance behaved correctly after the merge:
+
+1. Canonical Dank Shield CI #2102 completed successfully on `4c7d21eaf893f2ba6ad4079f4fea2a79cc96c4c9` at 2026-09-14T14:47:57Z.
+2. Only after that success, Deploy Supabase migrations #22 / `34857969808` started at 2026-09-14T14:47:58Z.
+3. The deployment targeted the same canonical merge SHA and completed successfully.
+4. Deployment job `Push pending migrations` passed:
+   - checkout validated release commit;
+   - immutable current-main target verification;
+   - required-secret verification;
+   - Supabase CLI installation;
+   - production project link;
+   - migration status;
+   - pending-migration preview;
+   - pending-migration apply.
+
+No production migration workflow ran ahead of canonical CI.
 
 ## Cleanup / conflicts
 
-- Basic Verify native restart runtime, clean public ticket panel runtime, Profile, and Community Tools were inspected and left unchanged because they already have correct retry/ownership behavior.
-- `commands_ext/public_tickettool_parity_polish.py` has no live runtime registration caller; it remains a helper/legacy surface and is not a second live owner.
-- Old submissions modules expose view builders but have no live importer; the live central interaction handler remains authoritative.
+- Basic Verify native restart runtime, clean public ticket panel runtime, Profile, and Community Tools were inspected and left unchanged because their retry/ownership behavior was already correct.
+- `commands_ext/public_tickettool_parity_polish.py` has no live runtime registration caller and remains a helper/legacy surface, not a second live owner.
+- Old submissions modules expose view builders but have no live importer; the central live interaction handler remains authoritative.
 - Dormant `startup_guards/*` were not activated or modified.
-- The temporary GitHub repair workflow is deleted from the branch final tree.
-- No production runtime file was changed by the final regression-assertion correction.
+- No new startup guard, root runtime patch, schema migration, monkey patch, generated file, or unrelated production change was introduced by this task.
+- No implementation blocker remains.
 
-## Blockers / risks
+## Runtime acceptance note
 
-No known implementation blocker remains. The only repository gate left is revalidation of this final bookkeeping-only task-record head before protected merge. Runtime acceptance after deployment should include representative old persistent ticket/member-notice components after restart/reconnect to confirm Discord-side persistence behavior matches the tested registry semantics.
+Repository acceptance is complete. A live operational smoke test after bot restart/reconnect can still click representative old persistent ticket and member-notice components to confirm Discord-side persistence behavior in production, but that is not a remaining code or merge blocker.
 
-## Completed prior task
+## Completed prior tasks
 
 ### DS-SEC-045 — Legitimate self-action audit classification
 
@@ -167,8 +174,8 @@ Completed and merged as PR #212. Canonical merge SHA: `9112528e42e77ec348abe69d9
 
 ### DS-SEC-044 — Hostile bot re-entry race and integration persistence
 
-Suspended previously after PR #211 merged and CI passed. Remaining acceptance is the hostile/GANG-Nuker re-entry production test. Do not resume during this active task without explicit `FORCE SWITCH`.
+Still suspended. PR #211 merged and CI passed previously. Remaining acceptance is the hostile/GANG-Nuker re-entry production test after deployment. Do not resume it from this closeout record without the explicit task-switch instruction already required by the project workflow.
 
 ## Next step
 
-Revalidate the exact head created by this bookkeeping-only task-record update. If all required and companion workflows remain green, mark PR #216 ready, merge that exact validated head through protected `main`, then verify canonical post-merge Dank Shield CI and gated Supabase production-promotion ordering. Do not modify the branch again after the final green validation unless a new failure requires it.
+Persistent interaction compatibility audit is complete. Merge this one-file closeout record only after its own exact-head required CI is green. After that closeout merge, verify canonical `main` CI once more and leave this task closed unless new runtime evidence shows a regression.
