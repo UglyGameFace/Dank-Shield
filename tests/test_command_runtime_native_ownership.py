@@ -25,6 +25,7 @@ from stoney_verify.command_surface_contract import (
     PUBLIC_DANK_CHILDREN,
     PUBLIC_GLOBAL_COMMAND_NAMES,
 )
+from stoney_verify.startup_diagnostics import EXPECTED_STARTUP_OWNER_MODULES
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -94,6 +95,14 @@ assert app_commands.CommandTree.sync is sync
         capture_output=True,
         text=True,
     )
+
+
+def test_native_command_runtime_replaces_retired_startup_owner_expectations() -> None:
+    assert "stoney_verify.command_runtime" in EXPECTED_STARTUP_OWNER_MODULES
+    assert "stoney_verify.startup_guards.command_safety" not in EXPECTED_STARTUP_OWNER_MODULES
+    assert "stoney_verify.startup_guards.auto_shard" not in EXPECTED_STARTUP_OWNER_MODULES
+    assert "stoney_verify.startup_guards.global_command_sync" not in EXPECTED_STARTUP_OWNER_MODULES
+    assert "stoney_verify.startup_guards.command_scope_dedupe" not in EXPECTED_STARTUP_OWNER_MODULES
 
 
 def test_native_bot_constructor_owns_tree_and_shard_choice(monkeypatch: pytest.MonkeyPatch) -> None:
