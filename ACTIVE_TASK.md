@@ -2,14 +2,15 @@
 
 ## Persistent interaction compatibility audit
 
-**Status:** IMPLEMENTED — EXACT-HEAD VALIDATION IN PROGRESS
+**Status:** VALIDATED — FINAL BOOKKEEPING HEAD REVALIDATION REQUIRED BEFORE PROTECTED MERGE
 **Branch:** `audit/persistent-interaction-compatibility`
-**Current base:** `2d90a4be61cdd32ee8a4b049c3098e48064c66f2`
+**Current base:** `0e75103d0a4da161241ed9500217db2d33402e8d`
+**Functional validated head:** `df1a9ab954cd8debc3d6bdba9872fe2c6635d63d`
 **PR:** #216 — `Harden persistent interaction restart compatibility`
 
 ## Outcome
 
-Make every live persistent Discord interaction owner restart-safe, retryable after partial registration failure, and semantically bound to the exact stale/persisted message being clicked so users cannot become stuck or accidentally act on newer state.
+Make every live persistent Discord interaction owner restart-safe, retryable after partial registration failure, and semantically bound to the exact persisted message being clicked so users cannot become stuck or accidentally act on newer state.
 
 ## Scope
 
@@ -54,7 +55,7 @@ Out of scope: AntiNuke behavior, schema changes, billing, broad setup redesign, 
 - `spam_guard.py`
   - Added per-view/page success keys.
   - Retry only missing Spam Guard panels.
-  - Register only the active `SpamIncidentRestoreView(restored=False)` as the persistent callback owner; `restored=True` remains a disabled rendering state only.
+  - Register only active `SpamIncidentRestoreView(restored=False)` as the persistent callback owner; `restored=True` remains a disabled rendering state only.
 - `commands_ext/public_members_group.py`
   - Added exact `dm_message_id` notice resolution.
   - `I’m still active` and `I’m okay leaving` now fail closed for unmatched, resolved, or expired old messages instead of mutating a newer notice.
@@ -64,49 +65,76 @@ Out of scope: AntiNuke behavior, schema changes, billing, broad setup redesign, 
   - Failed listener attachment no longer silently marks the runtime installed.
 - Added `tests/test_persistent_interaction_compatibility.py` covering all confirmed defects.
 
-## Validation / results so far
+## Validation history
 
-Local canonical-environment validation used Python 3.11.16 and the repository dependency set:
+Initial canonical-environment validation used Python 3.11.16 and the repository dependency set:
 
 - Supabase 2.x import smoke: passed.
-- `tests/test_persistent_interaction_compatibility.py`: **6 passed**.
-- Related existing restart/persistence regressions: **23 passed**.
+- `tests/test_persistent_interaction_compatibility.py`: 6 passed.
+- Related existing restart/persistence regressions: 23 passed.
 - `python -m compileall -q stoney_verify main.py tools tests`: passed.
 - `git diff --check`: passed.
 
-GitHub-hosted one-shot repair validation run `34842302455` repeated the same Python 3.11 dependency install, strict patch application, focused regressions, compile, and diff check successfully before committing the implementation.
+GitHub-hosted one-shot repair validation run `34842302455` repeated the Python 3.11 dependency install, strict patch application, focused regressions, compile, and diff check successfully before committing the implementation. The temporary repair workflow removed itself and is absent from the PR tree/diff.
 
-The temporary repair workflow removed itself in the implementation commit and is absent from the final PR tree/diff.
+### Superseded exact-head failure and correction
 
-Exact-head validation on `fcd9a84a3160b7ac4027b7ce35d89cef69b69f18` reached green companion workflows and green Claim-first/Managed-category jobs while the full Python unit lane was still running. That head was superseded before merge because `main` advanced through PR #215; its incomplete run is retained only as intermediate evidence, not merge evidence.
+Exact head `b5295bac128c0e0cf5e09cce45277bc2b19a6554` produced one full-suite failure with 1464 tests passing. The runtime implementation itself was correct. The new regression asserted the concrete class name `TicketPanelView`, but another test can import dormant `startup_guards/legacy_public_ticket_panel_disable.py`, which replaces that module symbol with `DisabledLegacyTicketPanelView` inside the shared test process. Both classes occupy the same single legacy-public registration slot.
 
-## Current-main integration
+The correction changed only the regression assertion so it verifies the single registration slot and retry behavior regardless of which legitimate compatibility class currently owns the symbol. No runtime module changed in that correction.
 
-`main` first advanced during the audit to `1b31acc3a29a1057d5f188ad409fc7e1619ed54e` via PR #214. That production change touched `anti_nuke_audit_compat_runtime.py`, its focused tests, and `ACTIVE_TASK.md`; it did not overlap the four persistent-interaction runtime modules.
+## Final functional validation evidence
 
-The audit branch integrated that main state using merge commit `e5fd8418ac27c947d6cf3cb8aa437a3f461c5b2e`, preserving the already-validated interaction implementation blobs byte-for-byte.
+Functional exact head `df1a9ab954cd8debc3d6bdba9872fe2c6635d63d` is fully green.
 
-`main` then advanced again through bookkeeping-only PR #215 to `2d90a4be61cdd32ee8a4b049c3098e48064c66f2`. PR #215 changed only `ACTIVE_TASK.md` and recorded DS-SEC-045 post-merge acceptance; no runtime or test overlap exists with this interaction repair. The current branch integrates that closure record while continuing to overlay only the same five validated interaction implementation/test blobs on current main.
+### Dank Shield CI
 
-## Final validation required
+Run #2100 / `34851504419` — **success**.
 
-- Exact-head Dank Shield CI passes all required jobs.
-- Full unit suite and standalone `tools/test_*.py` checks pass.
-- Public setup, public command-surface, startup-friction, invite, setup-safety, Dank Design, role-truth, and event-boundary audits pass.
-- Claim-first ticket security passes.
-- Managed category SQL smoke test passes.
-- Companion workflows triggered for the exact head pass.
-- PR #216 remains mergeable with no unresolved review threads.
-- Final compare against current `main` contains only:
+Required jobs:
+
+- `Python compile check` — success.
+  - committed diff whitespace — success.
+  - Python compile — success.
+  - full unit suite — **1465 passed, 9 warnings**.
+  - standalone `tools/test_*.py` checks — success.
+  - public setup text/isolation audit — success.
+  - canonical public command-surface audit — success.
+  - public command/startup-friction audit — success.
+  - public invite permissions audit — success.
+  - setup safety audit — success.
+  - Dank Design Smart Auto-Detect audit — success.
+  - role-truth ownership audit — success.
+  - event-boundary ownership audit — success.
+- `Claim-first ticket security` — success.
+- `Managed category SQL smoke test` — success.
+
+### Companion workflows
+
+All companion workflows on the same exact head succeeded:
+
+- Application Command Size Diagnostics #1118 / `34851504449` — success.
+- Dank Design Regression CI #368 / `34851504421` — success.
+- Ticket Owner Emergency Override #671 / `34851504460` — success.
+- Profile Runtime Diagnostics #874 / `34851504466` — success.
+
+### PR integrity
+
+- PR #216 is mergeable.
+- No unresolved review threads.
+- Final compare against current `main` contains exactly six files:
   - `ACTIVE_TASK.md`
   - `stoney_verify/transcripts.py`
   - `stoney_verify/tickets_new/panel.py`
   - `stoney_verify/spam_guard.py`
   - `stoney_verify/commands_ext/public_members_group.py`
   - `tests/test_persistent_interaction_compatibility.py`
-- No temporary workflow, startup guard, root runtime patch, schema migration, monkey patch, generated file, or unrelated change remains.
-- Merge only the exact validated head through protected `main`.
-- Validate canonical post-merge `main` CI and gated production-promotion ordering before calling the task complete.
+- No temporary workflow, startup guard, root runtime patch, schema migration, monkey patch, generated file, or unrelated runtime change remains.
+- Current `main` is `0e75103d0a4da161241ed9500217db2d33402e8d` and remains protected with required GitHub Actions checks for `Python compile check`, `Claim-first ticket security`, and `Managed category SQL smoke test`.
+
+## Current-main integration
+
+`main` advanced during this task through PR #214, bookkeeping PR #215, and bookkeeping PR #218. Their runtime changes did not overlap the four persistent-interaction implementation modules. PR #218 changed only `ACTIVE_TASK.md`. The audit branch integrated each current-main advance while preserving the persistent-interaction runtime blobs and final six-file scope.
 
 ## Cleanup / conflicts
 
@@ -115,17 +143,17 @@ The audit branch integrated that main state using merge commit `e5fd8418ac27c947
 - Old submissions modules expose view builders but have no live importer; the live central interaction handler remains authoritative.
 - Dormant `startup_guards/*` were not activated or modified.
 - The temporary GitHub repair workflow is deleted from the branch final tree.
-- PR #214 AntiNuke code and PR #215 DS-SEC-045 closeout evidence are preserved from current `main`.
+- No production runtime file was changed by the final regression-assertion correction.
 
 ## Blockers / risks
 
-No known implementation blocker. Exact-head CI and protected merge remain hard gates. Runtime acceptance after deployment should include clicking representative old persistent ticket/member-notice components after a bot restart/reconnect to confirm Discord-side persistence behavior matches the tested registry semantics.
+No known implementation blocker remains. The only repository gate left is revalidation of this final bookkeeping-only task-record head before protected merge. Runtime acceptance after deployment should include representative old persistent ticket/member-notice components after restart/reconnect to confirm Discord-side persistence behavior matches the tested registry semantics.
 
 ## Completed prior task
 
 ### DS-SEC-045 — Legitimate self-action audit classification
 
-Complete, merged, and post-merge validated. Implementation PR #214 final head `8c6617a00258d9a5c4d1be878e6ec885f0f56eb6` merged as canonical main `1b31acc3a29a1057d5f188ad409fc7e1619ed54e`. Its full PR validation passed, post-merge Dank Shield CI run #2089 passed all required jobs, Ticket Owner Emergency Override passed, Deploy Supabase migrations succeeded, and `main` remained protected. Bookkeeping closeout PR #215 merged as `2d90a4be61cdd32ee8a4b049c3098e48064c66f2`. A live Basic Verify click remains useful operational smoke testing but is not a code blocker.
+Complete, merged, and post-merge validated. Implementation PR #214 final head `8c6617a00258d9a5c4d1be878e6ec885f0f56eb6` merged as canonical main `1b31acc3a29a1057d5f188ad409fc7e1619ed54e`. Bookkeeping closeout PR #215 merged as `2d90a4be61cdd32ee8a4b049c3098e48064c66f2`.
 
 ### Verification integrity audit repair
 
@@ -143,4 +171,4 @@ Suspended previously after PR #211 merged and CI passed. Remaining acceptance is
 
 ## Next step
 
-Validate the exact PR #216 head after integrating current `main` `2d90a4be61cdd32ee8a4b049c3098e48064c66f2`. If all required and companion workflows are green and the six-file compare remains clean, update this record with immutable validation evidence, revalidate that final bookkeeping head, mark PR #216 ready, merge the exact validated head through protected `main`, and verify canonical post-merge CI plus gated production promotion.
+Revalidate the exact head created by this bookkeeping-only task-record update. If all required and companion workflows remain green, mark PR #216 ready, merge that exact validated head through protected `main`, then verify canonical post-merge Dank Shield CI and gated Supabase production-promotion ordering. Do not modify the branch again after the final green validation unless a new failure requires it.
