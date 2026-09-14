@@ -1,18 +1,31 @@
 from __future__ import annotations
 
-import builtins
-import importlib
-import os
-from contextlib import contextmanager
-from types import ModuleType
-from typing import Dict, Iterable, Iterator, Tuple
+"""Startup-guard package boundary.
 
+Normal Dank Shield boot does **not** iterate a startup-guard registry. Production
+startup ownership is explicit in ``main.py``, the host hooks, and canonical
+feature modules. The tuple below is retained only as inert historical metadata
+while older audits/tests are migrated away from treating registry membership as
+runtime activation.
+
+Do not add an executable bulk loader here. Importing every historical guard would
+reactivate old monkey patches, listeners, command-tree mutations, compatibility
+layers, and schema-era code with duplicate ownership risk.
+"""
+
+from typing import Tuple
+
+# ``process_health`` is an intentionally preserved package-level side effect.
+# Existing boot paths import ``stoney_verify.startup_guards`` before the app and
+# rely on its process/import/signal safety. Moving that owner belongs in a
+# separate, boot-order-sensitive migration.
 from .process_health import start_health_loop as start_process_health_loop
 
-_LOADED: Dict[str, ModuleType] = {}
-_ERRORS: Dict[str, BaseException] = {}
-_SEEN_IMPORT_MESSAGES: set[str] = set()
 
+# Historical only. This is NOT an activation plan and nothing in this package
+# iterates it. Keep the legacy private name temporarily because a few focused
+# compatibility tests use the list as historical metadata; new code must use
+# neither name to decide what runs in production.
 _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.embed_literal_newline_guard",
     "stoney_verify.startup_guards.process_health",
@@ -92,115 +105,10 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.job_dedupe",
 )
 
-_IMPORT_CHATTER_PREFIXES: Tuple[str, ...] = (
-    "🧷 ",
-    "🌐 public_startup_scope loaded",
-    "🩹 ",
-    "🔗 ",
-    "🧪 ",
-)
-_ERROR_CHATTER_PREFIXES: Tuple[str, ...] = ("⚠️ ", "❌ ", "🛑 ")
-_ALWAYS_SHOW_PREFIXES: Tuple[str, ...] = (
-    "🛡️ member_activity_notices_db_safety active",
-    "🛠️ setup_permission_repair_modlog_silence_guard active",
-    "🛡️ role_hierarchy_action_guard active",
-    "🛡️ spam_guard_invite_hard_block active",
-    "✅ spam_guard_invite_override_options active",
-    "🛡️ discord_invite_blocker_runtime_guard active",
-    "✅ protection_invite_target_precedence_guard active",
-    "✅ protection_center_invite_controls_guard active",
-    "✅ protection_center_clear_categories_guard active",
-    "✅ protection_center_invite_simple_flow_guard active",
-    "✅ self_roles_command_guard active",
-    "✅ modlog_probot_parity_guard active",
-    "✅ automod_public_guard active",
-    "✅ protection_center_command_guard active",
-    "✅ embed_builder_command_guard active",
-    "✅ setup_overview_command_guard active",
-    "✅ protection_pack_manual_import_guard active",
-    "✅ protection_import_button_patch active",
-    "✅ ticket_forms_foundation_guard active",
-    "✅ production_command_surface_guard active",
-)
-_ONCE_ONLY_PREFIXES: Tuple[str, ...] = (
-    "✅ ticket_panel_doctor_stability_guard: patched ticket panel health checks",
-    "✅ ticket_panel_doctor_stability_guard: patched /dank setup ticket scoreboard",
-    "✅ ticket_panel_doctor_stability_guard: patched /ticket-panel doctor",
-    "🔤 channel_font_exact_unicode_guard active;",
-    "🔤 channel_font_rename_queue_guard active;",
-    "🔤 channel_font_preview_button_guard waiting for ChannelFontModeView before attaching button",
-)
+LEGACY_DORMANT_STARTUP_GUARDS: Tuple[str, ...] = _STARTUP_GUARDS
 
 
-def _log_style() -> str:
-    return os.getenv("DANK_STARTUP_LOG_STYLE", "compact").strip().lower()
-
-
-def _seen_once(message: str) -> bool:
-    if not any(message.startswith(prefix) for prefix in _ONCE_ONLY_PREFIXES):
-        return False
-    if message in _SEEN_IMPORT_MESSAGES:
-        return True
-    _SEEN_IMPORT_MESSAGES.add(message)
-    return False
-
-
-@contextmanager
-def _maybe_suppress_import_chatter(module_name: str) -> Iterator[None]:
-    if _log_style() not in {"compact", "quiet"}:
-        yield
-        return
-    original_print = builtins.print
-
-    def filtered_print(*args, **kwargs):
-        try:
-            message = " ".join(str(arg) for arg in args)
-        except Exception:
-            message = ""
-        if any(message.startswith(prefix) for prefix in _ERROR_CHATTER_PREFIXES):
-            return original_print(*args, **kwargs)
-        if _seen_once(message):
-            return None
-        if any(message.startswith(prefix) for prefix in _ALWAYS_SHOW_PREFIXES):
-            return original_print(*args, **kwargs)
-        if any(message.startswith(prefix) for prefix in _IMPORT_CHATTER_PREFIXES):
-            return None
-        return original_print(*args, **kwargs)
-
-    builtins.print = filtered_print
-    try:
-        yield
-    finally:
-        builtins.print = original_print
-
-
-def load_startup_guards(
-    modules: Iterable[str] = _STARTUP_GUARDS,
-) -> Dict[str, ModuleType]:
-    for module_name in modules:
-        if module_name in _LOADED:
-            continue
-        try:
-            with _maybe_suppress_import_chatter(module_name):
-                module = importlib.import_module(module_name)
-                _LOADED[module_name] = module
-                if (
-                    module_name
-                    == "stoney_verify.startup_guards.invite_live_enforcer_guard"
-                ):
-                    apply_func = getattr(module, "apply", None)
-                    if callable(apply_func):
-                        apply_func()
-        except Exception as exc:
-            _ERRORS[module_name] = exc
-            print(
-                f"⚠️ startup_guard loader failed module={module_name}: {exc!r}"
-            )
-    if _log_style() != "quiet":
-        print(
-            f"🧩 startup_guard loader complete loaded={len(_LOADED)}"
-        )
-    return dict(_LOADED)
-
-
-load_all_startup_guards = load_startup_guards
+__all__ = [
+    "LEGACY_DORMANT_STARTUP_GUARDS",
+    "start_process_health_loop",
+]
