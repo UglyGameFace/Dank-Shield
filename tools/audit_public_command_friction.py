@@ -11,7 +11,6 @@ This audit intentionally validates the live command owners. Historical dormant
 startup guards are not a command-surface dependency and are not treated as one.
 """
 
-import ast
 from pathlib import Path
 import sys
 
@@ -57,25 +56,6 @@ FORBIDDEN_ENV_MARKERS = {
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
-
-
-def literal_set_from_file(path: Path, assignment_name: str) -> set[str]:
-    text = read(path)
-    tree = ast.parse(text, filename=str(path))
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign):
-            continue
-        if not any(isinstance(t, ast.Name) and t.id == assignment_name for t in node.targets):
-            continue
-        value = node.value
-        if not isinstance(value, (ast.Set, ast.List, ast.Tuple)):
-            continue
-        out: set[str] = set()
-        for item in value.elts:
-            if isinstance(item, ast.Constant) and isinstance(item.value, str):
-                out.add(item.value)
-        return out
-    return set()
 
 
 def main() -> int:
