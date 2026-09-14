@@ -8,12 +8,12 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 FILES = [
+    "stoney_verify/commands_ext/public_setup_compact.py",
     "stoney_verify/commands_ext/public_ticket_panel_clean.py",
     "stoney_verify/startup_guards/auto_schema_bootstrap.py",
     "stoney_verify/startup_guards/ticket_category_schema_bootstrap_guard.py",
     "stoney_verify/startup_guards/ticket_category_setup_guard.py",
     "stoney_verify/startup_guards/ticket_form_default_templates_guard.py",
-    "stoney_verify/startup_guards/__init__.py",
     "stoney_verify/tickets_new/managed_category_service.py",
     "stoney_verify/tickets_new/intake_service.py",
     "stoney_verify/tickets_new/panel.py",
@@ -25,6 +25,9 @@ FILES = [
 ]
 
 CHECKS = {
+    "stoney_verify/commands_ext/public_setup_compact.py": [
+        "from stoney_verify.startup_guards import ticket_category_setup_guard as _ticket_category_guard",
+    ],
     "stoney_verify/commands_ext/public_ticket_panel_clean.py": [
         "managed_category_service as managed_categories",
         "ensure_category_setup_state(guild_id)",
@@ -139,11 +142,6 @@ CHECKS = {
         "ticket_category_setup_selected_keys",
         "reconcile_dank_ticket_categories(null)",
     ],
-    "stoney_verify/startup_guards/__init__.py": [
-        "auto_schema_bootstrap",
-        "ticket_category_schema_bootstrap_guard",
-        "ticket_category_setup_guard",
-    ],
 }
 
 OBSOLETE_FILES = (
@@ -154,18 +152,6 @@ OBSOLETE_FILES = (
     "supabase/migrations/202608020003_ticket_category_custom_preservation.sql",
     "supabase/migrations/202608020004_ticket_category_selection_custom_only.sql",
 )
-
-FORBIDDEN_STARTUP_GUARDS = (
-    "public_ticket_panel_clean_hardening",
-    "ticket_category_cod_services_guard",
-    "ticket_category_game_services_guard",
-)
-
-ORDERED_STARTUP_SNIPPETS = [
-    "auto_schema_bootstrap",
-    "ticket_category_schema_bootstrap_guard",
-    "ticket_category_setup_guard",
-]
 
 
 def main() -> int:
@@ -213,15 +199,11 @@ def main() -> int:
         )
         return 1
 
-    startup_text = (ROOT / "stoney_verify/startup_guards/__init__.py").read_text(encoding="utf-8")
-    for snippet in FORBIDDEN_STARTUP_GUARDS:
-        if snippet in startup_text:
-            print(f"obsolete category/panel guard still loaded: {snippet}", file=sys.stderr)
-            return 1
-
-    positions = [startup_text.find(snippet) for snippet in ORDERED_STARTUP_SNIPPETS]
-    if any(pos < 0 for pos in positions) or positions != sorted(positions):
-        print("startup guard order is wrong for ticket category setup", file=sys.stderr)
+    setup_compact_text = (
+        ROOT / "stoney_verify/commands_ext/public_setup_compact.py"
+    ).read_text(encoding="utf-8")
+    if "ticket_category_setup_guard as _ticket_category_guard" not in setup_compact_text:
+        print("ticket category setup has no explicit live setup owner", file=sys.stderr)
         return 1
 
     print("Ticket category menu audit passed")
