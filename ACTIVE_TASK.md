@@ -6,7 +6,7 @@
 **Closure branch:** `chore/close-ds-sec-045`
 **Implementation PR:** #214 — `Prevent legitimate member updates from triggering self-ejection`
 **Merged PR head:** `8c6617a00258d9a5c4d1be878e6ec885f0f56eb6`
-**Canonical main merge:** `1b31acc3a29a1057d5f188ad409fc7e1619ed54e`
+**Canonical implementation merge:** `1b31acc3a29a1057d5f188ad409fc7e1619ed54e`
 
 ## Outcome
 
@@ -43,7 +43,7 @@ The final PR head `8c6617a00258d9a5c4d1be878e6ec885f0f56eb6` passed the complete
 
 PR #214 merged into protected `main` as `1b31acc3a29a1057d5f188ad409fc7e1619ed54e`.
 
-Post-merge evidence on that exact canonical main SHA:
+Post-merge evidence on that exact implementation SHA:
 
 - Dank Shield CI run #2089 — success.
 - `Python compile check` — success.
@@ -51,7 +51,7 @@ Post-merge evidence on that exact canonical main SHA:
 - `Managed category SQL smoke test` — success.
 - Ticket Owner Emergency Override — success.
 - Deploy Supabase migrations — success.
-- `main` remains protected with the required checks.
+- `main` remained protected with the required checks.
 
 ## Cleanup / conflicts
 
@@ -62,7 +62,7 @@ Post-merge evidence on that exact canonical main SHA:
 
 ## Runtime acceptance
 
-A live Basic Verify click after deployment is still a useful production smoke test because GitHub CI cannot click Discord components. It is not a remaining code blocker because both the final PR head and canonical `main` passed the automated and post-merge validation gates.
+A live Basic Verify click after deployment is still a useful production smoke test because GitHub CI cannot click Discord components. It is not a remaining code blocker because both the final PR head and canonical implementation merge passed the automated and post-merge validation gates.
 
 Expected live result:
 
@@ -85,4 +85,4 @@ Still suspended under the prior task lock. Do not resume it during DS-SEC-045 cl
 
 ## Next step
 
-Merge this bookkeeping-only closure update after exact-head CI is green. After deployment, perform the live Basic Verify smoke test as operational confirmation. Resume DS-SEC-044 only through the explicit task-switch protocol.
+No further repository action is required for DS-SEC-045. After deployment, perform the live Basic Verify smoke test as operational confirmation. Resume DS-SEC-044 only through the explicit task-switch protocol.
