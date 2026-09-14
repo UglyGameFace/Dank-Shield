@@ -2,17 +2,15 @@ from __future__ import annotations
 
 """Canonical per-guild verification-mode policy.
 
-Public Dank Shield servers default to simple Discord button verification:
-Unverified clicks Verify, Dank Shield grants the configured Verified/full-access
-role and removes Unverified.
-
-ID / website upload verification is intentionally special-case. It is only
-available in allowlisted guild IDs so old legacy single-server / Stoners Paradise ID
-panels never leak into unrelated public servers such as The 420 Lobby.
+Public Dank Shield servers may enable Simple Verify, Voice Verify, or an
+allowlisted ID/Web verification flow. The persisted setup-service state is the
+authority for whether Simple Verify is actually enabled; legacy mode aliases
+are accepted only when no specialized service or explicit Simple Verify switch
+contradicts them.
 """
 
 import os
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 DEFAULT_ID_VERIFY_ALLOWED_GUILD_IDS: frozenset[int] = frozenset({1357215261001912320})
 DEFAULT_ID_VERIFY_ALLOWED_GUILD_NAMES: frozenset[str] = frozenset()
@@ -35,6 +33,29 @@ _ID_MODE_VALUES: frozenset[str] = frozenset(
         "id_voice_check",
         "id_voice",
     }
+)
+_BASIC_MODE_VALUES: frozenset[str] = frozenset(
+    {
+        "basic_verify",
+        "basic_button",
+        "basic_button_verify",
+        "simple_verify",
+        "public_basic",
+        "button_verify",
+    }
+)
+_BASIC_SWITCH_KEYS: tuple[str, ...] = (
+    "basic_verify_enabled",
+    "basic_button_verify_enabled",
+)
+_MODE_KEYS: tuple[str, ...] = (
+    "verification_mode",
+    "verify_mode",
+    "verification_flow",
+    "setup_type",
+    "setup_choice",
+    "setup_mode",
+    "verification_panel_style",
 )
 
 
@@ -124,6 +145,22 @@ def _truthy(value: Any) -> bool:
     return _safe_str(value).lower() in {"1", "true", "yes", "y", "on", "enabled"}
 
 
+def _explicit_basic_switch(cfg: Any) -> Optional[bool]:
+    for key in _BASIC_SWITCH_KEYS:
+        value = _cfg_value(cfg, key, None)
+        if value is not None:
+            return _truthy(value)
+    return None
+
+
+def _service_state(cfg: Any) -> Any:
+    # Import lazily so this policy module remains lightweight and does not create
+    # a setup import cycle for callers that only need allowlist helpers.
+    from ..setup_service_state import service_state_from_config
+
+    return service_state_from_config(cfg)
+
+
 def id_verify_allowed_guild_ids() -> set[int]:
     configured = _env_id_set("DANK_ID_VERIFY_ALLOWED_GUILD_IDS")
     configured |= _env_id_set("ID_VERIFY_ALLOWED_GUILD_IDS")
@@ -161,22 +198,8 @@ def id_verify_allowed_for_guild(guild: Any, cfg: Any = None) -> bool:
 
 
 def config_requests_id_verify(cfg: Any) -> bool:
-    """Recognize every canonical and persisted setup representation of ID mode.
-
-    The setup templates persist ``setup_choice=id_check`` or
-    ``setup_choice=id_voice_check`` plus ``verification_requires_id=true``.
-    Older policy code only inspected ``verification_mode`` and omitted the real
-    template fields, which made an approved ID server look like Basic Verify.
-    """
-    for key in (
-        "verification_mode",
-        "verify_mode",
-        "verification_flow",
-        "setup_type",
-        "setup_choice",
-        "setup_mode",
-        "verification_panel_style",
-    ):
+    """Recognize every canonical and persisted setup representation of ID mode."""
+    for key in _MODE_KEYS:
         if _normalized_mode(_cfg_value(cfg, key)) in _ID_MODE_VALUES:
             return True
 
@@ -193,10 +216,80 @@ def config_requests_id_verify(cfg: Any) -> bool:
     return False
 
 
+def _legacy_basic_mode_requested(cfg: Any, state: Any) -> bool:
+    """Preserve old Basic Verify configs without overriding newer service truth."""
+    explicit = _explicit_basic_switch(cfg)
+    if explicit is not None:
+        return bool(explicit)
+
+    # Specialized persisted services are authoritative. A stale old mode string
+    # must never turn Voice/ID verification back into one-click Basic Verify.
+    if bool(getattr(state, "voice_verify", False) or getattr(state, "id_verify", False)):
+        return False
+
+    for key in _MODE_KEYS:
+        if _normalized_mode(_cfg_value(cfg, key)) in _BASIC_MODE_VALUES:
+            return True
+    return False
+
+
+def basic_verify_allowed_for_guild(guild: Any, cfg: Any = None) -> bool:
+    """Return whether one-click Basic Verify may grant access in this guild.
+
+    Protected ID/Web verification always wins when an allowlisted guild requests
+    it. Otherwise the canonical setup-service state decides whether Simple
+    Verify is enabled. Legacy Basic mode strings remain compatible only when
+    they do not conflict with an explicit or specialized persisted service.
+    """
+    if config_requests_id_verify(cfg) and id_verify_allowed_for_guild(guild, cfg):
+        return False
+
+    state = _service_state(cfg)
+    if bool(getattr(state, "simple_verify", False)):
+        return True
+    return _legacy_basic_mode_requested(cfg, state)
+
+
 def effective_verification_mode(guild: Any, cfg: Any = None) -> str:
+    """Resolve the primary access-verification mode for policy consumers.
+
+    ``basic_button`` means Basic Verify may grant access. ``id_verify`` is the
+    protected allowlisted ID/ticket path. ``voice_verify`` means Voice Verify is
+    enabled without Simple Verify. ``disabled`` means no Basic/ID/Voice access
+    verification mode is currently authorized.
+    """
     if config_requests_id_verify(cfg) and id_verify_allowed_for_guild(guild, cfg):
         return "id_verify"
-    return "basic_button"
+
+    state = _service_state(cfg)
+    if basic_verify_allowed_for_guild(guild, cfg):
+        return "basic_button"
+    if bool(getattr(state, "voice_verify", False)):
+        return "voice_verify"
+    return "disabled"
+
+
+def basic_verify_disabled_reason(guild: Any, cfg: Any = None) -> str:
+    if basic_verify_allowed_for_guild(guild, cfg):
+        return ""
+
+    if config_requests_id_verify(cfg) and id_verify_allowed_for_guild(guild, cfg):
+        return (
+            "This server uses protected ID/Web verification. Use the configured "
+            "verification ticket and staff approval flow instead of Basic Verify."
+        )
+
+    state = _service_state(cfg)
+    if bool(getattr(state, "voice_verify", False)):
+        return (
+            "This server uses Voice Verify without Simple Verify. Use the configured "
+            "verification ticket/voice flow instead of the Basic Verify button."
+        )
+
+    return (
+        "Basic Button Verification is not enabled for this server. "
+        "Staff can enable Simple Verify from `/dank setup` if that is the intended access flow."
+    )
 
 
 def id_verify_disabled_reason(guild: Any, cfg: Any = None) -> str:
@@ -206,7 +299,7 @@ def id_verify_disabled_reason(guild: Any, cfg: Any = None) -> str:
     name = getattr(guild, "name", "this server")
     return (
         f"ID verification is not enabled for {name} (`{gid}`). "
-        "This server uses Basic Button Verification. ID/web upload verification is restricted to allowlisted guild IDs."
+        "Choose an available verification mode in `/dank setup`; Dank Shield will not silently downgrade a protected ID request to Basic Verify."
     )
 
 
@@ -214,6 +307,8 @@ __all__ = [
     "BASIC_VERIFY_CUSTOM_ID",
     "BASIC_VERIFY_FOOTER",
     "DEFAULT_ID_VERIFY_ALLOWED_GUILD_IDS",
+    "basic_verify_allowed_for_guild",
+    "basic_verify_disabled_reason",
     "config_requests_id_verify",
     "effective_verification_mode",
     "id_verify_allowed_for_guild",
