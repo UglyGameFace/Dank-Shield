@@ -13,6 +13,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -66,6 +67,39 @@ jobs:
           fi
 
           echo "Validated production migration target: $TARGET_SHA"
+
+      - name: Verify manual target passed canonical CI
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          runs="$(
+            gh api --method GET \
+              -f branch=main \
+              -f event=push \
+              -f status=success \
+              -f head_sha="$TARGET_SHA" \
+              -f per_page=100 \
+              "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs"
+          )"
+
+          if ! jq -e --arg sha "$TARGET_SHA" '
+            .workflow_runs[]
+            | select(
+                .head_sha == $sha
+                and .conclusion == "success"
+                and .event == "push"
+                and .head_branch == "main"
+              )
+          ' <<<"$runs" >/dev/null; then
+            echo "::error title=Canonical CI not proven::No successful Dank Shield CI push run on main was found for $TARGET_SHA."
+            exit 1
+          fi
+
+          echo "Canonical CI success verified for manual target: $TARGET_SHA"
 
       - name: Verify required secrets
         shell: bash
