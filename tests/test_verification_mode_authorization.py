@@ -76,6 +76,29 @@ def test_legacy_basic_configs_remain_compatible() -> None:
     assert verification_modes.effective_verification_mode(guild(), old_mode_only) == "basic_button"
 
 
+def test_legacy_voice_mode_cannot_be_mistaken_for_basic() -> None:
+    cfg = {
+        "verification_mode": "voice_check",
+        "verification_enabled": True,
+    }
+
+    assert verification_modes.config_requests_voice_verify(cfg) is True
+    assert verification_modes.basic_verify_allowed_for_guild(guild(), cfg) is False
+    assert verification_modes.effective_verification_mode(guild(), cfg) == "voice_verify"
+
+
+def test_explicit_simple_switch_allows_intentional_legacy_simple_plus_voice() -> None:
+    cfg = {
+        "verification_mode": "voice_check",
+        "verification_enabled": True,
+        "basic_verify_enabled": True,
+    }
+
+    assert verification_modes.config_requests_voice_verify(cfg) is True
+    assert verification_modes.basic_verify_allowed_for_guild(guild(), cfg) is True
+    assert verification_modes.effective_verification_mode(guild(), cfg) == "basic_button"
+
+
 def test_explicit_basic_disable_beats_stale_legacy_mode_string() -> None:
     cfg = {
         "verification_mode": "basic_button",
@@ -131,6 +154,20 @@ def test_non_allowlisted_id_plus_voice_can_still_use_voice_without_basic() -> No
 
     assert verification_modes.basic_verify_allowed_for_guild(public_guild, cfg) is False
     assert verification_modes.effective_verification_mode(public_guild, cfg) == "voice_verify"
+
+
+def test_non_allowlisted_id_conflict_does_not_use_stale_basic_switch() -> None:
+    cfg = {
+        "setup_choice": "id_check",
+        "verification_enabled": True,
+        "basic_verify_enabled": True,
+        "id_verify_enabled": True,
+        "verification_requires_id": True,
+    }
+    public_guild = guild(999)
+
+    assert verification_modes.basic_verify_allowed_for_guild(public_guild, cfg) is False
+    assert verification_modes.effective_verification_mode(public_guild, cfg) == "disabled"
 
 
 def test_stale_basic_button_is_blocked_before_role_resolution(
