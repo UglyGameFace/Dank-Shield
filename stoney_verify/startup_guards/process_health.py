@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-"""
-Process health / crash visibility guard.
+"""Process health / crash visibility service.
 
-This replaces the old root-level runtime_process_health_guard.py.
+Production ownership is explicit: ``main.py`` installs the process-level hooks
+and attaches this service to the known Discord bot. Importing this module alone
+must not modify process-global import behavior or register Discord listeners.
 
-It logs boot count, host shutdown signals, unhandled sync/async exceptions,
-process exit, and periodic memory/task heartbeats. It exits cleanly on host
-SIGTERM/SIGINT instead of swallowing shutdown signals.
+The service logs boot count, host shutdown signals, unhandled sync/async
+exceptions, process exit, periodic memory/task heartbeats, operation-queue
+health, and the optional external Healthchecks watchdog.
 """
 
 import atexit
 import asyncio
-import builtins
 import os
 import signal
 import sys
@@ -28,7 +28,6 @@ _HEALTH_INTERVAL_SECONDS = int(os.getenv("DANK_PROCESS_HEALTH_INTERVAL_SECONDS",
 _HEALTH_TASK_STARTED = False
 _READY_LISTENER_ATTACHED = False
 _PREVIOUS_EXCEPTHOOK = sys.excepthook
-_ORIGINAL_IMPORT = builtins.__import__
 _INSTALLED = False
 _EXTERNAL_WATCHDOG_LAST_OK_AT = 0.0
 _EXTERNAL_WATCHDOG_LAST_ERROR = ""
@@ -369,11 +368,14 @@ def start_health_loop() -> None:
         _log(f"failed starting heartbeat loop: {e!r}")
 
 
-def _attach_ready_listener(bot: Any) -> None:
+def attach_process_health(bot: Any) -> bool:
+    """Attach the health on-ready listener to the explicit bot owner once."""
+
     global _READY_LISTENER_ATTACHED
-    if _READY_LISTENER_ATTACHED or bot is None:
-        return
-    _READY_LISTENER_ATTACHED = True
+    if _READY_LISTENER_ATTACHED:
+        return False
+    if bot is None:
+        return False
 
     async def _process_health_on_ready() -> None:
         try:
@@ -389,43 +391,28 @@ def _attach_ready_listener(bot: Any) -> None:
 
     try:
         bot.add_listener(_process_health_on_ready, "on_ready")
+        _READY_LISTENER_ATTACHED = True
         _log("on_ready heartbeat listener attached")
+        return True
     except Exception as e:
-        _READY_LISTENER_ATTACHED = False
         _log(f"failed attaching on_ready heartbeat listener: {e!r}")
+        return False
 
 
-def _maybe_attach_loaded_bot() -> None:
-    try:
-        for module_name in ("stoney_verify.app", "stoney_verify.globals"):
-            module = sys.modules.get(module_name)
-            if module is None:
-                continue
-            bot = getattr(module, "bot", None)
-            if bot is not None:
-                _attach_ready_listener(bot)
-                return
-    except Exception:
-        pass
+def install_process_health() -> bool:
+    """Install process-level crash/signal/exit visibility exactly once.
 
+    This function deliberately does not replace ``builtins.__import__`` and does
+    not discover or attach a Discord bot. Bot ownership is an explicit separate
+    handoff through :func:`attach_process_health`.
+    """
 
-def _safe_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0) -> Any:
-    module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
-    try:
-        _maybe_attach_loaded_bot()
-    except Exception:
-        pass
-    return module
-
-
-def install() -> None:
     global _INSTALLED
     if _INSTALLED:
-        return
+        return False
     _INSTALLED = True
 
     sys.excepthook = _sync_excepthook
-    builtins.__import__ = _safe_import
 
     for sig_name in ("SIGTERM", "SIGINT"):
         try:
@@ -449,15 +436,13 @@ def install() -> None:
     else:
         _log(f"BOOT count={count} first_recorded_boot pid={os.getpid()} {_memory_snapshot()}")
 
-    _maybe_attach_loaded_bot()
-
-
-install()
-_log("loaded; crash/restart visibility active")
+    _log("installed; crash/restart visibility active")
+    return True
 
 
 __all__ = [
-    "install",
+    "attach_process_health",
+    "install_process_health",
     "install_loop_exception_handler",
     "start_health_loop",
     "external_watchdog_configured",

@@ -16,7 +16,9 @@ The real runtime path is narrower than the file tree suggests:
 
 ```
 Discloud runs main.py
+  → main.py explicitly installs process health (crash/signal/exit visibility)
   → main.py imports a SMALL fixed set of startup guards explicitly
+  → main.py explicitly attaches process health and other runtime services to bot
   → main.py calls stoney_verify.app.run()
   → app.py imports core modules IN A DELIBERATE ORDER (commands before events)
   → commands.py registers slash commands AT IMPORT TIME
@@ -29,9 +31,9 @@ Critical, non-obvious facts (verified — do not assume otherwise):
   `load_all_startup_guards()` / `load_startup_guards()` mechanism was formally
   retired after the runtime-ownership audit. `startup_guards/__init__.py` keeps
   an inert historical inventory while older audits are migrated. The inventory
-  originally contained 76 names; retired files are removed as their ownership
-  migrations complete. Nothing iterates that list during normal boot, and new
-  code must not treat membership as runtime activation.
+  originally contained 76 names; retired or explicitly migrated owners are
+  removed as their ownership migrations complete. Nothing iterates that list
+  during normal boot, and new code must not treat membership as runtime activation.
 - **The guards that actually run** are the few imported explicitly by `main.py`
   (`discord_api_safety`, `command_safety`, `command_scope_dedupe`,
   `public_server_env_id_guard`, `guild_config_runtime_validator`,
@@ -41,11 +43,13 @@ Critical, non-obvious facts (verified — do not assume otherwise):
   `runtime_safety` and `public_startup_scope` import hooks are retired; do not
   restore them. See `docs/STARTUP_GUARD_RUNTIME_OWNERSHIP_AUDIT.md` and
   `docs/RUNTIME_SAFETY_NATIVE_OWNERSHIP_AUDIT.md` before changing ownership.
-- **Importing the `startup_guards` package currently imports `process_health`.**
-  That package-level process/import/signal safety is a real live owner and was
-  deliberately preserved. Moving it requires its own boot-order-sensitive
-  migration; do not confuse other guard retirement with removal of this side
-  effect.
+- **Process health is explicitly owned by `main.py`.** The implementation remains
+  at `stoney_verify.startup_guards.process_health` for stable internal imports,
+  but importing `startup_guards` no longer activates it. `main.py` calls
+  `install_process_health()` before the other startup guards and later calls
+  `attach_process_health(bot)` directly. Process health must never restore a
+  `builtins.__import__` hook or implicit bot discovery. See
+  `docs/PROCESS_HEALTH_NATIVE_OWNERSHIP_AUDIT.md`.
 - **Slash commands register as an import side effect** (`commands.py` calls
   `register_all_commands(bot, bot.tree)` at module top level). Discord's global
   command cap is 100; the live public surface is ~9 today. Adding a command can
@@ -74,6 +78,9 @@ most load-bearing code in the repo. Re-read section 4.
 - **No new monkey-patches** of discord.py or the command tree
   (`setattr` on `discord.*` classes, `CommandTree.add_command/sync`, etc.).
   If a patch seems necessary, stop and ask.
+- **No global Python import interception for runtime discovery.** In particular,
+  do not replace `builtins.__import__` to wait for app modules or the Discord bot.
+  Boot dependencies must be handed off explicitly by the owning entrypoint.
 - **Prefer deleting a superseded patch over adding another layer.**
 - **Do not restore a bulk startup-guard loader.** If dormant behavior is proven
   necessary, migrate only that behavior into its canonical owner with behavioral
@@ -105,12 +112,12 @@ most load-bearing code in the repo. Re-read section 4.
 
 These are load-bearing or dangerous to change blind:
 
-1. `main.py` — entry point and guard import order.
+1. `main.py` — entry point, explicit process-health ownership, and guard import order.
 2. `sitecustomize.py` / `usercustomize.py` — host-level auto-run compatibility hooks.
 3. `stoney_verify/globals.py` — the shared `bot` singleton, env config, Supabase client, import-time invite listener (wildcard-exported; ripples everywhere).
 4. `stoney_verify/app.py` import sequence & `on_ready`.
 5. `stoney_verify/commands.py` (esp. the import-time `register_all_commands`) and `commands_ext/__init__.py` (registration pipeline + 100-command budget).
-6. `startup_guards/__init__.py` historical inventory/package side effects and the explicitly owned infra-safety guards in section 1.
+6. `startup_guards/__init__.py` historical inventory boundary and the explicitly owned infra-safety guards in section 1.
 7. `stoney_verify/guild_config.py` — per-server config resolution (source of past isolation bugs).
 8. Supabase client lifecycle (`get_supabase`/`reset_supabase`) and `supabase/migrations/`.
 9. `bot.tree.clear_commands` / `copy_global_to` and the dangerous-clear env flags — can wipe the live command surface for every server.
@@ -135,16 +142,16 @@ These are load-bearing or dangerous to change blind:
 These are real and need dedicated, tested passes — flag them, don't blind-fix:
 
 - **Live guard/monkey-patch ownership.** Bulk loading is retired. The temporary
-  `runtime_safety` and `public_startup_scope` import hooks are also retired, with
-  their one required behavior moved into the canonical identity-admin command.
-  Remaining live patch debt includes `process_health`, command safety/tree
-  wrappers, and selected feature-owned helpers. Migrate them into canonical
-  owners one subsystem at a time; do not delete them merely because they live
-  under `startup_guards/`.
+  `runtime_safety` and `public_startup_scope` import hooks are retired, and the
+  process-health global import interceptor/package side effect is retired in
+  favor of explicit `main.py` ownership. Remaining live patch debt includes
+  command safety/tree wrappers and selected feature-owned helpers. Migrate them
+  into canonical owners one subsystem at a time; do not delete them merely
+  because they live under `startup_guards/`.
 - **Historical dormant guard inventory.** The inert historical record is retained
-  for audit compatibility, not activation. Retired files are removed from the
-  inventory as ownership migrations complete. Remove other dormant files only
-  after proving import reachability, newer canonical ownership, and regression
+  for audit compatibility, not activation. Retired or migrated owners are removed
+  from the inventory as ownership migrations complete. Remove other dormant files
+  only after proving import reachability, newer canonical ownership, and regression
   safety.
 - **Channel Builder follow-up debt is not route wiring.** Its API routes are
   directly registered today. Remaining work, if any, is product/runtime cleanup

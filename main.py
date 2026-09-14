@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+# Process health is an explicit boot owner. Install crash/signal/exit visibility
+# before loading the rest of the application, without intercepting Python imports.
+from stoney_verify.startup_guards.process_health import (
+    attach_process_health,
+    install_process_health,
+)
+
+install_process_health()
+
 # Load Discord API throttling/retry safety before the app imports anything that
 # can call audit logs, send modlogs, or edit ticket channels.
 import stoney_verify.startup_guards.discord_api_safety  # noqa: F401
@@ -55,6 +64,21 @@ def _sleep_before_import_if_discord_login_backoff_active() -> None:
             f"sleeping {remaining}s before bot import"
         )
         time.sleep(remaining)
+
+
+def _attach_process_health_runtime() -> None:
+    """Attach process health to the known bot without import interception."""
+
+    try:
+        from stoney_verify.globals import bot
+
+        if not attach_process_health(bot):
+            print("ℹ️ process_health bot listener was already attached; duplicate skipped")
+    except Exception as exc:
+        print(
+            "⚠️ process_health bot attachment failed; process crash/signal visibility remains active: "
+            f"{type(exc).__name__}: {exc}"
+        )
 
 
 def _install_invite_reconciliation_runtime() -> None:
@@ -300,6 +324,7 @@ def _install_spam_guard_abuse_runtimes() -> None:
 
 def main() -> None:
     _sleep_before_import_if_discord_login_backoff_active()
+    _attach_process_health_runtime()
     _install_invite_reconciliation_runtime()
     _install_anti_nuke_gateway_runtime()
     _install_anti_nuke_finalizer_runtime()
