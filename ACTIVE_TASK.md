@@ -4,7 +4,7 @@
 
 **Status:** IMPLEMENTED — EXACT-HEAD VALIDATION IN PROGRESS
 **Branch:** `audit/persistent-interaction-compatibility`
-**Current base:** `1b31acc3a29a1057d5f188ad409fc7e1619ed54e`
+**Current base:** `2d90a4be61cdd32ee8a4b049c3098e48064c66f2`
 **PR:** #216 — `Harden persistent interaction restart compatibility`
 
 ## Outcome
@@ -78,11 +78,15 @@ GitHub-hosted one-shot repair validation run `34842302455` repeated the same Pyt
 
 The temporary repair workflow removed itself in the implementation commit and is absent from the final PR tree/diff.
 
+Exact-head validation on `fcd9a84a3160b7ac4027b7ce35d89cef69b69f18` reached green companion workflows and green Claim-first/Managed-category jobs while the full Python unit lane was still running. That head was superseded before merge because `main` advanced through PR #215; its incomplete run is retained only as intermediate evidence, not merge evidence.
+
 ## Current-main integration
 
-`main` advanced during the audit to `1b31acc3a29a1057d5f188ad409fc7e1619ed54e` via PR #214. That production change touches `anti_nuke_audit_compat_runtime.py`, its focused tests, and `ACTIVE_TASK.md`; it does not overlap the four persistent-interaction runtime modules.
+`main` first advanced during the audit to `1b31acc3a29a1057d5f188ad409fc7e1619ed54e` via PR #214. That production change touched `anti_nuke_audit_compat_runtime.py`, its focused tests, and `ACTIVE_TASK.md`; it did not overlap the four persistent-interaction runtime modules.
 
-The audit branch was integrated with current `main` using merge commit `e5fd8418ac27c947d6cf3cb8aa437a3f461c5b2e`. The merge tree takes current `main` as the base and overlays only the five already-validated interaction implementation/test blobs, preserving PR #214’s production code unchanged.
+The audit branch integrated that main state using merge commit `e5fd8418ac27c947d6cf3cb8aa437a3f461c5b2e`, preserving the already-validated interaction implementation blobs byte-for-byte.
+
+`main` then advanced again through bookkeeping-only PR #215 to `2d90a4be61cdd32ee8a4b049c3098e48064c66f2`. PR #215 changed only `ACTIVE_TASK.md` and recorded DS-SEC-045 post-merge acceptance; no runtime or test overlap exists with this interaction repair. The current branch integrates that closure record while continuing to overlay only the same five validated interaction implementation/test blobs on current main.
 
 ## Final validation required
 
@@ -111,6 +115,7 @@ The audit branch was integrated with current `main` using merge commit `e5fd8418
 - Old submissions modules expose view builders but have no live importer; the live central interaction handler remains authoritative.
 - Dormant `startup_guards/*` were not activated or modified.
 - The temporary GitHub repair workflow is deleted from the branch final tree.
+- PR #214 AntiNuke code and PR #215 DS-SEC-045 closeout evidence are preserved from current `main`.
 
 ## Blockers / risks
 
@@ -120,7 +125,7 @@ No known implementation blocker. Exact-head CI and protected merge remain hard g
 
 ### DS-SEC-045 — Legitimate self-action audit classification
 
-Completed and merged as PR #214. Canonical merge SHA: `1b31acc3a29a1057d5f188ad409fc7e1619ed54e`. The persistent-interaction audit preserves that AntiNuke compatibility repair unchanged.
+Complete, merged, and post-merge validated. Implementation PR #214 final head `8c6617a00258d9a5c4d1be878e6ec885f0f56eb6` merged as canonical main `1b31acc3a29a1057d5f188ad409fc7e1619ed54e`. Its full PR validation passed, post-merge Dank Shield CI run #2089 passed all required jobs, Ticket Owner Emergency Override passed, Deploy Supabase migrations succeeded, and `main` remained protected. Bookkeeping closeout PR #215 merged as `2d90a4be61cdd32ee8a4b049c3098e48064c66f2`. A live Basic Verify click remains useful operational smoke testing but is not a code blocker.
 
 ### Verification integrity audit repair
 
@@ -138,4 +143,4 @@ Suspended previously after PR #211 merged and CI passed. Remaining acceptance is
 
 ## Next step
 
-Validate the exact PR #216 head created by this task-record update. If all required and companion workflows are green and the six-file compare remains clean, update this record with immutable validation evidence, revalidate that final bookkeeping head, mark PR #216 ready, merge the exact validated head through protected `main`, and verify canonical post-merge CI plus gated production promotion.
+Validate the exact PR #216 head after integrating current `main` `2d90a4be61cdd32ee8a4b049c3098e48064c66f2`. If all required and companion workflows are green and the six-file compare remains clean, update this record with immutable validation evidence, revalidate that final bookkeeping head, mark PR #216 ready, merge the exact validated head through protected `main`, and verify canonical post-merge CI plus gated production promotion.
