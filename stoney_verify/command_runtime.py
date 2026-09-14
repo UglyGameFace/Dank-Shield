@@ -2,9 +2,10 @@ from __future__ import annotations
 
 """Native Discord command/runtime ownership for Dank Shield.
 
-This module contains reusable command-surface and bot-construction behavior, but
-it never monkey-patches discord.py. ``globals.py`` owns bot construction and
-``app.py`` owns when command sync/cleanup runs.
+This module owns Dank Shield's bot-class selection and its one command tree.
+Nothing here monkey-patches discord.py classes. ``globals.py`` creates the shared
+bot through :func:`create_discord_bot`; the custom bot/tree subclasses apply
+policy only to that instance.
 """
 
 import hashlib
@@ -74,6 +75,14 @@ def _env_int_set(name: str) -> set[int]:
     return out
 
 
+def _env_explicit(name: str) -> bool:
+    try:
+        raw = os.getenv(name)
+        return raw is not None and str(raw).strip() != ""
+    except Exception:
+        return False
+
+
 def public_command_scope_enabled() -> bool:
     profile = _env_str("DANK_COMMAND_PROFILE", "public").lower()
     deployment = _env_str("DANK_DEPLOYMENT_MODE", "").lower()
@@ -87,6 +96,17 @@ def public_command_scope_enabled() -> bool:
     return profile in {"public", "minimal"} or deployment in {"public", "prod", "production"}
 
 
+def normalize_command_runtime_env() -> None:
+    """Preserve public-safe defaults previously supplied by a startup guard."""
+
+    if not _env_explicit("DANK_SYNC_BETA_GUILD_COMMANDS"):
+        os.environ["DANK_SYNC_BETA_GUILD_COMMANDS"] = "false"
+        try:
+            print("🧭 command_runtime defaulted DANK_SYNC_BETA_GUILD_COMMANDS=false")
+        except Exception:
+            pass
+
+
 def auto_shard_enabled() -> bool:
     return _env_bool("DISCORD_AUTO_SHARD", False)
 
@@ -94,38 +114,6 @@ def auto_shard_enabled() -> bool:
 def configured_shard_count() -> Optional[int]:
     value = _env_int("DISCORD_SHARD_COUNT", 0)
     return value if value > 0 else None
-
-
-def create_discord_bot(
-    *,
-    command_prefix: str,
-    intents: discord.Intents,
-    help_command: Any = None,
-) -> commands.Bot:
-    """Create the one shared bot without replacing ``commands.Bot`` globally."""
-
-    use_auto_shard = auto_shard_enabled()
-    bot_cls: type[commands.Bot] = commands.AutoShardedBot if use_auto_shard else commands.Bot
-    kwargs: dict[str, Any] = {
-        "command_prefix": command_prefix,
-        "intents": intents,
-        "help_command": help_command,
-    }
-    shard_count = configured_shard_count() if use_auto_shard else None
-    if shard_count is not None:
-        kwargs["shard_count"] = shard_count
-
-    instance = bot_cls(**kwargs)
-    try:
-        print(
-            "🧭 command_runtime bot created "
-            f"class={instance.__class__.__name__} "
-            f"auto_shard={use_auto_shard} "
-            f"configured_shard_count={shard_count or 'auto'}"
-        )
-    except Exception:
-        pass
-    return instance
 
 
 def _command_name(command: Any) -> str:
@@ -190,7 +178,7 @@ def _dank_child_names(tree: Any) -> tuple[str, ...]:
 
 
 def validate_public_command_surface(tree: Any) -> dict[str, Any]:
-    """Fail closed if the menu-first public surface drifted before Discord login."""
+    """Fail closed if the menu-first public surface drifted before Discord ready."""
 
     snapshot = command_budget_snapshot(tree)
     actual_names = tuple(sorted(str(name) for name in snapshot["global_names"]))
@@ -199,7 +187,7 @@ def validate_public_command_surface(tree: Any) -> dict[str, Any]:
         missing = sorted(set(expected_names) - set(actual_names))
         unexpected = sorted(set(actual_names) - set(expected_names))
         raise RuntimeError(
-            "Dank Shield public command surface drifted before login: "
+            "Dank Shield public command surface drifted before ready: "
             f"missing={missing} unexpected={unexpected} actual={list(actual_names)}"
         )
 
@@ -209,7 +197,7 @@ def validate_public_command_surface(tree: Any) -> dict[str, Any]:
         missing = sorted(set(expected_children) - set(actual_children))
         unexpected = sorted(set(actual_children) - set(expected_children))
         raise RuntimeError(
-            "Dank Shield /dank menu-first surface drifted before login: "
+            "Dank Shield /dank menu-first surface drifted before ready: "
             f"missing={missing} unexpected={unexpected} actual={list(actual_children)}"
         )
 
@@ -322,56 +310,78 @@ def remember_global_sync(surface_hash: str, *, public_scope: bool) -> None:
     _write_sync_state(state)
 
 
-@dataclass(frozen=True)
-class CommandSyncResult:
-    commands: list[Any]
-    skipped: bool
-    scope: str
-    surface_hash: str = ""
-
-
-async def sync_command_tree(
-    tree: app_commands.CommandTree[Any],
-    *,
-    guild: Optional[discord.abc.Snowflake] = None,
-    public_scope: bool,
-    reason: str,
-    force: bool = False,
-) -> CommandSyncResult:
-    """Synchronize through one explicit owner without replacing CommandTree.sync."""
-
-    if guild is None:
-        validate_global_sync_budget(tree, public_scope=public_scope)
-        skip, surface_hash = should_skip_unchanged_global_sync(tree, public_scope=public_scope)
-        if skip and not force:
-            print(
-                "🧭 command_runtime skipped unchanged global command sync "
-                f"hash={surface_hash[:12]} epoch={COMMAND_SYNC_EPOCH} reason={reason}"
-            )
-            return CommandSyncResult([], True, "global", surface_hash)
-
-        synced = list(await tree.sync())
-        remember_global_sync(surface_hash, public_scope=public_scope)
-        print(
-            "🌐 command_runtime global slash sync complete "
-            f"commands={len(synced)} hash={surface_hash[:12]} reason={reason} force={force}"
-        )
-        return CommandSyncResult(synced, False, "global", surface_hash)
-
-    guild_id = int(getattr(guild, "id", 0) or 0)
-    synced = list(await tree.sync(guild=guild))
-    print(
-        "🌐 command_runtime guild slash sync complete "
-        f"guild={guild_id} commands={len(synced)} reason={reason}"
-    )
-    return CommandSyncResult(synced, False, f"guild:{guild_id}")
-
-
 def configured_guild_cleanup_ids() -> set[int]:
     ids = _env_int_set("DANK_GUILD_COMMAND_CLEANUP_IDS")
     ids |= _env_int_set("GUILD_ID")
     ids |= _env_int_set("DANK_BETA_GUILD_ID")
     return {guild_id for guild_id in ids if guild_id > 0}
+
+
+def _dangerous_global_clear_requested() -> bool:
+    return _env_bool("CLEAR_GLOBAL_COMMANDS_ON_BOOT", False) and _env_bool(
+        "DANK_DANGEROUS_CLEAR_ALL_GLOBAL_COMMANDS_ON_BOOT", False
+    )
+
+
+def _should_clear_public_guild_copy(guild: Optional[discord.abc.Snowflake]) -> bool:
+    if guild is None or not public_command_scope_enabled():
+        return False
+    if _env_bool("DANK_SYNC_BETA_GUILD_COMMANDS", False):
+        return False
+    if _env_bool("DANK_DISABLE_GUILD_COMMAND_COPY_CLEANUP", False):
+        return False
+    if not _env_bool("DANK_CLEAR_BETA_GUILD_COMMANDS_ON_BOOT", True):
+        return False
+    guild_id = int(getattr(guild, "id", 0) or 0)
+    return guild_id > 0 and guild_id in configured_guild_cleanup_ids()
+
+
+class DankCommandTree(app_commands.CommandTree):
+    """Command tree whose policy applies only to the shared Dank Shield bot."""
+
+    async def sync(self, *, guild: Optional[discord.abc.Snowflake] = None):  # type: ignore[override]
+        public_scope = public_command_scope_enabled()
+
+        if guild is None:
+            snapshot = command_budget_snapshot(self)
+            count = int(snapshot.get("global_count", 0) or 0)
+
+            # Preserve the explicitly dangerous one-time zero-command wipe path.
+            if not (count == 0 and _dangerous_global_clear_requested()):
+                validate_global_sync_budget(self, public_scope=public_scope)
+
+            skip, surface_hash = should_skip_unchanged_global_sync(self, public_scope=public_scope)
+            if skip:
+                print(
+                    "🧭 command_runtime skipped unchanged global command sync "
+                    f"hash={surface_hash[:12]} epoch={COMMAND_SYNC_EPOCH}"
+                )
+                return []
+
+            synced = await super().sync(guild=None)
+            remember_global_sync(surface_hash, public_scope=public_scope)
+            print(
+                "🌐 command_runtime global slash sync complete "
+                f"commands={len(synced)} hash={surface_hash[:12]}"
+            )
+            return synced
+
+        guild_id = int(getattr(guild, "id", 0) or 0)
+        if _should_clear_public_guild_copy(guild):
+            self.clear_commands(guild=guild)
+            synced = await super().sync(guild=guild)
+            print(
+                "🧹 command_runtime cleared stale guild-scoped command copy "
+                f"guild={guild_id} remaining={len(synced)}"
+            )
+            return synced
+
+        synced = await super().sync(guild=guild)
+        print(
+            "🌐 command_runtime guild slash sync complete "
+            f"guild={guild_id} commands={len(synced)}"
+        )
+        return synced
 
 
 async def clear_stale_guild_command_copies(
@@ -385,6 +395,8 @@ async def clear_stale_guild_command_copies(
         return {"status": "skipped_non_public", "cleared": [], "failed": []}
     if _env_bool("DANK_SYNC_BETA_GUILD_COMMANDS", False):
         return {"status": "skipped_beta_sync_enabled", "cleared": [], "failed": []}
+    if _env_bool("DANK_DISABLE_GUILD_COMMAND_COPY_CLEANUP", False):
+        return {"status": "disabled", "cleared": [], "failed": []}
     if not _env_bool("DANK_CLEAR_BETA_GUILD_COMMANDS_ON_BOOT", True):
         return {"status": "disabled", "cleared": [], "failed": []}
 
@@ -394,15 +406,10 @@ async def clear_stale_guild_command_copies(
         guild_obj = discord.Object(id=guild_id)
         try:
             tree.clear_commands(guild=guild_obj)
-            result = await sync_command_tree(
-                tree,
-                guild=guild_obj,
-                public_scope=public_scope,
-                reason="stale_guild_copy_cleanup",
-            )
-            if result.commands:
+            synced = list(await tree.sync(guild=guild_obj))
+            if synced:
                 raise RuntimeError(
-                    f"guild cleanup sync returned {len(result.commands)} command(s) instead of zero"
+                    f"guild cleanup sync returned {len(synced)} command(s) instead of zero"
                 )
             cleared.append(guild_id)
         except Exception as exc:
@@ -420,9 +427,99 @@ async def clear_stale_guild_command_copies(
     return {"status": status, "cleared": cleared, "failed": failed}
 
 
+class _DankCommandOwnerMixin:
+    async def setup_hook(self) -> None:
+        await super().setup_hook()  # type: ignore[misc]
+        public_scope = public_command_scope_enabled()
+
+        # Command registration has completed before bot.run() reaches setup_hook.
+        # Fail startup before on_ready if the menu-first contract is incomplete.
+        if public_scope:
+            validate_public_command_surface(self.tree)  # type: ignore[attr-defined]
+
+        result = await clear_stale_guild_command_copies(
+            self.tree,  # type: ignore[attr-defined]
+            public_scope=public_scope,
+        )
+        if result.get("status") == "partial_failure":
+            print(
+                "⚠️ command_runtime setup cleanup completed with failures "
+                f"failed={result.get('failed', [])}"
+            )
+
+
+class DankBot(_DankCommandOwnerMixin, commands.Bot):
+    pass
+
+
+class DankAutoShardedBot(_DankCommandOwnerMixin, commands.AutoShardedBot):
+    pass
+
+
+def create_discord_bot(
+    *,
+    command_prefix: str,
+    intents: discord.Intents,
+    help_command: Any = None,
+) -> commands.Bot:
+    """Create the one shared bot without replacing ``commands.Bot`` globally."""
+
+    normalize_command_runtime_env()
+    use_auto_shard = auto_shard_enabled()
+    bot_cls: type[commands.Bot] = DankAutoShardedBot if use_auto_shard else DankBot
+    kwargs: dict[str, Any] = {
+        "command_prefix": command_prefix,
+        "intents": intents,
+        "help_command": help_command,
+        "tree_cls": DankCommandTree,
+    }
+    shard_count = configured_shard_count() if use_auto_shard else None
+    if shard_count is not None:
+        kwargs["shard_count"] = shard_count
+
+    instance = bot_cls(**kwargs)
+    try:
+        print(
+            "🧭 command_runtime bot created "
+            f"class={instance.__class__.__name__} tree={instance.tree.__class__.__name__} "
+            f"auto_shard={use_auto_shard} "
+            f"configured_shard_count={shard_count or 'auto'}"
+        )
+    except Exception:
+        pass
+    return instance
+
+
+@dataclass(frozen=True)
+class CommandSyncResult:
+    commands: list[Any]
+    skipped: bool
+    scope: str
+    surface_hash: str = ""
+
+
+async def sync_command_tree(
+    tree: app_commands.CommandTree[Any],
+    *,
+    guild: Optional[discord.abc.Snowflake] = None,
+    public_scope: bool,
+    reason: str,
+) -> CommandSyncResult:
+    """Explicit helper for future callers; the shared tree already owns policy."""
+
+    before_hash = command_surface_hash(tree) if guild is None else ""
+    synced = list(await tree.sync(guild=guild))
+    scope = "global" if guild is None else f"guild:{int(getattr(guild, 'id', 0) or 0)}"
+    skipped = guild is None and public_scope and not synced and bool(before_hash)
+    return CommandSyncResult(synced, skipped, scope, before_hash)
+
+
 __all__ = [
     "COMMAND_SYNC_EPOCH",
     "CommandSyncResult",
+    "DankAutoShardedBot",
+    "DankBot",
+    "DankCommandTree",
     "auto_shard_enabled",
     "clear_stale_guild_command_copies",
     "command_budget_snapshot",
@@ -430,6 +527,7 @@ __all__ = [
     "configured_guild_cleanup_ids",
     "configured_shard_count",
     "create_discord_bot",
+    "normalize_command_runtime_env",
     "public_command_scope_enabled",
     "remember_global_sync",
     "should_skip_unchanged_global_sync",
