@@ -57,7 +57,8 @@ _DEFAULT_GRACE_DAYS = 14
 
 _NOTICE_TABLE = "member_activity_notices"
 _NOTICE_MEMORY: dict[str, dict[str, Any]] = {}
-_NOTICE_WORKER_STARTED = False
+_NOTICE_DM_VIEW_REGISTERED = False
+_NOTICE_WORKER_LISTENER_ATTACHED = False
 _NOTICE_SEND_DELAY_SECONDS = 2.5
 _NOTICE_WORKER_INTERVAL_SECONDS = 30
 # Discord does not expose a user's timezone to bots.
@@ -717,6 +718,48 @@ def _latest_pending_notice_for_user(user_id: int) -> Optional[dict[str, Any]]:
     return pending[0] if pending else None
 
 
+def _notice_for_dm_message(
+    user_id: int,
+    message_id: int,
+) -> Optional[dict[str, Any]]:
+    "Resolve the exact notice represented by the clicked Discord DM."
+    if int(user_id or 0) <= 0 or int(message_id or 0) <= 0:
+        return None
+
+    rows, _warning = _select_notice_rows(user_id=int(user_id), limit=100)
+    wanted = str(int(message_id))
+    for row in rows:
+        if str(row.get("dm_message_id") or "").strip() == wanted:
+            return row
+    return None
+
+
+def _pending_notice_for_dm_message(
+    user_id: int,
+    message_id: int,
+) -> tuple[Optional[dict[str, Any]], str]:
+    notice = _notice_for_dm_message(user_id, message_id)
+    if notice is None:
+        return None, "unmatched"
+
+    status = str(notice.get("status") or "")
+    if status not in _NOTICE_PENDING_STATUSES:
+        return notice, "resolved"
+
+    deadline = _coerce_utc(notice.get("deadline_at"))
+    if deadline is not None and deadline < _utcnow():
+        return notice, "expired"
+
+    return notice, "pending"
+
+
+def _interaction_notice_message_id(interaction: discord.Interaction) -> int:
+    try:
+        return int(getattr(getattr(interaction, "message", None), "id", 0) or 0)
+    except Exception:
+        return 0
+
+
 def _notice_dm_embed(row: dict[str, Any]) -> discord.Embed:
     guild_name = str(row.get("guild_name") or "the server")
     user_name = str(row.get("user_display_name") or "there")
@@ -748,6 +791,45 @@ class MemberActivityNoticeDMView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=None)
 
+    async def _clicked_pending_notice(
+        self,
+        interaction: discord.Interaction,
+    ) -> tuple[Optional[dict[str, Any]], str]:
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    _pending_notice_for_dm_message,
+                    int(interaction.user.id),
+                    _interaction_notice_message_id(interaction),
+                ),
+                timeout=8.0,
+            )
+        except Exception as exc:
+            print(
+                "⚠️ member_activity_notices exact notice lookup skipped: "
+                f"{exc!r}"
+            )
+            return None, "lookup_failed"
+
+    async def _reject_stale_notice(
+        self,
+        interaction: discord.Interaction,
+        state: str,
+    ) -> None:
+        if state == "resolved":
+            message = "This activity notice has already been answered or closed."
+        elif state == "expired":
+            message = (
+                "This activity notice has expired. Ask the server staff to send "
+                "a fresh notice if they still need a response."
+            )
+        else:
+            message = (
+                "I can’t safely match this button to its original activity "
+                "notice. Ask the server staff to send a fresh notice."
+            )
+        await interaction.response.send_message(message, ephemeral=True)
+
     @discord.ui.button(
         label="I’m still active",
         emoji="✅",
@@ -755,22 +837,11 @@ class MemberActivityNoticeDMView(discord.ui.View):
         custom_id="dank_member_notice_still_active",
     )
     async def still_active(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        try:
-            notice = await asyncio.wait_for(
-                asyncio.to_thread(_latest_pending_notice_for_user, int(interaction.user.id)),
-                timeout=8.0,
-            )
-        except Exception as exc:
-            print(f"⚠️ member_activity_notices pending notice lookup skipped: {exc!r}")
-            notice = None
-        if notice is None:
-            return await interaction.response.send_message(
-                "You’re all set — I don’t see an active cleanup notice for you anymore.",
-                ephemeral=True,
-            )
+        _ = button
+        notice, state = await self._clicked_pending_notice(interaction)
+        if notice is None or state != "pending":
+            return await self._reject_stale_notice(interaction, state)
 
-        guild_id = _safe_int_attr(type("Obj", (), {"guild_id": notice.get("guild_id")})(), "guild_id", 0)
-        # Safer than _safe_int_attr on dict:
         try:
             guild_id = int(str(notice.get("guild_id")))
         except Exception:
@@ -808,13 +879,21 @@ class MemberActivityNoticeDMView(discord.ui.View):
         custom_id="dank_member_notice_what_is_this",
     )
     async def what_is_this(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         try:
             notice = await asyncio.wait_for(
-                asyncio.to_thread(_latest_pending_notice_for_user, int(interaction.user.id)),
+                asyncio.to_thread(
+                    _notice_for_dm_message,
+                    int(interaction.user.id),
+                    _interaction_notice_message_id(interaction),
+                ),
                 timeout=8.0,
             )
         except Exception as exc:
-            print(f"⚠️ member_activity_notices pending notice lookup skipped: {exc!r}")
+            print(
+                "⚠️ member_activity_notices exact notice lookup skipped: "
+                f"{exc!r}"
+            )
             notice = None
         guild_name = str((notice or {}).get("guild_name") or "that server")
         await interaction.response.send_message(
@@ -831,22 +910,18 @@ class MemberActivityNoticeDMView(discord.ui.View):
         custom_id="dank_member_notice_ok_leaving",
     )
     async def okay_leaving(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        try:
-            notice = await asyncio.wait_for(
-                asyncio.to_thread(_latest_pending_notice_for_user, int(interaction.user.id)),
-                timeout=8.0,
-            )
-        except Exception as exc:
-            print(f"⚠️ member_activity_notices pending notice lookup skipped: {exc!r}")
-            notice = None
-        if notice is not None:
-            await asyncio.to_thread(
-                _update_notice_row,
-                str(notice.get("notice_id")),
-                status=_NOTICE_STATUS_OK_LEAVING,
-                responded_at=_utcnow().isoformat(),
-                response="ok_leaving",
-            )
+        _ = button
+        notice, state = await self._clicked_pending_notice(interaction)
+        if notice is None or state != "pending":
+            return await self._reject_stale_notice(interaction, state)
+
+        await asyncio.to_thread(
+            _update_notice_row,
+            str(notice.get("notice_id")),
+            status=_NOTICE_STATUS_OK_LEAVING,
+            responded_at=_utcnow().isoformat(),
+            response="ok_leaving",
+        )
         await interaction.response.send_message(
             "Thanks for letting the staff team know. No action was taken from this button alone.",
             ephemeral=True,
@@ -961,22 +1036,33 @@ async def _process_due_member_notices(bot: Any, *, one_pass: bool = False) -> No
         await asyncio.sleep(_NOTICE_WORKER_INTERVAL_SECONDS)
 
 
-def _start_member_notice_worker(bot: Any) -> None:
-    """Attach the member notice worker safely.
+def _register_member_notice_dm_view(bot: Any) -> bool:
+    global _NOTICE_DM_VIEW_REGISTERED
 
-    discord.py 2.x does not allow accessing bot.loop from a synchronous setup
-    path before login. The worker is therefore attached as an on_ready listener
-    and the actual asyncio task is created only after Discord has connected.
-    """
-    global _NOTICE_WORKER_STARTED
-    if _NOTICE_WORKER_STARTED:
-        return
-    _NOTICE_WORKER_STARTED = True
+    if _NOTICE_DM_VIEW_REGISTERED:
+        return True
 
     try:
         bot.add_view(MemberActivityNoticeDMView())
-    except Exception:
-        pass
+        _NOTICE_DM_VIEW_REGISTERED = True
+        print("📩 member_activity_notices persistent DM view registered")
+    except Exception as e:
+        print(
+            "⚠️ member_activity_notices persistent DM view registration "
+            f"failed: {repr(e)}"
+        )
+
+    return _NOTICE_DM_VIEW_REGISTERED
+
+
+def _start_member_notice_worker(bot: Any) -> None:
+    """Attach the member notice worker and keep DM-view registration retryable."""
+    global _NOTICE_WORKER_LISTENER_ATTACHED
+
+    _register_member_notice_dm_view(bot)
+
+    if _NOTICE_WORKER_LISTENER_ATTACHED:
+        return
 
     async def _runner() -> None:
         try:
@@ -986,21 +1072,35 @@ def _start_member_notice_worker(bot: Any) -> None:
         await _process_due_member_notices(bot)
 
     async def _on_ready_member_activity_notices() -> None:
+        _register_member_notice_dm_view(bot)
         try:
             existing = getattr(bot, "_member_activity_notice_worker_task", None)
             if existing is not None and not existing.done():
                 return
-            task = asyncio.create_task(_runner(), name="member_activity_notices_worker")
+            task = asyncio.create_task(
+                _runner(),
+                name="member_activity_notices_worker",
+            )
             setattr(bot, "_member_activity_notice_worker_task", task)
             print("📩 member_activity_notices worker started")
         except Exception as e:
-            print(f"⚠️ member_activity_notices worker failed to start: {repr(e)}")
+            print(
+                "⚠️ member_activity_notices worker failed to start: "
+                f"{repr(e)}"
+            )
 
     try:
         bot.add_listener(_on_ready_member_activity_notices, "on_ready")
+        _NOTICE_WORKER_LISTENER_ATTACHED = True
         print("📩 member_activity_notices worker listener attached")
     except Exception as e:
-        print(f"⚠️ member_activity_notices worker listener failed to attach: {repr(e)}")
+        print(
+            "⚠️ member_activity_notices worker listener failed to attach: "
+            f"{repr(e)}"
+        )
+        raise RuntimeError(
+            "member activity notice on_ready listener was not attached"
+        ) from e
 
 
 def _notice_results_embed(guild: discord.Guild) -> discord.Embed:

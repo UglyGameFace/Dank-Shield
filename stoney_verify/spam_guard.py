@@ -64,6 +64,7 @@ _SETTINGS_TABLE_AVAILABLE: Optional[bool] = None
 _CASES_TABLE_AVAILABLE: Optional[bool] = None
 _SPAM_GUARD_COMMANDS_REGISTERED = False
 _SPAM_GUARD_VIEWS_REGISTERED = False
+_SPAM_GUARD_REGISTERED_VIEW_KEYS: Set[str] = set()
 
 _RUNTIME_SETTINGS: Dict[int, Dict[str, Any]] = {}
 _MESSAGE_WINDOWS: Dict[Tuple[int, int], Dict[str, Any]] = {}
@@ -3705,10 +3706,56 @@ async def _spam_guard_warm_settings_cache():
         _debug(f"warm settings cache failed error={repr(e)}")
 
 
-@bot.listen("on_ready")
-async def _register_spam_guard_views():
+def register_spam_guard_persistent_views(bot_instance: Any = None) -> bool:
+    "Register only missing Spam Guard persistent callback owners."
     global _SPAM_GUARD_VIEWS_REGISTERED
 
+    target = bot_instance or bot
+
+    for page in SPAM_PANEL_PAGES:
+        key = f"panel:{page}"
+        if key in _SPAM_GUARD_REGISTERED_VIEW_KEYS:
+            continue
+        try:
+            target.add_view(
+                SpamGuardPanelView.build(
+                    page=page,
+                    settings=_default_settings(0),
+                )
+            )
+            _SPAM_GUARD_REGISTERED_VIEW_KEYS.add(key)
+        except Exception as e:
+            print(
+                f"⚠️ spam_guard: failed to register persistent "
+                f"{page} panel view: {e}"
+            )
+
+    # restored=True is a disabled rendering state, not a second callback owner.
+    restore_key = "incident:restore"
+    if restore_key not in _SPAM_GUARD_REGISTERED_VIEW_KEYS:
+        try:
+            target.add_view(SpamIncidentRestoreView(restored=False))
+            _SPAM_GUARD_REGISTERED_VIEW_KEYS.add(restore_key)
+        except Exception as e:
+            print(
+                "⚠️ spam_guard: failed to register incident restore view: "
+                f"{e}"
+            )
+
+    required = {
+        *(f"panel:{page}" for page in SPAM_PANEL_PAGES),
+        "incident:restore",
+    }
+    _SPAM_GUARD_VIEWS_REGISTERED = required.issubset(
+        _SPAM_GUARD_REGISTERED_VIEW_KEYS
+    )
+    if _SPAM_GUARD_VIEWS_REGISTERED:
+        print("✅ spam_guard: persistent views registered")
+    return _SPAM_GUARD_VIEWS_REGISTERED
+
+
+@bot.listen("on_ready")
+async def _register_spam_guard_views():
     if not cleanup_stale_memory.is_running():
         try:
             cleanup_stale_memory.start()
@@ -3716,18 +3763,7 @@ async def _register_spam_guard_views():
         except Exception as e:
             _debug(f"failed starting stale memory cleanup loop error={repr(e)}")
 
-    if _SPAM_GUARD_VIEWS_REGISTERED:
-        return
-
-    try:
-        for page in SPAM_PANEL_PAGES:
-            bot.add_view(SpamGuardPanelView.build(page=page, settings=_default_settings(0)))
-        bot.add_view(SpamIncidentRestoreView(restored=False))
-        bot.add_view(SpamIncidentRestoreView(restored=True))
-        _SPAM_GUARD_VIEWS_REGISTERED = True
-        print("✅ spam_guard: persistent views registered")
-    except Exception as e:
-        print(f"⚠️ spam_guard: failed to register persistent views: {e}")
+    register_spam_guard_persistent_views(bot)
 
 
 _register_spam_guard_commands()
