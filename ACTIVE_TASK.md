@@ -1,43 +1,71 @@
 # ACTIVE TASK
 
-## DS-SEC-044 — Hostile bot re-entry race and integration persistence
+## DS-AUD-009 — Release governance and production promotion safety
 
-**Status:** IMPLEMENTED ON BRANCH / VALIDATION PENDING
-**Branch:** `fix/antinuke-hostile-reentry-race`
-**Base:** `fd7315ed7a0f5288c0484443c5f981aa8f64da45`
+**Status:** IN PROGRESS — ROOT CAUSE CONFIRMED
+**Branch:** `fix/release-governance-009`
+**Base:** `a9d4a7bd83c773c9f0fa265d6169485ff1f5d17b`
 
-## Live acceptance failure
+## Outcome
 
-The Sep 13 live GANG-Nuker retest showed Dank Shield banning the known hostile identity, but the identity still completed destructive actions before removal and the same installer repeatedly recreated the bot/integration pair.
+Make production-changing releases fail closed behind validated repository state instead of allowing production mutation to race or bypass CI.
 
-Confirmed contributing paths:
+## Scope
 
-- Guild `1476736723953385514` initially booted with AntiNuke OFF; destructive events at 16:57/16:58 were explicitly observed while disabled.
-- Once containment was active, known-hostile re-entry still performed a `refresh=True` reputation lookup before the ban, leaving a post-admission race window.
-- Discord bot/integration admission is observed after the action; there is no pre-join veto callback.
-- Physical guild owners cannot be contained by a Discord bot, so owner-originated hostile re-adds must block the hostile target and correlated integration rather than punish the owner.
-- `integration_create` was covered for detection/containment but did not have creation rollback equivalent to channels/webhooks.
+- GitHub release/merge governance that can be enforced from the repository.
+- Production Supabase migration promotion and rollback/recovery documentation.
+- Durable CI regression coverage for the production-promotion contract.
+- Explicit documentation of the GitHub-hosted branch/ruleset control that must be enabled outside repository contents.
 
-## Implemented
+Application feature behavior, Discord UX, AntiNuke behavior, tickets, setup, and unrelated architectural cleanup are out of scope.
 
-- Added `anti_nuke_reentry_race_runtime.py` as the final AntiNuke runtime layer.
-- Uses already-cached/local hostile reputation before any authoritative reputation refresh for known identities.
-- Adds a fast member-join block for already-known hostile IDs.
-- Adds a fast known-hostile bot-add path that bans the target before integration enumeration or further reconciliation.
-- Correlates `integration_create` and `bot_add` in both event orderings for the same installer.
-- Removes integrations correlated with a known-hostile re-add even when the installer is the physical guild owner.
-- Rolls back untrusted integration creation immediately in Contain while preserving explicitly trusted normal staff behavior.
-- Preserves the owner platform boundary and existing Alert/disabled semantics.
-- Installs after the final Contain/Strict Lockdown product policy so it operates on the canonical final policy stack.
-- Added focused regression coverage for hot reputation, integration-before-bot, bot-before-integration, untrusted integration rollback, trusted Contain behavior, fast member join, and startup order.
+## Findings / root cause
+
+- `main` is currently unprotected and the repository has no GitHub rulesets.
+- The canonical `Dank Shield CI` workflow validates pull requests and pushes to `main`, but GitHub currently does not require that validation before `main` changes.
+- `.github/workflows/deploy-supabase-migrations.yml` deploys production migrations directly on qualifying pushes to `main`.
+- That migration workflow is independent of the `Dank Shield CI` result, so production schema mutation can begin before the same commit has passed canonical CI.
+- The migration deploy uses the GitHub `production` environment and a serialized concurrency group, which are useful controls, but neither currently creates a dependency on canonical CI.
+- Existing schema-authority tests verify that production changes use the Supabase CLI, but they do not verify the CI-before-production promotion relationship.
+- The repository currently has no GitHub releases or tag refs, so release identity/rollback provenance is not established by tags/releases today.
+
+## Execution path
+
+1. A change reaches `main`.
+2. `Dank Shield CI` starts from the `push` event.
+3. If `supabase/migrations/**` changed, `Deploy Supabase migrations` also starts from the same `push` event.
+4. The migration job can therefore reach `supabase db push` without first proving the canonical CI run for that exact `main` SHA succeeded.
+
+## Planned changes
+
+- Rewire production migration deployment to run only after a successful `Dank Shield CI` completion for the exact `main` SHA, while retaining explicit manual dispatch for controlled recovery.
+- Preserve production environment isolation, serialized deployment, dry-run preview, required-secret checks, and exact-SHA checkout.
+- Add regression coverage that fails if production migration deployment regresses to direct `push` promotion or loses the exact CI-success gate.
+- Update release documentation with the canonical promotion sequence, evidence required before release, and rollback/recovery boundaries.
+- Record the repository-admin ruleset requirement precisely; do not pretend repository files can enforce a GitHub rule that is currently disabled at the hosting layer.
 
 ## Validation required
 
-- Focused race/integration regression suite green.
-- Full exact-head Dank Shield CI green.
-- Diff review shows only this live-acceptance repair.
-- After merge/deploy, repeat the same GANG-Nuker re-entry test and confirm no destructive action lands before the hostile identity/integration is removed.
+- Focused release-governance/schema-authority tests pass.
+- Workflow YAML and shell logic are reviewed for `workflow_run` and manual-dispatch paths.
+- Full exact-head Dank Shield CI passes.
+- Final diff contains only DS-AUD-009 release-governance work plus this task record.
+- Current GitHub branch/ruleset state is re-checked before completion.
 
-## Platform boundary
+## Cleanup / conflicts
 
-Discord can still admit an owner-authorized bot before Dank Shield receives a gateway/audit event. This repair removes avoidable DB latency and correlated integration persistence, but no Discord bot can mathematically pre-veto an action performed by the physical guild owner or an already-authorized actor before Discord emits the event.
+No conflicting release workflow implementation has been found. The existing Supabase deploy workflow is the production schema mutation owner and will be repaired rather than duplicated.
+
+## Blockers / risks
+
+Repository contents cannot by themselves enable GitHub branch protection/rulesets. `main` must ultimately have a hosting-layer rule requiring pull requests and required checks; the connected GitHub surface currently exposes ruleset reads but no ruleset mutation action.
+
+## Suspended task
+
+### DS-SEC-044 — Hostile bot re-entry race and integration persistence
+
+Suspended by explicit FORCE SWITCH after PR #211 merged and exact-head CI passed. Remaining acceptance evidence: after deployment, repeat the hostile/GANG-Nuker re-entry test and confirm no destructive action lands before the hostile identity/integration is removed. No additional AntiNuke investigation is part of DS-AUD-009.
+
+## Next step
+
+Repair the canonical Supabase production-promotion workflow and add regression coverage for the exact CI-success gate.
