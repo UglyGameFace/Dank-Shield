@@ -4,9 +4,9 @@ This document is the canonical production-promotion contract for Dank Shield.
 
 ## Release identity
 
-The canonical release identity is the **full 40-character commit SHA in `main`** that passed the required checks. Branch names, local working trees, PR head names, Discord messages, and deployment timestamps are not release identities.
+The canonical release identity is the **full 40-character commit SHA at the current head of `main`** that passed the required checks. Branch names, local working trees, PR head names, Discord messages, and deployment timestamps are not release identities.
 
-GitHub tags/releases may be added later for human-friendly versioning, but they do not replace the validated `main` SHA as the deployment authority.
+GitHub tags/releases may be added later for human-friendly versioning, but they do not replace the validated current `main` SHA as the deployment authority.
 
 ## Canonical promotion sequence
 
@@ -18,11 +18,11 @@ Production-changing work follows this order:
 4. Review the final diff for unrelated, generated, secret-bearing, conflict, or temporary changes.
 5. Merge the validated PR.
 6. Let **Dank Shield CI** validate the resulting `main` SHA.
-7. Only after that exact `main` CI run succeeds may production promotion run.
+7. Only while that CI-green SHA is still the current `main` head may production promotion run.
 8. If `supabase/migrations/` contains pending migrations, the production migration workflow previews them and then applies them through the Supabase CLI.
 9. Runtime/deployment acceptance evidence is recorded against the same `main` SHA.
 
-A PR being green does not authorize production mutation by itself. The merged `main` SHA must also pass canonical CI because the merge result is the release candidate.
+A PR being green does not authorize production mutation by itself. The merged `main` SHA must also pass canonical CI because the merge result is the release candidate. A successful CI result also expires for promotion if a newer commit becomes the canonical `main` head before the deployment job reaches its gate.
 
 ## Production database gate
 
@@ -34,20 +34,20 @@ Automatic production migration runs must satisfy all of these conditions:
 - The triggering CI conclusion is `success`.
 - The triggering CI event is a `push`, not a pull-request run.
 - The migration workflow checks out the exact triggering `main` SHA.
-- The target SHA is verified to belong to canonical `main` history.
+- The target SHA is still the exact current canonical `main` head when deployment begins; stale successful CI runs are rejected.
 - The `production` GitHub environment is used.
 - Production migration runs remain serialized with `cancel-in-progress: false`.
 - `supabase migration list` and `supabase db push --dry-run --include-all` run before the real `supabase db push --include-all`.
 
-The deploy workflow intentionally runs after every successful canonical `main` CI completion. When no migrations are pending, the Supabase migration commands are a no-op. This is safer than guessing from only the last commit in a multi-commit push and accidentally missing a pending migration.
+The deploy workflow intentionally runs after every successful canonical `main` CI completion. When no migrations are pending, the Supabase migration commands are a no-op. If a newer commit reaches `main` before an older CI run completes, the older deployment attempt fails closed as stale and the newer current-head CI run owns promotion.
 
 ## Manual migration recovery
 
 `workflow_dispatch` exists for controlled recovery, not as a CI bypass.
 
-A manual run must use a **full 40-character SHA** that belongs to `main` history. The workflow independently queries GitHub Actions and refuses promotion unless it finds a successful **Dank Shield CI** `push` run on `main` for that exact SHA.
+A manual run must use the **full 40-character SHA at the current head of `main`**. The workflow independently queries GitHub Actions and refuses promotion unless it also finds a successful **Dank Shield CI** `push` run on `main` for that exact SHA.
 
-Use manual dispatch only when the automatic post-CI promotion did not run, was interrupted, or must be safely replayed. Do not use it to deploy an unmerged branch, a failing commit, or an arbitrary local SHA.
+Use manual dispatch only when the automatic post-CI promotion did not run, was interrupted, or must be safely replayed. Do not use it to deploy an older main ancestor, an unmerged branch, a failing commit, or an arbitrary local SHA.
 
 ## Database rollback boundary
 
@@ -101,6 +101,6 @@ For each production-impacting PR, retain enough evidence to answer exactly what 
 
 ## Emergency rule
 
-Do not fix a production incident by pushing unreviewed code directly to `main` or by applying ad-hoc schema SQL outside the migration chain. Use a focused emergency branch/PR, run the same required checks, and promote the resulting `main` SHA through the same gate.
+Do not fix a production incident by pushing unreviewed code directly to `main` or by applying ad-hoc schema SQL outside the migration chain. Use a focused emergency branch/PR, run the same required checks, and promote the resulting current `main` SHA through the same gate.
 
-A faster emergency path may reduce review scope, but it does not remove CI, exact-SHA provenance, or the migration owner.
+A faster emergency path may reduce review scope, but it does not remove CI, exact-SHA provenance, current-head validation, or the migration owner.
