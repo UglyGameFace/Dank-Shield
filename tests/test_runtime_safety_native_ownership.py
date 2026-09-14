@@ -16,6 +16,10 @@ def test_temporary_runtime_import_hook_modules_are_retired() -> None:
     assert not (STARTUP_GUARDS / "runtime_safety.py").exists()
     assert not (STARTUP_GUARDS / "public_startup_scope.py").exists()
 
+    inventory = _read("stoney_verify/startup_guards/__init__.py")
+    assert "stoney_verify.startup_guards.runtime_safety" not in inventory
+    assert "stoney_verify.startup_guards.public_startup_scope" not in inventory
+
 
 def test_sitecustomize_no_longer_loads_application_runtime_patcher() -> None:
     text = _read("sitecustomize.py")
