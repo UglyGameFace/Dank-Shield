@@ -18,11 +18,13 @@ The real runtime path is narrower than the file tree suggests:
 Discloud runs main.py
   → main.py explicitly installs process health (crash/signal/exit visibility)
   → main.py imports a SMALL fixed set of startup guards explicitly
+  → globals.py constructs the one shared DankBot/DankAutoShardedBot + DankCommandTree
   → main.py explicitly attaches process health and other runtime services to bot
   → main.py calls stoney_verify.app.run()
   → app.py imports core modules IN A DELIBERATE ORDER (commands before events)
   → commands.py registers slash commands AT IMPORT TIME
-  → bot.run(DISCORD_TOKEN) → on_ready → API/workers/maintenance
+  → bot.run(DISCORD_TOKEN) → native setup_hook command validation/cleanup
+  → on_ready → API/workers/maintenance + normal bot.tree.sync() through DankCommandTree
 ```
 
 Critical, non-obvious facts (verified — do not assume otherwise):
@@ -35,14 +37,15 @@ Critical, non-obvious facts (verified — do not assume otherwise):
   removed as their ownership migrations complete. Nothing iterates that list
   during normal boot, and new code must not treat membership as runtime activation.
 - **The guards that actually run** are the few imported explicitly by `main.py`
-  (`discord_api_safety`, `command_safety`, `command_scope_dedupe`,
-  `public_server_env_id_guard`, `guild_config_runtime_validator`,
-  `interaction_action_lock_guard`), the verified Basic Verify compatibility
-  imports from `sitecustomize.py`, their verified transitive imports, and
-  guards/helpers deliberately imported by canonical feature modules. The old
-  `runtime_safety` and `public_startup_scope` import hooks are retired; do not
-  restore them. See `docs/STARTUP_GUARD_RUNTIME_OWNERSHIP_AUDIT.md` and
-  `docs/RUNTIME_SAFETY_NATIVE_OWNERSHIP_AUDIT.md` before changing ownership.
+  (`discord_api_safety`, `public_server_env_id_guard`,
+  `guild_config_runtime_validator`, `interaction_action_lock_guard`), the verified
+  Basic Verify compatibility imports from `sitecustomize.py`, their verified
+  transitive imports, and guards/helpers deliberately imported by canonical
+  feature modules. The old `runtime_safety`, `public_startup_scope`, command-tree
+  safety/sync, and command-scope dedupe startup owners are retired; do not restore
+  them. See `docs/STARTUP_GUARD_RUNTIME_OWNERSHIP_AUDIT.md`,
+  `docs/RUNTIME_SAFETY_NATIVE_OWNERSHIP_AUDIT.md`, and
+  `docs/COMMAND_NATIVE_OWNERSHIP_AUDIT.md` before changing ownership.
 - **Process health is explicitly owned by `main.py`.** The implementation remains
   at `stoney_verify.startup_guards.process_health` for stable internal imports,
   but importing `startup_guards` no longer activates it. `main.py` calls
@@ -50,10 +53,19 @@ Critical, non-obvious facts (verified — do not assume otherwise):
   `attach_process_health(bot)` directly. Process health must never restore a
   `builtins.__import__` hook or implicit bot discovery. See
   `docs/PROCESS_HEALTH_NATIVE_OWNERSHIP_AUDIT.md`.
+- **Command/bot ownership is native and instance-scoped.** `globals.py` is the one
+  shared bot constructor and calls `command_runtime.create_discord_bot(...)`.
+  That chooses `DankBot` vs `DankAutoShardedBot` from the shard configuration and
+  injects one `DankCommandTree`. The tree owns command-budget enforcement,
+  public-surface validation, unchanged-global-sync state, and configured stale
+  guild-copy cleanup. Do not replace `commands.Bot`, `CommandTree.add_command`,
+  or `CommandTree.sync` globally.
 - **Slash commands register as an import side effect** (`commands.py` calls
-  `register_all_commands(bot, bot.tree)` at module top level). Discord's global
-  command cap is 100; the live public surface is ~9 today. Adding a command can
-  silently push another out — see `command_safety`.
+  `register_all_commands(bot, bot.tree)` at module top level). The canonical
+  public surface is six application commands total: `/dank`, `/mod`, `/ticket`,
+  `/tickets`, `/verify`, plus `View Dank Profile`. Before normal ready handling,
+  the native setup hook fails closed if those roots or the approved direct
+  `/dank` children (`home`, `purge`, `setup`, `upload`) drift or disappear.
 - **`sitecustomize.py` and `usercustomize.py` auto-run before `main.py`.** Their
   remaining behavior is compatibility-scoped. Do not add a fallback startup
   loader, application runtime patcher, or another compatibility installer there.
@@ -114,13 +126,13 @@ These are load-bearing or dangerous to change blind:
 
 1. `main.py` — entry point, explicit process-health ownership, and guard import order.
 2. `sitecustomize.py` / `usercustomize.py` — host-level auto-run compatibility hooks.
-3. `stoney_verify/globals.py` — the shared `bot` singleton, env config, Supabase client, import-time invite listener (wildcard-exported; ripples everywhere).
+3. `stoney_verify/globals.py` and `stoney_verify/command_runtime.py` — the shared bot singleton, native Bot/AutoShardedBot + command-tree ownership, env config, Supabase client, and import-time invite listener.
 4. `stoney_verify/app.py` import sequence & `on_ready`.
-5. `stoney_verify/commands.py` (esp. the import-time `register_all_commands`) and `commands_ext/__init__.py` (registration pipeline + 100-command budget).
+5. `stoney_verify/commands.py` (esp. the import-time `register_all_commands`) and `commands_ext/__init__.py` (registration pipeline and final public surface).
 6. `startup_guards/__init__.py` historical inventory boundary and the explicitly owned infra-safety guards in section 1.
 7. `stoney_verify/guild_config.py` — per-server config resolution (source of past isolation bugs).
 8. Supabase client lifecycle (`get_supabase`/`reset_supabase`) and `supabase/migrations/`.
-9. `bot.tree.clear_commands` / `copy_global_to` and the dangerous-clear env flags — can wipe the live command surface for every server.
+9. `bot.tree.clear_commands` / `copy_global_to`, command-sync state, and the dangerous-clear env flags — can alter or wipe the live command surface for every server.
 
 ---
 
@@ -142,12 +154,12 @@ These are load-bearing or dangerous to change blind:
 These are real and need dedicated, tested passes — flag them, don't blind-fix:
 
 - **Live guard/monkey-patch ownership.** Bulk loading is retired. The temporary
-  `runtime_safety` and `public_startup_scope` import hooks are retired, and the
-  process-health global import interceptor/package side effect is retired in
-  favor of explicit `main.py` ownership. Remaining live patch debt includes
-  command safety/tree wrappers and selected feature-owned helpers. Migrate them
-  into canonical owners one subsystem at a time; do not delete them merely
-  because they live under `startup_guards/`.
+  `runtime_safety` and `public_startup_scope` import hooks are retired, the
+  process-health global import interceptor/package side effect is retired, and
+  the command Bot/CommandTree wrappers are retired in favor of native shared
+  bot/tree ownership. Remaining live patch debt is in other explicitly scoped
+  infrastructure and feature-owned helpers. Migrate it one subsystem at a time;
+  do not delete a guard merely because of its directory name.
 - **Historical dormant guard inventory.** The inert historical record is retained
   for audit compatibility, not activation. Retired or migrated owners are removed
   from the inventory as ownership migrations complete. Remove other dormant files
