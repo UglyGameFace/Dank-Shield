@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Compatibility coverage for Discord audit events newer than discord.py enums."""
+"""Compatibility coverage for Discord audit enums and route-to-action semantics."""
 
 import re
 from typing import Any, Mapping
@@ -60,12 +60,7 @@ def _patch_action_names() -> bool:
     guardian._PANIC_ACTIONS = frozenset(guardian._PANIC_WEIGHTS)  # noqa: SLF001
     self_action._PROTECTED_ACTIONS = frozenset(  # noqa: SLF001
         set(self_action._PROTECTED_ACTIONS)  # noqa: SLF001
-        | {
-            "voice_channel_status_create",
-            "voice_channel_status_delete",
-            "member_move",
-            "member_disconnect",
-        }
+        | {"voice_channel_status_create", "voice_channel_status_delete"}
     )
     setattr(guardian, _ACTION_FLAG, True)
     return True
@@ -83,6 +78,9 @@ def _patch_self_action_route() -> bool:
         if not isinstance(payload, Mapping):
             payload = {}
 
+        # discord.py 2.7.1 multiplexes role and voice mutations through the
+        # generic member PATCH route, while Discord emits distinct audit actions.
+        # Classify those payloads before the generic member_update fallback.
         member = re.fullmatch(r"/guilds/(\d+)/members/(\d+)", path)
         if member and method == "PATCH":
             guild_id = int(member.group(1))
