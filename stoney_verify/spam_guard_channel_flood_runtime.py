@@ -94,14 +94,15 @@ async def _on_message(message: Any) -> None:
     guild_id = _safe_int(getattr(guild, "id", 0), 0)
     channel_id = _safe_int(getattr(channel, "id", 0), 0)
     settings = await _settings(guild_id)
-    if settings is None or _exempt(author, settings):
+    if settings is None:
         return
 
     triggered, rows = detector.record_channel(message, fingerprint=_fingerprint(message))
     if not triggered:
         return
     if _cooling(guild_id, channel_id):
-        await _remove(message)
+        if not _exempt(author, settings):
+            await _remove(message)
         return
     _arm(guild_id, channel_id)
 
