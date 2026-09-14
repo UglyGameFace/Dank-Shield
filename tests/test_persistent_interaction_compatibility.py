@@ -99,7 +99,11 @@ def test_ticket_panel_registry_retries_only_missing_view(
     assert _in_loop(ticket_panel.register_ticket_persistent_views, fake) is True
 
     names = [name for name, _page, _disabled in fake.views]
-    assert names.count("TicketPanelView") == 1
+    # The dormant legacy-panel compatibility guard can replace the module symbol
+    # when imported by another test. Either class still occupies the same single
+    # legacy-public registration slot; retry behavior must not duplicate it.
+    legacy_public_names = {"TicketPanelView", "DisabledLegacyTicketPanelView"}
+    assert sum(name in legacy_public_names for name in names) == 1
     assert names.count("StaffGhostTicketView") == 2
     assert names.count("TicketChannelActionsView") == 1
     assert names.count("LegacyTicketChannelCompatibilityView") == 1
