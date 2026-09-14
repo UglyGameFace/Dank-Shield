@@ -1,15 +1,19 @@
 name: Deploy Supabase migrations
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "supabase/migrations/**"
-      - ".github/workflows/deploy-supabase-migrations.yml"
+  workflow_run:
+    workflows: ["Dank Shield CI"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      target_sha:
+        description: "Exact CI-green current main SHA to deploy"
+        required: true
+        type: string
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -19,6 +23,11 @@ concurrency:
 jobs:
   deploy:
     name: Push pending migrations
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production
@@ -26,10 +35,72 @@ jobs:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      TARGET_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.target_sha }}
 
     steps:
-      - name: Check out repository
+      - name: Check out validated release commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+
+      - name: Verify immutable current-main target
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! printf '%s' "$TARGET_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error title=Invalid release SHA::target_sha must be a full 40-character lowercase commit SHA."
+            exit 1
+          fi
+
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$TARGET_SHA" ]; then
+            echo "::error title=Checkout mismatch::Expected $TARGET_SHA but checked out $actual_sha."
+            exit 1
+          fi
+
+          git fetch --quiet origin main
+          current_main_sha="$(git rev-parse origin/main)"
+          if [ "$TARGET_SHA" != "$current_main_sha" ]; then
+            echo "::error title=Stale release target::$TARGET_SHA is not the current canonical main head ($current_main_sha)."
+            exit 1
+          fi
+
+          echo "Validated current production migration target: $TARGET_SHA"
+
+      - name: Verify manual target passed canonical CI
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          runs="$(
+            gh api --method GET \
+              -f branch=main \
+              -f event=push \
+              -f status=success \
+              -f head_sha="$TARGET_SHA" \
+              -f per_page=100 \
+              "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs"
+          )"
+
+          if ! jq -e --arg sha "$TARGET_SHA" '
+            .workflow_runs[]
+            | select(
+                .head_sha == $sha
+                and .conclusion == "success"
+                and .event == "push"
+                and .head_branch == "main"
+              )
+          ' <<<"$runs" >/dev/null; then
+            echo "::error title=Canonical CI not proven::No successful Dank Shield CI push run on main was found for $TARGET_SHA."
+            exit 1
+          fi
+
+          echo "Canonical CI success verified for manual target: $TARGET_SHA"
 
       - name: Verify required secrets
         shell: bash

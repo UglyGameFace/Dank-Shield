@@ -164,3 +164,44 @@ def test_production_schema_changes_flow_through_supabase_cli() -> None:
     assert "supabase migration list" in workflow
     assert "supabase db push --dry-run" in workflow
     assert "supabase db push" in workflow
+
+
+def test_production_schema_deploy_waits_for_canonical_ci() -> None:
+    workflow = _text(DEPLOY_WORKFLOW)
+
+    # Production promotion must be a privileged follow-up to the canonical CI
+    # run, never a sibling push workflow racing the same main commit.
+    assert "workflow_run:" in workflow
+    assert 'workflows: ["Dank Shield CI"]' in workflow
+    assert "types: [completed]" in workflow
+    assert "branches: [main]" in workflow
+    assert "\n  push:\n" not in workflow
+
+    assert "github.event.workflow_run.conclusion == 'success'" in workflow
+    assert "github.event.workflow_run.event == 'push'" in workflow
+    assert "github.event.workflow_run.head_branch == 'main'" in workflow
+    assert "github.event.workflow_run.head_sha" in workflow
+
+    # Promotion must reject stale CI completions. An older successful main run
+    # must never deploy after a newer commit has already become canonical main.
+    assert 'current_main_sha="$(git rev-parse origin/main)"' in workflow
+    assert 'if [ "$TARGET_SHA" != "$current_main_sha" ]; then' in workflow
+    assert "Stale release target" in workflow
+    assert "git merge-base --is-ancestor" not in workflow
+
+    # Manual recovery is deliberately explicit and immutable: it must target
+    # the current main SHA and independently prove that exact SHA already passed
+    # canonical Dank Shield CI.
+    assert "workflow_dispatch:" in workflow
+    assert "target_sha:" in workflow
+    assert "^[0-9a-f]{40}$" in workflow
+    assert "actions: read" in workflow
+    assert "Verify manual target passed canonical CI" in workflow
+    assert '"/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs"' in workflow
+    assert '-f head_sha="$TARGET_SHA"' in workflow
+    assert "-f status=success" in workflow
+    assert '.head_branch == "main"' in workflow
+
+    assert "environment: production" in workflow
+    assert "group: supabase-production-migrations" in workflow
+    assert "cancel-in-progress: false" in workflow
