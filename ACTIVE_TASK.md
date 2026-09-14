@@ -2,9 +2,10 @@
 
 ## DS-AUD-009 — Release governance and production promotion safety
 
-**Status:** IN PROGRESS — ROOT CAUSE CONFIRMED
+**Status:** IMPLEMENTED ON BRANCH — EXACT-HEAD VALIDATION IN PROGRESS
 **Branch:** `fix/release-governance-009`
 **Base:** `a9d4a7bd83c773c9f0fa265d6169485ff1f5d17b`
+**PR:** #212 (draft)
 
 ## Outcome
 
@@ -23,38 +24,45 @@ Application feature behavior, Discord UX, AntiNuke behavior, tickets, setup, and
 
 - `main` is currently unprotected and the repository has no GitHub rulesets.
 - The canonical `Dank Shield CI` workflow validates pull requests and pushes to `main`, but GitHub currently does not require that validation before `main` changes.
-- `.github/workflows/deploy-supabase-migrations.yml` deploys production migrations directly on qualifying pushes to `main`.
-- That migration workflow is independent of the `Dank Shield CI` result, so production schema mutation can begin before the same commit has passed canonical CI.
-- The migration deploy uses the GitHub `production` environment and a serialized concurrency group, which are useful controls, but neither currently creates a dependency on canonical CI.
-- Existing schema-authority tests verify that production changes use the Supabase CLI, but they do not verify the CI-before-production promotion relationship.
-- The repository currently has no GitHub releases or tag refs, so release identity/rollback provenance is not established by tags/releases today.
+- `.github/workflows/deploy-supabase-migrations.yml` previously deployed production migrations directly on qualifying pushes to `main`.
+- That migration workflow was independent of the `Dank Shield CI` result, so production schema mutation could begin before the same commit passed canonical CI.
+- The migration deploy already used the GitHub `production` environment and a serialized concurrency group, but neither created a dependency on canonical CI.
+- Existing schema-authority tests verified that production changes use the Supabase CLI, but did not verify the CI-before-production promotion relationship.
+- The repository currently has no GitHub releases or tag refs, so release identity/rollback provenance was not established by tags/releases.
+- Initial DS-AUD-009 implementation still left `workflow_dispatch` able to prove only main-history membership; final review caught that manual recovery also needed exact canonical-CI proof to avoid becoming a bypass.
 
-## Execution path
+## Execution path before repair
 
-1. A change reaches `main`.
-2. `Dank Shield CI` starts from the `push` event.
-3. If `supabase/migrations/**` changed, `Deploy Supabase migrations` also starts from the same `push` event.
-4. The migration job can therefore reach `supabase db push` without first proving the canonical CI run for that exact `main` SHA succeeded.
+1. A change reached `main`.
+2. `Dank Shield CI` started from the `push` event.
+3. If `supabase/migrations/**` changed, `Deploy Supabase migrations` also started from the same `push` event.
+4. The migration job could therefore reach `supabase db push` without first proving the canonical CI run for that exact `main` SHA succeeded.
 
-## Planned changes
+## Implemented
 
-- Rewire production migration deployment to run only after a successful `Dank Shield CI` completion for the exact `main` SHA, while retaining explicit manual dispatch for controlled recovery.
-- Preserve production environment isolation, serialized deployment, dry-run preview, required-secret checks, and exact-SHA checkout.
-- Add regression coverage that fails if production migration deployment regresses to direct `push` promotion or loses the exact CI-success gate.
-- Update release documentation with the canonical promotion sequence, evidence required before release, and rollback/recovery boundaries.
-- Record the repository-admin ruleset requirement precisely; do not pretend repository files can enforce a GitHub rule that is currently disabled at the hosting layer.
+- Rewired automatic production migration deployment to `workflow_run` after `Dank Shield CI` completes on `main`.
+- Automatic promotion requires the canonical run conclusion to be `success`, the triggering event to be `push`, and the triggering branch to be `main`.
+- Production checkout is pinned to the exact triggering `head_sha` and verifies that SHA belongs to canonical `main` history.
+- Manual recovery still exists, but now requires a full immutable SHA, verifies main-history membership, and queries GitHub Actions to prove a successful `Dank Shield CI` push run on `main` for that exact SHA.
+- Added the minimum `actions: read` token permission needed for manual CI proof while retaining `contents: read`.
+- Preserved the existing `production` environment, serialized migration concurrency, secret checks, migration status, dry-run preview, and Supabase CLI deployment ownership.
+- Extended `tests/test_schema_authority.py` so direct-push promotion, missing exact-SHA checks, or a manual CI bypass fail regression coverage.
+- Added `docs/RELEASE_GOVERNANCE.md` covering exact-SHA release identity, canonical promotion order, forward-only migration correction, rollback compatibility, required release evidence, emergency rules, and the hosting-layer `main` ruleset requirement.
+- Reused the existing production migration workflow rather than adding a second deployment owner.
 
 ## Validation required
 
 - Focused release-governance/schema-authority tests pass.
-- Workflow YAML and shell logic are reviewed for `workflow_run` and manual-dispatch paths.
+- Workflow YAML and shell logic are reviewed for automatic `workflow_run` and manual-dispatch paths.
 - Full exact-head Dank Shield CI passes.
+- Relevant exact-head companion workflows pass, including Schema Authority SQL.
 - Final diff contains only DS-AUD-009 release-governance work plus this task record.
 - Current GitHub branch/ruleset state is re-checked before completion.
+- After merge, the resulting `main` SHA must pass canonical CI before the new production-promotion workflow can proceed.
 
 ## Cleanup / conflicts
 
-No conflicting release workflow implementation has been found. The existing Supabase deploy workflow is the production schema mutation owner and will be repaired rather than duplicated.
+No conflicting release workflow implementation was found. The existing Supabase deploy workflow remains the sole production schema mutation owner. No runtime code or migration SQL is modified by DS-AUD-009.
 
 ## Blockers / risks
 
@@ -68,4 +76,4 @@ Suspended by explicit FORCE SWITCH after PR #211 merged and exact-head CI passed
 
 ## Next step
 
-Repair the canonical Supabase production-promotion workflow and add regression coverage for the exact CI-success gate.
+Validate the final PR #212 exact head, inspect any failing workflow at the exact failing step, then review the final diff and hosting-layer ruleset state before merge readiness.
