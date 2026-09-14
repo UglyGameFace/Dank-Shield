@@ -68,6 +68,7 @@ FALLBACK_GHOST_CATEGORY = "ghost"
 VALID_PRIORITIES = {"low", "medium", "high", "urgent"}
 
 _PERSISTENT_VIEWS_REGISTERED = False
+_PERSISTENT_VIEW_KEYS: set[str] = set()
 _CREATE_IN_PROGRESS: set[tuple[int, int]] = set()
 _CREATE_IN_PROGRESS_LOCK = asyncio.Lock()
 _TICKET_ENTRY_GUARD_ACTIVE: set[int] = set()
@@ -3052,40 +3053,39 @@ async def send_staff_ghost_ticket_panel(channel: discord.TextChannel):
     )
 
 
-@bot.listen("on_ready")
-async def register_ticket_panel():
+def register_ticket_persistent_views(bot_instance: Any = None) -> bool:
+    "Register ticket persistent views idempotently and retry partial failures."
     global _PERSISTENT_VIEWS_REGISTERED
 
+    target = bot_instance or bot
+    required = (
+        ("legacy_public_panel", TicketPanelView),
+        ("staff_ghost_panel", StaffGhostTicketView),
+        ("ticket_actions", TicketChannelActionsView),
+        ("legacy_ticket_actions", LegacyTicketChannelCompatibilityView),
+    )
+
+    for key, factory in required:
+        if key in _PERSISTENT_VIEW_KEYS:
+            continue
+        try:
+            target.add_view(factory())
+            _PERSISTENT_VIEW_KEYS.add(key)
+            _debug(f"registered {factory.__name__}")
+        except Exception as e:
+            print(f"⚠️ Failed to register {factory.__name__}:", repr(e))
+
+    _PERSISTENT_VIEWS_REGISTERED = all(
+        key in _PERSISTENT_VIEW_KEYS for key, _factory in required
+    )
     if _PERSISTENT_VIEWS_REGISTERED:
-        return
+        print("✅ Ticket panel buttons registered.")
+    return _PERSISTENT_VIEWS_REGISTERED
 
-    _PERSISTENT_VIEWS_REGISTERED = True
 
-    try:
-        bot.add_view(TicketPanelView())
-        _debug("registered TicketPanelView")
-    except Exception as e:
-        print("⚠️ Failed to register public ticket panel view:", repr(e))
-
-    try:
-        bot.add_view(StaffGhostTicketView())
-        _debug("registered StaffGhostTicketView")
-    except Exception as e:
-        print("⚠️ Failed to register staff ghost ticket view:", repr(e))
-
-    try:
-        bot.add_view(TicketChannelActionsView())
-        _debug("registered TicketChannelActionsView")
-    except Exception as e:
-        print("⚠️ Failed to register ticket channel actions view:", repr(e))
-
-    try:
-        bot.add_view(LegacyTicketChannelCompatibilityView())
-        _debug("registered LegacyTicketChannelCompatibilityView")
-    except Exception as e:
-        print("⚠️ Failed to register legacy ticket action compatibility view:", repr(e))
-
-    print("✅ Ticket panel buttons registered.")
+@bot.listen("on_ready")
+async def register_ticket_panel():
+    register_ticket_persistent_views(bot)
 
 
 __all__ = [

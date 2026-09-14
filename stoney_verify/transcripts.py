@@ -136,6 +136,7 @@ _DELETE_ACTION_LOCKS: Dict[int, asyncio.Lock] = {}
 _OPEN_CONTROLS_LOCKS: Dict[int, asyncio.Lock] = {}
 
 _TRANSCRIPT_VIEWS_REGISTERED = False
+_TRANSCRIPT_REGISTERED_VIEW_KEYS: set[str] = set()
 
 
 def _lock_for(container: Dict[int, asyncio.Lock], channel_id: int) -> asyncio.Lock:
@@ -2727,34 +2728,38 @@ async def check_bot_can_assign_roles(guild: discord.Guild) -> Tuple[bool, str, L
 # Persistent views
 # ============================================================
 
-@bot.listen("on_ready")
-async def _register_transcript_views():
+def register_transcript_persistent_views(bot_instance: Any = None) -> bool:
+    "Register every transcript/ticket persistent view without losing retries."
     global _TRANSCRIPT_VIEWS_REGISTERED
 
+    target = bot_instance or bot
+    required = (
+        ("ticket_open", TicketOpenActionsView),
+        ("confirm_close", ConfirmCloseTicketView),
+        ("staff_closed", StaffClosedTicketView),
+        ("verification_staff", VerificationStaffReviewView),
+    )
+
+    for key, factory in required:
+        if key in _TRANSCRIPT_REGISTERED_VIEW_KEYS:
+            continue
+        try:
+            target.add_view(factory())
+            _TRANSCRIPT_REGISTERED_VIEW_KEYS.add(key)
+        except Exception as e:
+            print(f"⚠️ Failed to register {factory.__name__}:", e)
+
+    _TRANSCRIPT_VIEWS_REGISTERED = all(
+        key in _TRANSCRIPT_REGISTERED_VIEW_KEYS for key, _factory in required
+    )
     if _TRANSCRIPT_VIEWS_REGISTERED:
-        return
+        print("✅ transcript persistent views registered")
+    return _TRANSCRIPT_VIEWS_REGISTERED
 
-    _TRANSCRIPT_VIEWS_REGISTERED = True
 
-    try:
-        bot.add_view(TicketOpenActionsView())
-    except Exception as e:
-        print("⚠️ Failed to register TicketOpenActionsView:", e)
-
-    try:
-        bot.add_view(ConfirmCloseTicketView())
-    except Exception as e:
-        print("⚠️ Failed to register ConfirmCloseTicketView:", e)
-
-    try:
-        bot.add_view(StaffClosedTicketView())
-    except Exception as e:
-        print("⚠️ Failed to register StaffClosedTicketView:", e)
-
-    try:
-        bot.add_view(VerificationStaffReviewView())
-    except Exception as e:
-        print("⚠️ Failed to register VerificationStaffReviewView:", e)
+@bot.listen("on_ready")
+async def _register_transcript_views():
+    register_transcript_persistent_views(bot)
 
 
 __all__ = [
