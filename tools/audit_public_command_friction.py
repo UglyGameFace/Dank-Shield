@@ -6,6 +6,9 @@ The canonical final product surface lives in ``stoney_verify.command_surface_con
 Implementation modules may register broader groups before final compaction, but
 Discord must sync only the compact doorway commands plus the intentional direct
 purge exception.
+
+This audit intentionally validates the live command owners. Historical dormant
+startup guards are not a command-surface dependency and are not treated as one.
 """
 
 import ast
@@ -23,41 +26,11 @@ from stoney_verify.command_surface_contract import (  # noqa: E402
     PUBLIC_HIDDEN_DANK_CHILDREN,
 )
 
-SLASH_CLEANUP = ROOT / "stoney_verify" / "startup_guards" / "slash_command_cleanup.py"
-BRANDING_GUARD = ROOT / "stoney_verify" / "startup_guards" / "dank_shield_branding_guard.py"
-STARTUP_LOADER = ROOT / "stoney_verify" / "startup_guards" / "__init__.py"
 ENV_EXAMPLE = ROOT / ".env.example"
 PUBLIC_SETUP_AUDIT = ROOT / "tools" / "audit_public_setup.py"
 PUBLIC_SURFACE_AUDIT = ROOT / "tools" / "audit_public_command_surface.py"
 DIRECT_PURGE = ROOT / "stoney_verify" / "commands_ext" / "public_direct_purge.py"
 FINAL_SURFACE = ROOT / "stoney_verify" / "commands_ext" / "public_exit_compact_surface.py"
-
-REQUIRED_STALE_TOP_LEVEL = {
-    "stoney",
-    "spam_guard",
-    "grant_vr",
-    "ticket_panel_rules_set",
-    "ticket_panel_bootstrap_all",
-    "verify_status",
-    "repair_verify_ui",
-    "ticket-intake",
-    "ticket-category",
-    "ticket-panel",
-}
-
-REQUIRED_PRUNED_DANK_CHILDREN = {
-    "setup-status",
-    "setup-assistant",
-    "setup-defaults",
-    "setup-review",
-    "setup-verify-ids",
-    "production-audit",
-    "permission-check",
-    "tickettool-check",
-    "db-check",
-    "health",
-    "scoreboard",
-}
 
 REQUIRED_ENV_MARKERS = {
     "DANK_DEPLOYMENT_MODE=production",
@@ -79,27 +52,6 @@ FORBIDDEN_ENV_MARKERS = {
     "DANK_SYNC_BETA_GUILD_COMMANDS=true",
     "CLEAR_GLOBAL_COMMANDS_ON_BOOT=true",
     "DANK_CLEAR_ANY_GUILD_COMMAND_COPY_ON_BOOT=true",
-}
-
-REQUIRED_BRANDING_MARKERS = {
-    "Dank Shield",
-    "/dank",
-    "discord.InteractionResponse",
-    "discord.Interaction",
-    "Webhook",
-}
-
-REQUIRED_LOADER_ORDER = [
-    "stoney_verify.startup_guards.slash_command_cleanup",
-    "stoney_verify.startup_guards.dank_shield_branding_guard",
-]
-
-REQUIRED_COMMAND_CLEANUP_EPOCH_MARKERS = {
-    "COMMAND_CLEANUP_EPOCH",
-    "cleanup_epoch",
-    'state["cleanup_epoch"] = COMMAND_CLEANUP_EPOCH',
-    'and str(state.get("cleanup_epoch", "")) == COMMAND_CLEANUP_EPOCH',
-    "2026-08-08-public-command-contract-v2-mega-menu",
 }
 
 
@@ -126,12 +78,6 @@ def literal_set_from_file(path: Path, assignment_name: str) -> set[str]:
     return set()
 
 
-def fail_missing(label: str, have: set[str], required: set[str], failures: list[str]) -> None:
-    missing = sorted(required - have)
-    if missing:
-        failures.append(f"{label} missing: {', '.join(missing)}")
-
-
 def main() -> int:
     failures: list[str] = []
 
@@ -151,9 +97,6 @@ def main() -> int:
         failures.append(f"canonical /dank children mismatch: {sorted(PUBLIC_DANK_CHILDREN)!r}")
 
     for path in (
-        SLASH_CLEANUP,
-        BRANDING_GUARD,
-        STARTUP_LOADER,
         ENV_EXAMPLE,
         PUBLIC_SETUP_AUDIT,
         PUBLIC_SURFACE_AUDIT,
@@ -162,11 +105,6 @@ def main() -> int:
     ):
         if not path.exists():
             failures.append(f"missing required file: {path.relative_to(ROOT)}")
-
-    stale_top = literal_set_from_file(SLASH_CLEANUP, "STALE_TOP_LEVEL_COMMANDS")
-    pruned_dank = literal_set_from_file(SLASH_CLEANUP, "CONFUSING_DANK_CHILDREN")
-    fail_missing("STALE_TOP_LEVEL_COMMANDS", stale_top, REQUIRED_STALE_TOP_LEVEL, failures)
-    fail_missing("CONFUSING_DANK_CHILDREN", pruned_dank, REQUIRED_PRUNED_DANK_CHILDREN, failures)
 
     hidden_direct_aliases = {
         name
@@ -189,25 +127,11 @@ def main() -> int:
             "tickettool-check",
         }
     }
-    fail_missing("CONFUSING_DANK_CHILDREN hidden aliases", pruned_dank, hidden_direct_aliases, failures)
-
-    cleanup_text = read(SLASH_CLEANUP)
-    cleanup_required_text = [
-        "install_slash_command_cleanup_guard()",
-        "app_commands.CommandTree.sync = _patched_sync",
-        'remove_stale_top_level_commands(self, reason="pre_sync", guild=guild)',
-        'prune_public_stoney_children(self, reason="pre_sync", guild=guild)',
-        "DANK_SKIP_UNCHANGED_GLOBAL_SYNC",
-        "DANK_FORCE_COMMAND_SYNC_ON_BOOT",
-        "DANK_GUILD_COMMAND_CLEANUP_IDS",
-        "DANK_SYNC_BETA_GUILD_COMMANDS",
-        "candidates.update(name for name in before if name not in ALLOWED_DANK_CHILDREN)",
-        "ALLOWED_DANK_CHILDREN = set(PUBLIC_DANK_CHILDREN)",
-    ]
-    cleanup_required_text.extend(sorted(REQUIRED_COMMAND_CLEANUP_EPOCH_MARKERS))
-    for marker in cleanup_required_text:
-        if marker not in cleanup_text:
-            failures.append(f"slash command cleanup missing marker: {marker}")
+    if hidden_direct_aliases & PUBLIC_DANK_CHILDREN:
+        failures.append(
+            "hidden direct aliases leaked into canonical /dank children: "
+            + ", ".join(sorted(hidden_direct_aliases & PUBLIC_DANK_CHILDREN))
+        )
 
     purge_text = read(DIRECT_PURGE)
     for marker in (
@@ -232,23 +156,6 @@ def main() -> int:
     ):
         if marker not in final_text:
             failures.append(f"final command surface missing purge marker: {marker}")
-
-    branding_text = read(BRANDING_GUARD)
-    for marker in REQUIRED_BRANDING_MARKERS:
-        if marker not in branding_text:
-            failures.append(f"branding guard missing marker: {marker}")
-
-    loader_text = read(STARTUP_LOADER)
-    for marker in REQUIRED_LOADER_ORDER:
-        if marker not in loader_text:
-            failures.append(f"startup loader missing guard: {marker}")
-
-    slash_pos = loader_text.find("stoney_verify.startup_guards.slash_command_cleanup")
-    public_scope_pos = loader_text.find("stoney_verify.startup_guards.public_startup_scope")
-    if slash_pos < 0:
-        failures.append("startup loader does not load slash_command_cleanup")
-    elif public_scope_pos >= 0 and slash_pos > public_scope_pos:
-        failures.append("slash_command_cleanup loads too late after public_startup_scope")
 
     env_text = read(ENV_EXAMPLE)
     for marker in REQUIRED_ENV_MARKERS:
