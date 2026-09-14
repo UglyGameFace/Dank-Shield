@@ -74,6 +74,19 @@ def _env_int_set(name: str) -> set[int]:
     return out
 
 
+def public_command_scope_enabled() -> bool:
+    profile = _env_str("DANK_COMMAND_PROFILE", "public").lower()
+    deployment = _env_str("DANK_DEPLOYMENT_MODE", "").lower()
+    if not deployment:
+        if _env_bool("DANK_PRODUCTION_MODE", False):
+            deployment = "production"
+        elif _env_bool("DANK_PUBLIC_MODE", False):
+            deployment = "public"
+        else:
+            deployment = "development"
+    return profile in {"public", "minimal"} or deployment in {"public", "prod", "production"}
+
+
 def auto_shard_enabled() -> bool:
     return _env_bool("DISCORD_AUTO_SHARD", False)
 
@@ -323,13 +336,14 @@ async def sync_command_tree(
     guild: Optional[discord.abc.Snowflake] = None,
     public_scope: bool,
     reason: str,
+    force: bool = False,
 ) -> CommandSyncResult:
     """Synchronize through one explicit owner without replacing CommandTree.sync."""
 
     if guild is None:
         validate_global_sync_budget(tree, public_scope=public_scope)
         skip, surface_hash = should_skip_unchanged_global_sync(tree, public_scope=public_scope)
-        if skip:
+        if skip and not force:
             print(
                 "🧭 command_runtime skipped unchanged global command sync "
                 f"hash={surface_hash[:12]} epoch={COMMAND_SYNC_EPOCH} reason={reason}"
@@ -340,7 +354,7 @@ async def sync_command_tree(
         remember_global_sync(surface_hash, public_scope=public_scope)
         print(
             "🌐 command_runtime global slash sync complete "
-            f"commands={len(synced)} hash={surface_hash[:12]} reason={reason}"
+            f"commands={len(synced)} hash={surface_hash[:12]} reason={reason} force={force}"
         )
         return CommandSyncResult(synced, False, "global", surface_hash)
 
@@ -416,6 +430,7 @@ __all__ = [
     "configured_guild_cleanup_ids",
     "configured_shard_count",
     "create_discord_bot",
+    "public_command_scope_enabled",
     "remember_global_sync",
     "should_skip_unchanged_global_sync",
     "sync_command_tree",
