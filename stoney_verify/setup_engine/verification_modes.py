@@ -34,6 +34,17 @@ _ID_MODE_VALUES: frozenset[str] = frozenset(
         "id_voice",
     }
 )
+_VOICE_MODE_VALUES: frozenset[str] = frozenset(
+    {
+        "voice_check",
+        "voice",
+        "vc",
+        "vc_verify",
+        "voice_verify",
+        "id_voice_check",
+        "id_voice",
+    }
+)
 _BASIC_MODE_VALUES: frozenset[str] = frozenset(
     {
         "basic_verify",
@@ -216,15 +227,36 @@ def config_requests_id_verify(cfg: Any) -> bool:
     return False
 
 
+def config_requests_voice_verify(cfg: Any) -> bool:
+    """Recognize current and historical persisted Voice Verify representations."""
+    for key in _MODE_KEYS:
+        if _normalized_mode(_cfg_value(cfg, key)) in _VOICE_MODE_VALUES:
+            return True
+
+    for key in (
+        "voice_verification_enabled",
+        "vc_verify_enabled",
+        "voice_verify_enabled",
+        "enable_vc_verify",
+        "verification_allows_voice",
+    ):
+        if _truthy(_cfg_value(cfg, key, None)):
+            return True
+    return False
+
+
 def _legacy_basic_mode_requested(cfg: Any, state: Any) -> bool:
     """Preserve old Basic Verify configs without overriding newer service truth."""
     explicit = _explicit_basic_switch(cfg)
     if explicit is not None:
         return bool(explicit)
 
-    # Specialized persisted services are authoritative. A stale old mode string
-    # must never turn Voice/ID verification back into one-click Basic Verify.
+    # Specialized persisted services and legacy specialized mode strings are
+    # authoritative. A stale aggregate verification flag must never turn Voice
+    # or ID verification back into one-click Basic Verify.
     if bool(getattr(state, "voice_verify", False) or getattr(state, "id_verify", False)):
+        return False
+    if config_requests_voice_verify(cfg) or config_requests_id_verify(cfg):
         return False
 
     for key in _MODE_KEYS:
@@ -236,15 +268,21 @@ def _legacy_basic_mode_requested(cfg: Any, state: Any) -> bool:
 def basic_verify_allowed_for_guild(guild: Any, cfg: Any = None) -> bool:
     """Return whether one-click Basic Verify may grant access in this guild.
 
-    Protected ID/Web verification always wins when an allowlisted guild requests
-    it. Otherwise the canonical setup-service state decides whether Simple
-    Verify is enabled. Legacy Basic mode strings remain compatible only when
-    they do not conflict with an explicit or specialized persisted service.
+    Any persisted ID/Web request blocks Basic Verify so an unavailable protected
+    ID flow can never silently downgrade into one-click role access. Otherwise
+    an explicit Simple Verify switch is authoritative, allowing intentional
+    Simple + Voice configurations while preserving Voice-only separation.
     """
-    if config_requests_id_verify(cfg) and id_verify_allowed_for_guild(guild, cfg):
+    if config_requests_id_verify(cfg):
         return False
 
+    explicit = _explicit_basic_switch(cfg)
+    if explicit is not None:
+        return bool(explicit)
+
     state = _service_state(cfg)
+    if config_requests_voice_verify(cfg) or bool(getattr(state, "voice_verify", False)):
+        return False
     if bool(getattr(state, "simple_verify", False)):
         return True
     return _legacy_basic_mode_requested(cfg, state)
@@ -264,7 +302,7 @@ def effective_verification_mode(guild: Any, cfg: Any = None) -> str:
     state = _service_state(cfg)
     if basic_verify_allowed_for_guild(guild, cfg):
         return "basic_button"
-    if bool(getattr(state, "voice_verify", False)):
+    if bool(getattr(state, "voice_verify", False)) or config_requests_voice_verify(cfg):
         return "voice_verify"
     return "disabled"
 
@@ -273,18 +311,22 @@ def basic_verify_disabled_reason(guild: Any, cfg: Any = None) -> str:
     if basic_verify_allowed_for_guild(guild, cfg):
         return ""
 
-    if config_requests_id_verify(cfg) and id_verify_allowed_for_guild(guild, cfg):
+    id_requested = config_requests_id_verify(cfg)
+    if id_requested and id_verify_allowed_for_guild(guild, cfg):
         return (
             "This server uses protected ID/Web verification. Use the configured "
             "verification ticket and staff approval flow instead of Basic Verify."
         )
 
     state = _service_state(cfg)
-    if bool(getattr(state, "voice_verify", False)):
+    if bool(getattr(state, "voice_verify", False)) or config_requests_voice_verify(cfg):
         return (
             "This server uses Voice Verify without Simple Verify. Use the configured "
             "verification ticket/voice flow instead of the Basic Verify button."
         )
+
+    if id_requested:
+        return id_verify_disabled_reason(guild, cfg)
 
     return (
         "Basic Button Verification is not enabled for this server. "
@@ -310,6 +352,7 @@ __all__ = [
     "basic_verify_allowed_for_guild",
     "basic_verify_disabled_reason",
     "config_requests_id_verify",
+    "config_requests_voice_verify",
     "effective_verification_mode",
     "id_verify_allowed_for_guild",
     "id_verify_disabled_reason",
