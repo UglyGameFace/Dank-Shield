@@ -2,16 +2,15 @@
 
 ## DS-AUD-STARTUP-OWNERSHIP — Retire dead bulk startup loader and document real runtime ownership
 
-**Status:** COMPLETE — FINAL PR HEAD VALIDATED, READY FOR MERGE
+**Status:** IMPLEMENTATION VALIDATED — FINAL BOOKKEEPING HEAD REVALIDATION REQUIRED
 **Branch:** `audit/startup-guard-runtime-ownership`
 **PR:** #221 — `Retire dormant startup guard bulk loader`
 **Base / canonical main at task start:** `85cdac93bcb6fdd47243819ff8ea1a8ca4eada65`
 **Validated implementation head:** `0a48b5b0d33c3465651467af932b3aa3c404a5a8`
-**Final validated PR head:** `ace711675b129f54794aae1c70d42cb602226203`
 
 ## Outcome
 
-Production startup ownership is now explicit and auditable without reactivating the historical startup-guard bulk loader. Proven dead loader/host-hook machinery is retired; verified live owners remain intact; diagnostics report the real startup contract instead of registry fiction.
+Production startup ownership is explicit and auditable without reactivating the historical startup-guard bulk loader. Proven dead loader/host-hook machinery is retired; verified live owners remain intact; diagnostics report the real startup contract instead of registry fiction.
 
 ## Root cause / findings
 
@@ -25,7 +24,7 @@ Production startup ownership is now explicit and auditable without reactivating 
 - `sitecustomize.py` owns `runtime_safety` / `public_startup_scope` and Basic Verify compatibility through `basic_verification_mode_guard` -> `id_verify_allowlist_guard` -> `unverified_ticket_panel_flow`.
 - Canonical feature modules deliberately import selected startup-guard helpers; those imports do not justify a bulk loader.
 - `usercustomize.py` -> `panel_menu_retry_guard` -> removed `public_ticket_panel_clean_hardening` was a proven dead host path.
-- Channel Builder is already directly wired through `stoney_verify.app` -> `api_new.server.start_api()` -> `register_channel_builder_routes(...)`; the old bridge remains removed.
+- Channel Builder is directly wired through `stoney_verify.app` -> `api_new.server.start_api()` -> `register_channel_builder_routes(...)`; the old bridge remains removed.
 
 ## Implemented
 
@@ -49,15 +48,15 @@ Production startup ownership is now explicit and auditable without reactivating 
 - No dormant guard family bulk-activated or mass-deleted.
 - Channel Builder direct route registration remains canonical with one installer.
 - Live `process_health`, runtime-safety, command-tree, verification, ticket, invite, member-lifecycle, and Channel Builder feature-owned paths remain intentionally owned.
-- Final PR scope is exactly 13 files and contains no unrelated project changes.
+- PR scope is exactly 13 files and contains no unrelated project changes.
 - PR #221 has no unresolved review threads.
-- Canonical `main` was re-fetched after final validation and remained `85cdac93bcb6fdd47243819ff8ea1a8ca4eada65`.
+- Canonical `main` remained `85cdac93bcb6fdd47243819ff8ea1a8ca4eada65` through the validated implementation/bookkeeping passes.
 
-## Validation
+## Validation evidence already completed
 
 Implementation head `0a48b5b0d33c3465651467af932b3aa3c404a5a8` passed the complete repository and companion gate, including Dank Shield CI #2107 / `34864527365`.
 
-The bookkeeping update then produced final PR head `ace711675b129f54794aae1c70d42cb602226203`. That exact final head also passed the complete gate:
+A subsequent bookkeeping head also passed the complete gate before this final record normalization:
 
 - Dank Shield CI #2108 / `34865851160` — success.
   - committed diff whitespace — success.
@@ -82,6 +81,8 @@ The bookkeeping update then produced final PR head `ace711675b129f54794aae1c70d4
 - DS Backlog 027 Validation #75 / `34865851149` — success.
 - Profile Runtime Diagnostics #880 / `34865851325` — success.
 
+The commit containing this head-stable task record is the final bookkeeping candidate. No further branch edits are permitted unless its exact-head validation finds a real defect. Its exact SHA and final validation run IDs will be recorded in PR #221 metadata/body, which does not mutate the branch head.
+
 ## Remaining risks / backlog
 
 - Live explicitly owned legacy patch/import-hook behavior (`process_health`, `runtime_safety`, `public_startup_scope`, command-tree wrappers, selected feature helpers) remains separate architectural debt.
@@ -92,4 +93,4 @@ The bookkeeping update then produced final PR head `ace711675b129f54794aae1c70d4
 
 ## Next step
 
-Merge PR #221 only at exact validated head `ace711675b129f54794aae1c70d42cb602226203` through protected `main`. After merge, verify canonical `main`, canonical post-merge Dank Shield CI, Ticket Owner Emergency where applicable, and the gated Deploy Supabase migrations workflow targets the exact same immutable merge SHA before considering this finding closed and advancing the master audit.
+Freeze this branch. Validate the exact current PR head with Dank Shield CI and all applicable companion workflows. If every workflow is green, re-fetch `main`, verify mergeability/review state/file scope, record the immutable final head and validation IDs in PR #221 metadata, mark the PR ready, and merge only that exact validated head through protected `main`. Then verify canonical post-merge CI, Ticket Owner Emergency where applicable, and the gated Deploy Supabase migrations workflow targets the exact same immutable merge SHA before closing this finding and advancing the master audit.
