@@ -1,120 +1,122 @@
 # ACTIVE TASK
 
-## Verification integrity audit repair
+## DS-SEC-045 — Legitimate self-action audit classification
 
 **Status:** IMPLEMENTED — FINAL EXACT-HEAD VALIDATION REQUIRED BEFORE PROTECTED MERGE
-**Branch:** `fix/verification-integrity-mode-authorization`
-**Base:** `9112528e42e77ec348abe69d9207e37a64294380`
-**PR:** #213 — `Make verification mode authorization fail closed`
+**Branch:** `fix/basic-verify-self-action-proof`
+**Base:** `5f51da0e338208538133f0b610c3e14a9c6f0bbc`
+**PR:** #214 — `Prevent legitimate member updates from triggering self-ejection`
 
 ## Outcome
 
-Ensure every Basic Verify entry point uses one canonical per-guild authorization policy so stale Discord buttons, persistent views, fallback listeners, staff tools, or legacy configuration cannot grant access when Simple Verify is not actually enabled.
+Prevent legitimate Dank Shield member mutations from being mistaken for unverified bot-identity activity and triggering durable compromise quarantine / self-ejection, while preserving the fail-closed response for genuinely unmatched Dank Shield-attributed audit actions.
 
 ## Scope
 
-- Canonical Basic / Voice / ID / disabled verification-mode resolution.
-- Authorization at the Basic role-mutation boundary.
-- Basic verification panel posting authorization.
-- Backward compatibility for legitimate legacy Basic and Voice verification configurations.
-- Behavioral regression coverage for specialized, conflicting, and stale verification states.
+- Discord `Modify Guild Member` PATCH classification used by AntiNuke self-action proof.
+- Basic Verify and verification role swaps performed with `Member.edit(roles=...)`.
+- Voice moves/disconnects performed through `Member.move_to()` / `Member.edit(voice_channel=...)`.
+- Correct proof target scoping for role-update versus voice audit entries.
+- Regression coverage against the composed production classifier.
 
-AntiNuke, release governance, tickets unrelated to verification, setup redesign outside verification mode truth, and unrelated cleanup are out of scope.
+Out of scope: changing verification authorization policy, AntiNuke thresholds, durable quarantine duration, credential policy, persistence schema, setup UX, unrelated security redesign, and unrelated cleanup.
 
 ## Findings / root cause
 
-- `app.py` installs the persistent Basic Verify runtime globally before Discord login so old posted buttons remain dispatchable after restart.
-- `apply_basic_verification()` previously refreshed guild configuration only to resolve roles; it did not verify that Simple Verify remained authorized before adding access roles and removing Unverified.
-- A stale Basic Verify message could therefore reach the role-grant path after a guild changed to Voice Verify, protected ID/Web verification, or disabled Simple Verify.
-- `setup_engine.verification_modes.effective_verification_mode()` previously represented only `id_verify` versus `basic_button`, so Voice-only and disabled verification state collapsed to Basic.
-- Canonical `SetupServiceState` already distinguishes `simple_verify`, `voice_verify`, and `id_verify`, including intentional custom Simple + Voice configurations.
-- Historical verification routing also recognized legacy Voice mode aliases such as `voice_check`, `voice`, `vc`, `vc_verify`, `voice_verify`, and `id_voice_check`. Without carrying those aliases into the canonical resolver, a legacy Voice row with aggregate `verification_enabled=true` could still be mistaken for Basic.
-- The richer DS-SETUP-020 compatibility layer is loaded through the dormant startup-guard catalog, so it cannot be treated as production authorization ownership. `CLAUDE.md` explicitly documents that the startup-guard loader is not called at boot.
-- Existing setup tests already assert that specialized verification must not fake Simple Verify.
+- Production pins `discord.py==2.7.1`.
+- `discord.py` routes several member mutations through `PATCH /guilds/{guild_id}/members/{user_id}`.
+- Basic Verify's successful role path calls `fresh.edit(roles=final_roles, reason="Dank Shield basic button verification")`.
+- The base self-action request classifier treated that generic PATCH as `member_update`.
+- Discord records a `roles` payload as `member_role_update`, so the one-time local authorization was stamped for the wrong action and could not be consumed by the resulting audit entry.
+- `anti_nuke_zero_damage_runtime` deliberately treats an unmatched protected audit event attributed to Dank Shield as possible bot-identity compromise in Contain mode, persists quarantine, warns the owner, and self-ejects. That is why an ordinary Basic Verify click produced the owner DM and bot removal.
+- The same generic PATCH route is used by `Member.move_to()` / voice-channel edits, while Discord records `member_move` or `member_disconnect` instead of `member_update`.
+- Member move/disconnect audit entries do not expose a reliable affected-member target, so applying the normal member target-key requirement would create another false mismatch.
+- `anti_nuke_audit_compat_runtime` is already the installed compatibility owner for Discord audit behavior that differs from the pinned discord.py surface. Extending that owner is smaller and cleaner than adding another startup guard or duplicate classifier.
+- `anti_nuke_zero_damage_runtime` already owns protected-action registration for `member_move` and `member_disconnect`; the final repair does not duplicate that registration in the compatibility layer.
 
 ## Execution path before repair
 
-1. `app.py` globally registers `BasicVerifyView` and the fallback Basic interaction listener.
-2. An old or current Basic Verify component with the stable custom ID dispatches after restart.
-3. `apply_basic_verification()` loads guild config and resolves verification roles.
-4. Without checking whether Simple Verify is still enabled, it adds Verified/member access and removes Unverified.
-5. Upstream callers could add their own mode checks, but the actual role mutation boundary itself was not fail closed.
+1. A user presses the Basic Verify button.
+2. `apply_basic_verification()` calls `Member.edit(roles=...)`.
+3. discord.py sends `PATCH /guilds/{guild}/members/{member}` with a `roles` JSON field.
+4. The self-action proof classified the request as `member_update` and stamped a one-time nonce into the Discord audit reason.
+5. Discord emitted a `member_role_update` audit entry for the same legitimate request.
+6. Action mismatch prevented the nonce authorization from being consumed.
+7. The zero-damage unmatched-self-action handler treated the bot-attributed event as possible credential compromise, persisted quarantine, DMed the owner, and attempted self-ejection.
 
 ## Implemented
 
-- Added `basic_verify_allowed_for_guild()` as the canonical Basic authorization policy.
-- Any persisted ID/Web request blocks Basic Verify so an unavailable protected ID flow cannot silently downgrade into one-click access.
-- Protected allowlisted ID/Web verification resolves to `id_verify`.
-- Added canonical current + historical Voice recognition through service flags and legacy mode aliases.
-- Canonical setup-service state determines whether Simple Verify is enabled.
-- Voice-only state resolves to `voice_verify`; no authorized Basic/ID/Voice service resolves to `disabled`.
-- Non-allowlisted ID + Voice preserves the valid Voice service while still blocking Basic and ID panel access.
-- Intentional custom Simple + Voice configurations still resolve to `basic_button` when Simple Verify is explicitly enabled.
-- Legitimate legacy Basic configs remain supported through historical aggregate `verification_enabled=true` and Basic mode aliases when they do not conflict with specialized state.
-- Legacy Voice mode-only rows cannot fall through an aggregate `verification_enabled=true` value into Basic Verify.
-- Explicit Basic disable beats stale legacy Basic mode strings.
-- `apply_basic_verification()` blocks unauthorized Basic Verify before snapshot/role resolution or any Discord role mutation.
-- `post_basic_verify_panel()` refuses to post/refresh a Basic panel when Simple Verify is unauthorized.
-- `/verify panel` explains the canonical disabled reason instead of presenting a non-working or unsafe Basic panel.
-- Added focused behavioral regressions for Basic, Voice-only, disabled, Simple + Voice, legacy Basic, legacy Voice, explicit-disable precedence, ID precedence, non-allowlisted ID, conflicting stale flags, stale Basic buttons, and disabled panel posting.
-- Updated the existing non-allowlisted ID + Voice regression to require Basic denial while preserving `voice_verify`.
+- Extended the existing audit-compat route classifier to inspect generic member PATCH payloads before the legacy generic fallback.
+- `roles` payloads now authorize `member_role_update` and retain affected-member target scoping.
+- `channel_id` payloads now authorize `member_move` or `member_disconnect`.
+- Voice move/disconnect proof is scoped by action + guild + one-time nonce rather than a member target that Discord does not reliably provide for those audit entries.
+- All other generic member PATCH requests continue through the existing `member_update` classifier unchanged.
+- The existing zero-damage runtime remains the sole owner that adds move/disconnect to the protected self-action set.
+- No new startup module, guard, monkey patch layer, verification mutation owner, persistence field, or fallback was introduced.
+- Added focused regressions that compose the real self-action + zero-damage + audit-compat classifier and verify:
+  - Basic Verify-style `roles` PATCH -> `member_role_update`;
+  - the stamped Basic Verify authorization is consumed by the corresponding role-update audit event;
+  - voice move -> `member_move` without an invalid target requirement;
+  - voice disconnect -> `member_disconnect` without an invalid target requirement;
+  - a targetless move audit consumes its authorization;
+  - ordinary member PATCH fields still map to `member_update`.
 
 ## Validation / results
 
-Functional exact head `82dcf85c69af7704593815a1e242a3d84a79c9ba` passed the complete PR validation set before this bookkeeping-only update:
+Functional implementation head: `1e449bfa6ab15043f03d564444c8e523881e4a6b`.
 
-- Dank Shield CI — success.
-  - `Python compile check` — success.
-  - committed diff whitespace — success.
-  - Python compile — success.
-  - full unit test suite — success.
-  - standalone tool checks — success.
-  - public setup text/isolation audit — success.
-  - canonical public command-surface audit — success.
-  - command-surface/startup-friction audit — success.
-  - public invite audit — success.
-  - setup safety audit — success.
-  - Dank Design audit — success.
-  - role-truth ownership audit — success.
-  - event-boundary ownership audit — success.
+At the time this task record was written:
+
+- Application Command Size Diagnostics — success on the functional head.
+- Ticket Owner Emergency Override — success on the functional head.
+- Dank Shield CI — running on the functional head.
   - `Claim-first ticket security` — success.
   - `Managed category SQL smoke test` — success.
-- Application Command Size Diagnostics — success.
-- Dank Design Regression CI — success.
-- Ticket Owner Emergency Override — success.
-- Profile Runtime Diagnostics — success.
+  - `Python compile check` — compile and committed-diff whitespace steps passed; full unit/static lane still running.
 
-That evidence validates the functional code but is intentionally superseded for merge evidence by this task-record-only commit. The final exact head must pass the same protected PR checks before merge.
+The first bookkeeping head failed only `git diff --check` because this Markdown record used three trailing-space line breaks. No Python or product validation ran after that whitespace gate. Those trailing spaces are removed in the current exact head.
+
+This task record intentionally does **not** claim the repair complete. The new exact head created by this whitespace cleanup must pass the complete protected validation set before the PR can leave draft state or merge.
 
 ## Final validation required
 
-- Final exact-head Dank Shield CI passes all three required jobs.
-- Python lane again passes the unit suite, standalone tools, and every public/static audit.
-- All relevant companion workflows pass.
-- Final diff remains exactly the six verification-integrity/task-record files already reviewed.
-- No new startup guard, monkey patch, root runtime patch, schema change, AntiNuke change, or second verification-role mutation owner is introduced.
-- `main` remains protected before merge.
+- Exact-head Dank Shield CI passes all jobs.
+- Python lane passes committed diff whitespace, Python compilation, full unit suite, standalone tool checks, public setup/isolation audit, canonical public command-surface audit, startup-friction audit, public invite audit, setup safety audit, Dank Design audit, role-truth ownership audit, and event-boundary ownership audit.
+- All companion workflows triggered for the exact head pass.
+- PR remains mergeable with no unresolved review threads.
+- Final diff contains only the existing audit-compat owner, the focused regression file, and this task record.
+- No redundant move/disconnect protected-action registration remains in audit compat.
+- No temporary/debug code, generated files, secrets, merge-conflict artifacts, or unrelated changes are present.
+- Merge must use the exact validated head through the repository's normal protected-main workflow.
+- Post-merge `main` CI must be checked before calling the repository work complete.
+- Live Discord Basic Verify behavior remains a post-deploy runtime acceptance check because GitHub CI cannot click the production Discord component.
 
 ## Cleanup / conflicts
 
-The role mutation itself is now the fail-closed authority. Existing upstream staff-browser preflight still uses the canonical effective mode for UX and does not bypass the mutation boundary. Rewriting that large member-browser module would widen this security repair without improving the actual authorization boundary, so it remains unchanged.
+- An intermediate implementation briefly duplicated `member_move` / `member_disconnect` protected registration inside audit compat. Inspection showed `anti_nuke_zero_damage_runtime` already owns those actions, so the duplicate was removed before the final functional diff.
+- The route-to-audit translation stays in the already-existing `anti_nuke_audit_compat_runtime`; no second compatibility module or new startup shim was created.
+- Ordinary `member_update`, kick, role-specific PUT/DELETE, and existing voice-status compatibility behavior are preserved.
+- No unrelated repository files are changed by the functional repair.
 
 ## Blockers / risks
 
-No known product blocker. Functional code validation is green. The only remaining gate is final exact-head CI after this documentation-only bookkeeping update, followed by protected merge and post-merge `main` validation.
+- No known implementation blocker.
+- Exact-head CI is still a hard merge gate.
+- GitHub's connected integration cannot read the branch-protection endpoint (`403 Resource not accessible by integration`), so protection must not be inferred from that API; mergeability/check evidence and GitHub's protected merge behavior remain authoritative.
+- Production Discord interaction has not yet been re-run after deployment; that is the remaining live acceptance check after code merge/deploy.
 
 ## Completed prior task
 
-### DS-AUD-009 — Release governance and production promotion safety
+### Verification integrity audit repair
 
-Completed and merged as PR #212. Canonical merge SHA `9112528e42e77ec348abe69d9207e37a64294380` passed post-merge Dank Shield CI before the gated Supabase production promotion ran successfully. `main` is protected with required pull-request checks.
+PR #213 merged as canonical `main` SHA `5f51da0e338208538133f0b610c3e14a9c6f0bbc`. That repair made Basic Verify authorization fail closed when Simple Verify is not actually enabled. DS-SEC-045 is a separate regression in the AntiNuke self-action proof revealed by a legitimate Basic Verify role mutation.
 
 ## Suspended task
 
 ### DS-SEC-044 — Hostile bot re-entry race and integration persistence
 
-Suspended by explicit FORCE SWITCH after PR #211 merged and exact-head CI passed. Remaining acceptance evidence: after deployment, repeat the hostile/GANG-Nuker re-entry test and confirm no destructive action lands before the hostile identity/integration is removed.
+Suspended previously by explicit task switch. Remaining acceptance evidence is the hostile/GANG-Nuker re-entry runtime test after deployment; do not resume it during DS-SEC-045 without an explicit `FORCE SWITCH`.
 
 ## Next step
 
-Validate the new exact head created by this bookkeeping-only update. If all required and companion workflows are green and the six-file diff remains clean, mark PR #213 ready and merge it through protected `main` using the exact validated head SHA. Then validate the resulting canonical `main` CI and gated production-promotion run.
+Validate the new exact head produced by this whitespace-cleanup commit. If every required and companion workflow is green, the diff/review checks remain clean, and PR #214 is still mergeable, mark it ready and merge the exact validated head through `main`. Then validate canonical `main` CI and leave the live Basic Verify click as the explicit post-deploy acceptance check.
