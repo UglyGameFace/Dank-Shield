@@ -2,66 +2,50 @@
 
 ## DS-AUD-STARTUP-OWNERSHIP — Retire dead bulk startup loader and document real runtime ownership
 
-**Status:** IMPLEMENTATION VALIDATED — FINAL BOOKKEEPING HEAD REVALIDATION REQUIRED
-**Branch:** `audit/startup-guard-runtime-ownership`
-**PR:** #221 — `Retire dormant startup guard bulk loader`
-**Base / canonical main at task start:** `85cdac93bcb6fdd47243819ff8ea1a8ca4eada65`
-**Validated implementation head:** `0a48b5b0d33c3465651467af932b3aa3c404a5a8`
+**Status:** CLOSED — implementation, merge, and production acceptance passed
+**Implementation PR:** #221 — `Retire dormant startup guard bulk loader`
+**Validated final PR head:** `a8dc5755195179bd3eb3936d58567b7f9042181c`
+**Canonical implementation merge:** `b604de8b20ffb8b4c8a80ad90c054873ccf33c12`
 
 ## Outcome
 
-Production startup ownership is explicit and auditable without reactivating the historical startup-guard bulk loader. Proven dead loader/host-hook machinery is retired; verified live owners remain intact; diagnostics report the real startup contract instead of registry fiction.
+The executable startup-guard bulk loader is retired. Production startup ownership is explicit and auditable, diagnostics are read-only, the proven-dead `usercustomize.py -> panel_menu_retry_guard` path is removed, and verified live startup/feature owners remain intact. Channel Builder remains directly registered through its canonical API server path rather than a startup guard.
 
-## Root cause / findings
-
-- `load_startup_guards()` / `load_all_startup_guards()` had no normal production boot caller.
-- The historical `_STARTUP_GUARDS` tuple contains 76 modules and is not runtime truth.
-- The only remaining executable bulk-loader escape hatch was diagnostics `--load`; public `/dank diagnostics` did not use it.
-- Blind activation would execute old monkey patches, listeners, command-tree mutations, compatibility layers, and schema-era code with duplicate-ownership risk.
-- Direct `main.py` startup-guard ownership is exactly six modules: `discord_api_safety`, `command_safety`, `command_scope_dedupe`, `public_server_env_id_guard`, `guild_config_runtime_validator`, and `interaction_action_lock_guard`.
-- `command_safety` transitively owns `auto_shard` and `global_command_sync`.
-- Importing `stoney_verify.startup_guards` still intentionally owns `process_health`.
-- `sitecustomize.py` owns `runtime_safety` / `public_startup_scope` and Basic Verify compatibility through `basic_verification_mode_guard` -> `id_verify_allowlist_guard` -> `unverified_ticket_panel_flow`.
-- Canonical feature modules deliberately import selected startup-guard helpers; those imports do not justify a bulk loader.
-- `usercustomize.py` -> `panel_menu_retry_guard` -> removed `public_ticket_panel_clean_hardening` was a proven dead host path.
-- Channel Builder is directly wired through `stoney_verify.app` -> `api_new.server.start_api()` -> `register_channel_builder_routes(...)`; the old bridge remains removed.
-
-## Implemented
+## Final implementation scope
 
 - Removed executable `load_startup_guards()` / `load_all_startup_guards()` and loader-only state.
-- Retained the 76-module inventory only as inert `LEGACY_DORMANT_STARTUP_GUARDS` historical metadata.
-- Made startup diagnostics read-only over verified owners already present in `sys.modules`; diagnostics cannot activate missing guards.
-- Retired diagnostics `--load` activation behavior.
-- Removed obsolete bulk-loader alias compatibility from `sitecustomize.py`.
-- Removed the dead `usercustomize.py` panel retry hook and deleted `panel_menu_retry_guard.py` after reference verification.
-- Updated ticket-category and public-command audits to validate canonical live owners rather than historical registry membership.
-- Added regression coverage requiring the exact six direct startup-guard owners in `main.py` and preventing loader/host-shim restoration.
-- Added `docs/STARTUP_GUARD_RUNTIME_OWNERSHIP_AUDIT.md` with live boot, host, transitive, feature-owned, and dormant-family classification.
-- Corrected `CLAUDE.md`, including the stale Channel Builder warning.
-- Removed leftover unused AST audit machinery found during final diff review.
+- Retained the 76-module historical list only as inert `LEGACY_DORMANT_STARTUP_GUARDS` metadata.
+- Made startup diagnostics observe verified already-loaded owners without importing missing guards.
+- Removed obsolete bulk-loader compatibility from `sitecustomize.py`.
+- Removed the dead panel retry host hook from `usercustomize.py` and retired `panel_menu_retry_guard.py` after reference verification.
+- Updated ownership regressions/audits and documented the live-vs-dormant runtime map.
+- Corrected stale Channel Builder architecture documentation.
+- Preserved `main.py` boot order, `stoney_verify/app.py` import order, schema authority, AntiNuke behavior, persistent-view ownership, and all verified live owners.
 
-## Safety / cleanup evidence
+## Exact-head pre-merge validation
 
-- `main.py` boot order unchanged.
-- `stoney_verify/app.py` import order unchanged.
-- No schema migration, AntiNuke change, new startup guard, root `runtime_*_patch.py`, host hook, discord.py monkey patch, persistent-view owner, or `*_new` tree introduced.
-- No dormant guard family bulk-activated or mass-deleted.
-- Channel Builder direct route registration remains canonical with one installer.
-- Live `process_health`, runtime-safety, command-tree, verification, ticket, invite, member-lifecycle, and Channel Builder feature-owned paths remain intentionally owned.
-- PR scope is exactly 13 files and contains no unrelated project changes.
-- PR #221 has no unresolved review threads.
-- Canonical `main` remained `85cdac93bcb6fdd47243819ff8ea1a8ca4eada65` through the validated implementation/bookkeeping passes.
+Final PR head `a8dc5755195179bd3eb3936d58567b7f9042181c` passed the complete gate:
 
-## Validation evidence already completed
+- Dank Shield CI #2110 / `34866937298` — success.
+- Profile Runtime Diagnostics #882 / `34866937192` — success.
+- Ticket Category Menu Sanity #511 / `34866937324` — success.
+- Schema Authority SQL #41 / `34866937297` — success.
+- Application Command Size Diagnostics #1126 / `34866937238` — success.
+- Ticket Owner Emergency Override #681 / `34866937354` — success.
+- Dank Design Regression CI #376 / `34866937317` — success.
+- DS Backlog 027 Validation #77 / `34866937216` — success.
+- No unresolved review threads; PR scope remained the expected 13 files; canonical `main` had not drifted before merge.
 
-Implementation head `0a48b5b0d33c3465651467af932b3aa3c404a5a8` passed the complete repository and companion gate, including Dank Shield CI #2107 / `34864527365`.
+## Post-merge production acceptance
 
-A subsequent bookkeeping head also passed the complete gate before this final record normalization:
+PR #221 merged through protected `main` as `b604de8b20ffb8b4c8a80ad90c054873ccf33c12`.
 
-- Dank Shield CI #2108 / `34865851160` — success.
+Acceptance on that exact canonical SHA passed:
+
+- Dank Shield CI #2111 / `34868701823` — success.
   - committed diff whitespace — success.
   - Python compile — success.
-  - full repository unit test suite — success.
+  - full repository unit suite — success.
   - standalone `tools/test_*.py` checks — success.
   - public setup/isolation audit — success.
   - canonical public command-surface audit — success.
@@ -73,24 +57,32 @@ A subsequent bookkeeping head also passed the complete gate before this final re
   - event-boundary ownership audit — success.
   - Claim-first ticket security — success.
   - Managed category SQL smoke test — success.
-- Ticket Category Menu Sanity #509 / `34865851300` — success.
-- Dank Design Regression CI #374 / `34865851342` — success.
-- Schema Authority SQL #39 / `34865851306` — success.
-- Ticket Owner Emergency Override #679 / `34865851260` — success.
-- Application Command Size Diagnostics #1124 / `34865851408` — success.
-- DS Backlog 027 Validation #75 / `34865851149` — success.
-- Profile Runtime Diagnostics #880 / `34865851325` — success.
+- Ticket Owner Emergency Override #682 / `34868701837` — success on the same SHA.
+- DS Backlog 027 Validation #78 / `34868701818` — success on the same SHA.
+- Ticket Category Menu Sanity #512 / `34868701946` — success on the same SHA.
+- Schema Authority SQL #42 / `34868701834` — success on the same SHA.
+- Deploy Supabase migrations #24 / `34869794858` — success on the same SHA.
+  - CI #2111 completed successfully at 2026-09-14T16:37:44Z.
+  - production promotion started afterward at 2026-09-14T16:37:46Z.
+  - immutable current-main target verification — success.
+  - required secrets / CLI / production project link — success.
+  - migration status — success.
+  - migration preview — success.
+  - migration apply — success.
+- Canonical `main` was re-fetched after production promotion and remained `b604de8b20ffb8b4c8a80ad90c054873ccf33c12`.
 
-The commit containing this head-stable task record is the final bookkeeping candidate. No further branch edits are permitted unless its exact-head validation finds a real defect. Its exact SHA and final validation run IDs will be recorded in PR #221 metadata/body, which does not mutate the branch head.
+The startup-loader/runtime-ownership finding is therefore closed. Do not reopen it without new regression evidence.
 
-## Remaining risks / backlog
+## Remaining master-audit backlog
 
-- Live explicitly owned legacy patch/import-hook behavior (`process_health`, `runtime_safety`, `public_startup_scope`, command-tree wrappers, selected feature helpers) remains separate architectural debt.
-- Dormant guard files remain a future deletion/consolidation surface and require individual importer/supersession proof.
-- Dual/dead implementation trees (`commands_new`, `db_new`, `tasks_new`, `core/`, etc.) remain separate audit work.
-- Channel Builder stale runbook/workflow path references remain separate follow-up if still present.
-- DS-SEC-044 hostile re-entry production acceptance remains suspended.
+These remain separate findings and were not pulled into this repair:
+
+- live explicitly owned legacy patch/import-hook behavior (`process_health`, `runtime_safety`, `public_startup_scope`, command-tree wrappers, selected feature helpers);
+- dormant startup-guard file deletion/consolidation, only after individual importer/supersession proof;
+- dual/dead implementation trees such as `commands_new`, `db_new`, `tasks_new`, `core/`, and other parallel implementations;
+- any remaining stale Channel Builder runbook/workflow references;
+- DS-SEC-044 hostile re-entry production acceptance remains separately suspended.
 
 ## Next step
 
-Freeze this branch. Validate the exact current PR head with Dank Shield CI and all applicable companion workflows. If every workflow is green, re-fetch `main`, verify mergeability/review state/file scope, record the immutable final head and validation IDs in PR #221 metadata, mark the PR ready, and merge only that exact validated head through protected `main`. Then verify canonical post-merge CI, Ticket Owner Emergency where applicable, and the gated Deploy Supabase migrations workflow targets the exact same immutable merge SHA before closing this finding and advancing the master audit.
+Merge this bookkeeping-only closeout through protected `main`, verify its canonical post-closeout CI/promotion, then select the next unresolved master-audit finding from current repository evidence and create a fresh active-task record from that exact canonical main.
