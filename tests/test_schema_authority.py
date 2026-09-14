@@ -164,3 +164,31 @@ def test_production_schema_changes_flow_through_supabase_cli() -> None:
     assert "supabase migration list" in workflow
     assert "supabase db push --dry-run" in workflow
     assert "supabase db push" in workflow
+
+
+def test_production_schema_deploy_waits_for_canonical_ci() -> None:
+    workflow = _text(DEPLOY_WORKFLOW)
+
+    # Production promotion must be a privileged follow-up to the canonical CI
+    # run, never a sibling push workflow racing the same main commit.
+    assert "workflow_run:" in workflow
+    assert 'workflows: ["Dank Shield CI"]' in workflow
+    assert "types: [completed]" in workflow
+    assert "branches: [main]" in workflow
+    assert "\n  push:\n" not in workflow
+
+    assert "github.event.workflow_run.conclusion == 'success'" in workflow
+    assert "github.event.workflow_run.event == 'push'" in workflow
+    assert "github.event.workflow_run.head_branch == 'main'" in workflow
+    assert "github.event.workflow_run.head_sha" in workflow
+
+    # Manual recovery is deliberately explicit and immutable: it must target a
+    # full commit SHA that is verified to belong to canonical main history.
+    assert "workflow_dispatch:" in workflow
+    assert "target_sha:" in workflow
+    assert "^[0-9a-f]{40}$" in workflow
+    assert "git merge-base --is-ancestor" in workflow
+
+    assert "environment: production" in workflow
+    assert "group: supabase-production-migrations" in workflow
+    assert "cancel-in-progress: false" in workflow
