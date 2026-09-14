@@ -1,17 +1,36 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
+import sys
+from typing import Any, Dict, List, Optional, Sequence
+
+
+# This is the explicit startup-health contract, not an activation registry.
+# Every module here has a verified owner in main.py, sitecustomize.py, or a
+# transitive import from one of those owners. Diagnostics only observe whether
+# those already-owned modules are present in sys.modules. They never import a
+# missing module as a repair action.
+EXPECTED_STARTUP_OWNER_MODULES: tuple[str, ...] = (
+    "stoney_verify.startup_guards.process_health",
+    "stoney_verify.startup_guards.discord_api_safety",
+    "stoney_verify.startup_guards.command_safety",
+    "stoney_verify.startup_guards.auto_shard",
+    "stoney_verify.startup_guards.global_command_sync",
+    "stoney_verify.startup_guards.command_scope_dedupe",
+    "stoney_verify.startup_guards.public_server_env_id_guard",
+    "stoney_verify.startup_guards.guild_config_runtime_validator",
+    "stoney_verify.startup_guards.interaction_action_lock_guard",
+    "stoney_verify.startup_guards.runtime_safety",
+    "stoney_verify.startup_guards.public_startup_scope",
+    "stoney_verify.startup_guards.basic_verification_mode_guard",
+    "stoney_verify.startup_guards.id_verify_allowlist_guard",
+    "stoney_verify.startup_guards.unverified_ticket_panel_flow",
+)
 
 
 @dataclass(frozen=True)
 class StartupGuardStatus:
-    """Single startup guard import state.
-
-    This intentionally reports loader state without importing every guard by default.
-    Use build_startup_health_report(load_missing=True) only from explicit diagnostics
-    or local validation tools.
-    """
+    """Observed state for one explicitly owned startup module."""
 
     module: str
     state: str
@@ -21,7 +40,7 @@ class StartupGuardStatus:
 
 @dataclass(frozen=True)
 class StartupHealthReport:
-    """Snapshot of startup guard health for production diagnostics."""
+    """Read-only snapshot of the explicit production startup contract."""
 
     status: str
     expected_count: int
@@ -36,124 +55,56 @@ class StartupHealthReport:
         return asdict(self)
 
 
-def _load_startup_loader() -> Any:
-    # Importing the package loader should be safe: it defines guard lists and
-    # loader state. It should not start the Discord client.
-    from stoney_verify import startup_guards
-
-    return startup_guards
+def _loaded_module_names() -> set[str]:
+    return set(sys.modules)
 
 
-def _public_state_mapping(value: Any) -> Dict[str, Any]:
-    if isinstance(value, Mapping):
-        return dict(value)
-    return {}
+def build_startup_health_report() -> StartupHealthReport:
+    """Report explicit startup ownership without importing or repairing anything.
 
-
-def _expected_guards(loader: Any) -> Sequence[str]:
-    value = getattr(loader, "_STARTUP_GUARDS", ())
-    if isinstance(value, tuple):
-        return value
-    if isinstance(value, list):
-        return tuple(str(item) for item in value)
-    return ()
-
-
-def _loaded_guards(loader: Any) -> Dict[str, Any]:
-    return _public_state_mapping(getattr(loader, "_LOADED", {}))
-
-
-def _failed_guards(loader: Any) -> Dict[str, BaseException]:
-    raw = _public_state_mapping(getattr(loader, "_ERRORS", {}))
-    return {str(module): exc for module, exc in raw.items() if isinstance(exc, BaseException)}
-
-
-def _summarize_error(exc: BaseException) -> tuple[str, str]:
-    return (exc.__class__.__name__, str(exc) or repr(exc))
-
-
-def build_startup_health_report(*, load_missing: bool = False) -> StartupHealthReport:
-    """Build a startup guard health report.
-
-    Args:
-        load_missing: When false, report current loader state only. When true,
-            call the startup guard loader first so missing modules are attempted.
-            Keep this false in normal runtime diagnostics unless the caller
-            intentionally wants to trigger imports.
+    Missing modules are warnings. Direct main.py import failures normally prevent
+    the process from reaching diagnostics at all; host-hook failures can be
+    swallowed by the host hook and therefore appear here as missing instead of
+    being guessed into a synthetic failure state.
     """
 
-    loader = _load_startup_loader()
-
-    if load_missing:
-        load_all = getattr(loader, "load_all_startup_guards", None)
-        if callable(load_all):
-            load_all()
-
-    expected = tuple(_expected_guards(loader))
-    loaded = _loaded_guards(loader)
-    failed = _failed_guards(loader)
-
+    loaded_modules = _loaded_module_names()
     statuses: List[StartupGuardStatus] = []
-    blockers: List[str] = []
     warnings: List[str] = []
 
-    for module in expected:
-        if module in failed:
-            error_type, error_message = _summarize_error(failed[module])
-            statuses.append(
-                StartupGuardStatus(
-                    module=module,
-                    state="failed",
-                    error_type=error_type,
-                    error_message=error_message,
-                )
-            )
-            blockers.append(f"{module}: {error_type}: {error_message}")
-        elif module in loaded:
+    for module in EXPECTED_STARTUP_OWNER_MODULES:
+        if module in loaded_modules:
             statuses.append(StartupGuardStatus(module=module, state="loaded"))
         else:
             statuses.append(StartupGuardStatus(module=module, state="missing"))
-            warnings.append(f"{module}: not loaded yet")
+            warnings.append(f"{module}: expected startup owner is not loaded")
 
-    unexpected_loaded = sorted(module for module in loaded if module not in set(expected))
-    for module in unexpected_loaded:
-        statuses.append(StartupGuardStatus(module=module, state="loaded_unexpected"))
-        warnings.append(f"{module}: loaded but not listed in _STARTUP_GUARDS")
-
-    failed_count = len(failed)
-    loaded_count = len(loaded)
-    missing_count = sum(1 for status in statuses if status.state == "missing")
-
-    if failed_count:
-        status = "blocker"
-    elif missing_count:
-        status = "warning"
-    else:
-        status = "ok"
+    loaded_count = sum(1 for item in statuses if item.state == "loaded")
+    missing_count = sum(1 for item in statuses if item.state == "missing")
+    status = "warning" if missing_count else "ok"
 
     return StartupHealthReport(
         status=status,
-        expected_count=len(expected),
+        expected_count=len(EXPECTED_STARTUP_OWNER_MODULES),
         loaded_count=loaded_count,
-        failed_count=failed_count,
+        failed_count=0,
         missing_count=missing_count,
-        blockers=blockers,
+        blockers=[],
         warnings=warnings,
         guards=statuses,
     )
 
 
 def format_startup_health_report(report: StartupHealthReport) -> str:
-    """Format a plain-language startup health report for logs or commands."""
+    """Format a plain-language startup ownership report for logs or commands."""
 
     lines = [
-        "Dank Shield startup health",
+        "Dank Shield startup ownership health",
         f"Status: {report.status.upper()}",
         (
             "Counts: "
             f"expected={report.expected_count} "
             f"loaded={report.loaded_count} "
-            f"failed={report.failed_count} "
             f"missing={report.missing_count}"
         ),
     ]
@@ -177,21 +128,23 @@ def format_startup_health_report(report: StartupHealthReport) -> str:
     return "\n".join(lines)
 
 
-def startup_health_summary(*, load_missing: bool = False) -> str:
-    """Convenience helper for commands, logs, and local diagnostics."""
+def startup_health_summary() -> str:
+    """Convenience helper for read-only startup diagnostics."""
 
-    return format_startup_health_report(build_startup_health_report(load_missing=load_missing))
+    return format_startup_health_report(build_startup_health_report())
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = list(argv or [])
-    load_missing = "--load" in args
-    report = build_startup_health_report(load_missing=load_missing)
+    if "--load" in args:
+        print(
+            "Bulk startup-guard loading is retired; --load is ignored and this "
+            "report remains read-only."
+        )
+    report = build_startup_health_report()
     print(format_startup_health_report(report))
     return 1 if report.status == "blocker" else 0
 
 
 if __name__ == "__main__":
-    import sys
-
     raise SystemExit(main(sys.argv[1:]))
