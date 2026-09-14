@@ -25,7 +25,8 @@ from .process_health import start_health_loop as start_process_health_loop
 # Historical only. This is NOT an activation plan and nothing in this package
 # iterates it. Keep the legacy private name temporarily because a few focused
 # compatibility tests use the list as historical metadata; new code must use
-# neither name to decide what runs in production.
+# neither name to decide what runs in production. Retired files are removed from
+# this inventory once their ownership migration is complete.
 _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.embed_literal_newline_guard",
     "stoney_verify.startup_guards.process_health",
@@ -66,7 +67,6 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.protection_import_button_patch",
     "stoney_verify.startup_guards.setup_permission_repair_modlog_silence_guard",
     "stoney_verify.startup_guards.dank_shield_branding_guard",
-    "stoney_verify.startup_guards.runtime_safety",
     "stoney_verify.startup_guards.invite_intent_safety",
     "stoney_verify.startup_guards.alt_identity_link_safety",
     "stoney_verify.startup_guards.member_join_removal_safety",
@@ -99,7 +99,6 @@ _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.ticket_action_lock_guard",
     "stoney_verify.startup_guards.production_command_surface_guard",
     "stoney_verify.panel_bootstrap_runtime",
-    "stoney_verify.startup_guards.public_startup_scope",
     "stoney_verify.startup_guards.event_safety",
     "stoney_verify.startup_guards.shard_safety",
     "stoney_verify.startup_guards.job_dedupe",
