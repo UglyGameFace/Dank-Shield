@@ -183,11 +183,18 @@ def test_production_schema_deploy_waits_for_canonical_ci() -> None:
     assert "github.event.workflow_run.head_sha" in workflow
 
     # Manual recovery is deliberately explicit and immutable: it must target a
-    # full commit SHA that is verified to belong to canonical main history.
+    # full commit SHA in canonical main history and independently prove that
+    # the exact SHA already passed canonical Dank Shield CI.
     assert "workflow_dispatch:" in workflow
     assert "target_sha:" in workflow
     assert "^[0-9a-f]{40}$" in workflow
     assert "git merge-base --is-ancestor" in workflow
+    assert "actions: read" in workflow
+    assert "Verify manual target passed canonical CI" in workflow
+    assert '"/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs"' in workflow
+    assert '-f head_sha="$TARGET_SHA"' in workflow
+    assert "-f status=success" in workflow
+    assert '.head_branch == "main"' in workflow
 
     assert "environment: production" in workflow
     assert "group: supabase-production-migrations" in workflow
