@@ -1,107 +1,113 @@
 # ACTIVE TASK
 
-## DS-AUD-RUNTIME-SAFETY — Retire temporary runtime monkey-patcher into canonical owners
+## DS-AUD-PROCESS-HEALTH — Move process health to explicit native boot ownership
 
-**Status:** CLOSED — implementation, merge, canonical CI, and production promotion passed
-**Implementation PR:** #223 — `Retire temporary runtime safety import hooks`
-**Validated final PR head:** `d3c5a75ef3b19882d9c62447ef14e73ec6612410`
-**Canonical implementation merge:** `2726f33699d2e73c82c90c49f131ce1105fd19b9`
+**Status:** IN PROGRESS
+**Branch:** `audit/process-health-native-ownership`
+**Base main:** `f84549835335d2b0844ec61887f740d646c57094`
 
-## Outcome
+## Previous finding closure
 
-The temporary `startup_guards.runtime_safety` monkey-patcher and its transitive `public_startup_scope` import hook are retired. Runtime behavior now matches the canonical source that CI inspects instead of being replaced after import by hidden global hooks.
+`DS-AUD-RUNTIME-SAFETY` is closed and must not be reopened without new regression evidence.
 
-The most serious correctness conflict is removed: the retired patcher can no longer replace the database-authoritative persistent ticket-number allocator with older channel/DB-max scanning logic.
+Its bookkeeping closeout PR #224 merged as `f84549835335d2b0844ec61887f740d646c57094`. Acceptance on that exact canonical SHA passed:
 
-The one behavior that required native migration, `/identity_truth`, now performs the real synchronous truth lookup off the Discord event loop with `asyncio.to_thread` rather than relying on a runtime patch that returned an empty result while a loop was running.
+- Dank Shield CI #2118 / `34880362833` — success, including the full repository unit suite, standalone tools, public setup/isolation, command-surface, startup-friction, invite-permissions, setup-safety, Dank Design, role-truth, event-boundary, Claim-first ticket security, and Managed category SQL checks.
+- Ticket Owner Emergency Override #689 / `34880362840` — success on the same SHA.
+- Deploy Supabase migrations #27 / `34881534753` — success on the same SHA.
+  - canonical CI completed at 2026-09-14T18:33:34Z;
+  - production promotion started afterward at 2026-09-14T18:33:37Z;
+  - validated release checkout, immutable current-main verification, secrets, Supabase CLI, production link, migration status, preview, and apply all passed.
+- Canonical `main` remained exactly `f84549835335d2b0844ec61887f740d646c57094` after promotion.
+- No open PRs remained when this finding began.
 
-## Final implementation scope
+## Finding
 
-- Removed `sitecustomize.py` loading/calling `runtime_safety` while preserving Basic Verify compatibility.
-- Deleted `stoney_verify/startup_guards/runtime_safety.py`.
-- Deleted `stoney_verify/startup_guards/public_startup_scope.py`.
-- Removed both retired modules from startup diagnostics and the inert historical startup inventory.
-- Migrated `/identity_truth` to off-thread execution of the canonical truth lookup.
-- Preserved canonical `tickets_new.service` unchanged, including its durable database-authoritative persistent ticket allocator.
-- Retired redundant/unsafe RaidGuard, ticket-timeout, voice-modlog, startup-maintenance, and public-startup-scope patch behavior instead of rebuilding it.
-- Added focused behavioral regression coverage and `docs/RUNTIME_SAFETY_NATIVE_OWNERSHIP_AUDIT.md`.
-- Updated `CLAUDE.md` so the retired import hooks are not restored as supposed runtime owners.
-- Left `main.py`, `app.py`, events, modlog, ticket service, schema, AntiNuke, persistent views, and `process_health` unchanged.
+The remaining live startup ownership debt is `process_health`.
 
-## Exact-head pre-merge validation
+Production boot currently reaches it implicitly:
 
-Final frozen PR head `d3c5a75ef3b19882d9c62447ef14e73ec6612410` passed the complete gate:
+`main.py` imports `stoney_verify.startup_guards.*` → Python imports `stoney_verify.startup_guards.__init__` → package `__init__` imports `startup_guards.process_health` → `process_health.py` calls `install()` at module import time.
 
-- Dank Shield CI #2115 / `34876108367` — success.
-  - committed diff whitespace — success.
-  - Python compile — success.
-  - full repository unit suite — success.
-  - standalone tool checks — success.
-  - public setup/isolation audit — success.
-  - canonical public command-surface audit — success.
-  - public command/startup-friction audit — success.
-  - public invite permissions audit — success.
-  - setup safety audit — success.
-  - Dank Design Smart Auto-Detect audit — success.
-  - role-truth ownership audit — success.
-  - event-boundary ownership audit — success.
-  - Claim-first ticket security — success.
-  - Managed category SQL smoke test — success.
-- Profile Runtime Diagnostics #885 / `34876108372` — success.
-- Ticket Category Menu Sanity #515 / `34876108365` — success.
-- Schema Authority SQL #44 / `34876108388` — success.
-- Application Command Size Diagnostics #1129 / `34876108368` — success.
-- Ticket Owner Emergency Override #686 / `34876108423` — success.
-- Dank Design Regression CI #379 / `34876108336` — success.
-- No unresolved review threads; PR scope remained the expected 10 files; canonical `main` had not drifted before merge.
+`install()` currently owns real process-health behavior, but also replaces `builtins.__import__` globally. That import hook exists only so `_safe_import()` can repeatedly call `_maybe_attach_loaded_bot()` after every Python import until `stoney_verify.app` or `stoney_verify.globals` exposes `bot`.
 
-## Post-merge production acceptance
+That is unnecessary hidden runtime ownership. `main.py` already owns boot order and can explicitly install process health and attach it to the known bot before importing/running the app.
 
-PR #223 merged through protected `main` as `2726f33699d2e73c82c90c49f131ce1105fd19b9`.
+## Root cause
 
-Acceptance on that exact canonical SHA passed:
+A legitimate infrastructure service was implemented as a startup-guard package side effect and used a process-wide import interceptor to discover when its real dependency (`bot`) became available.
 
-- Dank Shield CI #2116 / `34877361979` — success.
-  - committed diff whitespace — success.
-  - Python compile — success.
-  - full repository unit suite — success.
-  - standalone tool checks — success.
-  - public setup/isolation audit — success.
-  - canonical public command-surface audit — success.
-  - public command/startup-friction audit — success.
-  - public invite permissions audit — success.
-  - setup safety audit — success.
-  - Dank Design Smart Auto-Detect audit — success.
-  - role-truth ownership audit — success.
-  - event-boundary ownership audit — success.
-  - Claim-first ticket security — success.
-  - Managed category SQL smoke test — success.
-- Ticket Owner Emergency Override #687 / `34877361932` — success on the same SHA.
-- Schema Authority SQL #45 / `34877361931` — success on the same SHA.
-- Ticket Category Menu Sanity #516 / `34877362002` — success on the same SHA.
-- Deploy Supabase migrations #26 / `34878587626` — success on the same SHA.
-  - canonical CI #2116 completed successfully at 2026-09-14T18:04:33Z.
-  - production promotion started afterward at 2026-09-14T18:04:35Z.
-  - checkout of validated release commit — success.
-  - immutable current-main target verification — success.
-  - required secrets / Supabase CLI / production project link — success.
-  - migration status — success.
-  - migration preview — success.
-  - migration apply — success.
-- Canonical `main` was re-fetched after production promotion and remained `2726f33699d2e73c82c90c49f131ce1105fd19b9`.
+This couples unrelated Python imports to Discord health registration and makes `startup_guards` package import itself behaviorally significant.
 
-The runtime-safety/import-hook finding is therefore closed. Do not reopen it without new regression evidence.
+Repository search confirms the following process-health behaviors are unique and must be preserved:
 
-## Remaining master-audit backlog
+- `sys.excepthook` ownership for unhandled synchronous exceptions;
+- asyncio loop exception handling;
+- SIGTERM/SIGINT logging and clean `SystemExit` behavior;
+- atexit process-exit logging;
+- boot-count/restart visibility;
+- current and peak RSS snapshots;
+- operation-queue health snapshots;
+- periodic health heartbeat task;
+- external Healthchecks watchdog ping/status.
 
-These remain separate findings and were not pulled into this repair:
+The problem is not those behaviors. The problem is package-level activation and global `builtins.__import__` replacement used for bot discovery.
 
-- `process_health` package-level process/signal/import-health ownership and other explicitly owned legacy patch/wrapper behavior;
-- dormant startup-guard file deletion/consolidation, only after individual importer/supersession proof;
-- dual/dead implementation trees such as `commands_new`, `db_new`, `tasks_new`, `core/`, and other parallel implementations;
-- remaining stale Channel Builder runbook/workflow references, if current repository evidence still shows any;
-- DS-SEC-044 hostile re-entry production acceptance remains separately suspended and must not be resumed without explicit authorization.
+## In scope
+
+- Move process health out of `stoney_verify/startup_guards/` into a canonical infrastructure module under `stoney_verify/`.
+- Preserve process exception, signal, atexit, boot-state, memory, operation-queue, heartbeat, and external-watchdog behavior.
+- Remove the global import interceptor and implicit bot discovery.
+- Make `main.py` explicitly install process-level health before startup-guard imports and explicitly attach health to the known bot before app import/login.
+- Remove the `startup_guards` package-level process-health side effect and retired historical inventory entry.
+- Update startup diagnostics to the canonical owner path.
+- Update public status reporting to use the canonical health module.
+- Update existing process-health test paths and add behavioral regression coverage for explicit ownership and the absence of a global import hook.
+- Document the ownership migration and update architecture guardrails.
+
+## Out of scope
+
+- `command_safety`, command-tree wrappers, or other startup guards;
+- dormant startup-guard deletion beyond the retired `process_health` file itself;
+- AntiNuke runtime installers, hostile actor/re-entry work, or DS-SEC-044 acceptance;
+- dual/dead implementation trees (`commands_new`, `db_new`, `tasks_new`, `core/`);
+- Channel Builder cleanup;
+- unrelated app, ticket, moderation, verification, schema, or Supabase behavior.
+
+## Planned implementation
+
+1. Create `stoney_verify/process_health.py` as the canonical owner.
+   - Preserve the health/watchdog functionality.
+   - Remove `builtins` import, `_ORIGINAL_IMPORT`, `_safe_import`, `_maybe_attach_loaded_bot`, and import-time `install()` activation.
+   - Expose explicit `install_process_health()` and `attach_process_health(bot)` entrypoints.
+   - Keep listener attachment idempotent.
+   - Adjust the operation-queue relative import for the new module location.
+2. Update `main.py` to install process-level health explicitly before startup-guard imports, then attach it to `stoney_verify.globals.bot` before the app is imported/run.
+3. Remove the old package-level process-health import/export and historical inventory entry from `startup_guards/__init__.py`.
+4. Update `startup_diagnostics.py` and `commands_ext/public_status_reporter.py` to the canonical module path.
+5. Delete `startup_guards/process_health.py` only after all callers are migrated.
+6. Update existing tests that intentionally exercise process-health behavior and add behavioral ownership tests.
+7. Add `docs/PROCESS_HEALTH_NATIVE_OWNERSHIP_AUDIT.md` and update `CLAUDE.md`.
+
+## Validation plan
+
+- Inspect final diff against exact base `f84549835335d2b0844ec61887f740d646c57094` and verify only process-health ownership files changed.
+- Behavioral subprocess proof that importing `stoney_verify.startup_guards` no longer changes `builtins.__import__` or loads the retired guard module.
+- Behavioral subprocess proof that canonical process-health installation preserves `builtins.__import__` while installing the process exception hook.
+- Behavioral fake-bot proof that explicit process-health attachment registers exactly one `on_ready` listener and remains idempotent.
+- Existing current/peak RSS and external-watchdog tests remain valid against the canonical module.
+- Startup diagnostics expect the canonical process-health owner and not the retired startup-guard path.
+- Full Dank Shield CI, compile, repository pytest, standalone tools, public safety audits, Claim-first security, Managed SQL, and all applicable companion workflows must pass on one frozen exact PR head.
+- Before merge: exact file scope, clean diff, no unresolved review threads, no main drift, mergeable, no temporary/debug/workflow debris.
+- After merge: canonical main equals actual merge SHA; canonical CI and Ticket Owner pass on that SHA; gated Supabase promotion starts only after canonical CI and passes immutable-main/status/preview/apply; main remains unchanged afterward.
+
+## Current evidence / blockers
+
+- Canonical base is production-accepted and stable.
+- No open PR conflicts existed when the branch was created.
+- No blocker is currently known.
+- Because this finding changes boot-order-sensitive infrastructure, no merge is allowed until exact-head full CI and post-merge acceptance prove the explicit owner behaves correctly.
 
 ## Next step
 
-Merge this bookkeeping-only closeout through protected `main`, verify canonical post-closeout CI and migration promotion on the exact merge SHA, then select the next unresolved master-audit finding from current repository evidence and create a fresh active-task record from that exact canonical main. Do not choose the next finding from stale summaries alone.
+Implement the explicit process-health owner on this branch, validate it on a draft PR, and do not move to another master-audit finding until this one is merged, production-accepted, and repository-accurately closed.
