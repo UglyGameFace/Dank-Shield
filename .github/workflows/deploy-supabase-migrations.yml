@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       target_sha:
-        description: "Exact CI-green commit SHA from main to deploy"
+        description: "Exact CI-green current main SHA to deploy"
         required: true
         type: string
 
@@ -44,7 +44,7 @@ jobs:
           ref: ${{ env.TARGET_SHA }}
           fetch-depth: 0
 
-      - name: Verify immutable main-history target
+      - name: Verify immutable current-main target
         shell: bash
         run: |
           set -euo pipefail
@@ -61,12 +61,13 @@ jobs:
           fi
 
           git fetch --quiet origin main
-          if ! git merge-base --is-ancestor "$TARGET_SHA" origin/main; then
-            echo "::error title=Untrusted release target::$TARGET_SHA is not in the canonical main history."
+          current_main_sha="$(git rev-parse origin/main)"
+          if [ "$TARGET_SHA" != "$current_main_sha" ]; then
+            echo "::error title=Stale release target::$TARGET_SHA is not the current canonical main head ($current_main_sha)."
             exit 1
           fi
 
-          echo "Validated production migration target: $TARGET_SHA"
+          echo "Validated current production migration target: $TARGET_SHA"
 
       - name: Verify manual target passed canonical CI
         if: github.event_name == 'workflow_dispatch'
