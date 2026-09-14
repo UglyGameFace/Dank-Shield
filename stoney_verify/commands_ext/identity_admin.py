@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, List, Optional
 
 import discord
@@ -229,7 +230,8 @@ def register_identity_admin_commands(bot: Any, tree: Any) -> None:
             return
 
         try:
-            truth = get_identity_truth_context(
+            truth = await asyncio.to_thread(
+                get_identity_truth_context,
                 guild_id=str(interaction.guild_id or 0),
                 user_id=str(resolved_member.id),
             )

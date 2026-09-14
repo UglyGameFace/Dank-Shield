@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 """
-Python host fallback for Dank Shield startup safety.
+Python host compatibility for Dank Shield verification startup.
 
 Some hosts auto-import ``sitecustomize`` before the normal app entrypoint. Keep
-this file tiny: the real runtime safety logic lives in
-``stoney_verify.startup_guards.runtime_safety``.
+this file limited to the verified Basic Verify compatibility path; application
+runtime ownership belongs to canonical modules, not host import hooks.
 """
 
 
@@ -64,16 +64,6 @@ def _force_verify_panel_command_module() -> None:
     except Exception:
         pass
 
-
-try:
-    from stoney_verify.startup_guards.runtime_safety import load_runtime_safety
-
-    load_runtime_safety()
-except Exception as e:
-    try:
-        print(f"⚠️ sitecustomize failed to load startup_guards.runtime_safety: {e!r}")
-    except Exception:
-        pass
 
 try:
     _force_verify_panel_command_module()

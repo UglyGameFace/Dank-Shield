@@ -1,88 +1,125 @@
 # ACTIVE TASK
 
-## DS-AUD-STARTUP-OWNERSHIP — Retire dead bulk startup loader and document real runtime ownership
+## DS-AUD-RUNTIME-SAFETY — Retire temporary runtime monkey-patcher into canonical owners
 
-**Status:** CLOSED — implementation, merge, and production acceptance passed
-**Implementation PR:** #221 — `Retire dormant startup guard bulk loader`
-**Validated final PR head:** `a8dc5755195179bd3eb3936d58567b7f9042181c`
-**Canonical implementation merge:** `b604de8b20ffb8b4c8a80ad90c054873ccf33c12`
+**Status:** IMPLEMENTATION COMPLETE — final exact-head revalidation required
+**Branch:** `audit/runtime-safety-native-ownership`
+**Base / canonical main at task start:** `0d6287d67b4a28ab4f08fdbbdf9811ec16f263c9`
+**Implementation PR:** #223 — `Retire temporary runtime safety import hooks`
 
-## Outcome
+## Previous finding closure
 
-The executable startup-guard bulk loader is retired. Production startup ownership is explicit and auditable, diagnostics are read-only, the proven-dead `usercustomize.py -> panel_menu_retry_guard` path is removed, and verified live startup/feature owners remain intact. Channel Builder remains directly registered through its canonical API server path rather than a startup guard.
+The prior startup-loader/runtime-ownership finding is closed. Its bookkeeping PR #222 merged as `0d6287d67b4a28ab4f08fdbbdf9811ec16f263c9` and passed canonical post-closeout acceptance:
 
-## Final implementation scope
+- Dank Shield CI #2113 / `34873092523` — success on the exact merge SHA.
+- Ticket Owner Emergency Override #684 / `34873092697` — success on the same SHA.
+- Deploy Supabase migrations #25 / `34874281385` — success on the same SHA, triggered only after canonical CI.
+- immutable current-main verification, migration status, preview, and apply — success.
+- canonical `main` remained `0d6287d67b4a28ab4f08fdbbdf9811ec16f263c9` after promotion.
 
-- Removed executable `load_startup_guards()` / `load_all_startup_guards()` and loader-only state.
-- Retained the 76-module historical list only as inert `LEGACY_DORMANT_STARTUP_GUARDS` metadata.
-- Made startup diagnostics observe verified already-loaded owners without importing missing guards.
-- Removed obsolete bulk-loader compatibility from `sitecustomize.py`.
-- Removed the dead panel retry host hook from `usercustomize.py` and retired `panel_menu_retry_guard.py` after reference verification.
-- Updated ownership regressions/audits and documented the live-vs-dormant runtime map.
-- Corrected stale Channel Builder architecture documentation.
-- Preserved `main.py` boot order, `stoney_verify/app.py` import order, schema authority, AntiNuke behavior, persistent-view ownership, and all verified live owners.
+Do not reopen DS-AUD-STARTUP-OWNERSHIP without new regression evidence.
 
-## Exact-head pre-merge validation
+## Scope
 
-Final PR head `a8dc5755195179bd3eb3936d58567b7f9042181c` passed the complete gate:
+This finding is limited to the live `startup_guards.runtime_safety` host/import-hook subsystem and its transitive `startup_guards.public_startup_scope` hook.
 
-- Dank Shield CI #2110 / `34866937298` — success.
-- Profile Runtime Diagnostics #882 / `34866937192` — success.
-- Ticket Category Menu Sanity #511 / `34866937324` — success.
-- Schema Authority SQL #41 / `34866937297` — success.
-- Application Command Size Diagnostics #1126 / `34866937238` — success.
-- Ticket Owner Emergency Override #681 / `34866937354` — success.
-- Dank Design Regression CI #376 / `34866937317` — success.
-- DS Backlog 027 Validation #77 / `34866937216` — success.
-- No unresolved review threads; PR scope remained the expected 13 files; canonical `main` had not drifted before merge.
+In scope:
 
-## Post-merge production acceptance
+- `sitecustomize.py` ownership of `runtime_safety`;
+- `stoney_verify/startup_guards/runtime_safety.py`;
+- `stoney_verify/startup_guards/public_startup_scope.py`;
+- the runtime patch targets in RaidGuard, identity truth, tickets, modlog/voice handling, and app startup maintenance;
+- startup diagnostics, historical inventory, tests, and architecture documentation affected by retiring these two explicit startup owners.
 
-PR #221 merged through protected `main` as `b604de8b20ffb8b4c8a80ad90c054873ccf33c12`.
+Explicitly out of scope:
 
-Acceptance on that exact canonical SHA passed:
+- `process_health` process/signal/import-health ownership;
+- Basic Verify host compatibility in `sitecustomize.py`;
+- direct `main.py` command/startup guards;
+- unrelated dormant startup-guard families;
+- AntiNuke / DS-SEC-044;
+- schema changes;
+- persistent-view ownership.
 
-- Dank Shield CI #2111 / `34868701823` — success.
-  - committed diff whitespace — success.
-  - Python compile — success.
-  - full repository unit suite — success.
-  - standalone `tools/test_*.py` checks — success.
-  - public setup/isolation audit — success.
-  - canonical public command-surface audit — success.
-  - public command/startup-friction audit — success.
-  - public invite permissions audit — success.
-  - setup safety audit — success.
-  - Dank Design Smart Auto-Detect audit — success.
-  - role-truth ownership audit — success.
-  - event-boundary ownership audit — success.
-  - Claim-first ticket security — success.
-  - Managed category SQL smoke test — success.
-- Ticket Owner Emergency Override #682 / `34868701837` — success on the same SHA.
-- DS Backlog 027 Validation #78 / `34868701818` — success on the same SHA.
-- Ticket Category Menu Sanity #512 / `34868701946` — success on the same SHA.
-- Schema Authority SQL #42 / `34868701834` — success on the same SHA.
-- Deploy Supabase migrations #24 / `34869794858` — success on the same SHA.
-  - CI #2111 completed successfully at 2026-09-14T16:37:44Z.
-  - production promotion started afterward at 2026-09-14T16:37:46Z.
-  - immutable current-main target verification — success.
-  - required secrets / CLI / production project link — success.
-  - migration status — success.
-  - migration preview — success.
-  - migration apply — success.
-- Canonical `main` was re-fetched after production promotion and remained `b604de8b20ffb8b4c8a80ad90c054873ccf33c12`.
+## Root cause and final findings
 
-The startup-loader/runtime-ownership finding is therefore closed. Do not reopen it without new regression evidence.
+`runtime_safety.py` remained a temporary production monkey-patcher that installed a global `builtins.__import__` hook and replaced live functions after their canonical modules loaded. `public_startup_scope.py` installed a second chained global import hook. That meant reviewed source and static CI were not necessarily the code actually running.
 
-## Remaining master-audit backlog
+The most serious conflict was ticket numbering: canonical `tickets_new.service._reserve_next_ticket_number()` delegates to the durable database-authoritative persistent allocator, while `runtime_safety` replaced it at runtime with older channel/DB-max scanning logic. The patcher could therefore override a newer correctness invariant after CI had already validated it.
 
-These remain separate findings and were not pulled into this repair:
+Other patch behavior was traced before removal:
 
-- live explicitly owned legacy patch/import-hook behavior (`process_health`, `runtime_safety`, `public_startup_scope`, command-tree wrappers, selected feature helpers);
-- dormant startup-guard file deletion/consolidation, only after individual importer/supersession proof;
-- dual/dead implementation trees such as `commands_new`, `db_new`, `tasks_new`, `core/`, and other parallel implementations;
-- any remaining stale Channel Builder runbook/workflow references;
-- DS-SEC-044 hostile re-entry production acceptance remains separately suspended.
+- **RaidGuard:** canonical code already avoids synchronous hard-identity DB work on the running Discord event loop. Runtime patching was redundant.
+- **Identity truth:** `get_identity_truth_context()` is synchronous and `/identity_truth` called it from an async command. The runtime patch avoided blocking by returning `{}` on a running loop, silently suppressing real truth data. This required a native migration.
+- **Ticket timeout wrappers:** canonical repository/event paths already offload blocking DB work. `asyncio.wait_for` around thread-backed work can report timeout while the underlying operation continues, so those wrappers were unsafe and were not preserved.
+- **Voice modlog:** canonical voice logging already uses async Discord APIs. The extra runtime-job replacement was defensive layering, not unique correctness ownership, so it was retired instead of rebuilt.
+- **Startup maintenance:** canonical app startup reconciliation/backfill already runs in its own background task over async services. The extra runtime-job replacement was redundant and was retired instead of rebuilt.
+- **Public startup scope:** canonical app startup scope plus directly owned `command_scope_dedupe` already owns public command cleanup and safe beta-guild sync defaults. The second import-hook owner was duplicate behavior and was removed.
+
+## Implementation
+
+- Removed `sitecustomize.py` loading/calling `runtime_safety` while preserving Basic Verify compatibility behavior.
+- Deleted `stoney_verify/startup_guards/runtime_safety.py`.
+- Deleted `stoney_verify/startup_guards/public_startup_scope.py`.
+- Removed both retired modules from startup diagnostics and the inert historical startup inventory.
+- Migrated `/identity_truth` to await the real synchronous truth lookup through `asyncio.to_thread`, so it remains non-blocking and returns actual truth data.
+- Left canonical `tickets_new.service` unchanged, which preserves the database-authoritative persistent ticket allocator instead of reimplementing it.
+- Did not add replacement voice/startup queue wrappers after proving canonical async/background ownership was sufficient.
+- Left `main.py`, `app.py`, events, modlog, ticket service, schema, AntiNuke, persistent views, and `process_health` unchanged.
+- Added focused architecture documentation in `docs/RUNTIME_SAFETY_NATIVE_OWNERSHIP_AUDIT.md`.
+- Updated `CLAUDE.md` so the retired import hooks are not treated as live debt to restore.
+- Added behavioral regression coverage for host startup, off-thread identity truth execution, persistent ticket allocator delegation, and preservation of `process_health`.
+
+## Validation state
+
+The first frozen implementation head started full validation. Before this bookkeeping correction, the following companion workflows had already passed on that implementation state:
+
+- Application Command Size Diagnostics #1128 — success.
+- Ticket Category Menu Sanity #514 — success.
+- Ticket Owner Emergency Override #685 — success.
+- Dank Design Regression CI #378 — success.
+- Schema Authority SQL #43 — success.
+- Profile Runtime Diagnostics #884 — success.
+- Dank Shield CI #2114 had Claim-first ticket security and Managed category SQL smoke test green and was still running its full unit-suite lane.
+
+This task-file correction changes the PR head. Therefore none of the above is sufficient for merge by itself. The branch must now remain frozen and the complete required gate must pass again on the new exact head.
+
+## Final validation requirements
+
+Before merge, require on one frozen exact PR head:
+
+- targeted runtime-safety/native-ownership behavioral tests;
+- persistent ticket counter regression tooling;
+- startup diagnostics tests;
+- committed diff whitespace check;
+- Python compile;
+- full repository unit suite;
+- standalone `tools/test_*.py` checks;
+- public setup/isolation audit;
+- canonical public command-surface audit;
+- public command/startup-friction audit;
+- invite permissions audit;
+- setup safety audit;
+- Dank Design audit;
+- role-truth audit;
+- event-boundary audit;
+- Claim-first ticket security;
+- Managed category SQL smoke test;
+- all applicable companion workflows;
+- final PR head, file scope, review-thread, mergeability, and canonical-main drift inspection.
+
+## Risks / compatibility checks
+
+- `/identity_truth` must return real proof/manual-link data without blocking Discord's event loop.
+- Ticket numbering must remain database-authoritative in actual runtime, not merely in static source inspection.
+- Voice modlog and startup maintenance must remain functional through their existing canonical async/background owners after the patcher disappears.
+- Public deployments must remain global-command-first with safe beta-guild command behavior.
+- Basic Verify host behavior and `process_health` must remain intact.
+
+## Blockers
+
+No code blocker is known. Final exact-head CI/review/merge validation is still required.
 
 ## Next step
 
-Merge this bookkeeping-only closeout through protected `main`, verify its canonical post-closeout CI/promotion, then select the next unresolved master-audit finding from current repository evidence and create a fresh active-task record from that exact canonical main.
+Freeze the branch at this bookkeeping-corrected head. Do not edit it again unless exact-head validation exposes a real defect. Re-run the complete validation gate, re-fetch canonical `main`, verify PR head/scope/reviews/mergeability, record immutable run evidence in the PR body rather than another branch commit, then mark ready and merge only that exact validated head. After merge, perform canonical-main CI, Ticket Owner, migration-promotion, and main-drift acceptance before closing this finding and selecting the next master-audit item.
