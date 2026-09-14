@@ -114,13 +114,23 @@ This is the strongest next candidate. Preserve valid command-budget, safe-sync, 
 
 `startup_guards.interaction_action_lock_guard` currently patches private Discord.py `discord.ui.View._scheduled_task` to observe or block duplicate component actions. Audit and migrate valid idempotency behavior into explicit component/action owners without depending on a private library method.
 
-### 3. Dormant startup-guard consolidation
+### 3. Discord API / guild-config safety ownership
+
+Current live safety behavior still depends on global mutation:
+
+- `startup_guards.discord_api_safety` replaces `discord.Guild.audit_logs`, wraps `send` on `discord.TextChannel`, `discord.Thread`, and `discord.DMChannel`, and wraps `edit` on text/voice/stage/category channel classes to provide serialization, retry, and backoff behavior;
+- `startup_guards.public_server_env_id_guard` mutates imported `stoney_verify.globals` server-specific role/channel/category/guild IDs to zero in public mode and clears `OPTIONAL_ROLE_IDS`;
+- `startup_guards.guild_config_runtime_validator` replaces `guild_config.discover_runtime_guild_config` to validate saved IDs, purge invalid values, and apply runtime discovery.
+
+Preserve the real Discord rate-limit/retry behavior and public multi-server isolation guarantees, but migrate them into explicit Discord API/config owners instead of global Discord.py class mutation, imported-global rewriting, or replacement of the canonical discovery function.
+
+### 4. Dormant startup-guard consolidation
 
 The historical startup inventory still contains many old compatibility files. Remove them only by verified family after proving import reachability, current canonical ownership, and regression safety. Do not mass-delete by filename.
 
 Families still requiring dedicated evidence include command-surface compatibility, invite/spam, member/role/modlog, verification, ticket/VC, setup, and schema/config/queue helpers.
 
-### 4. Parallel/dead implementation-tree audit
+### 5. Parallel/dead implementation-tree audit
 
 Current evidence corrects an older stale note:
 
@@ -130,19 +140,19 @@ Current evidence corrects an older stale note:
 
 They are **not** deletion candidates merely because of the `_new` suffix.
 
-Still-unresolved dead/parallel candidates include `commands_new`, `db_new`, `core/`, and `utils_new`, subject to exact importer and behavior proof before consolidation/deletion. Active canonical trees such as `api_new`, `members_new`, `moderation_new`, `tickets_new`, and `verification_new` must remain protected.
+Still-unresolved dead/parallel candidates include `commands_new`, `db_new`, `core/`, and `utils_new`, subject to exact importer and behavior proof before consolidation/deletion. Current tree inspection shows `commands_new` still contains a non-trivial `tickets.py`, while `db_new`, `core/`, and `utils_new` are tiny placeholder-like trees; none should be removed until importer and behavior proof is complete. Active canonical trees such as `api_new`, `events_new`, `members_new`, `moderation_new`, `setup_new`, `tasks_new`, `tickets_new`, and `verification_new` must remain protected.
 
-### 5. Feature-owned compatibility/helper cleanup
+### 6. Feature-owned compatibility/helper cleanup
 
 Audit remaining helpers that are imported by canonical features rather than bulk startup loading, including Basic Verify compatibility, ticket forms/category helpers, setup permission repair, member lifecycle helpers, invite sanitization, and the Channel Builder font/helper chain. Preserve real behavior, retire superseded patch ownership.
 
 A current unfinished product item also remains in `services/invite_cleanup_service.py`: configured `allowed_codes` are still represented by an empty set with `TODO: load from guild config later`. That requires a product-correctness pass rather than blind cleanup.
 
-### 6. Dank Design behavioral coverage / architecture cleanup
+### 7. Dank Design behavioral coverage / architecture cleanup
 
 `commands_ext/public_design_studio.py` remains a churn-prone subsystem. Rebuild/strengthen behavioral coverage before structural cleanup; do not restore brittle static source-shape tests.
 
-### 7. Stale architecture/runbook truth
+### 8. Stale architecture/runbook truth
 
 Some older audit/readiness documents now contradict current runtime evidence, including outdated claims about which `_new` trees are dead and blockers already resolved by later work. Reconcile documentation only after the corresponding runtime owners are proven so documentation follows code truth rather than steering it incorrectly.
 
