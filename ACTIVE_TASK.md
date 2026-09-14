@@ -2,9 +2,9 @@
 
 ## DS-SEC-045 — Legitimate self-action audit classification
 
-**Status:** IMPLEMENTED — FINAL EXACT-HEAD VALIDATION REQUIRED BEFORE PROTECTED MERGE  
-**Branch:** `fix/basic-verify-self-action-proof`  
-**Base:** `5f51da0e338208538133f0b610c3e14a9c6f0bbc`  
+**Status:** IMPLEMENTED — FINAL EXACT-HEAD VALIDATION REQUIRED BEFORE PROTECTED MERGE
+**Branch:** `fix/basic-verify-self-action-proof`
+**Base:** `5f51da0e338208538133f0b610c3e14a9c6f0bbc`
 **PR:** #214 — `Prevent legitimate member updates from triggering self-ejection`
 
 ## Outcome
@@ -74,7 +74,9 @@ At the time this task record was written:
   - `Managed category SQL smoke test` — success.
   - `Python compile check` — compile and committed-diff whitespace steps passed; full unit/static lane still running.
 
-This task record intentionally does **not** claim the repair complete. The new exact head created by this bookkeeping update must pass the complete protected validation set before the PR can leave draft state or merge.
+The first bookkeeping head failed only `git diff --check` because this Markdown record used three trailing-space line breaks. No Python or product validation ran after that whitespace gate. Those trailing spaces are removed in the current exact head.
+
+This task record intentionally does **not** claim the repair complete. The new exact head created by this whitespace cleanup must pass the complete protected validation set before the PR can leave draft state or merge.
 
 ## Final validation required
 
@@ -117,4 +119,4 @@ Suspended previously by explicit task switch. Remaining acceptance evidence is t
 
 ## Next step
 
-Validate the new exact head produced by this task-record commit. If every required and companion workflow is green, the diff/review checks remain clean, and PR #214 is still mergeable, mark it ready and merge the exact validated head through `main`. Then validate canonical `main` CI and leave the live Basic Verify click as the explicit post-deploy acceptance check.
+Validate the new exact head produced by this whitespace-cleanup commit. If every required and companion workflow is green, the diff/review checks remain clean, and PR #214 is still mergeable, mark it ready and merge the exact validated head through `main`. Then validate canonical `main` CI and leave the live Basic Verify click as the explicit post-deploy acceptance check.
