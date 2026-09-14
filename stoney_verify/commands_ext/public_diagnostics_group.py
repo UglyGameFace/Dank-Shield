@@ -124,7 +124,7 @@ def _startup_diagnostics_embed(
     guild_context_error: Optional[BaseException] = None,
     activity_scope: Optional[ActivityScopeReport] = None,
 ) -> discord.Embed:
-    report = build_startup_health_report(load_missing=False)
+    report = build_startup_health_report()
 
     color = discord.Color.green()
     if report.status == "blocker":
@@ -144,20 +144,19 @@ def _startup_diagnostics_embed(
     embed = discord.Embed(
         title="🩺 Dank Shield Diagnostics",
         description=(
-            "Read-only startup, guild-config, and activity-coverage health report. The report itself does **not** reload guards, "
+            "Read-only startup-owner, guild-config, and activity-coverage health report. The report itself does **not** import or reload guards, "
             "change setup, grant permissions, touch tickets, or mutate server config. Use **Fix Channel Access** below only when you intentionally want the separate repair workflow."
         ),
         color=color,
         timestamp=now_utc(),
     )
     embed.add_field(
-        name="Startup Status",
+        name="Startup Ownership",
         value=(
             f"Status: **{report.status.upper()}**\n"
-            f"Expected guards: `{report.expected_count}`\n"
+            f"Expected boot owners: `{report.expected_count}`\n"
             f"Loaded: `{report.loaded_count}`\n"
-            f"Failed: `{report.failed_count}`\n"
-            f"Missing/not loaded yet: `{report.missing_count}`"
+            f"Missing: `{report.missing_count}`"
         ),
         inline=False,
     )
@@ -187,7 +186,7 @@ def _startup_diagnostics_embed(
     embed.add_field(
         name="What this means",
         value=(
-            "**BLOCKER** means at least one startup guard failed and the bot may be unsafe to release.\n"
+            "**Startup warning** means an explicitly owned boot module is not present in this process; diagnostics will not import it for you.\n"
             "**Unsafe to run mutations** means this guild should refuse setup/ticket/protection actions instead of guessing config.\n"
             "**Incomplete activity coverage** means Dank Shield will not treat inactivity evidence as purge-safe until channel access is restored.\n"
             "**Not ready** means setup is incomplete, but diagnostics stayed read-only and did not change anything."
