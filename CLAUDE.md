@@ -25,24 +25,36 @@ Discloud runs main.py
 
 Critical, non-obvious facts (verified — do not assume otherwise):
 
-- **The startup-guard loader is NOT called at boot.** `load_all_startup_guards()`
-  / `load_startup_guards()` has no live call site. The ~100 modules listed in
-  `stoney_verify/startup_guards/__init__.py::_STARTUP_GUARDS` are **dormant**
-  unless something imports them directly. Do not assume a guard runs just
-  because it is in that list. `main.py`'s "minimal guards" comment is the real
-  contract.
+- **There is no executable bulk startup-guard loader.** The old
+  `load_all_startup_guards()` / `load_startup_guards()` mechanism was formally
+  retired after the runtime-ownership audit. `startup_guards/__init__.py` keeps
+  the old 76-module list only as inert historical metadata while older audits
+  are migrated. Nothing iterates that list during normal boot, and new code must
+  not treat membership as runtime activation.
 - **The guards that actually run** are the few imported explicitly by `main.py`
   (`discord_api_safety`, `command_safety`, `command_scope_dedupe`,
   `public_server_env_id_guard`, `guild_config_runtime_validator`,
-  `interaction_action_lock_guard`), the ones imported by `sitecustomize.py` /
-  `usercustomize.py` (host auto-import), and anything imported transitively by
-  the `app.py` module chain.
+  `interaction_action_lock_guard`), the host-owned imports from
+  `sitecustomize.py`, their verified transitive imports, and guards/helpers
+  deliberately imported by canonical feature modules. See
+  `docs/STARTUP_GUARD_RUNTIME_OWNERSHIP_AUDIT.md` before changing ownership.
+- **Importing the `startup_guards` package currently imports `process_health`.**
+  That package-level process/import/signal safety is a real live owner and was
+  deliberately preserved. Moving it requires its own boot-order-sensitive
+  migration; do not confuse bulk-loader retirement with removal of this side
+  effect.
 - **Slash commands register as an import side effect** (`commands.py` calls
   `register_all_commands(bot, bot.tree)` at module top level). Discord's global
   command cap is 100; the live public surface is ~9 today. Adding a command can
   silently push another out — see `command_safety`.
 - **`sitecustomize.py` and `usercustomize.py` auto-run before `main.py`** and
-  mutate the command registry. Keep them consistent with each other.
+  mutate the command registry. Keep them consistent with each other. Do not add
+  a fallback startup loader or another compatibility installer there.
+- **Channel Builder routes are directly wired.** `app.py` starts
+  `api_new.server.start_api(bot)`, `server.py` imports
+  `register_channel_builder_routes`, and `start_api()` registers those routes
+  directly. The old `channel_builder_api_guard` bridge is removed and must stay
+  removed.
 
 If you change boot order, guard imports, or registration, you are touching the
 most load-bearing code in the repo. Re-read section 4.
@@ -60,8 +72,9 @@ most load-bearing code in the repo. Re-read section 4.
   (`setattr` on `discord.*` classes, `CommandTree.add_command/sync`, etc.).
   If a patch seems necessary, stop and ask.
 - **Prefer deleting a superseded patch over adding another layer.**
-- **Do not re-activate the guard loader** (`load_all_startup_guards`) without a
-  deliberate, staged review — it would suddenly run ~100 dormant monkey-patches.
+- **Do not restore a bulk startup-guard loader.** If dormant behavior is proven
+  necessary, migrate only that behavior into its canonical owner with behavioral
+  coverage. Never iterate the historical guard inventory.
 - No new `*_new` parallel module trees. Finish or delete; do not fork a third copy.
 - No `from .globals import *` in new code — import explicit names.
 
@@ -94,7 +107,7 @@ These are load-bearing or dangerous to change blind:
 3. `stoney_verify/globals.py` — the shared `bot` singleton, env config, Supabase client, import-time invite listener (wildcard-exported; ripples everywhere).
 4. `stoney_verify/app.py` import sequence & `on_ready`.
 5. `stoney_verify/commands.py` (esp. the import-time `register_all_commands`) and `commands_ext/__init__.py` (registration pipeline + 100-command budget).
-6. `startup_guards/__init__.py` loader list and the infra-safety guards in section 1.
+6. `startup_guards/__init__.py` historical inventory/package side effects and the explicitly owned infra-safety guards in section 1.
 7. `stoney_verify/guild_config.py` — per-server config resolution (source of past isolation bugs).
 8. Supabase client lifecycle (`get_supabase`/`reset_supabase`) and `supabase/migrations/`.
 9. `bot.tree.clear_commands` / `copy_global_to` and the dangerous-clear env flags — can wipe the live command surface for every server.
@@ -118,13 +131,19 @@ These are load-bearing or dangerous to change blind:
 
 These are real and need dedicated, tested passes — flag them, don't blind-fix:
 
-- **Dead guard loader.** `_STARTUP_GUARDS` + `load_all_startup_guards` are
-  effectively dead. Decide: formally retire the loader, or deliberately re-wire a
-  vetted subset. Do not flip it on casually.
-- **Channel Builder dashboard API is unwired in production.** Its routes register
-  only via `channel_builder_api_guard`, which lives in the dead loader and is
-  imported by no live path; `server.py` is not directly patched. The
-  `channel-builder-*` workflows reflect this. Wiring it is a deliberate task.
+- **Live guard/monkey-patch ownership.** Bulk loading is retired, but several
+  explicitly owned modules still patch discord.py, `builtins.__import__`, or
+  command-tree behavior (`process_health`, `runtime_safety`,
+  `public_startup_scope`, command safety wrappers, and selected feature-owned
+  helpers). Migrate them into canonical owners one subsystem at a time; do not
+  delete them merely because they live under `startup_guards/`.
+- **Historical dormant guard inventory.** The inert 76-module record is retained
+  for audit compatibility, not activation. Remove dormant files only after
+  proving import reachability, newer canonical ownership, and regression safety.
+- **Channel Builder follow-up debt is not route wiring.** Its API routes are
+  directly registered today. Remaining work, if any, is product/runtime cleanup
+  and stale documentation/workflow path references, not reintroducing the old
+  startup-guard bridge.
 - **Dank Design subsystem** (`commands_ext/public_design_studio.py`) is the most
   churn-prone area. Its old static tests were deleted (they pointed at a
   deprecated shim). Rebuild coverage behaviorally before reworking it.
