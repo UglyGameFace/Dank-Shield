@@ -13,10 +13,9 @@ install_process_health()
 # can call audit logs, send modlogs, or edit ticket channels.
 import stoney_verify.startup_guards.discord_api_safety  # noqa: F401
 
-# Keep production/public slash commands on one surface. This runs before app.py
-# so the app does not create beta guild command copies unless explicitly enabled.
-import stoney_verify.startup_guards.command_safety  # noqa: F401
-import stoney_verify.startup_guards.command_scope_dedupe  # noqa: F401
+# Command-tree policy is owned natively by stoney_verify.command_runtime through
+# the shared bot constructed in globals.py. Do not restore command-tree startup
+# guards or global discord.py monkey patches here.
 
 # Public production must never read deployment-level Discord role/channel/
 # category/home-guild IDs. This runs before app.py imports globals consumers.
@@ -26,8 +25,6 @@ import stoney_verify.startup_guards.public_server_env_id_guard  # noqa: F401
 # stoney_verify.commands and commands_ext, never startup_guards.
 from stoney_verify.startup_guards import (  # noqa: F401
     discord_api_safety,
-    command_safety,
-    command_scope_dedupe,
     public_server_env_id_guard,
     guild_config_runtime_validator,
     interaction_action_lock_guard,
