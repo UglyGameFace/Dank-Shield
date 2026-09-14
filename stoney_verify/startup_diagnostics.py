@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Sequence
 EXPECTED_STARTUP_OWNER_MODULES: tuple[str, ...] = (
     "stoney_verify.startup_guards.process_health",
     "stoney_verify.startup_guards.discord_api_safety",
+    "stoney_verify.command_runtime",
     "stoney_verify.startup_guards.public_server_env_id_guard",
     "stoney_verify.startup_guards.guild_config_runtime_validator",
     "stoney_verify.startup_guards.interaction_action_lock_guard",
