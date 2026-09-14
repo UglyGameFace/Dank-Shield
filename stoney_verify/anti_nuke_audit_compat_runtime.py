@@ -60,7 +60,12 @@ def _patch_action_names() -> bool:
     guardian._PANIC_ACTIONS = frozenset(guardian._PANIC_WEIGHTS)  # noqa: SLF001
     self_action._PROTECTED_ACTIONS = frozenset(  # noqa: SLF001
         set(self_action._PROTECTED_ACTIONS)  # noqa: SLF001
-        | {"voice_channel_status_create", "voice_channel_status_delete"}
+        | {
+            "voice_channel_status_create",
+            "voice_channel_status_delete",
+            "member_move",
+            "member_disconnect",
+        }
     )
     setattr(guardian, _ACTION_FLAG, True)
     return True
@@ -72,16 +77,38 @@ def _patch_self_action_route() -> bool:
     original = self_action._request_spec  # noqa: SLF001
 
     def wrapped(bot: discord.Client, route: Any, kwargs: Mapping[str, Any]):
+        method = str(getattr(route, "method", "") or "").strip().upper()
+        path = self_action._route_path(route)  # noqa: SLF001
+        payload = kwargs.get("json")
+        if not isinstance(payload, Mapping):
+            payload = {}
+
+        member = re.fullmatch(r"/guilds/(\d+)/members/(\d+)", path)
+        if member and method == "PATCH":
+            guild_id = int(member.group(1))
+            member_id = int(member.group(2))
+            if "channel_id" in payload:
+                action = (
+                    "member_disconnect"
+                    if payload.get("channel_id") is None
+                    else "member_move"
+                )
+                return self_action._spec((action,), guild_id)  # noqa: SLF001
+            if "roles" in payload:
+                return self_action._spec(  # noqa: SLF001
+                    ("member_role_update",),
+                    guild_id,
+                    self_action._id_key(member_id),  # noqa: SLF001
+                )
+
         spec = original(bot, route, kwargs)
         if spec is not None:
             return spec
-        method = str(getattr(route, "method", "") or "").strip().upper()
-        path = self_action._route_path(route)  # noqa: SLF001
+
         match = re.fullmatch(r"/channels/(\d+)/voice-status", path)
         if match and method == "PUT":
             channel_id = int(match.group(1))
-            payload = kwargs.get("json")
-            status = payload.get("status") if isinstance(payload, Mapping) else None
+            status = payload.get("status")
             action = (
                 "voice_channel_status_delete"
                 if status is None
