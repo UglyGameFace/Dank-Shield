@@ -16,7 +16,12 @@ import discord
 
 from stoney_verify.guild_config import get_guild_config
 from stoney_verify.setup_engine.loader import snapshot_from_config
-from stoney_verify.setup_engine.verification_modes import BASIC_VERIFY_CUSTOM_ID, BASIC_VERIFY_FOOTER
+from stoney_verify.setup_engine.verification_modes import (
+    BASIC_VERIFY_CUSTOM_ID,
+    BASIC_VERIFY_FOOTER,
+    basic_verify_allowed_for_guild,
+    basic_verify_disabled_reason,
+)
 
 _BASIC_VERIFY_LOCKS: dict[str, asyncio.Lock] = {}
 _RUNTIME_VIEW_REGISTERED = False
@@ -432,6 +437,8 @@ async def post_basic_verify_panel(channel: discord.TextChannel, *, actor_id: int
     if not isinstance(channel, discord.TextChannel):
         return "invalid_channel"
     cfg = await get_guild_config(channel.guild.id, refresh=True)
+    if not basic_verify_allowed_for_guild(channel.guild, cfg):
+        return "disabled"
     embed = build_basic_verify_embed(channel.guild, cfg)
     view = BasicVerifyView()
 
@@ -457,6 +464,13 @@ async def post_basic_verify_panel(channel: discord.TextChannel, *, actor_id: int
 async def apply_basic_verification(member: discord.Member) -> tuple[bool, str]:
     guild = member.guild
     cfg = await get_guild_config(guild.id, refresh=True)
+
+    # The persistent Basic Verify view is globally registered so old Discord
+    # messages keep dispatching after restart. Authorization therefore belongs
+    # here, at the role-mutation boundary, not only in panel posting or callers.
+    if not basic_verify_allowed_for_guild(guild, cfg):
+        return False, basic_verify_disabled_reason(guild, cfg)
+
     snap = snapshot_from_config(guild.id, cfg)
 
     verified = _role(guild, snap.verified_role_id)

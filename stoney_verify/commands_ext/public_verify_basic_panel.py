@@ -6,6 +6,7 @@ import discord
 from discord import app_commands
 
 from ..guild_config import get_guild_config
+from ..setup_engine.verification_modes import basic_verify_disabled_reason
 from ..verification_new.basic_verify import (
     install_basic_verify_runtime,
     post_basic_verify_panel,
@@ -60,6 +61,12 @@ async def verify_panel(interaction: discord.Interaction) -> None:
     try:
         runtime_ready = _install_basic_verify_runtime(getattr(interaction, "client", None))
         result = await post_basic_verify_panel(target, actor_id=int(getattr(interaction.user, "id", 0) or 0))
+        if result == "disabled":
+            cfg = await get_guild_config(target.guild.id, refresh=True)
+            return await _send(
+                interaction,
+                basic_verify_disabled_reason(target.guild, cfg),
+            )
         suffix = " Runtime handler ready." if runtime_ready else " Runtime handler was not confirmed; restart the bot if the button still fails."
         await _send(interaction, f"Panel {result} in {target.mention}.{suffix}")
     except Exception as exc:
