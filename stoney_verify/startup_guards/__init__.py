@@ -8,6 +8,10 @@ feature modules. The tuple below is retained only as inert historical metadata
 while older audits/tests are migrated away from treating registry membership as
 runtime activation.
 
+Importing this package must not activate process health or other unrelated
+runtime behavior. Process health is installed and attached explicitly by
+``main.py``.
+
 Do not add an executable bulk loader here. Importing every historical guard would
 reactivate old monkey patches, listeners, command-tree mutations, compatibility
 layers, and schema-era code with duplicate ownership risk.
@@ -15,21 +19,14 @@ layers, and schema-era code with duplicate ownership risk.
 
 from typing import Tuple
 
-# ``process_health`` is an intentionally preserved package-level side effect.
-# Existing boot paths import ``stoney_verify.startup_guards`` before the app and
-# rely on its process/import/signal safety. Moving that owner belongs in a
-# separate, boot-order-sensitive migration.
-from .process_health import start_health_loop as start_process_health_loop
-
 
 # Historical only. This is NOT an activation plan and nothing in this package
 # iterates it. Keep the legacy private name temporarily because a few focused
 # compatibility tests use the list as historical metadata; new code must use
-# neither name to decide what runs in production. Retired files are removed from
-# this inventory once their ownership migration is complete.
+# neither name to decide what runs in production. Retired/migrated owners are
+# removed from this inventory as their ownership migration completes.
 _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.embed_literal_newline_guard",
-    "stoney_verify.startup_guards.process_health",
     "stoney_verify.startup_guards.command_safety",
     "stoney_verify.startup_guards.global_interaction_trace_guard",
     "stoney_verify.startup_guards.interaction_action_lock_guard",
@@ -109,5 +106,4 @@ LEGACY_DORMANT_STARTUP_GUARDS: Tuple[str, ...] = _STARTUP_GUARDS
 
 __all__ = [
     "LEGACY_DORMANT_STARTUP_GUARDS",
-    "start_process_health_loop",
 ]
