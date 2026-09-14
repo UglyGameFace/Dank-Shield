@@ -28,28 +28,31 @@ Critical, non-obvious facts (verified — do not assume otherwise):
 - **There is no executable bulk startup-guard loader.** The old
   `load_all_startup_guards()` / `load_startup_guards()` mechanism was formally
   retired after the runtime-ownership audit. `startup_guards/__init__.py` keeps
-  the old 76-module list only as inert historical metadata while older audits
-  are migrated. Nothing iterates that list during normal boot, and new code must
-  not treat membership as runtime activation.
+  an inert historical inventory while older audits are migrated. The inventory
+  originally contained 76 names; retired files are removed as their ownership
+  migrations complete. Nothing iterates that list during normal boot, and new
+  code must not treat membership as runtime activation.
 - **The guards that actually run** are the few imported explicitly by `main.py`
   (`discord_api_safety`, `command_safety`, `command_scope_dedupe`,
   `public_server_env_id_guard`, `guild_config_runtime_validator`,
-  `interaction_action_lock_guard`), the host-owned imports from
-  `sitecustomize.py`, their verified transitive imports, and guards/helpers
-  deliberately imported by canonical feature modules. See
-  `docs/STARTUP_GUARD_RUNTIME_OWNERSHIP_AUDIT.md` before changing ownership.
+  `interaction_action_lock_guard`), the verified Basic Verify compatibility
+  imports from `sitecustomize.py`, their verified transitive imports, and
+  guards/helpers deliberately imported by canonical feature modules. The old
+  `runtime_safety` and `public_startup_scope` import hooks are retired; do not
+  restore them. See `docs/STARTUP_GUARD_RUNTIME_OWNERSHIP_AUDIT.md` and
+  `docs/RUNTIME_SAFETY_NATIVE_OWNERSHIP_AUDIT.md` before changing ownership.
 - **Importing the `startup_guards` package currently imports `process_health`.**
   That package-level process/import/signal safety is a real live owner and was
   deliberately preserved. Moving it requires its own boot-order-sensitive
-  migration; do not confuse bulk-loader retirement with removal of this side
+  migration; do not confuse other guard retirement with removal of this side
   effect.
 - **Slash commands register as an import side effect** (`commands.py` calls
   `register_all_commands(bot, bot.tree)` at module top level). Discord's global
   command cap is 100; the live public surface is ~9 today. Adding a command can
   silently push another out — see `command_safety`.
-- **`sitecustomize.py` and `usercustomize.py` auto-run before `main.py`** and
-  mutate the command registry. Keep them consistent with each other. Do not add
-  a fallback startup loader or another compatibility installer there.
+- **`sitecustomize.py` and `usercustomize.py` auto-run before `main.py`.** Their
+  remaining behavior is compatibility-scoped. Do not add a fallback startup
+  loader, application runtime patcher, or another compatibility installer there.
 - **Channel Builder routes are directly wired.** `app.py` starts
   `api_new.server.start_api(bot)`, `server.py` imports
   `register_channel_builder_routes`, and `start_api()` registers those routes
@@ -103,7 +106,7 @@ most load-bearing code in the repo. Re-read section 4.
 These are load-bearing or dangerous to change blind:
 
 1. `main.py` — entry point and guard import order.
-2. `sitecustomize.py` / `usercustomize.py` — host-level auto-run hooks that mutate the command registry.
+2. `sitecustomize.py` / `usercustomize.py` — host-level auto-run compatibility hooks.
 3. `stoney_verify/globals.py` — the shared `bot` singleton, env config, Supabase client, import-time invite listener (wildcard-exported; ripples everywhere).
 4. `stoney_verify/app.py` import sequence & `on_ready`.
 5. `stoney_verify/commands.py` (esp. the import-time `register_all_commands`) and `commands_ext/__init__.py` (registration pipeline + 100-command budget).
@@ -131,15 +134,18 @@ These are load-bearing or dangerous to change blind:
 
 These are real and need dedicated, tested passes — flag them, don't blind-fix:
 
-- **Live guard/monkey-patch ownership.** Bulk loading is retired, but several
-  explicitly owned modules still patch discord.py, `builtins.__import__`, or
-  command-tree behavior (`process_health`, `runtime_safety`,
-  `public_startup_scope`, command safety wrappers, and selected feature-owned
-  helpers). Migrate them into canonical owners one subsystem at a time; do not
-  delete them merely because they live under `startup_guards/`.
-- **Historical dormant guard inventory.** The inert 76-module record is retained
-  for audit compatibility, not activation. Remove dormant files only after
-  proving import reachability, newer canonical ownership, and regression safety.
+- **Live guard/monkey-patch ownership.** Bulk loading is retired. The temporary
+  `runtime_safety` and `public_startup_scope` import hooks are also retired, with
+  their one required behavior moved into the canonical identity-admin command.
+  Remaining live patch debt includes `process_health`, command safety/tree
+  wrappers, and selected feature-owned helpers. Migrate them into canonical
+  owners one subsystem at a time; do not delete them merely because they live
+  under `startup_guards/`.
+- **Historical dormant guard inventory.** The inert historical record is retained
+  for audit compatibility, not activation. Retired files are removed from the
+  inventory as ownership migrations complete. Remove other dormant files only
+  after proving import reachability, newer canonical ownership, and regression
+  safety.
 - **Channel Builder follow-up debt is not route wiring.** Its API routes are
   directly registered today. Remaining work, if any, is product/runtime cleanup
   and stale documentation/workflow path references, not reintroducing the old
