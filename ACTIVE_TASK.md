@@ -1,87 +1,95 @@
 # ACTIVE TASK
 
-## DS-AUD-009 — Release governance and production promotion safety
+## Verification integrity audit repair
 
-**Status:** IMPLEMENTED ON BRANCH — FINAL EXACT-HEAD REVALIDATION IN PROGRESS
-**Branch:** `fix/release-governance-009`
-**Base:** `a9d4a7bd83c773c9f0fa265d6169485ff1f5d17b`
-**PR:** #212 (draft)
+**Status:** IMPLEMENTED ON BRANCH — FOCUSED VALIDATION PENDING
+**Branch:** `fix/verification-integrity-mode-authorization`
+**Base:** `9112528e42e77ec348abe69d9207e37a64294380`
+**PR:** not opened yet
 
 ## Outcome
 
-Make production-changing releases fail closed behind validated repository state instead of allowing production mutation to race, bypass CI, or promote stale main history.
+Ensure every Basic Verify entry point uses one canonical per-guild authorization policy so stale Discord buttons, persistent views, fallback listeners, staff tools, or legacy configuration cannot grant access when Simple Verify is not actually enabled.
 
 ## Scope
 
-- GitHub release/merge governance that can be enforced from the repository.
-- Production Supabase migration promotion and rollback/recovery documentation.
-- Durable CI regression coverage for the production-promotion contract.
-- Explicit documentation of the GitHub-hosted branch/ruleset control that must be enabled outside repository contents.
+- Canonical Basic / Voice / ID / disabled verification-mode resolution.
+- Authorization at the Basic role-mutation boundary.
+- Basic verification panel posting authorization.
+- Backward compatibility for legitimate legacy Basic Verify configurations.
+- Behavioral regression coverage for specialized and stale verification states.
 
-Application feature behavior, Discord UX, AntiNuke behavior, tickets, setup, and unrelated architectural cleanup are out of scope.
+AntiNuke, release governance, tickets unrelated to verification, setup redesign outside verification mode truth, and unrelated cleanup are out of scope.
 
 ## Findings / root cause
 
-- `main` is currently unprotected and the repository has no GitHub rulesets.
-- The canonical `Dank Shield CI` workflow validates pull requests and pushes to `main`, but GitHub currently does not require that validation before `main` changes.
-- `.github/workflows/deploy-supabase-migrations.yml` previously deployed production migrations directly on qualifying pushes to `main`.
-- That migration workflow was independent of the `Dank Shield CI` result, so production schema mutation could begin before the same commit passed canonical CI.
-- The migration deploy already used the GitHub `production` environment and a serialized concurrency group, but neither created a dependency on canonical CI.
-- Existing schema-authority tests verified that production changes use the Supabase CLI, but did not verify the CI-before-production promotion relationship.
-- The repository currently has no GitHub releases or tag refs, so release identity/rollback provenance was not established by tags/releases.
-- Initial DS-AUD-009 implementation still left `workflow_dispatch` able to prove only main-history membership; review caught that manual recovery also needed exact canonical-CI proof to avoid becoming a bypass.
-- A later final race review found that ancestor-only validation could allow an older successful `main` CI run to promote after a newer commit became canonical `main`. Production promotion must therefore require the exact current `main` head, not merely a valid ancestor.
+- `app.py` installs the persistent Basic Verify runtime globally before Discord login so old posted buttons remain dispatchable after restart.
+- `apply_basic_verification()` previously refreshed guild configuration only to resolve roles; it did not verify that Simple Verify remained authorized before adding access roles and removing Unverified.
+- A stale Basic Verify message could therefore reach the role-grant path after a guild changed to Voice Verify, protected ID/Web verification, or disabled Simple Verify.
+- `setup_engine.verification_modes.effective_verification_mode()` previously represented only `id_verify` versus `basic_button`, so Voice-only and disabled verification state collapsed to Basic.
+- Canonical `SetupServiceState` already distinguishes `simple_verify`, `voice_verify`, and `id_verify`, including intentional custom Simple + Voice configurations.
+- The richer DS-SETUP-020 compatibility layer is loaded through the dormant startup-guard catalog, so it cannot be treated as production authorization ownership. `CLAUDE.md` explicitly documents that the startup-guard loader is not called at boot.
+- Existing setup tests already assert that specialized verification must not fake Simple Verify.
 
 ## Execution path before repair
 
-1. A change reached `main`.
-2. `Dank Shield CI` started from the `push` event.
-3. If `supabase/migrations/**` changed, `Deploy Supabase migrations` also started from the same `push` event.
-4. The migration job could therefore reach `supabase db push` without first proving the canonical CI run for that exact `main` SHA succeeded.
+1. `app.py` globally registers `BasicVerifyView` and the fallback Basic interaction listener.
+2. An old or current Basic Verify component with the stable custom ID dispatches after restart.
+3. `apply_basic_verification()` loads guild config and resolves verification roles.
+4. Without checking whether Simple Verify is still enabled, it adds Verified/member access and removes Unverified.
+5. Upstream callers could add their own mode checks, but the actual role mutation boundary itself was not fail closed.
 
 ## Implemented
 
-- Rewired automatic production migration deployment to `workflow_run` after `Dank Shield CI` completes on `main`.
-- Automatic promotion requires the canonical run conclusion to be `success`, the triggering event to be `push`, and the triggering branch to be `main`.
-- Production checkout is pinned to the exact triggering `head_sha`.
-- Before any production access, the workflow fetches canonical `main` and rejects the target unless it is still the exact current `origin/main` head; stale successful CI completions therefore fail closed.
-- Manual recovery still exists, but now requires the full immutable current `main` SHA and queries GitHub Actions to prove a successful `Dank Shield CI` push run on `main` for that exact SHA.
-- Added the minimum `actions: read` token permission needed for manual CI proof while retaining `contents: read`.
-- Preserved the existing `production` environment, serialized migration concurrency, secret checks, migration status, dry-run preview, and Supabase CLI deployment ownership.
-- Extended `tests/test_schema_authority.py` so direct-push promotion, missing current-head validation, stale ancestor promotion, missing exact-SHA checks, or a manual CI bypass fail regression coverage.
-- Added `docs/RELEASE_GOVERNANCE.md` covering current-head exact-SHA release identity, canonical promotion order, stale-run rejection, forward-only migration correction, rollback compatibility, required release evidence, emergency rules, and the hosting-layer `main` ruleset requirement.
-- Reused the existing production migration workflow rather than adding a second deployment owner.
+- Added `basic_verify_allowed_for_guild()` as the canonical Basic authorization policy.
+- Protected allowlisted ID/Web verification takes precedence over Basic Verify.
+- Canonical setup-service state now determines whether Simple Verify is enabled.
+- Voice-only state resolves to `voice_verify`; no authorized Basic/ID/Voice service resolves to `disabled`.
+- Intentional custom Simple + Voice configurations still resolve to `basic_button` because Simple Verify is explicitly enabled.
+- Legitimate legacy Basic configs remain supported through historical aggregate `verification_enabled=true` and Basic mode aliases when they do not conflict with newer specialized/explicit state.
+- Explicit Basic disable beats stale legacy Basic mode strings.
+- Non-allowlisted ID requests no longer silently downgrade to one-click Basic Verify.
+- `apply_basic_verification()` now blocks unauthorized Basic Verify before snapshot/role resolution or any Discord role mutation.
+- `post_basic_verify_panel()` now refuses to post/refresh a Basic panel when Simple Verify is unauthorized.
+- `/verify panel` explains the canonical disabled reason instead of presenting a non-working or unsafe Basic panel.
+- Added focused behavioral regressions for Basic, Voice-only, disabled, Simple + Voice, legacy Basic, explicit-disable precedence, ID precedence, non-allowlisted ID, stale Basic buttons, and disabled panel posting.
+- Updated the older non-allowlisted ID regression to require fail-closed `disabled` state rather than silent Basic downgrade.
 
 ## Validation / results
 
-- Prior exact head `7dfff581972a249899badfaaae9e88e4062869e5` passed all six PR workflows, including full Dank Shield CI and Schema Authority SQL.
-- That validation was intentionally superseded after final review found and repaired the stale-successful-CI promotion race.
-- Final exact-head revalidation is required after the current-head hardening commits.
+Local container execution is unavailable because the execution environment cannot resolve GitHub to clone the repository. Validation must therefore proceed through the repository's protected PR CI after final pre-CI review.
 
 ## Validation required
 
-- Focused release-governance/schema-authority tests pass on the final exact head.
-- Workflow YAML and shell logic are reviewed for automatic `workflow_run`, stale-run rejection, and manual-dispatch paths.
-- Full final exact-head Dank Shield CI passes.
-- Relevant final exact-head companion workflows pass, including Schema Authority SQL.
-- Final diff contains only DS-AUD-009 release-governance work plus this task record.
-- Current GitHub branch/ruleset state is re-checked before completion.
-- After merge, the resulting `main` SHA must pass canonical CI before the new production-promotion workflow can proceed.
+- Focused verification authorization and ID ticket tests pass.
+- Existing Basic Verify restart/persistent-view tests pass.
+- Existing setup service-state, Voice Verify, member-browser, and ID verification regressions pass.
+- Python compile/static checks pass.
+- Full exact-head Dank Shield CI passes.
+- Relevant companion workflows pass.
+- Final diff contains only verification-integrity work plus this task record.
+- No new startup guard, monkey patch, root runtime patch, or second verification-role mutation owner is introduced.
 
 ## Cleanup / conflicts
 
-No conflicting release workflow implementation was found. The existing Supabase deploy workflow remains the sole production schema mutation owner. No runtime code or migration SQL is modified by DS-AUD-009.
+The role mutation itself is now the fail-closed authority. Existing upstream staff-browser preflight still uses the canonical effective mode for UX and does not bypass the mutation boundary; review will determine whether removing that redundant preflight is worth widening this repair.
 
 ## Blockers / risks
 
-Repository contents cannot by themselves enable GitHub branch protection/rulesets. `main` must ultimately have a hosting-layer rule requiring pull requests and required checks; the connected GitHub surface currently exposes ruleset reads but no ruleset mutation action.
+No known product blocker. The remaining risk is regression compatibility with older verification-mode tests and historical setup shapes; exact-head CI is required before merge readiness.
+
+## Completed prior task
+
+### DS-AUD-009 — Release governance and production promotion safety
+
+Completed and merged as PR #212. Canonical merge SHA `9112528e42e77ec348abe69d9207e37a64294380` passed post-merge Dank Shield CI before the gated Supabase production promotion ran successfully. `main` is protected with required pull-request checks.
 
 ## Suspended task
 
 ### DS-SEC-044 — Hostile bot re-entry race and integration persistence
 
-Suspended by explicit FORCE SWITCH after PR #211 merged and exact-head CI passed. Remaining acceptance evidence: after deployment, repeat the hostile/GANG-Nuker re-entry test and confirm no destructive action lands before the hostile identity/integration is removed. No additional AntiNuke investigation is part of DS-AUD-009.
+Suspended by explicit FORCE SWITCH after PR #211 merged and exact-head CI passed. Remaining acceptance evidence: after deployment, repeat the hostile/GANG-Nuker re-entry test and confirm no destructive action lands before the hostile identity/integration is removed.
 
 ## Next step
 
-Validate the final PR #212 exact head, inspect any failing workflow at the exact failing step, then review the final diff and hosting-layer ruleset state before merge readiness.
+Open a draft PR to obtain focused/full CI evidence, inspect any failure at the exact failing step, correct only root-cause regressions, then perform final exact-head diff and workflow validation before merge readiness.
