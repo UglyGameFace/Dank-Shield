@@ -27,7 +27,6 @@ from typing import Tuple
 # removed from this inventory as their ownership migration completes.
 _STARTUP_GUARDS: Tuple[str, ...] = (
     "stoney_verify.startup_guards.embed_literal_newline_guard",
-    "stoney_verify.startup_guards.command_safety",
     "stoney_verify.startup_guards.global_interaction_trace_guard",
     "stoney_verify.startup_guards.interaction_action_lock_guard",
     "stoney_verify.startup_guards.slash_command_cleanup",
