@@ -182,13 +182,19 @@ def test_production_schema_deploy_waits_for_canonical_ci() -> None:
     assert "github.event.workflow_run.head_branch == 'main'" in workflow
     assert "github.event.workflow_run.head_sha" in workflow
 
-    # Manual recovery is deliberately explicit and immutable: it must target a
-    # full commit SHA in canonical main history and independently prove that
-    # the exact SHA already passed canonical Dank Shield CI.
+    # Promotion must reject stale CI completions. An older successful main run
+    # must never deploy after a newer commit has already become canonical main.
+    assert 'current_main_sha="$(git rev-parse origin/main)"' in workflow
+    assert 'if [ "$TARGET_SHA" != "$current_main_sha" ]; then' in workflow
+    assert "Stale release target" in workflow
+    assert "git merge-base --is-ancestor" not in workflow
+
+    # Manual recovery is deliberately explicit and immutable: it must target
+    # the current main SHA and independently prove that exact SHA already passed
+    # canonical Dank Shield CI.
     assert "workflow_dispatch:" in workflow
     assert "target_sha:" in workflow
     assert "^[0-9a-f]{40}$" in workflow
-    assert "git merge-base --is-ancestor" in workflow
     assert "actions: read" in workflow
     assert "Verify manual target passed canonical CI" in workflow
     assert '"/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs"' in workflow
