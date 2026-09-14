@@ -1,98 +1,100 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+import builtins
+from types import ModuleType
 
 from stoney_verify import startup_diagnostics as diagnostics
 
 
-def test_startup_health_report_reads_current_state_without_loading_missing(monkeypatch):
-    load_calls: list[str] = []
-    fake_loader = SimpleNamespace(
-        _STARTUP_GUARDS=("guard.loaded", "guard.missing"),
-        _LOADED={"guard.loaded": object()},
-        _ERRORS={},
-        load_all_startup_guards=lambda: load_calls.append("called"),
+def _module(name: str) -> ModuleType:
+    return ModuleType(name)
+
+
+def test_startup_health_report_reads_explicit_owner_state_without_importing(monkeypatch):
+    owners = (
+        "guard.loaded",
+        "guard.missing",
     )
+    monkeypatch.setattr(diagnostics, "EXPECTED_STARTUP_OWNER_MODULES", owners)
+    monkeypatch.setitem(diagnostics.sys.modules, "guard.loaded", _module("guard.loaded"))
+    diagnostics.sys.modules.pop("guard.missing", None)
 
-    monkeypatch.setattr(diagnostics, "_load_startup_loader", lambda: fake_loader)
+    import_calls: list[str] = []
+    original_import = builtins.__import__
 
-    report = diagnostics.build_startup_health_report(load_missing=False)
+    def tracking_import(name, *args, **kwargs):
+        import_calls.append(str(name))
+        return original_import(name, *args, **kwargs)
 
-    assert load_calls == []
+    monkeypatch.setattr(builtins, "__import__", tracking_import)
+
+    report = diagnostics.build_startup_health_report()
+
+    assert import_calls == []
     assert report.status == "warning"
     assert report.expected_count == 2
     assert report.loaded_count == 1
     assert report.failed_count == 0
     assert report.missing_count == 1
-    assert report.warnings == ["guard.missing: not loaded yet"]
+    assert report.blockers == []
+    assert report.warnings == ["guard.missing: expected startup owner is not loaded"]
     assert [guard.state for guard in report.guards] == ["loaded", "missing"]
 
 
-def test_startup_health_report_can_load_missing_on_demand(monkeypatch):
-    load_calls: list[str] = []
-
-    def load_all() -> None:
-        load_calls.append("called")
-
-    fake_loader = SimpleNamespace(
-        _STARTUP_GUARDS=("guard.loaded",),
-        _LOADED={"guard.loaded": object()},
-        _ERRORS={},
-        load_all_startup_guards=load_all,
-    )
-
-    monkeypatch.setattr(diagnostics, "_load_startup_loader", lambda: fake_loader)
-
-    report = diagnostics.build_startup_health_report(load_missing=True)
-
-    assert load_calls == ["called"]
-    assert report.status == "ok"
-    assert report.expected_count == 1
-    assert report.loaded_count == 1
-    assert report.failed_count == 0
-    assert report.missing_count == 0
-
-
-def test_startup_health_report_marks_failed_guards_as_blockers(monkeypatch):
-    error = RuntimeError("boom")
-    fake_loader = SimpleNamespace(
-        _STARTUP_GUARDS=("guard.failed",),
-        _LOADED={},
-        _ERRORS={"guard.failed": error},
-    )
-
-    monkeypatch.setattr(diagnostics, "_load_startup_loader", lambda: fake_loader)
+def test_startup_health_report_is_ok_when_every_explicit_owner_is_loaded(monkeypatch):
+    owners = ("guard.one", "guard.two")
+    monkeypatch.setattr(diagnostics, "EXPECTED_STARTUP_OWNER_MODULES", owners)
+    for name in owners:
+        monkeypatch.setitem(diagnostics.sys.modules, name, _module(name))
 
     report = diagnostics.build_startup_health_report()
 
-    assert report.status == "blocker"
-    assert report.expected_count == 1
-    assert report.loaded_count == 0
-    assert report.failed_count == 1
+    assert report.status == "ok"
+    assert report.expected_count == 2
+    assert report.loaded_count == 2
     assert report.missing_count == 0
-    assert report.guards[0].state == "failed"
-    assert report.guards[0].error_type == "RuntimeError"
-    assert report.guards[0].error_message == "boom"
-    assert report.blockers == ["guard.failed: RuntimeError: boom"]
+    assert report.warnings == []
+
+
+def test_retired_load_flag_cannot_import_missing_guards(monkeypatch, capsys):
+    owners = ("guard.missing",)
+    monkeypatch.setattr(diagnostics, "EXPECTED_STARTUP_OWNER_MODULES", owners)
+    diagnostics.sys.modules.pop("guard.missing", None)
+
+    import_calls: list[str] = []
+    original_import = builtins.__import__
+
+    def tracking_import(name, *args, **kwargs):
+        import_calls.append(str(name))
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", tracking_import)
+
+    assert diagnostics.main(["--load"]) == 0
+    output = capsys.readouterr().out
+
+    assert import_calls == []
+    assert "Bulk startup-guard loading is retired" in output
+    assert "guard.missing" in output
 
 
 def test_format_startup_health_report_is_plain_language():
     report = diagnostics.StartupHealthReport(
-        status="blocker",
+        status="warning",
         expected_count=2,
         loaded_count=1,
-        failed_count=1,
-        missing_count=0,
-        blockers=["guard.failed: RuntimeError: boom"],
-        warnings=[],
+        failed_count=0,
+        missing_count=1,
+        blockers=[],
+        warnings=["guard.missing: expected startup owner is not loaded"],
         guards=[],
     )
 
     text = diagnostics.format_startup_health_report(report)
 
-    assert "Dank Shield startup health" in text
-    assert "Status: BLOCKER" in text
+    assert "Dank Shield startup ownership health" in text
+    assert "Status: WARNING" in text
     assert "expected=2" in text
     assert "loaded=1" in text
-    assert "failed=1" in text
-    assert "guard.failed: RuntimeError: boom" in text
+    assert "missing=1" in text
+    assert "guard.missing: expected startup owner is not loaded" in text
