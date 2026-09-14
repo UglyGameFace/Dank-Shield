@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import os
@@ -10,8 +9,9 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 import discord
-from discord.ext import commands
 from supabase import Client, create_client
+
+from .command_runtime import create_discord_bot
 
 
 # ============================================================
@@ -626,7 +626,7 @@ def build_intents() -> discord.Intents:
     return intents
 
 
-bot = commands.Bot(
+bot = create_discord_bot(
     command_prefix="!",
     intents=build_intents(),
     help_command=None,
@@ -756,4 +756,3 @@ def _install_dank_globals_invite_enforcer() -> None:
 
 
 _install_dank_globals_invite_enforcer()
-
