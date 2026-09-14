@@ -80,7 +80,8 @@ def test_persisted_id_setup_still_cannot_enable_a_non_allowlisted_guild() -> Non
     )
 
     assert verification_modes.config_requests_id_verify(cfg) is True
-    assert verification_modes.effective_verification_mode(guild, cfg) == "basic_button"
+    assert verification_modes.basic_verify_allowed_for_guild(guild, cfg) is False
+    assert verification_modes.effective_verification_mode(guild, cfg) == "disabled"
 
 
 def test_allowlisted_ticket_uses_valid_inherited_access_without_rewriting_permissions(
