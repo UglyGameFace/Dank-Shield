@@ -127,7 +127,10 @@ def test_native_bot_constructor_owns_tree_and_shard_choice(monkeypatch: pytest.M
     assert isinstance(sharded, DankAutoShardedBot)
     assert type(sharded.tree) is DankCommandTree
     assert int(sharded.shard_count or 0) == 2
-    asyncio.run(sharded.close())
+    # AutoShardedBot.close() assumes the internal shard queue was created by
+    # startup. This constructor test never starts/connects the client, so calling
+    # close() here would test an invalid discord.py lifecycle rather than Dank
+    # Shield ownership.
 
 
 def test_public_surface_validation_is_menu_first_and_fail_closed() -> None:
