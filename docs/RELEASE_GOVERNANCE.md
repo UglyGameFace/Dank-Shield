@@ -45,7 +45,7 @@ The deploy workflow intentionally runs after every successful canonical `main` C
 
 `workflow_dispatch` exists for controlled recovery, not as a CI bypass.
 
-A manual run must use a **full 40-character SHA** that belongs to `main` history. Before dispatching it, verify that the chosen SHA has a successful canonical Dank Shield CI run.
+A manual run must use a **full 40-character SHA** that belongs to `main` history. The workflow independently queries GitHub Actions and refuses promotion unless it finds a successful **Dank Shield CI** `push` run on `main` for that exact SHA.
 
 Use manual dispatch only when the automatic post-CI promotion did not run, was interrupted, or must be safely replayed. Do not use it to deploy an unmerged branch, a failing commit, or an arbitrary local SHA.
 
