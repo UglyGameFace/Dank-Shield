@@ -1,165 +1,114 @@
 # ACTIVE TASK
 
-## DS-AUD-PROCESS-HEALTH — Move process health to explicit native boot ownership
+## DS-AUD-COMMAND-OWNERSHIP — Make the menu-first command surface canonical and retire command-tree/bot monkey patches
 
-**Status:** CLOSED — implementation merge and production acceptance passed; bookkeeping closeout is being merged through protected `main`
-**Implementation PR:** #225 — `Make process health an explicit boot owner`
-**Validated final PR head:** `318c2adfe4c1d45d6f6caafbc8d2fdfeb1baa7f8`
-**Canonical implementation merge:** `5ce360654892f25117b1d04d9df52e54a9707888`
+**Status:** IN PROGRESS — execution path mapped; implementation pending
+**Branch:** `audit/menu-command-native-ownership`
+**Base main:** `fa585c111caf2386c71380e5de9aa44694e6ece4`
 
-## Outcome
+## Previous finding closure
 
-The process-health service remains at its stable internal module path, `stoney_verify.startup_guards.process_health`, but it no longer owns production through hidden package side effects or a global Python import interceptor.
+`DS-AUD-PROCESS-HEALTH` is closed and must not be reopened without new regression evidence.
 
-`main.py` is now the explicit boot owner:
+Its bookkeeping closeout PR #226 merged as `fa585c111caf2386c71380e5de9aa44694e6ece4`. Acceptance on that exact canonical SHA passed:
 
-- it calls `install_process_health()` before the other startup guards;
-- it explicitly attaches process health to the known shared Discord bot;
-- importing `stoney_verify.startup_guards` no longer imports or activates process health;
-- importing the process-health module alone is inert;
-- `builtins.__import__` is no longer replaced or used for bot discovery.
+- Dank Shield CI #2123 / `34893184698` — success, including the full repository suite and every standard audit step; completed `2026-09-14T20:40:32Z`.
+- Ticket Owner Emergency Override #694 / `34893184749` — success on the same SHA.
+- Deploy Supabase migrations #29 / `34894355557` — success on the same SHA; started `2026-09-14T20:40:34Z` after canonical CI completed.
+- Immutable current-main verification, required secrets, Supabase CLI, project link, migration status, preview, and apply all passed.
+- Canonical `main` remained exactly `fa585c111caf2386c71380e5de9aa44694e6ece4` after promotion.
 
-The real service behavior was preserved: synchronous and asyncio exception visibility, SIGTERM/SIGINT handling, atexit logging, boot/restart count, current/peak RSS, operation-queue health, periodic process heartbeat, and the external Healthchecks watchdog.
+## Product outcome
 
-## Root cause
+Dank Shield already has the desired menu-first UX. This finding must preserve that product surface rather than create another control center.
 
-A legitimate infrastructure service was coupled to `startup_guards` package initialization and a process-wide `builtins.__import__` wrapper solely so it could poll `sys.modules` until `stoney_verify.app` or `stoney_verify.globals` exposed `bot`.
+Current canonical public application-command contract:
 
-The entrypoint already owns boot order and the bot dependency is known explicitly, so global import interception was unnecessary hidden ownership.
+- `/dank`
+- `/mod`
+- `/ticket`
+- `/tickets`
+- `/verify`
+- `View Dank Profile` context menu
 
-## Final implementation scope
+The `/dank` group is intentionally compact. Its approved direct children are `home`, `purge`, `setup`, and `upload`; feature discovery and configuration belong behind the existing Home control-center UI.
 
-Exactly seven files changed in PR #225:
+The goal of this finding is to make that small menu-first surface the explicit runtime truth while removing hidden framework mutation underneath it.
 
-1. `ACTIVE_TASK.md`
-2. `CLAUDE.md`
-3. `docs/PROCESS_HEALTH_NATIVE_OWNERSHIP_AUDIT.md`
-4. `main.py`
-5. `stoney_verify/startup_guards/__init__.py`
-6. `stoney_verify/startup_guards/process_health.py`
-7. `tests/test_process_health_native_ownership.py`
+## Current execution path and root cause
 
-No app, ticket, verification, moderation, schema, Supabase migration, AntiNuke, or product-command implementation was changed.
+The user-facing menu is already compact, but command ownership is still layered:
 
-## Exact-head pre-merge validation
+1. `main.py` imports `startup_guards.command_safety`.
+2. `command_safety` transitively imports `startup_guards.auto_shard` and `startup_guards.global_command_sync`.
+3. `auto_shard` can globally replace `discord.ext.commands.Bot` with an `AutoShardedBot` subclass before `globals.py` creates the shared bot.
+4. `global_command_sync` globally replaces `discord.app_commands.CommandTree.sync` to enforce a global sync limit.
+5. `command_safety` globally replaces `CommandTree.add_command`, catches `CommandLimitReached`, records the skipped command, and returns `None`, allowing startup to continue with a missing user-facing command. It also wraps `CommandTree.sync` a second time for budget logging.
+6. `main.py` separately imports `command_scope_dedupe`, which mutates the beta-sync env default and installs another `on_ready` listener for delayed guild-copy cleanup.
+7. `app.py` already owns the actual slash-maintenance lifecycle and, outside `command_scope_dedupe`, is the only live runtime caller of `tree.sync()`.
+8. `globals.py` contains the one canonical bot construction site.
 
-Frozen PR head `318c2adfe4c1d45d6f6caafbc8d2fdfeb1baa7f8` passed the complete applicable gate:
+The root cause is that legitimate bot-class selection, command-budget validation, sync policy, and duplicate-scope cleanup were implemented as startup patches around discord.py instead of being owned by the existing bot constructor and slash-maintenance path.
 
-- Dank Shield CI #2119 / `34886315545` — success.
-  - committed diff whitespace — success;
-  - Python compile — success;
-  - full repository unit suite — success;
-  - standalone tool checks — success;
-  - public setup/isolation — success;
-  - canonical public command surface — success;
-  - public command/startup friction — success;
-  - public invite permissions — success;
-  - setup safety — success;
-  - Dank Design Smart Auto-Detect — success;
-  - role-truth ownership — success;
-  - event-boundary ownership — success;
-  - Claim-first ticket security — success;
-  - Managed category SQL smoke — success.
-- Schema Authority SQL #46 / `34886315429` — success.
-- Dank Design Regression CI #381 / `34886315441` — success.
-- Ticket Category Menu Sanity #518 / `34886315660` — success.
-- Application Command Size Diagnostics #1131 / `34886315440` — success.
-- Ticket Owner Emergency Override #690 / `34886315476` — success.
-- Profile Runtime Diagnostics #887 / `34886315585` — success.
-- PR remained exactly seven intended files, mergeable, with no review threads or human review blocker.
-- Canonical `main` remained exact base `f84549835335d2b0844ec61887f740d646c57094` before merge.
+A second correctness problem exists in registration: `CommandLimitReached` can currently be swallowed so boot appears healthy even though a command disappeared. That violates the public-product requirement that users must not silently lose features.
 
-## Post-merge production acceptance
+## Evidence-backed native ownership target
 
-PR #225 merged through protected `main` as `5ce360654892f25117b1d04d9df52e54a9707888`.
+- `stoney_verify/globals.py` owns Bot vs AutoShardedBot selection directly from `DISCORD_AUTO_SHARD` and optional `DISCORD_SHARD_COUNT`.
+- A canonical non-guard command-runtime helper may own reusable command-surface hashing/budget/state helpers, but must not monkey-patch discord.py.
+- `stoney_verify/app.py` owns when global/guild command sync happens, beta-guild sync defaults, stale configured guild-copy cleanup, and sync outcome logging.
+- `stoney_verify/commands_ext/__init__.py` must never silently continue after `CommandLimitReached`; that error is fail-closed and visible.
+- The existing `command_surface_contract.py` remains authoritative for the six-command public surface and compact `/dank` child set.
 
-Acceptance on that exact canonical SHA passed:
+## Existing dormant behavior reviewed
 
-- Dank Shield CI #2120 / `34887880599` — success.
-  - full repository unit suite and every standard audit step passed;
-  - CI completed at `2026-09-14T19:47:19Z`.
-- Schema Authority SQL #47 / `34887880531` — success on the same SHA.
-- Ticket Owner Emergency Override #691 / `34887880511` — success on the same SHA.
-- Ticket Category Menu Sanity #519 / `34887880570` — success on the same SHA.
-- Deploy Supabase migrations #28 / `34889012749` — success on the same SHA.
-  - promotion started at `2026-09-14T19:47:21Z`, after canonical CI completed successfully;
-  - validated release checkout — success;
-  - immutable current-main target verification — success;
-  - required secrets — success;
-  - Supabase CLI — success;
-  - production project link — success;
-  - migration status — success;
-  - migration preview — success;
-  - apply pending migrations — success.
-- Canonical `main` was re-fetched after promotion and remained exactly `5ce360654892f25117b1d04d9df52e54a9707888`.
+`startup_guards/slash_command_cleanup.py` is not a live production owner, but it contains historical command-surface hashing and `DANK_SKIP_UNCHANGED_GLOBAL_SYNC` state-file behavior still advertised by `.env.example` and public launch documentation. During this finding, either migrate that useful behavior into the canonical command runtime or remove the false configuration contract. Do not reactivate the dormant guard or its monkey patches.
 
-The process-health ownership finding is closed. Do not reopen it without new regression evidence.
+## Intended implementation scope
 
-## Remaining master-audit backlog
+- `stoney_verify/globals.py`: direct Bot/AutoShardedBot construction; no `commands.Bot` class replacement.
+- `stoney_verify/app.py`: native slash-sync/default/cleanup ownership.
+- `stoney_verify/commands_ext/__init__.py`: fail closed on `CommandLimitReached` instead of tolerating a missing command.
+- Add a canonical command-runtime helper only if needed to keep reusable non-patching budget/hash/state logic out of `app.py`.
+- `main.py`: stop importing command ownership guards once their behavior is native.
+- `startup_diagnostics.py`: remove retired command guard modules from the expected startup-owner contract.
+- `startup_guards/__init__.py`: remove migrated command ownership from inert historical metadata where appropriate.
+- Delete retired live owners after native behavior is covered:
+  - `startup_guards/command_safety.py`
+  - `startup_guards/auto_shard.py`
+  - `startup_guards/global_command_sync.py`
+  - `startup_guards/command_scope_dedupe.py`
+- Update focused compatibility tests/tools that currently encode those modules as required startup owners.
+- Add behavioral regression coverage for native bot selection, sync policy, unchanged-sync state, fail-closed command limits, stale guild-copy cleanup, and the unchanged six-command/menu-first contract.
+- Add a focused ownership audit document and update `CLAUDE.md` to match the new boot contract.
 
-The remaining work is separate from process health and must continue one finding at a time from current repository evidence.
+## Deliberately unchanged
 
-### 1. Command-tree / slash-command ownership
+- Existing Home/control-center menu design and destinations.
+- The six approved global application commands and approved `/dank` direct children.
+- Ticket security, ticket panel persistence, verification, moderation, design, profile, setup, and feature callbacks behind the menu.
+- Discord API retry/audit-log ownership, interaction action-lock ownership, guild-config safety, AntiNuke, schema, Supabase migrations, and DS-SEC-044.
+- Broad `commands_ext` registrar consolidation beyond the specific `CommandLimitReached` correctness boundary. Register-then-compact cleanup remains a separate follow-up unless evidence proves it must change to complete this owner migration safely.
 
-Current live ownership still includes stacked command-tree behavior:
+## Validation plan
 
-- `startup_guards.command_safety` wraps `discord.app_commands.CommandTree.add_command` and `CommandTree.sync`;
-- `startup_guards.global_command_sync` wraps `CommandTree.sync` again;
-- `startup_guards.auto_shard` can replace `discord.ext.commands.Bot` with an `AutoShardedBot` subclass when enabled;
-- `startup_guards.command_scope_dedupe` owns beta-sync defaults and late guild-copy cleanup.
+- Prove discord.py 2.7.1 supports explicit Bot/AutoShardedBot construction without class replacement.
+- Prove no production code assigns to `commands.Bot`, `CommandTree.add_command`, or `CommandTree.sync` after the migration.
+- Prove beta guild sync defaults false without env mutation.
+- Prove public global sync rejects command-budget overflow and public-surface drift visibly rather than returning a fake successful empty result.
+- Prove intentional beta-guild sync still works when explicitly enabled.
+- Prove stale guild command copies are only cleared for configured cleanup guild IDs when public cleanup is enabled.
+- Prove unchanged global sync state is honored natively if the documented setting remains supported.
+- Prove `CommandLimitReached` propagates/fails closed through the registrar.
+- Prove canonical public roots remain exactly `dank`, `mod`, `ticket`, `tickets`, `verify`, plus `View Dank Profile`, and `/dank` keeps only `home`, `purge`, `setup`, `upload`.
+- Run compile, full pytest, standalone tools, public command/setup/invite safety audits, Claim-first security, Managed SQL, and every applicable companion workflow on one frozen exact PR head.
+- Before merge: exact file scope, clean diff, no unresolved reviews, no main drift, mergeable, no temporary/debug/workflow debris.
+- After merge: canonical main equals the actual merge SHA; canonical CI and Ticket Owner pass on that SHA; gated Supabase promotion starts only after canonical CI, passes immutable-main/status/preview/apply, and main remains unchanged afterward.
 
-This is the strongest next candidate. Preserve valid command-budget, safe-sync, shard-selection, and duplicate-scope behavior while moving it into canonical command/bot construction owners instead of stacked Discord.py monkey patches.
+## Current blockers
 
-### 2. Interaction/UI action-lock ownership
-
-`startup_guards.interaction_action_lock_guard` currently patches private Discord.py `discord.ui.View._scheduled_task` to observe or block duplicate component actions. Audit and migrate valid idempotency behavior into explicit component/action owners without depending on a private library method.
-
-### 3. Discord API / guild-config safety ownership
-
-Current live safety behavior still depends on global mutation:
-
-- `startup_guards.discord_api_safety` replaces `discord.Guild.audit_logs`, wraps `send` on `discord.TextChannel`, `discord.Thread`, and `discord.DMChannel`, and wraps `edit` on text/voice/stage/category channel classes to provide serialization, retry, and backoff behavior;
-- `startup_guards.public_server_env_id_guard` mutates imported `stoney_verify.globals` server-specific role/channel/category/guild IDs to zero in public mode and clears `OPTIONAL_ROLE_IDS`;
-- `startup_guards.guild_config_runtime_validator` replaces `guild_config.discover_runtime_guild_config` to validate saved IDs, purge invalid values, and apply runtime discovery.
-
-Preserve the real Discord rate-limit/retry behavior and public multi-server isolation guarantees, but migrate them into explicit Discord API/config owners instead of global Discord.py class mutation, imported-global rewriting, or replacement of the canonical discovery function.
-
-### 4. Dormant startup-guard consolidation
-
-The historical startup inventory still contains many old compatibility files. Remove them only by verified family after proving import reachability, current canonical ownership, and regression safety. Do not mass-delete by filename.
-
-Families still requiring dedicated evidence include command-surface compatibility, invite/spam, member/role/modlog, verification, ticket/VC, setup, and schema/config/queue helpers.
-
-### 5. Parallel/dead implementation-tree audit
-
-Current evidence corrects an older stale note:
-
-- `events_new` is live and imported by current runtime paths;
-- `tasks_new` is live through current staff/worker paths;
-- `setup_new` is live through public setup recommendation flows.
-
-They are **not** deletion candidates merely because of the `_new` suffix.
-
-Still-unresolved dead/parallel candidates include `commands_new`, `db_new`, `core/`, and `utils_new`, subject to exact importer and behavior proof before consolidation/deletion. Current tree inspection shows `commands_new` still contains a non-trivial `tickets.py`, while `db_new`, `core/`, and `utils_new` are tiny placeholder-like trees; none should be removed until importer and behavior proof is complete. Active canonical trees such as `api_new`, `events_new`, `members_new`, `moderation_new`, `setup_new`, `tasks_new`, `tickets_new`, and `verification_new` must remain protected.
-
-### 6. Feature-owned compatibility/helper cleanup
-
-Audit remaining helpers that are imported by canonical features rather than bulk startup loading, including Basic Verify compatibility, ticket forms/category helpers, setup permission repair, member lifecycle helpers, invite sanitization, and the Channel Builder font/helper chain. Preserve real behavior, retire superseded patch ownership.
-
-A current unfinished product item also remains in `services/invite_cleanup_service.py`: configured `allowed_codes` are still represented by an empty set with `TODO: load from guild config later`. That requires a product-correctness pass rather than blind cleanup.
-
-### 7. Dank Design behavioral coverage / architecture cleanup
-
-`commands_ext/public_design_studio.py` remains a churn-prone subsystem. Rebuild/strengthen behavioral coverage before structural cleanup; do not restore brittle static source-shape tests.
-
-### 8. Stale architecture/runbook truth
-
-Some older audit/readiness documents now contradict current runtime evidence, including outdated claims about which `_new` trees are dead and blockers already resolved by later work. Reconcile documentation only after the corresponding runtime owners are proven so documentation follows code truth rather than steering it incorrectly.
-
-## Separately suspended
-
-- `DS-SEC-044` hostile re-entry production acceptance remains separately suspended and must not be resumed without explicit authorization.
+None known. Implementation has not yet been written on this branch.
 
 ## Next step
 
-Merge this bookkeeping-only closeout through protected `main`, verify canonical post-closeout CI and gated production promotion on the exact closeout merge SHA, then re-fetch current `main` and open the next master-audit finding from live evidence. The leading candidate is the command-tree/slash-command ownership family, but selection must be confirmed against the post-closeout canonical repository before implementation begins.
+Implement native command/bot ownership from this exact base while preserving the existing menu-first contract. Validate behavior before opening the implementation PR; do not broaden into interaction locks, Discord API wrappers, dormant guard-family deletion, or feature registrar redesign.
