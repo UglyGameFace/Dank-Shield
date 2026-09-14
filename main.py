@@ -259,6 +259,45 @@ def _install_anti_nuke_product_policy_runtime() -> None:
         )
 
 
+def _install_anti_nuke_reentry_race_runtime() -> None:
+    """Install the final known-hostile re-entry/integration race guard."""
+
+    try:
+        from stoney_verify.globals import bot
+        from stoney_verify.anti_nuke_reentry_race_runtime import (
+            install_anti_nuke_reentry_race_runtime,
+        )
+
+        if not install_anti_nuke_reentry_race_runtime(bot):
+            print("ℹ️ AntiNuke hostile re-entry race guard was already installed; duplicate skipped")
+    except Exception as exc:
+        print(
+            "🚨 AntiNuke hostile re-entry race guard install failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
+def _install_spam_guard_abuse_runtimes() -> None:
+    """Attach artifact-informed SpamGuard burst defenses after product policy."""
+
+    try:
+        from stoney_verify.globals import bot
+        from stoney_verify.spam_guard_webhook_runtime import install_spam_guard_webhook_runtime
+        from stoney_verify.spam_guard_channel_flood_runtime import install_spam_guard_channel_flood_runtime
+        from stoney_verify.spam_guard_interaction_flood_runtime import (
+            install_spam_guard_interaction_flood_runtime,
+        )
+
+        install_spam_guard_webhook_runtime(bot)
+        install_spam_guard_channel_flood_runtime(bot)
+        install_spam_guard_interaction_flood_runtime(bot)
+    except Exception as exc:
+        print(
+            "🚨 SpamGuard abuse runtime install failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
 def main() -> None:
     _sleep_before_import_if_discord_login_backoff_active()
     _install_invite_reconciliation_runtime()
@@ -274,6 +313,8 @@ def main() -> None:
     from stoney_verify.app import run as _run_dank_shield
 
     _install_anti_nuke_product_policy_runtime()
+    _install_anti_nuke_reentry_race_runtime()
+    _install_spam_guard_abuse_runtimes()
     _run_dank_shield()
 
 
