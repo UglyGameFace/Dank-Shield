@@ -158,7 +158,7 @@ def test_direct_canonical_writes_preserve_historical_overwrite_semantics(monkeyp
     assert saved["staff_role_id"] == "999"
 
 
-def test_explicit_fill_missing_mode_blocks_protected_reassignment(monkeypatch) -> None:
+def test_explicit_fill_missing_mode_blocks_protected_reassignment_without_write(monkeypatch) -> None:
     row = _split_brain_row()
     row["staff_role_id"] = "111"
     row["settings"]["staff_role_id"] = "111"
@@ -174,9 +174,7 @@ def test_explicit_fill_missing_mode_blocks_protected_reassignment(monkeypatch) -
         },
     )
 
-    assert len(writes) == 1
-    assert writes[0]["settings"]["staff_role_id"] == "111"
-    assert writes[0]["config"]["staff_role_id"] == "111"
+    assert writes == []
     assert saved["staff_role_id"] == "111"
 
 
@@ -204,7 +202,7 @@ def test_canonical_clear_removes_flat_and_both_json_shapes(monkeypatch) -> None:
     assert "vc_verify_channel_id" not in persisted["config"]
 
 
-def test_runtime_discovery_natively_purges_invalid_saved_ids(monkeypatch) -> None:
+def test_runtime_discovery_natively_purges_all_invalid_saved_ids(monkeypatch) -> None:
     row = _split_brain_row()
     row["staff_role_id"] = "999"
     row["allow_runtime_discovery"] = False
@@ -228,17 +226,26 @@ def test_runtime_discovery_natively_purges_invalid_saved_ids(monkeypatch) -> Non
 
     discovered = asyncio.run(guild_config.discover_runtime_guild_config(guild))
 
+    expected_invalid = {
+        "staff_role_id": "999",
+        "vc_verify_channel_id": "111",
+        "vc_verify_queue_channel_id": "222",
+    }
     assert discovered["staff_role_id"] is None
-    assert discovered["invalid_saved_config_ids"] == {"staff_role_id": "999"}
+    assert discovered["vc_verify_channel_id"] is None
+    assert discovered["vc_verify_queue_channel_id"] is None
+    assert discovered["invalid_saved_config_ids"] == expected_invalid
     assert len(writes) == 1
     payload = writes[0]
-    assert payload["staff_role_id"] is None
-    assert "staff_role_id" not in payload["settings"]
-    assert "staff_role_id" not in payload["config"]
+    for key in expected_invalid:
+        assert payload[key] is None
+        assert key not in payload["settings"]
+        assert key not in payload["config"]
     persisted = store[guild_config.GUILD_CONFIG_TABLE][str(row["guild_id"])]
-    assert persisted["staff_role_id"] is None
-    assert "staff_role_id" not in persisted["settings"]
-    assert "staff_role_id" not in persisted["config"]
+    for key in expected_invalid:
+        assert persisted[key] is None
+        assert key not in persisted["settings"]
+        assert key not in persisted["config"]
 
 
 def test_public_setup_writer_is_a_compatibility_facade(monkeypatch) -> None:
