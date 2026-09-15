@@ -43,9 +43,10 @@ Critical, non-obvious facts (verified — do not assume otherwise):
   guards/helpers deliberately imported by canonical feature modules. The old
   `runtime_safety`, `public_startup_scope`, command-tree safety/sync,
   command-scope dedupe, and global interaction scheduler startup owners are
-  retired; do not restore them. See `docs/STARTUP_GUARD_RUNTIME_OWNERSHIP_AUDIT.md`,
-  `docs/RUNTIME_SAFETY_NATIVE_OWNERSHIP_AUDIT.md`, and
-  `docs/COMMAND_NATIVE_OWNERSHIP_AUDIT.md` before changing ownership.
+  retired; do not restore them. `docs/STARTUP_GUARD_RUNTIME_OWNERSHIP_AUDIT.md`
+  is historical loader-retirement evidence, not current owner truth. See the
+  newer `docs/RUNTIME_SAFETY_NATIVE_OWNERSHIP_AUDIT.md` and
+  `docs/COMMAND_NATIVE_OWNERSHIP_AUDIT.md` before changing migrated ownership.
 - **Process health is explicitly owned by `main.py`.** The implementation remains
   at `stoney_verify.startup_guards.process_health` for stable internal imports,
   but importing `startup_guards` no longer activates it. `main.py` calls
@@ -168,9 +169,9 @@ These are real and need dedicated, tested passes — flag them, don't blind-fix:
   guard merely because of its directory name.
 - **Historical dormant guard inventory.** The inert historical record is retained
   for audit compatibility, not activation. Retired or migrated owners are removed
-  from the inventory as their ownership migrations complete. Remove other dormant files
-  only after proving import reachability, newer canonical ownership, and regression
-  safety.
+  from the inventory as their ownership migrations complete. Remove other dormant
+  files only after proving import reachability, newer canonical ownership, and
+  regression safety.
 - **Channel Builder follow-up debt is not route wiring.** Its API routes are
   directly registered today. Remaining work, if any, is product/runtime cleanup
   and stale documentation/workflow path references, not reintroducing the old
