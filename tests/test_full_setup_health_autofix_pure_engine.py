@@ -163,11 +163,22 @@ def test_open_route_previews_scoped_permission_repair() -> None:
 
 def test_apply_route_clears_component_defer_by_editing_original_card() -> None:
     body = _owner_source(SERVICE, "apply_permission_repair")
+    owner = _owners(SERVICE)["apply_permission_repair"]
 
     assert "await solid._safe_defer_update(interaction)" in body
     assert "await solid._edit_or_followup(" in body
-    assert "thinking=True" not in body
     assert "interaction.followup.send" not in body
+
+    thinking_true_keywords = [
+        keyword
+        for node in ast.walk(owner)
+        if isinstance(node, ast.Call)
+        for keyword in node.keywords
+        if keyword.arg == "thinking"
+        and isinstance(keyword.value, ast.Constant)
+        and keyword.value.value is True
+    ]
+    assert thinking_true_keywords == []
 
 
 def test_importing_engine_cannot_replace_solid_owners() -> None:
