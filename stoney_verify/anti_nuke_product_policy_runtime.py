@@ -2,7 +2,6 @@ from __future__ import annotations
 
 """Separate normal containment from the optional Strict Lockdown product tier."""
 
-import asyncio
 from types import SimpleNamespace
 from typing import Any, Mapping, Optional
 
@@ -10,7 +9,6 @@ import discord
 
 from . import anti_nuke
 from . import anti_nuke_guardian_runtime as guardian
-from . import anti_nuke_hostile_actor_runtime as hostile
 from . import anti_nuke_lockdown_runtime as lockdown
 from . import anti_nuke_readiness_gate_runtime as readiness
 from . import anti_nuke_zero_damage_runtime as zero_damage
@@ -19,30 +17,12 @@ _INSTALL_FLAG = "_dank_antinuke_product_policy_installed"
 _SETTING_FLAG = "_dank_antinuke_strict_setting_installed"
 _PROCESS_FLAG = "_dank_antinuke_product_process_patched"
 _GUARDIAN_FLAG = "_dank_antinuke_product_guardian_patched"
-_REPUTATION_FLAG = "_dank_antinuke_product_reputation_patched"
 _UI_FLAG = "_dank_antinuke_product_ui_patched"
 STRICT_LOCKDOWN_KEY = readiness.STRICT_LOCKDOWN_KEY
 _ALWAYS_FIRST_STRIKE_ACTIONS = frozenset({"member_prune"})
 _DIRECT_STRICT_KEYS = frozenset(
     {"channel_delete", "role_delete", "webhook_delete", "message_delete", "message_bulk_delete"}
 )
-
-# Creating or refreshing an invite is ordinary member-facing Discord behavior when
-# the guild has granted Create Invite. It belongs in invite/modlog policy, not in
-# destructive AntiNuke containment. Feeding it into the canonical destructive
-# processor turns every non-AntiNuke-trusted member into a first-strike attacker.
-_NON_PUNITIVE_GUARDIAN_ACTIONS = frozenset({"invite_create", "invite_update"})
-
-# Versions before this policy correction could persist a durable hostile identity
-# immediately after a normal invite was created. Match only the exact records that
-# this bug produced so genuinely destructive reputation remains authoritative.
-_LEGACY_INVITE_FALSE_POSITIVE_REASONS = frozenset(
-    {
-        "dank shield antinuke containment: invite creation",
-        "dank shield antinuke containment: invite mutation",
-    }
-)
-_LEGACY_REPUTATION_CLEARING: set[tuple[int, int]] = set()
 
 
 def _safe_bool(value: Any, default: bool = False) -> bool:
@@ -51,6 +31,15 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return bool(default)
     return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _is_bot_actor(actor: Any) -> bool:
+    if not bool(getattr(actor, "bot", False)):
+        return False
+    try:
+        return int(getattr(actor, "id", 0) or 0) > 0
+    except Exception:
+        return False
 
 
 def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
@@ -72,73 +61,6 @@ def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
 
 def strict_lockdown_active(settings: Mapping[str, Any] | None) -> bool:
     return readiness._strict_lockdown_active(settings)  # noqa: SLF001
-
-
-def _legacy_invite_false_positive(reputation: Mapping[str, Any] | None) -> bool:
-    if not isinstance(reputation, Mapping) or not bool(reputation.get("active")):
-        return False
-    if str(reputation.get("source") or "").strip().lower() != "antinuke":
-        return False
-    if (
-        str(reputation.get("classification") or "").strip().lower()
-        != "confirmed_destructive_actor"
-    ):
-        return False
-    reason = " ".join(str(reputation.get("last_reason") or "").split()).lower()
-    return reason in _LEGACY_INVITE_FALSE_POSITIVE_REASONS
-
-
-async def sanitize_legacy_false_positive_reputation(
-    guild_id: int,
-    user_id: int,
-    reputation: Mapping[str, Any] | None,
-) -> Optional[dict[str, Any]]:
-    """Mask and durably clear only the invite-create reputations created by this bug."""
-
-    if reputation is None:
-        return None
-    row = dict(reputation)
-    if not _legacy_invite_false_positive(row):
-        return row
-
-    gid, uid = int(guild_id), int(user_id)
-    row["active"] = False
-    key = (gid, uid)
-    try:
-        hostile._MEMORY[key] = dict(row)  # noqa: SLF001
-        hostile._NEGATIVE_CACHE.pop(key, None)  # noqa: SLF001
-    except Exception:
-        pass
-
-    if key not in _LEGACY_REPUTATION_CLEARING:
-        _LEGACY_REPUTATION_CLEARING.add(key)
-
-        async def persist_clear() -> None:
-            try:
-                await hostile.clear_hostile_reputation(
-                    gid,
-                    uid,
-                    reason=(
-                        "Automatic cleanup: legacy AntiNuke invite-creation false positive"
-                    ),
-                )
-            except Exception as exc:
-                print(
-                    "⚠️ AntiNuke legacy invite reputation cleanup failed "
-                    f"guild={gid} user={uid} error={type(exc).__name__}: {exc}"
-                )
-            finally:
-                _LEGACY_REPUTATION_CLEARING.discard(key)
-
-        try:
-            asyncio.create_task(
-                persist_clear(),
-                name=f"dank-clear-legacy-invite-reputation-{gid}-{uid}",
-            )
-        except RuntimeError:
-            _LEGACY_REPUTATION_CLEARING.discard(key)
-
-    return row
 
 
 def _patch_setting_model() -> bool:
@@ -186,8 +108,8 @@ def _patch_threshold_policy() -> bool:
 
     # The earlier lockdown wrapper reads this module-level set at call time.
     # Clearing it restores the canonical engine's behavior in normal Contain:
-    # untrusted operators are first-strike, explicitly trusted operators use
-    # their configured bounded thresholds.
+    # untrusted human operators are first-strike, while trusted operators and
+    # operational bots use their configured bounded thresholds.
     lockdown._STRICT_PROCESS_ACTION_KEYS = frozenset()  # noqa: SLF001
 
     original = anti_nuke._process_claimed_destructive_event  # noqa: SLF001
@@ -206,7 +128,12 @@ def _patch_threshold_policy() -> bool:
             settings = await anti_nuke.get_antinuke_settings(int(guild.id))
         except Exception:
             settings = None
-        if strict_lockdown_active(settings) and action_key in _DIRECT_STRICT_KEYS:
+        actor = getattr(entry, "user", None)
+        if (
+            strict_lockdown_active(settings)
+            and action_key in _DIRECT_STRICT_KEYS
+            and not _is_bot_actor(actor)
+        ):
             threshold_override = 1
         return await original(
             guild,
@@ -227,23 +154,12 @@ def _patch_guardian_policy() -> bool:
     if bool(getattr(guardian, _GUARDIAN_FLAG, False)):
         return False
 
-    # These actions were added by the broad zero-damage audit surface but they are
-    # not destructive containment events. Remove them from both processing and
-    # panic scoring so ordinary invite creation can never become a hostile identity.
-    for name in _NON_PUNITIVE_GUARDIAN_ACTIONS:
-        guardian._ACTIONS.pop(name, None)  # noqa: SLF001
-        guardian._PANIC_WEIGHTS.pop(name, None)  # noqa: SLF001
-    guardian._PANIC_ACTIONS = frozenset(guardian._PANIC_WEIGHTS)  # noqa: SLF001
-    guardian._PANIC_SEVERE_ACTIONS = frozenset(  # noqa: SLF001
-        set(guardian._PANIC_SEVERE_ACTIONS) - set(_NON_PUNITIVE_GUARDIAN_ACTIONS)  # noqa: SLF001
-    )
-
     strict_names = _strict_action_names()
 
     # #208/#209 intentionally forced these entries to one event. That is now
-    # reserved for Strict Lockdown. The canonical engine still makes unknown
-    # actors first-strike in ordinary Contain, while trusted operators retain
-    # their configured thresholds.
+    # reserved for Strict Lockdown human actors. The canonical engine keeps
+    # operational bots on bounded thresholds while unknown bot installs remain
+    # governed by the separate bot-add authorization policy.
     for name in strict_names:
         spec = guardian._ACTIONS.get(name)  # noqa: SLF001
         if spec is None:
@@ -265,6 +181,7 @@ def _patch_guardian_policy() -> bool:
         settings = await anti_nuke.get_antinuke_settings(int(guild.id))
         if (
             strict_lockdown_active(settings)
+            and not _is_bot_actor(actor)
             and not anti_nuke._actor_is_owner_or_bot(guild, actor)  # noqa: SLF001
         ):
             actor = SimpleNamespace(id=0, roles=[])
@@ -274,6 +191,7 @@ def _patch_guardian_policy() -> bool:
         settings = await anti_nuke.get_antinuke_settings(int(guild.id))
         if (
             strict_lockdown_active(settings)
+            and not _is_bot_actor(actor)
             and not anti_nuke._actor_is_owner_or_bot(guild, actor)  # noqa: SLF001
         ):
             actor = SimpleNamespace(id=0, roles=[])
@@ -292,37 +210,17 @@ def _patch_guardian_policy() -> bool:
         spec: tuple[str, str, str, Optional[int]],
     ) -> None:
         settings = await anti_nuke.get_antinuke_settings(int(guild.id))
-        if strict_lockdown_active(settings) and action_name in strict_names:
+        if (
+            strict_lockdown_active(settings)
+            and action_name in strict_names
+            and not _is_bot_actor(actor)
+        ):
             label, threshold_key, counter_key, _override = spec
             spec = (label, threshold_key, counter_key, 1)
         await original_process(guild, entry, actor, action_name, spec)
 
     guardian._process = guardian_process  # noqa: SLF001
     setattr(guardian, _GUARDIAN_FLAG, True)
-    return True
-
-
-def _patch_reputation_policy() -> bool:
-    if bool(getattr(hostile, _REPUTATION_FLAG, False)):
-        return False
-
-    original_get = hostile.get_actor_reputation
-
-    async def get_actor_reputation(
-        guild_id: int,
-        user_id: int,
-        *,
-        refresh: bool = False,
-    ) -> Optional[dict[str, Any]]:
-        reputation = await original_get(guild_id, user_id, refresh=refresh)
-        return await sanitize_legacy_false_positive_reputation(
-            guild_id,
-            user_id,
-            reputation,
-        )
-
-    hostile.get_actor_reputation = get_actor_reputation
-    setattr(hostile, _REPUTATION_FLAG, True)
     return True
 
 
@@ -563,7 +461,6 @@ def install_anti_nuke_product_policy_runtime() -> bool:
     setting = _patch_setting_model()
     threshold = _patch_threshold_policy()
     guardian_policy = _patch_guardian_policy()
-    reputation_policy = _patch_reputation_policy()
     ui = _patch_ui()
     setattr(anti_nuke, _INSTALL_FLAG, True)
     print(
@@ -572,7 +469,6 @@ def install_anti_nuke_product_policy_runtime() -> bool:
         f"setting={'patched' if setting else 'ready'}; "
         f"thresholds={'patched' if threshold else 'ready'}; "
         f"guardian={'patched' if guardian_policy else 'ready'}; "
-        f"reputation={'patched' if reputation_policy else 'ready'}; "
         f"ui={'patched' if ui else 'ready'}"
     )
     return True
@@ -581,6 +477,5 @@ def install_anti_nuke_product_policy_runtime() -> bool:
 __all__ = [
     "STRICT_LOCKDOWN_KEY",
     "install_anti_nuke_product_policy_runtime",
-    "sanitize_legacy_false_positive_reputation",
     "strict_lockdown_active",
 ]

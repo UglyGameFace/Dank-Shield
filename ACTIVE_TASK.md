@@ -1,131 +1,93 @@
 # ACTIVE TASK
 
-## DS-FIX-AUTHORIZED-BOT-BAN — Stop legitimate bot and invite false-positive containment
+## DS-FIX-ANTINUKE-BOT-PERMISSION-INTEGRITY — Preserve legitimate bot authority
 
-**Outcome:** Dank Shield must not remove a legitimate bot merely because the physical guild owner installed it, and an ordinary member creating a Discord invite must not be promoted into durable hostile identity state and repeatedly banned. Genuine known-hostile identities and non-owner unauthorized bot additions must remain protected by AntiNuke.
+**Outcome:** AntiNuke keeps unknown bot installs behind the canonical bot-add authorization gate while treating already-operational bot actors as bounded delegated principals, preventing one legitimate bot action or a guardian panic burst from immediately kicking the bot or stripping all of its manageable roles.
 
-**Status:** IMPLEMENTED AND VALIDATED ON CODE HEAD — PR #235 pending final record-head CI and merge
+**Status:** VALIDATED; MERGE PENDING. Runtime/code head `c5d1d8e27f7edd373141793722cf2303fc192319` passed every required workflow. This task-record-only commit changes no runtime code and must receive the repository's required exact-head checks before PR #238 is merged.
 
-**Branch:** `fix/authorized-bot-ban-false-positive`
-**PR:** #235 — `Fix authorized bot and invite false-positive bans`
-**Base main:** `d3853509b90a57769cd2c5a5a3d565cad28c9d87`
-**Validated implementation head:** `0f664bbf71495b4d4b178b753c1df2341f72850b`
+**Repair branch:** `fix/antinuke-legit-bot-permission-integrity`
+**Repair PR:** #238 — `Fix AntiNuke legitimate bot permission damage`
+**Validated runtime/code head:** `c5d1d8e27f7edd373141793722cf2303fc192319`
+**Prior merged PR:** #236 — `Fix AntiNuke authorized bot trust ownership`
+**Prior merge SHA:** `eb94e6e46d0c0cfdef2657eb302d0538a6e804fa`
+**Superseded closure PR:** #237 — closed without merge after live permission damage was reported
 
 ## Scope
 
-- AntiNuke bot-add authorization when the physical guild owner installs a bot
-- AntiNuke treatment of ordinary Discord invite creation/mutation audit events
-- durable hostile-reputation creation caused by that invite false positive
-- canonical and fast/local hostile re-entry enforcement consuming that false reputation
-- focused behavioral regressions for legitimate and genuinely hostile cases
-
-No unrelated ticket, setup, lifecycle-card, permission-repair, schema, or general moderation redesign is included.
-
-## Findings / root cause
-
-### Authorized bot-add path
-
-The canonical bot-add handlers already exempt the physical guild owner, but the later lockdown wrapper reinterpreted `antinuke_trusted_user_ids` as a required allowlist for the **target bot ID**. That meant an owner-authorized bot could still be removed simply because its ID was not pre-populated in a hidden target allowlist. This contradicted the canonical owner-authorization contract.
-
-The exact historical Discadia audit entry is not available through the repository, so the repository evidence proves the conflicting owner-add removal path rather than claiming an unavailable Discord audit record. Other inspected bot paths already fail safely for this incident class: SpamGuard downgrades bot invite escalation to alert-only, verification/join-removal safety skips bot accounts, and fresh-join role recovery treats bots as skipped.
-
-### Ordinary invite creation -> durable hostile identity
-
-`anti_nuke_zero_damage_runtime` expanded the guardian surface to include `invite_create` and `invite_update`, even though the canonical gateway contract classifies those member-facing creation actions as benign/non-first-strike. The guardian then fed those events into the canonical destructive processor.
-
-For an ordinary member who was neither owner/Dank Shield nor explicitly delegated AntiNuke trust, the canonical destructive processor used first-strike containment. The hostile-actor runtime wraps containment durably: it wrote an active `confirmed_destructive_actor` reputation row first, then banned the member. The exact false-positive reasons were:
-
-- `Dank Shield AntiNuke containment: Invite creation`
-- `Dank Shield AntiNuke containment: Invite mutation`
-
-Both the canonical hostile member-join path and the fast hot/local re-entry path could consume that persisted reputation and ban the same member again after an owner unbanned/reinvited them.
-
-The supplied production logs match this execution order: the returning member disappeared before verification could assign the Unverified role, verification then received Discord `Unknown Member`, and a recent ban audit entry existed. The verification failure was therefore downstream of the ban rather than its cause.
-
-## Execution path
-
-### Bot-add false positive
-
-Discord `bot_add` audit event -> guardian bot-add handling -> lockdown bot-add wrapper -> hidden target-ID allowlist check -> owner-authorized bot removal.
-
-### Invite/re-ban false positive
-
-Discord `invite_create` / `invite_update` audit event -> zero-damage guardian expansion -> guardian `_process` -> canonical `_process_claimed_destructive_event` -> first-strike containment -> hostile runtime durable containment -> `mark_confirmed_hostile` -> ban -> later member join -> canonical/fast reputation lookup -> re-entry ban.
-
-## Changes
-
 - `stoney_verify/anti_nuke_lockdown_runtime.py`
-  - physical guild-owner bot installation is explicit authorization when the target has no exact active hostile reputation
-  - `antinuke_trusted_user_ids` is no longer a hidden required target-bot allowlist
-  - non-owner bot additions still delegate to canonical AntiNuke security handling
-  - exact active hostile-bot reputation still outranks owner authorization
-
 - `stoney_verify/anti_nuke_product_policy_runtime.py`
-  - removes `invite_create` and `invite_update` from punitive guardian processing and panic scoring in the final product policy
-  - leaves invite-message enforcement with Invite Shield / SpamGuard configuration rather than destructive AntiNuke identity containment
-  - recognizes only the exact historical invite false-positive reputation shape/reasons
-  - masks that row inactive in memory immediately and schedules a durable `clear_hostile_reputation` write
-  - genuine destructive reputation remains active
+- `tests/test_antinuke_legit_bot_permission_integrity.py`
+- this task record
 
-- `stoney_verify/anti_nuke_reentry_race_runtime.py`
-  - routes hot in-memory and local-mirror reputation through the same legacy false-positive sanitizer before the fast re-entry path can ban
+No unrelated AntiNuke redesign, setup, tickets, verification, moderation, or PR #235 work is included.
 
-- focused regression coverage
-  - owner-authorized non-hostile bot remains allowed
-  - non-owner bot addition still reaches canonical security handling
-  - active known-hostile bot still reaches hostile handling even when owner-added
-  - final guardian policy removes invite create/mutation from destructive/panic surfaces
-  - exact legacy invite false-positive is masked and durably cleared
-  - fast re-entry cannot re-ban the legacy invite false positive
-  - a real destructive hostile identity is still blocked on fast re-entry
+## Root cause
+
+1. Native destructive-event processing classified every bot except Dank Shield itself as an untrusted actor, making ordinary bot actions first-strike events.
+2. Lockdown structural overrides could force `threshold_override=1`, collapsing otherwise bounded structural actions to one strike.
+3. Canonical containment can kick the attributed actor and, if that fails, strip every manageable role, not only dangerous roles.
+4. Guardian panic containment can apply that same containment to observed peer actors, creating multi-bot blast radius.
+5. Gateway-fast dangerous role/member-role paths could roll back role permissions before ordinary threshold processing.
+6. The later-installed Strict Lockdown product-policy layer rebuilt guardian wrappers and could reintroduce synthetic-untrusted/first-strike behavior after the lockdown repair unless it shared the same bot boundary.
+7. Making every bot globally trusted would weaken bot-add authorization because a bot inviter could then authorize arbitrary new bot installs, so bot-add authorization requires a separate trust context.
+8. The first exact-head CI attempt also exposed three task-owned test-contract failures: two legacy partial AntiNuke test doubles lacked newly canonical hooks, and the product-policy test replaced the lockdown module with a minimal fake that did not own the private bot classifier.
+
+## Repair behavior
+
+- Operational bot actors are treated as delegated for ordinary destructive-event thresholds.
+- Structural and panic `threshold_override=1` values are ignored for bot actors so one attributed action cannot destroy their role state.
+- Direct containment preserves a bot actor unless the bot has active hostile reputation; threshold-triggered canonical processing may still contain a bot after it actually crosses configured limits.
+- Bot-add authorization runs in an isolated context that still requires explicit human/role trust or target bot pre-approval; implicit operational-bot trust cannot authorize a new bot install.
+- Guardian strict overwrite/AutoMod rollback does not force bot actors through the synthetic untrusted proxy.
+- Gateway-fast dangerous role create/update by a bot uses canonical threshold processing instead of immediate rollback/containment.
+- Gateway member-role handling does not strip newly granted roles from a bot target.
+- Native member dangerous-role grants and bot-only role permission escalation are protected from immediate rollback.
+- The final Strict Lockdown product-policy layer preserves the same bounded-bot rule for direct strict actions, guardian processing, overwrite rollback, and AutoMod rollback.
+- Product policy owns its local bot classifier instead of depending on a private helper from another runtime layer.
+- Lockdown canonical security hooks remain fail-closed for the real production module while focused unit-test doubles may omit unrelated hooks.
+- Durable hostile reputation remains authoritative and can still allow containment of a known-hostile bot.
 
 ## Validation / results
 
-Validated implementation head: `0f664bbf71495b4d4b178b753c1df2341f72850b`
+Exact runtime/code head `c5d1d8e27f7edd373141793722cf2303fc192319`:
 
-- Dank Shield CI #2154 — **PASS**
-  - Python compile — PASS
-  - full unit suite — **1487 passed, 9 warnings**
-  - standalone tool checks — PASS
-  - public setup audit — PASS
-  - public command-surface/friction audits — PASS
-  - public invite/permissions audit — PASS
-  - setup-safety audit — PASS
-  - Dank Design Smart Auto-Detect audit — PASS
-  - role-truth audit — PASS
-  - event-boundary audit — PASS
-  - Claim-first ticket security — PASS
-  - Managed category SQL smoke test — PASS
-- Ticket Owner Emergency Override #725 — **PASS**
-- Dank Design Regression CI #405 — **PASS**
-- Application Command Size Diagnostics #1158 — **PASS**
-- Profile Runtime Diagnostics #912 — **PASS**
-- committed diff whitespace check — PASS
+- Dank Shield CI #2168: SUCCESS
+- Python compile: SUCCESS
+- full unit suite: SUCCESS; the prior 3 failures are cleared
+- committed diff whitespace: SUCCESS
+- standalone tool checks: SUCCESS
+- public setup/isolation audit: SUCCESS
+- canonical command-surface audits: SUCCESS
+- invite-permission audit: SUCCESS
+- setup-safety audit: SUCCESS
+- Dank Design Smart Auto-Detect audit: SUCCESS
+- role-truth ownership audit: SUCCESS
+- event-boundary ownership audit: SUCCESS
+- managed-category SQL smoke: SUCCESS
+- claim-first ticket security: SUCCESS
+- Dank Design Regression CI #418: SUCCESS
+- Application Command Size Diagnostics #1171: SUCCESS
+- Ticket Owner Emergency Override #739: SUCCESS
+- Profile Runtime Diagnostics #925: SUCCESS
+- branch freshness: 0 commits behind `main` at validated code head
+- changed-file inspection: task-only files; no unrelated generated, conflict, secret-bearing, or accidental files found
+- PR review/thread inspection before record closeout: no blocking review/thread findings
 
-This record update changes the branch head after the validated implementation head, so the final record-only head must also complete required CI before merge.
+The earlier exact-head failure on `0b59ae5c2ceb14e306a4dd06711717fbd2f37fd5` was fully diagnosed rather than retried blindly: 1490 tests passed and three task-owned compatibility assertions failed. Those failures were corrected by commits `ce579806fe8010161b43005fe5f9584796ae5286` and `c5d1d8e27f7edd373141793722cf2303fc192319`.
 
 ## Cleanup / conflicts
 
-- PR #235 contains only the active task record, the three affected AntiNuke runtime files, two existing focused test files, and one new focused regression test file.
-- No ticket, setup, permission-repair, lifecycle-card, schema, or unrelated feature code was changed.
-- No PR review thread requires a code response at the time of this record update.
-- `main` remained at the task base during implementation and the PR was mergeable during validation.
+- No duplicate bot-add authorization owner was added.
+- No startup workaround, retry loop, blanket bot exemption, or containment bypass was introduced.
+- The later product-policy wrapper now shares the same operational-bot boundary instead of undoing lockdown behavior.
+- Real production canonical hooks remain mandatory and fail closed if unexpectedly absent.
+- PR #235 and unrelated setup/ticket/moderation work remain outside this task.
 
-## Blockers / risks
+## Blocker / runtime boundary
 
-- The exact historical Discord audit entry for the Discadia incident is not repository-accessible. The conflicting owner-add code path is proven and corrected, but the unavailable incident record is not fabricated.
-- This change deliberately does **not** auto-unban existing Discord bans. Automatically reversing arbitrary bans would be unsafe because some may be legitimate. After deployment, affected false-positive users/bots must be manually unbanned if they remain on Discord's ban list.
-- GitHub validation cannot prove which revision is currently running on Discloud. Production must be restarted/deployed from the merged `main` revision before the fix is live.
-
-## Backlog discovered during incident logs
-
-These are real but separate tasks and are intentionally not mixed into PR #235:
-
-1. configured modlog channel repeatedly returns Discord `403 Missing Access`
-2. configured welcome/exit card channel lacks View Channel, Send Messages, Embed Links, and Read Message History for Dank Shield
-3. source-reputation query references missing `member_joins.evidence_tier` column
-4. verify the merged revision is the revision actually running on Discloud
+No repository-code blocker remains on the validated runtime head. The repository repair prevents future AntiNuke permission damage, but it cannot reconstruct Discord permissions already stripped from live bots. Existing damaged bot roles/permissions must be restored in Discord after the repaired revision is deployed.
 
 ## Next step
 
-Wait for required CI on this record-only final head, mark PR #235 ready, merge it, verify `main`, then deploy/restart Dank Shield from the merged `main` revision. After the fixed revision is live, manually unban/re-add only the accounts affected by these false positives. The next repository task should then address the logging/channel permission failures before the schema mismatch, one task at a time.
+Let the required checks pass on this record-only final head, mark PR #238 ready, merge it with the expected head SHA, then use the PR's canonical merge metadata as the final merge record rather than creating another bookkeeping commit and restarting CI again.

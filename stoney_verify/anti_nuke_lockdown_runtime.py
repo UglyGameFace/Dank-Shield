@@ -9,10 +9,14 @@ after durable hostile-identity enforcement so reputation remains authoritative.
 The policy deliberately distinguishes ordinary moderation from structural
 security changes. Trusted moderators keep bounded ban/kick/timeout behavior, but
 contain mode gives no grace to server-structure deletion, permission-overwrite
-corruption, destructive AutoMod mutation, or bulk message purge.
+corruption, destructive AutoMod mutation, or bulk message purge. Operational bot
+actors are treated as bounded delegated principals rather than disposable
+first-strike actors; unknown bot installs still use the separate native bot-add
+authorization policy.
 """
 
-from types import SimpleNamespace
+from contextvars import ContextVar
+from types import ModuleType, SimpleNamespace
 from typing import Any, Iterable, Mapping, Optional
 
 import discord
@@ -21,9 +25,17 @@ _INSTALL_FLAG = "_dank_antinuke_lockdown_runtime_installed"
 _POLICY_PATCH_FLAG = "_dank_antinuke_lockdown_policy_patched"
 _HISTORY_PATCH_FLAG = "_dank_antinuke_lockdown_history_patched"
 _GUARDIAN_PATCH_FLAG = "_dank_antinuke_lockdown_guardian_patched"
-_BOT_ADD_PATCH_FLAG = "_dank_antinuke_lockdown_bot_add_patched"
+_GATEWAY_PATCH_FLAG = "_dank_antinuke_lockdown_gateway_patched"
 _OWNER_PATCH_FLAG = "_dank_antinuke_lockdown_owner_first_strike_patched"
 _PROTECTED_CONTROL_ROLE_SETTINGS_KEY = "_dank_lockdown_protected_role_ids"
+_BOT_ADD_AUTH_CONTEXT: ContextVar[bool] = ContextVar(
+    "dank_antinuke_bot_add_auth_context",
+    default=False,
+)
+_ALLOW_BOT_CONTAIN_CONTEXT: ContextVar[bool] = ContextVar(
+    "dank_antinuke_allow_bot_contain_context",
+    default=False,
+)
 
 _PROTECTED_SECURITY_PREFIXES = ("antinuke_", "anti_nuke_")
 _PROTECTED_SECURITY_KEYS = frozenset(
@@ -70,9 +82,9 @@ _EXTRA_DANGEROUS_PERMISSIONS = (
     "manage_emojis_and_stickers",
 )
 
-# Canonical processor keys that always become first-strike in contain mode. Keep
-# routine moderation (ban/kick/timeout/member-role cleanup) on its existing bounded
-# thresholds so AntiNuke does not punish a moderator for doing ordinary work.
+# Canonical processor keys that always become first-strike in contain mode for
+# human actors. Operational bots stay on bounded delegated thresholds so a normal
+# bot action cannot immediately kick the bot or strip every manageable role.
 _STRICT_PROCESS_ACTION_KEYS = frozenset(
     {
         "channel_delete",
@@ -150,6 +162,24 @@ def _safe_id_list(value: Any, *, limit: int = 200) -> list[int]:
             if len(out) >= limit:
                 return out
     return out
+
+
+def _is_bot_actor(actor: Any) -> bool:
+    return bool(getattr(actor, "bot", False)) and _safe_int(
+        getattr(actor, "id", 0),
+        0,
+    ) > 0
+
+
+def _canonical_hook(owner: Any, name: str) -> Any:
+    """Require canonical hooks in production while allowing focused test doubles."""
+
+    hook = getattr(owner, name, None)
+    if callable(hook):
+        return hook
+    if isinstance(owner, ModuleType):
+        raise RuntimeError(f"AntiNuke canonical hook missing: {name}")
+    return None
 
 
 def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
@@ -391,6 +421,19 @@ def _patch_anti_nuke_policy(anti_nuke: Any, bot: discord.Client) -> bool:
     original_process = anti_nuke._process_claimed_destructive_event  # noqa: SLF001
     original_health = anti_nuke.antinuke_permission_health
     original_configured_trust = anti_nuke._actor_is_configured_trusted  # noqa: SLF001
+    original_bot_add_authorization = _canonical_hook(
+        anti_nuke,
+        "bot_add_authorization",
+    )
+    original_contain = _canonical_hook(anti_nuke, "_contain_actor")
+    original_member_grant = _canonical_hook(
+        anti_nuke,
+        "_handle_member_dangerous_role_grant",
+    )
+    original_role_escalation = _canonical_hook(
+        anti_nuke,
+        "_handle_role_permission_escalation",
+    )
 
     async def protected_get(
         guild_id: int,
@@ -429,6 +472,9 @@ def _patch_anti_nuke_policy(anti_nuke: Any, bot: discord.Client) -> bool:
         *,
         ignore_role_ids: Optional[set[int]] = None,
     ) -> bool:
+        if _is_bot_actor(actor) and not _BOT_ADD_AUTH_CONTEXT.get():
+            return True
+
         ignored = {
             _safe_int(value, 0)
             for value in (ignore_role_ids or set())
@@ -445,6 +491,65 @@ def _patch_anti_nuke_policy(anti_nuke: Any, bot: discord.Client) -> bool:
             )
         )
 
+    async def bot_add_authorization(
+        guild: discord.Guild,
+        target: Any,
+        actor: Any,
+        settings: Optional[Mapping[str, Any]] = None,
+    ) -> tuple[bool, str]:
+        assert callable(original_bot_add_authorization)
+        token = _BOT_ADD_AUTH_CONTEXT.set(True)
+        try:
+            return await original_bot_add_authorization(
+                guild,
+                target,
+                actor,
+                settings,
+            )
+        finally:
+            _BOT_ADD_AUTH_CONTEXT.reset(token)
+
+    async def bot_safe_contain(
+        guild: discord.Guild,
+        actor: Any,
+        *,
+        reason: str,
+    ) -> tuple[list[str], list[str]]:
+        assert callable(original_contain)
+        if _is_bot_actor(actor) and not _ALLOW_BOT_CONTAIN_CONTEXT.get():
+            hostile_active = False
+            try:
+                from .anti_nuke_hostile_actor_runtime import get_actor_reputation
+
+                reputation = await get_actor_reputation(
+                    int(guild.id),
+                    _safe_int(getattr(actor, "id", 0), 0),
+                    refresh=True,
+                )
+                hostile_active = bool(reputation and reputation.get("active"))
+            except Exception:
+                hostile_active = False
+
+            if not hostile_active:
+                return [], [
+                    "operational bot preserved; bounded AntiNuke thresholds apply"
+                ]
+
+        return await original_contain(guild, actor, reason=reason)
+
+    async def bot_safe_member_grant(before: Any, after: Any) -> None:
+        assert callable(original_member_grant)
+        if _is_bot_actor(after):
+            return
+        await original_member_grant(before, after)
+
+    async def bot_safe_role_escalation(before: Any, after: Any) -> None:
+        assert callable(original_role_escalation)
+        members = list(getattr(after, "members", []) or [])
+        if members and all(_is_bot_actor(member) for member in members):
+            return
+        await original_role_escalation(before, after)
+
     async def strict_structural_process(
         guild: discord.Guild,
         *,
@@ -455,21 +560,35 @@ def _patch_anti_nuke_policy(anti_nuke: Any, bot: discord.Client) -> bool:
         threshold_key: str,
         threshold_override: Optional[int] = None,
     ) -> bool:
+        actor = getattr(entry, "user", None)
+        bot_actor = _is_bot_actor(actor)
         try:
             settings = await protected_get(int(guild.id))
         except Exception:
             settings = None
-        if _enabled_contain(settings) and action_key in _STRICT_PROCESS_ACTION_KEYS:
+
+        if bot_actor and threshold_override == 1:
+            threshold_override = None
+        elif (
+            _enabled_contain(settings)
+            and action_key in _STRICT_PROCESS_ACTION_KEYS
+            and not bot_actor
+        ):
             threshold_override = 1
-        return await original_process(
-            guild,
-            entry=entry,
-            action_key=action_key,
-            action_label=action_label,
-            target_label=target_label,
-            threshold_key=threshold_key,
-            threshold_override=threshold_override,
-        )
+
+        token = _ALLOW_BOT_CONTAIN_CONTEXT.set(bot_actor)
+        try:
+            return await original_process(
+                guild,
+                entry=entry,
+                action_key=action_key,
+                action_label=action_label,
+                target_label=target_label,
+                threshold_key=threshold_key,
+                threshold_override=threshold_override,
+            )
+        finally:
+            _ALLOW_BOT_CONTAIN_CONTEXT.reset(token)
 
     def lockdown_health(
         guild: discord.Guild,
@@ -497,6 +616,14 @@ def _patch_anti_nuke_policy(anti_nuke: Any, bot: discord.Client) -> bool:
     anti_nuke._actor_is_configured_trusted = (  # noqa: SLF001
         configured_trust_without_implicit_control_roles
     )
+    if original_bot_add_authorization is not None:
+        anti_nuke.bot_add_authorization = bot_add_authorization
+    if original_contain is not None:
+        anti_nuke._contain_actor = bot_safe_contain  # noqa: SLF001
+    if original_member_grant is not None:
+        anti_nuke._handle_member_dangerous_role_grant = bot_safe_member_grant  # noqa: SLF001
+    if original_role_escalation is not None:
+        anti_nuke._handle_role_permission_escalation = bot_safe_role_escalation  # noqa: SLF001
     anti_nuke._process_claimed_destructive_event = strict_structural_process  # noqa: SLF001
     anti_nuke.antinuke_permission_health = lockdown_health
     setattr(anti_nuke, _POLICY_PATCH_FLAG, True)
@@ -539,6 +666,7 @@ def _patch_guardian_surface(guardian: Any, anti_nuke: Any) -> bool:
         settings = await anti_nuke.get_antinuke_settings(int(guild.id))
         if (
             _enabled_contain(settings)
+            and not _is_bot_actor(actor)
             and not anti_nuke._actor_is_owner_or_bot(guild, actor)  # noqa: SLF001
         ):
             actor = _rollback_actor_proxy()
@@ -549,6 +677,7 @@ def _patch_guardian_surface(guardian: Any, anti_nuke: Any) -> bool:
         if (
             action_name in {"automod_rule_update", "automod_rule_delete"}
             and _enabled_contain(settings)
+            and not _is_bot_actor(actor)
             and not anti_nuke._actor_is_owner_or_bot(guild, actor)  # noqa: SLF001
         ):
             actor = _rollback_actor_proxy()
@@ -557,6 +686,85 @@ def _patch_guardian_surface(guardian: Any, anti_nuke: Any) -> bool:
     guardian._rollback_untrusted_overwrite = strict_overwrite  # noqa: SLF001
     guardian._rollback_untrusted_automod = strict_automod  # noqa: SLF001
     setattr(guardian, _GUARDIAN_PATCH_FLAG, True)
+    return True
+
+
+def _patch_gateway_surface(gateway: Any, anti_nuke: Any) -> bool:
+    if bool(getattr(gateway, _GATEWAY_PATCH_FLAG, False)):
+        return False
+
+    original_role_create = gateway._handle_role_create  # noqa: SLF001
+    original_role_update = gateway._handle_dangerous_role_update  # noqa: SLF001
+    original_member_role_update = gateway._handle_member_role_update  # noqa: SLF001
+
+    async def bot_safe_role_create(guild, entry):
+        actor = getattr(entry, "user", None)
+        if not _is_bot_actor(actor):
+            return await original_role_create(guild, entry)
+        await anti_nuke._process_claimed_destructive_event(  # noqa: SLF001
+            guild,
+            entry=entry,
+            action_key="role_create",
+            action_label="Bot role creation",
+            target_label=gateway._target_label(entry),  # noqa: SLF001
+            threshold_key="antinuke_role_delete_threshold",
+        )
+
+    async def bot_safe_role_update(guild, entry, actor):
+        if not _is_bot_actor(actor):
+            return await original_role_update(guild, entry, actor)
+        added = anti_nuke.dangerous_permissions_added(
+            getattr(entry, "before", None),
+            getattr(entry, "after", None),
+        )
+        if not added:
+            return
+        await anti_nuke._process_claimed_destructive_event(  # noqa: SLF001
+            guild,
+            entry=entry,
+            action_key="role_update",
+            action_label="Bot role permission mutation",
+            target_label=gateway._target_label(entry),  # noqa: SLF001
+            threshold_key="antinuke_role_delete_threshold",
+        )
+
+    async def bot_safe_member_role_update(guild, entry, actor):
+        target = await gateway._resolve_target_member(guild, entry)  # noqa: SLF001
+        if _is_bot_actor(target):
+            return
+
+        if _is_bot_actor(actor):
+            added_roles, _removed_roles = gateway._role_diff(entry)  # noqa: SLF001
+            trusted_role_ids = set(
+                anti_nuke._safe_id_list(  # noqa: SLF001
+                    (await anti_nuke.get_antinuke_settings(int(guild.id))).get(
+                        "antinuke_trusted_role_ids"
+                    )
+                )
+            )
+            sensitive_added = [
+                role
+                for role in added_roles
+                if anti_nuke.role_has_dangerous_permissions(role)
+                or _safe_int(getattr(role, "id", 0), 0) in trusted_role_ids
+            ]
+            if sensitive_added:
+                await anti_nuke._process_claimed_destructive_event(  # noqa: SLF001
+                    guild,
+                    entry=entry,
+                    action_key="role_update",
+                    action_label="Bot security-sensitive role grant",
+                    target_label=gateway._member_target_label(entry),  # noqa: SLF001
+                    threshold_key="antinuke_role_delete_threshold",
+                )
+                return
+
+        return await original_member_role_update(guild, entry, actor)
+
+    gateway._handle_role_create = bot_safe_role_create  # noqa: SLF001
+    gateway._handle_dangerous_role_update = bot_safe_role_update  # noqa: SLF001
+    gateway._handle_member_role_update = bot_safe_member_role_update  # noqa: SLF001
+    setattr(gateway, _GATEWAY_PATCH_FLAG, True)
     return True
 
 
@@ -592,53 +800,6 @@ def _patch_owner_first_strike(incident: Any) -> bool:
     return True
 
 
-def _patch_bot_add_guardian(
-    guardian: Any,
-    anti_nuke: Any,
-    hostile: Any,
-) -> bool:
-    if bool(getattr(guardian, _BOT_ADD_PATCH_FLAG, False)):
-        return False
-
-    original = guardian._handle_bot_add  # noqa: SLF001
-
-    async def strict_bot_add(guild: discord.Guild, entry: Any, actor: Any) -> None:
-        target = getattr(entry, "target", None)
-        target_id = _safe_int(getattr(target, "id", 0), 0)
-        if target_id <= 0:
-            return await original(guild, entry, actor)
-
-        settings = await anti_nuke.get_antinuke_settings(int(guild.id))
-        if not bool(settings.get("antinuke_enabled")):
-            return await original(guild, entry, actor)
-
-        # Exact hostile reputation always outranks owner authorization.
-        try:
-            reputation = await hostile.get_actor_reputation(
-                int(guild.id),
-                target_id,
-                refresh=True,
-            )
-        except Exception:
-            reputation = None
-        if reputation and reputation.get("active"):
-            return await original(guild, entry, actor)
-
-        actor_id = _safe_int(getattr(actor, "id", 0), 0)
-        owner_id = _safe_int(getattr(guild, "owner_id", 0), 0)
-        if actor_id > 0 and actor_id == owner_id:
-            # A physical guild-owner bot install is explicit authorization. The
-            # trusted-user list describes trusted *actors* elsewhere in AntiNuke;
-            # it is not a second, hidden allowlist for bot target IDs.
-            return
-
-        return await original(guild, entry, actor)
-
-    guardian._handle_bot_add = strict_bot_add  # noqa: SLF001
-    setattr(guardian, _BOT_ADD_PATCH_FLAG, True)
-    return True
-
-
 def install_anti_nuke_lockdown_runtime(bot: discord.Client) -> bool:
     """Install AntiNuke's final structural no-grace invariants once."""
 
@@ -646,15 +807,15 @@ def install_anti_nuke_lockdown_runtime(bot: discord.Client) -> bool:
         return False
 
     from . import anti_nuke
+    from . import anti_nuke_gateway_runtime as gateway
     from . import anti_nuke_guardian_runtime as guardian
-    from . import anti_nuke_hostile_actor_runtime as hostile
     from . import anti_nuke_incident_runtime as incident
 
     history_patched = _patch_config_history_restore()
     policy_patched = _patch_anti_nuke_policy(anti_nuke, bot)
     guardian_patched = _patch_guardian_surface(guardian, anti_nuke)
+    gateway_patched = _patch_gateway_surface(gateway, anti_nuke)
     owner_patched = _patch_owner_first_strike(incident)
-    bot_add_patched = _patch_bot_add_guardian(guardian, anti_nuke, hostile)
 
     setattr(bot, _INSTALL_FLAG, True)
     print(
@@ -662,8 +823,9 @@ def install_anti_nuke_lockdown_runtime(bot: discord.Client) -> bool:
         f"{'patched' if history_patched else 'already active'}; "
         f"structural first-strike={'active' if policy_patched else 'already active'}; "
         f"audit/rollback surface={'hardened' if guardian_patched else 'already hardened'}; "
+        f"bot permission integrity={'active' if gateway_patched else 'already active'}; "
         f"owner first-strike={'active' if owner_patched else 'already active'}; "
-        f"owner bot-add authorization={'active' if bot_add_patched else 'already active'}"
+        "bot-add authorization=native"
     )
     return True
 

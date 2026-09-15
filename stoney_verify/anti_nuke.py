@@ -27,6 +27,7 @@ ANTINUKE_DEFAULTS: dict[str, Any] = {
     "antinuke_protect_role_escalation": True,
     "antinuke_trusted_user_ids": [],
     "antinuke_trusted_role_ids": [],
+    "antinuke_trusted_bot_ids": [],
 }
 
 DANGEROUS_PERMISSION_NAMES: tuple[str, ...] = (
@@ -265,6 +266,13 @@ def normalize_antinuke_settings(cfg: Any) -> dict[str, Any]:
                 defaults["antinuke_trusted_role_ids"],
             )
         ),
+        "antinuke_trusted_bot_ids": _safe_id_list(
+            _cfg_value(
+                cfg,
+                "antinuke_trusted_bot_ids",
+                defaults["antinuke_trusted_bot_ids"],
+            )
+        ),
     }
 
 
@@ -417,6 +425,73 @@ def is_trusted_actor(
         settings,
         ignore_role_ids=ignore_role_ids,
     )
+
+
+async def bot_add_authorization(
+    guild: discord.Guild,
+    target: Any,
+    actor: Any,
+    settings: Optional[Mapping[str, Any]] = None,
+) -> tuple[bool, str]:
+    """Return whether one bot-add event is explicitly authorized.
+
+    Trusted bot IDs and explicitly trusted delegated inviters are authorization
+    signals. The physical guild owner must pre-approve the bot target because a
+    Discord bot cannot contain the owner after a malicious addition. Durable
+    hostile reputation always outranks either trust signal.
+    """
+
+    clean = dict(settings or await get_antinuke_settings(int(guild.id)))
+    target_id = _safe_int(getattr(target, "id", 0), 0)
+    actor_id = _safe_int(getattr(actor, "id", 0), 0)
+    if target_id <= 0:
+        return False, "bot target could not be resolved"
+
+    trusted_bot_ids = set(_safe_id_list(clean.get("antinuke_trusted_bot_ids")))
+    target_trusted = target_id in trusted_bot_ids
+
+    owner_id = _safe_int(getattr(guild, "owner_id", 0), 0)
+    actor_is_owner = actor_id > 0 and actor_id == owner_id
+    actor_is_dank = False
+    try:
+        actor_is_dank = bool(
+            getattr(bot, "user", None) is not None
+            and actor_id > 0
+            and actor_id == int(bot.user.id)
+        )
+    except Exception:
+        actor_is_dank = False
+
+    delegated_trust = (
+        not actor_is_owner
+        and not actor_is_dank
+        and _actor_is_configured_trusted(actor, clean)
+    )
+    candidate_authorized = target_trusted or actor_is_dank or delegated_trust
+    if not candidate_authorized:
+        if actor_is_owner:
+            return False, "guild owner must pre-approve this bot ID"
+        return False, "bot target and inviter are not explicitly trusted"
+
+    try:
+        from .anti_nuke_hostile_actor_runtime import get_actor_reputation
+
+        reputation = await get_actor_reputation(
+            int(guild.id),
+            target_id,
+            refresh=True,
+        )
+    except Exception:
+        reputation = None
+
+    if reputation and bool(reputation.get("active")):
+        return False, "bot has active hostile reputation"
+
+    if target_trusted:
+        return True, "bot ID is explicitly trusted"
+    if actor_is_dank:
+        return True, "Dank Shield initiated the addition"
+    return True, "inviter is explicitly trusted"
 
 
 def _role_is_default(role: Any) -> bool:
@@ -1664,7 +1739,13 @@ async def _handle_bot_add(member: discord.Member) -> None:
         return
 
     actor = getattr(entry, "user", None)
-    if _actor_is_owner_or_bot(guild, actor):
+    authorized, authorization_reason = await bot_add_authorization(
+        guild,
+        member,
+        actor,
+        settings,
+    )
+    if authorized:
         return
 
     response = "Alert-only mode: newly added bot was left in the server."
@@ -1674,7 +1755,7 @@ async def _handle_bot_add(member: discord.Member) -> None:
             await guild.kick(
                 member,
                 reason=(
-                    "Dank Shield AntiNuke rollback: untrusted bot addition"
+                    "Dank Shield AntiNuke rollback: unauthorized bot addition"
                 ),
             )
             removed_bot = True
@@ -1682,15 +1763,19 @@ async def _handle_bot_add(member: discord.Member) -> None:
             removed_bot = False
 
         actor_id = _safe_int(getattr(actor, "id", 0), 0)
-        lock = _lock_for(_CONTAINMENT_LOCKS, (int(guild.id), actor_id))
-        async with lock:
-            removed, blocked = await _contain_actor(
-                guild,
-                actor,
-                reason=(
-                    "Dank Shield AntiNuke containment: untrusted bot addition"
-                ),
-            )
+        owner_id = _safe_int(getattr(guild, "owner_id", 0), 0)
+        removed: list[str] = []
+        blocked: list[str] = []
+        if actor_id > 0 and actor_id != owner_id:
+            lock = _lock_for(_CONTAINMENT_LOCKS, (int(guild.id), actor_id))
+            async with lock:
+                removed, blocked = await _contain_actor(
+                    guild,
+                    actor,
+                    reason=(
+                        "Dank Shield AntiNuke containment: unauthorized bot addition"
+                    ),
+                )
 
         response = (
             "Removed the newly added bot."
@@ -1701,7 +1786,7 @@ async def _handle_bot_add(member: discord.Member) -> None:
             )
         )
         if removed:
-            response += " Containment actions: " + ", ".join(removed) + "."
+            response += " Inviter containment: " + ", ".join(removed) + "."
         if blocked:
             response += (
                 " Could not fully contain inviter: "
@@ -1711,11 +1796,12 @@ async def _handle_bot_add(member: discord.Member) -> None:
 
     await _post_incident(
         guild,
-        title="🚨 AntiNuke Untrusted Bot Added",
+        title="🚨 AntiNuke Unauthorized Bot Added",
         actor=actor,
         action_label="Bot added to server",
         target_label=f"{member} (`{member.id}`)",
         response_label=response,
+        details=authorization_reason,
     )
 
 
@@ -1928,6 +2014,7 @@ __all__ = [
     "ANTINUKE_DEFAULTS",
     "DANGEROUS_PERMISSION_NAMES",
     "antinuke_permission_health",
+    "bot_add_authorization",
     "dangerous_permissions_added",
     "dangerous_permissions_changed",
     "get_antinuke_settings",
