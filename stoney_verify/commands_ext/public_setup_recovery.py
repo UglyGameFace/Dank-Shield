@@ -24,7 +24,9 @@ import discord
 from ..globals import get_supabase, now_utc
 from ..guild_config import (
     GUILD_CONFIG_TABLE_FALLBACKS,
+    clear_guild_config_keys_sync,
     invalidate_guild_config,
+    upsert_guild_config_sync,
 )
 from . import public_setup_solid as solid
 
@@ -320,53 +322,53 @@ def _write_config_patch_sync(
     patch: dict[str, Any],
     snapshot: Optional[dict[str, Any]] = None,
 ) -> str:
-    supabase = _supabase_required()
+    """Apply recovery-owned config changes through the canonical guild writer.
+
+    Recovery snapshots are persisted before any clear operation so a failed
+    reset never destroys the only restore point. Ticket-choice persistence is a
+    separate table and remains owned by this recovery module.
+    """
+
     table, row, row_error = _fetch_config_row_sync(guild_id)
     if row_error and row is None:
         raise RuntimeError(row_error)
 
-    settings = _merge_settings(row)
-    for key, value in patch.items():
-        settings[key] = value
-    if snapshot is not None:
-        settings["last_setup_snapshot"] = snapshot
-    settings["setup_recovery_updated_at"] = _now_iso()
-
-    base = {
-        "guild_id": str(guild_id),
-        "updated_at": _now_iso(),
-    }
-    payloads = (
-        {**base, **patch, "settings": settings},
-        {**base, **patch},
-        {**base, "settings": settings},
-        {**base, "config": settings},
+    stamp = _now_iso()
+    clear_keys = tuple(
+        str(key)
+        for key, value in patch.items()
+        if value is None
     )
-    last_error = ""
+    updates = {
+        str(key): value
+        for key, value in patch.items()
+        if value is not None
+    }
 
-    for payload in payloads:
-        try:
-            if row:
-                (
-                    supabase.table(table)
-                    .update(payload)
-                    .eq("guild_id", str(guild_id))
-                    .execute()
-                )
-            else:
-                try:
-                    (
-                        supabase.table(table)
-                        .upsert(payload, on_conflict="guild_id")
-                        .execute()
-                    )
-                except TypeError:
-                    supabase.table(table).upsert(payload).execute()
-            return table
-        except Exception as exc:
-            last_error = f"{type(exc).__name__}: {str(exc)[:250]}"
+    snapshot_updates: dict[str, Any] = {
+        "setup_recovery_updated_at": stamp,
+        "__config_write_mode": "explicit_override",
+        "__config_write_source": "public_setup_recovery",
+    }
+    if snapshot is not None:
+        snapshot_updates["last_setup_snapshot"] = snapshot
 
-    raise RuntimeError(last_error or "Could not update guild setup config.")
+    # Preserve a recovery point before destructive key clearing. The canonical
+    # writer owns storage-shape synchronization and cache updates.
+    if snapshot is not None:
+        upsert_guild_config_sync(guild_id, snapshot_updates)
+
+    if clear_keys:
+        clear_guild_config_keys_sync(
+            guild_id,
+            clear_keys,
+            source="guild config recovery",
+        )
+
+    final_updates = dict(snapshot_updates)
+    final_updates.update(updates)
+    upsert_guild_config_sync(guild_id, final_updates)
+    return table
 
 
 def _delete_ticket_categories_sync(guild_id: int) -> tuple[int, str]:
