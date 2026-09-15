@@ -18,6 +18,7 @@ import discord
 from . import anti_nuke
 from . import anti_nuke_guardian_runtime as guardian
 from . import anti_nuke_hostile_actor_runtime as hostile
+from . import anti_nuke_product_policy_runtime as product_policy
 
 _INSTALL_FLAG = "_dank_antinuke_reentry_race_runtime_installed"
 _GUARDIAN_FLAG = "_dank_antinuke_reentry_race_guardian_patched"
@@ -78,8 +79,11 @@ async def _fast_reputation(guild_id: int, user_id: int) -> Optional[dict[str, An
 
     Explicit clears update both the in-process cache and local mirror, so using those
     sources first removes the network round-trip from the destructive re-entry path.
-    A cache miss deliberately returns None so the existing canonical path can perform
-    its authoritative lookup for first-seen identities.
+    Every hot/local row is still passed through the final product-policy sanitizer so
+    a legacy false-positive record can never outrun its durable cleanup and re-ban the
+    member during the fast re-entry window. A cache miss deliberately returns None so
+    the existing canonical path can perform its authoritative lookup for first-seen
+    identities.
     """
 
     key = _key(guild_id, user_id)
@@ -88,7 +92,11 @@ async def _fast_reputation(guild_id: int, user_id: int) -> Optional[dict[str, An
 
     cached = hostile._MEMORY.get(key)  # noqa: SLF001
     if isinstance(cached, Mapping):
-        return dict(cached)
+        return await product_policy.sanitize_legacy_false_positive_reputation(
+            int(guild_id),
+            int(user_id),
+            cached,
+        )
 
     try:
         local = await asyncio.to_thread(
@@ -101,7 +109,11 @@ async def _fast_reputation(guild_id: int, user_id: int) -> Optional[dict[str, An
     if isinstance(local, Mapping):
         row = dict(local)
         hostile._MEMORY[key] = row  # noqa: SLF001
-        return dict(row)
+        return await product_policy.sanitize_legacy_false_positive_reputation(
+            int(guild_id),
+            int(user_id),
+            row,
+        )
     return None
 
 
