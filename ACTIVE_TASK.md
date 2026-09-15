@@ -1,93 +1,93 @@
 # ACTIVE TASK
 
-## DS-FIX-ANTINUKE-BOT-PERMISSION-INTEGRITY — Preserve legitimate bot authority
+## DS-AUD-GUILD-CONFIG-OWNERSHIP — Consolidate guild config persistence and runtime validation
 
-**Outcome:** AntiNuke keeps unknown bot installs behind the canonical bot-add authorization gate while treating already-operational bot actors as bounded delegated principals, preventing one legitimate bot action or a guardian panic burst from immediately kicking the bot or stripping all of its manageable roles.
+**Outcome target:** `stoney_verify.guild_config` is the one canonical owner of per-guild configuration reads, writes, cache behavior, split-brain storage compatibility, public isolation, and saved Discord-ID validation. Setup modules may keep stable compatibility imports, but they must not implement a second Supabase persistence engine or mutate the canonical config module at import time.
 
-**Status:** VALIDATED; MERGE PENDING. Runtime/code head `c5d1d8e27f7edd373141793722cf2303fc192319` passed every required workflow. This task-record-only commit changes no runtime code and must receive the repository's required exact-head checks before PR #238 is merged.
+**Status:** IN PROGRESS — implementation branch active; PR/CI validation not complete
 
-**Repair branch:** `fix/antinuke-legit-bot-permission-integrity`
-**Repair PR:** #238 — `Fix AntiNuke legitimate bot permission damage`
-**Validated runtime/code head:** `c5d1d8e27f7edd373141793722cf2303fc192319`
-**Prior merged PR:** #236 — `Fix AntiNuke authorized bot trust ownership`
-**Prior merge SHA:** `eb94e6e46d0c0cfdef2657eb302d0538a6e804fa`
-**Superseded closure PR:** #237 — closed without merge after live permission damage was reported
+**Branch:** `audit/guild-config-ownership`
+**Base main:** `2c31b5cade7c4fdd667a90a701c248508bb7d8eb`
 
 ## Scope
 
-- `stoney_verify/anti_nuke_lockdown_runtime.py`
-- `stoney_verify/anti_nuke_product_policy_runtime.py`
-- `tests/test_antinuke_legit_bot_permission_integrity.py`
-- this task record
+- `stoney_verify/guild_config.py`
+- `stoney_verify/commands_ext/public_setup_config_writer.py`
+- production startup ownership for `guild_config_runtime_validator`
+- startup diagnostics/audit expectations affected by that retirement
+- focused behavioral regression coverage for persistence, clearing, and native runtime validation
+- task record
 
-No unrelated AntiNuke redesign, setup, tickets, verification, moderation, or PR #235 work is included.
+No unrelated setup UI redesign, ticket redesign, AntiNuke redesign, Discord API safety migration, dormant-guard mass cleanup, or feature work belongs in this task.
 
-## Root cause
+## Findings / root cause
 
-1. Native destructive-event processing classified every bot except Dank Shield itself as an untrusted actor, making ordinary bot actions first-strike events.
-2. Lockdown structural overrides could force `threshold_override=1`, collapsing otherwise bounded structural actions to one strike.
-3. Canonical containment can kick the attributed actor and, if that fails, strip every manageable role, not only dangerous roles.
-4. Guardian panic containment can apply that same containment to observed peer actors, creating multi-bot blast radius.
-5. Gateway-fast dangerous role/member-role paths could roll back role permissions before ordinary threshold processing.
-6. The later-installed Strict Lockdown product-policy layer rebuilt guardian wrappers and could reintroduce synthetic-untrusted/first-strike behavior after the lockdown repair unless it shared the same bot boundary.
-7. Making every bot globally trusted would weaken bot-add authorization because a bot inviter could then authorize arbitrary new bot installs, so bot-add authorization requires a separate trust context.
-8. The first exact-head CI attempt also exposed three task-owned test-contract failures: two legacy partial AntiNuke test doubles lacked newly canonical hooks, and the product-policy test replaced the lockdown module with a minimal fake that did not own the private bot classifier.
+1. `stoney_verify.guild_config` already owns canonical per-guild config reads, cache state, env fallback isolation, and a generic writer.
+2. `stoney_verify.commands_ext.public_setup_config_writer` had grown into a second full persistence engine with its own Supabase access, split-brain merge rules, overwrite policy, setup-completion invalidation, and clear behavior.
+3. The setup writer was therefore not a thin compatibility layer. Setup behavior and canonical runtime behavior could diverge depending on which writer a caller imported.
+4. Existing rows may contain the same value in flat columns plus `settings` and `config` JSON shapes. The public setup writer had explicit behavior to keep those shapes synchronized and to prevent stale JSON from resurrecting cleared values.
+5. `startup_guards.guild_config_runtime_validator` is still a live `main.py` monkey patch that replaces `discover_runtime_guild_config` so stale saved roles/channels/categories are purged from Supabase before runtime discovery.
+6. That validation behavior belongs with canonical config resolution, not in an import-time startup patch.
+7. Direct callers of canonical `upsert_guild_config` historically use it for legitimate admin reassignment as well as fill-missing flows. Consolidation must not silently change those direct calls into no-ops.
+8. Historical setup-specific split-brain tests pinned the second writer rather than canonical ownership, so ownership tests need to move with the behavior.
 
-## Repair behavior
+## Execution path
 
-- Operational bot actors are treated as delegated for ordinary destructive-event thresholds.
-- Structural and panic `threshold_override=1` values are ignored for bot actors so one attributed action cannot destroy their role state.
-- Direct containment preserves a bot actor unless the bot has active hostile reputation; threshold-triggered canonical processing may still contain a bot after it actually crosses configured limits.
-- Bot-add authorization runs in an isolated context that still requires explicit human/role trust or target bot pre-approval; implicit operational-bot trust cannot authorize a new bot install.
-- Guardian strict overwrite/AutoMod rollback does not force bot actors through the synthetic untrusted proxy.
-- Gateway-fast dangerous role create/update by a bot uses canonical threshold processing instead of immediate rollback/containment.
-- Gateway member-role handling does not strip newly granted roles from a bot target.
-- Native member dangerous-role grants and bot-only role permission escalation are protected from immediate rollback.
-- The final Strict Lockdown product-policy layer preserves the same bounded-bot rule for direct strict actions, guardian processing, overwrite rollback, and AutoMod rollback.
-- Product policy owns its local bot classifier instead of depending on a private helper from another runtime layer.
-- Lockdown canonical security hooks remain fail-closed for the real production module while focused unit-test doubles may omit unrelated hooks.
-- Durable hostile reputation remains authoritative and can still allow containment of a known-hostile bot.
+Current production flow before this branch:
+
+1. `main.py` imports `guild_config_runtime_validator`.
+2. Import executes its patch immediately and replaces `stoney_verify.guild_config.discover_runtime_guild_config`.
+3. Feature/runtime callers resolve through the patched function for stale-ID cleanup and runtime discovery.
+4. Setup flows generally import `commands_ext.public_setup_config_writer`, which persists directly through Supabase rather than through `guild_config.upsert_guild_config`.
+5. Other feature/admin callers import `guild_config.upsert_guild_config` directly, so two mutation engines govern the same row family.
+
+Target flow on this branch:
+
+1. `stoney_verify.guild_config` owns persistence, split-brain synchronization, clear behavior, cache state, and native saved-ID validation.
+2. `public_setup_config_writer` remains only as a stable compatibility facade that annotates setup intent and delegates to the canonical owner.
+3. `main.py` no longer activates `guild_config_runtime_validator`.
+4. Startup diagnostics/audit expectations no longer require that retired validator owner.
+5. Runtime discovery calls the native canonical validator/discovery path directly.
+
+## Changes so far
+
+- Added canonical synchronous and asynchronous guild-config persistence entrypoints.
+- Moved split-brain compatibility behavior into the canonical writer so writes can keep flat, `settings`, and `config` shapes synchronized when those shapes exist.
+- Added canonical explicit key-clearing behavior that removes stale values from flat and both JSON shapes.
+- Added canonical config-write metadata/control handling so setup can request `setup_builder` semantics without owning persistence.
+- Kept direct canonical writes compatible with historical overwrite behavior while allowing explicit `fill_missing`/runtime-discovery safety modes for auto-discovery paths.
+- Converted `public_setup_config_writer` into a compatibility facade over the canonical writer/clear APIs.
+- Removed production `main.py` activation of `guild_config_runtime_validator` and removed it from startup diagnostics expectations.
+- Updated the explicit startup-owner audit tool accordingly.
+- Retired the setup-owned split-brain test file and replaced it with native ownership tests.
+- Added behavior-level coverage for canonical split-brain writes, canonical clears, setup facade delegation, direct-write compatibility, explicit fill-missing protection, and native stale-ID purge.
 
 ## Validation / results
 
-Exact runtime/code head `c5d1d8e27f7edd373141793722cf2303fc192319`:
+Not yet validated on CI. Current branch head before PR creation: `ae29d6c4891a516d4ad9e8f0d6563a0334d1c128`.
 
-- Dank Shield CI #2168: SUCCESS
-- Python compile: SUCCESS
-- full unit suite: SUCCESS; the prior 3 failures are cleared
-- committed diff whitespace: SUCCESS
-- standalone tool checks: SUCCESS
-- public setup/isolation audit: SUCCESS
-- canonical command-surface audits: SUCCESS
-- invite-permission audit: SUCCESS
-- setup-safety audit: SUCCESS
-- Dank Design Smart Auto-Detect audit: SUCCESS
-- role-truth ownership audit: SUCCESS
-- event-boundary ownership audit: SUCCESS
-- managed-category SQL smoke: SUCCESS
-- claim-first ticket security: SUCCESS
-- Dank Design Regression CI #418: SUCCESS
-- Application Command Size Diagnostics #1171: SUCCESS
-- Ticket Owner Emergency Override #739: SUCCESS
-- Profile Runtime Diagnostics #925: SUCCESS
-- branch freshness: 0 commits behind `main` at validated code head
-- changed-file inspection: task-only files; no unrelated generated, conflict, secret-bearing, or accidental files found
-- PR review/thread inspection before record closeout: no blocking review/thread findings
-
-The earlier exact-head failure on `0b59ae5c2ceb14e306a4dd06711717fbd2f37fd5` was fully diagnosed rather than retried blindly: 1490 tests passed and three task-owned compatibility assertions failed. Those failures were corrected by commits `ce579806fe8010161b43005fe5f9584796ae5286` and `c5d1d8e27f7edd373141793722cf2303fc192319`.
+Known local limitation: this environment cannot clone/run the repository locally because the runner cannot resolve GitHub. Validation must therefore come from repository CI on the branch/PR rather than being invented from a failed local clone.
 
 ## Cleanup / conflicts
 
-- No duplicate bot-add authorization owner was added.
-- No startup workaround, retry loop, blanket bot exemption, or containment bypass was introduced.
-- The later product-policy wrapper now shares the same operational-bot boundary instead of undoing lockdown behavior.
-- Real production canonical hooks remain mandatory and fail closed if unexpectedly absent.
-- PR #235 and unrelated setup/ticket/moderation work remain outside this task.
+- No second writer should remain in `public_setup_config_writer` after this migration.
+- The retired runtime validator module has not yet been deleted because importer/supersession references still need exact review before file removal. Production ownership has been removed.
+- `public_server_env_id_guard` remains live and unchanged in this task because public env-ID isolation is a separate ownership migration with its own boot-order behavior.
+- `discord_api_safety` remains live and unchanged.
+- Dormant ticket/API guild-config compatibility guards are not being mass-deleted in this task without importer proof.
 
-## Blocker / runtime boundary
+## Blockers / risks
 
-No repository-code blocker remains on the validated runtime head. The repository repair prevents future AntiNuke permission damage, but it cannot reconstruct Discord permissions already stripped from live bots. Existing damaged bot roles/permissions must be restored in Discord after the repaired revision is deployed.
+- CI has not yet compiled or executed the branch.
+- Canonical writer migration touches a high-centrality module, so full repository tests and targeted setup/config tests are required before any completion claim.
+- Schema compatibility fallback payloads must be proven against existing tests/workflows.
+
+## Backlog
+
+### Setup picker does not find expected channels/roles — USER REPORTED, NOT INVESTIGATED IN THIS TASK
+
+User supplied screenshots showing `/dank setup` still opening the generic Discord resource picker and returning incomplete/incorrect results. The user specifically expected the previously intended dedicated Dank Shield setup picker rather than Discord's generic picker. Symptoms include the picker failing to surface expected resources and making setup frustrating/unusable. This is a separate setup-UI/resource-discovery issue and must not be investigated or patched on the active guild-config ownership branch unless it is proven to share this task's root cause.
 
 ## Next step
 
-Let the required checks pass on this record-only final head, mark PR #238 ready, merge it with the expected head SHA, then use the PR's canonical merge metadata as the final merge record rather than creating another bookkeeping commit and restarting CI again.
+Open a draft PR from `audit/guild-config-ownership`, let repository CI compile and execute the new native ownership path, then fix only failures that are in-scope or required for compatibility/regression prevention. After one exact PR head is green, perform final diff/importer/cleanup review before considering merge readiness.
