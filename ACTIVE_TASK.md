@@ -2,9 +2,9 @@
 
 ## DS-AUD-GUILD-CONFIG-OWNERSHIP — Consolidate guild config persistence and runtime validation
 
-**Outcome target:** `stoney_verify.guild_config` is the one canonical owner of per-guild configuration reads, writes, cache behavior, split-brain storage compatibility, public isolation, and saved Discord-ID validation. Setup modules may keep stable compatibility imports, but they must not implement a second Supabase persistence engine or mutate the canonical config module at import time.
+**Outcome target:** `stoney_verify.guild_config` is the canonical owner of normal per-guild configuration persistence, cache behavior, public isolation, split-brain storage compatibility, and saved Discord-ID validation. Setup compatibility surfaces may delegate to it, but normal production paths must not run a competing guild-config mutation engine or depend on an import-time validator patch.
 
-**Status:** IN PROGRESS — implementation complete enough for exact-head CI; final validation/cleanup gate still open
+**Status:** FINAL VALIDATION — implementation/cleanup complete; exact-head CI must pass before merge-readiness is claimed
 
 **Branch:** `audit/guild-config-ownership`
 **PR:** #239 (draft)
@@ -12,109 +12,112 @@
 
 ## Scope
 
-- `stoney_verify/guild_config.py`
-- `stoney_verify/commands_ext/public_setup_config_writer.py`
-- production startup ownership for `guild_config_runtime_validator`
+- canonical `stoney_verify/guild_config.py` persistence/cache/runtime validation
+- `commands_ext/public_setup_config_writer.py` ownership consolidation
+- production boot ordering where modules can copy setup writer callbacks
+- Setup Recovery guild-config mutations
+- retirement of `guild_config_runtime_validator` as a production startup owner
 - startup diagnostics/audit expectations affected by that retirement
-- focused behavioral regression coverage for persistence, clearing, cache compatibility, and native runtime validation
-- setup tests that still pinned the retired writer internals
-- task record
+- behavioral regression coverage and stale tests tied to the superseded writer
+- task/PR bookkeeping
 
-No unrelated setup UI redesign, ticket redesign, AntiNuke redesign, Discord API safety migration, dormant-guard mass cleanup, or feature work belongs in this task.
+No unrelated setup-picker redesign, ticket redesign, AntiNuke redesign, Discord API safety migration, or dormant-startup-guard mass cleanup belongs in this task.
 
 ## Findings / root cause
 
-1. `stoney_verify.guild_config` already owned canonical per-guild config reads, cache state, env fallback isolation, and a generic writer.
-2. `stoney_verify.commands_ext.public_setup_config_writer` had grown into a second full persistence engine with its own Supabase access, split-brain merge rules, overwrite policy, setup-completion invalidation, and clear behavior.
-3. The setup writer was therefore not a thin compatibility layer. Setup behavior and canonical runtime behavior could diverge depending on which writer a caller imported.
-4. Existing rows may contain the same value in flat columns plus `settings` and `config` JSON shapes. The former setup writer had explicit behavior to keep those shapes synchronized and to prevent stale JSON from resurrecting cleared values.
-5. `startup_guards.guild_config_runtime_validator` was still a live `main.py` monkey patch that replaced `discover_runtime_guild_config` so stale saved roles/channels/categories were purged from Supabase before runtime discovery.
-6. That validation behavior belongs with canonical config resolution, not in an import-time startup patch.
-7. Direct callers of canonical `upsert_guild_config` historically use it for legitimate admin reassignment as well as fill-missing flows. Consolidation must preserve direct overwrite behavior while requiring explicit fill-only mode for discovery/auto-fill paths.
-8. Historical setup-specific tests pinned private helpers and Supabase access on the second writer. Those tests must move with ownership instead of forcing the duplicate implementation to remain.
-9. Consumers already import `get_cached_guild_config` and `env_fallback_allowed_for_guild`; canonical `guild_config.py` needed native public implementations so callers no longer rely on missing/exception-fallback behavior.
-10. `public_setup_group.py` still carries a historical local writer fallback. The compatibility facade now binds the group's writer aliases immediately when the facade is imported, removing later registration-order dependence in the public command profile. The old implementation remains dormant for compatibility pending safe importer-proof cleanup.
+1. `stoney_verify.guild_config` already owned the main runtime resolver/cache, but setup also had a second complete Supabase persistence engine in `public_setup_config_writer.py`.
+2. Existing rows can expose the same config through flat columns and legacy JSON compatibility buckets. Canonical reads merge `settings`, `config`, `metadata`, and `meta`, so writes/clears that update fewer shapes can let stale values reappear later.
+3. `guild_config_runtime_validator` was a live `main.py` monkey patch replacing canonical runtime discovery to purge stale saved Discord IDs.
+4. `public_setup_group.py` still contains a historical local writer implementation. Rebinding its globals only during later setup registration was insufficient because several modules import `_upsert_config` by value and can permanently retain whichever function existed at their own import time.
+5. Setup Recovery had its own live direct `guild_configs` mutation path, bypassing canonical split-brain synchronization and cache behavior.
+6. Direct canonical callers historically use `upsert_guild_config` for intentional admin reassignment. Consolidation therefore must preserve normal direct overwrite semantics while discovery/auto-fill paths opt into explicit fill-only modes.
+7. Cache/read failure isolation previously cleared every key ending in `_id`, accidentally clearing `guild_id` itself. Resource IDs must be isolated without erasing the identity of the guild whose config object is being returned.
+8. Existing consumers already import `get_cached_guild_config` and `env_fallback_allowed_for_guild`; canonical native implementations were required instead of relying on missing-function fallback behavior.
+9. `setup_service_modes.py` still contains an emergency raw-Supabase branch, but its normal path imports the canonical setup facade. It is a compatibility feature helper, not a normal production guild-config writer.
+10. The retired validator's only remaining code importer is another dormant compatibility guard reached through dormant setup-health compatibility code. It is not on the verified production boot path.
 
-## Execution path
+## Verified production execution path
 
-Production flow before this branch:
+1. `main.py` no longer imports `guild_config_runtime_validator`.
+2. `app.py` imports core runtime modules in its existing deliberate order and then imports `commands.py` before events.
+3. `commands.py` imports the `commands_ext` package, which only defines module metadata/helpers at package import time; it does not eagerly import the configured command modules.
+4. Before importing command modules that can copy `public_setup_group._upsert_config`, `commands.py` explicitly imports `public_setup_config_writer` and requires `apply_public_setup_writer_patch()` to succeed.
+5. The facade binds `public_setup_group._upsert_config_sync` / `_upsert_config` to canonical delegates.
+6. Later command-module imports therefore copy the canonical facade callback, not the historical group-local writer.
+7. Setup Recovery clears/writes guild config through canonical clear/upsert APIs. Ticket-choice persistence remains feature-owned because `ticket_categories` is a different table.
+8. Native `discover_runtime_guild_config` validates/purges stale saved role/channel/category IDs before optional runtime discovery.
 
-1. `main.py` imported `guild_config_runtime_validator`.
-2. Import executed its patch immediately and replaced `stoney_verify.guild_config.discover_runtime_guild_config`.
-3. Feature/runtime callers resolved through the patched function for stale-ID cleanup and runtime discovery.
-4. Setup flows generally imported `commands_ext.public_setup_config_writer`, which persisted directly through Supabase rather than through `guild_config.upsert_guild_config`.
-5. Other feature/admin callers imported `guild_config.upsert_guild_config` directly, so multiple mutation engines governed the same row family.
+## Changes
 
-Target flow on this branch:
-
-1. `stoney_verify.guild_config` owns persistence, split-brain synchronization, clear behavior, cache state, public env-fallback policy, cached-config compatibility, and native saved-ID validation.
-2. `public_setup_config_writer` remains only as a stable compatibility facade that annotates setup intent and delegates to the canonical owner.
-3. Importing that facade immediately binds `public_setup_group` writer callbacks to the canonical facade, so normal public boot does not execute the historical local writer.
-4. `main.py` no longer activates `guild_config_runtime_validator`.
-5. Startup diagnostics/audit expectations no longer require that retired validator owner.
-6. Runtime discovery calls the native canonical validator/discovery path directly.
-
-## Changes so far
-
-- Added canonical synchronous and asynchronous guild-config persistence entrypoints.
-- Moved split-brain compatibility behavior into the canonical writer so writes keep flat, `settings`, and `config` shapes synchronized when those shapes exist.
-- Added canonical explicit key-clearing behavior that removes stale values from flat and both JSON shapes.
-- Added canonical config-write metadata/control handling so setup can request `setup_builder` semantics without owning persistence.
-- Preserved historical overwrite semantics for direct canonical writes; explicit `fill_missing`/runtime-discovery modes block protected reassignment and now avoid unnecessary writes when everything is blocked.
-- Added native `get_cached_guild_config` and `env_fallback_allowed_for_guild` compatibility APIs with public-guild isolation behavior.
-- Converted `public_setup_config_writer` into a compatibility facade over canonical writer/clear APIs.
-- Made the facade bind `public_setup_group._upsert_config_sync` / `_upsert_config` immediately on import to remove later setup-registration dependence.
-- Removed production `main.py` activation of `guild_config_runtime_validator` and removed it from startup diagnostics expectations.
-- Updated the explicit startup-owner audit tool accordingly.
-- Retired the setup-owned split-brain test file and replaced it with native ownership tests.
-- Migrated tests that still called removed setup-writer private helpers so completion invalidation and clear-payload behavior are asserted against canonical `guild_config` ownership.
-- Added behavior-level coverage for split-brain writes, canonical clears, setup facade delegation, direct-write compatibility, explicit fill-missing protection/no-write behavior, native stale-ID purge, cached config compatibility, and env-fallback isolation.
+- Added/expanded canonical sync + async guild-config persistence entrypoints.
+- Canonical writes synchronize flat columns and every existing compatibility JSON bucket: `settings`, `config`, `metadata`, and `meta`.
+- Canonical clear APIs remove stale keys from flat and every existing compatibility JSON bucket.
+- Added canonical protected-write modes, write-source metadata, setup completion invalidation controls, and fill-only no-write behavior.
+- Preserved historical direct canonical overwrite behavior for intentional admin mutations.
+- Added native `get_cached_guild_config` and `env_fallback_allowed_for_guild` compatibility APIs.
+- Preserved `guild_id` on isolated/unavailable fallback objects while clearing resource IDs.
+- Converted `public_setup_config_writer` from a second Supabase engine into a thin setup-intent facade.
+- Bound the canonical setup writer before command consumers can copy setup callbacks by value; bootstrap fails closed if that binding cannot be established.
+- Routed Setup Recovery guild-config mutations through canonical APIs and behaviorally verified snapshot-save → clear → final-write ordering.
+- Removed `guild_config_runtime_validator` from production `main.py` startup ownership and startup diagnostics expectations.
+- Updated architecture guardrails to identify native guild-config ownership and prevent restoration of the retired boot patch.
+- Replaced/migrated tests that pinned private helpers on the old setup writer with canonical behavioral coverage.
 
 ## Validation / results
 
-PR #239 exact head `73ec7657ccab9b49c60b9ea06ddfc5ca6dadd367` ran all five PR workflows:
+Earlier exact-head CI exposed six in-scope migration/test regressions; all were corrected without restoring duplicate persistence logic.
 
-- Profile Runtime Diagnostics #931: **success**
-- Dank Design Regression CI #424: **success**
-- Application Command Size Diagnostics #1182: **success**
-- Ticket Owner Emergency Override #752: **success**
-- Dank Shield CI #2181: **failure** in unit-test gate
+A later exact head reached **1509 passed / 1 failed**. The only failure was `test_db_read_failure_is_distinct_from_genuine_unconfigured_guild`, whose legacy assertion treated `guild_id` as a resource ID and required it to be `None`. That assertion has now been corrected to require:
 
-The failing full-suite run compiled successfully and reported **1502 passed / 6 failed**. All six failures were in-scope ownership-test/test-migration issues:
+- `guild_id == "123"`
+- `source == "unavailable:db_read_failed"`
+- `use_env_fallbacks is False`
+- all other `*_id` resource fields are `None`
 
-1. fill-missing protection test expected an unnecessary write after a reassignment was correctly blocked;
-2. stale-ID validation fixture contained two additional intentionally invalid voice-channel IDs but expected only the staff role to be reported;
-3-4. two setup navigation tests still called removed private completion helpers on `public_setup_config_writer`;
-5. voice reconciliation test still called removed private clear-payload helper on the setup writer;
-6. voice reconciliation atomic-clear test monkeypatched Supabase internals on the facade rather than on canonical `guild_config`.
+The implementation/test head immediately before this task-record commit is `d0cd04485c992227091ca40a7357326baea2c336`.
 
-Those six test issues have been corrected without restoring duplicate persistence logic. Current implementation/test head before this task-record update: `55b0b32a4c2c2d81512d12e4062ba5bd56e483f0`.
+Companion workflows on the preceding implementation heads have repeatedly passed:
 
-Known local limitation: this environment cannot clone/run the repository locally because the runner cannot resolve GitHub. Repository CI is therefore the executable validation source.
+- Ticket Panel Single Owner
+- Ticket Owner Emergency Override
+- Dank Design Regression CI
+- Application Command Size Diagnostics
+- Profile Runtime Diagnostics
+- Managed category SQL smoke
+- Claim-first ticket security
+- Python compile/diff whitespace
+
+**Required final evidence:** all PR workflows, including the complete Dank Shield unit + standalone audit lane, must pass on the exact final head containing this record.
+
+Known local limitation: the local runner cannot resolve GitHub for a repository clone, so GitHub Actions is the executable repository-validation source for this task.
 
 ## Cleanup / conflicts
 
-- `public_setup_config_writer` no longer owns Supabase persistence.
-- Setup private-helper tests no longer pin behavior to the retired writer implementation.
-- The historical local writer remains present in `public_setup_group.py` as a dormant compatibility fallback; public-profile import ordering now binds its live callbacks to the canonical facade before setup use. Deleting the large fallback requires direct importer/reference proof and is not being done speculatively.
-- The retired `guild_config_runtime_validator` module has not yet been deleted because exact importer/supersession references still require final review. Production ownership has been removed.
-- `setup_service_modes.py` retains a direct-Supabase emergency branch used only if importing the canonical setup writer fails. It is a compatibility feature owner, not production startup ownership, and is not being rewritten without proof that the fallback is reachable/incorrect.
-- `public_server_env_id_guard` remains live and unchanged because its boot-order behavior is a separate ownership migration.
-- `discord_api_safety` remains live and unchanged.
-- Dormant ticket/API guild-config compatibility guards are not being mass-deleted without importer proof.
+- `public_setup_config_writer` no longer owns direct Supabase persistence.
+- The live Setup Recovery config mutation bypass is removed.
+- Normal public boot cannot copy the historical group-local writer before canonical binding.
+- `public_setup_group.py` still physically contains its historical writer as a dormant compatibility fallback. Removing a large shared setup module's fallback solely for aesthetic cleanup is deferred without stronger importer/runtime proof; normal production ownership no longer uses it.
+- `setup_service_modes.py` retains an emergency direct-Supabase fallback only if canonical setup-writer import is unavailable; normal behavior uses the canonical facade. No evidence showed that emergency branch participating in production boot.
+- The retired validator file remains present but dormant. Deleting it would require following the dormant verification/setup-health compatibility chain and is outside this focused ownership migration.
+- `public_server_env_id_guard` and `discord_api_safety` remain unchanged and live under their existing ownership.
+- No unrelated setup UI/picker changes are included.
+- PR #239 has no review threads or submitted reviews blocking the change.
+- Branch remained ahead of and not behind `main` during the final implementation review; re-check before marking ready.
 
 ## Blockers / risks
 
-- A new exact-head full CI run must pass after the six test migrations.
-- Canonical writer migration touches a high-centrality module, so standalone audit steps that were skipped after the failed unit gate still need to execute successfully.
-- Final PR diff/importer review must verify no accidental unrelated changes and confirm the retired validator file can either remain dormant safely or be deleted with reference proof.
+- Final exact-head CI is still required after this task-record update.
+- If final CI fails, only failures sharing this ownership root cause or required for compatibility/regression prevention belong in this task.
+- No production/live-server acceptance has been claimed from repository CI alone.
 
 ## Backlog
 
-### Setup picker does not find expected channels/roles — USER REPORTED, NOT INVESTIGATED IN THIS TASK
+### Setup picker does not find expected channels/roles — USER REPORTED, NEXT AUDIT ITEM
 
-User supplied screenshots showing `/dank setup` still opening the generic Discord resource picker and returning incomplete/incorrect results. The user specifically expected the previously intended dedicated Dank Shield setup picker rather than Discord's generic picker. Symptoms include the picker failing to surface expected resources and making setup frustrating/unusable. This is a separate setup-UI/resource-discovery issue and must not be investigated or patched on the active guild-config ownership branch unless it is proven to share this task's root cause.
+User supplied screenshots showing the Fix Access/setup flow opening Discord's generic channel/category picker, failing to surface expected resources, and showing `This interaction failed`. The user expected the previously intended dedicated Dank Shield picker. This has deliberately not been investigated on PR #239 because it is a separate setup UI/resource-discovery task.
+
+When this guild-config ownership task truly closes, recover the actual picker execution path first: locate the screen/callback creating the selector, verify whether the shared/dedicated Dank picker implementation is still authoritative, determine why this path uses Discord's generic resource picker or fails its interaction, and then fix the smallest complete root cause with mobile behavior/regression coverage.
 
 ## Next step
 
-Freeze the new PR head, run all PR workflows on that exact commit, and inspect the full Dank Shield CI through the standalone audit steps that were previously skipped. If green, perform final diff/importer/cleanup review, update this record and the PR validation summary, then decide whether the draft can be marked ready for review.
+Run all PR workflows on the exact final head containing this record. If every required check passes, re-check main drift, review threads, changed-file scope, and PR metadata; update the PR validation summary without moving the head; mark PR #239 ready for review. Do not start the setup-picker task until this task is actually closed/handed off.
