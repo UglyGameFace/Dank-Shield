@@ -99,8 +99,8 @@ def _patch_threshold_policy() -> bool:
 
     # The earlier lockdown wrapper reads this module-level set at call time.
     # Clearing it restores the canonical engine's behavior in normal Contain:
-    # untrusted operators are first-strike, explicitly trusted operators use
-    # their configured bounded thresholds.
+    # untrusted human operators are first-strike, while trusted operators and
+    # operational bots use their configured bounded thresholds.
     lockdown._STRICT_PROCESS_ACTION_KEYS = frozenset()  # noqa: SLF001
 
     original = anti_nuke._process_claimed_destructive_event  # noqa: SLF001
@@ -119,7 +119,12 @@ def _patch_threshold_policy() -> bool:
             settings = await anti_nuke.get_antinuke_settings(int(guild.id))
         except Exception:
             settings = None
-        if strict_lockdown_active(settings) and action_key in _DIRECT_STRICT_KEYS:
+        actor = getattr(entry, "user", None)
+        if (
+            strict_lockdown_active(settings)
+            and action_key in _DIRECT_STRICT_KEYS
+            and not lockdown._is_bot_actor(actor)  # noqa: SLF001
+        ):
             threshold_override = 1
         return await original(
             guild,
@@ -143,9 +148,9 @@ def _patch_guardian_policy() -> bool:
     strict_names = _strict_action_names()
 
     # #208/#209 intentionally forced these entries to one event. That is now
-    # reserved for Strict Lockdown. The canonical engine still makes unknown
-    # actors first-strike in ordinary Contain, while trusted operators retain
-    # their configured thresholds.
+    # reserved for Strict Lockdown human actors. The canonical engine keeps
+    # operational bots on bounded thresholds while unknown bot installs remain
+    # governed by the separate bot-add authorization policy.
     for name in strict_names:
         spec = guardian._ACTIONS.get(name)  # noqa: SLF001
         if spec is None:
@@ -167,6 +172,7 @@ def _patch_guardian_policy() -> bool:
         settings = await anti_nuke.get_antinuke_settings(int(guild.id))
         if (
             strict_lockdown_active(settings)
+            and not lockdown._is_bot_actor(actor)  # noqa: SLF001
             and not anti_nuke._actor_is_owner_or_bot(guild, actor)  # noqa: SLF001
         ):
             actor = SimpleNamespace(id=0, roles=[])
@@ -176,6 +182,7 @@ def _patch_guardian_policy() -> bool:
         settings = await anti_nuke.get_antinuke_settings(int(guild.id))
         if (
             strict_lockdown_active(settings)
+            and not lockdown._is_bot_actor(actor)  # noqa: SLF001
             and not anti_nuke._actor_is_owner_or_bot(guild, actor)  # noqa: SLF001
         ):
             actor = SimpleNamespace(id=0, roles=[])
@@ -194,7 +201,11 @@ def _patch_guardian_policy() -> bool:
         spec: tuple[str, str, str, Optional[int]],
     ) -> None:
         settings = await anti_nuke.get_antinuke_settings(int(guild.id))
-        if strict_lockdown_active(settings) and action_name in strict_names:
+        if (
+            strict_lockdown_active(settings)
+            and action_name in strict_names
+            and not lockdown._is_bot_actor(actor)  # noqa: SLF001
+        ):
             label, threshold_key, counter_key, _override = spec
             spec = (label, threshold_key, counter_key, 1)
         await original_process(guild, entry, actor, action_name, spec)
