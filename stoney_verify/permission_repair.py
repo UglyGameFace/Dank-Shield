@@ -1090,8 +1090,8 @@ class UndoTokenModal(discord.ui.Modal, title="Undo Fix Access"):
                 ephemeral=True,
             )
 
-        # Modals need a deferred response, but the deferred original is edited
-        # below so Discord never leaves a permanent thinking placeholder.
+        # Modals need a deferred response, but every outcome below resolves that
+        # original response so Discord cannot leave a permanent thinking card.
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         async def job() -> TargetRepairResult:
@@ -1115,12 +1115,22 @@ class UndoTokenModal(discord.ui.Modal, title="Undo Fix Access"):
             concurrency_key="permission_repair",
             timeout_seconds=180.0,
         )
-        if isinstance(result, TargetRepairResult):
-            await _edit_original_or_followup(
-                interaction,
-                embed=_result_embed(result, undo=True),
-                view=TargetPermissionRepairView(self.state),
-            )
+        if not isinstance(result, TargetRepairResult):
+            try:
+                await interaction.edit_original_response(
+                    content="⚠️ Undo did not complete. See the status message below for the reason.",
+                    embed=None,
+                    view=None,
+                )
+            except Exception:
+                pass
+            return
+
+        await _edit_original_or_followup(
+            interaction,
+            embed=_result_embed(result, undo=True),
+            view=TargetPermissionRepairView(self.state),
+        )
 
 
 class TargetPermissionRepairView(discord.ui.View):
