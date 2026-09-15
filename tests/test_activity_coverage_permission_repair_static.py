@@ -5,8 +5,10 @@ README = Path("README.md").read_text(encoding="utf-8")
 AUDIT = Path("tools/audit_public_invite_permissions.py").read_text(encoding="utf-8")
 
 
-def test_permission_repair_can_restore_activity_coverage():
+def test_permission_repair_can_restore_activity_coverage_only_when_opted_in():
     assert "_merge_activity_coverage_targets" in SOURCE
+    assert "include_activity_coverage: bool = False" in SOURCE
+    assert "if include_activity_coverage:" in SOURCE
     assert "read_message_history=True" in SOURCE
     assert "expected.manage_threads = True" in SOURCE
     assert "Member visibility is not changed" in SOURCE
