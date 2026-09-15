@@ -1,110 +1,94 @@
 # ACTIVE TASK
 
-## DS-FIX-TICKET-REBUILD-READINESS — Stop false-positive ticket setup readiness
+## DS-FIX-PERMISSION-REPAIR-UX — Make permission repair usable, truthful, and non-stalling
 
-**Outcome:** `Rebuild Default Ticket Choices` no longer treats existing/default ticket-choice rows as proof that ticket creation is operationally ready.
+**Outcome:** Dank Shield permission repair shows actionable information, keeps selected options visibly selected, reports only permission changes Discord actually accepted, and clears deferred interaction responses instead of leaving a permanent “Dank Shield is thinking…” card.
 
-**Status:** MERGED + POST-MERGE VALIDATED. Repository implementation and production Supabase promotion are complete. The only remaining unvalidated environment detail is whether the live Discloud bot process is currently running the merged revision; GitHub does not expose that host runtime revision and this repository has no Discloud deployment workflow proving it automatically.
+**Status:** IMPLEMENTATION COMPLETE + VALIDATED — PR #233 is awaiting merge/deployment. Live Discloud runtime revision is still external to GitHub validation.
 
-**Implementation PR:** #230 — `Stop ticket choice rebuild from falsely reporting setup ready`
-**Validated PR head:** `383c1cbcc706560c5d6b4559d5992dd6916c7cb4`
-**Merge SHA:** `beedb110fed87a0dd0ab558075b9246fe897bb43`
-**Canonical main:** `beedb110fed87a0dd0ab558075b9246fe897bb43`
+**Branch:** `fix/permission-repair-ui-flow`
+**Base main:** `653debf88186f8eb2123db5eda52eee5f779b977`
+**Validated implementation head:** `c9ea890702daf0138957d7ea51d48f63d9db6a9b`
+**PR:** #233 — `Fix permission repair UI state and stalled Discord responses`
 
 ## Scope
 
-- `stoney_verify/commands_ext/public_setup_recovery.py`
-- focused regression coverage in `tests/test_setup_rebuild_ticket_readiness.py`
-- no ticket creation schema, command ownership, interaction-lock ownership, moderation, verification, or unrelated setup behavior was changed
+- `stoney_verify/setup_permission_repair_services.py`
+- `stoney_verify/permission_repair.py`
+- `stoney_verify/setup_activity_access.py`
+- `stoney_verify/startup_guards/setup_health_defer_guard.py`
+- retired `stoney_verify/startup_guards/setup_permission_repair_preview_clarity_guard.py`
+- focused permission-repair regression coverage
 
-## Root cause
+No ticket schema, moderation, verification, anti-nuke, command ownership, or unrelated setup redesign was included.
 
-`public_setup_recovery._rebuild_recommended_menu()` previously treated successful ticket-choice seeding, or the fact that default choices already existed, as the complete readiness result.
+## Findings / root cause
 
-Actual ticket creation uses `public_ticket_panel_clean._ticket_setup_preflight()`, which separately validates the operational ticket path, including the Active Tickets category, staff role, category privacy/permissions, and ticket-panel channel permissions.
+1. Normal permission repair appended the full Advanced health audit, producing a large diagnostic dump instead of a focused repair result.
+2. Whole-server activity coverage was merged into ordinary setup repair, causing unrelated channels to appear as repair targets.
+3. `setup_permission_repair_services.preview_or_apply()` could report a target as changed before Discord accepted the permission write.
+4. Mutation flows deferred with a thinking response and then sent a follow-up, leaving the original Discord thinking card unresolved.
+5. The selected-target view stored state correctly but rebuilt controls with static labels, making target/feature/mode selections appear to reset.
+6. `setup_permission_repair_preview_clarity_guard` duplicated display ownership by monkey-patching the legacy result embed.
+7. The first exact-head full-suite run exposed one regression-test bug: a raw source-string assertion matched `thinking=True` inside a comment. The test was corrected to inspect the function AST for an actual `thinking=True` keyword argument.
 
-That split produced the user-visible contradiction where rebuild reported a green success result while a member pressing **Create Ticket** was immediately blocked by the canonical preflight.
+## Execution path preserved
 
-## Execution path after the fix
-
-1. Rebuild/confirm the default ticket-choice catalog using the existing canonical seed owner.
-2. Detect when ticket choices still require owner confirmation.
-3. Run the same canonical `_ticket_setup_preflight()` used by real ticket creation.
-4. Fail closed if readiness cannot be verified.
-5. Surface blockers and warnings directly in the rebuild result.
-6. Return ready only when owner confirmation is not pending and ticket-creation preflight has no blockers.
-
-Warnings remain non-blocking, matching the real ticket-creation path.
+- Setup Security / Logs routes remain on the native `setup_permission_repair_services` owner.
+- Activity coverage stays opt-in from the dedicated activity-access path instead of expanding normal setup repair.
+- Selected-target repair changes only Dank Shield’s own overwrite, preserves unrelated member/staff visibility, requires explicit confirmation before clearing explicit denies, and keeps undo snapshots.
+- Existing operation-queue serialization remains authoritative for mutation safety.
 
 ## Changes
 
-- added post-rebuild canonical ticket preflight
-- removed the false implication that `Default ticket choices already exist` means setup is ready
-- added clear `ticket setup is not ready` output for blockers
-- added repair guidance to **Safety & Repair → Specific Channel** / **Fix Channel Access**
-- added fail-closed behavior if the canonical preflight throws or cannot complete
-- added owner-confirmation-required handling
+- normal setup repair is limited to configured/exact-name setup targets
+- activity-coverage repair is explicit opt-in
+- normal repair output is condensed to safe fixes, remaining blockers, and direct next actions
+- Advanced diagnostic output is removed from ordinary repair
+- only successful Discord permission writes are reported as changed
+- component mutation flows use deferred message updates and edit the original interaction response
+- undo modal flow edits its deferred original response so the thinking card is cleared
+- target, feature, repair mode, and category-child state remain visibly selected
+- obsolete preview-clarity monkey patch was retired
+- regression coverage verifies state persistence, scope separation, truthful writes, compact output, component limits, and response lifecycle
 
-## Regression coverage
+## Validation / results
 
-Focused tests prove:
+On exact implementation head `c9ea890702daf0138957d7ea51d48f63d9db6a9b`:
 
-- existing ticket choices + missing Active Tickets access cannot return ready
-- owner confirmation required cannot return ready
-- a clean canonical ticket preflight can return ready
-- preflight failure returns not-ready instead of optimistic success
+- Dank Shield CI #2145 — SUCCESS
+  - full Python compile/unit/audit lane — SUCCESS
+  - 1,483-test suite passed after correcting the test-only false positive from the prior run
+  - Managed category SQL smoke test — SUCCESS
+  - Claim-first ticket security — SUCCESS
+- DS Backlog 027 Validation #82 — SUCCESS
+- Dank Design Regression CI #398 — SUCCESS
+- Profile Runtime Diagnostics #905 — SUCCESS
+- Application Command Size Diagnostics #1151 — SUCCESS
+- Schema Authority SQL #61 — SUCCESS
+- Ticket Owner Emergency Override #716 — SUCCESS
+- PR has zero submitted reviews and zero review threads
+- branch is 14 commits ahead of current `main`, 0 behind, and mergeable
 
-## Validation results
+The final bookkeeping commit that updates this task record changes documentation only and does not alter runtime or test behavior.
 
-### Exact PR head
+## Cleanup / conflicts
 
-On `383c1cbcc706560c5d6b4559d5992dd6916c7cb4`:
+- final diff is confined to the permission-repair implementation, its direct setup/activity callers, startup ownership cleanup, tests, and this task record
+- obsolete `setup_permission_repair_preview_clarity_guard.py` is removed rather than left as a competing monkey patch
+- no unrelated runtime feature work was mixed into this task
+- no unresolved PR review threads or requested changes remain
+- current branch is not behind `main`
 
-- Dank Shield CI #2137 — SUCCESS
-- Application Command Size Diagnostics #1144 — SUCCESS
-- Ticket Owner Emergency Override #708 — SUCCESS
-- Managed category SQL smoke test — SUCCESS
-- Claim-first ticket security — SUCCESS
-- full Python/unit/audit lane — SUCCESS
-- PR was mergeable with zero submitted reviews and zero review threads
-- latest canonical main had been integrated before this validation pass
+## Blockers / risks
 
-### Post-merge canonical main
-
-On merge SHA `beedb110fed87a0dd0ab558075b9246fe897bb43`:
-
-- Dank Shield CI #2139 — SUCCESS
-- full Python compile/unit/audit lane — SUCCESS
-- Managed category SQL smoke test — SUCCESS
-- Claim-first ticket security — SUCCESS
-- Ticket Owner Emergency Override #710 — SUCCESS
-- Deploy Supabase migrations #33 — SUCCESS
-  - validated release checkout passed
-  - immutable current-main verification passed
-  - required-secret validation passed
-  - Supabase CLI/project link passed
-  - migration status and preview passed
-  - pending migration apply passed
-- canonical `main` remained exactly `beedb110fed87a0dd0ab558075b9246fe897bb43` after promotion
-
-## Cleanup / conflict inspection
-
-- PR #230 differs from its integrated base by exactly two intended files: the recovery implementation and its focused regression tests.
-- no unrelated feature behavior was mixed into the fix.
-- no review threads or requested changes remain.
-- the stale previous active-task record was discovered after merge and is being corrected by a bookkeeping-only follow-up PR.
-
-## Remaining blocker / risk
-
-The repository is configured for Discloud with app ID `stoneyverify`, `MAIN=main.py`, and `AUTORESTART=true`, but that config does not prove that a GitHub merge automatically uploads the new source revision to the running Discloud app.
-
-No Discloud deployment workflow exists in this repository, and the currently available GitHub access cannot read the live Discloud process revision. Therefore the code fix is merged and fully validated in canonical source, but the exact source revision running on the live Discloud process remains externally unverified.
+- GitHub cannot prove which source revision the live Discloud process is currently running. The live Discord behavior changes only after the merged revision is deployed/restarted on the host.
 
 ## Backlog
 
-- unrelated prior audit follow-ups remain separate and must not be mixed into this task
-- prior interaction-guard lock-retention debt remains a separate concurrency task
+- unrelated existing setup/startup-guard cleanup remains separate
+- operation-queue lock-retention debt remains separate
 
 ## Next step
 
-Verify the live Discloud `stoneyverify` process is running merge SHA `beedb110fed87a0dd0ab558075b9246fe897bb43`, or redeploy/restart it from canonical `main` if the host does not automatically track GitHub. Once that runtime revision is confirmed, this task can be marked fully closed with no remaining validation gap.
+Merge PR #233 after its final bookkeeping-head checks remain green, then deploy/restart the live Discloud bot from canonical `main` and verify the permission-repair flow in Discord.

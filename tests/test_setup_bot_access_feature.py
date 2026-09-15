@@ -52,7 +52,6 @@ def test_setup_route_calls_owned_activity_access_service(monkeypatch) -> None:
     assert calls == [(interaction, "logs")]
 
 
-
 def test_access_check_reports_exact_missing_permissions_and_coverage() -> None:
     report = ActivityScopeReport(
         total_channels=4,
@@ -162,11 +161,16 @@ def test_open_access_check_is_read_only_and_renders_audit_result(monkeypatch) ->
     assert interaction.guild.channels[0].mutation_attempted is False
 
 
-def test_repair_button_routes_to_existing_preview_first_permission_tool(monkeypatch) -> None:
+def test_repair_button_routes_to_activity_scoped_preview_first_permission_tool(monkeypatch) -> None:
     calls: list[object] = []
 
-    async def open_repair(interaction, *, parent="security") -> None:
-        calls.append((interaction, parent))
+    async def open_repair(
+        interaction,
+        *,
+        parent="security",
+        include_activity_coverage=False,
+    ) -> None:
+        calls.append((interaction, parent, include_activity_coverage))
 
     monkeypatch.setattr(setup_permission_repair_services, "open_permission_repair", open_repair)
 
@@ -176,8 +180,7 @@ def test_repair_button_routes_to_existing_preview_first_permission_tool(monkeypa
 
     assert fix.disabled is False
     asyncio.run(fix.callback(interaction))
-    assert calls == [(interaction, "logs")]
-
+    assert calls == [(interaction, "logs", True)]
 
     complete_view = setup_activity_access.ActivityAccessView(needs_repair=False)
     assert _button(complete_view, "Fix Channel Permissions").disabled is True

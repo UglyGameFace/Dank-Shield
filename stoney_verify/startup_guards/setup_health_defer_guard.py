@@ -11,7 +11,6 @@ def _load_polish_guards() -> None:
     for module_name in (
         "verification_member_role_fallback_guard",
         "setup_picker_permission_error_guard",
-        "setup_permission_repair_preview_clarity_guard",
     ):
         try:
             module = __import__(f"stoney_verify.startup_guards.{module_name}", fromlist=["apply"])
@@ -22,6 +21,7 @@ def _load_polish_guards() -> None:
             pass
     try:
         from stoney_verify.setup_engine import adapter
+
         adapter.apply()
     except Exception:
         pass
@@ -46,7 +46,12 @@ async def _ack(interaction: discord.Interaction) -> None:
             pass
 
 
-async def _send(interaction: discord.Interaction, *, embed: discord.Embed, view: discord.ui.View | None) -> None:
+async def _send(
+    interaction: discord.Interaction,
+    *,
+    embed: discord.Embed,
+    view: discord.ui.View | None,
+) -> None:
     try:
         if interaction.response.is_done():
             await interaction.edit_original_response(embed=embed, view=view)
@@ -56,7 +61,12 @@ async def _send(interaction: discord.Interaction, *, embed: discord.Embed, view:
     except Exception:
         pass
     try:
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        await interaction.followup.send(
+            embed=embed,
+            view=view,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
     except Exception:
         pass
 
@@ -75,7 +85,10 @@ def apply() -> bool:
                 return
             guild = interaction.guild
             if guild is None:
-                return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+                return await interaction.response.send_message(
+                    "❌ This must be used inside a server.",
+                    ephemeral=True,
+                )
             await _ack(interaction)
             try:
                 embed = await fresh.recommend._build_plain_setup_health_embed(guild)  # type: ignore[attr-defined]
@@ -85,7 +98,11 @@ def apply() -> bool:
                     embed = await solid._build_health_embed(guild)
                     view = solid.BackToSetupView()
                 except Exception:
-                    embed = discord.Embed(title="❌ Setup Health Failed", description=f"`{type(exc).__name__}: {str(exc)[:260]}`", color=discord.Color.red())
+                    embed = discord.Embed(
+                        title="❌ Setup Health Failed",
+                        description=f"`{type(exc).__name__}: {str(exc)[:260]}`",
+                        color=discord.Color.red(),
+                    )
                     view = solid.BackToSetupView()
             await _send(interaction, embed=embed, view=view)
 
