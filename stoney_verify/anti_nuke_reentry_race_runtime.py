@@ -8,9 +8,9 @@ for re-entry containment and removes integrations correlated with a known-hostil
 re-add without waiting on a network reputation refresh.
 
 The runtime also owns the final benign-action safety boundary. Ordinary member-facing
-Discord creation/update actions must never enter destructive AntiNuke containment or
-persist a hostile identity. Older false-positive rows from that exact bug are masked
-before re-entry enforcement and durably cleared.
+Discord creation/update/cancellation actions must never enter destructive AntiNuke
+containment or persist a hostile identity. Older false-positive rows from that exact
+bug are masked before re-entry enforcement and durably cleared.
 """
 
 import asyncio
@@ -31,6 +31,11 @@ _WINDOW_SECONDS = 15.0
 _RECENT_HOSTILE_READD: dict[tuple[int, int], float] = {}
 _PENDING_INTEGRATIONS: dict[tuple[int, int], list[tuple[float, Any]]] = {}
 
+# These actions can be performed by members through narrow Discord permissions such
+# as Create Invite, Create Events, Create Public/Private Threads, Create Expressions,
+# or by the creator editing/cancelling their own object. They are not sufficient
+# evidence of a destructive server attack and therefore must not enter first-strike
+# containment or Guardian panic scoring by themselves.
 _NON_PUNITIVE_GUARDIAN_ACTIONS = frozenset(
     {
         "invite_create",
@@ -41,10 +46,15 @@ _NON_PUNITIVE_GUARDIAN_ACTIONS = frozenset(
         "sticker_update",
         "scheduled_event_create",
         "scheduled_event_update",
+        "scheduled_event_delete",
+        "thread_create",
+        "thread_update",
+        "soundboard_sound_create",
+        "soundboard_sound_update",
     }
 )
 
-# Before this policy correction, zero-damage audit expansion could route these
+# Before this policy correction, Guardian/zero-damage audit coverage could route these
 # ordinary Discord actions through first-strike containment and persist the actor as
 # confirmed destructive. Match only the exact records that implementation produced.
 _LEGACY_FALSE_POSITIVE_REASONS = frozenset(
@@ -57,6 +67,11 @@ _LEGACY_FALSE_POSITIVE_REASONS = frozenset(
         "dank shield antinuke containment: sticker mutation",
         "dank shield antinuke containment: scheduled-event creation",
         "dank shield antinuke containment: scheduled-event mutation",
+        "dank shield antinuke containment: scheduled-event cancellation",
+        "dank shield antinuke containment: thread/forum-post creation",
+        "dank shield antinuke containment: thread/forum-post mutation",
+        "dank shield antinuke containment: soundboard creation",
+        "dank shield antinuke containment: soundboard mutation",
     }
 )
 _LEGACY_REPUTATION_CLEARING: set[tuple[int, int]] = set()
@@ -432,9 +447,9 @@ def _patch_guardian() -> bool:
     if bool(getattr(guardian, _GUARDIAN_FLAG, False)):
         return False
 
-    # Final product boundary: ordinary member-facing create/update actions are not
-    # destructive AntiNuke incidents. Zero-damage audit expansion runs earlier, so
-    # remove these entries after all earlier guardian patches and before login.
+    # Final product boundary: ordinary member-facing actions are not destructive
+    # AntiNuke incidents. Zero-damage audit expansion runs earlier, so remove these
+    # entries after all earlier guardian patches and before login.
     for name in _NON_PUNITIVE_GUARDIAN_ACTIONS:
         guardian._ACTIONS.pop(name, None)  # noqa: SLF001
         guardian._PANIC_WEIGHTS.pop(name, None)  # noqa: SLF001
