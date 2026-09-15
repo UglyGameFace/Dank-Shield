@@ -443,7 +443,7 @@ def _fallback_config_for_read_state(guild_id: Any, *, source: str) -> GuildRunti
     cfg = env_fallback_guild_config(gid)
     if not _allow_env_fallback_for_guild(gid):
         for key in list(cfg.keys()):
-            if key.endswith("_id"):
+            if key != "guild_id" and key.endswith("_id"):
                 cfg[key] = None
         cfg["use_env_fallbacks"] = False
     cfg["source"] = str(source or "unavailable:unknown")
