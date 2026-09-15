@@ -7,8 +7,8 @@ from typing import Any
 import discord
 import pytest
 
+from stoney_verify import guild_config
 from stoney_verify.commands_ext import public_setup_compact as compact
-from stoney_verify.commands_ext import public_setup_config_writer as writer
 from stoney_verify.commands_ext import public_setup_recommend as recommend
 from stoney_verify.commands_ext import public_setup_solid as solid
 
@@ -140,11 +140,12 @@ def test_finished_home_opens_summary_instead_of_test_checklist(
     assert events == ["summary"]
 
 
-def test_setup_writer_invalidates_completion_after_edit() -> None:
-    payload = writer._completion_aware_updates(
+def test_canonical_writer_invalidates_completion_after_setup_edit() -> None:
+    payload = guild_config._completion_aware_patch(
         {
             "ticket_prefix": "help",
             "__config_write_mode": "setup_builder",
+            "__config_write_invalidate_completion": True,
         }
     )
     assert payload["setup_completed"] is False
@@ -152,10 +153,11 @@ def test_setup_writer_invalidates_completion_after_edit() -> None:
 
 
 def test_finish_write_is_not_invalidated() -> None:
-    payload = writer._completion_aware_updates(
+    payload = guild_config._completion_aware_patch(
         {
             "setup_completed": True,
             "setup_completed_at": "now",
+            "__config_write_invalidate_completion": True,
         }
     )
     assert payload["setup_completed"] is True
