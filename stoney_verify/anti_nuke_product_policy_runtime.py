@@ -33,6 +33,15 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
+def _is_bot_actor(actor: Any) -> bool:
+    if not bool(getattr(actor, "bot", False)):
+        return False
+    try:
+        return int(getattr(actor, "id", 0) or 0) > 0
+    except Exception:
+        return False
+
+
 def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
     try:
         if hasattr(cfg, "get"):
@@ -123,7 +132,7 @@ def _patch_threshold_policy() -> bool:
         if (
             strict_lockdown_active(settings)
             and action_key in _DIRECT_STRICT_KEYS
-            and not lockdown._is_bot_actor(actor)  # noqa: SLF001
+            and not _is_bot_actor(actor)
         ):
             threshold_override = 1
         return await original(
@@ -172,7 +181,7 @@ def _patch_guardian_policy() -> bool:
         settings = await anti_nuke.get_antinuke_settings(int(guild.id))
         if (
             strict_lockdown_active(settings)
-            and not lockdown._is_bot_actor(actor)  # noqa: SLF001
+            and not _is_bot_actor(actor)
             and not anti_nuke._actor_is_owner_or_bot(guild, actor)  # noqa: SLF001
         ):
             actor = SimpleNamespace(id=0, roles=[])
@@ -182,7 +191,7 @@ def _patch_guardian_policy() -> bool:
         settings = await anti_nuke.get_antinuke_settings(int(guild.id))
         if (
             strict_lockdown_active(settings)
-            and not lockdown._is_bot_actor(actor)  # noqa: SLF001
+            and not _is_bot_actor(actor)
             and not anti_nuke._actor_is_owner_or_bot(guild, actor)  # noqa: SLF001
         ):
             actor = SimpleNamespace(id=0, roles=[])
@@ -204,7 +213,7 @@ def _patch_guardian_policy() -> bool:
         if (
             strict_lockdown_active(settings)
             and action_name in strict_names
-            and not lockdown._is_bot_actor(actor)  # noqa: SLF001
+            and not _is_bot_actor(actor)
         ):
             label, threshold_key, counter_key, _override = spec
             spec = (label, threshold_key, counter_key, 1)
