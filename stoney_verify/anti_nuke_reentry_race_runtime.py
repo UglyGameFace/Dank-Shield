@@ -6,6 +6,11 @@ Discord does not offer bots a pre-join authorization callback. This runtime ther
 uses the already-prewarmed/local hostile reputation state as the first decision source
 for re-entry containment and removes integrations correlated with a known-hostile
 re-add without waiting on a network reputation refresh.
+
+The runtime also owns the final benign-action safety boundary. Ordinary member-facing
+Discord creation/update/cancellation actions must never enter destructive AntiNuke
+containment or persist a hostile identity. Older false-positive rows from that exact
+bug are masked before re-entry enforcement and durably cleared.
 """
 
 import asyncio
@@ -21,9 +26,55 @@ from . import anti_nuke_hostile_actor_runtime as hostile
 
 _INSTALL_FLAG = "_dank_antinuke_reentry_race_runtime_installed"
 _GUARDIAN_FLAG = "_dank_antinuke_reentry_race_guardian_patched"
+_REPUTATION_FLAG = "_dank_antinuke_benign_reputation_patched"
 _WINDOW_SECONDS = 15.0
 _RECENT_HOSTILE_READD: dict[tuple[int, int], float] = {}
 _PENDING_INTEGRATIONS: dict[tuple[int, int], list[tuple[float, Any]]] = {}
+
+# These actions can be performed by members through narrow Discord permissions such
+# as Create Invite, Create Events, Create Public/Private Threads, Create Expressions,
+# or by the creator editing/cancelling their own object. They are not sufficient
+# evidence of a destructive server attack and therefore must not enter first-strike
+# containment or Guardian panic scoring by themselves.
+_NON_PUNITIVE_GUARDIAN_ACTIONS = frozenset(
+    {
+        "invite_create",
+        "invite_update",
+        "emoji_create",
+        "emoji_update",
+        "sticker_create",
+        "sticker_update",
+        "scheduled_event_create",
+        "scheduled_event_update",
+        "scheduled_event_delete",
+        "thread_create",
+        "thread_update",
+        "soundboard_sound_create",
+        "soundboard_sound_update",
+    }
+)
+
+# Before this policy correction, Guardian/zero-damage audit coverage could route these
+# ordinary Discord actions through first-strike containment and persist the actor as
+# confirmed destructive. Match only the exact records that implementation produced.
+_LEGACY_FALSE_POSITIVE_REASONS = frozenset(
+    {
+        "dank shield antinuke containment: invite creation",
+        "dank shield antinuke containment: invite mutation",
+        "dank shield antinuke containment: emoji creation",
+        "dank shield antinuke containment: emoji mutation",
+        "dank shield antinuke containment: sticker creation",
+        "dank shield antinuke containment: sticker mutation",
+        "dank shield antinuke containment: scheduled-event creation",
+        "dank shield antinuke containment: scheduled-event mutation",
+        "dank shield antinuke containment: scheduled-event cancellation",
+        "dank shield antinuke containment: thread/forum-post creation",
+        "dank shield antinuke containment: thread/forum-post mutation",
+        "dank shield antinuke containment: soundboard creation",
+        "dank shield antinuke containment: soundboard mutation",
+    }
+)
+_LEGACY_REPUTATION_CLEARING: set[tuple[int, int]] = set()
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -37,6 +88,98 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 def _key(guild_id: Any, actor_id: Any) -> tuple[int, int]:
     return (_safe_int(guild_id, 0), _safe_int(actor_id, 0))
+
+
+def _legacy_benign_false_positive(reputation: Mapping[str, Any] | None) -> bool:
+    if not isinstance(reputation, Mapping) or not bool(reputation.get("active")):
+        return False
+    if str(reputation.get("source") or "").strip().lower() != "antinuke":
+        return False
+    if (
+        str(reputation.get("classification") or "").strip().lower()
+        != "confirmed_destructive_actor"
+    ):
+        return False
+    reason = " ".join(str(reputation.get("last_reason") or "").split()).lower()
+    return reason in _LEGACY_FALSE_POSITIVE_REASONS
+
+
+async def sanitize_legacy_false_positive_reputation(
+    guild_id: int,
+    user_id: int,
+    reputation: Mapping[str, Any] | None,
+) -> Optional[dict[str, Any]]:
+    """Mask and durably clear only hostile rows created by the benign-action bug."""
+
+    if reputation is None:
+        return None
+    row = dict(reputation)
+    if not _legacy_benign_false_positive(row):
+        return row
+
+    gid, uid = int(guild_id), int(user_id)
+    key = (gid, uid)
+    row["active"] = False
+
+    # The fast path reads this cache directly, so mask the row synchronously before
+    # scheduling the durable clear. That closes the re-ban race immediately.
+    try:
+        hostile._MEMORY[key] = dict(row)  # noqa: SLF001
+        hostile._NEGATIVE_CACHE.pop(key, None)  # noqa: SLF001
+    except Exception:
+        pass
+
+    if key not in _LEGACY_REPUTATION_CLEARING:
+        _LEGACY_REPUTATION_CLEARING.add(key)
+
+        async def persist_clear() -> None:
+            try:
+                await hostile.clear_hostile_reputation(
+                    gid,
+                    uid,
+                    reason="Automatic cleanup: legacy AntiNuke benign-action false positive",
+                )
+            except Exception as exc:
+                print(
+                    "⚠️ AntiNuke legacy benign-action reputation cleanup failed "
+                    f"guild={gid} user={uid} error={type(exc).__name__}: {exc}"
+                )
+            finally:
+                _LEGACY_REPUTATION_CLEARING.discard(key)
+
+        try:
+            asyncio.create_task(
+                persist_clear(),
+                name=f"dank-clear-legacy-benign-reputation-{gid}-{uid}",
+            )
+        except RuntimeError:
+            _LEGACY_REPUTATION_CLEARING.discard(key)
+
+    return row
+
+
+def _patch_reputation_lookup() -> bool:
+    if bool(getattr(hostile, _REPUTATION_FLAG, False)):
+        return False
+
+    original_get = hostile.get_actor_reputation
+
+    async def get_actor_reputation(
+        guild_id: int,
+        user_id: int,
+        *,
+        refresh: bool = False,
+    ) -> Optional[dict[str, Any]]:
+        reputation = await original_get(guild_id, user_id, refresh=refresh)
+        return await sanitize_legacy_false_positive_reputation(
+            guild_id,
+            user_id,
+            reputation,
+        )
+
+    hostile.get_actor_reputation = get_actor_reputation
+    setattr(hostile, _REPUTATION_FLAG, True)
+    return True
 
 
 def _prune() -> None:
@@ -78,8 +221,10 @@ async def _fast_reputation(guild_id: int, user_id: int) -> Optional[dict[str, An
 
     Explicit clears update both the in-process cache and local mirror, so using those
     sources first removes the network round-trip from the destructive re-entry path.
-    A cache miss deliberately returns None so the existing canonical path can perform
-    its authoritative lookup for first-seen identities.
+    Every hot/local row is sanitized before enforcement so a legacy benign-action
+    false positive cannot outrun its durable cleanup and re-ban the member. A cache
+    miss deliberately returns None so the canonical path can do its authoritative
+    lookup for first-seen identities.
     """
 
     key = _key(guild_id, user_id)
@@ -88,7 +233,11 @@ async def _fast_reputation(guild_id: int, user_id: int) -> Optional[dict[str, An
 
     cached = hostile._MEMORY.get(key)  # noqa: SLF001
     if isinstance(cached, Mapping):
-        return dict(cached)
+        return await sanitize_legacy_false_positive_reputation(
+            int(guild_id),
+            int(user_id),
+            cached,
+        )
 
     try:
         local = await asyncio.to_thread(
@@ -101,7 +250,11 @@ async def _fast_reputation(guild_id: int, user_id: int) -> Optional[dict[str, An
     if isinstance(local, Mapping):
         row = dict(local)
         hostile._MEMORY[key] = row  # noqa: SLF001
-        return dict(row)
+        return await sanitize_legacy_false_positive_reputation(
+            int(guild_id),
+            int(user_id),
+            row,
+        )
     return None
 
 
@@ -294,6 +447,17 @@ def _patch_guardian() -> bool:
     if bool(getattr(guardian, _GUARDIAN_FLAG, False)):
         return False
 
+    # Final product boundary: ordinary member-facing actions are not destructive
+    # AntiNuke incidents. Zero-damage audit expansion runs earlier, so remove these
+    # entries after all earlier guardian patches and before login.
+    for name in _NON_PUNITIVE_GUARDIAN_ACTIONS:
+        guardian._ACTIONS.pop(name, None)  # noqa: SLF001
+        guardian._PANIC_WEIGHTS.pop(name, None)  # noqa: SLF001
+    guardian._PANIC_ACTIONS = frozenset(guardian._PANIC_WEIGHTS)  # noqa: SLF001
+    guardian._PANIC_SEVERE_ACTIONS = frozenset(  # noqa: SLF001
+        set(guardian._PANIC_SEVERE_ACTIONS) - set(_NON_PUNITIVE_GUARDIAN_ACTIONS)  # noqa: SLF001
+    )
+
     original_bot_add = guardian._handle_bot_add  # noqa: SLF001
     original_process = guardian._process  # noqa: SLF001
 
@@ -365,7 +529,9 @@ def _patch_guardian() -> bool:
             if blocked_actor:
                 response_parts.append("inviter blockers: " + ", ".join(blocked_actor))
         elif hostile._is_owner(guild, actor_id):  # noqa: SLF001
-            response_parts.append("physical owner cannot be contained; hostile target/integration blocked instead")
+            response_parts.append(
+                "physical owner cannot be contained; hostile target/integration blocked instead"
+            )
 
         pending_results, matching_results = await asyncio.gather(
             pending_task,
@@ -411,17 +577,21 @@ def _patch_guardian() -> bool:
 def install_anti_nuke_reentry_race_runtime(bot: discord.Client) -> bool:
     if bool(getattr(bot, _INSTALL_FLAG, False)):
         return False
-    patched = _patch_guardian()
+    reputation_patched = _patch_reputation_lookup()
+    guardian_patched = _patch_guardian()
     bot.add_listener(_fast_member_join, "on_member_join")
     setattr(bot, _INSTALL_FLAG, True)
     print(
         "🛡️ AntiNuke hostile re-entry race guard active: "
-        "hot reputation path, immediate known-hostile ban, integration correlation/rollback; "
-        f"guardian={'patched' if patched else 'ready'}"
+        "hot reputation path, benign-action false-positive cleanup, "
+        "immediate known-hostile ban, integration correlation/rollback; "
+        f"reputation={'patched' if reputation_patched else 'ready'}; "
+        f"guardian={'patched' if guardian_patched else 'ready'}"
     )
     return True
 
 
 __all__ = [
     "install_anti_nuke_reentry_race_runtime",
+    "sanitize_legacy_false_positive_reputation",
 ]
