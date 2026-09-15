@@ -65,7 +65,13 @@ async def clear_guild_config_keys(
 
 
 def apply_public_setup_writer_patch() -> bool:
-    """Keep legacy setup callbacks pointed at the canonical writer facade."""
+    """Keep legacy setup callbacks pointed at the canonical writer facade.
+
+    ``public_setup_group`` still carries its historical local writer as a
+    compatibility fallback. The public command profile imports this facade early
+    through onboarding, so binding the aliases here makes the canonical writer
+    authoritative before setup commands can be used. Repeated calls are safe.
+    """
     try:
         from . import public_setup_group as group
 
@@ -74,6 +80,12 @@ def apply_public_setup_writer_patch() -> bool:
         return True
     except Exception:
         return False
+
+
+# Install the compatibility aliases as soon as any public setup/config consumer
+# imports this facade. This removes registration-order dependence while the large
+# setup group retains its dormant fallback implementation for compatibility.
+apply_public_setup_writer_patch()
 
 
 __all__ = [
