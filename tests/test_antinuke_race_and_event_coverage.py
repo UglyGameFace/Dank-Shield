@@ -188,4 +188,4 @@ def test_untrusted_bot_add_is_immediate_not_thresholded(monkeypatch) -> None:
     asyncio.run(anti_nuke._handle_bot_add(member))
 
     assert len(incidents) == 1
-    assert incidents[0]["title"] == "🚨 AntiNuke Untrusted Bot Added"
+    assert incidents[0]["title"] == "🚨 AntiNuke Unauthorized Bot Added"
