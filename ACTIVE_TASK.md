@@ -7,7 +7,7 @@
 **Status:** IMPLEMENTATION COMPLETE; EXACT-HEAD VALIDATION PENDING. Do not call this merge-ready until the final branch head passes required CI and the final diff/PR review is clean.
 
 **Implementation branch:** `fix/antinuke-authorized-bot-trust`
-**PR:** not opened yet
+**PR:** #236 — `Fix AntiNuke authorized bot trust ownership` (draft during validation)
 
 ## Scope
 
@@ -87,4 +87,4 @@ No completion or merge-readiness claim is valid until those checks pass.
 
 ## Next step
 
-Open a focused PR from `fix/antinuke-authorized-bot-trust`, freeze its exact head, run/inspect all required CI on that SHA, resolve only failures belonging to this task, then perform final diff/review cleanup before marking it merge-ready.
+Freeze PR #236's exact head, run/inspect all required CI on that SHA, resolve only failures belonging to this task, then perform final diff/review cleanup before marking it merge-ready.
