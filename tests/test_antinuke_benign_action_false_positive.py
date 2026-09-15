@@ -17,6 +17,11 @@ BENIGN_ACTIONS = {
     "sticker_update",
     "scheduled_event_create",
     "scheduled_event_update",
+    "scheduled_event_delete",
+    "thread_create",
+    "thread_update",
+    "soundboard_sound_create",
+    "soundboard_sound_update",
 }
 
 LEGACY_REASONS = {
@@ -28,6 +33,11 @@ LEGACY_REASONS = {
     "Dank Shield AntiNuke containment: Sticker mutation",
     "Dank Shield AntiNuke containment: Scheduled-event creation",
     "Dank Shield AntiNuke containment: Scheduled-event mutation",
+    "Dank Shield AntiNuke containment: Scheduled-event cancellation",
+    "Dank Shield AntiNuke containment: Thread/forum-post creation",
+    "Dank Shield AntiNuke containment: Thread/forum-post mutation",
+    "Dank Shield AntiNuke containment: Soundboard creation",
+    "Dank Shield AntiNuke containment: Soundboard mutation",
 }
 
 
@@ -56,7 +66,12 @@ def _reset(guild_id: int = 10, user_id: int = 55) -> None:
     reentry._LEGACY_REPUTATION_CLEARING.discard((guild_id, user_id))  # noqa: SLF001
 
 
-def test_final_guardian_boundary_removes_all_benign_member_actions(monkeypatch) -> None:
+def test_final_guardian_boundary_covers_complete_benign_action_contract(monkeypatch) -> None:
+    # Keep this explicit. These are Discord actions that a server may deliberately
+    # grant through narrow member permissions, or that a creator can perform on their
+    # own object. None is sufficient evidence for first-strike destructive identity.
+    assert set(reentry._NON_PUNITIVE_GUARDIAN_ACTIONS) == BENIGN_ACTIONS  # noqa: SLF001
+
     async def base_bot_add(*_args, **_kwargs):
         return None
 
@@ -144,7 +159,7 @@ def test_real_destructive_reputation_is_never_cleared(monkeypatch) -> None:
 def test_fast_reentry_cannot_reban_benign_action_false_positive(monkeypatch) -> None:
     _reset()
     hostile._MEMORY[(10, 55)] = _legacy_row(  # noqa: SLF001
-        "Dank Shield AntiNuke containment: Emoji creation"
+        "Dank Shield AntiNuke containment: Scheduled-event cancellation"
     )
     clears: list[int] = []
     bans: list[int] = []
@@ -221,7 +236,7 @@ def test_authoritative_reputation_lookup_sanitizes_before_callers_see_row(monkey
 
     async def base_get(_guild_id: int, _user_id: int, *, refresh: bool = False):
         _ = refresh
-        return _legacy_row("Dank Shield AntiNuke containment: Sticker mutation")
+        return _legacy_row("Dank Shield AntiNuke containment: Soundboard mutation")
 
     async def clear(*_args, **_kwargs):
         return {"active": False}
