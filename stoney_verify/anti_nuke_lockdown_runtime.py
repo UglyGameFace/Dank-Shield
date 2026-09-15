@@ -16,7 +16,7 @@ authorization policy.
 """
 
 from contextvars import ContextVar
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any, Iterable, Mapping, Optional
 
 import discord
@@ -169,6 +169,17 @@ def _is_bot_actor(actor: Any) -> bool:
         getattr(actor, "id", 0),
         0,
     ) > 0
+
+
+def _canonical_hook(owner: Any, name: str) -> Any:
+    """Require canonical hooks in production while allowing focused test doubles."""
+
+    hook = getattr(owner, name, None)
+    if callable(hook):
+        return hook
+    if isinstance(owner, ModuleType):
+        raise RuntimeError(f"AntiNuke canonical hook missing: {name}")
+    return None
 
 
 def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
@@ -410,10 +421,19 @@ def _patch_anti_nuke_policy(anti_nuke: Any, bot: discord.Client) -> bool:
     original_process = anti_nuke._process_claimed_destructive_event  # noqa: SLF001
     original_health = anti_nuke.antinuke_permission_health
     original_configured_trust = anti_nuke._actor_is_configured_trusted  # noqa: SLF001
-    original_bot_add_authorization = anti_nuke.bot_add_authorization
-    original_contain = anti_nuke._contain_actor  # noqa: SLF001
-    original_member_grant = anti_nuke._handle_member_dangerous_role_grant  # noqa: SLF001
-    original_role_escalation = anti_nuke._handle_role_permission_escalation  # noqa: SLF001
+    original_bot_add_authorization = _canonical_hook(
+        anti_nuke,
+        "bot_add_authorization",
+    )
+    original_contain = _canonical_hook(anti_nuke, "_contain_actor")
+    original_member_grant = _canonical_hook(
+        anti_nuke,
+        "_handle_member_dangerous_role_grant",
+    )
+    original_role_escalation = _canonical_hook(
+        anti_nuke,
+        "_handle_role_permission_escalation",
+    )
 
     async def protected_get(
         guild_id: int,
@@ -477,6 +497,7 @@ def _patch_anti_nuke_policy(anti_nuke: Any, bot: discord.Client) -> bool:
         actor: Any,
         settings: Optional[Mapping[str, Any]] = None,
     ) -> tuple[bool, str]:
+        assert callable(original_bot_add_authorization)
         token = _BOT_ADD_AUTH_CONTEXT.set(True)
         try:
             return await original_bot_add_authorization(
@@ -494,6 +515,7 @@ def _patch_anti_nuke_policy(anti_nuke: Any, bot: discord.Client) -> bool:
         *,
         reason: str,
     ) -> tuple[list[str], list[str]]:
+        assert callable(original_contain)
         if _is_bot_actor(actor) and not _ALLOW_BOT_CONTAIN_CONTEXT.get():
             hostile_active = False
             try:
@@ -516,11 +538,13 @@ def _patch_anti_nuke_policy(anti_nuke: Any, bot: discord.Client) -> bool:
         return await original_contain(guild, actor, reason=reason)
 
     async def bot_safe_member_grant(before: Any, after: Any) -> None:
+        assert callable(original_member_grant)
         if _is_bot_actor(after):
             return
         await original_member_grant(before, after)
 
     async def bot_safe_role_escalation(before: Any, after: Any) -> None:
+        assert callable(original_role_escalation)
         members = list(getattr(after, "members", []) or [])
         if members and all(_is_bot_actor(member) for member in members):
             return
@@ -592,10 +616,14 @@ def _patch_anti_nuke_policy(anti_nuke: Any, bot: discord.Client) -> bool:
     anti_nuke._actor_is_configured_trusted = (  # noqa: SLF001
         configured_trust_without_implicit_control_roles
     )
-    anti_nuke.bot_add_authorization = bot_add_authorization
-    anti_nuke._contain_actor = bot_safe_contain  # noqa: SLF001
-    anti_nuke._handle_member_dangerous_role_grant = bot_safe_member_grant  # noqa: SLF001
-    anti_nuke._handle_role_permission_escalation = bot_safe_role_escalation  # noqa: SLF001
+    if original_bot_add_authorization is not None:
+        anti_nuke.bot_add_authorization = bot_add_authorization
+    if original_contain is not None:
+        anti_nuke._contain_actor = bot_safe_contain  # noqa: SLF001
+    if original_member_grant is not None:
+        anti_nuke._handle_member_dangerous_role_grant = bot_safe_member_grant  # noqa: SLF001
+    if original_role_escalation is not None:
+        anti_nuke._handle_role_permission_escalation = bot_safe_role_escalation  # noqa: SLF001
     anti_nuke._process_claimed_destructive_event = strict_structural_process  # noqa: SLF001
     anti_nuke.antinuke_permission_health = lockdown_health
     setattr(anti_nuke, _POLICY_PATCH_FLAG, True)
