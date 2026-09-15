@@ -79,24 +79,28 @@ class _FakeGuild:
 
 
 def _split_brain_row() -> dict[str, Any]:
+    current = {
+        "voice_verification_enabled": False,
+        "verification_allows_voice": False,
+        "vc_verify_channel_id": "111",
+        "vc_verify_queue_channel_id": "222",
+    }
+    stale = {
+        "voice_verification_enabled": True,
+        "verification_allows_voice": True,
+        "vc_verify_channel_id": "111",
+        "vc_verify_queue_channel_id": "222",
+    }
     return {
         "guild_id": "1514374173517152418",
         "voice_verification_enabled": False,
         "verification_allows_voice": False,
         "vc_verify_channel_id": "111",
         "vc_verify_queue_channel_id": "222",
-        "settings": {
-            "voice_verification_enabled": False,
-            "verification_allows_voice": False,
-            "vc_verify_channel_id": "111",
-            "vc_verify_queue_channel_id": "222",
-        },
-        "config": {
-            "voice_verification_enabled": True,
-            "verification_allows_voice": True,
-            "vc_verify_channel_id": "111",
-            "vc_verify_queue_channel_id": "222",
-        },
+        "settings": deepcopy(current),
+        "config": deepcopy(stale),
+        "metadata": deepcopy(stale),
+        "meta": deepcopy(stale),
     }
 
 
@@ -110,7 +114,7 @@ def _install_fake_supabase(monkeypatch, row: dict[str, Any]) -> tuple[dict[str, 
     return store, writes
 
 
-def test_canonical_writer_updates_flat_and_both_json_shapes_atomically(monkeypatch) -> None:
+def test_canonical_writer_updates_flat_and_all_json_shapes_atomically(monkeypatch) -> None:
     row = _split_brain_row()
     store, writes = _install_fake_supabase(monkeypatch, row)
 
@@ -128,21 +132,20 @@ def test_canonical_writer_updates_flat_and_both_json_shapes_atomically(monkeypat
     assert len(writes) == 1
     payload = writes[0]
     assert payload["voice_verification_enabled"] is False
-    assert payload["settings"]["voice_verification_enabled"] is False
-    assert payload["config"]["voice_verification_enabled"] is False
-    assert payload["settings"]["verification_allows_voice"] is False
-    assert payload["config"]["verification_allows_voice"] is False
+    for bucket in ("settings", "config", "metadata", "meta"):
+        assert payload[bucket]["voice_verification_enabled"] is False
+        assert payload[bucket]["verification_allows_voice"] is False
     persisted = store[guild_config.GUILD_CONFIG_TABLE][str(row["guild_id"])]
-    assert persisted["settings"]["voice_verification_enabled"] is False
-    assert persisted["config"]["voice_verification_enabled"] is False
+    for bucket in ("settings", "config", "metadata", "meta"):
+        assert persisted[bucket]["voice_verification_enabled"] is False
     assert saved["voice_verification_enabled"] is False
 
 
 def test_direct_canonical_writes_preserve_historical_overwrite_semantics(monkeypatch) -> None:
     row = _split_brain_row()
     row["staff_role_id"] = "111"
-    row["settings"]["staff_role_id"] = "111"
-    row["config"]["staff_role_id"] = "111"
+    for bucket in ("settings", "config", "metadata", "meta"):
+        row[bucket]["staff_role_id"] = "111"
     _store, writes = _install_fake_supabase(monkeypatch, row)
 
     saved = guild_config.upsert_guild_config_sync(
@@ -153,16 +156,16 @@ def test_direct_canonical_writes_preserve_historical_overwrite_semantics(monkeyp
     assert len(writes) == 1
     payload = writes[0]
     assert payload["staff_role_id"] == "999"
-    assert payload["settings"]["staff_role_id"] == "999"
-    assert payload["config"]["staff_role_id"] == "999"
+    for bucket in ("settings", "config", "metadata", "meta"):
+        assert payload[bucket]["staff_role_id"] == "999"
     assert saved["staff_role_id"] == "999"
 
 
 def test_explicit_fill_missing_mode_blocks_protected_reassignment_without_write(monkeypatch) -> None:
     row = _split_brain_row()
     row["staff_role_id"] = "111"
-    row["settings"]["staff_role_id"] = "111"
-    row["config"]["staff_role_id"] = "111"
+    for bucket in ("settings", "config", "metadata", "meta"):
+        row[bucket]["staff_role_id"] = "111"
     _store, writes = _install_fake_supabase(monkeypatch, row)
 
     saved = guild_config.upsert_guild_config_sync(
@@ -178,7 +181,7 @@ def test_explicit_fill_missing_mode_blocks_protected_reassignment_without_write(
     assert saved["staff_role_id"] == "111"
 
 
-def test_canonical_clear_removes_flat_and_both_json_shapes(monkeypatch) -> None:
+def test_canonical_clear_removes_flat_and_all_json_shapes(monkeypatch) -> None:
     row = _split_brain_row()
     store, writes = _install_fake_supabase(monkeypatch, row)
 
@@ -192,14 +195,14 @@ def test_canonical_clear_removes_flat_and_both_json_shapes(monkeypatch) -> None:
     payload = writes[0]
     assert payload["vc_verify_channel_id"] is None
     assert payload["vc_verify_queue_channel_id"] is None
-    assert "vc_verify_channel_id" not in payload["settings"]
-    assert "vc_verify_queue_channel_id" not in payload["settings"]
-    assert "vc_verify_channel_id" not in payload["config"]
-    assert "vc_verify_queue_channel_id" not in payload["config"]
+    for bucket in ("settings", "config", "metadata", "meta"):
+        assert "vc_verify_channel_id" not in payload[bucket]
+        assert "vc_verify_queue_channel_id" not in payload[bucket]
     persisted = store[guild_config.GUILD_CONFIG_TABLE][str(row["guild_id"])]
     assert persisted["vc_verify_channel_id"] is None
-    assert "vc_verify_channel_id" not in persisted["settings"]
-    assert "vc_verify_channel_id" not in persisted["config"]
+    for bucket in ("settings", "config", "metadata", "meta"):
+        assert "vc_verify_channel_id" not in persisted[bucket]
+        assert "vc_verify_queue_channel_id" not in persisted[bucket]
 
 
 def test_runtime_discovery_natively_purges_all_invalid_saved_ids(monkeypatch) -> None:
@@ -207,20 +210,14 @@ def test_runtime_discovery_natively_purges_all_invalid_saved_ids(monkeypatch) ->
     row["staff_role_id"] = "999"
     row["allow_runtime_discovery"] = False
     row["use_env_fallbacks"] = False
-    row["settings"].update(
-        {
-            "staff_role_id": "999",
-            "allow_runtime_discovery": False,
-            "use_env_fallbacks": False,
-        }
-    )
-    row["config"].update(
-        {
-            "staff_role_id": "999",
-            "allow_runtime_discovery": False,
-            "use_env_fallbacks": False,
-        }
-    )
+    for bucket in ("settings", "config", "metadata", "meta"):
+        row[bucket].update(
+            {
+                "staff_role_id": "999",
+                "allow_runtime_discovery": False,
+                "use_env_fallbacks": False,
+            }
+        )
     store, writes = _install_fake_supabase(monkeypatch, row)
     guild = _FakeGuild(int(row["guild_id"]))
 
@@ -239,13 +236,13 @@ def test_runtime_discovery_natively_purges_all_invalid_saved_ids(monkeypatch) ->
     payload = writes[0]
     for key in expected_invalid:
         assert payload[key] is None
-        assert key not in payload["settings"]
-        assert key not in payload["config"]
+        for bucket in ("settings", "config", "metadata", "meta"):
+            assert key not in payload[bucket]
     persisted = store[guild_config.GUILD_CONFIG_TABLE][str(row["guild_id"])]
     for key in expected_invalid:
         assert persisted[key] is None
-        assert key not in persisted["settings"]
-        assert key not in persisted["config"]
+        for bucket in ("settings", "config", "metadata", "meta"):
+            assert key not in persisted[bucket]
 
 
 def test_public_setup_writer_is_a_compatibility_facade(monkeypatch) -> None:
