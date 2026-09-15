@@ -76,8 +76,9 @@ def build_activity_access_embed(report: ActivityScopeReport) -> discord.Embed:
         embed.add_field(
             name="How to repair it",
             value=(
-                "Use **Fix Channel Permissions** to open the existing preview-first repair tool, or "
-                "manually grant only the permissions listed above. Dank Shield does not silently grant itself access."
+                "Use **Fix Channel Permissions** to open the activity-scoped preview. It only adds "
+                "Dank Shield's required history/thread access and does not make unrelated setup repair "
+                "scan every server channel by default."
             ),
             inline=False,
         )
@@ -111,6 +112,7 @@ class ActivityAccessView(discord.ui.View):
         row=0,
     )
     async def check_again(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         await open_activity_access_check(interaction, parent=self.parent)
 
     @discord.ui.button(
@@ -121,11 +123,13 @@ class ActivityAccessView(discord.ui.View):
         row=0,
     )
     async def fix_permissions(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         from stoney_verify import setup_permission_repair_services
 
         await setup_permission_repair_services.open_permission_repair(
             interaction,
             parent=self.parent,
+            include_activity_coverage=True,
         )
 
     @discord.ui.button(
@@ -142,7 +146,6 @@ class ActivityAccessView(discord.ui.View):
         if self.parent == "security":
             await recommend._open_advanced_security(interaction)
             return
-
         await recommend._open_advanced_logs_activity(interaction)
 
     @discord.ui.button(
@@ -153,6 +156,7 @@ class ActivityAccessView(discord.ui.View):
         row=1,
     )
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
         from stoney_verify.commands_ext import public_setup_recommend as recommend
 
         await recommend._home_edit(interaction)
