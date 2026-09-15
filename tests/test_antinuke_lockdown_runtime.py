@@ -520,7 +520,7 @@ def test_owner_destructive_path_is_forced_to_first_strike(
     assert captured["threshold_override"] == 1
 
 
-def test_owner_added_unapproved_bot_is_removed_but_trusted_bot_is_allowed(
+def test_owner_added_non_hostile_bot_is_authorized_without_hidden_target_allowlist(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = {
@@ -528,29 +528,20 @@ def test_owner_added_unapproved_bot_is_removed_but_trusted_bot_is_allowed(
         "antinuke_mode": "contain",
         "antinuke_trusted_user_ids": [],
     }
-    original_calls: list[int] = []
-    incidents: list[str] = []
+    original_calls: list[tuple[int, int]] = []
 
     async def original(guild, entry, actor):
-        _ = guild, actor
-        original_calls.append(int(entry.target.id))
+        original_calls.append((int(entry.target.id), int(actor.id)))
 
     async def get_settings(_guild_id: int):
         return dict(settings)
-
-    async def post_incident(guild, **kwargs):
-        _ = guild
-        incidents.append(str(kwargs["title"]))
 
     async def reputation(_guild_id: int, _user_id: int, *, refresh: bool = False):
         _ = refresh
         return None
 
     guardian = SimpleNamespace(_handle_bot_add=original)
-    anti_nuke = SimpleNamespace(
-        get_antinuke_settings=get_settings,
-        _post_incident=post_incident,
-    )
+    anti_nuke = SimpleNamespace(get_antinuke_settings=get_settings)
     hostile = SimpleNamespace(get_actor_reputation=reputation)
     monkeypatch.setattr(
         guardian,
@@ -561,31 +552,28 @@ def test_owner_added_unapproved_bot_is_removed_but_trusted_bot_is_allowed(
 
     assert lockdown._patch_bot_add_guardian(guardian, anti_nuke, hostile) is True  # noqa: SLF001
 
-    class Guild:
-        id = 10
-        owner_id = 99
-
-        def __init__(self) -> None:
-            self.kicked: list[int] = []
-
-        async def kick(self, target, *, reason: str):
-            assert "not pre-approved" in reason
-            self.kicked.append(int(target.id))
-
-    guild = Guild()
-    owner = SimpleNamespace(id=99)
+    guild = SimpleNamespace(id=10, owner_id=99)
     target = SimpleNamespace(id=55)
     entry = SimpleNamespace(target=target)
 
-    asyncio.run(guardian._handle_bot_add(guild, entry, owner))
-    assert guild.kicked == [55]
+    asyncio.run(
+        guardian._handle_bot_add(guild, entry, SimpleNamespace(id=99))
+    )
     assert original_calls == []
-    assert incidents == ["🚨 AntiNuke Unapproved Bot Added By Owner"]
 
+    # The trusted-user list is an actor trust list, not a hidden required bot-ID
+    # allowlist. Owner authorization must remain valid either way.
     settings["antinuke_trusted_user_ids"] = [55]
-    asyncio.run(guardian._handle_bot_add(guild, entry, owner))
-    assert guild.kicked == [55]
+    asyncio.run(
+        guardian._handle_bot_add(guild, entry, SimpleNamespace(id=99))
+    )
     assert original_calls == []
+
+    # A non-owner install still belongs to the canonical bot-add security path.
+    asyncio.run(
+        guardian._handle_bot_add(guild, entry, SimpleNamespace(id=77))
+    )
+    assert original_calls == [(55, 77)]
 
 
 def test_known_hostile_bot_reputation_outranks_trust_allowlist(
