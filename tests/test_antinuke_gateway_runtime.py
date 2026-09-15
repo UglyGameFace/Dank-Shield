@@ -216,7 +216,7 @@ def test_bot_add_gateway_removes_new_bot_and_contains_inviter(monkeypatch) -> No
 
     assert kicked == [555]
     assert contained == [444]
-    assert incidents == ["🚨 AntiNuke Untrusted Bot Added"]
+    assert incidents == ["🚨 AntiNuke Unauthorized Bot Added"]
     assert anti_nuke._audit_entry_seen(entry) is True
     _reset_runtime_state()
 
