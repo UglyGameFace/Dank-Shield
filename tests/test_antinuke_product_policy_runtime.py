@@ -131,8 +131,27 @@ def test_guardian_policy_restores_normal_trust_and_reapplies_strict(monkeypatch)
                 "antinuke_channel_delete_threshold",
                 "channel_delete",
                 1,
-            )
+            ),
+            "invite_create": (
+                "Invite creation",
+                "antinuke_channel_delete_threshold",
+                "invite_create",
+                None,
+            ),
+            "invite_update": (
+                "Invite mutation",
+                "antinuke_channel_delete_threshold",
+                "invite_update",
+                None,
+            ),
         },
+        _PANIC_WEIGHTS={
+            "channel_delete": 3,
+            "invite_create": 2,
+            "invite_update": 2,
+        },
+        _PANIC_ACTIONS=frozenset({"channel_delete", "invite_create", "invite_update"}),
+        _PANIC_SEVERE_ACTIONS=frozenset({"channel_delete", "invite_create"}),
         _rollback_untrusted_overwrite=base_rollback,
         _rollback_untrusted_automod=base_rollback,
         _process=base_process,
@@ -154,6 +173,11 @@ def test_guardian_policy_restores_normal_trust_and_reapplies_strict(monkeypatch)
 
     assert policy._patch_guardian_policy() is True  # noqa: SLF001
     assert fake_guardian._ACTIONS["channel_delete"][3] is None
+    assert "invite_create" not in fake_guardian._ACTIONS
+    assert "invite_update" not in fake_guardian._ACTIONS
+    assert "invite_create" not in fake_guardian._PANIC_ACTIONS
+    assert "invite_update" not in fake_guardian._PANIC_ACTIONS
+    assert "invite_create" not in fake_guardian._PANIC_SEVERE_ACTIONS
 
     guild = SimpleNamespace(id=7)
     actor = SimpleNamespace(id=77, roles=[])
