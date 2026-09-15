@@ -22,12 +22,12 @@ import stoney_verify.startup_guards.discord_api_safety  # noqa: F401
 import stoney_verify.startup_guards.public_server_env_id_guard  # noqa: F401
 
 # Core runtime safety only. Product command registration belongs to
-# stoney_verify.commands and commands_ext, never startup_guards.
+# stoney_verify.commands and commands_ext, never startup_guards. Interaction
+# duplicate protection is feature-owned by stoney_verify.interaction_guard.
 from stoney_verify.startup_guards import (  # noqa: F401
     discord_api_safety,
     public_server_env_id_guard,
     guild_config_runtime_validator,
-    interaction_action_lock_guard,
 )
 
 
