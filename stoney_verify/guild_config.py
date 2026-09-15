@@ -791,10 +791,14 @@ def _candidate_write_payloads(
     flat_updates = _known_flat_payload(existing, updates)
     base = {"guild_id": str(int(guild_id)), "updated_at": _now().isoformat()}
 
+    json_keys = ("settings", "config", "metadata", "meta")
     json_updates: dict[str, Any] = {}
-    if not isinstance(existing, Mapping) or "settings" in existing:
+    if isinstance(existing, Mapping):
+        for json_key in json_keys:
+            if json_key in existing:
+                json_updates[json_key] = settings
+    else:
         json_updates["settings"] = settings
-    if not isinstance(existing, Mapping) or "config" in existing:
         json_updates["config"] = settings
 
     direct_updates = {
@@ -802,15 +806,15 @@ def _candidate_write_payloads(
         for key, value in dict(updates).items()
         if str(key) not in _CONTROL_KEYS and value is not None
     }
-    candidates = [
+    candidates: list[Dict[str, Any]] = [
         {**base, **json_updates, **flat_updates},
-        {**base, "settings": settings, **flat_updates},
-        {**base, "config": settings, **flat_updates},
-        {**base, **flat_updates},
-        {**base, "settings": settings},
-        {**base, "config": settings},
-        {**base, **direct_updates},
     ]
+    for json_key in json_keys:
+        if json_key in json_updates:
+            candidates.append({**base, json_key: settings, **flat_updates})
+    if flat_updates:
+        candidates.append({**base, **flat_updates})
+    candidates.append({**base, **direct_updates})
 
     unique: list[Dict[str, Any]] = []
     seen: set[str] = set()
@@ -996,10 +1000,9 @@ def clear_guild_config_keys_sync(
         flat_clear = {key: None for key in clear_keys if key in columns}
         flat_metadata = {key: value for key, value in metadata.items() if key in columns}
         json_updates: dict[str, Any] = {}
-        if "settings" in columns:
-            json_updates["settings"] = settings
-        if "config" in columns:
-            json_updates["config"] = settings
+        for json_key in ("settings", "config", "metadata", "meta"):
+            if json_key in columns:
+                json_updates[json_key] = settings
         payload = {**json_updates, **flat_clear, **flat_metadata, "updated_at": stamp}
 
         def _write():
