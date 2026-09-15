@@ -310,6 +310,11 @@ def _allow_env_fallback_for_guild(guild_id: Any) -> bool:
     return gid == home_gid
 
 
+def env_fallback_allowed_for_guild(guild_id: Any) -> bool:
+    """Public compatibility wrapper for per-guild env fallback policy."""
+    return _allow_env_fallback_for_guild(guild_id)
+
+
 def _is_retryable_db_error(error: Exception) -> bool:
     text = repr(error).lower()
     markers = (
@@ -443,6 +448,22 @@ def _fallback_config_for_read_state(guild_id: Any, *, source: str) -> GuildRunti
         cfg["use_env_fallbacks"] = False
     cfg["source"] = str(source or "unavailable:unknown")
     return cfg
+
+
+def get_cached_guild_config(guild_id: Any) -> GuildRuntimeConfig:
+    """Return the last resolved config without performing database I/O.
+
+    Cache consumers such as ticket sync call this only after an async refresh.
+    On a cache miss, return the same isolation-safe fallback shape rather than
+    raising or leaking another guild's deployment-level Discord IDs.
+    """
+    gid = _fallback_guild_id(guild_id)
+    cached = _CONFIG_CACHE.get(_cache_key(gid))
+    if cached:
+        return GuildRuntimeConfig(cached)
+    if _allow_env_fallback_for_guild(gid):
+        return env_fallback_guild_config(gid)
+    return _fallback_config_for_read_state(gid, source="unconfigured:cache_miss")
 
 
 def _normalize_config_row(
@@ -637,7 +658,7 @@ def _read_row_value(row: Optional[Mapping[str, Any]], key: str) -> Any:
 
 def _write_mode(patch: Mapping[str, Any]) -> str:
     mode = _safe_str(patch.get("__config_write_mode"), "").lower()
-    return mode if mode in _ALLOWED_MODES else "fill_missing"
+    return mode if mode in _ALLOWED_MODES else "explicit_override"
 
 
 def _write_source(patch: Mapping[str, Any]) -> str:
@@ -1313,11 +1334,13 @@ __all__ = [
     "GUILD_CONFIG_TABLE",
     "GUILD_CONFIG_TABLE_FALLBACKS",
     "public_config_isolation_enabled",
+    "env_fallback_allowed_for_guild",
     "clear_guild_config_cache",
     "invalidate_guild_config",
     "invalidate_config_cache",
     "guild_config_cache_snapshot",
     "env_fallback_guild_config",
+    "get_cached_guild_config",
     "get_guild_config",
     "upsert_guild_config_sync",
     "upsert_guild_config",
