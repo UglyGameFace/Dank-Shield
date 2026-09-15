@@ -636,26 +636,50 @@ async def _process(guild: discord.Guild, entry: Any, actor: Any, action_name: st
 
 async def _handle_bot_add(guild: discord.Guild, entry: Any, actor: Any) -> None:
     settings = await anti_nuke.get_antinuke_settings(int(guild.id))
-    if not settings["antinuke_enabled"] or anti_nuke._actor_is_owner_or_bot(guild, actor):  # noqa: SLF001
+    if not settings["antinuke_enabled"]:
         return
     target = getattr(entry, "target", None)
+    authorized, authorization_reason = await anti_nuke.bot_add_authorization(
+        guild,
+        target,
+        actor,
+        settings,
+    )
+    if authorized:
+        return
+
     panic_active, panic_triggered, observed = _panic_state(guild, actor, "bot_add", entry=entry)
     response = "Alert-only mode: newly added bot was left in the server."
     if settings["antinuke_mode"] == "contain":
         removed_bot = False
         try:
             if target is not None:
-                await guild.kick(target, reason="Dank Shield AntiNuke rollback: untrusted bot addition")
+                await guild.kick(target, reason="Dank Shield AntiNuke rollback: unauthorized bot addition")
                 removed_bot = True
         except Exception:
             removed_bot = False
-        removed_actor, blocked_actor = await _contain_peer(guild, actor)
+
+        actor_id = _safe_int(getattr(actor, "id", 0), 0)
+        owner_id = _safe_int(getattr(guild, "owner_id", 0), 0)
+        removed_actor: list[str] = []
+        blocked_actor: list[str] = []
+        if actor_id > 0 and actor_id != owner_id:
+            removed_actor, blocked_actor = await _contain_peer(guild, actor)
+
         response = "Removed the newly added bot." if removed_bot else "Could not remove the newly added bot."
         if removed_actor:
             response += " Inviter containment: " + ", ".join(removed_actor) + "."
         if blocked_actor:
             response += " Inviter blockers: " + ", ".join(blocked_actor) + "."
-    await anti_nuke._post_incident(guild, title="🚨 AntiNuke Untrusted Bot Added", actor=actor, action_label="Bot added to server", target_label=_target_label("bot_add", entry), response_label=response, details="Gateway-fast rollback; REST propagation was not required.")  # noqa: SLF001
+    await anti_nuke._post_incident(
+        guild,
+        title="🚨 AntiNuke Unauthorized Bot Added",
+        actor=actor,
+        action_label="Bot added to server",
+        target_label=_target_label("bot_add", entry),
+        response_label=response,
+        details=f"Gateway-fast rollback; authorization={authorization_reason}",
+    )  # noqa: SLF001
     if panic_active and panic_triggered:
         await _post_panic_incident(guild, actor=actor, action_label="Bot added to server", target_label=_target_label("bot_add", entry), observed=observed)
 

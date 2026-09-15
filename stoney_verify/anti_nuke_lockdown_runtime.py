@@ -21,7 +21,6 @@ _INSTALL_FLAG = "_dank_antinuke_lockdown_runtime_installed"
 _POLICY_PATCH_FLAG = "_dank_antinuke_lockdown_policy_patched"
 _HISTORY_PATCH_FLAG = "_dank_antinuke_lockdown_history_patched"
 _GUARDIAN_PATCH_FLAG = "_dank_antinuke_lockdown_guardian_patched"
-_BOT_ADD_PATCH_FLAG = "_dank_antinuke_lockdown_bot_add_patched"
 _OWNER_PATCH_FLAG = "_dank_antinuke_lockdown_owner_first_strike_patched"
 _PROTECTED_CONTROL_ROLE_SETTINGS_KEY = "_dank_lockdown_protected_role_ids"
 
@@ -592,87 +591,6 @@ def _patch_owner_first_strike(incident: Any) -> bool:
     return True
 
 
-def _patch_bot_add_guardian(
-    guardian: Any,
-    anti_nuke: Any,
-    hostile: Any,
-) -> bool:
-    if bool(getattr(guardian, _BOT_ADD_PATCH_FLAG, False)):
-        return False
-
-    original = guardian._handle_bot_add  # noqa: SLF001
-
-    async def strict_bot_add(guild: discord.Guild, entry: Any, actor: Any) -> None:
-        target = getattr(entry, "target", None)
-        target_id = _safe_int(getattr(target, "id", 0), 0)
-        if target_id <= 0:
-            return await original(guild, entry, actor)
-
-        settings = await anti_nuke.get_antinuke_settings(int(guild.id))
-        if not bool(settings.get("antinuke_enabled")):
-            return await original(guild, entry, actor)
-
-        # Durable hostile reputation outranks the bot allowlist.
-        try:
-            reputation = await hostile.get_actor_reputation(
-                int(guild.id),
-                target_id,
-                refresh=True,
-            )
-        except Exception:
-            reputation = None
-        if reputation and reputation.get("active"):
-            return await original(guild, entry, actor)
-
-        trusted_targets = set(
-            _safe_id_list(settings.get("antinuke_trusted_user_ids"))
-        )
-        if target_id in trusted_targets:
-            return
-
-        actor_id = _safe_int(getattr(actor, "id", 0), 0)
-        owner_id = _safe_int(getattr(guild, "owner_id", 0), 0)
-        if actor_id <= 0 or actor_id != owner_id:
-            return await original(guild, entry, actor)
-
-        response = "Owner added an unapproved bot."
-        if str(settings.get("antinuke_mode") or "contain").lower() == "contain":
-            removal_target = target or discord.Object(id=target_id)
-            try:
-                await guild.kick(
-                    removal_target,
-                    reason=(
-                        "Dank Shield AntiNuke lockdown: owner-added bot was not "
-                        "pre-approved"
-                    ),
-                )
-                response = "Removed owner-added bot because its ID was not pre-approved."
-            except Exception as exc:
-                response = (
-                    "Could not remove owner-added unapproved bot: "
-                    f"{type(exc).__name__}. Check hierarchy and Kick Members immediately."
-                )
-        else:
-            response += " Alert-only mode did not remove it."
-
-        await anti_nuke._post_incident(  # noqa: SLF001
-            guild,
-            title="🚨 AntiNuke Unapproved Bot Added By Owner",
-            actor=actor,
-            action_label="Unapproved bot added to server",
-            target_label=f"{target or 'bot'} (`{target_id}`)",
-            response_label=response,
-            details=(
-                "Lockdown requires bot IDs to be explicitly trusted before they are "
-                "added. The physical guild owner cannot be contained by a Discord bot."
-            ),
-        )
-
-    guardian._handle_bot_add = strict_bot_add  # noqa: SLF001
-    setattr(guardian, _BOT_ADD_PATCH_FLAG, True)
-    return True
-
-
 def install_anti_nuke_lockdown_runtime(bot: discord.Client) -> bool:
     """Install AntiNuke's final structural no-grace invariants once."""
 
@@ -681,14 +599,12 @@ def install_anti_nuke_lockdown_runtime(bot: discord.Client) -> bool:
 
     from . import anti_nuke
     from . import anti_nuke_guardian_runtime as guardian
-    from . import anti_nuke_hostile_actor_runtime as hostile
     from . import anti_nuke_incident_runtime as incident
 
     history_patched = _patch_config_history_restore()
     policy_patched = _patch_anti_nuke_policy(anti_nuke, bot)
     guardian_patched = _patch_guardian_surface(guardian, anti_nuke)
     owner_patched = _patch_owner_first_strike(incident)
-    bot_add_patched = _patch_bot_add_guardian(guardian, anti_nuke, hostile)
 
     setattr(bot, _INSTALL_FLAG, True)
     print(
@@ -697,7 +613,7 @@ def install_anti_nuke_lockdown_runtime(bot: discord.Client) -> bool:
         f"structural first-strike={'active' if policy_patched else 'already active'}; "
         f"audit/rollback surface={'hardened' if guardian_patched else 'already hardened'}; "
         f"owner first-strike={'active' if owner_patched else 'already active'}; "
-        f"owner bot-add allowlist={'active' if bot_add_patched else 'already active'}"
+        "bot-add authorization=native"
     )
     return True
 
