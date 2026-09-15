@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -270,6 +271,17 @@ def test_public_setup_writer_is_a_compatibility_facade(monkeypatch) -> None:
 def test_setup_group_callbacks_are_bound_to_canonical_facade() -> None:
     assert public_setup_group._upsert_config_sync is public_setup_config_writer.upsert_guild_config_sync
     assert public_setup_group._upsert_config is public_setup_config_writer.upsert_guild_config
+
+
+def test_commands_bootstrap_binds_writer_before_modules_can_copy_setup_callback() -> None:
+    commands_text = Path("stoney_verify/commands.py").read_text(encoding="utf-8")
+    binding = commands_text.index("public_setup_config_writer as _public_setup_config_writer")
+    welcome_import = commands_text.index("public_welcome_card_studio")
+    exit_import = commands_text.index("public_exit_compact_surface")
+
+    assert binding < welcome_import
+    assert binding < exit_import
+    assert "Canonical guild-config writer binding failed during command bootstrap." in commands_text
 
 
 def test_async_public_setup_facade_uses_canonical_async_writer(monkeypatch) -> None:
