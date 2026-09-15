@@ -39,7 +39,12 @@ def test_db_read_failure_is_distinct_from_genuine_unconfigured_guild(monkeypatch
 
     assert cfg["source"] == "unavailable:db_read_failed"
     assert cfg["use_env_fallbacks"] is False
-    assert all(value is None for key, value in cfg.items() if key.endswith("_id"))
+    assert cfg["guild_id"] == "123"
+    assert all(
+        value is None
+        for key, value in cfg.items()
+        if key != "guild_id" and key.endswith("_id")
+    )
 
 
 def test_refresh_preserves_stale_known_good_config_when_db_is_unavailable(monkeypatch) -> None:

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import discord
 import pytest
 
+from stoney_verify import guild_config
 from stoney_verify import setup_resource_reconcile as reconcile
 from stoney_verify.commands_ext import public_setup_config_writer as writer
 from stoney_verify.commands_ext import public_setup_fresh_choice as fresh
@@ -63,7 +64,7 @@ def test_config_clear_payload_removes_stale_mapping_key():
         },
         "vc_verify_channel_id": "123",
     }
-    result = writer._settings_payload_without_keys(
+    result = guild_config._settings_payload_without_keys(
         existing,
         {"vc_verify_channel_id"},
         {"setup_completed": False},
@@ -185,11 +186,11 @@ def test_clear_writer_updates_both_json_buckets_atomically(monkeypatch):
         def table(self, _name):
             return _Table()
 
-    monkeypatch.setattr(writer, "get_supabase", lambda: _SB())
+    monkeypatch.setattr(guild_config, "get_supabase", lambda: _SB())
     monkeypatch.setattr(
-        writer,
-        "_fetch_existing_config_row_sync",
-        lambda _guild_id: dict(existing),
+        guild_config,
+        "_fetch_existing_row_sync",
+        lambda _table_name, _guild_id: dict(existing),
     )
 
     writer.clear_guild_config_keys_sync(
