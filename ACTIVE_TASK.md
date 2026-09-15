@@ -2,86 +2,83 @@
 
 ## DS-AUD-INTERACTION-OWNERSHIP — Retire private View scheduler patch into native interaction ownership
 
-**Status:** IN PROGRESS — root cause proven; implementation branch active
-**Branch:** `audit/interaction-lock-native-ownership`
-**Base main:** `ca9b831169c9477c62da74d2b808a7bc16cd58da`
+**Status:** CLOSED — implementation merged and exact-SHA production acceptance passed
+**Implementation PR:** #229
+**Frozen implementation head:** `61f9f8a1c5040d9aadbd513b019f3a3af0b9364b`
+**Implementation merge SHA:** `e7ac11cb7d457d53f61f0cf709c330219e6ff202`
 
-## Previous finding closure
+## Outcome
 
-`DS-AUD-COMMAND-OWNERSHIP` is closed and must not be reopened without new regression evidence.
+The process-wide patch of private `discord.ui.View._scheduled_task` is retired. Dank Shield now relies on its explicit native interaction owner, `stoney_verify.interaction_guard`, plus feature-owned ticket mutation locks. Production boot no longer imports or expects the retired scheduler guard.
 
-Implementation PR #227 merged as `f17ad5d2af0809a9738eb6bbcbf4c295c693ba10` and passed exact-SHA production acceptance. Bookkeeping closeout PR #228 then merged as `ca9b831169c9477c62da74d2b808a7bc16cd58da`.
+User-visible behavior preserved:
 
-Post-closeout acceptance on that exact canonical SHA passed:
+- duplicate in-flight native actions are rejected with a clear ephemeral busy response;
+- safe defer/send/follow-up and structured interaction failure diagnostics remain intact;
+- ticket close/reopen/delete mutation locks remain intact;
+- menu-first feature callbacks and their existing destinations remain unchanged.
 
-- Dank Shield CI #2131 / `34912852902` — SUCCESS, including the full unit suite and every standard audit lane.
-- Ticket Owner Emergency Override #702 / `34912852978` — SUCCESS on the same SHA.
-- Deploy Supabase migrations #31 / `34913644427` — SUCCESS on the same SHA after canonical CI; validated-release checkout, immutable current-main verification, required secrets, Supabase CLI, project link, migration status, preview, and apply all passed.
-- Canonical `main` remained exactly `ca9b831169c9477c62da74d2b808a7bc16cd58da` after promotion.
+Removed architecture debt:
 
-## Finding
+- production import of `startup_guards.interaction_action_lock_guard`;
+- startup-diagnostics ownership requirement for that guard;
+- historical startup inventory entry for that guard;
+- the superseded guard module and its process-wide private discord.py mutation;
+- the static source-shape test that required `_scheduled_task` patching.
 
-Production boot still imports `startup_guards.interaction_action_lock_guard`, which globally replaces private `discord.ui.View._scheduled_task` for every component interaction in the process.
+Behavior-level coverage now proves the native owner rejects a duplicate and does not mutate `discord.ui.View._scheduled_task`.
 
-The patch is not the canonical owner of real duplicate protection:
+## Root cause closed
 
-- default mode is `observe`, so duplicate detections normally log and still execute the original callback;
-- enforcement requires both block mode and a matching `DANK_SHIELD_INTERACTION_ACTION_LOCK_BLOCK_TARGETS` pattern;
-- repository configuration does not configure or advertise those block targets;
-- the guard's duplicate/cooldown counters have no consumer outside the guard and its static source-shape test;
-- no feature code depends on the `_dank_shield_action_lock_wrapped` marker or saved private scheduler original.
+The old startup guard globally replaced a private discord.py scheduler for every component callback even though its default mode was observe-only, repository configuration did not configure blocking targets, and its counters/patch markers had no live consumers outside its own source-shape test. Real duplicate protection already belonged to `stoney_verify.interaction_guard` and feature-owned locks.
 
-Meanwhile `stoney_verify.interaction_guard` already owns explicit native interaction safety without framework mutation. It provides `asyncio.Lock` action ownership, duplicate in-flight rejection, clear ephemeral busy responses, safe defer/send/follow-up handling, and structured failure diagnostics. Live feature paths already use `run_guarded_interaction(...)`, including tickets, Protection Center, Design, Help, Setup, Diagnostics, and related public UI flows.
+## Exact-head validation
 
-## Root cause / old execution path
+Frozen implementation head `61f9f8a1c5040d9aadbd513b019f3a3af0b9364b` passed all applicable workflows:
 
-1. `main.py` imports `interaction_action_lock_guard` as a required startup owner.
-2. Import executes `apply()` immediately.
-3. `apply()` replaces private `discord.ui.View._scheduled_task` globally.
-4. Every view component dispatch enters the compatibility wrapper regardless of whether that feature uses the native interaction owner.
-5. The old static test asserts that this private framework patch must continue to exist, locking the repository to discord.py internals rather than user-visible behavior.
+- Dank Shield CI #2134 / `34914271470` — SUCCESS, including the full unit suite and every standard audit lane.
+- Ticket Owner Emergency Override #705 / `34914271443` — SUCCESS.
+- Application Command Size Diagnostics #1142 / `34914271440` — SUCCESS.
+- Dank Design Regression CI #392 / `34914271457` — SUCCESS.
+- Ticket Category Menu Sanity #530 / `34914271445` — SUCCESS.
+- Schema Authority SQL #56 / `34914271464` — SUCCESS.
+- Profile Runtime Diagnostics #898 / `34914271444` — SUCCESS.
 
-This is unnecessary global ownership and a discord.py upgrade risk.
+Before merge, PR #229 was mergeable, changed exactly the intended nine files, had no reviews or inline review comments, and canonical `main` had not drifted from its base.
 
-## Intended fix
+## Post-merge production acceptance
 
-- remove `interaction_action_lock_guard` from explicit production boot;
-- remove it from startup diagnostics and the inert historical startup inventory;
-- delete the superseded startup guard module;
-- delete the source-shape test that requires the private scheduler patch;
-- update the explicit-main startup ownership audit tool;
-- preserve `stoney_verify.interaction_guard` and all feature-owned native callers unchanged;
-- preserve native ticket close/reopen/delete mutation locks and unrelated compatibility families unchanged;
-- add behavior-level proof that the native interaction owner rejects an in-flight duplicate and that importing/using it does not modify `discord.ui.View._scheduled_task`.
+Implementation PR #229 merged as `e7ac11cb7d457d53f61f0cf709c330219e6ff202`.
 
-## Deliberately unchanged
+Acceptance on that exact canonical SHA passed:
 
-- ticket lifecycle mutation locking and ticket security;
-- feature callback behavior behind the existing menu-first UI;
-- Discord API retry/audit-log ownership;
-- guild-config/public-env safety ownership;
-- AntiNuke, moderation, verification, design, schema, Supabase migrations, command ownership, and DS-SEC-044;
-- dormant ticket lock compatibility guards absent separate importer proof.
+- Dank Shield CI #2136 / `34915202887` — SUCCESS, including compile, full pytest, standalone tools, public setup/isolation, canonical command surface, startup friction, invite permissions, setup safety, Dank Design, role truth, event boundary, Claim-first security, and Managed SQL. Canonical CI completed `2026-09-15T01:07:35Z`.
+- Ticket Category Menu Sanity #531 / `34915202861` — SUCCESS on the same SHA.
+- Ticket Owner Emergency Override #707 / `34915202863` — SUCCESS on the same SHA.
+- Schema Authority SQL #57 / `34915202864` — SUCCESS on the same SHA.
+- Deploy Supabase migrations #32 / `34916007882` — SUCCESS on the same SHA; started `2026-09-15T01:07:37Z`, two seconds after canonical CI completed.
+- Supabase validated-release checkout, immutable current-main verification, required secrets, CLI install, project link, migration status, preview, and apply all passed.
+- Canonical `main` remained exactly `e7ac11cb7d457d53f61f0cf709c330219e6ff202` after promotion.
 
-## Separate follow-up discovered during proof
+This finding must not be reopened without new regression evidence.
 
-`stoney_verify.interaction_guard` retains completed `asyncio.Lock` objects in its `_ACTION_LOCKS` mapping. That is real bounded-by-keyspace retention debt, but changing lock lifecycle is not required to retire the global framework patch and has different concurrency semantics when `reject_duplicate=False`. Keep it as a focused follow-up unless implementation evidence shows it is required for this finding. Do not smuggle a concurrency rewrite into the scheduler-patch retirement.
+## Separate follow-up retained
 
-## Validation plan
+`stoney_verify.interaction_guard` currently retains completed `asyncio.Lock` objects in `_ACTION_LOCKS`. That is real bounded-by-keyspace retention debt, but it is a separate concurrency/lifecycle finding because cleanup semantics differ when `reject_duplicate=False`. Do not smuggle that change into unrelated ownership work.
 
-- prove production boot no longer imports the retired guard;
-- prove startup diagnostics no longer expects it;
-- prove the old private scheduler marker/module is absent from live ownership;
-- prove native duplicate rejection remains behaviorally covered;
-- prove native interaction ownership does not mutate `discord.ui.View._scheduled_task`;
-- run compile, full pytest, standalone tools, public setup/isolation, command surface/friction, invite/setup safety, Dank Design, role truth, event boundary, Claim-first security, Managed SQL, and every applicable companion workflow on one frozen exact PR head;
-- inspect exact file scope, reviews/threads, mergeability, and main drift before merge;
-- after merge require canonical main CI and applicable companions on the merge SHA, then gated Supabase promotion on the same SHA after CI success with immutable-main/status/preview/apply checks, and verify main remains unchanged afterward.
+## Next master-audit candidate
 
-## Current blockers
+### DS-AUD-GUILD-CONFIG-OWNERSHIP — Move public server-ID isolation and saved-ID validation into canonical config owners
 
-None known.
+Read-only evidence already bounds the next candidate:
+
+- `startup_guards.public_server_env_id_guard` imports `stoney_verify.globals` and mutates deployment-level guild/channel/role/category IDs to zero after import in public mode.
+- `startup_guards.guild_config_runtime_validator` replaces canonical `guild_config.discover_runtime_guild_config` at import time.
+- canonical `guild_config.py` already owns public config isolation and runtime discovery, so validation/purge belongs there rather than in a startup monkey patch.
+- `verification_member_role_fallback_guard` currently patches the validator guard's private `_apply_runtime_discovery`; Verified-as-member semantics must be preserved explicitly before the validator wrapper is retired.
+- direct server-ID env consumers such as transcript/modlog helpers must be checked against the same public isolation policy so moving the globals guard does not create a fake sense of safety.
+- `discord_api_safety` is deliberately excluded. Its audit-log/send/edit retry and AntiNuke behavior is broader security-sensitive ownership and must be handled as its own finding.
 
 ## Next step
 
-Implement the bounded ownership retirement on this branch, open a draft PR, freeze one exact head, and fix only evidence-backed failures.
+Merge this bookkeeping-only closeout after exact-head CI proves `ACTIVE_TASK.md` is the only change. Then start `DS-AUD-GUILD-CONFIG-OWNERSHIP` from the resulting accepted canonical `main` SHA and preserve current public/beta behavior with behavioral tests before retiring either config startup guard.
