@@ -9,6 +9,7 @@ from typing import Any
 from stoney_verify import guild_config
 from stoney_verify.commands_ext import public_setup_config_writer
 from stoney_verify.commands_ext import public_setup_group
+from stoney_verify.commands_ext import public_setup_recovery
 
 
 class _FakeQuery:
@@ -284,18 +285,56 @@ def test_commands_bootstrap_binds_writer_before_modules_can_copy_setup_callback(
     assert "Canonical guild-config writer binding failed during command bootstrap." in commands_text
 
 
-def test_setup_recovery_config_mutations_delegate_to_canonical_owner() -> None:
-    recovery_text = Path(
-        "stoney_verify/commands_ext/public_setup_recovery.py"
-    ).read_text(encoding="utf-8")
-    start = recovery_text.index("def _write_config_patch_sync")
-    end = recovery_text.index("def _delete_ticket_categories_sync")
-    writer_section = recovery_text[start:end]
+def test_setup_recovery_config_mutations_delegate_to_canonical_owner(monkeypatch) -> None:
+    calls: list[tuple[str, Any]] = []
+    snapshot = {"config": {"ticket_category_id": "111"}}
 
-    assert "upsert_guild_config_sync" in writer_section
-    assert "clear_guild_config_keys_sync" in writer_section
-    assert "supabase.table" not in writer_section
-    assert ".update(payload)" not in writer_section
+    monkeypatch.setattr(
+        public_setup_recovery,
+        "_fetch_config_row_sync",
+        lambda guild_id: (
+            "guild_configs",
+            {"guild_id": str(guild_id), "settings": {}},
+            "",
+        ),
+    )
+
+    def fake_upsert(guild_id: int, patch: dict[str, Any]):
+        calls.append(("upsert", (guild_id, deepcopy(patch))))
+        return guild_config.GuildRuntimeConfig({"guild_id": str(guild_id), **patch})
+
+    def fake_clear(guild_id: int, keys: Any, *, source: str, actor: Any = None):
+        calls.append(("clear", (guild_id, tuple(keys), source, actor)))
+        return guild_config.GuildRuntimeConfig({"guild_id": str(guild_id)})
+
+    monkeypatch.setattr(public_setup_recovery, "upsert_guild_config_sync", fake_upsert)
+    monkeypatch.setattr(public_setup_recovery, "clear_guild_config_keys_sync", fake_clear)
+
+    table = public_setup_recovery._write_config_patch_sync(
+        123,
+        {
+            "ticket_category_id": None,
+            "verification_enabled": True,
+        },
+        snapshot,
+    )
+
+    assert table == "guild_configs"
+    assert [kind for kind, _payload in calls] == ["upsert", "clear", "upsert"]
+
+    first_upsert = calls[0][1][1]
+    assert first_upsert["last_setup_snapshot"] == snapshot
+    assert first_upsert["__config_write_mode"] == "explicit_override"
+    assert first_upsert["__config_write_source"] == "public_setup_recovery"
+
+    clear_call = calls[1][1]
+    assert clear_call[0] == 123
+    assert clear_call[1] == ("ticket_category_id",)
+    assert clear_call[2] == "guild config recovery"
+
+    final_upsert = calls[2][1][1]
+    assert final_upsert["verification_enabled"] is True
+    assert final_upsert["last_setup_snapshot"] == snapshot
 
 
 def test_async_public_setup_facade_uses_canonical_async_writer(monkeypatch) -> None:
