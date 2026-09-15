@@ -78,9 +78,11 @@ def test_selected_target_mutations_use_message_update_not_permanent_thinking_pla
     assert "thinking=True" not in deny_source
     assert "_edit_original_or_followup" in deny_source
 
-    # Modal submissions need a deferred response, but must edit that original
-    # deferred response instead of leaving Discord's thinking card behind.
+    # Modal submissions need a deferred response, but both success and queue
+    # duplicate/busy/failure paths must clear that deferred original.
     assert "thinking=True" in undo_source
+    assert "if not isinstance(result, TargetRepairResult):" in undo_source
+    assert "await interaction.edit_original_response(" in undo_source
     assert "_edit_original_or_followup" in undo_source
 
 
