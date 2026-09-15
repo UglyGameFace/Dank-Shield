@@ -590,19 +590,95 @@ async def _restore_last_reset(guild: discord.Guild) -> tuple[str, bool]:
     return message, ok
 
 
+def _rebuild_issue_lines(items: Any) -> str:
+    clean = [
+        _short(item, 160)
+        for item in list(items or [])
+        if str(item or "").strip()
+    ]
+    lines = [f"• {item}" for item in clean[:2]]
+    if len(clean) > 2:
+        lines.append(f"• +{len(clean) - 2} more issue(s)")
+    return "\n".join(lines)
+
+
 async def _rebuild_recommended_menu(
     guild: discord.Guild,
 ) -> tuple[str, bool]:
     created, skipped, error = await solid._seed_recommended_categories(guild)
     if error:
         return f"🚫 Default ticket choices could not be rebuilt: `{error}`", False
+
     if created:
-        return (
+        choice_result = (
             "✅ Created default ticket choices: "
-            + ", ".join(f"`{item}`" for item in created),
-            True,
+            + ", ".join(f"`{item}`" for item in created)
         )
-    return "✅ Default ticket choices already exist. Nothing changed.", True
+    else:
+        choice_result = "✅ Default ticket choices already exist."
+
+    selection_required = any(
+        str(item or "").strip().lower() == "selection required"
+        for item in list(skipped or [])
+    )
+
+    try:
+        from . import public_ticket_panel_clean as ticket_panel
+
+        _parent, _staff, blockers, warnings = (
+            await ticket_panel._ticket_setup_preflight(guild)
+        )
+        blockers = list(blockers or [])
+        warnings = list(warnings or [])
+    except Exception as exc:
+        return (
+            choice_result
+            + "\n\n🚫 Ticket readiness could not be verified after rebuilding "
+            + f"the choices: `{type(exc).__name__}: {_short(exc, 260)}`\n"
+            + "Nothing should be treated as ready until the ticket preflight succeeds.",
+            False,
+        )
+
+    parts = [choice_result]
+    fixes: list[str] = []
+
+    if selection_required:
+        parts.append(
+            "⚠️ Ticket choices still need owner confirmation before this menu is ready."
+        )
+        fixes.append(
+            "Open `/dank setup` → **Manage Setup** → **All Features & Settings** "
+            "→ **Tickets** → **Ticket Choices**, then save the options this server should show."
+        )
+
+    if blockers:
+        parts.append(
+            "⚠️ Ticket choices are present, but ticket setup is **not ready**.\n"
+            "**Blockers**\n"
+            + _rebuild_issue_lines(blockers)
+        )
+        fixes.append(
+            "Run `/dank setup` → **Safety & Repair** → **Specific Channel**, "
+            "or `/dank diagnostics` → **Fix Channel Access**."
+        )
+
+    if warnings:
+        parts.append(
+            "**Warnings**\n"
+            + _rebuild_issue_lines(warnings)
+        )
+
+    if selection_required or blockers:
+        parts.append("**Next fix**\n" + "\n".join(f"• {item}" for item in fixes))
+        return "\n\n".join(parts), False
+
+    if warnings:
+        parts.append(
+            "✅ Ticket creation preflight passed. The warnings above do not block ticket creation."
+        )
+    else:
+        parts.append("✅ Ticket creation preflight passed.")
+    return "\n\n".join(parts), True
 
 
 async def _recovery_snapshot_summary(
