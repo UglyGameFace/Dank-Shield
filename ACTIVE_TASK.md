@@ -4,11 +4,11 @@
 
 **Outcome:** Dank Shield permission repair shows actionable information, keeps selected options visibly selected, reports only permission changes Discord actually accepted, and clears deferred interaction responses instead of leaving a permanent “Dank Shield is thinking…” card.
 
-**Status:** IMPLEMENTATION COMPLETE + VALIDATED — PR #233 is awaiting merge/deployment. Live Discloud runtime revision is still external to GitHub validation.
+**Status:** MERGED + REPOSITORY VALIDATED. PR #233 is merged into canonical `main`. The only remaining unverified boundary is the external live Discloud runtime revision/deployment, which GitHub cannot prove.
 
-**Branch:** `fix/permission-repair-ui-flow`
-**Base main:** `653debf88186f8eb2123db5eda52eee5f779b977`
-**Validated implementation head:** `c9ea890702daf0138957d7ea51d48f63d9db6a9b`
+**Implementation branch:** `fix/permission-repair-ui-flow`
+**Validated final PR head:** `1d45075ac4a56b15bb53c524a2a606b98a6338d8`
+**Merge SHA / canonical main:** `71c0eddbe690f9df7f9224ef3990a431ad517bdd`
 **PR:** #233 — `Fix permission repair UI state and stalled Discord responses`
 
 ## Scope
@@ -54,41 +54,41 @@ No ticket schema, moderation, verification, anti-nuke, command ownership, or unr
 
 ## Validation / results
 
-On exact implementation head `c9ea890702daf0138957d7ea51d48f63d9db6a9b`:
+On exact final PR head `1d45075ac4a56b15bb53c524a2a606b98a6338d8`:
 
-- Dank Shield CI #2145 — SUCCESS
+- Dank Shield CI #2146 — SUCCESS
   - full Python compile/unit/audit lane — SUCCESS
-  - 1,483-test suite passed after correcting the test-only false positive from the prior run
   - Managed category SQL smoke test — SUCCESS
   - Claim-first ticket security — SUCCESS
-- DS Backlog 027 Validation #82 — SUCCESS
-- Dank Design Regression CI #398 — SUCCESS
-- Profile Runtime Diagnostics #905 — SUCCESS
-- Application Command Size Diagnostics #1151 — SUCCESS
-- Schema Authority SQL #61 — SUCCESS
-- Ticket Owner Emergency Override #716 — SUCCESS
-- PR has zero submitted reviews and zero review threads
-- branch is 14 commits ahead of current `main`, 0 behind, and mergeable
+- DS Backlog 027 Validation #83 — SUCCESS
+- Dank Design Regression CI #399 — SUCCESS
+- Profile Runtime Diagnostics #906 — SUCCESS
+- Application Command Size Diagnostics #1152 — SUCCESS
+- Schema Authority SQL #62 — SUCCESS
+- Ticket Owner Emergency Override #717 — SUCCESS
+- zero submitted reviews and zero review threads
+- final diff cleanup found no conflict markers or unrelated implementation work
 
-The final bookkeeping commit that updates this task record changes documentation only and does not alter runtime or test behavior.
+PR #233 merged successfully. Canonical `main` now points to merge SHA `71c0eddbe690f9df7f9224ef3990a431ad517bdd`.
 
 ## Cleanup / conflicts
 
 - final diff is confined to the permission-repair implementation, its direct setup/activity callers, startup ownership cleanup, tests, and this task record
-- obsolete `setup_permission_repair_preview_clarity_guard.py` is removed rather than left as a competing monkey patch
+- obsolete `setup_permission_repair_preview_clarity_guard.py` was removed rather than left as a competing monkey patch
 - no unrelated runtime feature work was mixed into this task
 - no unresolved PR review threads or requested changes remain
-- current branch is not behind `main`
+- canonical `main` contains the validated implementation
 
-## Blockers / risks
+## Remaining blocker / risk
 
-- GitHub cannot prove which source revision the live Discloud process is currently running. The live Discord behavior changes only after the merged revision is deployed/restarted on the host.
+GitHub cannot prove which source revision the live Discloud process is currently running. The live Discord behavior changes only after Discloud is deployed/restarted from canonical `main`. This is an external runtime verification boundary, not remaining repository implementation work.
 
 ## Backlog
 
+- investigate false-positive enforcement against authorized bots, specifically the reported Discadia bump-bot ban; trace the exact ban owner and protect authorized bots without creating a bot-name hardcode
 - unrelated existing setup/startup-guard cleanup remains separate
 - operation-queue lock-retention debt remains separate
 
 ## Next step
 
-Merge PR #233 after its final bookkeeping-head checks remain green, then deploy/restart the live Discloud bot from canonical `main` and verify the permission-repair flow in Discord.
+Verify or redeploy the live Discloud bot from merge SHA `71c0eddbe690f9df7f9224ef3990a431ad517bdd` when host access is available. Repository work for this task is closed; the next repository task is the authorized-bot false-positive ban investigation.
