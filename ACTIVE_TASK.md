@@ -7,6 +7,7 @@
 **Status:** IMPLEMENTATION COMPLETE; EXACT-HEAD VALIDATION PENDING. The prior task closure is suspended until the repair head passes required CI and final diff/review checks.
 
 **Repair branch:** `fix/antinuke-legit-bot-permission-integrity`
+**Repair PR:** #238 — `Fix AntiNuke legitimate bot permission damage` (draft during validation)
 **Prior merged PR:** #236 — `Fix AntiNuke authorized bot trust ownership`
 **Prior merge SHA:** `eb94e6e46d0c0cfdef2657eb302d0538a6e804fa`
 **Superseded closure PR:** #237 — closed without merge after live permission damage was reported
@@ -14,6 +15,7 @@
 ## Scope
 
 - `stoney_verify/anti_nuke_lockdown_runtime.py`
+- `stoney_verify/anti_nuke_product_policy_runtime.py`
 - focused legitimate-bot permission-integrity regression coverage
 - this task record
 
@@ -26,7 +28,8 @@ No unrelated AntiNuke redesign, setup, tickets, verification, moderation, or PR 
 3. Canonical containment kicks the attributed actor and, if that fails, strips every manageable role, not only dangerous roles.
 4. Guardian panic containment can apply that same containment to observed peer actors, creating multi-bot blast radius.
 5. Gateway-fast dangerous role/member-role paths can roll back role permissions before ordinary threshold processing.
-6. Simply making all bots trusted globally would weaken bot-add authorization because a bot inviter could then authorize arbitrary new bot installs. Bot-add authorization therefore needs a separate trust context.
+6. The later-installed Strict Lockdown product-policy layer can rebuild guardian wrappers and reintroduce synthetic-untrusted/first-strike behavior after the lockdown repair unless it shares the same bot boundary.
+7. Simply making all bots trusted globally would weaken bot-add authorization because a bot inviter could then authorize arbitrary new bot installs. Bot-add authorization therefore needs a separate trust context.
 
 ## Repair behavior
 
@@ -38,6 +41,7 @@ No unrelated AntiNuke redesign, setup, tickets, verification, moderation, or PR 
 - Gateway-fast dangerous role create/update by a bot uses canonical threshold processing instead of immediate rollback/containment.
 - Gateway member-role handling does not strip newly granted roles from a bot target.
 - Native member dangerous-role grants and bot-only role permission escalation are protected from immediate rollback.
+- The final Strict Lockdown product-policy layer preserves the same bounded-bot rule for direct strict actions, guardian processing, overwrite rollback, and AutoMod rollback.
 - Durable hostile reputation remains authoritative and can still allow containment of a known-hostile bot.
 
 ## Validation added
@@ -51,6 +55,7 @@ Focused regressions cover:
 - guardian strict rollback preserving the real bot actor instead of the untrusted proxy
 - gateway bot role creation/update using canonical thresholds
 - gateway bot targets retaining newly granted roles
+- final product-policy installation preserving bot thresholds and real bot identity in Strict Lockdown
 
 ## Pending validation
 
@@ -68,4 +73,4 @@ The repository repair can prevent future AntiNuke permission damage, but GitHub 
 
 ## Next step
 
-Open the focused repair PR, freeze the exact head, resolve only task-owned CI failures, merge after every required check passes, then close the task record with the validated head and canonical merge SHA.
+Freeze PR #238's exact head, resolve only task-owned CI failures, merge after every required check passes, then close the task record with the validated head and canonical merge SHA.
