@@ -284,6 +284,20 @@ def test_commands_bootstrap_binds_writer_before_modules_can_copy_setup_callback(
     assert "Canonical guild-config writer binding failed during command bootstrap." in commands_text
 
 
+def test_setup_recovery_config_mutations_delegate_to_canonical_owner() -> None:
+    recovery_text = Path(
+        "stoney_verify/commands_ext/public_setup_recovery.py"
+    ).read_text(encoding="utf-8")
+    start = recovery_text.index("def _write_config_patch_sync")
+    end = recovery_text.index("def _delete_ticket_categories_sync")
+    writer_section = recovery_text[start:end]
+
+    assert "upsert_guild_config_sync" in writer_section
+    assert "clear_guild_config_keys_sync" in writer_section
+    assert "supabase.table" not in writer_section
+    assert ".update(payload)" not in writer_section
+
+
 def test_async_public_setup_facade_uses_canonical_async_writer(monkeypatch) -> None:
     seen: dict[str, Any] = {}
 
