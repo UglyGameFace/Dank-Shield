@@ -63,6 +63,20 @@ class _FakeSupabase:
         return _FakeQuery(self.store, name, self.writes)
 
 
+class _FakeGuild:
+    def __init__(self, guild_id: int) -> None:
+        self.id = guild_id
+        self.roles: list[Any] = []
+        self.text_channels: list[Any] = []
+        self.categories: list[Any] = []
+
+    def get_role(self, _role_id: int):
+        return None
+
+    def get_channel(self, _channel_id: int):
+        return None
+
+
 def _split_brain_row() -> dict[str, Any]:
     return {
         "guild_id": "1514374173517152418",
@@ -123,6 +137,48 @@ def test_canonical_writer_updates_flat_and_both_json_shapes_atomically(monkeypat
     assert saved["voice_verification_enabled"] is False
 
 
+def test_direct_canonical_writes_preserve_historical_overwrite_semantics(monkeypatch) -> None:
+    row = _split_brain_row()
+    row["staff_role_id"] = "111"
+    row["settings"]["staff_role_id"] = "111"
+    row["config"]["staff_role_id"] = "111"
+    _store, writes = _install_fake_supabase(monkeypatch, row)
+
+    saved = guild_config.upsert_guild_config_sync(
+        int(row["guild_id"]),
+        {"staff_role_id": "999"},
+    )
+
+    assert len(writes) == 1
+    payload = writes[0]
+    assert payload["staff_role_id"] == "999"
+    assert payload["settings"]["staff_role_id"] == "999"
+    assert payload["config"]["staff_role_id"] == "999"
+    assert saved["staff_role_id"] == "999"
+
+
+def test_explicit_fill_missing_mode_blocks_protected_reassignment(monkeypatch) -> None:
+    row = _split_brain_row()
+    row["staff_role_id"] = "111"
+    row["settings"]["staff_role_id"] = "111"
+    row["config"]["staff_role_id"] = "111"
+    _store, writes = _install_fake_supabase(monkeypatch, row)
+
+    saved = guild_config.upsert_guild_config_sync(
+        int(row["guild_id"]),
+        {
+            "staff_role_id": "999",
+            "__config_write_mode": "fill_missing",
+            "__config_write_source": "runtime test",
+        },
+    )
+
+    assert len(writes) == 1
+    assert writes[0]["settings"]["staff_role_id"] == "111"
+    assert writes[0]["config"]["staff_role_id"] == "111"
+    assert saved["staff_role_id"] == "111"
+
+
 def test_canonical_clear_removes_flat_and_both_json_shapes(monkeypatch) -> None:
     row = _split_brain_row()
     store, writes = _install_fake_supabase(monkeypatch, row)
@@ -145,6 +201,43 @@ def test_canonical_clear_removes_flat_and_both_json_shapes(monkeypatch) -> None:
     assert persisted["vc_verify_channel_id"] is None
     assert "vc_verify_channel_id" not in persisted["settings"]
     assert "vc_verify_channel_id" not in persisted["config"]
+
+
+def test_runtime_discovery_natively_purges_invalid_saved_ids(monkeypatch) -> None:
+    row = _split_brain_row()
+    row["staff_role_id"] = "999"
+    row["allow_runtime_discovery"] = False
+    row["use_env_fallbacks"] = False
+    row["settings"].update(
+        {
+            "staff_role_id": "999",
+            "allow_runtime_discovery": False,
+            "use_env_fallbacks": False,
+        }
+    )
+    row["config"].update(
+        {
+            "staff_role_id": "999",
+            "allow_runtime_discovery": False,
+            "use_env_fallbacks": False,
+        }
+    )
+    store, writes = _install_fake_supabase(monkeypatch, row)
+    guild = _FakeGuild(int(row["guild_id"]))
+
+    discovered = asyncio.run(guild_config.discover_runtime_guild_config(guild))
+
+    assert discovered["staff_role_id"] is None
+    assert discovered["invalid_saved_config_ids"] == {"staff_role_id": "999"}
+    assert len(writes) == 1
+    payload = writes[0]
+    assert payload["staff_role_id"] is None
+    assert "staff_role_id" not in payload["settings"]
+    assert "staff_role_id" not in payload["config"]
+    persisted = store[guild_config.GUILD_CONFIG_TABLE][str(row["guild_id"])]
+    assert persisted["staff_role_id"] is None
+    assert "staff_role_id" not in persisted["settings"]
+    assert "staff_role_id" not in persisted["config"]
 
 
 def test_public_setup_writer_is_a_compatibility_facade(monkeypatch) -> None:
