@@ -7,6 +7,7 @@ import pytest
 
 from stoney_verify import anti_nuke_hostile_actor_runtime as hostile
 from stoney_verify import anti_nuke_lockdown_runtime as lockdown
+from stoney_verify import anti_nuke_product_policy_runtime as product_policy
 from stoney_verify import guild_config
 
 
@@ -308,6 +309,125 @@ def test_gateway_preserves_bot_target_and_thresholds_bot_actor() -> None:
 
     assert original_calls == []
     assert process_calls == ["role_create", "role_update"]
+
+
+def test_final_product_policy_preserves_bot_actor_in_strict_lockdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_actor_ids: list[int] = []
+    seen_specs: list[tuple[str, str, str, object]] = []
+    seen_overrides: list[object] = []
+
+    strict_settings = {
+        **_settings(),
+        product_policy.STRICT_LOCKDOWN_KEY: True,
+    }
+
+    async def get_settings(_guild_id: int):
+        return dict(strict_settings)
+
+    async def base_overwrite(_guild, _entry, actor, _action_name):
+        seen_actor_ids.append(int(actor.id))
+        return "ok"
+
+    async def base_automod(_guild, _entry, actor, _action_name):
+        seen_actor_ids.append(int(actor.id))
+        return "ok"
+
+    async def base_guardian_process(_guild, _entry, _actor, _action_name, spec):
+        seen_specs.append(spec)
+
+    async def base_process(_guild, **kwargs):
+        seen_overrides.append(kwargs.get("threshold_override"))
+        return True
+
+    fake_anti_nuke = SimpleNamespace(
+        get_antinuke_settings=get_settings,
+        _actor_is_owner_or_bot=lambda _guild, _actor: False,
+        _process_claimed_destructive_event=base_process,
+    )
+    fake_guardian = SimpleNamespace(
+        _ACTIONS={
+            "overwrite_update": (
+                "Overwrite",
+                "antinuke_channel_delete_threshold",
+                "channel_update",
+                None,
+            )
+        },
+        _rollback_untrusted_overwrite=base_overwrite,
+        _rollback_untrusted_automod=base_automod,
+        _process=base_guardian_process,
+    )
+    setattr(fake_guardian, product_policy._GUARDIAN_FLAG, False)  # noqa: SLF001
+    setattr(fake_anti_nuke, product_policy._PROCESS_FLAG, False)  # noqa: SLF001
+
+    monkeypatch.setattr(product_policy, "anti_nuke", fake_anti_nuke)
+    monkeypatch.setattr(product_policy, "guardian", fake_guardian)
+    monkeypatch.setattr(
+        lockdown,
+        "_STRICT_PROCESS_ACTION_KEYS",
+        frozenset({"channel_delete"}),
+    )
+
+    assert product_policy._patch_threshold_policy() is True  # noqa: SLF001
+    assert product_policy._patch_guardian_policy() is True  # noqa: SLF001
+
+    guild = SimpleNamespace(id=1)
+    actor = SimpleNamespace(id=55, bot=True)
+    entry = SimpleNamespace(user=actor)
+
+    asyncio.run(
+        fake_anti_nuke._process_claimed_destructive_event(
+            guild,
+            entry=entry,
+            action_key="channel_delete",
+            action_label="Channel deletion",
+            target_label="#general",
+            threshold_key="antinuke_channel_delete_threshold",
+        )
+    )
+    asyncio.run(
+        fake_guardian._rollback_untrusted_overwrite(
+            guild,
+            entry,
+            actor,
+            "overwrite_update",
+        )
+    )
+    asyncio.run(
+        fake_guardian._rollback_untrusted_automod(
+            guild,
+            entry,
+            actor,
+            "automod_rule_update",
+        )
+    )
+    asyncio.run(
+        fake_guardian._process(
+            guild,
+            entry,
+            actor,
+            "overwrite_update",
+            (
+                "Overwrite",
+                "antinuke_channel_delete_threshold",
+                "channel_update",
+                None,
+            ),
+        )
+    )
+
+    assert seen_overrides == [None]
+    assert seen_actor_ids == [55, 55]
+    assert seen_specs == [
+        (
+            "Overwrite",
+            "antinuke_channel_delete_threshold",
+            "channel_update",
+            None,
+        )
+    ]
 
 
 async def _async_value(value):
