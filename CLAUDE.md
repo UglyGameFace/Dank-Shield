@@ -38,12 +38,12 @@ Critical, non-obvious facts (verified — do not assume otherwise):
   during normal boot, and new code must not treat membership as runtime activation.
 - **The guards that actually run** are the few imported explicitly by `main.py`
   (`discord_api_safety`, `public_server_env_id_guard`,
-  `guild_config_runtime_validator`, `interaction_action_lock_guard`), the verified
-  Basic Verify compatibility imports from `sitecustomize.py`, their verified
-  transitive imports, and guards/helpers deliberately imported by canonical
-  feature modules. The old `runtime_safety`, `public_startup_scope`, command-tree
-  safety/sync, and command-scope dedupe startup owners are retired; do not restore
-  them. See `docs/STARTUP_GUARD_RUNTIME_OWNERSHIP_AUDIT.md`,
+  `guild_config_runtime_validator`), the verified Basic Verify compatibility
+  imports from `sitecustomize.py`, their verified transitive imports, and
+  guards/helpers deliberately imported by canonical feature modules. The old
+  `runtime_safety`, `public_startup_scope`, command-tree safety/sync,
+  command-scope dedupe, and global interaction scheduler startup owners are
+  retired; do not restore them. See `docs/STARTUP_GUARD_RUNTIME_OWNERSHIP_AUDIT.md`,
   `docs/RUNTIME_SAFETY_NATIVE_OWNERSHIP_AUDIT.md`, and
   `docs/COMMAND_NATIVE_OWNERSHIP_AUDIT.md` before changing ownership.
 - **Process health is explicitly owned by `main.py`.** The implementation remains
@@ -60,6 +60,11 @@ Critical, non-obvious facts (verified — do not assume otherwise):
   public-surface validation, unchanged-global-sync state, and configured stale
   guild-copy cleanup. Do not replace `commands.Bot`, `CommandTree.add_command`,
   or `CommandTree.sync` globally.
+- **Interaction action safety is native and feature-owned.** Public interaction
+  owners use `stoney_verify.interaction_guard.run_guarded_interaction(...)` for
+  duplicate in-flight rejection, safe acknowledgements/responses, and structured
+  diagnostics. Do not patch private `discord.ui.View._scheduled_task` or restore
+  `startup_guards.interaction_action_lock_guard`.
 - **Slash commands register as an import side effect** (`commands.py` calls
   `register_all_commands(bot, bot.tree)` at module top level). The canonical
   public surface is six application commands total: `/dank`, `/mod`, `/ticket`,
@@ -155,14 +160,15 @@ These are real and need dedicated, tested passes — flag them, don't blind-fix:
 
 - **Live guard/monkey-patch ownership.** Bulk loading is retired. The temporary
   `runtime_safety` and `public_startup_scope` import hooks are retired, the
-  process-health global import interceptor/package side effect is retired, and
-  the command Bot/CommandTree wrappers are retired in favor of native shared
-  bot/tree ownership. Remaining live patch debt is in other explicitly scoped
-  infrastructure and feature-owned helpers. Migrate it one subsystem at a time;
-  do not delete a guard merely because of its directory name.
+  process-health global import interceptor/package side effect is retired, the
+  command Bot/CommandTree wrappers are retired, and the private Discord View
+  scheduler interaction patch is retired in favor of explicit native owners.
+  Remaining live patch debt is in other explicitly scoped infrastructure and
+  feature-owned helpers. Migrate it one subsystem at a time; do not delete a
+  guard merely because of its directory name.
 - **Historical dormant guard inventory.** The inert historical record is retained
   for audit compatibility, not activation. Retired or migrated owners are removed
-  from the inventory as ownership migrations complete. Remove other dormant files
+  from the inventory as their ownership migrations complete. Remove other dormant files
   only after proving import reachability, newer canonical ownership, and regression
   safety.
 - **Channel Builder follow-up debt is not route wiring.** Its API routes are
