@@ -150,7 +150,9 @@ def audit_context(
 def repair_button_state(audit: ContextualRepairAudit) -> tuple[str, str, discord.ButtonStyle, bool]:
     if audit.healthy:
         return "Access Healthy", "✅", discord.ButtonStyle.secondary, True
-    return "Fix Issues", "🛠️", discord.ButtonStyle.danger, False
+    if audit.repairable_count > 0:
+        return "Fix Issues", "🛠️", discord.ButtonStyle.danger, False
+    return "Manual Fix Needed", "⚠️", discord.ButtonStyle.secondary, False
 
 
 def remaining_issue_lines(audit: ContextualRepairAudit) -> list[str]:
