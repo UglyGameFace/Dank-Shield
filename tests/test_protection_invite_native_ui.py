@@ -139,6 +139,7 @@ def test_native_invite_view_uses_buttons_not_raw_resource_selectors() -> None:
     labels = {str(getattr(child, "label", "") or "") for child in view.children}
     assert {
         "Fix This Channel",
+        "Turn Shield On / Off",
         "Watch Every Bot",
         "Choose Watched Channel",
         "All Channels",
@@ -157,6 +158,13 @@ def test_native_invite_ui_uses_shared_browser_and_central_cleanup_policy() -> No
     assert "scan_channel_invites" in source
     assert "protection-center-native-invite-cleanup" in source
     assert "startup_guards" not in source
+
+
+def test_native_editor_preserves_original_on_off_action() -> None:
+    source = Path(invite_ui.__file__).read_text(encoding="utf-8")
+    assert 'label="Turn Shield On / Off"' in source
+    assert "await _ORIGINAL_TOGGLE(interaction)" in source
+    assert "_ORIGINAL_TOGGLE = original" in source
 
 
 def test_bootstrap_binds_feature_function_not_component_callback_or_view_init() -> None:
