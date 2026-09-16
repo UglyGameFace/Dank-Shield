@@ -51,6 +51,12 @@ def test_private_join_audience_is_not_opened_automatically() -> None:
     assert "set_permissions(" not in CORE
 
 
+def test_repair_edits_the_existing_component_menu_after_acknowledgement() -> None:
+    assert "await welcome._ack_update(interaction)" in INTEGRATION
+    assert "defer(ephemeral=True, thinking=True)" not in INTEGRATION
+    assert "await welcome._refresh_center(" in INTEGRATION
+
+
 def test_shared_contract_reaudits_and_has_healthy_state() -> None:
     assert "after = audit_context(" in CORE
     assert 'return "Access Healthy", "✅"' in CORE
