@@ -43,6 +43,15 @@ if not _apply_setup_resource_picker_binding():
     raise RuntimeError("Canonical setup resource picker binding failed during command bootstrap.")
 
 
+# Invite target metadata is durable guild config, while invite deletion remains
+# owned by invite_policy_engine. Bind those two canonical owners directly instead
+# of reviving the old startup-guard wrappers around Spam Guard.
+from .invite_scope_settings import install_invite_policy_scope_binding as _install_invite_policy_scope_binding
+
+if not _install_invite_policy_scope_binding():
+    raise RuntimeError("Canonical invite scope policy binding failed during command bootstrap.")
+
+
 # Invite Shield's public UI is feature-owned under commands_ext and installed
 # explicitly before split registration. This replaces the historical startup-
 # guard picker chain without patching ProtectionCenterView.__init__ or a Discord
