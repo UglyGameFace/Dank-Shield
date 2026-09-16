@@ -74,6 +74,7 @@ def invite_shield_embed(scope: dict[str, Any], *, note: str = "") -> discord.Emb
         name="Fast setup",
         value=(
             "**Fix This Channel** turns Invite Shield on and protects bot invite posts in the channel where you opened this screen.\n"
+            "**Turn Shield On / Off** preserves the original Invite Blocker toggle without leaving you trapped in this editor.\n"
             "**Watch Every Bot** protects bot invite posts server-wide.\n"
             "**Choose Watched Channel** uses Dank Shield's searchable server browser.\n"
             "**Clean Existing Invites** scans one chosen channel through the central invite policy before deleting anything."
@@ -255,6 +256,16 @@ class InviteShieldView(discord.ui.View):
             origin_channel_id=int(channel.id),
             note=f"Invite Shield is ON and watching bot invite posts in {channel.mention}.",
         )
+
+    @discord.ui.button(label="Turn Shield On / Off", emoji="🛡️", style=discord.ButtonStyle.secondary, row=0)
+    async def toggle_shield(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        center = _center()
+        if not await center._require_setup_permission(interaction):
+            return
+        if not callable(_ORIGINAL_TOGGLE):
+            return await _safe_ephemeral(interaction, "⚠️ Invite Shield toggle ownership is unavailable. Nothing was changed.")
+        await _ORIGINAL_TOGGLE(interaction)
 
     @discord.ui.button(label="Watch Every Bot", emoji="🤖", style=discord.ButtonStyle.primary, row=1)
     async def watch_every_bot(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
