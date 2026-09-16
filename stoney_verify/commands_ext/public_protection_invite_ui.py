@@ -22,6 +22,9 @@ from ..invite_scope_settings import (
 )
 from ..ui import DankGuildResourceBrowserView
 
+_INSTALLED = False
+_ORIGINAL_TOGGLE: Any = None
+
 
 def _center() -> Any:
     from . import public_protection_center as center
@@ -453,15 +456,48 @@ async def open_invite_shield(interaction: discord.Interaction) -> None:
         return await _safe_ephemeral(interaction, "❌ This must be used inside a server.")
     scope = await load_invite_scope_settings(int(guild.id), refresh=True)
     channel_id = _channel_id(interaction)
-    await interaction.response.edit_message(
-        embed=invite_shield_embed(scope),
-        view=InviteShieldView(
-            author_id=int(interaction.user.id),
-            guild=guild,
-            origin_channel_id=channel_id,
-            scope=scope,
-        ),
+    embed = invite_shield_embed(scope)
+    view = InviteShieldView(
+        author_id=int(interaction.user.id),
+        guild=guild,
+        origin_channel_id=channel_id,
+        scope=scope,
     )
+    if interaction.response.is_done():
+        await interaction.edit_original_response(content=None, embed=embed, view=view)
+    else:
+        await interaction.response.edit_message(content=None, embed=embed, view=view)
 
 
-__all__ = ["InviteShieldView", "InviteScopeIdsModal", "invite_shield_embed", "open_invite_shield"]
+def install_native_invite_ui() -> bool:
+    """Route the canonical Invite Blocker action to this native feature UI.
+
+    The Protection Center button already calls ``_toggle_invite_shield`` inside
+    its guarded interaction boundary. Rebinding that feature function keeps the
+    existing button, owner checks, and error handling intact without replacing a
+    View constructor or component callback like the retired startup guards did.
+    """
+
+    global _INSTALLED, _ORIGINAL_TOGGLE
+    if _INSTALLED:
+        return True
+    try:
+        center = _center()
+        original = getattr(center, "_toggle_invite_shield", None)
+        if not callable(original):
+            return False
+        _ORIGINAL_TOGGLE = original
+        center._toggle_invite_shield = open_invite_shield
+        _INSTALLED = True
+        return True
+    except Exception:
+        return False
+
+
+__all__ = [
+    "InviteShieldView",
+    "InviteScopeIdsModal",
+    "install_native_invite_ui",
+    "invite_shield_embed",
+    "open_invite_shield",
+]
