@@ -32,6 +32,17 @@ if not _public_setup_config_writer.apply_public_setup_writer_patch():
     raise RuntimeError("Canonical guild-config writer binding failed during command bootstrap.")
 
 
+# Bind normal public setup role/channel/category choices to the shared Dank
+# resource browser before split command registration can construct any picker
+# views. Feature modules retain their own validation and save callbacks; this
+# binding only replaces Discord-native entity discovery with the canonical
+# cache-backed browser.
+from .setup_resource_picker_binding import apply_setup_resource_picker_binding as _apply_setup_resource_picker_binding
+
+if not _apply_setup_resource_picker_binding():
+    raise RuntimeError("Canonical setup resource picker binding failed during command bootstrap.")
+
+
 # The public Create Ticket button is an interaction runtime, not a slash-command
 # profile feature. Install it independently so already-posted persistent panels
 # cannot be orphaned by command profile selection or an unrelated registrar
@@ -42,7 +53,7 @@ try:
     )
 except Exception as e:
     print(f"❌ commands.py could not import ticket panel runtime: {repr(e)}")
-    raise RuntimeError("Dank Shield ticket panel runtime import failed closed.") from e
+    raise RuntimeError("Dank Shield ticket panel runtime import failed closed during import.") from e
 
 
 # Ticket security is intentionally loaded outside the tolerant command-module
