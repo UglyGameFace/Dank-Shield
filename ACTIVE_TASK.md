@@ -1,83 +1,67 @@
 # ACTIVE TASK
 
-## DS-AUD-PROTECTION-INVITE-GUARD-RETIREMENT — Retire dormant Invite Shield startup-guard ownership
+## DS-AUD-CONTEXTUAL-PERMISSION-REPAIR — Make configuration menus self-repairing
 
-**Outcome target:** Remove or neutralize the dormant startup-guard implementations that still duplicate the now-native `/dank protection` Invite Shield targeting and historical cleanup UI, while preserving any compatibility helpers that are still legitimately referenced by tests/tools or non-picker runtime code. The repository must have one clear production owner for Invite Shield UI and target persistence, with no dead guard chain waiting to be accidentally reactivated later.
+**Outcome target:** Any configuration surface that can detect a repairable Dank Shield access/setup failure must expose a same-screen repair action, apply every safe repair for that menu, re-audit after the change, and explain any blocker Discord will not let the bot repair automatically. The first acceptance surface is `/dank welcome join-leave`, which currently reports missing permissions without offering a repair path.
 
-**Status:** IMPLEMENTATION / VALIDATION
+**Status:** IMPLEMENTATION
 
-**Branch:** `audit/protection-invite-guard-retirement`
-**Base main:** `734916ba151ccc408ce9fa07a4635fd6ecb24776`
-**Previous integrated task:** PR #242 merged at `734916ba151ccc408ce9fa07a4635fd6ecb24776`
+**Branch:** `audit/contextual-permission-repair-contract`
+**Base main:** `59911d39d9c8181f12f29a59203eae8fb710467d`
+**Previous integrated task:** PR #243 merged at `59911d39d9c8181f12f29a59203eae8fb710467d`
 
 ## Scope
 
-- dormant startup guards that duplicate Invite Shield target/channel picker UI
-- dormant startup guards that monkey-patch Protection Center invite callbacks/view constructors solely for that old UI
-- historical guard-to-guard references and compatibility tests/tools that keep those files artificially alive
-- startup-guard historical metadata entries for retired invite picker owners
-- focused regression/static acceptance coverage proving the native PR #242 path remains the only production UI owner
+- shared contextual permission-repair contract built on the existing canonical `permission_repair_core`
+- same-screen `Fix Issues` / `Access Healthy` control contract
+- safe repair of Dank Shield's own missing channel overwrite bits only
+- exact post-repair re-audit before reporting success
+- explicit manual blockers when Discord prevents automated repair
+- `/dank welcome join-leave` integration for both selected Join and Leave channels
+- regression coverage that prevents diagnosis-only configuration menus from silently regressing
 - task/PR bookkeeping
 
-Out of scope unless tracing proves a direct dependency:
-- `invite_policy_engine` enforcement semantics
-- the new `invite_scope_settings` persistence service
-- the new `public_protection_invite_ui` product flow
-- generic Spam Guard detection/enforcement behavior
-- AntiNuke, tickets, design, members, welcome, modlog, or unrelated setup cleanup
-- invite-policy compatibility helpers that still have a real non-picker consumer
+Out of scope for the first implementation pass unless tracing proves a direct dependency:
+- widening private/staff channels to members automatically
+- changing role hierarchy automatically
+- granting Administrator
+- changing selected channels just to make a health check green
+- unrelated product behavior in Protection, Tickets, Design, AntiNuke, or member moderation
 
-## Findings / root cause
+## Root cause
 
-1. PR #242 made `public_protection_invite_ui` the production owner for Invite Shield targeting/cleanup and `invite_scope_settings` the owner for target metadata.
-2. `commands.py` installs those canonical owners explicitly during normal boot; the historical startup-guard registry is inert metadata.
-3. The obsolete Invite Shield UI was not one isolated file. It was a dependency cluster where guards imported and patched one another:
-   - `protection_center_invite_simple_flow_guard`
-   - `protection_center_invite_controls_guard`
-   - `protection_center_invite_status_guard`
-   - `spam_guard_invite_scope_pagination_guard`
-   - `invite_hard_block_all_bots_controls_guard`
-   - `protection_invite_cleanup_picker_guard`
-   - `protection_invite_toggle_cleanup_guard`
-4. `protection_center_filter_list_guard` secretly chained the retired cleanup picker even though it owns content-filter presentation, not Invite Shield cleanup.
-5. `protection_center_clear_categories_guard` imported the old invite controls/status guards and patched their editor in addition to its broader category-wording behavior.
-6. Two unrelated retirement tests still read `protection_center_invite_simple_flow_guard.py` as a convenient source file, and `tools/audit_invite_link_safety.py` audited the old cleanup guard rather than the native owner.
-7. `spam_guard_invite_override_options`, `protection_invite_target_precedence_guard`, live invite enforcers, and central policy code are not removed in this task because they contain broader policy/compatibility behavior outside the superseded picker/UI chain.
+1. `welcome_event_services._can_post()` detects missing View Channel, Send Messages, Embed Links, and Read Message History permissions and displays them in the Join/Leave menu.
+2. The Join/Leave center has channel selectors, toggles, edit/preview/template/help controls, refresh, and close, but no repair button.
+3. Dank Shield already owns canonical target-level repair machinery in `permission_repair_core`: target auditing, minimum feature permission profiles, safe overwrite repair, explicit-deny preservation, retry handling, post-repair audit, and undo/event recording.
+4. The gap is therefore integration and contract ownership, not a lack of repair capability.
+5. New-member visibility is a separate audience/configuration concern. A repair action must never expose a private staff channel merely to make a warning disappear.
 
-## Implementation
+## Implementation contract
 
-- Deleted the seven obsolete Invite Shield UI/cleanup guard files listed above as one coordinated retirement set.
-- Removed `protection_center_invite_controls_guard` and `protection_center_invite_simple_flow_guard` from inert historical startup-guard metadata.
-- Refactored `protection_center_clear_categories_guard` so it keeps only general Protection Center category wording and no longer imports or patches a retired Invite Shield editor.
-- Refactored `protection_center_filter_list_guard` so it no longer chains Invite Shield cleanup.
-- Updated legacy setup/VC retirement tests so they no longer depend on a deleted Invite Shield file.
-- Updated `tools/audit_invite_link_safety.py` to audit the native `public_protection_invite_ui` cleanup path and require the retired guard files to remain absent.
-- Added `tests/test_protection_invite_guard_retirement.py` to lock file deletion, registry cleanup, surviving-guard decoupling, native boot ownership, shared resource-browser usage, and no raw Discord resource-picker/direct-delete regression.
-- Added `docs/PROTECTION_INVITE_GUARD_RETIREMENT.md` as the current disposition record while preserving the older runtime-ownership audit as a historical snapshot of its examined base.
+- Menus that expose repairable access findings must include a contextual repair control on the same view.
+- Healthy state renders as `✅ Access Healthy` and is disabled.
+- Unhealthy state renders as `🛠️ Fix Issues` and repairs all safe targets owned by that menu in one action.
+- Repairs must use canonical `permission_repair_core`, not duplicate ad-hoc `set_permissions` logic.
+- Explicit denies remain preserved unless a separate explicit confirmation flow exists.
+- After repair, the menu must reload config/state and re-audit before showing success.
+- Remaining unsafe/manual blockers must be named precisely.
+- Audience visibility issues may be reported but must not be repaired by making private staff channels public automatically.
 
 ## Validation gate
 
-- exact final branch must remain 0 behind `main`
-- focused retirement tests/static audits must pass
-- full required GitHub Actions must pass on the exact final head
-- no submitted review or unresolved inline review thread may be ignored
-- no merge until the final head is validated and scope-clean
+- exact final branch 0 behind `main`
+- focused contextual-repair and Welcome menu tests pass
+- full required GitHub Actions pass on the exact final head
+- no review/thread issue ignored
+- no merge until exact-head validation and scope review are clean
 
-## Cleanup / compatibility
+## Backlog after this task
 
-- No Invite Shield product behavior was moved back into a startup guard.
-- The central invite policy/delete path is unchanged.
-- The new native UI/persistence owners from PR #242 are unchanged.
-- Broader invite override/precedence compatibility is intentionally left for a separate policy audit rather than being deleted merely because neighboring UI guards were retired.
-
-## Backlog
-
+- adopt the shared contextual repair control across remaining diagnosis-capable configuration menus in priority order: Setup/Verification, Tickets, Modlog/Member Logs, Profile/Self Roles, Protection, VC verification, Embed/Status surfaces
 - `/dank protection` remaining non-invite picker/guard cleanup
-- broader invite override/precedence compatibility ownership audit
-- `/dank design` style/layout/font/separator picker migration
-- ticket/member/self-role/welcome/modlog picker migrations in documented order
+- `/dank design` picker migration
 - admin-only legacy setup picker cleanup
 
 ## Next step
 
-Compare the branch against current `main`, open a draft PR, run exact-head GitHub Actions and focused regressions, fix only concrete in-scope failures, then perform final drift/review cleanup before merge-readiness is claimed.
+Implement the shared contextual repair helper on top of `permission_repair_core`, wire it into `/dank welcome join-leave`, add regression tests for one-press multi-target repair/re-audit/manual blockers, then open a draft PR and validate the exact head.
