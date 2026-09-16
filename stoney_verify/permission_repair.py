@@ -28,10 +28,12 @@ from .permission_repair_ui import (
     open_target_permission_repair,
 )
 
-# These classes were never in the old __all__, but repository tests and callers
-# have historically reached them through stoney_verify.permission_repair.
+# These names were never all in the old __all__, but repository tests and
+# compatibility callers have historically reached them through
+# stoney_verify.permission_repair. Keep that import surface stable.
 ExplicitDenyConfirmView = _core.ExplicitDenyConfirmView
 UndoTokenModal = _core.UndoTokenModal
+_apply_missing_to_overwrite = _core._apply_missing_to_overwrite
 
 # Keep return points inside the unchanged core implementation on the production
 # UI owner. This is module composition, not a startup guard/runtime import hook.
@@ -47,6 +49,7 @@ __all__ = [
     "TargetRepairResult",
     "TargetSearchModal",
     "UndoTokenModal",
+    "_apply_missing_to_overwrite",
     "approved_public_permissions",
     "apply_target_repair",
     "audit_target",
