@@ -117,14 +117,10 @@ def test_each_requirement_builds_one_combined_screen(
         str(getattr(child, "label", "") or "")
         for child in view.children
     }
-    placeholders = {
-        str(getattr(child, "placeholder", "") or "")
-        for child in view.children
-    }
 
     assert "Create this for me" in labels
     assert "Back to Guided Setup" in labels
-    assert "Choose one I already have" in placeholders
+    assert "Choose one I already have" in labels
     assert len(view.children) == 3
 
 
