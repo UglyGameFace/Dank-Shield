@@ -1,78 +1,77 @@
 # ACTIVE TASK
 
-## DS-AUD-SETUP-ROLE-CHANNEL-PICKERS — Replace live /dank setup native entity pickers with the Dank resource browser
+## DS-AUD-PROTECTION-PICKERS — Move /dank protection invite/link/spam pickers onto canonical Dank picker ownership
 
-**Outcome target:** Every normal public `/dank setup` path that asks an owner to choose an existing Discord role, text/voice channel, or category uses a Dank Shield-owned, cache-backed resource browser with paging, search, owner locking, safe empty states, and explicit interaction-error handling. Normal setup must not fall back to Discord's generic `RoleSelect` / `ChannelSelect` UX for these mappings.
+**Outcome target:** Every normal public `/dank protection` invite/link/spam selection flow uses the shared Dank Shield picker/resource-browser contract, keeps feature persistence in the native protection/spam owners, is owner-locked and mobile-safe, and no longer depends on startup guards that monkey-patch raw `discord.ui.Select` callbacks.
 
 **Status:** INVESTIGATION / IMPLEMENTATION
 
-**Branch:** `audit/setup-role-channel-pickers`
-**Base main:** `a82bffa58effa1fec841c4a68f71f5caa613f7a4`
-**Previous integrated task:** PR #240 merged at `a82bffa58effa1fec841c4a68f71f5caa613f7a4`
+**Branch:** `audit/protection-picker-migration`
+**Base main:** `c5820840a162803765d50806686f539fb3e388ff`
+**Previous integrated task:** PR #241 merged at `c5820840a162803765d50806686f539fb3e388ff`
 
 ## Scope
 
-- public `/dank setup` role/channel/category selection paths that are loaded by the normal public command profile
-- shared Dank Shield resource-browser ownership needed to avoid duplicating the PR #240 browser pattern
-- `public_setup_solid`
-- `public_setup_recommend` guided one-item existing-resource choices
-- `public_setup_full_customization`
-- preservation of existing role hierarchy/channel permission checks, config aliases, save sources, navigation, and stale-screen protection
+- public `/dank protection` invite/link/spam picker paths
+- Invite Shield cleanup channel selection
+- Discord Invite Blocker bot/channel scope selection
+- shared `DankPickerView` / `DankGuildResourceBrowserView` reuse
+- removal of picker UI/business-logic ownership from startup guards where the production path is proven
+- preservation of existing guild-scoped spam/invite persistence and protection refresh behavior
 - focused regression/static acceptance coverage
-- picker adoption documentation and task/PR bookkeeping
+- task/PR bookkeeping
 
-Out of scope unless production-path tracing proves otherwise:
-- admin-only legacy fallback commands (`public_setup_start`, `public_setup_picker`)
-- protection/design/ticket/member/welcome picker migrations
-- guild-config persistence semantics
-- creation/default builders
-- permission-repair mutation semantics
-- startup-guard redesign unrelated to setup picker ownership
+Out of scope unless production tracing proves otherwise:
+- setup picker work already merged in PR #241
+- design/ticket/member/welcome picker migrations
+- AntiNuke policy semantics
+- unrelated Protection Center controls
+- spam/invite enforcement algorithm changes
 
 ## Findings / root cause
 
-1. PR #240 fixed the user-reported **Fix Access** target selector by replacing its native `ChannelSelect` with a Dank-owned cache browser, and that task is now merged.
-2. The public command profile explicitly loads `public_setup_solid`, `public_setup_recommend`, and `public_setup_full_customization` as normal setup owners.
-3. `public_setup_solid` still defines raw `SaveRoleSelect(discord.ui.RoleSelect)` and `SaveChannelSelect(discord.ui.ChannelSelect)` and uses them throughout Ticket Basics, Access Roles, Verification Channels, and Logs + Status.
-4. `public_setup_full_customization` independently defines another raw `SaveRoleSelect` and `SaveChannelSelect` pair and uses them for roles, Discord categories, feature channels, and logs/status.
-5. `public_setup_recommend` has raw `GuidedExistingRoleSelect` and `GuidedExistingChannelSelect` for the guided one-item setup path.
-6. The repository's shared picker wrappers `DankRoleSelect` / `DankChannelSelect` are intentionally thin wrappers over Discord-native entity selectors. Replacing raw selectors with those wrappers would improve ownership checks but would **not** solve the generic-picker discovery problem the user reported.
-7. The existing shared-picker migration docs say `/dank setup` role/channel mapping is the next migration stage, require mobile-safe/no-silent-failure behavior, and prohibit one-off raw entity selectors without a documented limitation.
-8. `public_setup_start` remains an admin-profile fallback. It is imported by the public dashboard for naming modals, but its raw role/channel mapping screens are not part of the normal public profile unless tracing proves a live handoff.
+1. PR #241 completed the normal public `/dank setup` picker migration and is merged.
+2. The shared-picker migration order explicitly names `/dank protection` invite/link/spam pickers as the next migration target and prohibits raw one-off selectors plus startup-guard-owned business logic.
+3. `startup_guards/protection_invite_cleanup_picker_guard.py` currently owns a raw `InviteCleanupChannelSelect(discord.ui.Select)`, its paging UI, and monkey-patches `CleanTargetChannelInvites.callback` at startup.
+4. `startup_guards/spam_guard_invite_scope_pagination_guard.py` currently owns raw `BotPageSelect(discord.ui.Select)` and `ChannelPageSelect(discord.ui.Select)` surfaces, pages resources manually, patches spam settings accessors, and refreshes Protection Center state from the guard.
+5. `startup_guards/protection_center_filter_list_guard.py` explicitly chains the invite cleanup picker guard, proving the picker is activated through startup-guard composition rather than a native protection owner.
+6. `commands_ext/public_protection_center.py` is the production-facing Protection Center and already owns permission checks, guarded interaction error handling, guild config access, spam settings save/load helpers, and protection-message refresh behavior. That is the correct native UI boundary for protection choices.
+7. The newly merged shared `DankGuildResourceBrowserView` can replace manual 25-item channel paging/search for cleanup targets. Normal finite protection choices should use `DankPickerView` rather than feature-local raw `discord.ui.Select` classes.
 
 ## Implementation direction
 
-- Promote the PR #240 cache/search/paging pattern into a reusable shared guild-resource browser instead of copying feature-specific picker code again.
-- Support role and channel/category resource types with deterministic guild-cache discovery, 25-item pages, name/ID/mention search, owner locking, Back/Close, and explicit `on_error` behavior.
-- Keep feature-specific validation and persistence in the setup owner modules. The shared browser chooses an object; it does not own setup business logic.
-- Replace normal public setup native entity selectors with buttons/flows that open the shared resource browser, then feed the selected live guild object into the existing validation/save path.
-- Preserve current config aliases, role-manage requirements, channel permission/file requirements, guided stale-screen checks, and post-save navigation.
+- Move Invite Shield cleanup target selection out of `protection_invite_cleanup_picker_guard.py` and into a native protection-owned helper/view using the shared guild resource browser.
+- Move Discord Invite Blocker bot/channel scope selection out of `spam_guard_invite_scope_pagination_guard.py`; keep spam setting persistence in `spam_guard` / canonical guild config services.
+- Reuse shared picker owner-locking, Close/Back/error behavior instead of reimplementing per guard.
+- Preserve current selected IDs, all-bots/all-channels semantics, paste-ID fallback where still useful, and Protection Center refresh behavior.
+- Remove startup-guard callback monkey-patches once the native production path owns the picker.
 
 ## Validation plan
 
-- prove normal public `/dank setup` owner modules contain no raw `discord.ui.RoleSelect` / `discord.ui.ChannelSelect` selection path after migration
-- prove the shared browser pages more than 25 resources and searches by name + Discord ID/mention
+- prove normal public protection invite/link/spam selection paths do not instantiate raw `discord.ui.Select` from startup guards
+- prove cleanup channel discovery uses the shared cache-backed browser and re-resolves the selected channel before mutation
+- prove invite-blocker bot/channel choices preserve existing selected IDs and guild-scoped saves
 - prove wrong-owner interactions are rejected safely
-- prove role/channel filters select only allowed resource types
-- prove existing role hierarchy and channel permission rejection behavior still runs before save
-- prove guided one-item existing-resource selection still saves and advances only when the guided step is current
-- prove setup remains inside the existing navigation tree and every callback has a safe response path
-- run all PR workflows on the exact final head before merge-readiness is claimed
+- prove empty/removed resources return a safe user response instead of `Interaction failed`
+- prove existing protection/spam runtime behavior and enforcement tests remain green
+- run exact-head GitHub Actions before merge-readiness is claimed
 
 ## Cleanup / compatibility
 
-- Do not add a startup guard, monkey patch, or parallel config writer.
-- Do not change role/channel creation behavior in this task.
-- Keep admin-only legacy pickers separate unless a real public execution path reaches them.
-- If a startup guard mutates one of the live setup picker classes, record it as an ownership conflict and remove or migrate only the conflicting behavior needed for this task.
+- Do not create a second spam settings writer or guild-config writer.
+- Do not move enforcement policy into UI code.
+- Do not retain startup guards solely to own picker UI after native migration.
+- If a guard still performs non-picker compatibility work, split or narrow it rather than deleting unrelated behavior.
 
 ## Backlog
 
-- `/dank protection` invite/link/spam picker migration
 - `/dank design` style/layout/font/separator picker migration
-- ticket/member/self-role/welcome/modlog picker migrations in the documented order
-- admin-only legacy setup picker cleanup after the public production path is clean
+- ticket panel/category picker migration
+- members cleanup/review picker migration
+- self-role/profile picker migration
+- welcome/modlog setup picker migration
+- remaining startup-guard picker cleanup after feature-native migrations
 
 ## Next step
 
-Finish tracing the three live public setup selector owners and their existing validation/save contracts, implement one shared resource browser, migrate those live paths without changing business rules, add focused regressions, then open a draft PR and run exact-head CI.
+Trace the exact protection callback handoffs for Invite Shield cleanup and Discord Invite Blocker scope, move the first proven picker path to the shared native picker contract, add focused regressions, then continue through the remaining invite/link/spam picker surfaces before opening the task PR.
