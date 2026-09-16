@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -23,7 +24,12 @@ class FakeGuild:
         return self._channels.get(channel_id)
 
 
-def _audit(channel: FakeChannel, *, missing: list[str] | None = None, blockers: list[str] | None = None):
+def _audit(
+    channel: FakeChannel,
+    *,
+    missing: list[str] | None = None,
+    blockers: list[str] | None = None,
+):
     missing = list(missing or [])
     blockers = list(blockers or [])
     return SimpleNamespace(
@@ -34,12 +40,18 @@ def _audit(channel: FakeChannel, *, missing: list[str] | None = None, blockers: 
     )
 
 
-def test_same_screen_button_is_disabled_only_when_context_is_healthy(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_same_screen_button_is_disabled_only_when_context_is_healthy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(repair.discord.abc, "GuildChannel", FakeChannel)
     channel = FakeChannel(10, "welcome")
     guild = FakeGuild([channel])
 
-    monkeypatch.setattr(repair.core, "audit_target", lambda *_args, **_kwargs: _audit(channel))
+    monkeypatch.setattr(
+        repair.core,
+        "audit_target",
+        lambda *_args, **_kwargs: _audit(channel),
+    )
     healthy = repair.audit_context(
         guild,
         [repair.ContextualRepairTarget(10, "welcome", "Join channel")],
@@ -50,7 +62,10 @@ def test_same_screen_button_is_disabled_only_when_context_is_healthy(monkeypatch
     monkeypatch.setattr(
         repair.core,
         "audit_target",
-        lambda *_args, **_kwargs: _audit(channel, missing=["view_channel", "send_messages"]),
+        lambda *_args, **_kwargs: _audit(
+            channel,
+            missing=["view_channel", "send_messages"],
+        ),
     )
     unhealthy = repair.audit_context(
         guild,
@@ -60,7 +75,9 @@ def test_same_screen_button_is_disabled_only_when_context_is_healthy(monkeypatch
     assert (label, emoji, disabled) == ("Fix Issues", "🛠️", False)
 
 
-def test_repair_context_repairs_every_safe_target_then_reaudits(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_repair_context_repairs_every_safe_target_then_reaudits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(repair.discord.abc, "GuildChannel", FakeChannel)
     join = FakeChannel(10, "welcome")
     leave = FakeChannel(20, "join-leave-log")
@@ -74,7 +91,16 @@ def test_repair_context_repairs_every_safe_target_then_reaudits(monkeypatch: pyt
             return _audit(channel)
         return _audit(channel, missing=["view_channel", "send_messages"])
 
-    async def fake_apply(_guild, channel, *, actor_id: int, feature: str, mode: str, include_children: bool, clear_explicit_denies: bool):
+    async def fake_apply(
+        _guild,
+        channel,
+        *,
+        actor_id: int,
+        feature: str,
+        mode: str,
+        include_children: bool,
+        clear_explicit_denies: bool,
+    ):
         assert actor_id == 99
         assert mode == "minimum"
         assert include_children is False
@@ -91,8 +117,6 @@ def test_repair_context_repairs_every_safe_target_then_reaudits(monkeypatch: pyt
     monkeypatch.setattr(repair.core, "audit_target", fake_audit)
     monkeypatch.setattr(repair.core, "apply_target_repair", fake_apply)
 
-    result = pytest.run(async_fn=repair.repair_context) if False else None
-
     async def run():
         return await repair.repair_context(
             guild,
@@ -103,8 +127,6 @@ def test_repair_context_repairs_every_safe_target_then_reaudits(monkeypatch: pyt
             actor_id=99,
         )
 
-    import asyncio
-
     result = asyncio.run(run())
     assert result.ok is True
     assert result.remaining_issues == []
@@ -113,16 +135,24 @@ def test_repair_context_repairs_every_safe_target_then_reaudits(monkeypatch: pyt
     assert "Access re-check passed" in result.summary()
 
 
-def test_manual_issue_is_never_erased_by_bot_permission_repair(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_manual_issue_is_never_erased_by_bot_permission_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(repair.discord.abc, "GuildChannel", FakeChannel)
     channel = FakeChannel(10, "private-log")
     guild = FakeGuild([channel])
-    monkeypatch.setattr(repair.core, "audit_target", lambda *_args, **_kwargs: _audit(channel))
+    monkeypatch.setattr(
+        repair.core,
+        "audit_target",
+        lambda *_args, **_kwargs: _audit(channel),
+    )
 
     audit = repair.audit_context(
         guild,
         [repair.ContextualRepairTarget(10, "welcome", "Join channel")],
-        manual_issues=["Join audience: selected channel is private; choose a public Join channel."],
+        manual_issues=[
+            "Join audience: selected channel is private; choose a public Join channel."
+        ],
     )
     assert audit.healthy is False
     assert repair.repair_button_state(audit)[0] == "Fix Issues"
