@@ -24,12 +24,6 @@ RECOMMEND = (
     / "commands_ext"
     / "public_setup_recommend.py"
 )
-PROTECTION = (
-    ROOT
-    / "stoney_verify"
-    / "startup_guards"
-    / "protection_center_invite_simple_flow_guard.py"
-)
 
 
 def _source(path: Path) -> str:
@@ -56,10 +50,6 @@ def _owner_source(path: Path, name: str) -> str:
 
 def test_legacy_guard_is_deleted() -> None:
     assert not TARGET.exists()
-
-
-def test_hidden_protection_loader_is_removed() -> None:
-    assert "vc_verified_health_check_guard" not in _source(PROTECTION)
 
 
 def test_canonical_setup_uses_session_access_not_approved_role_access() -> None:

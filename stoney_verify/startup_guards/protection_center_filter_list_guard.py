@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-"""Add a saved content-filter list button to Protection Center."""
+"""Add a saved content-filter list button to Protection Center.
+
+Invite Shield cleanup is owned natively by ``public_protection_invite_ui`` and
+must not be chained from this unrelated historical content-filter guard.
+"""
 
 from typing import Any
 
@@ -29,10 +33,17 @@ def _items(center: Any, cfg: Any) -> list[str]:
 
 class TrackedFiltersButton(discord.ui.Button):
     def __init__(self) -> None:
-        super().__init__(label="Tracked Filters", emoji="📋", style=discord.ButtonStyle.secondary, custom_id="dank_protection:tracked_filters", row=3)
+        super().__init__(
+            label="Tracked Filters",
+            emoji="📋",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_protection:tracked_filters",
+            row=3,
+        )
 
     async def callback(self, interaction: discord.Interaction) -> None:
         from stoney_verify.commands_ext import public_protection_center as center
+
         if not await center._require_setup_permission(interaction):
             return
         guild = interaction.guild
@@ -49,28 +60,24 @@ class TrackedFiltersButton(discord.ui.Button):
         else:
             embed.description = "No saved content filters yet. Use **Bad Word Filter** to add one."
         embed.set_footer(text=f"{len(values)} saved filter(s)")
-        await interaction.response.send_message(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-
-
-def _chain_cleanup_picker() -> None:
-    try:
-        from stoney_verify.startup_guards import protection_invite_cleanup_picker_guard as picker
-        picker.apply()
-    except Exception:
-        pass
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 def apply() -> bool:
     global _PATCHED, _ORIGINAL_INIT
-    _chain_cleanup_picker()
     if _PATCHED:
         return True
     try:
         from stoney_verify.commands_ext import public_protection_center as center
+
         _ORIGINAL_INIT = center.ProtectionCenterView.__init__
 
-        def patched_init(self: Any, *, author_id: int) -> None:
-            _ORIGINAL_INIT(self, author_id=author_id)
+        def patched_init(self: Any, *args: Any, **kwargs: Any) -> None:
+            _ORIGINAL_INIT(self, *args, **kwargs)
             try:
                 for child in list(getattr(self, "children", []) or []):
                     if str(getattr(child, "custom_id", "") or "") == "dank_protection:tracked_filters":
