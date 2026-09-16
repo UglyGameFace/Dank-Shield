@@ -243,7 +243,7 @@ try:
     register_interaction_handlers(bot)
 except Exception as e:
     try:
-        print(f"⚠️ commands.py failed to register interaction_handlers: {repr(e)}")
+        print(f"⚠️ commands.py failed to register interaction handlers: {repr(e)}")
     except Exception:
         pass
 
