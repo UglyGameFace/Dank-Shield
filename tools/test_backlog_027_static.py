@@ -120,10 +120,17 @@ def main() -> int:
     )
     absent("stoney_verify/startup_guards/member_cleanup_operation_queue_guard.py")
 
-    # #119 — selected target, feature/minimum/full modes, explicit-deny safety,
-    # undo, non-Administrator reauthorization, setup + diagnostics handoffs.
+    # #119 — selected-target repair keeps its mutation/audit core unchanged while
+    # the canonical UI boundary owns a dedicated, searchable/paged target browser.
     require(
         "stoney_verify/permission_repair.py",
+        "from . import permission_repair_core as _core",
+        "from .permission_repair_ui import",
+        "_core.TargetPermissionRepairView = TargetPermissionRepairView",
+        "_core.open_target_permission_repair = open_target_permission_repair",
+    )
+    require(
+        "stoney_verify/permission_repair_core.py",
         "class TargetPermissionRepairView",
         "Recommended minimum",
         "Full Dank Shield control",
@@ -135,6 +142,20 @@ def main() -> int:
         "clear_explicit_denies=False",
         "clear_explicit_denies=True",
         'event_type="permission_repair"',
+    )
+    require(
+        "stoney_verify/permission_repair_ui.py",
+        "class TargetChannelPickerView(DankPickerView)",
+        "class TargetPermissionRepairView(core.TargetPermissionRepairView)",
+        "Choose Channel / Category",
+        "Search",
+        "Clear Search",
+        "guild cache instead of Discord's generic entity picker",
+        "async def on_error",
+    )
+    forbid(
+        "stoney_verify/permission_repair_ui.py",
+        "discord.ui.ChannelSelect",
     )
     require(
         "stoney_verify/setup_permission_repair_services.py",
