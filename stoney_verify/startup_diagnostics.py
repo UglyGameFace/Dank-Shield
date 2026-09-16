@@ -15,7 +15,6 @@ EXPECTED_STARTUP_OWNER_MODULES: tuple[str, ...] = (
     "stoney_verify.startup_guards.discord_api_safety",
     "stoney_verify.command_runtime",
     "stoney_verify.startup_guards.public_server_env_id_guard",
-    "stoney_verify.startup_guards.guild_config_runtime_validator",
     "stoney_verify.startup_guards.basic_verification_mode_guard",
     "stoney_verify.startup_guards.id_verify_allowlist_guard",
     "stoney_verify.startup_guards.unverified_ticket_panel_flow",

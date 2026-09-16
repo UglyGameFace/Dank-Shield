@@ -22,6 +22,16 @@ except Exception:
         return None
 
 
+# Establish canonical guild-config write ownership before importing any command
+# module that may copy public_setup_group._upsert_config by value. Rebinding the
+# group later is too late for those copied references, so this is an explicit
+# production boot-order contract rather than a best-effort registration patch.
+from .commands_ext import public_setup_config_writer as _public_setup_config_writer
+
+if not _public_setup_config_writer.apply_public_setup_writer_patch():
+    raise RuntimeError("Canonical guild-config writer binding failed during command bootstrap.")
+
+
 # The public Create Ticket button is an interaction runtime, not a slash-command
 # profile feature. Install it independently so already-posted persistent panels
 # cannot be orphaned by command profile selection or an unrelated registrar

@@ -38,7 +38,6 @@ if (ROOT / "stoney_verify/startup_guards/panel_menu_retry_guard.py").exists():
 expected_main_guards = {
     "stoney_verify.startup_guards.discord_api_safety",
     "stoney_verify.startup_guards.public_server_env_id_guard",
-    "stoney_verify.startup_guards.guild_config_runtime_validator",
 }
 observed_main_guards: set[str] = set()
 main_tree = ast.parse(main_text, filename="main.py")

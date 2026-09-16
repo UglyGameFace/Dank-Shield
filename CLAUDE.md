@@ -37,10 +37,13 @@ Critical, non-obvious facts (verified — do not assume otherwise):
   removed as their ownership migrations complete. Nothing iterates that list
   during normal boot, and new code must not treat membership as runtime activation.
 - **The guards that actually run** are the few imported explicitly by `main.py`
-  (`discord_api_safety`, `public_server_env_id_guard`,
-  `guild_config_runtime_validator`), the verified Basic Verify compatibility
-  imports from `sitecustomize.py`, their verified transitive imports, and
-  guards/helpers deliberately imported by canonical feature modules. The old
+  (`discord_api_safety`, `public_server_env_id_guard`), the verified Basic Verify
+  compatibility imports from `sitecustomize.py`, their verified transitive
+  imports, and guards/helpers deliberately imported by canonical feature modules.
+  Guild-config persistence, cache behavior, public isolation, saved Discord-ID
+  validation, and runtime discovery are owned natively by
+  `stoney_verify.guild_config`; do not restore
+  `startup_guards.guild_config_runtime_validator` as a boot owner. The old
   `runtime_safety`, `public_startup_scope`, command-tree safety/sync,
   command-scope dedupe, and global interaction scheduler startup owners are
   retired; do not restore them. `docs/STARTUP_GUARD_RUNTIME_OWNERSHIP_AUDIT.md`
@@ -136,7 +139,7 @@ These are load-bearing or dangerous to change blind:
 4. `stoney_verify/app.py` import sequence & `on_ready`.
 5. `stoney_verify/commands.py` (esp. the import-time `register_all_commands`) and `commands_ext/__init__.py` (registration pipeline and final public surface).
 6. `startup_guards/__init__.py` historical inventory boundary and the explicitly owned infra-safety guards in section 1.
-7. `stoney_verify/guild_config.py` — per-server config resolution (source of past isolation bugs).
+7. `stoney_verify/guild_config.py` — canonical per-server config persistence/resolution, cache state, public env-fallback isolation, saved Discord-ID validation, and runtime discovery.
 8. Supabase client lifecycle (`get_supabase`/`reset_supabase`) and `supabase/migrations/`.
 9. `bot.tree.clear_commands` / `copy_global_to`, command-sync state, and the dangerous-clear env flags — can alter or wipe the live command surface for every server.
 
@@ -146,7 +149,9 @@ These are load-bearing or dangerous to change blind:
 
 - DB config (`guild_configs` in Supabase) is authoritative; `.env` is fallback
   only. Never read deployment-level env role/channel/guild IDs in per-guild
-  runtime paths. `public_server_env_id_guard` enforces this.
+  runtime paths. `public_server_env_id_guard` enforces deployment-ID isolation;
+  `stoney_verify.guild_config` owns the per-guild read/write/cache and saved-ID
+  validation contract.
 - One env-var prefix: `DANK_`. (The bot was renamed from "Stoney Verify"; do not
   reintroduce `STONEY_` / `/stoney` markers.)
 - `.env.example` is the documented public-production configuration. Keep it in
@@ -162,8 +167,9 @@ These are real and need dedicated, tested passes — flag them, don't blind-fix:
 - **Live guard/monkey-patch ownership.** Bulk loading is retired. The temporary
   `runtime_safety` and `public_startup_scope` import hooks are retired, the
   process-health global import interceptor/package side effect is retired, the
-  command Bot/CommandTree wrappers are retired, and the private Discord View
-  scheduler interaction patch is retired in favor of explicit native owners.
+  command Bot/CommandTree wrappers are retired, the private Discord View
+  scheduler interaction patch is retired, and guild-config runtime validation is
+  native in `stoney_verify.guild_config` instead of a startup validator patch.
   Remaining live patch debt is in other explicitly scoped infrastructure and
   feature-owned helpers. Migrate it one subsystem at a time; do not delete a
   guard merely because of its directory name.
