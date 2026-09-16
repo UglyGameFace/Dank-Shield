@@ -27,10 +27,16 @@ def labels(view: discord.ui.View) -> list[str]:
 
 
 def channel_placeholders(view: discord.ui.View) -> list[str]:
+    """Return channel-mapping prompts for native selects or Dank browser buttons."""
+
     return [
-        str(getattr(child, "placeholder", "") or "")
+        str(
+            getattr(child, "placeholder", "")
+            or getattr(child, "label", "")
+            or ""
+        )
         for child in view.children
-        if isinstance(child, discord.ui.ChannelSelect)
+        if bool(getattr(child, "channel_types", None))
     ]
 
 
