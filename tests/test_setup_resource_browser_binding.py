@@ -153,10 +153,21 @@ def test_live_setup_views_construct_without_native_entity_selects_after_binding(
 
 
 def test_guided_business_logic_stays_owned_by_existing_save_path() -> None:
-    import inspect
+    import ast
+    from pathlib import Path
+
     from stoney_verify.commands_ext import public_setup_recommend as recommend
 
-    source = inspect.getsource(recommend._guided_save_existing_item)
+    module_source = Path(recommend.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(module_source)
+    owner = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name == "_guided_save_existing_item"
+    )
+    source = ast.get_source_segment(module_source, owner) or ""
+
     assert "_guided_step_is_current" in source
     assert "_guided_item_payload" in source
     assert "_save_config" in source
