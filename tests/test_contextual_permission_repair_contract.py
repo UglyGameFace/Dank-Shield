@@ -155,10 +155,34 @@ def test_manual_issue_is_never_erased_by_bot_permission_repair(
         ],
     )
     assert audit.healthy is False
-    assert repair.repair_button_state(audit)[0] == "Fix Issues"
+    assert repair.repair_button_state(audit)[0] == "Manual Fix Needed"
     assert repair.remaining_issue_lines(audit) == [
         "Join audience: selected channel is private; choose a public Join channel."
     ]
+
+
+def test_blocked_permission_issue_is_labeled_as_manual_instead_of_fake_autofix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(repair.discord.abc, "GuildChannel", FakeChannel)
+    channel = FakeChannel(10, "welcome")
+    guild = FakeGuild([channel])
+    monkeypatch.setattr(
+        repair.core,
+        "audit_target",
+        lambda *_args, **_kwargs: _audit(
+            channel,
+            missing=["view_channel"],
+            blockers=["Discord denied Manage Channels."],
+        ),
+    )
+
+    audit = repair.audit_context(
+        guild,
+        [repair.ContextualRepairTarget(10, "welcome", "Join channel")],
+    )
+    assert audit.repairable_count == 0
+    assert repair.repair_button_state(audit)[:2] == ("Manual Fix Needed", "⚠️")
 
 
 def test_duplicate_target_feature_pairs_are_repaired_once() -> None:
