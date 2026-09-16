@@ -20,6 +20,8 @@ CHANNEL_IDS_KEY = "invite_hard_block_target_channel_ids"
 PROTECTED_RULE_KEY = "invite_protected_poster_rule_enabled"
 
 _SCOPE_KEYS = (ALL_BOTS_KEY, BOT_IDS_KEY, CHANNEL_IDS_KEY, PROTECTED_RULE_KEY)
+_POLICY_BOUND = False
+_ORIGINAL_POLICY_LOAD: Any = None
 
 
 def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
@@ -152,11 +154,50 @@ async def save_invite_scope_settings(guild_id: int, patch: Mapping[str, Any]) ->
     return dict(current)
 
 
+def install_invite_policy_scope_binding() -> bool:
+    """Make the canonical policy consume target metadata from guild config.
+
+    ``invite_policy_engine`` already owns all delete decisions but its historical
+    target matcher receives the Spam Guard settings dictionary. The old startup
+    guards solved that by monkey-patching Spam Guard globally. This explicit
+    boot binding leaves Spam Guard untouched: it only augments the policy's own
+    loader with scope values from the guild config object that loader already
+    fetched.
+    """
+
+    global _POLICY_BOUND, _ORIGINAL_POLICY_LOAD
+    if _POLICY_BOUND:
+        return True
+    try:
+        from . import invite_policy_engine as policy
+
+        original = getattr(policy, "load_invite_policy", None)
+        if not callable(original):
+            return False
+        if getattr(original, "_dank_scope_bound", False):
+            _POLICY_BOUND = True
+            return True
+
+        async def load_with_scope(guild: Any, *, refresh: bool = False):
+            cfg, settings = await original(guild, refresh=refresh)
+            return cfg, merge_scope_settings(settings, normalize_scope(cfg))
+
+        load_with_scope._dank_scope_bound = True  # type: ignore[attr-defined]
+        load_with_scope._dank_scope_original = original  # type: ignore[attr-defined]
+        _ORIGINAL_POLICY_LOAD = original
+        policy.load_invite_policy = load_with_scope
+        _POLICY_BOUND = True
+        return True
+    except Exception:
+        return False
+
+
 __all__ = [
     "ALL_BOTS_KEY",
     "BOT_IDS_KEY",
     "CHANNEL_IDS_KEY",
     "PROTECTED_RULE_KEY",
+    "install_invite_policy_scope_binding",
     "load_invite_scope_settings",
     "merge_scope_settings",
     "normalize_scope",
