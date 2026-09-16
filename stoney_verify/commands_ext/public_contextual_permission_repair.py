@@ -109,11 +109,11 @@ class WelcomeContextRepairButton(discord.ui.Button):
                 "❌ This repair control belongs to a different server. Reopen `/dank welcome join-leave`.",
             )
 
-        try:
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True, thinking=True)
-        except Exception:
-            pass
+        # This is a component update, not a new response. Reuse the same
+        # acknowledgement path as the menu's Refresh button so the repair result
+        # edits the existing ephemeral menu instead of creating a detached
+        # thinking response that can leave the original controls stale.
+        await welcome._ack_update(interaction)
 
         cfg = await get_guild_config(int(guild.id), refresh=True)
         result = await contextual.repair_context(
