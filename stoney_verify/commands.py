@@ -43,6 +43,16 @@ if not _apply_setup_resource_picker_binding():
     raise RuntimeError("Canonical setup resource picker binding failed during command bootstrap.")
 
 
+# Invite Shield's public UI is feature-owned under commands_ext and installed
+# explicitly before split registration. This replaces the historical startup-
+# guard picker chain without patching ProtectionCenterView.__init__ or a Discord
+# component callback.
+from .commands_ext.public_protection_invite_ui import install_native_invite_ui as _install_native_invite_ui
+
+if not _install_native_invite_ui():
+    raise RuntimeError("Canonical Protection Center invite UI binding failed during command bootstrap.")
+
+
 # The public Create Ticket button is an interaction runtime, not a slash-command
 # profile feature. Install it independently so already-posted persistent panels
 # cannot be orphaned by command profile selection or an unrelated registrar
@@ -224,7 +234,7 @@ try:
     register_interaction_handlers(bot)
 except Exception as e:
     try:
-        print(f"⚠️ commands.py failed to register interaction handlers: {repr(e)}")
+        print(f"⚠️ commands.py failed to register interaction_handlers: {repr(e)}")
     except Exception:
         pass
 
