@@ -197,19 +197,22 @@ def register_public_setup_gate(bot, tree) -> None:
     _ = bot, tree
     global _PATCHED
 
-    # This module registers after the setup owners. Apply the presentation patch
-    # here so there is still exactly one /dank setup command and one callback graph.
+    # This module registers after the setup owners. Apply presentation and
+    # contextual self-repair composition here so there is still exactly one
+    # canonical command/callback graph for every feature menu.
+    from .public_contextual_permission_repair import apply_contextual_permission_repair
     from .public_setup_compact import apply_compact_setup_patch
     from .public_runtime_ux_repairs import apply_runtime_ux_repairs
 
     apply_compact_setup_patch()
     apply_runtime_ux_repairs()
+    contextual_repair_ok = apply_contextual_permission_repair()
     count = _patch_all()
     _PATCHED = count > 0
     try:
         print(
             f"✅ public_setup_gate: setup readiness gate active patched_modules={count} "
-            "compact_setup=true runtime_ux_repairs=true"
+            f"compact_setup=true runtime_ux_repairs=true contextual_repair={'true' if contextual_repair_ok else 'false'}"
         )
     except Exception:
         pass
