@@ -4,7 +4,7 @@
 
 **Outcome target:** Remove or neutralize the dormant startup-guard implementations that still duplicate the now-native `/dank protection` Invite Shield targeting and historical cleanup UI, while preserving any compatibility helpers that are still legitimately referenced by tests/tools or non-picker runtime code. The repository must have one clear production owner for Invite Shield UI and target persistence, with no dead guard chain waiting to be accidentally reactivated later.
 
-**Status:** INVESTIGATION
+**Status:** IMPLEMENTATION / VALIDATION
 
 **Branch:** `audit/protection-invite-guard-retirement`
 **Base main:** `734916ba151ccc408ce9fa07a4635fd6ecb24776`
@@ -27,24 +27,33 @@ Out of scope unless tracing proves a direct dependency:
 - AntiNuke, tickets, design, members, welcome, modlog, or unrelated setup cleanup
 - invite-policy compatibility helpers that still have a real non-picker consumer
 
-## Starting evidence
+## Findings / root cause
 
-1. PR #242 moved production Invite Shield targeting and cleanup UX into `stoney_verify.commands_ext.public_protection_invite_ui` and durable target metadata into `stoney_verify.invite_scope_settings`.
-2. `commands.py` explicitly installs those canonical owners during normal boot.
-3. Exact-head PR #242 validation passed all six pull-request workflows before merge.
-4. The old invite picker implementation is spread across historical startup guards, including `protection_invite_cleanup_picker_guard`, `protection_center_invite_controls_guard`, `spam_guard_invite_scope_pagination_guard`, and `protection_center_invite_simple_flow_guard`.
-5. Those historical modules reference one another and some tests/tools inspect them as compatibility artifacts, so deletion must be coordinated rather than performed file-by-file on vibes, humanity's favorite dependency-management strategy.
-6. The bulk startup-guard list is historical metadata and is not the normal production owner, but leaving obsolete UI owners in that inventory still creates future reactivation risk and architectural ambiguity.
+1. PR #242 made `public_protection_invite_ui` the production owner for Invite Shield targeting/cleanup and `invite_scope_settings` the owner for target metadata.
+2. `commands.py` installs those canonical owners explicitly during normal boot; the historical startup-guard registry is inert metadata.
+3. The obsolete Invite Shield UI was not one isolated file. It was a dependency cluster where guards imported and patched one another:
+   - `protection_center_invite_simple_flow_guard`
+   - `protection_center_invite_controls_guard`
+   - `protection_center_invite_status_guard`
+   - `spam_guard_invite_scope_pagination_guard`
+   - `invite_hard_block_all_bots_controls_guard`
+   - `protection_invite_cleanup_picker_guard`
+   - `protection_invite_toggle_cleanup_guard`
+4. `protection_center_filter_list_guard` secretly chained the retired cleanup picker even though it owns content-filter presentation, not Invite Shield cleanup.
+5. `protection_center_clear_categories_guard` imported the old invite controls/status guards and patched their editor in addition to its broader category-wording behavior.
+6. Two unrelated retirement tests still read `protection_center_invite_simple_flow_guard.py` as a convenient source file, and `tools/audit_invite_link_safety.py` audited the old cleanup guard rather than the native owner.
+7. `spam_guard_invite_override_options`, `protection_invite_target_precedence_guard`, live invite enforcers, and central policy code are not removed in this task because they contain broader policy/compatibility behavior outside the superseded picker/UI chain.
 
-## Investigation plan
+## Implementation
 
-- map every default-branch reference to the old Invite Shield picker/Protection Center guard cluster
-- separate runtime imports from tests/tools/docs/historical metadata
-- identify any helper behavior in the old guards that is still consumed outside the retired picker path
-- remove or replace test/tool references that merely validate historical guard implementations
-- delete only files that have no remaining legitimate consumer after migration
-- update startup-guard historical metadata/audit docs when retired files leave the tree
-- add regressions proving normal boot uses only the PR #242 native UI/persistence path and does not import retired invite picker guards
+- Deleted the seven obsolete Invite Shield UI/cleanup guard files listed above as one coordinated retirement set.
+- Removed `protection_center_invite_controls_guard` and `protection_center_invite_simple_flow_guard` from inert historical startup-guard metadata.
+- Refactored `protection_center_clear_categories_guard` so it keeps only general Protection Center category wording and no longer imports or patches a retired Invite Shield editor.
+- Refactored `protection_center_filter_list_guard` so it no longer chains Invite Shield cleanup.
+- Updated legacy setup/VC retirement tests so they no longer depend on a deleted Invite Shield file.
+- Updated `tools/audit_invite_link_safety.py` to audit the native `public_protection_invite_ui` cleanup path and require the retired guard files to remain absent.
+- Added `tests/test_protection_invite_guard_retirement.py` to lock file deletion, registry cleanup, surviving-guard decoupling, native boot ownership, shared resource-browser usage, and no raw Discord resource-picker/direct-delete regression.
+- Added `docs/PROTECTION_INVITE_GUARD_RETIREMENT.md` as the current disposition record while preserving the older runtime-ownership audit as a historical snapshot of its examined base.
 
 ## Validation gate
 
@@ -56,18 +65,19 @@ Out of scope unless tracing proves a direct dependency:
 
 ## Cleanup / compatibility
 
-- Do not change Invite Shield product behavior merely to make deletion easier.
-- Do not revive the bulk startup-guard installer.
-- Do not move dead guard behavior into a new compatibility wrapper unless a concrete consumer requires it.
-- If a legacy helper is still genuinely needed, move that helper to a canonical non-guard module and migrate the consumer before deleting the old file.
+- No Invite Shield product behavior was moved back into a startup guard.
+- The central invite policy/delete path is unchanged.
+- The new native UI/persistence owners from PR #242 are unchanged.
+- Broader invite override/precedence compatibility is intentionally left for a separate policy audit rather than being deleted merely because neighboring UI guards were retired.
 
 ## Backlog
 
-- `/dank protection` remaining non-invite picker cleanup
+- `/dank protection` remaining non-invite picker/guard cleanup
+- broader invite override/precedence compatibility ownership audit
 - `/dank design` style/layout/font/separator picker migration
 - ticket/member/self-role/welcome/modlog picker migrations in documented order
 - admin-only legacy setup picker cleanup
 
 ## Next step
 
-Map the old Invite Shield guard cluster and all remaining references on `main`, classify each reference as runtime/test/tool/doc/metadata, then retire the smallest safe set without changing the native PR #242 behavior.
+Compare the branch against current `main`, open a draft PR, run exact-head GitHub Actions and focused regressions, fix only concrete in-scope failures, then perform final drift/review cleanup before merge-readiness is claimed.
