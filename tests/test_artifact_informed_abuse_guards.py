@@ -139,9 +139,10 @@ def test_channel_runtime_uses_existing_spamguard_policy_for_participants(monkeyp
     assert set(actions) == {300, 301, 302, 303}
 
 
-def test_main_installs_artifact_informed_guards_after_reentry_and_before_run() -> None:
+def test_main_installs_artifact_informed_guards_after_antinuke_post_app() -> None:
     source = open("main.py", "r", encoding="utf-8").read()
-    reentry = source.index("    _install_anti_nuke_reentry_race_runtime()")
-    abuse = source.index("    _install_spam_guard_abuse_runtimes()", reentry)
+    post_app = source.index("    install_anti_nuke_post_app(bot)")
+    abuse = source.index("    _install_spam_guard_abuse_runtimes()", post_app)
     run = source.index("    _run_dank_shield()", abuse)
-    assert reentry < abuse < run
+    assert post_app < abuse < run
+
