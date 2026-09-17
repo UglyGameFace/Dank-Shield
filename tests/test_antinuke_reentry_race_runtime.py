@@ -196,9 +196,16 @@ def test_fast_member_join_bans_cached_hostile_without_network_refresh(monkeypatc
             hostile._MEMORY[key] = old  # noqa: SLF001
 
 
-def test_reentry_guard_installs_after_final_product_policy() -> None:
-    source = Path("main.py").read_text(encoding="utf-8")
-    product = source.index("    _install_anti_nuke_product_policy_runtime()")
-    race_guard = source.index("    _install_anti_nuke_reentry_race_runtime()", product)
-    run = source.index("    _run_dank_shield()", race_guard)
-    assert product < race_guard < run
+def test_reentry_guard_follows_product_policy_in_post_app_coordinator() -> None:
+    coordinator_source = Path(
+        "stoney_verify/anti_nuke_runtime_coordinator.py"
+    ).read_text(encoding="utf-8")
+    product = coordinator_source.index('"product_policy"')
+    race_guard = coordinator_source.index('"reentry_race"', product)
+    assert product < race_guard
+
+    main_source = Path("main.py").read_text(encoding="utf-8")
+    post_install = main_source.index("    install_anti_nuke_post_app(bot)")
+    run = main_source.index("    _run_dank_shield()", post_install)
+    assert post_install < run
+
