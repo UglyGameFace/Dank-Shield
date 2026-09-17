@@ -1,123 +1,103 @@
 # ACTIVE TASK
 
-## DS-AUD-MODLOG-MEMBERLOGS-CONTEXTUAL-REPAIR — Repair the failed logging contextual integration
+## DS-AUD-PROFILE-SELFROLES-CONTEXTUAL-REPAIR — Move Profile and Self Roles onto shared same-screen repair
 
-**Outcome target:** Restore the intended same-screen permission-repair contract for normal public Modlog Health and `/dank member-logs`. Safe Dank Shield channel-access problems must expose one repair action, re-audit immediately, refresh the same response, and leave only unsafe or configuration-level blockers for the administrator.
+**Outcome target:** Extend the merged contextual permission-repair contract into the normal public Profile / Self Roles workflows. Any Profile or role-panel screen that can prove Dank Shield itself is missing safe access to an exact selected/configured channel must expose the same `Fix Issues` / `Access Healthy` / `Manual Fix Needed` behavior and delegate overwrite mutation to the shared repair owner.
 
-**Status:** REOPENED — CORRECTIVE IMPLEMENTATION / VALIDATION
+**Status:** IMPLEMENTATION / VALIDATION
 
-**Corrective branch:** `audit/modlog-memberlogs-contextual-repair-fix`
-**Base main:** `b8c798422dfd8d56c8dd7a6159c20cdcf1d6804a`
-**Failed merged implementation:** PR #247, merge commit `b8c798422dfd8d56c8dd7a6159c20cdcf1d6804a`, PR head `9f75754c88caec92946f2ad468e266b932e31783`
-**Previous integrated task:** PR #246 merged at `df85757d53b38338f829ff7ac618599015546cdf`
+**Branch:** `audit/profile-selfroles-contextual-repair`
+**Base main:** `70b8ba74cfdab562af26afef9664719c23a6f1fe`
+**Previous integrated task:** PR #249 merged and verified on `main` at `70b8ba74cfdab562af26afef9664719c23a6f1fe`
 
 ## Scope
 
-- investigate and correct PR #247 only; do not advance the audit backlog while this lock is active
-- canonical public Modlog Tracking → Health path through `modlog_tracking_service` and `public_modlog_group.open_modlog_health`
-- canonical public `/dank member-logs` callback owned by `startup_guards/member_lifecycle_router_guard.py` and installed through `public_member_lifecycle_runtime`
-- reuse `contextual_permission_repair` / `permission_repair_core`; no feature-local Discord overwrite mutation
-- preserve exact configured/resolved Modlog, live join card, live exit card, and staff audit targets
-- preserve safe/manual classification and same-screen `Fix Issues` / `Access Healthy` / `Manual Fix Needed` behavior
-- focused regression coverage for the concrete runtime binding failure
+- `/dank profile builder` and its profile/self-role panel posting path in `public_self_roles_group`
+- Compact Profile Signatures setup in `profile_card_setup_ui`
+- Roles Center self-role panel posting path in `roles_center_services`
+- reuse of `contextual_permission_repair` / `permission_repair_core`; bypass feature-local channel overwrite repair ownership
+- exact selected/configured channels only; no guessed replacement targets
+- same-screen repair state and immediate post-repair re-audit where the workflow owns the exact target
+- focused regressions and task/PR bookkeeping
 
-Out of scope unless tracing proves a direct dependency:
-- Profile / Self Roles work or the already-created `audit/profile-selfroles-contextual-repair` branch
-- changing Modlog event-family ownership
-- changing Welcome Card or Exit Card content/routing semantics
-- creating or guessing replacement log channels
-- widening @everyone, member, or staff visibility
-- clearing explicit denies automatically
-- broad startup-guard retirement or unrelated cleanup
+Out of scope:
+- changing profile role taxonomy, cosmetic-role safety policy, member privacy, profile-card rendering, or role creation semantics
+- moving Dank Shield's bot role or other role hierarchy
+- granting Administrator or server-level permissions through channel repair
+- widening member/@everyone visibility
+- clearing explicit denies without the existing explicit confirmation path
+- Protection / VC / Embed / Status contextual repair adoption
+- broad startup-guard retirement
 
-## Concrete failure
+## Findings
 
-PR #247 merged while two checks were still running, but the completed exact-head record is fully green: Dank Shield CI, Profile Runtime Diagnostics, Application Command Size Diagnostics, Ticket Owner Emergency Override, and Dank Design Regression CI all completed successfully on `9f75754c88caec92946f2ad468e266b932e31783`. The failure is therefore not a red-CI merge.
+1. PR #249 corrected the failed PR #247 Modlog/Member Logs runtime binding and is merged and verified on `main` at `70b8ba74cfdab562af26afef9664719c23a6f1fe`.
+2. `public_self_roles_group` already had a local Profile Builder health model separating channel-effective failures from manual role/server prerequisites.
+3. The old `builder:fix` path called `channel.set_permissions(...)` directly for Dank Shield. That duplicated permission ownership and bypassed the shared repair audit/undo/event path.
+4. Profile Builder channel health historically checked View Channel, Send Messages, and Embed Links. The shared `general` profile covers those plus Attach Files and Read Message History, which are safe bot-only panel capabilities.
+5. Manage Roles, role hierarchy, managed roles, and explicit denies are not safe channel-overwrite repairs and remain manual.
+6. Compact Profile Signatures validates every exact saved/selected channel and previously refused save/re-enable when access was missing, but provided no repair action. Its configured/selected IDs are deterministic repair targets.
+7. Compact setup runtime builds `profile_card_setup_ui.ProfileCardSetupView` dynamically after the late setup presentation patch, so the contextual subclass can be composed without creating a second setup command owner.
+8. Roles Center owns the exact text channel selected immediately before it posts a pronoun/identity self-role panel, so it can preflight and safely repair only that selected channel.
 
-The merged runtime integration is nevertheless inactive. `apply_logging_contextual_permission_repair()` tries to assign `member_logs_command.callback = contextual_member_logs_callback`. This repository pins `discord.py==2.7.1`; `discord.app_commands.Command.callback` is a getter-only property backed by `_callback`, with no setter. The assignment raises `AttributeError`. PR #247's atomic rollback then restores the Modlog Health function too, so neither Member Logs nor Modlog contextual repair remains active and startup reports the logging contextual repair activation as false.
+## Implemented execution path
 
-## Root cause
+- added `public_profile_contextual_permission_repair` and activate it from the existing late public setup gate
+- Profile Builder status now evaluates the exact current panel channel through the shared contextual audit while preserving the existing role/hierarchy manual blockers
+- Profile Builder button state is now `Fix Issues`, disabled `Access Healthy`, or `Manual Fix Needed`
+- `builder:fix` is intercepted before the historical local mutation path and delegates to `contextual_permission_repair.repair_context()`
+- after Profile Builder repair, the same interaction response is refreshed with a fresh access audit and last-repair result
+- Compact Profile Signatures gains a shared contextual access button on the same setup view
+- saved Compact Signature channels are repaired/re-audited through the shared owner
+- when an administrator selects new Compact Signature channels that are otherwise valid but inaccessible, the selected exact channels are repaired through the shared owner before the canonical save path continues; unresolved/manual access prevents the selection from being saved
+- Roles Center preflights the exact selected self-role panel channel through the shared owner before canonical role creation/posting continues
+- no replacement channel is guessed anywhere in these paths
+- no new feature-local `set_permissions`, explicit-deny clearing, role mutation, Administrator grant, or member-visibility widening path was added
 
-The regression is a **runtime callback wrapping problem** caused by treating a real `discord.app_commands.Command` like a mutable test double. `tests/test_logging_contextual_permission_repair.py` used `SimpleNamespace(callback=...)`, so assignment succeeded in CI and failed to model the pinned discord.py command object. The registration order itself is valid: `public_member_lifecycle_runtime` installs `/dank member-logs` before `public_setup_gate` applies contextual integrations.
+## Safety contract
 
-## Production execution path
+- only exact current/saved/selected channels are targeted
+- no replacement channel is guessed
+- no @everyone/member/staff visibility is widened
+- no role hierarchy is moved
+- no Administrator permission is granted
+- explicit denies stay preserved by the shared repair core
+- Manage Roles, role hierarchy, missing mappings, unsupported channel types, and server-level prerequisites remain manual
 
-- `commands_ext` registers `public_member_lifecycle_runtime` before `public_setup_gate`
-- `public_member_lifecycle_runtime` imports the authoritative member lifecycle router and calls `install()`
-- the router registers `/dank member-logs` as a real `discord.app_commands.Command` around `_member_logs_command`
-- `public_setup_gate` later calls `apply_logging_contextual_permission_repair()`
-- PR #247 failed at assignment to the read-only `Command.callback`, which triggered its rollback and removed the Modlog patch as well
-- Modlog Tracking's Health button and `/dank modlog health` both resolve `public_modlog_group.open_modlog_health` at call time, so replacing that module function remains the correct Modlog integration point
+## Validation added
 
-## Corrective changes
-
-- keep `_member_logs_command` as the authoritative Member Logs callback instead of replacing the framework command callback after registration
-- after the canonical Member Logs response succeeds, call `attach_member_logs_contextual_repair()` to edit that same response with `MemberLogsRepairView`
-- gate Member Logs decoration on the shared logging integration activation flag so Modlog + Member Logs activation remains atomic
-- keep Modlog Health patching through the existing module function
-- remove the obsolete `_ORIGINAL_MEMBER_LOGS_CALLBACK` state and callback-assignment/rollback logic
-- do not mutate discord.py private `_callback`
-- do not add any new `set_permissions()` implementation
-
-## Validation coverage
-
-`tests/test_logging_contextual_permission_repair.py` must cover:
-- saved-ID-only Modlog targeting and `logs` profile
-- no guessed Modlog repair target
-- exact resolved Member Logs routes and `welcome` / `logs` profiles
-- unresolved routes and server-level permissions remain manual
-- no feature-local `set_permissions` / explicit-deny clearing
-- late public bootstrap activation
-- missing Member Logs command prevents partial Modlog activation
-- the pinned `app_commands.Command.callback` property is read-only
-- activation succeeds with a real `app_commands.Command` without replacing its callback
-- authoritative Member Logs source calls the contextual response decorator
-- Member Logs decoration is disabled until atomic activation succeeds
-- activated Member Logs response receives the repair view
-
-Local cloning remains unavailable because this execution environment cannot resolve `github.com`. GitHub Actions on the exact corrective PR head is the executable validation authority.
+`tests/test_profile_contextual_permission_repair.py` covers:
+- no permission mutation ownership in the integration module
+- Profile Builder `fix` interception and same-screen refresh
+- shared three-state button contract
+- role prerequisites / explicit denies remaining manual
+- Compact Profile Signatures same-screen repair control
+- exact selected-channel repair before canonical save
+- Roles Center exact selected-channel preflight repair
+- general minimum permission profile / no name guessing
+- late setup-gate activation
+- runtime rebinding of all three Profile/Self Roles surfaces
 
 ## Validation gate
 
-Before this task can be closed:
-- corrective branch is 0 behind `main`
-- final changed-file scope is reviewed and contains only task-owned implementation/tests/bookkeeping
-- focused logging contextual-repair regressions pass
-- Python compile passes
-- full unit suite passes
-- Claim-first ticket security passes
-- Managed category SQL smoke test passes
-- every other triggered workflow finishes successfully on the exact final head
-- review threads and PR reviews are checked
-- no unexplained drift or unrelated change remains
-- merge uses the exact validated head
-- `main` is verified at the resulting merge commit
-
-Any commit that changes the corrective PR head resets exact-head validation.
-
-## Cleanup / conflicts
-
-- shared permission mutation ownership remains in `contextual_permission_repair` / `permission_repair_core`
-- the failed post-registration Member Logs callback wrapper is removed rather than layered with another workaround
-- no private discord.py callback field mutation is introduced
-- the previously created `audit/profile-selfroles-contextual-repair` branch remains untouched
-
-## Blockers / risks
-
-- no current implementation blocker
-- local clone/test execution is unavailable in this environment because GitHub DNS resolution fails; exact-head GitHub Actions is required before merge
+- normal public Profile / Self Roles execution paths proven by source tracing
+- focused contextual-repair regressions pass
+- exact final branch 0 behind `main`
+- final changed-file scope contains only task-owned implementation/tests/bookkeeping
+- full required GitHub Actions pass on exact final head
+- no review/thread issue ignored
+- no merge until exact-head validation and scope review are clean
 
 ## Backlog after this task
 
-1. Profile / Self Roles contextual repair adoption
-2. Protection contextual repair adoption
-3. remaining VC-specific repair cleanup
-4. Embed / Status contextual repair adoption
-5. admin-only `/dank tickettool-check` contextual repair adoption
-6. remaining `/dank protection` non-invite picker/guard cleanup
-7. `/dank design` picker migration
-8. admin-only legacy setup picker cleanup
+- Protection contextual repair adoption
+- remaining VC-specific repair cleanup
+- Embed / Status contextual repair adoption
+- admin-only `/dank tickettool-check` contextual repair adoption
+- `/dank protection` remaining non-invite picker/guard cleanup
+- `/dank design` picker migration
+- admin-only legacy setup picker cleanup
 
 ## Next step
 
-Commit the corrective implementation and regressions as one focused tree, open the corrective PR, validate the exact head through every required workflow, inspect scope/reviews/drift, merge only that validated head, then verify the resulting merge commit is the current `main` before releasing this task lock.
+Validate the exact final PR #248 head against current `main`, inspect scope/reviews/drift, merge only when every triggered workflow is successful, verify the resulting merge commit as current `main`, then release the lock and move to Protection contextual repair.
