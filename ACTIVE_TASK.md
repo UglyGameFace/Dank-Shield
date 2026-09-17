@@ -1,50 +1,47 @@
 # ACTIVE TASK
 
-## DS-INVITE-HUMAN-EMBED-FALSE-POSITIVE — Stop Invite Shield deleting normal human-posted links
+## DS-INVITE-INTERACTION-RESPONSE-FALSE-POSITIVE — Stop Invite Shield deleting utility app responses
 
 **Status:** EMERGENCY PRODUCTION HOTFIX
 
-**Branch:** `hotfix/invite-shield-human-embed-false-positive`
-**Base main:** `e895e875c1661d32424c968babca5ef098786fc1`
+**Branch:** `hotfix/invite-shield-interaction-response`
+**Base main:** `bc0a14cf59bcddb7c7ac0a45498125921cae4023`
 
-## Emergency task switch
+## Why PR #254 was insufficient
 
-The AntiNuke runtime-consolidation branch is preserved unchanged at `refactor/antinuke-runtime-bootstrap-consolidation` and is temporarily paused. A live moderation regression takes priority over architecture cleanup.
+PR #254 fixed the first confirmed false-positive class: Discord-generated URL previews on ordinary messages. The new production logs prove the remaining delete is a different path. At 18:05:01 the live enforcer still detected an external invite in the application response and deleted it. The screenshot shows the video-downloader result itself contains a **Support Server** button.
 
-## User-visible regression
-
-A normal web link posted by a human can be deleted by Invite Shield even when the human did not post a Discord invite. This was reproduced by the current execution path rather than inferred from the warning text alone.
-
-## Root cause
-
-`invite_policy_engine.message_text()` scans message content plus Discord embeds, embed descriptions/URLs/fields, components, and attachment metadata. For a normal human-posted URL, Discord may generate an unfurled preview embed whose remote metadata contains a Discord invite. The central extractor then sees that remote page metadata as if the human authored the invite and permits Invite Shield to delete the whole message.
-
-That violates the engine's own documented contract that normal links are not touched.
+Discord interaction response messages carry `interaction_metadata` (and legacy `interaction` compatibility). The current PR #254 runtime still treats bot interaction responses like ordinary bot-authored rich messages, so its support-server embed/button is scanned and the entire utility response is removed.
 
 ## Correct behavior
 
-- human-authored messages: Invite Shield evaluates the actual message content only
-- explicit Discord invites in human message content remain detectable and blockable
-- Discord-generated unfurl/embed metadata must never turn an unrelated human link into an invite violation
-- bot/webhook-authored rich messages keep embed/component invite scanning because those surfaces are actually authored by the automated sender
-- same-server invite classification, external invite classification, exemptions, allowed channels/roles/codes, Link Shield interaction, reconciliation, and central delete ownership remain unchanged
+- human messages: evaluate actual message content only
+- interaction/app-command responses: evaluate actual message content only
+- explicit Discord invites written directly in an interaction response's content remain detectable
+- support/community links that exist only in an app response embed/button do not delete an otherwise legitimate utility response
+- ordinary unsolicited bot/webhook messages still scan custom rich embeds/components
+- generated link/article/video previews remain ignored
+- same-server/external invite classification and central delete ownership remain unchanged
 
-## Implementation plan
+## Scope
 
-Install a narrowly scoped runtime correction before invite reconciliation starts. It replaces only the invite-policy message-text surface selection, leaves the central policy decision/deletion engine intact, and is covered by focused regression tests. After the production hotfix is merged and deployed, fold this rule into the native invite-policy engine during the subsequent cleanup instead of leaving duplicate ownership.
+- refine the already-installed `invite_policy_message_surface_runtime.py`
+- extend focused regression tests
+- extend the standalone invite-link safety audit
+- update this task record
+
+No additional startup layer or second invite policy is introduced.
 
 ## Validation gate
 
-- human normal URL + Discord invite inside generated embed metadata => no invite code
-- human explicit Discord invite in content => detected
-- bot/webhook embed-only Discord invite => detected
-- existing text extractor redirect/path false-positive cases remain clean
-- focused invite-policy tests pass
-- invite-link safety audit passes
-- full unit/compile and required CI pass on exact head
-- diff contains only the hotfix surface, tests, bootstrap hook, and task record
-- merge exact validated head and verify `main` + Discloud
+- slash/app response with downloader embed + Support Server button => no invite code
+- app follow-up with invite only in support button/embed => no invite code
+- app response with explicit invite in message content => detected
+- ordinary bot custom-rich invite => detected
+- human normal-link and explicit-invite regressions remain green
+- full compile/unit/standalone audits and every required/companion workflow pass on exact head
+- merge exact validated head and verify current `main` plus Discloud success
 
-## Next step
+## Paused work
 
-Implement the message-surface correction and regression tests, run exact-head validation, merge/deploy the hotfix, then resume the preserved AntiNuke runtime-consolidation branch from the new main.
+The AntiNuke consolidation branch `refactor/antinuke-runtime-bootstrap-consolidation` remains preserved and paused until this live moderation regression is merged and deployed.
