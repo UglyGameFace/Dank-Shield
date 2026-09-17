@@ -19,13 +19,30 @@ def _embed_with_remote_invite(*, embed_type: str = "rich"):
     )
 
 
-def _message(*, content: str, bot: bool, embeds=None):
+def _support_button():
+    return SimpleNamespace(
+        url="https://discord.gg/remotehelp",
+        children=[],
+    )
+
+
+def _message(
+    *,
+    content: str,
+    bot: bool,
+    embeds=None,
+    components=None,
+    interaction_metadata=None,
+    interaction=None,
+):
     return SimpleNamespace(
         content=content,
         author=SimpleNamespace(id=123, bot=bot),
         embeds=list(embeds or []),
-        components=[],
+        components=list(components or []),
         attachments=[],
+        interaction_metadata=interaction_metadata,
+        interaction=interaction,
     )
 
 
@@ -103,6 +120,55 @@ def test_bot_normal_url_ignores_generated_link_preview_metadata() -> None:
             content="https://example-video-downloader.invalid/watch?v=456",
             bot=True,
             embeds=[_embed_with_remote_invite(embed_type="link")],
+        )
+        assert policy.extract_invite_codes_from_message(message) == []
+    finally:
+        restore()
+
+
+def test_interaction_response_ignores_support_server_embed_and_button() -> None:
+    restore = _install_for_test()
+    try:
+        message = _message(
+            content="",
+            bot=True,
+            embeds=[_embed_with_remote_invite(embed_type="rich")],
+            components=[_support_button()],
+            interaction_metadata=SimpleNamespace(id=999, user=SimpleNamespace(id=321)),
+        )
+        assert policy.extract_invite_codes_from_message(message) == []
+    finally:
+        restore()
+
+
+def test_interaction_followup_explicit_content_invite_is_still_detected() -> None:
+    restore = _install_for_test()
+    try:
+        message = _message(
+            content="Join https://discord.gg/explicitappinvite",
+            bot=True,
+            embeds=[_embed_with_remote_invite(embed_type="rich")],
+            components=[_support_button()],
+            interaction_metadata=SimpleNamespace(
+                id=999,
+                original_response_message_id=777,
+                user=SimpleNamespace(id=321),
+            ),
+        )
+        assert policy.extract_invite_codes_from_message(message) == ["explicitappinvite"]
+    finally:
+        restore()
+
+
+def test_legacy_interaction_marker_uses_content_only() -> None:
+    restore = _install_for_test()
+    try:
+        message = _message(
+            content="https://x.com/example/status/123",
+            bot=True,
+            embeds=[_embed_with_remote_invite(embed_type="rich")],
+            components=[_support_button()],
+            interaction=SimpleNamespace(id=888),
         )
         assert policy.extract_invite_codes_from_message(message) == []
     finally:
