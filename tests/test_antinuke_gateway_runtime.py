@@ -288,4 +288,3 @@ def test_main_installs_gateway_runtime_through_pre_app_coordinator() -> None:
     assert main_source.index("    install_anti_nuke_pre_app(bot)") < main_source.index(
         "from stoney_verify.app import run as _run_dank_shield"
     )
-
