@@ -94,6 +94,7 @@ def _install_invite_policy_message_surface_runtime() -> None:
             f"{type(exc).__name__}: {exc}"
         )
 
+
 def _install_invite_reconciliation_runtime() -> None:
     """Attach missed-invite recovery to the real bot before Discord login."""
 
