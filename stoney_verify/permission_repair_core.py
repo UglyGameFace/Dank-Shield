@@ -362,9 +362,9 @@ def audit_target(
         else:
             report.repairable_missing.append(name)
 
-    if report.missing and not bool(getattr(effective, "manage_channels", False)):
+    if report.missing and not bool(getattr(effective, "manage_roles", False)):
         report.blockers.append(
-            "Dank Shield does not have Manage Channels in this target, so Discord will not let the bot repair its own overwrite here. "
+            "Dank Shield does not have Manage Roles / Manage Permissions in this target, so Discord will not let the bot edit its own permission overwrite here. "
             "Fix the bot role/channel deny or reauthorize Dank Shield first."
         )
 
@@ -597,7 +597,7 @@ async def apply_target_repair(
             )
         except discord.Forbidden:
             result.failed_targets.append(
-                f"{_target_label(current_target)} — Discord denied Manage Channels."
+                f"{_target_label(current_target)} — Discord denied permission-overwrite editing (Manage Roles / Manage Permissions required)."
             )
             result.ok = False
         except Exception as exc:
@@ -1090,8 +1090,6 @@ class UndoTokenModal(discord.ui.Modal, title="Undo Fix Access"):
                 ephemeral=True,
             )
 
-        # Modals need a deferred response, but every outcome below resolves that
-        # original response so Discord cannot leave a permanent thinking card.
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         async def job() -> TargetRepairResult:
@@ -1308,8 +1306,6 @@ async def open_target_permission_repair(interaction: discord.Interaction) -> Non
     embed = build_preview_embed(state)
     view = TargetPermissionRepairView(state)
 
-    # Component navigation replaces the previous repair card instead of spawning
-    # another ephemeral stack. Slash/command entry still sends a fresh ephemeral.
     try:
         if getattr(interaction, "message", None) is not None and not interaction.response.is_done():
             await interaction.response.edit_message(embed=embed, view=view)
