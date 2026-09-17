@@ -7,8 +7,9 @@ from stoney_verify import invite_policy_engine as policy
 from stoney_verify import invite_policy_message_surface_runtime as surface
 
 
-def _embed_with_remote_invite():
+def _embed_with_remote_invite(*, embed_type: str = "rich"):
     return SimpleNamespace(
+        type=embed_type,
         title="Video downloader",
         description="Download videos here. Join support: https://discord.gg/remotehelp",
         url="https://example-video-downloader.invalid/",
@@ -62,7 +63,7 @@ def test_human_normal_url_ignores_discord_invite_from_generated_preview() -> Non
         message = _message(
             content="https://example-video-downloader.invalid/watch?v=123",
             bot=False,
-            embeds=[_embed_with_remote_invite()],
+            embeds=[_embed_with_remote_invite(embed_type="link")],
         )
         assert policy.extract_invite_codes_from_message(message) == []
     finally:
@@ -75,22 +76,35 @@ def test_human_explicit_invite_in_content_is_still_detected() -> None:
         message = _message(
             content="join this https://discord.gg/realinvite",
             bot=False,
-            embeds=[_embed_with_remote_invite()],
+            embeds=[_embed_with_remote_invite(embed_type="link")],
         )
         assert policy.extract_invite_codes_from_message(message) == ["realinvite"]
     finally:
         restore()
 
 
-def test_bot_embed_only_invite_remains_detectable() -> None:
+def test_bot_custom_rich_embed_invite_remains_detectable() -> None:
     restore = _install_for_test()
     try:
         message = _message(
             content="",
             bot=True,
-            embeds=[_embed_with_remote_invite()],
+            embeds=[_embed_with_remote_invite(embed_type="rich")],
         )
         assert policy.extract_invite_codes_from_message(message) == ["remotehelp"]
+    finally:
+        restore()
+
+
+def test_bot_normal_url_ignores_generated_link_preview_metadata() -> None:
+    restore = _install_for_test()
+    try:
+        message = _message(
+            content="https://example-video-downloader.invalid/watch?v=456",
+            bot=True,
+            embeds=[_embed_with_remote_invite(embed_type="link")],
+        )
+        assert policy.extract_invite_codes_from_message(message) == []
     finally:
         restore()
 
