@@ -78,6 +78,23 @@ def _attach_process_health_runtime() -> None:
         )
 
 
+def _install_invite_policy_message_surface_runtime() -> None:
+    """Ignore Discord-generated preview metadata for human Invite Shield checks."""
+
+    try:
+        from stoney_verify.invite_policy_message_surface_runtime import (
+            install_invite_policy_message_surface_runtime,
+        )
+
+        if not install_invite_policy_message_surface_runtime():
+            print("ℹ️ Invite Shield message-surface guard was already installed; duplicate skipped")
+    except Exception as exc:
+        print(
+            "🚨 Invite Shield message-surface guard install failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
 def _install_invite_reconciliation_runtime() -> None:
     """Attach missed-invite recovery to the real bot before Discord login."""
 
@@ -322,6 +339,7 @@ def _install_spam_guard_abuse_runtimes() -> None:
 def main() -> None:
     _sleep_before_import_if_discord_login_backoff_active()
     _attach_process_health_runtime()
+    _install_invite_policy_message_surface_runtime()
     _install_invite_reconciliation_runtime()
     _install_anti_nuke_gateway_runtime()
     _install_anti_nuke_finalizer_runtime()
