@@ -21,7 +21,6 @@ from .public_setup_group import _require_setup_permission, dank_group
 
 _PATCHED = False
 _ORIGINAL_MODLOG_HEALTH: Optional[Callable[..., Awaitable[Any]]] = None
-_ORIGINAL_MEMBER_LOGS_CALLBACK: Optional[Callable[..., Awaitable[Any]]] = None
 
 MODLOG_KEYS: tuple[str, ...] = (
     "modlog_channel_id",
@@ -635,25 +634,13 @@ async def open_contextual_modlog_health(interaction: discord.Interaction) -> Non
     )
 
 
-async def contextual_member_logs_callback(
-    interaction: discord.Interaction,
-    public_welcome: Optional[discord.TextChannel] = None,
-    join_leave_log: Optional[discord.TextChannel] = None,
-    staff_audit_log: Optional[discord.TextChannel] = None,
-) -> None:
-    original = _ORIGINAL_MEMBER_LOGS_CALLBACK
-    if original is None:
-        raise RuntimeError("Member Logs callback is unavailable.")
+async def attach_member_logs_contextual_repair(interaction: discord.Interaction) -> None:
+    """Attach the repair view after the authoritative Member Logs callback responds."""
 
-    authorized = _member_user_authorized(interaction)
-    await original(
-        interaction,
-        public_welcome=public_welcome,
-        join_leave_log=join_leave_log,
-        staff_audit_log=staff_audit_log,
-    )
+    if not _PATCHED or not _member_user_authorized(interaction):
+        return
     guild = interaction.guild
-    if not authorized or guild is None:
+    if guild is None:
         return
     try:
         cfg = await get_guild_config(int(guild.id), refresh=True)
@@ -665,17 +652,14 @@ async def contextual_member_logs_callback(
             )
         )
     except Exception:
-        # The canonical callback already returned its status/error. Failure to
-        # decorate that response must never turn a successful config write into
-        # a second user-visible failure.
+        # The authoritative callback already returned its status. Decoration is
+        # best-effort and must never turn a successful config write into a
+        # second user-visible failure.
         pass
 
 
-setattr(contextual_member_logs_callback, "_dank_logging_contextual_repair", True)
-
-
 def apply_logging_contextual_permission_repair() -> bool:
-    global _PATCHED, _ORIGINAL_MODLOG_HEALTH, _ORIGINAL_MEMBER_LOGS_CALLBACK
+    global _PATCHED, _ORIGINAL_MODLOG_HEALTH
     if _PATCHED:
         return True
     try:
@@ -686,40 +670,15 @@ def apply_logging_contextual_permission_repair() -> bool:
         if not callable(current_member_callback):
             return False
 
-        current_is_wrapper = bool(
-            getattr(current_member_callback, "_dank_logging_contextual_repair", False)
-        )
-        if current_is_wrapper and _ORIGINAL_MEMBER_LOGS_CALLBACK is None:
-            return False
-
         original_modlog = _ORIGINAL_MODLOG_HEALTH or modlog.open_modlog_health
-        original_member = (
-            _ORIGINAL_MEMBER_LOGS_CALLBACK
-            if current_is_wrapper
-            else current_member_callback
-        )
-        if not callable(original_member):
-            return False
-
         previous_modlog = modlog.open_modlog_health
-        previous_member = current_member_callback
         previous_original_modlog = _ORIGINAL_MODLOG_HEALTH
-        previous_original_member = _ORIGINAL_MEMBER_LOGS_CALLBACK
         try:
             _ORIGINAL_MODLOG_HEALTH = original_modlog
-            _ORIGINAL_MEMBER_LOGS_CALLBACK = original_member
-            if not current_is_wrapper:
-                member_logs_command.callback = contextual_member_logs_callback
             modlog.open_modlog_health = open_contextual_modlog_health
         except Exception:
             modlog.open_modlog_health = previous_modlog
-            if not current_is_wrapper:
-                try:
-                    member_logs_command.callback = previous_member
-                except Exception:
-                    pass
             _ORIGINAL_MODLOG_HEALTH = previous_original_modlog
-            _ORIGINAL_MEMBER_LOGS_CALLBACK = previous_original_member
             raise
 
         _PATCHED = True
@@ -738,6 +697,6 @@ __all__ = [
     "ModlogHealthRepairView",
     "MemberLogsRepairView",
     "open_contextual_modlog_health",
-    "contextual_member_logs_callback",
+    "attach_member_logs_contextual_repair",
     "apply_logging_contextual_permission_repair",
 ]
