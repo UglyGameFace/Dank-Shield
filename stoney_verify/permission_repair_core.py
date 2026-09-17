@@ -362,9 +362,9 @@ def audit_target(
         else:
             report.repairable_missing.append(name)
 
-    if report.missing and not bool(getattr(effective, "manage_channels", False)):
+    if report.missing and not bool(getattr(effective, "manage_roles", False)):
         report.blockers.append(
-            "Dank Shield does not have Manage Channels in this target, so Discord will not let the bot repair its own overwrite here. "
+            "Dank Shield does not have Manage Roles / Manage Permissions in this target, so Discord will not let the bot edit its own permission overwrite here. "
             "Fix the bot role/channel deny or reauthorize Dank Shield first."
         )
 
@@ -597,7 +597,7 @@ async def apply_target_repair(
             )
         except discord.Forbidden:
             result.failed_targets.append(
-                f"{_target_label(current_target)} — Discord denied Manage Channels."
+                f"{_target_label(current_target)} — Discord denied permission-overwrite editing (Manage Roles / Manage Permissions required)."
             )
             result.ok = False
         except Exception as exc:

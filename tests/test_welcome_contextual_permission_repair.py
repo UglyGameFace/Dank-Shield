@@ -58,7 +58,8 @@ def test_repair_edits_the_existing_component_menu_after_acknowledgement() -> Non
 
 
 def test_shared_contract_reaudits_and_has_healthy_state() -> None:
-    assert "after = audit_context(" in CORE
+    assert "after = await _audit_context_fresh(" in CORE
+    assert "fetch_channel = getattr(guild, \"fetch_channel\", None)" in CORE
     assert 'return "Access Healthy", "✅"' in CORE
     assert 'return "Fix Issues", "🛠️"' in CORE
     assert "clear_explicit_denies=False" in CORE
