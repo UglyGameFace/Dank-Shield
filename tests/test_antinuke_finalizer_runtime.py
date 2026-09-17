@@ -113,4 +113,3 @@ def test_coordinator_preserves_protection_layer_order_before_app_import() -> Non
     assert main_source.index("    install_anti_nuke_pre_app(bot)") < main_source.index(
         "from stoney_verify.app import run as _run_dank_shield"
     )
-
