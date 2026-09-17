@@ -485,39 +485,18 @@ def test_guardian_overwrite_rollback_does_not_honor_delegated_trust(
     assert seen_actor_ids == [0]
 
 
-def test_owner_destructive_path_is_forced_to_first_strike(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, object] = {}
-
-    async def original(guild, **kwargs):
-        _ = guild
-        captured.update(kwargs)
-        return True
-
-    incident = SimpleNamespace(_process_owner_destructive_event=original)
-    monkeypatch.setattr(
-        incident,
-        lockdown._OWNER_PATCH_FLAG,  # noqa: SLF001
-        False,
-        raising=False,
+def test_lockdown_defers_owner_severity_to_incident_runtime() -> None:
+    lockdown_source = Path("stoney_verify/anti_nuke_lockdown_runtime.py").read_text(
+        encoding="utf-8"
+    )
+    incident_source = Path("stoney_verify/anti_nuke_incident_runtime.py").read_text(
+        encoding="utf-8"
     )
 
-    assert lockdown._patch_owner_first_strike(incident) is True  # noqa: SLF001
-    result = asyncio.run(
-        incident._process_owner_destructive_event(
-            object(),
-            entry=object(),
-            action_key="channel_delete",
-            action_label="Channel deletion",
-            target_label="#general",
-            threshold_key="antinuke_channel_delete_threshold",
-            threshold_override=9,
-        )
-    )
-
-    assert result is True
-    assert captured["threshold_override"] == 1
+    assert "_patch_owner_first_strike" not in lockdown_source
+    assert "_OWNER_PATCH_FLAG" not in lockdown_source
+    assert "def _owner_event_policy(" in incident_source
+    assert "async def _process_owner_destructive_event(" in incident_source
 
 
 def test_lockdown_runtime_no_longer_owns_bot_add_authorization() -> None:
