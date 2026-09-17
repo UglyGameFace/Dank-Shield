@@ -208,4 +208,3 @@ def test_reentry_guard_follows_product_policy_in_post_app_coordinator() -> None:
     post_install = main_source.index("    install_anti_nuke_post_app(bot)")
     run = main_source.index("    _run_dank_shield()", post_install)
     assert post_install < run
-
