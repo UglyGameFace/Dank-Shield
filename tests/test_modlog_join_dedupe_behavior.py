@@ -75,31 +75,35 @@ def test_router_delegates_join_to_canonical_welcome_runtime(
             used_image=True,
         )
 
+    async def fake_load_config(_guild_id):
+        return {}
+
+    def fake_resolve_channel(_guild, _cfg, _keys):
+        return None
+
     monkeypatch.setattr(
         router,
         "send_live_welcome_card",
         fake_send_live_welcome_card,
     )
+    monkeypatch.setattr(router, "_load_config", fake_load_config)
+    monkeypatch.setattr(router, "_resolve_channel", fake_resolve_channel)
 
     asyncio.run(router._join_listener(member))
     assert calls == [101]
 
 
-def test_router_join_never_reenters_retired_route_resolution(
+def test_router_join_log_is_independent_of_welcome_card_gate(
     monkeypatch,
 ) -> None:
     guild = SimpleNamespace(id=777)
     member = SimpleNamespace(id=202, guild=guild)
-    calls: list[int] = []
-
-    async def forbidden_load(*_args, **_kwargs):
-        raise AssertionError("join listener read the retired lifecycle route")
-
-    def forbidden_resolve(*_args, **_kwargs):
-        raise AssertionError("join listener resolved the retired simple join card")
+    join_log_channel = SimpleNamespace(id=333)
+    welcome_calls: list[int] = []
+    join_log_calls: list[tuple[int, int]] = []
 
     async def fake_send_live_welcome_card(target):
-        calls.append(int(target.id))
+        welcome_calls.append(int(target.id))
         return SimpleNamespace(
             sent=False,
             code="studio_disabled",
@@ -107,16 +111,74 @@ def test_router_join_never_reenters_retired_route_resolution(
             used_image=False,
         )
 
-    monkeypatch.setattr(router, "_load_config", forbidden_load)
-    monkeypatch.setattr(router, "_resolve_channel", forbidden_resolve)
+    async def fake_load_config(guild_id):
+        assert int(guild_id) == 777
+        return {"join_leave_log_channel_id": "333"}
+
+    def fake_resolve_channel(_guild, _cfg, keys):
+        assert keys is router.JOIN_LEAVE_KEYS
+        return join_log_channel
+
+    async def fake_send_join_log_event(target, channel):
+        join_log_calls.append((int(target.id), int(channel.id)))
+        return True
+
     monkeypatch.setattr(
         router,
         "send_live_welcome_card",
         fake_send_live_welcome_card,
     )
+    monkeypatch.setattr(router, "_load_config", fake_load_config)
+    monkeypatch.setattr(router, "_resolve_channel", fake_resolve_channel)
+    monkeypatch.setattr(router, "_send_join_log_event", fake_send_join_log_event)
+    monkeypatch.setattr(router.discord, "TextChannel", SimpleNamespace)
 
     asyncio.run(router._join_listener(member))
-    assert calls == [202]
+
+    assert welcome_calls == [202]
+    assert join_log_calls == [(202, 333)]
+
+
+def test_router_join_log_suppresses_only_true_same_channel_duplicate(
+    monkeypatch,
+) -> None:
+    guild = SimpleNamespace(id=778)
+    member = SimpleNamespace(id=303, guild=guild)
+    join_log_channel = SimpleNamespace(id=444)
+    join_log_calls: list[tuple[int, int]] = []
+
+    async def fake_send_live_welcome_card(_target):
+        return SimpleNamespace(
+            sent=True,
+            code="sent",
+            channel_id=444,
+            used_image=True,
+        )
+
+    async def fake_load_config(_guild_id):
+        return {"join_leave_log_channel_id": "444"}
+
+    def fake_resolve_channel(_guild, _cfg, keys):
+        assert keys is router.JOIN_LEAVE_KEYS
+        return join_log_channel
+
+    async def fake_send_join_log_event(target, channel):
+        join_log_calls.append((int(target.id), int(channel.id)))
+        return True
+
+    monkeypatch.setattr(
+        router,
+        "send_live_welcome_card",
+        fake_send_live_welcome_card,
+    )
+    monkeypatch.setattr(router, "_load_config", fake_load_config)
+    monkeypatch.setattr(router, "_resolve_channel", fake_resolve_channel)
+    monkeypatch.setattr(router, "_send_join_log_event", fake_send_join_log_event)
+    monkeypatch.setattr(router.discord, "TextChannel", SimpleNamespace)
+
+    asyncio.run(router._join_listener(member))
+
+    assert join_log_calls == []
 
 
 def test_identical_unkeyed_embeds_are_coalesced_for_short_bursts(
