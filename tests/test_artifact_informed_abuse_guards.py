@@ -145,4 +145,3 @@ def test_main_installs_artifact_informed_guards_after_antinuke_post_app() -> Non
     abuse = source.index("    _install_spam_guard_abuse_runtimes()", post_app)
     run = source.index("    _run_dank_shield()", abuse)
     assert post_app < abuse < run
-
