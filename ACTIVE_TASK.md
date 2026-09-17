@@ -1,106 +1,78 @@
 # ACTIVE TASK
 
-## DS-SEC-CHAN-UPDATE-FALSE-POSITIVE — Stop benign channel edits from triggering AntiNuke
+## DS-MEMBER-JOIN-LOG-REGRESSION — Restore reliable member join/leave lifecycle logging
 
-**Outcome target:** Ordinary Discord channel edits such as renaming a channel must remain normal logging activity and must not enter Dank Shield's destructive AntiNuke/owner-compromise path. Explicit permission-overwrite mutations and genuinely destructive structural actions must remain protected.
+**Status:** FINAL EXACT-HEAD VALIDATION AFTER MAIN SYNC
 
-**Status:** FINAL EXACT-HEAD VALIDATION
+**Branch:** `fix/member-join-leave-log-regression`
+**Current base main:** `4f40659375cf15811dba17a4da484532eb7f1c1e`
+**PR:** #251
 
-**Branch:** `fix/antinuke-benign-channel-update`
-**Base main:** `98290563f7244af198c4384a595cb66cdc76e0e3`
-**PR:** #252
-**Previous integrated task:** PR #250 merged at `98290563f7244af198c4384a595cb66cdc76e0e3`; its exact PR head workflows passed and the merge commit became current `main`, releasing the previous contextual-repair lock.
+## Outcome target
 
-## User-reported production regression
-
-Renaming an ordinary channel triggered:
-
-- `🚨 AntiNuke Owner-Compromise Warning`
-- detected action `Channel settings mutation`
-- threshold `5s window • channel_update 1/1`
-
-The guild owner had only renamed a channel. No permission overwrite, deletion, or other destructive action occurred.
+Real Discord member joins and leaves must always produce the configured operational lifecycle log independently of optional Welcome/Exit Card Studio delivery and independently of invite-source attribution. A successful Studio delivery may suppress only a true same-channel duplicate.
 
 ## Root cause
 
-1. `anti_nuke_guardian_runtime._ACTIONS` classified the generic Discord `channel_update` audit action as destructive AntiNuke evidence and mapped it to the canonical `channel_update` counter.
-2. Discord uses generic `channel_update` for ordinary channel-setting edits such as names/topics, while permission overwrite changes have distinct `overwrite_create`, `overwrite_update`, and `overwrite_delete` audit actions that Dank Shield already handles separately.
-3. The guardian audit listener therefore routed a benign rename through `_process()` into the canonical destructive-event engine.
-4. `anti_nuke_lockdown_runtime` intentionally forces the owner-compromise path to first strike, so the misclassified event became `channel_update 1/1` and immediately produced the warning.
-5. Raising thresholds or exempting the guild owner would weaken real protection and would treat the symptom rather than the classifier bug.
+The canonical Welcome Card migration removed the operational join sender from the configured `JOIN_LEAVE_KEYS` route and made the optional Studio path the only public join output. Closure review found the same coupling on leave: disabling, failing, or separately routing Exit Card Studio could suppress the configured leave log as well. Invite attribution is a separate concern and must never gate the base `on_member_join` lifecycle event.
 
-## Execution path
+## Execution / ownership
 
-`on_audit_log_entry_create`
-→ guardian action-name classification
-→ generic `channel_update` lookup in `_ACTIONS`
-→ `_process(...)`
-→ `anti_nuke._process_claimed_destructive_event(...)`
-→ owner-compromise wrapper
-→ owner first-strike override
-→ incident post
+- `public_member_lifecycle_runtime` installs the authoritative `member_lifecycle_router_guard`.
+- `member_lifecycle_router_guard` owns the configured operational join/leave route.
+- Welcome Card Studio remains the optional member-facing welcome card owner.
+- Exit Card Studio remains the optional member-facing leave card owner.
+- staff invite-source/modlog output stays separate.
+- retired legacy public lifecycle senders remain inactive.
 
-The native channel-update fallback is not the live cause: the production gateway runtime retires the old generic overwrite listener, and the guardian gateway fallback already requires an actual overwrite difference and resolves only explicit overwrite audit actions.
+## Implemented changes
 
-## Changes
+- independently send configured operational join and leave events through `JOIN_LEAVE_KEYS`
+- preserve operational logging when either Studio is disabled, unavailable, fails, or targets another channel
+- suppress only a successful Studio delivery to the exact same lifecycle channel
+- keep join logging independent of invite attribution success
+- stop `/dank member-logs` from forcibly enabling Exit Card Studio when only the lifecycle log channel is changed
+- preserve compatibility target mapping without overriding the user's explicit Studio enable/disable choice
+- update lifecycle status/help and centralization guards
 
-- removed generic `channel_update` from the guardian destructive audit map
-- retained explicit `overwrite_create`, `overwrite_update`, and `overwrite_delete` protection unchanged
-- retained the canonical `channel_update` counter/slow-burn key because real overwrite and protected guild-update paths intentionally reuse it
-- retained owner first-strike behavior for genuinely protected actions
-- added `tests/test_antinuke_channel_update_false_positive.py` covering benign generic channel updates, explicit overwrite enforcement, and preservation of the shared overwrite counter
-- no threshold changes, owner whitelist, trust broadening, new runtime patch, duplicate enforcement path, or unrelated logging changes
+## Regression coverage
 
-## Validation results
+`tests/test_modlog_join_dedupe_behavior.py` covers Studio-disabled, Studio-failed, same-channel duplicate, different-channel, join, leave, and existing semantic-dedupe behavior.
 
-Implementation head `623e87274eab1f72e373e87459b01334b6056d88` passed the first full validation wave:
+`tools/test_join_leave_log_centralized.py` guards canonical ownership, both operational senders, `JOIN_LEAVE_KEYS`, duplicate suppression, Studio-gate independence, member-logs behavior, and retirement of legacy senders.
 
-- committed-diff whitespace check: PASS
-- Python compile: PASS
-- full unit test suite: PASS, including the new channel-update regressions
-- standalone tool checks: PASS
-- public setup/command/invite/safety/design/role/event-boundary audits: PASS
-- required `Claim-first ticket security`: PASS
-- required `Managed category SQL smoke test`: PASS
-- `Application Command Size Diagnostics`: PASS
-- `Dank Design Regression CI`: PASS
-- `Ticket Owner Emergency Override`: PASS
-- `Profile Runtime Diagnostics`: PASS
-- `Dank Shield CI`: PASS
-- PR #252 diff inspected: exactly 3 files (`ACTIVE_TASK.md`, guardian classifier, focused regression file); no unrelated runtime changes
-- PR #252 is mergeable; only automated Supabase comment states the PR has no `supabase` directory changes
-- current `main` remained `98290563f7244af198c4384a595cb66cdc76e0e3`, so the implementation wave was 0 behind base
+## Validation history
 
-This bookkeeping commit changes the PR head, so all required checks must pass again on the exact new head before merge.
+The pre-sync final head `cb9dd9fd157f7fe622f92e153ae0e321309c78dc` passed all triggered workflows, including Dank Shield CI, Ticket Owner Emergency Override, Dank Design Regression CI, Schema Authority SQL, Application Command Size Diagnostics, and Profile Runtime Diagnostics.
 
-## Cleanup / conflict inspection
+That head could not be merged because `main` advanced by five commits after the PR branched. GitHub correctly reported the PR as diverged and non-mergeable even though its own exact-head CI was green. Current `main` changes are AntiNuke-only plus `ACTIVE_TASK.md`; the lifecycle production/test files do not overlap.
 
-- generic `channel_update` no longer has a destructive guardian action spec
-- explicit overwrite audit actions remain the authoritative permission-overwrite path
-- canonical `channel_update` counter remains available for real overwrite/security activity
-- owner-compromise first-strike logic remains intact for genuinely protected actions
-- no threshold workaround or duplicate compatibility shim was introduced
-- no unrelated production code was touched
+This branch now incorporates current `main` while preserving the four-file lifecycle task scope. The resulting exact synchronized head must pass the full validation wave again before merge.
 
-## Validation gate remaining
+## Scope / cleanup
 
-- every triggered workflow succeeds on this exact final bookkeeping head
-- final branch remains 0 behind current `main`
-- PR remains mergeable with no unresolved review/thread issue
-- merge only this exact validated head
+Intended task files only:
+
+- `ACTIVE_TASK.md`
+- `stoney_verify/startup_guards/member_lifecycle_router_guard.py`
+- `tests/test_modlog_join_dedupe_behavior.py`
+- `tools/test_join_leave_log_centralized.py`
+
+The current-main AntiNuke changes are inherited from `main`, not part of this PR's lifecycle implementation. No invite-policy, moderation-policy, schema, role, ticket, or unrelated redesign belongs in this task.
+
+## Merge gate
+
+- exact synchronized head is 0 behind current `main`
+- all required and companion workflows pass on that exact head
+- final PR diff is limited to the intended lifecycle task
+- no unresolved review/thread blocker exists
+- PR is mergeable and marked ready
+- merge only the exact validated head
 - verify resulting merge commit is current `main`
-- verify post-merge CI/deployment/status checks before releasing the task lock
+- verify post-merge deployment/status before releasing this task lock
 
-## Backlog after this regression closes
-
-1. Protection contextual repair adoption
-2. remaining VC-specific repair cleanup
-3. Embed / Status contextual repair adoption
-4. admin-only `/dank tickettool-check` contextual repair adoption
-5. `/dank protection` remaining non-invite picker/guard cleanup
-6. `/dank design` picker migration
-7. admin-only legacy setup picker cleanup
+A live Discord join/leave remains the final production exercise and cannot be simulated by GitHub CI.
 
 ## Next step
 
-Run the exact-final-head validation wave created by this bookkeeping update. If every required and companion workflow is green, mark PR #252 ready, merge only that verified SHA, then verify merged `main` and deployment/status checks before releasing this task lock.
+Run the full exact-head validation wave on the synchronized branch. If green, mark PR #251 ready, merge the exact validated SHA, verify `main` and deployment/status, then return to PR #253 and resynchronize/revalidate it against the new `main` before merging.
