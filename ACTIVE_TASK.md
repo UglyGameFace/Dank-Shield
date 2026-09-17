@@ -1,100 +1,90 @@
 # ACTIVE TASK
 
-## DS-INVITE-INTERACTION-RESPONSE-FALSE-POSITIVE — Stop Invite Shield deleting utility app responses
+## DS-SEC-ANTINUKE-RUNTIME-CONSOLIDATION — Make AntiNuke runtime ownership explicit
 
-**Status:** FINAL EXACT-HEAD VALIDATION
+**Status:** PHASE A IMPLEMENTATION / VALIDATION
 
-**Branch:** `hotfix/invite-shield-interaction-response`
-**Base main:** `bc0a14cf59bcddb7c7ac0a45498125921cae4023`
-**Validated implementation head:** `ddefe9b9c5579bfd43a46b9f307064b472cd982c`
+**Branch:** `refactor/antinuke-runtime-bootstrap-consolidation`
+**Base main:** `bbf36ee6a4859f55a2e23373313cb21ccb64686d`
 
-## Why PR #254 was insufficient
+## Previous task locks closed
 
-PR #254 fixed the first confirmed false-positive class: Discord-generated URL previews on ordinary messages. Production then proved a second path remained. At 18:05:01 the live enforcer detected an external invite in the video-downloader application response and deleted the response. The user-visible downloader result includes a **Support Server** Discord link/button.
+- PR #251 (`DS-MEMBER-JOIN-LOG-REGRESSION`) merged as `0c8d8ae1971656f0c5c2e9ef95ebd11a9c94fa97`, became `main`, and Discloud reported success.
+- PR #253 (`DS-SEC-OWNER-POLICY-NORMALIZATION`) merged as `e895e875c1661d32424c968babca5ef098786fc1`, became `main`, and Discloud reported success.
+- PR #254 (`DS-INVITE-HUMAN-EMBED-FALSE-POSITIVE`) merged as `bc0a14cf59bcddb7c7ac0a45498125921cae4023` and Discloud reported success.
+- PR #255 (`DS-INVITE-INTERACTION-RESPONSE-FALSE-POSITIVE`) merged as `bbf36ee6a4859f55a2e23373313cb21ccb64686d` and Discloud reported success.
 
-Discord interaction response messages carry `interaction_metadata` (with legacy `interaction` compatibility). PR #254 still treated bot interaction responses like ordinary bot-authored rich messages, so its support-server embed/button became Invite Shield evidence.
+The Single Active Task Lock is now this AntiNuke runtime-ownership consolidation only.
 
-## Root cause
+## Resync after emergency hotfixes
 
-Invite Shield had one message-surface distinction too few:
+The consolidation branch was paused while the two live Invite Shield regressions were fixed. Before resuming implementation, the old branch head `e46c7b771088e464867ae5cb374cd0e714c30d72` was preserved at `backup/antinuke-runtime-bootstrap-pre-hotfix-sync`, then the consolidation changes were reapplied onto current production `main` `bbf36ee6a4859f55a2e23373313cb21ccb64686d`.
 
-- human messages were content-only
-- ordinary bot/webhook messages scanned authored rich embeds/components
-- **interaction responses were incorrectly in the ordinary bot bucket**
+The resync explicitly preserves the new `_install_invite_policy_message_surface_runtime()` bootstrap call before invite reconciliation. AntiNuke consolidation must not remove, reorder behind reconciliation, or otherwise regress the Invite Shield fixes from PRs #254/#255.
 
-That allowed a legitimate slash-command utility response to be deleted solely because the third-party app included a support/community invite in response chrome.
+## Outcome target
 
-## Correct behavior and implementation
+Reduce the architectural risk created by AntiNuke being assembled through a long sequence of independently owned startup wrappers and overlapping runtime policy patches. Preserve all validated security behavior while making bootstrap order and policy ownership explicit enough that a later fix cannot silently depend on accidental monkey-patch order.
 
-- human messages evaluate actual message content only
-- interaction/app-command responses evaluate actual message content only
-- Discord `interaction_metadata` is the primary interaction-response marker
-- legacy `interaction` remains supported
-- explicit Discord invites written directly in response content remain detectable
-- support/community links that exist only in an app response embed/button do not delete the utility response
-- ordinary unsolicited bot/webhook messages still scan custom rich embeds/components
-- generated link/article/video previews remain ignored
-- same-server/external classification, exemptions, Link Shield interaction, statistics, and central delete ownership remain unchanged
-- no additional startup layer or second invite policy was introduced
+## Confirmed current execution path
 
-## Files changed
+Before this task, `main.py` independently installed the following AntiNuke layers in order:
 
-Exactly four task files:
+1. gateway
+2. finalizer
+3. incident
+4. hostile actor reputation
+5. lockdown
+6. self-action proof
+7. zero-damage hardening
+8. audit compatibility
+9. readiness gate
+10. product policy after app import
+11. hostile re-entry race guard
 
-- `ACTIVE_TASK.md`
-- `stoney_verify/invite_policy_message_surface_runtime.py`
-- `tests/test_invite_policy_message_surface_runtime.py`
-- `tools/audit_invite_link_safety.py`
+That sequence is behaviorally important, but the ordering contract was spread across eleven wrapper functions in `main.py`, with each wrapper repeating lazy imports, duplicate handling, and exception handling. Several tests therefore pinned security behavior to string positions in the entrypoint instead of to one authoritative runtime bootstrap contract.
 
-## Regression coverage
+The deeper overlap audit also confirmed that lockdown, zero-damage, incident, and product-policy runtimes touch some of the same policy surfaces. PR #253 already made incident runtime the authoritative guild-owner severity classifier, so the old lockdown owner-first-strike wrapper is now legacy overlap rather than the source of truth.
 
-Focused tests and the standalone invite-link safety audit cover:
+## Phase A — bootstrap ownership consolidation
 
-- downloader-style interaction response + Support Server button => no invite code
-- interaction follow-up + support embed/button => no invite code
-- interaction response with explicit invite in content => detected
-- legacy interaction marker => content-only
-- ordinary bot custom-rich invite => detected
-- bot generated-link preview => no false invite
-- human generated-link preview => no false invite
-- human explicit invite => detected
+Implemented first because it is behavior-preserving and gives the remaining cleanup one explicit installation boundary:
 
-## Implementation-head validation
+- added `stoney_verify/anti_nuke_runtime_coordinator.py`
+- moved the authoritative pre-app and post-app AntiNuke installation order into declarative layer tables
+- centralized lazy import resolution, duplicate reporting, and per-layer fail-soft exception handling
+- reduced `main.py` to one pre-app AntiNuke coordinator call and one post-app coordinator call
+- preserved the exact behavioral module order and the app-import boundary
+- left SpamGuard installation independent because it is not an AntiNuke runtime layer
+- did not change thresholds, owner severity, containment, bot authorization, self-action proof, readiness requirements, or quarantine behavior in this phase
 
-On exact implementation head `ddefe9b9c5579bfd43a46b9f307064b472cd982c`:
+## Phase B — overlapping policy ownership cleanup
 
-- Dank Shield CI #2277: **success**
-  - Python compile check: **success**
-  - full unit test suite: **success**
-  - standalone tool checks: **success**
-  - public setup/isolation audit: **success**
-  - canonical public command audit: **success**
-  - public command/startup friction audit: **success**
-  - public invite permissions audit: **success**
-  - setup safety audit: **success**
-  - Dank Design Smart Auto-Detect audit: **success**
-  - role truth ownership audit: **success**
-  - event boundary ownership audit: **success**
-  - Claim-first ticket security: **success**
-  - Managed category SQL smoke test: **success**
-- Application Command Size Diagnostics #1262: **success**
-- Dank Design Regression CI #504: **success**
-- Ticket Owner Emergency Override #848: **success**
-- Profile Runtime Diagnostics #1011: **success**
+After Phase A is validated on the branch, continue inside this same task lock and remove only overlap that is proven redundant by current production semantics. Priority ownership boundaries:
 
-The implementation head was 0 commits behind `main`, the diff contained only the four task files, and PR #255 had no unresolved review threads or code-review blockers.
+- incident runtime owns guild-owner severity classification
+- product-policy runtime owns normal Contain versus optional Strict Lockdown threshold behavior
+- lockdown runtime owns control-plane/config-history/bot-delegation invariants, not owner severity
+- zero-damage runtime owns expanded audit coverage, compromise quarantine, and self-action hardening, not product-tier threshold semantics
+- gateway/guardian remain the event attribution and rollback surfaces
 
-## Cleanup / conflicts / risks
+Do not collapse modules merely to reduce file count. A runtime is removed or simplified only when its behavior has a clear canonical owner and regression coverage proves the replacement path.
 
-- No unrelated files are present.
-- No new invite listener, startup owner, or duplicate delete path was added.
-- AntiNuke consolidation remains isolated on `refactor/antinuke-runtime-bootstrap-consolidation`.
-- The remaining risk is production behavior of third-party Discord apps; the exact failure class now has direct regression coverage using Discord interaction-response markers rather than bot-name/domain allowlists.
+## Validation gate
 
-## Final validation note
+Before merge:
 
-This bookkeeping update changes the PR head SHA. Therefore the new final head must pass the complete required and companion workflow set again before merge. Do not merge based only on the successful implementation-head run above.
+- update startup-order tests to assert the coordinator contract instead of obsolete `main.py` wrapper strings
+- add focused coordinator tests for exact phase order, app boundary, duplicate handling, and fail-soft continuation
+- run Python compile and the full unit suite
+- run standalone/security/event-boundary audits
+- pass required `Python compile check`, `Claim-first ticket security`, and `Managed category SQL smoke test`
+- pass companion Dank Shield, design, profile, command-size, and ticket-owner workflows
+- inspect the exact final diff for debug code, stale wrappers, conflict artifacts, accidental policy changes, and duplicate runtime ownership
+- final branch must be 0 behind `main`
+- merge only the exact validated head
+- verify resulting `main` and `discloud/commit: success` before releasing this task lock
 
 ## Next step
 
-Revalidate this final bookkeeping head exactly, confirm it remains 0 behind `main` with only the four task files, mark PR #255 ready, merge using the exact validated SHA, verify the resulting `main` merge parent, and require Discloud deployment success before releasing the task lock.
+Verify the resynced branch is 0 behind current `main` with only the intended three consolidation files changed. Then finish Phase A regression migration and exact behavior checks before touching any Phase B overlap.
