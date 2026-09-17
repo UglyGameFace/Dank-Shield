@@ -7,8 +7,8 @@
 **Status:** IMPLEMENTATION / VALIDATION
 
 **Branch:** `audit/profile-selfroles-contextual-repair`
-**Base main:** `b8c798422dfd8d56c8dd7a6159c20cdcf1d6804a`
-**Previous integrated task:** PR #247 merged at `b8c798422dfd8d56c8dd7a6159c20cdcf1d6804a`
+**Base main:** `70b8ba74cfdab562af26afef9664719c23a6f1fe`
+**Previous integrated task:** PR #249 merged and verified on `main` at `70b8ba74cfdab562af26afef9664719c23a6f1fe`
 
 ## Scope
 
@@ -31,7 +31,7 @@ Out of scope:
 
 ## Findings
 
-1. PR #247 is merged and `main` points at `b8c798422dfd8d56c8dd7a6159c20cdcf1d6804a`.
+1. PR #249 corrected the failed PR #247 Modlog/Member Logs runtime binding and is merged and verified on `main` at `70b8ba74cfdab562af26afef9664719c23a6f1fe`.
 2. `public_self_roles_group` already had a local Profile Builder health model separating channel-effective failures from manual role/server prerequisites.
 3. The old `builder:fix` path called `channel.set_permissions(...)` directly for Dank Shield. That duplicated permission ownership and bypassed the shared repair audit/undo/event path.
 4. Profile Builder channel health historically checked View Channel, Send Messages, and Embed Links. The shared `general` profile covers those plus Attach Files and Read Message History, which are safe bot-only panel capabilities.
@@ -100,4 +100,4 @@ Out of scope:
 
 ## Next step
 
-Normalize this task to one final commit, open the draft PR, run exact-head focused/full CI, inspect any concrete failure, perform final scope/drift/review checks, merge only when the exact final head is clean, verify `main`, then release the lock and move to Protection contextual repair.
+Validate the exact final PR #248 head against current `main`, inspect scope/reviews/drift, merge only when every triggered workflow is successful, verify the resulting merge commit as current `main`, then release the lock and move to Protection contextual repair.
