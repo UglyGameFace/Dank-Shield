@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
@@ -30,6 +31,79 @@ for sample in false_positive_samples:
     found = extract_invite_codes_from_text(sample)
     if found:
         failures.append(f"central extractor false-positive {sample!r} -> {found}")
+
+# Discord-generated unfurls are not sender-authored invite evidence. A normal URL
+# must stay allowed even when remote preview metadata advertises a Discord invite.
+from stoney_verify import invite_policy_engine as invite_policy
+from stoney_verify import invite_policy_message_surface_runtime as message_surface
+
+try:
+    setattr(invite_policy, message_surface._INSTALL_FLAG, False)  # noqa: SLF001
+    message_surface.install_invite_policy_message_surface_runtime()
+
+    preview = SimpleNamespace(
+        type="link",
+        title="Video downloader",
+        description="Support server: https://discord.gg/remotehelp",
+        url="https://example-video-downloader.invalid/",
+        fields=[],
+        footer=None,
+        author=None,
+    )
+    human_normal = SimpleNamespace(
+        content="https://example-video-downloader.invalid/watch?v=123",
+        author=SimpleNamespace(id=1, bot=False),
+        embeds=[preview],
+        components=[],
+        attachments=[],
+    )
+    found = invite_policy.extract_invite_codes_from_message(human_normal)
+    if found:
+        failures.append(f"human normal link inherited invite from generated preview -> {found}")
+
+    human_invite = SimpleNamespace(
+        content="https://discord.gg/realinvite",
+        author=SimpleNamespace(id=1, bot=False),
+        embeds=[preview],
+        components=[],
+        attachments=[],
+    )
+    found = invite_policy.extract_invite_codes_from_message(human_invite)
+    if found != ["realinvite"]:
+        failures.append(f"human explicit invite was not preserved -> {found}")
+
+    bot_preview = SimpleNamespace(
+        content="https://example-video-downloader.invalid/watch?v=456",
+        author=SimpleNamespace(id=2, bot=True),
+        embeds=[preview],
+        components=[],
+        attachments=[],
+    )
+    found = invite_policy.extract_invite_codes_from_message(bot_preview)
+    if found:
+        failures.append(f"bot normal link inherited invite from generated preview -> {found}")
+
+    rich = SimpleNamespace(
+        type="rich",
+        title="Server invite",
+        description="Join https://discord.gg/botinvite",
+        url=None,
+        fields=[],
+        footer=None,
+        author=None,
+    )
+    bot_rich = SimpleNamespace(
+        content="",
+        author=SimpleNamespace(id=2, bot=True),
+        embeds=[rich],
+        components=[],
+        attachments=[],
+    )
+    found = invite_policy.extract_invite_codes_from_message(bot_rich)
+    if found != ["botinvite"]:
+        failures.append(f"bot-authored rich invite was not preserved -> {found}")
+except Exception as exc:
+    failures.append(f"message-surface invite audit failed: {type(exc).__name__}: {exc}")
 
 # Protection Center historical invite cleanup is now owned by the native UI and
 # must delegate deletion decisions to the central invite policy engine.
