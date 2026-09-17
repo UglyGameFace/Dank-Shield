@@ -217,10 +217,17 @@ def test_strict_ui_control_is_owner_guarded_and_named() -> None:
     assert "Normal Contain is the recommended starting mode" in source
 
 
-def test_main_installs_product_policy_after_app_import_before_run() -> None:
+def test_main_installs_post_app_policy_after_app_import_before_run() -> None:
+    coordinator_source = Path(
+        "stoney_verify/anti_nuke_runtime_coordinator.py"
+    ).read_text(encoding="utf-8")
+    product = coordinator_source.index('"product_policy"')
+    reentry = coordinator_source.index('"reentry_race"', product)
+    assert product < reentry
+
     source = Path("main.py").read_text(encoding="utf-8")
     app_import = source.index("from stoney_verify.app import run as _run_dank_shield")
-    product_install = source.index("    _install_anti_nuke_product_policy_runtime()", app_import)
-    bot_run = source.index("    _run_dank_shield()", product_install)
+    post_install = source.index("    install_anti_nuke_post_app(bot)", app_import)
+    bot_run = source.index("    _run_dank_shield()", post_install)
+    assert app_import < post_install < bot_run
 
-    assert app_import < product_install < bot_run
