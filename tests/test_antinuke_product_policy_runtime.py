@@ -230,4 +230,3 @@ def test_main_installs_post_app_policy_after_app_import_before_run() -> None:
     post_install = source.index("    install_anti_nuke_post_app(bot)", app_import)
     bot_run = source.index("    _run_dank_shield()", post_install)
     assert app_import < post_install < bot_run
-
