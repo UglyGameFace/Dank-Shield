@@ -1090,6 +1090,8 @@ class UndoTokenModal(discord.ui.Modal, title="Undo Fix Access"):
                 ephemeral=True,
             )
 
+        # Modals need a deferred response, but every outcome below resolves that
+        # original response so Discord cannot leave a permanent thinking card.
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         async def job() -> TargetRepairResult:
@@ -1306,6 +1308,8 @@ async def open_target_permission_repair(interaction: discord.Interaction) -> Non
     embed = build_preview_embed(state)
     view = TargetPermissionRepairView(state)
 
+    # Component navigation replaces the previous repair card instead of spawning
+    # another ephemeral stack. Slash/command entry still sends a fresh ephemeral.
     try:
         if getattr(interaction, "message", None) is not None and not interaction.response.is_done():
             await interaction.response.edit_message(embed=embed, view=view)
