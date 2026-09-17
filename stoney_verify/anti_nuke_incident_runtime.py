@@ -56,20 +56,16 @@ _OWNER_IMMEDIATE_ACTIONS = frozenset(
         "overwrite_delete",
         "role_delete",
         "member_prune",
+        "webhook_create",
         "webhook_update",
         "webhook_delete",
+        "integration_create",
         "integration_update",
         "integration_delete",
         "app_command_permission_update",
         "automod_rule_update",
         "automod_rule_delete",
-        "message_delete",
         "message_bulk_delete",
-        "stage_instance_delete",
-        "onboarding_prompt_update",
-        "onboarding_prompt_delete",
-        "onboarding_update",
-        "home_settings_update",
     }
 )
 _OWNER_IMMEDIATE_ACTION_KEYS = frozenset(
@@ -77,7 +73,6 @@ _OWNER_IMMEDIATE_ACTION_KEYS = frozenset(
         "channel_delete",
         "role_delete",
         "webhook_delete",
-        "message_delete",
         "message_bulk_delete",
         "member_prune",
     }
@@ -91,6 +86,7 @@ _OWNER_GUILD_BOUNDED_FIELDS = frozenset(
         "public_updates_channel_id",
         "safety_alerts_channel_id",
         "features",
+        "vanity_url_code",
     }
 )
 _OWNER_GUILD_ROUTINE_FIELDS = frozenset(
@@ -100,7 +96,6 @@ _OWNER_GUILD_ROUTINE_FIELDS = frozenset(
         "banner",
         "splash",
         "discovery_splash",
-        "vanity_url_code",
         "description",
         "default_message_notifications",
         "afk_channel_id",
@@ -109,6 +104,17 @@ _OWNER_GUILD_ROUTINE_FIELDS = frozenset(
         "system_channel_flags",
         "preferred_locale",
         "premium_progress_bar_enabled",
+    }
+)
+_OWNER_ROLE_ROUTINE_FIELDS = frozenset(
+    {
+        "name",
+        "hoist",
+        "mentionable",
+        "colour",
+        "color",
+        "icon",
+        "unicode_emoji",
     }
 )
 
@@ -369,7 +375,11 @@ def _owner_event_policy(
             return _OWNER_POLICY_BOUNDED
         if _field_changed(entry, "position"):
             return _OWNER_POLICY_BOUNDED
-        return _OWNER_POLICY_BENIGN
+        if any(_field_changed(entry, name) for name in _OWNER_ROLE_ROUTINE_FIELDS):
+            return _OWNER_POLICY_BENIGN
+        # If Discord gives us a sparse role diff, keep it bounded rather than
+        # silently treating an unknown authority change as cosmetic.
+        return _OWNER_POLICY_BOUNDED
 
     if action_name == "member_role_update":
         added, removed = _member_role_changes(entry)
