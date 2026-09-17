@@ -1,103 +1,69 @@
 # ACTIVE TASK
 
-## DS-AUD-PROFILE-SELFROLES-CONTEXTUAL-REPAIR — Move Profile and Self Roles onto shared same-screen repair
-
-**Outcome target:** Extend the merged contextual permission-repair contract into the normal public Profile / Self Roles workflows. Any Profile or role-panel screen that can prove Dank Shield itself is missing safe access to an exact selected/configured channel must expose the same `Fix Issues` / `Access Healthy` / `Manual Fix Needed` behavior and delegate overwrite mutation to the shared repair owner.
+## DS-AUD-CONTEXTUAL-REPAIR-LIVE-REGRESSION — Fix false Fix Issues failures
 
 **Status:** IMPLEMENTATION / VALIDATION
 
-**Branch:** `audit/profile-selfroles-contextual-repair`
-**Base main:** `70b8ba74cfdab562af26afef9664719c23a6f1fe`
-**Previous integrated task:** PR #249 merged and verified on `main` at `70b8ba74cfdab562af26afef9664719c23a6f1fe`
+**Branch:** `audit/contextual-repair-permission-cache-fix`
+**Base main:** `6b8abf9f66db55251c2c2e133526d1ac867c5755`
+**Previous integrated task:** PR #248 merged and verified on `main` at `6b8abf9f66db55251c2c2e133526d1ac867c5755`.
 
-## Scope
+## User-reported production regression
 
-- `/dank profile builder` and its profile/self-role panel posting path in `public_self_roles_group`
-- Compact Profile Signatures setup in `profile_card_setup_ui`
-- Roles Center self-role panel posting path in `roles_center_services`
-- reuse of `contextual_permission_repair` / `permission_repair_core`; bypass feature-local channel overwrite repair ownership
-- exact selected/configured channels only; no guessed replacement targets
-- same-screen repair state and immediate post-repair re-audit where the workflow owns the exact target
-- focused regressions and task/PR bookkeeping
+The guided setup `Fix Issues` action reported four targets as not repaired:
 
-Out of scope:
-- changing profile role taxonomy, cosmetic-role safety policy, member privacy, profile-card rendering, or role creation semantics
-- moving Dank Shield's bot role or other role hierarchy
-- granting Administrator or server-level permissions through channel repair
-- widening member/@everyone visibility
-- clearing explicit denies without the existing explicit confirmation path
-- Protection / VC / Embed / Status contextual repair adoption
-- broad startup-guard retirement
+- Verification start channel: still missing `send_messages`, `embed_links`, `attach_files`
+- Ticket archive category: still missing `view_channel`
+- Ticket transcripts channel: claimed Dank Shield lacked Manage Channels and could not repair its own overwrite
+- Moderation log channel: same Manage Channels blocker
 
-## Findings
+This regression takes the Single Active Task Lock. Do not move to Protection or any later audit item until this task is implemented, exact-head validated, merged, and verified on `main`.
 
-1. PR #249 corrected the failed PR #247 Modlog/Member Logs runtime binding and is merged and verified on `main` at `70b8ba74cfdab562af26afef9664719c23a6f1fe`.
-2. `public_self_roles_group` already had a local Profile Builder health model separating channel-effective failures from manual role/server prerequisites.
-3. The old `builder:fix` path called `channel.set_permissions(...)` directly for Dank Shield. That duplicated permission ownership and bypassed the shared repair audit/undo/event path.
-4. Profile Builder channel health historically checked View Channel, Send Messages, and Embed Links. The shared `general` profile covers those plus Attach Files and Read Message History, which are safe bot-only panel capabilities.
-5. Manage Roles, role hierarchy, managed roles, and explicit denies are not safe channel-overwrite repairs and remain manual.
-6. Compact Profile Signatures validates every exact saved/selected channel and previously refused save/re-enable when access was missing, but provided no repair action. Its configured/selected IDs are deterministic repair targets.
-7. Compact setup runtime builds `profile_card_setup_ui.ProfileCardSetupView` dynamically after the late setup presentation patch, so the contextual subclass can be composed without creating a second setup command owner.
-8. Roles Center owns the exact text channel selected immediately before it posts a pronoun/identity self-role panel, so it can preflight and safely repair only that selected channel.
+## Root causes
 
-## Implemented execution path
+1. `permission_repair_core.audit_target()` used `effective.manage_channels` as the prerequisite for `GuildChannel.set_permissions(...)`. Discord's Edit Channel Permissions endpoint actually requires `MANAGE_ROLES` (shown as Manage Permissions in channel UI). That produced false manual blockers when Manage Channels was absent but overwrite editing was authorized.
+2. `contextual_permission_repair.repair_context()` called `set_permissions(...)` and then immediately re-audited `guild.get_channel(...)`. discord.py sends the overwrite update over HTTP, while the gateway-backed channel object can still contain the pre-repair overwrite until the Channel Update event arrives. A same-tick cache-only audit can therefore claim a successful repair is still missing.
 
-- added `public_profile_contextual_permission_repair` and activate it from the existing late public setup gate
-- Profile Builder status now evaluates the exact current panel channel through the shared contextual audit while preserving the existing role/hierarchy manual blockers
-- Profile Builder button state is now `Fix Issues`, disabled `Access Healthy`, or `Manual Fix Needed`
-- `builder:fix` is intercepted before the historical local mutation path and delegates to `contextual_permission_repair.repair_context()`
-- after Profile Builder repair, the same interaction response is refreshed with a fresh access audit and last-repair result
-- Compact Profile Signatures gains a shared contextual access button on the same setup view
-- saved Compact Signature channels are repaired/re-audited through the shared owner
-- when an administrator selects new Compact Signature channels that are otherwise valid but inaccessible, the selected exact channels are repaired through the shared owner before the canonical save path continues; unresolved/manual access prevents the selection from being saved
-- Roles Center preflights the exact selected self-role panel channel through the shared owner before canonical role creation/posting continues
-- no replacement channel is guessed anywhere in these paths
-- no new feature-local `set_permissions`, explicit-deny clearing, role mutation, Administrator grant, or member-visibility widening path was added
+## Implementation
 
-## Safety contract
+- permission-overwrite authorization now checks effective `manage_roles`, not `manage_channels`
+- Discord Forbidden wording now identifies Manage Roles / Manage Permissions rather than falsely naming Manage Channels
+- the contextual post-repair audit fetches each exact configured target from Discord over HTTP before deciding whether repair succeeded
+- if the HTTP refresh itself fails, the audit falls back to the cached channel and remains fail-closed rather than claiming success
+- no member/@everyone visibility changes, Administrator grants, target guessing, role movement, or explicit-deny clearing were added
+- all permission mutation remains in `permission_repair_core`
 
-- only exact current/saved/selected channels are targeted
-- no replacement channel is guessed
-- no @everyone/member/staff visibility is widened
-- no role hierarchy is moved
-- no Administrator permission is granted
-- explicit denies stay preserved by the shared repair core
-- Manage Roles, role hierarchy, missing mappings, unsupported channel types, and server-level prerequisites remain manual
+## Regression coverage
 
-## Validation added
+`tests/test_contextual_permission_repair_live_regression.py` covers:
 
-`tests/test_profile_contextual_permission_repair.py` covers:
-- no permission mutation ownership in the integration module
-- Profile Builder `fix` interception and same-screen refresh
-- shared three-state button contract
-- role prerequisites / explicit denies remaining manual
-- Compact Profile Signatures same-screen repair control
-- exact selected-channel repair before canonical save
-- Roles Center exact selected-channel preflight repair
-- general minimum permission profile / no name guessing
-- late setup-gate activation
-- runtime rebinding of all three Profile/Self Roles surfaces
+- Manage Roles present + Manage Channels absent does not block overwrite repair
+- missing Manage Roles produces the manual overwrite blocker
+- successful mutation followed by a stale cached channel is verified against a fresh Discord channel
+- failed fresh fetch falls back to cache and does not falsely claim healthy access
 
 ## Validation gate
 
-- normal public Profile / Self Roles execution paths proven by source tracing
-- focused contextual-repair regressions pass
-- exact final branch 0 behind `main`
-- final changed-file scope contains only task-owned implementation/tests/bookkeeping
-- full required GitHub Actions pass on exact final head
-- no review/thread issue ignored
-- no merge until exact-head validation and scope review are clean
+- focused regression tests pass
+- full unit suite passes
+- Python compile and standalone audits pass
+- every triggered PR workflow succeeds on the exact final head
+- final branch is 0 behind current `main`
+- changed-file scope is limited to the repair core, contextual re-audit, focused tests, and task bookkeeping
+- no unresolved review/thread issue
+- exact validated head is merged
+- resulting merge commit is verified as current `main`
 
-## Backlog after this task
+## Backlog after this regression closes
 
-- Protection contextual repair adoption
-- remaining VC-specific repair cleanup
-- Embed / Status contextual repair adoption
-- admin-only `/dank tickettool-check` contextual repair adoption
-- `/dank protection` remaining non-invite picker/guard cleanup
-- `/dank design` picker migration
-- admin-only legacy setup picker cleanup
+1. Protection contextual repair adoption
+2. remaining VC-specific repair cleanup
+3. Embed / Status contextual repair adoption
+4. admin-only `/dank tickettool-check` contextual repair adoption
+5. `/dank protection` remaining non-invite picker/guard cleanup
+6. `/dank design` picker migration
+7. admin-only legacy setup picker cleanup
 
 ## Next step
 
-Validate the exact final PR #248 head against current `main`, inspect scope/reviews/drift, merge only when every triggered workflow is successful, verify the resulting merge commit as current `main`, then release the lock and move to Protection contextual repair.
+Open the corrective PR, inspect the exact diff, run the full exact-head validation wave, fix any regression found, merge only the final validated head, verify `main`, then release this lock.
