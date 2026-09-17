@@ -203,6 +203,7 @@ def register_public_setup_gate(bot, tree) -> None:
     from .public_contextual_permission_repair import apply_contextual_permission_repair
     from .public_ticket_contextual_permission_repair import apply_ticket_contextual_permission_repair
     from .public_logging_contextual_permission_repair import apply_logging_contextual_permission_repair
+    from .public_protection_contextual_permission_repair import apply_protection_contextual_permission_repair
     from . import public_profile_contextual_permission_repair as profile_contextual_repair
     from .public_setup_compact import apply_compact_setup_patch
     from .public_runtime_ux_repairs import apply_runtime_ux_repairs
@@ -214,6 +215,7 @@ def register_public_setup_gate(bot, tree) -> None:
     ticket_repair_ok = apply_ticket_contextual_permission_repair()
     logging_repair_ok = apply_logging_contextual_permission_repair()
     profile_repair_ok = profile_contextual_repair.apply_profile_contextual_permission_repair()
+    protection_repair_ok = apply_protection_contextual_permission_repair()
 
     # Compact Profile Signature selection historically fails closed before it
     # defers or writes when the interaction does not carry a real actor. Keep
@@ -246,7 +248,8 @@ def register_public_setup_gate(bot, tree) -> None:
             f"contextual_repair={'true' if contextual_repair_ok else 'false'} "
             f"ticket_contextual_repair={'true' if ticket_repair_ok else 'false'} "
             f"logging_contextual_repair={'true' if logging_repair_ok else 'false'} "
-            f"profile_contextual_repair={'true' if profile_repair_ok else 'false'}"
+            f"profile_contextual_repair={'true' if profile_repair_ok else 'false'} "
+            f"protection_contextual_repair={'true' if protection_repair_ok else 'false'}"
         )
     except Exception:
         pass
