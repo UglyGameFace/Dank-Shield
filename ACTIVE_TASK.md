@@ -2,11 +2,12 @@
 
 ## DS-SEC-ANTINUKE-RUNTIME-CONSOLIDATION — Make AntiNuke runtime ownership explicit
 
-**Status:** PHASE B IMPLEMENTATION / VALIDATION
+**Status:** FINAL EXACT-HEAD VALIDATION
 
 **Branch:** `refactor/antinuke-runtime-bootstrap-consolidation`
 **Base main:** `bbf36ee6a4859f55a2e23373313cb21ccb64686d`
 **Validated Phase A head:** `984c4b4d75ef805d8fd59d92af97cabbc0460699`
+**Validated Phase B implementation head:** `c8dff74f5a7bb38c95707b4040d1586dcbcb954f`
 
 ## Previous task locks closed
 
@@ -93,10 +94,10 @@ Removed only the proven redundant owner-severity overlap:
 - removed `_patch_owner_first_strike()`
 - removed the incident import and owner patch call from the lockdown installer
 - changed lockdown startup reporting to `owner severity=incident-owned`
-- updated comments to explicitly document the remaining strict pre-app behavior as fail-closed fallback that product policy relaxes after app import
+- documented the remaining strict pre-app behavior as fail-closed fallback that product policy relaxes after app import
 - replaced the obsolete lockdown owner-first-strike unit test with an ownership regression proving lockdown no longer patches owner severity and incident runtime contains the authoritative classifier
 
-No threshold, containment, bot-add authorization, quarantine, rollback, trusted-staff, or Strict Lockdown semantics are intentionally changed.
+No threshold, containment, bot-add authorization, quarantine, rollback, trusted-staff, or Strict Lockdown semantics were intentionally changed.
 
 ## Canonical ownership after Phase B
 
@@ -107,21 +108,56 @@ No threshold, containment, bot-add authorization, quarantine, rollback, trusted-
 - **gateway/guardian:** event attribution, action dispatch, rollback surfaces, and panic evidence
 - **runtime coordinator:** installation order and pre/post-app bootstrap boundary only
 
-## Validation gate
+## Phase B exact-head validation
 
-Before merge:
+Exact implementation head `c8dff74f5a7bb38c95707b4040d1586dcbcb954f` passed the complete workflow set:
 
-- Phase B exact head must pass Python compile, full unit suite, standalone/security/event-boundary audits, all three required jobs, and all companion workflows
-- inspect the final PR diff for debug code, stale owner-wrapper symbols, conflict artifacts, accidental policy changes, and duplicate runtime ownership
-- confirm owner-policy normalization regressions remain green
-- confirm Invite Shield bootstrap still precedes reconciliation
-- confirm branch remains 0 behind current `main`
-- resolve any review blocker
-- update this task record with final exact-head evidence
-- revalidate the bookkeeping head exactly
-- mark PR #256 ready and merge only the exact validated SHA
-- verify the resulting `main` merge parent and require `discloud/commit: success` before releasing this task lock
+- Dank Shield CI #2286: **success**
+  - Python compile check: **success**
+  - full unit test suite: **success**
+  - standalone tool checks: **success**
+  - public setup/isolation audit: **success**
+  - canonical public command surface audit: **success**
+  - public command/startup friction audit: **success**
+  - public invite permissions audit: **success**
+  - setup safety audit: **success**
+  - Dank Design Smart Auto-Detect audit: **success**
+  - role truth ownership audit: **success**
+  - event boundary ownership audit: **success**
+  - Claim-first ticket security: **success**
+  - Managed category SQL smoke test: **success**
+- Application Command Size Diagnostics #1270: **success**
+- Dank Design Regression CI #512: **success**
+- Ticket Owner Emergency Override #857: **success**
+- Profile Runtime Diagnostics #1019: **success**
+
+## Final diff / ownership audit
+
+At the validated Phase B head:
+
+- branch was 0 commits behind current `main` `bbf36ee6a4859f55a2e23373313cb21ccb64686d`
+- PR changed exactly 11 task files, limited to the coordinator/bootstrap, lockdown ownership cleanup, task record, and associated regression migrations/tests
+- no unresolved review threads existed; the only PR comment was Supabase noting no `supabase` directory changes
+- no Git conflict markers, debug breakpoints, or task TODO/FIXME artifacts were found in changed files
+- `main.py` still installs Invite Shield message-surface protection before invite reconciliation, then AntiNuke pre-app coordinator before app import, AntiNuke post-app coordinator after app import, SpamGuard after post-app, and finally runs the bot
+- lockdown contains no `_OWNER_PATCH_FLAG`, no `_patch_owner_first_strike()`, and no incident-runtime owner patch import
+- incident runtime still contains the authoritative `_owner_event_policy()` and `_process_owner_destructive_event()`
+- the conservative lockdown `_STRICT_PROCESS_ACTION_KEYS`, `_STRICT_GUARDIAN_ACTIONS`, and related rollback behavior remain deliberately intact as fail-closed pre-app fallback
+- owner-policy normalization and Invite Shield regressions are covered by the full passing unit/audit suite
+
+## Final exact-head gate
+
+This bookkeeping commit changes the PR head SHA. The new final head must independently pass the complete required and companion workflow set before merge. Do not merge based only on the successful Phase B implementation-head wave.
+
+After the final wave:
+
+1. confirm the branch is still 0 behind current `main` with the same intended 11 files
+2. confirm no new review blocker exists
+3. mark PR #256 ready
+4. merge using the exact validated final head SHA
+5. verify the resulting `main` merge commit has that exact PR head as a parent
+6. require `discloud/commit: success` before releasing the task lock
 
 ## Next step
 
-Run exact-head Phase B validation. If green, perform the final diff/ownership audit and bookkeeping update; if anything fails, fix only the current AntiNuke consolidation task and repeat exact-head validation.
+Run the final exact-head workflow wave created by this bookkeeping update. If every workflow remains green and `main` has not drifted, merge PR #256 and verify production deployment.
