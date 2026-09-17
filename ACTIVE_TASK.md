@@ -1,78 +1,78 @@
 # ACTIVE TASK
 
-## DS-MEMBER-JOIN-LOG-REGRESSION — Restore reliable member join/leave lifecycle logging
+## DS-SEC-OWNER-POLICY-NORMALIZATION — Normalize AntiNuke guild-owner evidence
 
-**Status:** FINAL EXACT-HEAD VALIDATION AFTER MAIN SYNC
+**Status:** FINAL EXACT-HEAD VALIDATION AFTER PR #251 INTEGRATION
 
-**Branch:** `fix/member-join-leave-log-regression`
-**Current base main:** `4f40659375cf15811dba17a4da484532eb7f1c1e`
-**PR:** #251
+**Branch:** `fix/antinuke-owner-policy-normalization`
+**Current base main:** `0c8d8ae1971656f0c5c2e9ef95ebd11a9c94fa97`
+**PR:** #253
+
+## Previous task closed
+
+PR #251 (`DS-MEMBER-JOIN-LOG-REGRESSION`) was synchronized with then-current `main`, passed every exact-head workflow, merged as `0c8d8ae1971656f0c5c2e9ef95ebd11a9c94fa97`, became current `main`, and Discloud reported `discloud/commit: success` for that exact merge commit.
+
+The Single Active Task Lock now returns to this AntiNuke owner-policy normalization task.
 
 ## Outcome target
 
-Real Discord member joins and leaves must always produce the configured operational lifecycle log independently of optional Welcome/Exit Card Studio delivery and independently of invite-source attribution. A successful Studio delivery may suppress only a true same-channel duplicate.
+Guild-owner activity must be classified by actual security severity. Cosmetic/routine administration must not become a false `Owner-Compromise Warning 1/1`; high-confidence destructive/security-authority mutations must remain immediate warnings; specialized dangerous-role owner paths must not be silently skipped.
 
 ## Root cause
 
-The canonical Welcome Card migration removed the operational join sender from the configured `JOIN_LEAVE_KEYS` route and made the optional Studio path the only public join output. Closure review found the same coupling on leave: disabling, failing, or separately routing Exit Card Studio could suppress the configured leave log as well. Invite attribution is a separate concern and must never gate the base `on_member_join` lifecycle event.
+1. The legacy lockdown owner wrapper supplies `threshold_override=1` without knowing whether the event is cosmetic, routine, bounded, or genuinely destructive.
+2. That can turn harmless owner administration into an immediate compromise accusation.
+3. Specialized dangerous role creation, dangerous role-permission escalation, and security-sensitive member-role grant handlers historically return early for the physical guild owner before canonical owner policy.
+4. The result is inconsistent in both directions: some harmless owner activity can over-alert while some dangerous owner authority events can be skipped.
 
-## Execution / ownership
+## Implemented severity policy
 
-- `public_member_lifecycle_runtime` installs the authoritative `member_lifecycle_router_guard`.
-- `member_lifecycle_router_guard` owns the configured operational join/leave route.
-- Welcome Card Studio remains the optional member-facing welcome card owner.
-- Exit Card Studio remains the optional member-facing leave card owner.
-- staff invite-source/modlog output stays separate.
-- retired legacy public lifecycle senders remain inactive.
+- cosmetic guild identity and cosmetic role edits are non-punitive owner evidence
+- routine/lower-confidence administration uses elevated bounded owner thresholds instead of `1/1`
+- channel creation, single-message deletion, onboarding/Stage administration, webhook create/update, integration create/update, vanity/security-adjacent guild settings, harmless role creation, role position/permission removal, and member-role removal are bounded
+- channel deletion, permission-overwrite mutation, role deletion, prune, webhook/integration deletion, command-permission mutation, AutoMod security mutation/deletion, bulk message deletion, guild owner/MFA mutation, dangerous role creation/escalation, and sensitive role grants remain immediate
+- owner-created OAuth/integration setup remains bounded so it does not conflict with canonical bot-add authorization and hostile-bot correlation
+- dangerous owner role creation, permission escalation, and sensitive member-role grants now enter canonical owner policy instead of being silently skipped
 
-## Implemented changes
+Discord's platform authority boundary is unchanged: Dank Shield can detect/report physical-owner compromise but cannot kick, ban, or strip the guild owner.
 
-- independently send configured operational join and leave events through `JOIN_LEAVE_KEYS`
-- preserve operational logging when either Studio is disabled, unavailable, fails, or targets another channel
-- suppress only a successful Studio delivery to the exact same lifecycle channel
-- keep join logging independent of invite attribution success
-- stop `/dank member-logs` from forcibly enabling Exit Card Studio when only the lifecycle log channel is changed
-- preserve compatibility target mapping without overriding the user's explicit Studio enable/disable choice
-- update lifecycle status/help and centralization guards
+## Preserved behavior
+
+Unknown/untrusted actor containment, operational-bot authorization, trusted-operator thresholds, overwrite protection, hostile reputation, Strict Lockdown, self-action protection, canonical bot-add authorization, and the newly merged PR #251 member-lifecycle route remain unchanged.
+
+No duplicate punishment engine or extra runtime patch layer is introduced.
 
 ## Regression coverage
 
-`tests/test_modlog_join_dedupe_behavior.py` covers Studio-disabled, Studio-failed, same-channel duplicate, different-channel, join, leave, and existing semantic-dedupe behavior.
-
-`tools/test_join_leave_log_centralized.py` guards canonical ownership, both operational senders, `JOIN_LEAVE_KEYS`, duplicate suppression, Studio-gate independence, member-logs behavior, and retirement of legacy senders.
+`tests/test_antinuke_owner_policy_normalization.py` covers cosmetic role rename/color, cosmetic guild rename, bounded channel creation, bounded single-message deletion, bounded onboarding/Stage/webhook-update/integration-create/vanity changes, immediate channel deletion/MFA/webhook-delete/integration-delete, dangerous owner role creation and permission escalation, and sensitive member-role grants.
 
 ## Validation history
 
-The pre-sync final head `cb9dd9fd157f7fe622f92e153ae0e321309c78dc` passed all triggered workflows, including Dank Shield CI, Ticket Owner Emergency Override, Dank Design Regression CI, Schema Authority SQL, Application Command Size Diagnostics, and Profile Runtime Diagnostics.
+The prior final head `548489871fb0435d23afdac9f0c36fd89f9f775e` passed all required and companion workflows, including full unit tests, Python compile, standalone audits, Application Command Size Diagnostics, Dank Design Regression CI, Ticket Owner Emergency Override, Profile Runtime Diagnostics, Claim-first ticket security, Managed category SQL smoke test, and Dank Shield CI.
 
-That head could not be merged because `main` advanced by five commits after the PR branched. GitHub correctly reported the PR as diverged and non-mergeable even though its own exact-head CI was green. Current `main` changes are AntiNuke-only plus `ACTIVE_TASK.md`; the lifecycle production/test files do not overlap.
+PR #251 then merged into `main`, making this branch stale by history only. The lifecycle implementation does not overlap this task's AntiNuke production/test files; `ACTIVE_TASK.md` is the only bookkeeping overlap.
 
-This branch now incorporates current `main` while preserving the four-file lifecycle task scope. The resulting exact synchronized head must pass the full validation wave again before merge.
+This branch now incorporates PR #251's merged `main` exactly while preserving the AntiNuke task files. Because the head SHA changed, all validation must pass again on the exact synchronized head before merge.
 
-## Scope / cleanup
-
-Intended task files only:
+## Intended PR scope
 
 - `ACTIVE_TASK.md`
-- `stoney_verify/startup_guards/member_lifecycle_router_guard.py`
-- `tests/test_modlog_join_dedupe_behavior.py`
-- `tools/test_join_leave_log_centralized.py`
+- `stoney_verify/anti_nuke_incident_runtime.py`
+- `tests/test_antinuke_owner_policy_normalization.py`
 
-The current-main AntiNuke changes are inherited from `main`, not part of this PR's lifecycle implementation. No invite-policy, moderation-policy, schema, role, ticket, or unrelated redesign belongs in this task.
+The lifecycle changes inherited from `main` are not part of PR #253's AntiNuke diff.
 
 ## Merge gate
 
-- exact synchronized head is 0 behind current `main`
-- all required and companion workflows pass on that exact head
-- final PR diff is limited to the intended lifecycle task
+- synchronized branch is 0 behind current `main`
+- every required and companion workflow passes on the exact head
+- final diff is limited to the three AntiNuke task files
 - no unresolved review/thread blocker exists
 - PR is mergeable and marked ready
 - merge only the exact validated head
 - verify resulting merge commit is current `main`
-- verify post-merge deployment/status before releasing this task lock
-
-A live Discord join/leave remains the final production exercise and cannot be simulated by GitHub CI.
+- verify `discloud/commit` succeeds before releasing the task lock
 
 ## Next step
 
-Run the full exact-head validation wave on the synchronized branch. If green, mark PR #251 ready, merge the exact validated SHA, verify `main` and deployment/status, then return to PR #253 and resynchronize/revalidate it against the new `main` before merging.
+Run the full exact-head validation wave on the synchronized PR #253 head. If every check is green, mark the PR ready, merge that exact SHA, verify `main` and Discloud deployment, then release this task lock and move to the broader AntiNuke runtime-ownership consolidation as the next AntiNuke cleanup task.
