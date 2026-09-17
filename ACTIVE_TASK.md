@@ -1,8 +1,8 @@
 # ACTIVE TASK
 
-## DS-MEMBER-JOIN-LOG-REGRESSION — Restore join events to the join/leave log
+## DS-MEMBER-JOIN-LOG-REGRESSION — Restore reliable member join/leave lifecycle logging
 
-**Status:** IMPLEMENTATION / VALIDATION
+**Status:** FINAL VALIDATION / MERGE GATE
 
 **Branch:** `fix/member-join-leave-log-regression`
 **Base main:** `98290563f7244af198c4384a595cb66cdc76e0e3`
@@ -14,75 +14,117 @@
 - PR #250 final head: `e28a6a65bb678d4b0f147c0c4cea0e9e987d8a62`
 - all five triggered exact-head workflows completed successfully
 - PR #250 merged as `98290563f7244af198c4384a595cb66cdc76e0e3`
-- that merge commit is the current `main`
-- Discloud commit status on the merge commit is successful
+- that merge commit became `main`
+- Discloud commit status on that merge commit was successful
 
-This file was stale after the merge; the repository lock is now transferred to the production join-log regression below.
+The Single Active Task Lock is now this member-lifecycle regression only. Do not switch to another audit item until this exact task is validated, merged, and verified on `main`.
 
 ## User-reported production regression
 
-New members are joining the guild, including members arriving through a recently added bot that presents Discord invites as hyperlinks, but Dank Shield is not posting those joins in the configured join/leave channel.
+Real members were joining the guild, including members arriving through a bot that presents Discord invites as hyperlinks, but Dank Shield was not posting those joins in the configured join/leave channel.
 
 ## Root cause
 
-The August 6 canonical Welcome Card change (`ae556fa34d4f9e2dd8cb7562d81472c592baa22e`) intentionally removed the operational join sender from `JOIN_LEAVE_KEYS` and made `Welcome Card Studio` the only public join sender.
+The August 6 canonical Welcome Card change (`ae556fa34d4f9e2dd8cb7562d81472c592baa22e`) removed the operational join sender from `JOIN_LEAVE_KEYS` and made Welcome Card Studio the only public join output. That made the configured join/leave route effectively exit-only.
 
-That created a routing regression:
+Closure review found the matching leave-side coupling in the same lifecycle boundary: `_leave_listener()` delegated only to `send_live_exit_card()`, and that runtime correctly honors the Exit Card Studio enable gate. As a result, explicitly disabling or failing Exit Card Studio could also suppress the configured operational leave entry.
 
-1. the configured join/leave channel stopped receiving member-joined events;
-2. a disabled, unavailable, or differently routed Welcome Card Studio could therefore make a perfectly valid Discord join appear completely unlogged in the join/leave channel;
-3. invite-source attribution is independent of the member-join gateway event, so an unresolved redirect/hyperlink/OAuth-style source must never suppress the basic join event log.
+Invite-source attribution is independent of Discord's member gateway event. A normal invite wrapped in a hyperlink still produces `on_member_join`; redirect/OAuth-style sources may be unattributable to a specific invite code, but attribution uncertainty must never suppress the base lifecycle event.
 
-Discord member events are enabled in code (`intents.members = True`). The defect is the retired join/leave route, not the existence of a hyperlink around an invite URL.
+Discord member events are enabled in code (`intents.members = True`). The defect was lifecycle route ownership, not the hyperlink itself.
 
-## Execution path
+## Canonical ownership after the fix
 
-- Discord dispatches `on_member_join`.
-- `member_lifecycle_router_guard._join_listener()` is the authoritative public lifecycle listener.
-- `send_live_welcome_card()` handles the optional member-facing Welcome Card Studio output.
-- `JOIN_LEAVE_KEYS` contains the configured operational lifecycle log channel aliases.
-- Before this task, `_join_listener()` never resolved or sent to `JOIN_LEAVE_KEYS`.
-- Invite attribution is separately collected by `members_new.join_context_service` and staff/modlog paths.
+- `public_member_lifecycle_runtime` is the public-core bootstrap and installs `member_lifecycle_router_guard`.
+- `member_lifecycle_router_guard` owns the operational join/leave event route through `JOIN_LEAVE_KEYS`.
+- Welcome Card Studio owns the optional member-facing welcome card.
+- Exit Card Studio owns the optional member-facing leave card.
+- Staff invite-source/modlog auditing stays separate from public lifecycle output.
+- `events.py` keeps its member lifecycle output staff/modlog-only.
+- Profile-card `on_member_remove` handlers remain cleanup-only.
+- AntiNuke `on_member_remove` remains security-only.
+- `public_setup_logs` explicitly does not register lifecycle listeners.
+- historical `welcome_member_events_guard` is not startup-loaded.
+- historical `public_member_lifecycle_logs` remains unregistered from command profiles.
+- retired v3/v4 public lifecycle marker senders remain disabled.
 
 ## Implementation
 
-- keep Welcome Card Studio as the canonical member-facing welcome card
-- restore an independent operational member-joined event to the configured join/leave route
-- make join logging independent of Welcome Card Studio enabled/disabled/failure state
-- make join logging independent of invite attribution success
-- suppress only a true duplicate when Welcome Card Studio already successfully posted to the exact same channel
-- preserve separate staff invite-source/audit ownership
-- expose the operational join/leave route clearly in `/dank member-logs` status/help text
-- retain legacy duplicate listener retirement
+- preserve Welcome Card Studio as the canonical member-facing welcome card
+- preserve Exit Card Studio as the canonical member-facing leave card
+- independently log every configured member join and leave through `JOIN_LEAVE_KEYS`
+- operational join logging does not depend on Welcome Card Studio being enabled, succeeding, or using the same channel
+- operational leave logging does not depend on Exit Card Studio being enabled, succeeding, or using the same channel
+- if a Studio successfully posts to the exact same configured lifecycle channel, suppress only that true duplicate
+- if a Studio posts to a different channel, keep the operational lifecycle log
+- if a Studio raises an exception, keep the operational lifecycle log
+- keep join logging independent of invite-source attribution success
+- preserve staff audit/modlog ownership separately
+- `/dank member-logs` no longer forcibly enables Exit Card Studio merely because the lifecycle log channel changed
+- `/dank member-logs` still updates the Exit Card target for compatibility without overriding the user's explicit Studio enable/disable choice
+- lifecycle status/help text now describes the operational route and Studio routes separately
 
 ## Regression coverage
 
-`tests/test_modlog_join_dedupe_behavior.py` now covers:
+`tests/test_modlog_join_dedupe_behavior.py` covers:
 
-- the canonical Welcome Card runtime still receives member joins
-- a disabled Welcome Card Studio does not suppress the operational join log
-- the operational join log resolves through `JOIN_LEAVE_KEYS`
-- same-channel duplicate suppression occurs only when Welcome Card Studio actually delivered there
+- canonical Welcome Card runtime still receives joins
+- disabled Welcome Card Studio does not suppress the operational join log
+- same-channel Welcome Card delivery suppresses only the duplicate operational join
+- different-channel Welcome Card delivery does not suppress the operational join
+- Welcome Card runtime exceptions do not suppress the operational join
+- disabled Exit Card Studio does not suppress the operational leave log
+- same-channel Exit Card delivery suppresses only the duplicate operational leave
+- different-channel Exit Card delivery does not suppress the operational leave
+- Exit Card runtime exceptions do not suppress the operational leave
 - existing modlog semantic dedupe remains intact
 
-Existing lifecycle centralization/static tests continue to guard against re-registering the retired legacy lifecycle module and old v3/v4 marker senders.
+`tools/test_join_leave_log_centralized.py` guards:
+
+- independent join and leave operational senders
+- `JOIN_LEAVE_KEYS` resolution for both directions
+- same-channel duplicate suppression markers
+- no configured-route diagnostics
+- independence from both Studio enable gates
+- `/dank member-logs` must not force `exit_card_enabled = True`
+- retired public lifecycle sender markers must stay absent
+
+Existing lifecycle static tests additionally guard the public-core bootstrap, old listener retirement, broad alias compatibility, staff/public separation, and canonical Studio ownership.
+
+## Scope / integration review
+
+Current branch scope is intentionally limited to:
+
+- `ACTIVE_TASK.md`
+- `stoney_verify/startup_guards/member_lifecycle_router_guard.py`
+- `tests/test_modlog_join_dedupe_behavior.py`
+- `tools/test_join_leave_log_centralized.py`
+
+No invite-policy changes, moderation-policy changes, database/schema changes, role changes, ticket changes, or unrelated audit redesign are included.
 
 ## Validation gate
 
-- targeted member lifecycle regression tests pass
-- join/leave centralization standalone audit passes
-- Python compile/static checks pass
-- full applicable test suite passes
-- every triggered PR workflow succeeds on the exact final head
-- final branch is compared against current `main` and contains no unrelated changes
-- final diff has no debug code, conflict artifacts, secrets, generated junk, or duplicate lifecycle senders
-- exact validated head is merged
+Before this task lock can be released:
+
+- targeted lifecycle behavior tests pass
+- lifecycle centralization/runtime static audits pass
+- Python compile checks pass
+- full applicable unit suite passes
+- every triggered workflow succeeds on the exact final head
+- branch is 0 behind current `main`
+- final diff contains only the intended four files
+- no unresolved review threads or review blockers exist
+- no debug code, conflict artifacts, secrets, generated junk, or duplicate lifecycle sender is present
+- PR is merged only with the exact validated head
 - resulting merge commit is verified as current `main`
+- merge/deployment status is checked
 
-## Backlog
+A real Discord member join/leave is the final production exercise and cannot be simulated by GitHub CI; repository validation must not be mislabeled as a live Discord event test.
 
-No unrelated redesign is included in this task. If a specific third-party invite bot uses a non-invite OAuth flow that Discord cannot attribute to an invite code, richer source attribution can be evaluated separately after this join-log regression closes. The member-joined log itself must still work regardless.
+## Backlog after this task closes
+
+Do not widen this task. If a specific third-party invite bot uses a non-invite OAuth flow that Discord cannot attribute to an invite code, richer source attribution can be evaluated separately after the lifecycle log regression is merged and verified. Dormant historical lifecycle compatibility files can likewise be considered during later cleanup only if they are proven safe to remove without reactivating or breaking ownership contracts.
 
 ## Next step
 
-Validate the branch, inspect CI and the final diff, fix only failures tied to this regression, then merge the exact validated head and verify the resulting `main` commit before releasing the task lock.
+Validate the exact final branch head, fix only failures tied to this lifecycle task, compare against current `main`, inspect the final PR state, merge the exact validated head, verify `main` and deployment/status evidence, then release the task lock.
