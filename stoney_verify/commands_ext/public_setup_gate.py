@@ -203,16 +203,40 @@ def register_public_setup_gate(bot, tree) -> None:
     from .public_contextual_permission_repair import apply_contextual_permission_repair
     from .public_ticket_contextual_permission_repair import apply_ticket_contextual_permission_repair
     from .public_logging_contextual_permission_repair import apply_logging_contextual_permission_repair
-    from .public_profile_contextual_permission_repair import apply_profile_contextual_permission_repair
+    from . import public_profile_contextual_permission_repair as profile_contextual_repair
     from .public_setup_compact import apply_compact_setup_patch
     from .public_runtime_ux_repairs import apply_runtime_ux_repairs
+    from stoney_verify import profile_card_setup_ui as profile_signatures
 
     apply_compact_setup_patch()
     apply_runtime_ux_repairs()
     contextual_repair_ok = apply_contextual_permission_repair()
     ticket_repair_ok = apply_ticket_contextual_permission_repair()
     logging_repair_ok = apply_logging_contextual_permission_repair()
-    profile_repair_ok = apply_profile_contextual_permission_repair()
+    profile_repair_ok = profile_contextual_repair.apply_profile_contextual_permission_repair()
+
+    # Compact Profile Signature selection historically fails closed before it
+    # defers or writes when the interaction does not carry a real actor. Keep
+    # that contract for malformed/test interactions while allowing the shared
+    # contextual repair path for normal Discord interactions, which always have
+    # an interaction user.
+    if profile_repair_ok:
+        contextual_signature_save = profile_signatures._save_selected_channels
+        if not getattr(contextual_signature_save, "_dank_actor_safe", False):
+            async def actor_safe_signature_save(interaction, view, selected):
+                actor = getattr(interaction, "user", None)
+                actor_id = int(getattr(actor, "id", 0) or 0)
+                if actor_id <= 0:
+                    return await profile_contextual_repair._ORIGINAL_SIGNATURE_SAVE(
+                        interaction,
+                        view,
+                        selected,
+                    )
+                return await contextual_signature_save(interaction, view, selected)
+
+            setattr(actor_safe_signature_save, "_dank_actor_safe", True)
+            profile_signatures._save_selected_channels = actor_safe_signature_save
+
     count = _patch_all()
     _PATCHED = count > 0
     try:
