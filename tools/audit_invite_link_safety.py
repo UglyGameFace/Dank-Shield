@@ -32,8 +32,9 @@ for sample in false_positive_samples:
     if found:
         failures.append(f"central extractor false-positive {sample!r} -> {found}")
 
-# Discord-generated unfurls are not sender-authored invite evidence. A normal URL
-# must stay allowed even when remote preview metadata advertises a Discord invite.
+# Discord-generated unfurls and interaction response chrome are not sender-authored
+# invite evidence. Utility app responses may contain a support-server button even
+# when the user invoked the app for a normal non-invite action.
 from stoney_verify import invite_policy_engine as invite_policy
 from stoney_verify import invite_policy_message_surface_runtime as message_surface
 
@@ -56,6 +57,8 @@ try:
         embeds=[preview],
         components=[],
         attachments=[],
+        interaction_metadata=None,
+        interaction=None,
     )
     found = invite_policy.extract_invite_codes_from_message(human_normal)
     if found:
@@ -67,6 +70,8 @@ try:
         embeds=[preview],
         components=[],
         attachments=[],
+        interaction_metadata=None,
+        interaction=None,
     )
     found = invite_policy.extract_invite_codes_from_message(human_invite)
     if found != ["realinvite"]:
@@ -78,6 +83,8 @@ try:
         embeds=[preview],
         components=[],
         attachments=[],
+        interaction_metadata=None,
+        interaction=None,
     )
     found = invite_policy.extract_invite_codes_from_message(bot_preview)
     if found:
@@ -98,10 +105,49 @@ try:
         embeds=[rich],
         components=[],
         attachments=[],
+        interaction_metadata=None,
+        interaction=None,
     )
     found = invite_policy.extract_invite_codes_from_message(bot_rich)
     if found != ["botinvite"]:
         failures.append(f"bot-authored rich invite was not preserved -> {found}")
+
+    support_button = SimpleNamespace(
+        url="https://discord.gg/remotehelp",
+        children=[],
+    )
+    app_response = SimpleNamespace(
+        content="",
+        author=SimpleNamespace(id=3, bot=True),
+        embeds=[rich],
+        components=[support_button],
+        attachments=[],
+        interaction_metadata=SimpleNamespace(
+            id=999,
+            user=SimpleNamespace(id=1),
+        ),
+        interaction=None,
+    )
+    found = invite_policy.extract_invite_codes_from_message(app_response)
+    if found:
+        failures.append(f"interaction utility response inherited support invite -> {found}")
+
+    app_explicit = SimpleNamespace(
+        content="https://discord.gg/explicitappinvite",
+        author=SimpleNamespace(id=3, bot=True),
+        embeds=[rich],
+        components=[support_button],
+        attachments=[],
+        interaction_metadata=SimpleNamespace(
+            id=999,
+            original_response_message_id=777,
+            user=SimpleNamespace(id=1),
+        ),
+        interaction=None,
+    )
+    found = invite_policy.extract_invite_codes_from_message(app_explicit)
+    if found != ["explicitappinvite"]:
+        failures.append(f"interaction explicit content invite was not preserved -> {found}")
 except Exception as exc:
     failures.append(f"message-surface invite audit failed: {type(exc).__name__}: {exc}")
 

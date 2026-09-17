@@ -1,16 +1,21 @@
 from __future__ import annotations
 
-"""Prevent Discord-generated link previews from becoming Invite Shield evidence.
+"""Prevent generated/app-response rich surfaces from becoming Invite Shield evidence.
 
-Invite Shield must judge links the sender actually authored. Discord can append
-unfurled previews for ordinary URLs, and remote page metadata can itself contain
-a Discord invite. Treating that preview metadata as message content causes false
-deletions of perfectly normal links.
+Invite Shield must judge links the sender actually authored as ordinary message
+content unless the rich surface itself is the moderation target.
 
-Human messages therefore use content only. Bot/webhook messages may additionally
-use custom rich embeds and components because automated senders can author those
-surfaces directly. Auto-generated link/article/video previews are ignored for
-all senders.
+Two Discord behaviors matter here:
+- normal URLs can gain Discord-generated preview embeds whose remote metadata may
+  advertise a Discord invite;
+- slash/application commands can return utility embeds and buttons that include
+  a support-server link even though the user invoked the app for a non-invite
+  action such as downloading a video.
+
+Human messages and interaction responses therefore use message content only.
+Ordinary bot/webhook messages may additionally use custom rich embeds/components
+because those automated senders can author those surfaces directly. Generated
+link/article/video previews remain ignored for every sender.
 """
 
 from typing import Any
@@ -26,6 +31,22 @@ def _human_authored(message: Any) -> bool:
     if author is None:
         return True
     return not bool(getattr(author, "bot", False))
+
+
+def _interaction_response(message: Any) -> bool:
+    """Return True when Discord marks this message as an interaction response."""
+
+    for attr in ("interaction_metadata", "interaction"):
+        try:
+            if getattr(message, attr, None) is not None:
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _content_text(message: Any) -> str:
+    return policy.clean_invite_text(str(getattr(message, "content", "") or ""))
 
 
 def _rich_bot_text(message: Any) -> str:
@@ -79,17 +100,15 @@ def install_invite_policy_message_surface_runtime() -> bool:
         setattr(policy, _ORIGINAL_ATTR, original)
 
     def message_text(message: Any) -> str:
-        if _human_authored(message):
-            return policy.clean_invite_text(
-                str(getattr(message, "content", "") or "")
-            )
+        if _human_authored(message) or _interaction_response(message):
+            return _content_text(message)
         return _rich_bot_text(message)
 
     policy.message_text = message_text
     setattr(policy, _INSTALL_FLAG, True)
     print(
         "🛡️ Invite Shield message-surface guard active: "
-        "human=content-only bot/webhook=content+custom-rich"
+        "human/interaction=content-only bot-webhook=content+custom-rich"
     )
     return True
 

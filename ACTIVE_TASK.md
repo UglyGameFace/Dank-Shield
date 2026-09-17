@@ -1,50 +1,100 @@
 # ACTIVE TASK
 
-## DS-INVITE-HUMAN-EMBED-FALSE-POSITIVE — Stop Invite Shield deleting normal human-posted links
+## DS-INVITE-INTERACTION-RESPONSE-FALSE-POSITIVE — Stop Invite Shield deleting utility app responses
 
-**Status:** EMERGENCY PRODUCTION HOTFIX
+**Status:** FINAL EXACT-HEAD VALIDATION
 
-**Branch:** `hotfix/invite-shield-human-embed-false-positive`
-**Base main:** `e895e875c1661d32424c968babca5ef098786fc1`
+**Branch:** `hotfix/invite-shield-interaction-response`
+**Base main:** `bc0a14cf59bcddb7c7ac0a45498125921cae4023`
+**Validated implementation head:** `ddefe9b9c5579bfd43a46b9f307064b472cd982c`
 
-## Emergency task switch
+## Why PR #254 was insufficient
 
-The AntiNuke runtime-consolidation branch is preserved unchanged at `refactor/antinuke-runtime-bootstrap-consolidation` and is temporarily paused. A live moderation regression takes priority over architecture cleanup.
+PR #254 fixed the first confirmed false-positive class: Discord-generated URL previews on ordinary messages. Production then proved a second path remained. At 18:05:01 the live enforcer detected an external invite in the video-downloader application response and deleted the response. The user-visible downloader result includes a **Support Server** Discord link/button.
 
-## User-visible regression
-
-A normal web link posted by a human can be deleted by Invite Shield even when the human did not post a Discord invite. This was reproduced by the current execution path rather than inferred from the warning text alone.
+Discord interaction response messages carry `interaction_metadata` (with legacy `interaction` compatibility). PR #254 still treated bot interaction responses like ordinary bot-authored rich messages, so its support-server embed/button became Invite Shield evidence.
 
 ## Root cause
 
-`invite_policy_engine.message_text()` scans message content plus Discord embeds, embed descriptions/URLs/fields, components, and attachment metadata. For a normal human-posted URL, Discord may generate an unfurled preview embed whose remote metadata contains a Discord invite. The central extractor then sees that remote page metadata as if the human authored the invite and permits Invite Shield to delete the whole message.
+Invite Shield had one message-surface distinction too few:
 
-That violates the engine's own documented contract that normal links are not touched.
+- human messages were content-only
+- ordinary bot/webhook messages scanned authored rich embeds/components
+- **interaction responses were incorrectly in the ordinary bot bucket**
 
-## Correct behavior
+That allowed a legitimate slash-command utility response to be deleted solely because the third-party app included a support/community invite in response chrome.
 
-- human-authored messages: Invite Shield evaluates the actual message content only
-- explicit Discord invites in human message content remain detectable and blockable
-- Discord-generated unfurl/embed metadata must never turn an unrelated human link into an invite violation
-- bot/webhook-authored rich messages keep embed/component invite scanning because those surfaces are actually authored by the automated sender
-- same-server invite classification, external invite classification, exemptions, allowed channels/roles/codes, Link Shield interaction, reconciliation, and central delete ownership remain unchanged
+## Correct behavior and implementation
 
-## Implementation plan
+- human messages evaluate actual message content only
+- interaction/app-command responses evaluate actual message content only
+- Discord `interaction_metadata` is the primary interaction-response marker
+- legacy `interaction` remains supported
+- explicit Discord invites written directly in response content remain detectable
+- support/community links that exist only in an app response embed/button do not delete the utility response
+- ordinary unsolicited bot/webhook messages still scan custom rich embeds/components
+- generated link/article/video previews remain ignored
+- same-server/external classification, exemptions, Link Shield interaction, statistics, and central delete ownership remain unchanged
+- no additional startup layer or second invite policy was introduced
 
-Install a narrowly scoped runtime correction before invite reconciliation starts. It replaces only the invite-policy message-text surface selection, leaves the central policy decision/deletion engine intact, and is covered by focused regression tests. After the production hotfix is merged and deployed, fold this rule into the native invite-policy engine during the subsequent cleanup instead of leaving duplicate ownership.
+## Files changed
 
-## Validation gate
+Exactly four task files:
 
-- human normal URL + Discord invite inside generated embed metadata => no invite code
-- human explicit Discord invite in content => detected
-- bot/webhook embed-only Discord invite => detected
-- existing text extractor redirect/path false-positive cases remain clean
-- focused invite-policy tests pass
-- invite-link safety audit passes
-- full unit/compile and required CI pass on exact head
-- diff contains only the hotfix surface, tests, bootstrap hook, and task record
-- merge exact validated head and verify `main` + Discloud
+- `ACTIVE_TASK.md`
+- `stoney_verify/invite_policy_message_surface_runtime.py`
+- `tests/test_invite_policy_message_surface_runtime.py`
+- `tools/audit_invite_link_safety.py`
+
+## Regression coverage
+
+Focused tests and the standalone invite-link safety audit cover:
+
+- downloader-style interaction response + Support Server button => no invite code
+- interaction follow-up + support embed/button => no invite code
+- interaction response with explicit invite in content => detected
+- legacy interaction marker => content-only
+- ordinary bot custom-rich invite => detected
+- bot generated-link preview => no false invite
+- human generated-link preview => no false invite
+- human explicit invite => detected
+
+## Implementation-head validation
+
+On exact implementation head `ddefe9b9c5579bfd43a46b9f307064b472cd982c`:
+
+- Dank Shield CI #2277: **success**
+  - Python compile check: **success**
+  - full unit test suite: **success**
+  - standalone tool checks: **success**
+  - public setup/isolation audit: **success**
+  - canonical public command audit: **success**
+  - public command/startup friction audit: **success**
+  - public invite permissions audit: **success**
+  - setup safety audit: **success**
+  - Dank Design Smart Auto-Detect audit: **success**
+  - role truth ownership audit: **success**
+  - event boundary ownership audit: **success**
+  - Claim-first ticket security: **success**
+  - Managed category SQL smoke test: **success**
+- Application Command Size Diagnostics #1262: **success**
+- Dank Design Regression CI #504: **success**
+- Ticket Owner Emergency Override #848: **success**
+- Profile Runtime Diagnostics #1011: **success**
+
+The implementation head was 0 commits behind `main`, the diff contained only the four task files, and PR #255 had no unresolved review threads or code-review blockers.
+
+## Cleanup / conflicts / risks
+
+- No unrelated files are present.
+- No new invite listener, startup owner, or duplicate delete path was added.
+- AntiNuke consolidation remains isolated on `refactor/antinuke-runtime-bootstrap-consolidation`.
+- The remaining risk is production behavior of third-party Discord apps; the exact failure class now has direct regression coverage using Discord interaction-response markers rather than bot-name/domain allowlists.
+
+## Final validation note
+
+This bookkeeping update changes the PR head SHA. Therefore the new final head must pass the complete required and companion workflow set again before merge. Do not merge based only on the successful implementation-head run above.
 
 ## Next step
 
-Implement the message-surface correction and regression tests, run exact-head validation, merge/deploy the hotfix, then resume the preserved AntiNuke runtime-consolidation branch from the new main.
+Revalidate this final bookkeeping head exactly, confirm it remains 0 behind `main` with only the four task files, mark PR #255 ready, merge using the exact validated SHA, verify the resulting `main` merge parent, and require Discloud deployment success before releasing the task lock.
