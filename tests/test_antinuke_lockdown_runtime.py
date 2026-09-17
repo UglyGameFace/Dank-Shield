@@ -546,4 +546,3 @@ def test_coordinator_keeps_hostile_lockdown_and_self_action_independent() -> Non
     assert app_boundary > 0
     assert '"install_hostile_actor_runtime"' in source
     assert '"install_anti_nuke_lockdown_runtime"' in source
-
