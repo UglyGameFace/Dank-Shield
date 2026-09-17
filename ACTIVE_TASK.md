@@ -1,58 +1,72 @@
 # ACTIVE TASK
 
-## DS-AUD-CONTEXTUAL-REPAIR-LIVE-REGRESSION — Fix false Fix Issues failures
+## DS-SEC-CHAN-UPDATE-FALSE-POSITIVE — Stop benign channel edits from triggering AntiNuke
+
+**Outcome target:** Ordinary Discord channel edits such as renaming a channel must remain normal logging activity and must not enter Dank Shield's destructive AntiNuke/owner-compromise path. Explicit permission-overwrite mutations and genuinely destructive structural actions must remain protected.
 
 **Status:** IMPLEMENTATION / VALIDATION
 
-**Branch:** `audit/contextual-repair-permission-cache-fix`
-**Base main:** `6b8abf9f66db55251c2c2e133526d1ac867c5755`
-**Previous integrated task:** PR #248 merged and verified on `main` at `6b8abf9f66db55251c2c2e133526d1ac867c5755`.
+**Branch:** `fix/antinuke-benign-channel-update`
+**Base main:** `98290563f7244af198c4384a595cb66cdc76e0e3`
+**Previous integrated task:** PR #250 merged at `98290563f7244af198c4384a595cb66cdc76e0e3`; its exact PR head workflows passed and the merge commit became current `main`, releasing the previous contextual-repair lock.
 
 ## User-reported production regression
 
-The guided setup `Fix Issues` action reported four targets as not repaired:
+Renaming an ordinary channel triggered:
 
-- Verification start channel: still missing `send_messages`, `embed_links`, `attach_files`
-- Ticket archive category: still missing `view_channel`
-- Ticket transcripts channel: claimed Dank Shield lacked Manage Channels and could not repair its own overwrite
-- Moderation log channel: same Manage Channels blocker
+- `🚨 AntiNuke Owner-Compromise Warning`
+- detected action `Channel settings mutation`
+- threshold `5s window • channel_update 1/1`
 
-This regression takes the Single Active Task Lock. Do not move to Protection or any later audit item until this task is implemented, exact-head validated, merged, and verified on `main`.
+The guild owner had only renamed a channel. No permission overwrite, deletion, or other destructive action occurred.
 
-## Root causes
+## Root cause
 
-1. `permission_repair_core.audit_target()` used `effective.manage_channels` as the prerequisite for `GuildChannel.set_permissions(...)`. Discord's Edit Channel Permissions endpoint actually requires `MANAGE_ROLES` (shown as Manage Permissions in channel UI). That produced false manual blockers when Manage Channels was absent but overwrite editing was authorized.
-2. `contextual_permission_repair.repair_context()` called `set_permissions(...)` and then immediately re-audited `guild.get_channel(...)`. discord.py sends the overwrite update over HTTP, while the gateway-backed channel object can still contain the pre-repair overwrite until the Channel Update event arrives. A same-tick cache-only audit can therefore claim a successful repair is still missing.
+1. `anti_nuke_guardian_runtime._ACTIONS` classifies the generic Discord `channel_update` audit action as destructive AntiNuke evidence and maps it to the canonical `channel_update` counter.
+2. Discord uses generic `channel_update` for ordinary channel-setting edits such as names/topics, while permission overwrite changes have distinct `overwrite_create`, `overwrite_update`, and `overwrite_delete` audit actions that Dank Shield already handles separately.
+3. The guardian audit listener therefore routes a benign rename through `_process()` into the canonical destructive-event engine.
+4. `anti_nuke_lockdown_runtime` intentionally forces the owner-compromise path to first strike, so the misclassified event becomes `channel_update 1/1` and immediately produces the warning.
+5. Raising thresholds or exempting the guild owner would weaken real protection and would treat the symptom rather than the classifier bug.
 
-## Implementation
+## Execution path
 
-- permission-overwrite authorization now checks effective `manage_roles`, not `manage_channels`
-- Discord Forbidden wording now identifies Manage Roles / Manage Permissions rather than falsely naming Manage Channels
-- the contextual post-repair audit fetches each exact configured target from Discord over HTTP before deciding whether repair succeeded
-- if the HTTP refresh itself fails, the audit falls back to the cached channel and remains fail-closed rather than claiming success
-- no member/@everyone visibility changes, Administrator grants, target guessing, role movement, or explicit-deny clearing were added
-- all permission mutation remains in `permission_repair_core`
+`on_audit_log_entry_create`
+→ guardian action-name classification
+→ generic `channel_update` lookup in `_ACTIONS`
+→ `_process(...)`
+→ `anti_nuke._process_claimed_destructive_event(...)`
+→ owner-compromise wrapper
+→ owner first-strike override
+→ incident post
 
-## Regression coverage
+The native channel-update fallback is not the live cause: the production gateway runtime retires the old generic overwrite listener, and the guardian gateway fallback already requires an actual overwrite difference and resolves only explicit overwrite audit actions.
 
-`tests/test_contextual_permission_repair_live_regression.py` covers:
+## Implementation scope
 
-- Manage Roles present + Manage Channels absent does not block overwrite repair
-- missing Manage Roles produces the manual overwrite blocker
-- successful mutation followed by a stale cached channel is verified against a fresh Discord channel
-- failed fresh fetch falls back to cache and does not falsely claim healthy access
+- remove generic `channel_update` from the guardian destructive audit map
+- retain explicit `overwrite_create`, `overwrite_update`, and `overwrite_delete` protection unchanged
+- retain the canonical `channel_update` counter/slow-burn key because real overwrite and protected guild-update paths intentionally reuse it
+- retain owner first-strike behavior for genuinely protected actions
+- add focused regression coverage proving benign generic channel updates are ignored while explicit overwrite updates still reach AntiNuke
+- no threshold changes, owner whitelist, trust broadening, new runtime patch, or duplicate enforcement path
 
 ## Validation gate
 
-- focused regression tests pass
+- focused false-positive regressions pass
+- existing AntiNuke tests pass
 - full unit suite passes
-- Python compile and standalone audits pass
+- Python compile and repository standalone audits pass
 - every triggered PR workflow succeeds on the exact final head
 - final branch is 0 behind current `main`
-- changed-file scope is limited to the repair core, contextual re-audit, focused tests, and task bookkeeping
+- changed-file scope is limited to the guardian classifier, focused regression coverage, and task bookkeeping
+- no duplicate generic `channel_update` destructive owner remains in the affected production path
 - no unresolved review/thread issue
 - exact validated head is merged
-- resulting merge commit is verified as current `main`
+- resulting merge commit is verified as current `main` and deployment/status checks are reviewed
+
+## Cleanup / conflict inspection
+
+Pending implementation and exact-head validation. Preserve explicit overwrite enforcement, canonical shared counters, owner-compromise protection, and unrelated logging behavior.
 
 ## Backlog after this regression closes
 
@@ -66,4 +80,4 @@ This regression takes the Single Active Task Lock. Do not move to Protection or 
 
 ## Next step
 
-Open the corrective PR, inspect the exact diff, run the full exact-head validation wave, fix any regression found, merge only the final validated head, verify `main`, then release this lock.
+Implement the classifier correction and focused regressions, inspect the exact diff, open the corrective PR, run the full exact-head validation wave, merge only the validated head, then verify the resulting `main` commit and deployment status before releasing this task lock.
