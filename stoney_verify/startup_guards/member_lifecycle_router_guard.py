@@ -3,9 +3,10 @@ from __future__ import annotations
 """Authoritative public member lifecycle router.
 
 Welcome Card Studio owns the member-facing welcome card, while the configured
-join/leave route owns the operational member-joined event log. Exit Card Studio
-owns the member-facing leave card. Staff audit remains a separate route, and
-staff audit/modlog listeners are never folded into these public lifecycle cards.
+join/leave route owns the operational member join/leave event log. Exit Card
+Studio owns the member-facing leave card. Staff audit remains a separate route,
+and staff audit/modlog listeners are never folded into these public lifecycle
+cards.
 """
 
 from typing import Any, Optional
@@ -168,26 +169,28 @@ def _same_channel_id(channel: Any, channel_id: Any) -> bool:
         return False
 
 
-async def _send_join_log_event(
+async def _send_member_log_event(
     member: discord.Member,
     channel: Optional[discord.TextChannel],
+    *,
+    joined: bool,
 ) -> bool:
-    """Send the operational join event independently of invite attribution.
-
-    A member joining through a normal invite, vanity URL, redirect/hyperlink, or
-    a source Discord cannot attribute must still produce a join/leave log entry.
-    Invite-source evidence remains owned by the separate staff-audit path.
-    """
+    """Send an operational member lifecycle event independent of card studios."""
 
     if not isinstance(channel, discord.TextChannel):
         return False
+
+    event_name = "join" if joined else "leave"
+    action = "joined" if joined else "left"
+    title = "🌿 Member Joined" if joined else "🍂 Member Left"
+    color = discord.Color.green() if joined else discord.Color.dark_grey()
 
     try:
         me = channel.guild.me
         if not isinstance(me, discord.Member):
             _log(
-                f"member join event skipped guild={member.guild.id} member={member.id} "
-                f"channel={channel.id}: bot member unavailable"
+                f"member {event_name} event skipped guild={member.guild.id} "
+                f"member={member.id} channel={channel.id}: bot member unavailable"
             )
             return False
         perms = channel.permissions_for(me)
@@ -200,18 +203,19 @@ async def _send_join_log_event(
             missing.append("Embed Links")
         if missing:
             _log(
-                f"member join event skipped guild={member.guild.id} member={member.id} "
-                f"channel={channel.id}: missing {', '.join(missing)}"
+                f"member {event_name} event skipped guild={member.guild.id} "
+                f"member={member.id} channel={channel.id}: "
+                f"missing {', '.join(missing)}"
             )
             return False
 
         embed = discord.Embed(
-            title="🌿 Member Joined",
+            title=title,
             description=(
-                f"{member.mention} joined the server.\n"
+                f"{member.mention} {action} the server.\n"
                 f"`{_safe_str(member)}` • `{member.id}`"
             ),
-            color=discord.Color.green(),
+            color=color,
             timestamp=discord.utils.utcnow(),
         )
         try:
@@ -231,18 +235,42 @@ async def _send_join_log_event(
             allowed_mentions=discord.AllowedMentions.none(),
         )
         _log(
-            f"member join event delivered guild={member.guild.id} member={member.id} "
-            f"channel={channel.id}"
+            f"member {event_name} event delivered guild={member.guild.id} "
+            f"member={member.id} channel={channel.id}"
         )
         return True
     except Exception as exc:
         _log(
-            f"member join event failed guild={getattr(member.guild, 'id', 'unknown')} "
+            f"member {event_name} event failed "
+            f"guild={getattr(member.guild, 'id', 'unknown')} "
             f"member={getattr(member, 'id', 'unknown')} "
             f"channel={getattr(channel, 'id', 'unknown')}: "
             f"{type(exc).__name__}: {exc}"
         )
         return False
+
+
+async def _send_join_log_event(
+    member: discord.Member,
+    channel: Optional[discord.TextChannel],
+) -> bool:
+    """Send the operational join event independently of invite attribution.
+
+    A member joining through a normal invite, vanity URL, redirect/hyperlink, or
+    a source Discord cannot attribute must still produce a join/leave log entry.
+    Invite-source evidence remains owned by the separate staff-audit path.
+    """
+
+    return await _send_member_log_event(member, channel, joined=True)
+
+
+async def _send_leave_log_event(
+    member: discord.Member,
+    channel: Optional[discord.TextChannel],
+) -> bool:
+    """Send the operational leave event independently of Exit Card Studio."""
+
+    return await _send_member_log_event(member, channel, joined=False)
 
 
 async def _join_listener(member: discord.Member) -> None:
@@ -297,6 +325,7 @@ async def _join_listener(member: discord.Member) -> None:
 
 
 async def _leave_listener(member: discord.Member) -> None:
+    delivery = None
     try:
         delivery = await send_live_exit_card(member)
         _log(
@@ -307,6 +336,40 @@ async def _leave_listener(member: discord.Member) -> None:
     except Exception as exc:
         _log(
             f"canonical exit failed guild={getattr(member.guild, 'id', 'unknown')} "
+            f"member={getattr(member, 'id', 'unknown')}: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+    # The operational join/leave log must not depend on Exit Card Studio. A
+    # failed/disabled exit card still logs the member leave. Only suppress a
+    # duplicate when the Studio already delivered successfully to the exact
+    # same configured channel.
+    try:
+        cfg = await _load_config(int(member.guild.id))
+        leave_log_channel = _resolve_channel(member.guild, cfg, JOIN_LEAVE_KEYS)
+        if not isinstance(leave_log_channel, discord.TextChannel):
+            _log(
+                f"member leave event skipped guild={member.guild.id} member={member.id}: "
+                "no configured join/leave log channel"
+            )
+            return
+
+        if (
+            delivery is not None
+            and bool(getattr(delivery, "sent", False))
+            and _same_channel_id(leave_log_channel, getattr(delivery, "channel_id", 0))
+        ):
+            _log(
+                f"member leave event duplicate suppressed guild={member.guild.id} "
+                f"member={member.id} channel={leave_log_channel.id}: "
+                "Exit Card Studio already delivered to this channel"
+            )
+            return
+
+        await _send_leave_log_event(member, leave_log_channel)
+    except Exception as exc:
+        _log(
+            f"member leave event routing failed guild={getattr(member.guild, 'id', 'unknown')} "
             f"member={getattr(member, 'id', 'unknown')}: "
             f"{type(exc).__name__}: {exc}"
         )
@@ -421,10 +484,9 @@ async def _member_logs_command(
         if join_leave_log is not None:
             for key in JOIN_LEAVE_KEYS:
                 payload[key] = str(join_leave_log.id)
-            # Member Logs owns the operational join route and remains the
-            # compatibility entry point for Exit Card Studio's live leave route.
+            # Member Logs owns the operational route and updates the Exit Card
+            # target for compatibility without changing the Studio enable toggle.
             payload["exit_card_channel_id"] = str(join_leave_log.id)
-            payload["exit_card_enabled"] = True
         if staff_audit_log is not None:
             payload["staff_join_audit_channel_id"] = str(staff_audit_log.id)
             payload["member_audit_log_channel_id"] = str(staff_audit_log.id)
@@ -457,9 +519,9 @@ async def _member_logs_command(
             title="👋 Member Lifecycle Routing",
             description=(
                 "Welcome Card Studio owns the member-facing join card. The "
-                "join/leave log independently records every member join. Exit "
-                "Card Studio owns the live leave card. Staff audit remains a "
-                "separate route."
+                "join/leave log independently records every member join and "
+                "leave. Exit Card Studio owns the member-facing leave card. "
+                "Staff audit remains a separate route."
             ),
             color=discord.Color.blurple(),
         )
@@ -502,7 +564,7 @@ async def _member_logs_command(
         embed.add_field(
             name="Legacy duplicate senders",
             value=(
-                "Retired. Operational join logging is owned by this router, "
+                "Retired. Operational join/leave logging is owned by this router, "
                 "while the old internal v3/v4 marker senders remain disabled."
             ),
             inline=False,
@@ -596,8 +658,8 @@ def install() -> bool:
         _INSTALLED = True
         _log(
             "active; Welcome Card Studio owns member-facing joins, the join/leave "
-            "route owns operational join logs, Exit Card Studio owns exits, and "
-            "legacy duplicate lifecycle senders are retired"
+            "route owns operational join/leave logs, Exit Card Studio owns "
+            "member-facing exits, and legacy duplicate lifecycle senders are retired"
         )
         return True
     except Exception as exc:

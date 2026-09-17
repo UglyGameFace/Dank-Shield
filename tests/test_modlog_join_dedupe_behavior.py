@@ -181,6 +181,86 @@ def test_router_join_log_suppresses_only_true_same_channel_duplicate(
     assert join_log_calls == []
 
 
+def test_router_leave_log_is_independent_of_exit_card_gate(
+    monkeypatch,
+) -> None:
+    guild = SimpleNamespace(id=779)
+    member = SimpleNamespace(id=404, guild=guild)
+    leave_log_channel = SimpleNamespace(id=555)
+    exit_calls: list[int] = []
+    leave_log_calls: list[tuple[int, int]] = []
+
+    async def fake_send_live_exit_card(target):
+        exit_calls.append(int(target.id))
+        return SimpleNamespace(
+            sent=False,
+            code="studio_disabled",
+            channel_id=0,
+            used_image=False,
+        )
+
+    async def fake_load_config(guild_id):
+        assert int(guild_id) == 779
+        return {"join_leave_log_channel_id": "555"}
+
+    def fake_resolve_channel(_guild, _cfg, keys):
+        assert keys is router.JOIN_LEAVE_KEYS
+        return leave_log_channel
+
+    async def fake_send_leave_log_event(target, channel):
+        leave_log_calls.append((int(target.id), int(channel.id)))
+        return True
+
+    monkeypatch.setattr(router, "send_live_exit_card", fake_send_live_exit_card)
+    monkeypatch.setattr(router, "_load_config", fake_load_config)
+    monkeypatch.setattr(router, "_resolve_channel", fake_resolve_channel)
+    monkeypatch.setattr(router, "_send_leave_log_event", fake_send_leave_log_event)
+    monkeypatch.setattr(router.discord, "TextChannel", SimpleNamespace)
+
+    asyncio.run(router._leave_listener(member))
+
+    assert exit_calls == [404]
+    assert leave_log_calls == [(404, 555)]
+
+
+def test_router_leave_log_suppresses_only_true_same_channel_duplicate(
+    monkeypatch,
+) -> None:
+    guild = SimpleNamespace(id=780)
+    member = SimpleNamespace(id=505, guild=guild)
+    leave_log_channel = SimpleNamespace(id=666)
+    leave_log_calls: list[tuple[int, int]] = []
+
+    async def fake_send_live_exit_card(_target):
+        return SimpleNamespace(
+            sent=True,
+            code="sent",
+            channel_id=666,
+            used_image=True,
+        )
+
+    async def fake_load_config(_guild_id):
+        return {"join_leave_log_channel_id": "666"}
+
+    def fake_resolve_channel(_guild, _cfg, keys):
+        assert keys is router.JOIN_LEAVE_KEYS
+        return leave_log_channel
+
+    async def fake_send_leave_log_event(target, channel):
+        leave_log_calls.append((int(target.id), int(channel.id)))
+        return True
+
+    monkeypatch.setattr(router, "send_live_exit_card", fake_send_live_exit_card)
+    monkeypatch.setattr(router, "_load_config", fake_load_config)
+    monkeypatch.setattr(router, "_resolve_channel", fake_resolve_channel)
+    monkeypatch.setattr(router, "_send_leave_log_event", fake_send_leave_log_event)
+    monkeypatch.setattr(router.discord, "TextChannel", SimpleNamespace)
+
+    asyncio.run(router._leave_listener(member))
+
+    assert leave_log_calls == []
+
+
 def test_identical_unkeyed_embeds_are_coalesced_for_short_bursts(
     monkeypatch,
 ) -> None:

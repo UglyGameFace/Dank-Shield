@@ -24,8 +24,11 @@ required_router = [
     "send_live_welcome_card",
     "send_live_exit_card",
     "async def _send_join_log_event(",
+    "async def _send_leave_log_event(",
     "join_log_channel = _resolve_channel(member.guild, cfg, JOIN_LEAVE_KEYS)",
+    "leave_log_channel = _resolve_channel(member.guild, cfg, JOIN_LEAVE_KEYS)",
     "member join event duplicate suppressed",
+    "member leave event duplicate suppressed",
     "no configured join/leave log channel",
     "canonical join result guild=",
     "canonical exit result guild=",
@@ -40,6 +43,12 @@ if "staff audit remains a separate route" not in router.lower():
 
 if "join/leave log must not depend on Welcome Card Studio" not in router:
     failures.append("router no longer documents independent operational join logging")
+
+if "join/leave log must not depend on Exit Card Studio" not in router:
+    failures.append("router no longer documents independent operational leave logging")
+
+if 'payload["exit_card_enabled"] = True' in router:
+    failures.append("member-logs command still forces Exit Card Studio enabled")
 
 required_join_runtime = [
     "image_card_member(member)",
