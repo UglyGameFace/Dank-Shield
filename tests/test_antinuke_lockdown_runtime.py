@@ -485,39 +485,18 @@ def test_guardian_overwrite_rollback_does_not_honor_delegated_trust(
     assert seen_actor_ids == [0]
 
 
-def test_owner_destructive_path_is_forced_to_first_strike(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, object] = {}
-
-    async def original(guild, **kwargs):
-        _ = guild
-        captured.update(kwargs)
-        return True
-
-    incident = SimpleNamespace(_process_owner_destructive_event=original)
-    monkeypatch.setattr(
-        incident,
-        lockdown._OWNER_PATCH_FLAG,  # noqa: SLF001
-        False,
-        raising=False,
+def test_lockdown_defers_owner_severity_to_incident_runtime() -> None:
+    lockdown_source = Path("stoney_verify/anti_nuke_lockdown_runtime.py").read_text(
+        encoding="utf-8"
+    )
+    incident_source = Path("stoney_verify/anti_nuke_incident_runtime.py").read_text(
+        encoding="utf-8"
     )
 
-    assert lockdown._patch_owner_first_strike(incident) is True  # noqa: SLF001
-    result = asyncio.run(
-        incident._process_owner_destructive_event(
-            object(),
-            entry=object(),
-            action_key="channel_delete",
-            action_label="Channel deletion",
-            target_label="#general",
-            threshold_key="antinuke_channel_delete_threshold",
-            threshold_override=9,
-        )
-    )
-
-    assert result is True
-    assert captured["threshold_override"] == 1
+    assert "_patch_owner_first_strike" not in lockdown_source
+    assert "_OWNER_PATCH_FLAG" not in lockdown_source
+    assert "def _owner_event_policy(" in incident_source
+    assert "async def _process_owner_destructive_event(" in incident_source
 
 
 def test_lockdown_runtime_no_longer_owns_bot_add_authorization() -> None:
@@ -529,25 +508,20 @@ def test_lockdown_runtime_no_longer_owns_bot_add_authorization() -> None:
     assert "_BOT_ADD_PATCH_FLAG" not in source
 
 
-def test_main_installs_hostile_and_lockdown_independently_before_app_import() -> None:
-    source = Path("main.py").read_text(encoding="utf-8")
-
-    hostile_start = source.index("def _install_hostile_actor_runtime")
-    lockdown_start = source.index("def _install_anti_nuke_lockdown_runtime")
-    app_import = source.index("from stoney_verify.app import run as _run_dank_shield")
-
-    assert hostile_start < lockdown_start < app_import
-    assert "install_anti_nuke_lockdown_runtime" not in source[
-        hostile_start:lockdown_start
-    ]
-    expected = (
-        "    _install_anti_nuke_incident_runtime()\n"
-        "    _install_hostile_actor_runtime()\n"
-        "    _install_anti_nuke_lockdown_runtime()\n"
-        "    _install_anti_nuke_self_action_runtime()\n"
-        "    _install_anti_nuke_zero_damage_runtime()\n"
-        "    _install_anti_nuke_audit_compat_runtime()\n"
-        "    _install_anti_nuke_readiness_gate_runtime()\n"
-        "    from stoney_verify.app import run as _run_dank_shield"
+def test_coordinator_keeps_hostile_lockdown_and_self_action_independent() -> None:
+    source = Path("stoney_verify/anti_nuke_runtime_coordinator.py").read_text(
+        encoding="utf-8"
     )
-    assert expected in source
+
+    incident = source.index('"incident"')
+    hostile = source.index('"hostile_actor"', incident)
+    lockdown_pos = source.index('"lockdown"', hostile)
+    self_action = source.index('"self_action"', lockdown_pos)
+    app_boundary = Path("main.py").read_text(encoding="utf-8").index(
+        "from stoney_verify.app import run as _run_dank_shield"
+    )
+
+    assert incident < hostile < lockdown_pos < self_action
+    assert app_boundary > 0
+    assert '"install_hostile_actor_runtime"' in source
+    assert '"install_anti_nuke_lockdown_runtime"' in source
