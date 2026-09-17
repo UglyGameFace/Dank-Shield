@@ -59,10 +59,6 @@ class ProtectionStatsAudit:
 
     @property
     def repairable_count(self) -> int:
-        if self.manual_issues:
-            # Server-level prerequisites can prevent every overwrite write. Keep
-            # the button manual rather than advertising an autofix that cannot run.
-            return 0
         return sum(
             1
             for row in self.rows
@@ -131,8 +127,6 @@ def _target_specs(cfg: Any) -> tuple[ProtectionStatsTarget, ...]:
     seen: set[int] = set()
     category_id = _safe_int(_cfg_value(cfg, SECURITY_STATS_CATEGORY_ID_KEY, 0), 0)
     if category_id > 0:
-        # The dedicated stats category needs channel-management capability so
-        # the product can keep its owned counter channels grouped and updated.
         out.append(
             ProtectionStatsTarget(
                 category_id,
@@ -150,9 +144,9 @@ def _target_specs(cfg: Any) -> tuple[ProtectionStatsTarget, ...]:
             continue
         seen.add(channel_id)
         label = str(key).replace("_", " ").title()
-        # Voice-channel full mode is intentionally narrow in the shared core:
-        # view_channel + manage_channels + move_members. It does not grant
-        # Administrator or alter any member/@everyone overwrite.
+        # For voice channels the shared core's full mode is bounded to
+        # view_channel/manage_channels/move_members. It does not grant
+        # Administrator and only edits Dank Shield's own member overwrite.
         out.append(
             ProtectionStatsTarget(
                 channel_id,
@@ -188,8 +182,7 @@ def _manual_prerequisites(guild: discord.Guild, cfg: Any) -> list[str]:
         out.append("Live Stats: the saved stats category mapping is missing. Use Live Stats setup to rebuild it.")
 
     saved = _mapping(_cfg_value(cfg, SECURITY_STATS_CHANNEL_IDS_KEY, {}))
-    missing_keys = [key for key in STAT_CHANNEL_PREFIXES if _safe_int(saved.get(key), 0) <= 0]
-    if missing_keys:
+    if any(_safe_int(saved.get(key), 0) <= 0 for key in STAT_CHANNEL_PREFIXES):
         out.append(
             "Live Stats: one or more saved counter mappings are missing. Use Live Stats setup to rebuild the owned display."
         )
@@ -204,18 +197,9 @@ def audit_protection_stats(
 ) -> ProtectionStatsAudit:
     rows: list[ProtectionStatsRow] = []
     for spec in _target_specs(cfg):
-        channel = (
-            resolved.get(spec.channel_id)
-            if resolved is not None
-            else guild.get_channel(spec.channel_id)
-        )
+        channel = resolved.get(spec.channel_id) if resolved is not None else guild.get_channel(spec.channel_id)
         if not isinstance(channel, discord.abc.GuildChannel):
-            rows.append(
-                ProtectionStatsRow(
-                    spec=spec,
-                    missing_target=True,
-                )
-            )
+            rows.append(ProtectionStatsRow(spec=spec, missing_target=True))
             continue
         rows.append(
             ProtectionStatsRow(
@@ -288,8 +272,6 @@ async def repair_protection_stats(
     before = await audit_protection_stats_fresh(guild, cfg)
     changed: list[str] = []
     failed: list[str] = []
-    if before.manual_issues:
-        return before, changed, failed
 
     for row in before.rows:
         if row.channel is None or row.audit is None or not row.audit.missing:
@@ -311,6 +293,44 @@ async def repair_protection_stats(
 
     after = await audit_protection_stats_fresh(guild, cfg)
     return after, changed, failed
+
+
+async def _defer_update(interaction: discord.Interaction) -> None:
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(thinking=False)
+    except Exception:
+        pass
+
+
+async def _refresh_same_screen(
+    interaction: discord.Interaction,
+    *,
+    content: str,
+) -> None:
+    guild = interaction.guild
+    if guild is None:
+        return
+    cfg = await center.get_guild_config(int(guild.id), refresh=True)
+    spam, spam_source = await center._load_spam_settings(int(guild.id))
+    embed = center._protection_embed(guild, cfg, spam, spam_source)
+    view = center.ProtectionCenterView(
+        author_id=int(interaction.user.id),
+        cfg=cfg,
+        spam=spam,
+    )
+    if interaction.response.is_done():
+        await interaction.edit_original_response(
+            content=content[:1800],
+            embed=embed,
+            view=view,
+        )
+    else:
+        await interaction.response.edit_message(
+            content=content[:1800],
+            embed=embed,
+            view=view,
+        )
 
 
 class ProtectionAccessButton(discord.ui.Button):
@@ -340,41 +360,57 @@ class ProtectionAccessButton(discord.ui.Button):
             await center._send_ephemeral(interaction, "❌ This must be used inside a server.")
             return
 
-        cfg = await center.get_guild_config(int(guild.id), refresh=True)
-        audit = await audit_protection_stats_fresh(guild, cfg)
-        if audit.healthy:
-            _VERIFIED_AUDIT[int(guild.id)] = audit
-            await center._refresh_panel(interaction, content="✅ Protection Live Stats access is healthy.")
-            return
-        if audit.repairable_count <= 0:
-            _VERIFIED_AUDIT[int(guild.id)] = audit
-            text = "\n".join(f"• {line}" for line in _remaining_lines(audit)[:6])
-            await center._refresh_panel(
-                interaction,
-                content=("⚠️ Manual fix needed for Protection Live Stats.\n" + text)[:1800],
-            )
-            return
+        await _defer_update(interaction)
+        try:
+            cfg = await center.get_guild_config(int(guild.id), refresh=True)
+            audit = await audit_protection_stats_fresh(guild, cfg)
+            if audit.healthy:
+                _VERIFIED_AUDIT[int(guild.id)] = audit
+                await _refresh_same_screen(
+                    interaction,
+                    content="✅ Protection Live Stats access is healthy.",
+                )
+                return
 
-        after, changed, failed = await repair_protection_stats(
-            guild,
-            cfg,
-            actor_id=int(interaction.user.id),
-        )
-        _VERIFIED_AUDIT[int(guild.id)] = after
-        remaining = _remaining_lines(after)
-        parts: list[str] = []
-        if changed:
-            parts.append(f"✅ Repaired {len(changed)} Protection target(s).")
-        if failed:
-            parts.append(f"⚠️ {len(failed)} target(s) could not be repaired automatically.")
-        if remaining:
-            parts.append("Remaining: " + " • ".join(remaining[:4]))
-        if after.healthy:
-            parts.append("✅ Access re-check passed.")
-        await center._refresh_panel(
-            interaction,
-            content="\n".join(parts)[:1800] or "Protection access re-check finished.",
-        )
+            changed: list[str] = []
+            failed: list[str] = []
+            after = audit
+            if audit.repairable_count > 0:
+                after, changed, failed = await repair_protection_stats(
+                    guild,
+                    cfg,
+                    actor_id=int(interaction.user.id),
+                )
+
+            _VERIFIED_AUDIT[int(guild.id)] = after
+            remaining = _remaining_lines(after)
+            parts: list[str] = []
+            if changed:
+                parts.append(f"✅ Repaired {len(changed)} Protection target(s).")
+            if failed:
+                parts.append(f"⚠️ {len(failed)} target(s) could not be repaired automatically.")
+            if remaining:
+                parts.append("Remaining: " + " • ".join(remaining[:4]))
+            if after.healthy:
+                parts.append("✅ Access re-check passed.")
+            if not parts:
+                parts.append("⚠️ Manual fix needed for Protection Live Stats.")
+            await _refresh_same_screen(interaction, content="\n".join(parts))
+        except Exception as exc:
+            center.log_interaction_failure(
+                interaction,
+                exc,
+                stage="protection_contextual_repair_failed",
+                action_name="protection.fix_access",
+                fix_hint="No member visibility was changed. Reopen Protection Center and retry after checking the listed bot permissions.",
+            )
+            try:
+                await _refresh_same_screen(
+                    interaction,
+                    content="⚠️ Protection access repair failed safely. No unrelated permissions were changed.",
+                )
+            except Exception:
+                pass
 
 
 def apply_protection_contextual_permission_repair() -> bool:
