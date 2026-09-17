@@ -26,7 +26,6 @@ _POLICY_PATCH_FLAG = "_dank_antinuke_lockdown_policy_patched"
 _HISTORY_PATCH_FLAG = "_dank_antinuke_lockdown_history_patched"
 _GUARDIAN_PATCH_FLAG = "_dank_antinuke_lockdown_guardian_patched"
 _GATEWAY_PATCH_FLAG = "_dank_antinuke_lockdown_gateway_patched"
-_OWNER_PATCH_FLAG = "_dank_antinuke_lockdown_owner_first_strike_patched"
 _PROTECTED_CONTROL_ROLE_SETTINGS_KEY = "_dank_lockdown_protected_role_ids"
 _BOT_ADD_AUTH_CONTEXT: ContextVar[bool] = ContextVar(
     "dank_antinuke_bot_add_auth_context",
@@ -82,9 +81,10 @@ _EXTRA_DANGEROUS_PERMISSIONS = (
     "manage_emojis_and_stickers",
 )
 
-# Canonical processor keys that always become first-strike in contain mode for
-# human actors. Operational bots stay on bounded delegated thresholds so a normal
-# bot action cannot immediately kick the bot or strip every manageable role.
+# Fail-closed pre-app defaults for structural actions. Product policy deliberately
+# relaxes these defaults after the app surface is imported so normal Contain keeps
+# trusted operators and operational bots on bounded thresholds. If that later
+# product-policy layer cannot install, these defaults remain conservative.
 _STRICT_PROCESS_ACTION_KEYS = frozenset(
     {
         "channel_delete",
@@ -94,8 +94,9 @@ _STRICT_PROCESS_ACTION_KEYS = frozenset(
     }
 )
 
-# Guardian action names whose exact audit semantics prove a structural/security
-# mutation even when their canonical counter key is shared with benign updates.
+# Fail-closed pre-app guardian defaults for structural/security mutations. The
+# post-app product-policy runtime is the healthy-state owner of normal Contain
+# versus Strict Lockdown behavior and relaxes these overrides when appropriate.
 _STRICT_GUARDIAN_ACTIONS = frozenset(
     {
         "guild_update",
@@ -768,38 +769,6 @@ def _patch_gateway_surface(gateway: Any, anti_nuke: Any) -> bool:
     return True
 
 
-def _patch_owner_first_strike(incident: Any) -> bool:
-    if bool(getattr(incident, _OWNER_PATCH_FLAG, False)):
-        return False
-
-    original = incident._process_owner_destructive_event  # noqa: SLF001
-
-    async def first_strike(
-        guild: discord.Guild,
-        *,
-        entry: Any,
-        action_key: str,
-        action_label: str,
-        target_label: str,
-        threshold_key: str,
-        threshold_override: Optional[int] = None,
-    ) -> bool:
-        _ = threshold_override
-        return await original(
-            guild,
-            entry=entry,
-            action_key=action_key,
-            action_label=action_label,
-            target_label=target_label,
-            threshold_key=threshold_key,
-            threshold_override=1,
-        )
-
-    incident._process_owner_destructive_event = first_strike  # noqa: SLF001
-    setattr(incident, _OWNER_PATCH_FLAG, True)
-    return True
-
-
 def install_anti_nuke_lockdown_runtime(bot: discord.Client) -> bool:
     """Install AntiNuke's final structural no-grace invariants once."""
 
@@ -809,13 +778,11 @@ def install_anti_nuke_lockdown_runtime(bot: discord.Client) -> bool:
     from . import anti_nuke
     from . import anti_nuke_gateway_runtime as gateway
     from . import anti_nuke_guardian_runtime as guardian
-    from . import anti_nuke_incident_runtime as incident
 
     history_patched = _patch_config_history_restore()
     policy_patched = _patch_anti_nuke_policy(anti_nuke, bot)
     guardian_patched = _patch_guardian_surface(guardian, anti_nuke)
     gateway_patched = _patch_gateway_surface(gateway, anti_nuke)
-    owner_patched = _patch_owner_first_strike(incident)
 
     setattr(bot, _INSTALL_FLAG, True)
     print(
@@ -824,7 +791,7 @@ def install_anti_nuke_lockdown_runtime(bot: discord.Client) -> bool:
         f"structural first-strike={'active' if policy_patched else 'already active'}; "
         f"audit/rollback surface={'hardened' if guardian_patched else 'already hardened'}; "
         f"bot permission integrity={'active' if gateway_patched else 'already active'}; "
-        f"owner first-strike={'active' if owner_patched else 'already active'}; "
+        "owner severity=incident-owned; "
         "bot-add authorization=native"
     )
     return True
