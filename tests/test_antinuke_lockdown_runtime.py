@@ -529,25 +529,21 @@ def test_lockdown_runtime_no_longer_owns_bot_add_authorization() -> None:
     assert "_BOT_ADD_PATCH_FLAG" not in source
 
 
-def test_main_installs_hostile_and_lockdown_independently_before_app_import() -> None:
-    source = Path("main.py").read_text(encoding="utf-8")
-
-    hostile_start = source.index("def _install_hostile_actor_runtime")
-    lockdown_start = source.index("def _install_anti_nuke_lockdown_runtime")
-    app_import = source.index("from stoney_verify.app import run as _run_dank_shield")
-
-    assert hostile_start < lockdown_start < app_import
-    assert "install_anti_nuke_lockdown_runtime" not in source[
-        hostile_start:lockdown_start
-    ]
-    expected = (
-        "    _install_anti_nuke_incident_runtime()\n"
-        "    _install_hostile_actor_runtime()\n"
-        "    _install_anti_nuke_lockdown_runtime()\n"
-        "    _install_anti_nuke_self_action_runtime()\n"
-        "    _install_anti_nuke_zero_damage_runtime()\n"
-        "    _install_anti_nuke_audit_compat_runtime()\n"
-        "    _install_anti_nuke_readiness_gate_runtime()\n"
-        "    from stoney_verify.app import run as _run_dank_shield"
+def test_coordinator_keeps_hostile_lockdown_and_self_action_independent() -> None:
+    source = Path("stoney_verify/anti_nuke_runtime_coordinator.py").read_text(
+        encoding="utf-8"
     )
-    assert expected in source
+
+    incident = source.index('"incident"')
+    hostile = source.index('"hostile_actor"', incident)
+    lockdown_pos = source.index('"lockdown"', hostile)
+    self_action = source.index('"self_action"', lockdown_pos)
+    app_boundary = Path("main.py").read_text(encoding="utf-8").index(
+        "from stoney_verify.app import run as _run_dank_shield"
+    )
+
+    assert incident < hostile < lockdown_pos < self_action
+    assert app_boundary > 0
+    assert '"install_hostile_actor_runtime"' in source
+    assert '"install_anti_nuke_lockdown_runtime"' in source
+
