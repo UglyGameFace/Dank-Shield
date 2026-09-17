@@ -2,10 +2,11 @@
 
 ## DS-SEC-ANTINUKE-RUNTIME-CONSOLIDATION — Make AntiNuke runtime ownership explicit
 
-**Status:** PHASE A IMPLEMENTATION / VALIDATION
+**Status:** PHASE B IMPLEMENTATION / VALIDATION
 
 **Branch:** `refactor/antinuke-runtime-bootstrap-consolidation`
 **Base main:** `bbf36ee6a4859f55a2e23373313cb21ccb64686d`
+**Validated Phase A head:** `984c4b4d75ef805d8fd59d92af97cabbc0460699`
 
 ## Previous task locks closed
 
@@ -14,77 +15,113 @@
 - PR #254 (`DS-INVITE-HUMAN-EMBED-FALSE-POSITIVE`) merged as `bc0a14cf59bcddb7c7ac0a45498125921cae4023` and Discloud reported success.
 - PR #255 (`DS-INVITE-INTERACTION-RESPONSE-FALSE-POSITIVE`) merged as `bbf36ee6a4859f55a2e23373313cb21ccb64686d` and Discloud reported success.
 
-The Single Active Task Lock is now this AntiNuke runtime-ownership consolidation only.
+The Single Active Task Lock is this AntiNuke runtime-ownership consolidation only.
 
 ## Resync after emergency hotfixes
 
-The consolidation branch was paused while the two live Invite Shield regressions were fixed. Before resuming implementation, the old branch head `e46c7b771088e464867ae5cb374cd0e714c30d72` was preserved at `backup/antinuke-runtime-bootstrap-pre-hotfix-sync`, then the consolidation changes were reapplied onto current production `main` `bbf36ee6a4859f55a2e23373313cb21ccb64686d`.
+The consolidation branch was paused while the two live Invite Shield regressions were fixed. The previous consolidation head `e46c7b771088e464867ae5cb374cd0e714c30d72` was preserved at `backup/antinuke-runtime-bootstrap-pre-hotfix-sync`, then the consolidation changes were reapplied onto production `main` `bbf36ee6a4859f55a2e23373313cb21ccb64686d`.
 
-The resync explicitly preserves the new `_install_invite_policy_message_surface_runtime()` bootstrap call before invite reconciliation. AntiNuke consolidation must not remove, reorder behind reconciliation, or otherwise regress the Invite Shield fixes from PRs #254/#255.
+The resync explicitly preserves `_install_invite_policy_message_surface_runtime()` before invite reconciliation. AntiNuke consolidation must not regress PRs #254/#255.
 
 ## Outcome target
 
-Reduce the architectural risk created by AntiNuke being assembled through a long sequence of independently owned startup wrappers and overlapping runtime policy patches. Preserve all validated security behavior while making bootstrap order and policy ownership explicit enough that a later fix cannot silently depend on accidental monkey-patch order.
-
-## Confirmed current execution path
-
-Before this task, `main.py` independently installed the following AntiNuke layers in order:
-
-1. gateway
-2. finalizer
-3. incident
-4. hostile actor reputation
-5. lockdown
-6. self-action proof
-7. zero-damage hardening
-8. audit compatibility
-9. readiness gate
-10. product policy after app import
-11. hostile re-entry race guard
-
-That sequence is behaviorally important, but the ordering contract was spread across eleven wrapper functions in `main.py`, with each wrapper repeating lazy imports, duplicate handling, and exception handling. Several tests therefore pinned security behavior to string positions in the entrypoint instead of to one authoritative runtime bootstrap contract.
-
-The deeper overlap audit also confirmed that lockdown, zero-damage, incident, and product-policy runtimes touch some of the same policy surfaces. PR #253 already made incident runtime the authoritative guild-owner severity classifier, so the old lockdown owner-first-strike wrapper is now legacy overlap rather than the source of truth.
+Reduce the architectural risk created by AntiNuke being assembled through a long sequence of independently owned startup wrappers and overlapping runtime policy patches. Preserve validated security behavior while making bootstrap order and policy ownership explicit enough that later fixes do not silently depend on accidental monkey-patch order.
 
 ## Phase A — bootstrap ownership consolidation
 
-Implemented first because it is behavior-preserving and gives the remaining cleanup one explicit installation boundary:
+Implemented:
 
 - added `stoney_verify/anti_nuke_runtime_coordinator.py`
 - moved the authoritative pre-app and post-app AntiNuke installation order into declarative layer tables
 - centralized lazy import resolution, duplicate reporting, and per-layer fail-soft exception handling
 - reduced `main.py` to one pre-app AntiNuke coordinator call and one post-app coordinator call
-- preserved the exact behavioral module order and the app-import boundary
-- left SpamGuard installation independent because it is not an AntiNuke runtime layer
-- did not change thresholds, owner severity, containment, bot authorization, self-action proof, readiness requirements, or quarantine behavior in this phase
+- preserved the exact behavioral module order and app-import boundary
+- kept SpamGuard independent
+- preserved Invite Shield message-surface setup before invite reconciliation
+- migrated startup-order regressions away from obsolete `main.py` wrapper-string checks
+- added focused coordinator tests for exact order, installer contracts, bot argument handling, duplicate results, fail-soft continuation, and bootstrap boundaries
+
+### Phase A validation
+
+The first Phase A CI attempt exposed only trailing blank-line whitespace in six migrated test files. Those files were cleaned and revalidated.
+
+Exact Phase A head `984c4b4d75ef805d8fd59d92af97cabbc0460699` was 0 behind `main` and passed the complete workflow set:
+
+- Dank Shield CI #2284: **success**
+  - Python compile check: **success**
+  - full unit test suite: **success**
+  - standalone tool checks: **success**
+  - public setup/isolation audit: **success**
+  - canonical public command surface audit: **success**
+  - public command/startup friction audit: **success**
+  - public invite permissions audit: **success**
+  - setup safety audit: **success**
+  - Dank Design Smart Auto-Detect audit: **success**
+  - role truth ownership audit: **success**
+  - event boundary ownership audit: **success**
+  - Claim-first ticket security: **success**
+  - Managed category SQL smoke test: **success**
+- Application Command Size Diagnostics #1268: **success**
+- Dank Design Regression CI #510: **success**
+- Ticket Owner Emergency Override #855: **success**
+- Profile Runtime Diagnostics #1017: **success**
+
+Phase A therefore established a behavior-preserving centralized bootstrap boundary before Phase B edits.
 
 ## Phase B — overlapping policy ownership cleanup
 
-After Phase A is validated on the branch, continue inside this same task lock and remove only overlap that is proven redundant by current production semantics. Priority ownership boundaries:
+### Deeper overlap audit
 
-- incident runtime owns guild-owner severity classification
-- product-policy runtime owns normal Contain versus optional Strict Lockdown threshold behavior
-- lockdown runtime owns control-plane/config-history/bot-delegation invariants, not owner severity
-- zero-damage runtime owns expanded audit coverage, compromise quarantine, and self-action hardening, not product-tier threshold semantics
-- gateway/guardian remain the event attribution and rollback surfaces
+The overlap audit found that most apparently duplicated strict behavior is **intentional fail-closed staging**, not dead code:
 
-Do not collapse modules merely to reduce file count. A runtime is removed or simplified only when its behavior has a clear canonical owner and regression coverage proves the replacement path.
+- `anti_nuke_lockdown_runtime` and `anti_nuke_zero_damage_runtime` install conservative pre-app structural/guardian defaults.
+- `anti_nuke_product_policy_runtime`, installed post-app, deliberately relaxes those defaults for healthy normal Contain and reapplies one-strike behavior only for Strict Lockdown where appropriate.
+- the coordinator is fail-soft. If product-policy installation fails, deleting the pre-app conservative defaults would turn a product-policy startup failure into a fail-open security regression.
+- therefore the pre-app strict processor keys, guardian overrides, and rollback guards remain intentionally present and are now documented as fail-closed fallback behavior.
+
+One overlap is genuinely redundant:
+
+- PR #253 made `anti_nuke_incident_runtime._owner_event_policy()` and `_process_owner_destructive_event()` the authoritative guild-owner severity classifier.
+- that classifier independently chooses benign, bounded, or immediate policy and does not depend on the old blanket owner `threshold_override=1`.
+- `anti_nuke_lockdown_runtime._patch_owner_first_strike()` only rewrote the argument to `1`; it no longer affected the authoritative outcome and obscured ownership.
+
+### Phase B implementation
+
+Removed only the proven redundant owner-severity overlap:
+
+- removed lockdown `_OWNER_PATCH_FLAG`
+- removed `_patch_owner_first_strike()`
+- removed the incident import and owner patch call from the lockdown installer
+- changed lockdown startup reporting to `owner severity=incident-owned`
+- updated comments to explicitly document the remaining strict pre-app behavior as fail-closed fallback that product policy relaxes after app import
+- replaced the obsolete lockdown owner-first-strike unit test with an ownership regression proving lockdown no longer patches owner severity and incident runtime contains the authoritative classifier
+
+No threshold, containment, bot-add authorization, quarantine, rollback, trusted-staff, or Strict Lockdown semantics are intentionally changed.
+
+## Canonical ownership after Phase B
+
+- **incident runtime:** guild-owner severity classification and owner compromise/burst reporting
+- **product-policy runtime:** healthy-state normal Contain versus optional Strict Lockdown semantics
+- **lockdown runtime:** config-history/control-plane protection, bot delegation/integrity, and conservative pre-app fallback
+- **zero-damage runtime:** expanded audit coverage, self-action hardening, compromise quarantine, and conservative pre-app fallback
+- **gateway/guardian:** event attribution, action dispatch, rollback surfaces, and panic evidence
+- **runtime coordinator:** installation order and pre/post-app bootstrap boundary only
 
 ## Validation gate
 
 Before merge:
 
-- update startup-order tests to assert the coordinator contract instead of obsolete `main.py` wrapper strings
-- add focused coordinator tests for exact phase order, app boundary, duplicate handling, and fail-soft continuation
-- run Python compile and the full unit suite
-- run standalone/security/event-boundary audits
-- pass required `Python compile check`, `Claim-first ticket security`, and `Managed category SQL smoke test`
-- pass companion Dank Shield, design, profile, command-size, and ticket-owner workflows
-- inspect the exact final diff for debug code, stale wrappers, conflict artifacts, accidental policy changes, and duplicate runtime ownership
-- final branch must be 0 behind `main`
-- merge only the exact validated head
-- verify resulting `main` and `discloud/commit: success` before releasing this task lock
+- Phase B exact head must pass Python compile, full unit suite, standalone/security/event-boundary audits, all three required jobs, and all companion workflows
+- inspect the final PR diff for debug code, stale owner-wrapper symbols, conflict artifacts, accidental policy changes, and duplicate runtime ownership
+- confirm owner-policy normalization regressions remain green
+- confirm Invite Shield bootstrap still precedes reconciliation
+- confirm branch remains 0 behind current `main`
+- resolve any review blocker
+- update this task record with final exact-head evidence
+- revalidate the bookkeeping head exactly
+- mark PR #256 ready and merge only the exact validated SHA
+- verify the resulting `main` merge parent and require `discloud/commit: success` before releasing this task lock
 
 ## Next step
 
-Verify the resynced branch is 0 behind current `main` with only the intended three consolidation files changed. Then finish Phase A regression migration and exact behavior checks before touching any Phase B overlap.
+Run exact-head Phase B validation. If green, perform the final diff/ownership audit and bookkeeping update; if anything fails, fix only the current AntiNuke consolidation task and repeat exact-head validation.
