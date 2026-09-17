@@ -418,7 +418,7 @@ def test_owner_stage_delete_is_bounded_not_one_strike(monkeypatch) -> None:
     assert incidents == []
 
 
-def test_owner_webhook_authority_change_remains_immediate(monkeypatch) -> None:
+def test_owner_webhook_update_is_bounded_not_one_strike(monkeypatch) -> None:
     incidents = _install_owner_test_doubles(monkeypatch)
     guild = SimpleNamespace(id=13, owner_id=42)
     owner = SimpleNamespace(id=42, mention="<@42>")
@@ -430,7 +430,28 @@ def test_owner_webhook_authority_change_remains_immediate(monkeypatch) -> None:
             action_key="webhook_update",
             action_label="Webhook mutation",
             target_label="Webhook",
-            threshold_key="antinuke_role_delete_threshold",
+            threshold_key="antinuke_webhook_create_threshold",
+            threshold_override=1,
+        )
+    )
+
+    assert incidents == []
+    assert anti_nuke._ACTION_WINDOWS  # noqa: SLF001
+
+
+def test_owner_webhook_delete_remains_immediate(monkeypatch) -> None:
+    incidents = _install_owner_test_doubles(monkeypatch)
+    guild = SimpleNamespace(id=14, owner_id=42)
+    owner = SimpleNamespace(id=42, mention="<@42>")
+
+    asyncio.run(
+        incident._process_owner_destructive_event(  # noqa: SLF001
+            guild,
+            entry=_entry("webhook_delete", owner),
+            action_key="webhook_delete",
+            action_label="Webhook deletion",
+            target_label="Webhook",
+            threshold_key="antinuke_webhook_create_threshold",
             threshold_override=None,
         )
     )
@@ -439,9 +460,9 @@ def test_owner_webhook_authority_change_remains_immediate(monkeypatch) -> None:
     assert incidents[0]["title"] == "🚨 AntiNuke Owner-Compromise Warning"
 
 
-def test_owner_integration_create_remains_immediate(monkeypatch) -> None:
+def test_owner_integration_create_is_bounded_for_legitimate_oauth_flow(monkeypatch) -> None:
     incidents = _install_owner_test_doubles(monkeypatch)
-    guild = SimpleNamespace(id=14, owner_id=42)
+    guild = SimpleNamespace(id=15, owner_id=42)
     owner = SimpleNamespace(id=42, mention="<@42>")
 
     asyncio.run(
@@ -450,6 +471,27 @@ def test_owner_integration_create_remains_immediate(monkeypatch) -> None:
             entry=_entry("integration_create", owner),
             action_key="integration_create",
             action_label="Integration creation",
+            target_label="Integration",
+            threshold_key="antinuke_role_delete_threshold",
+            threshold_override=1,
+        )
+    )
+
+    assert incidents == []
+    assert anti_nuke._ACTION_WINDOWS  # noqa: SLF001
+
+
+def test_owner_integration_delete_remains_immediate(monkeypatch) -> None:
+    incidents = _install_owner_test_doubles(monkeypatch)
+    guild = SimpleNamespace(id=16, owner_id=42)
+    owner = SimpleNamespace(id=42, mention="<@42>")
+
+    asyncio.run(
+        incident._process_owner_destructive_event(  # noqa: SLF001
+            guild,
+            entry=_entry("integration_delete", owner),
+            action_key="role_update",
+            action_label="Integration deletion",
             target_label="Integration",
             threshold_key="antinuke_role_delete_threshold",
             threshold_override=None,
@@ -462,7 +504,7 @@ def test_owner_integration_create_remains_immediate(monkeypatch) -> None:
 
 def test_owner_vanity_change_is_bounded_not_cosmetic_or_immediate(monkeypatch) -> None:
     incidents = _install_owner_test_doubles(monkeypatch)
-    guild = SimpleNamespace(id=15, owner_id=42)
+    guild = SimpleNamespace(id=17, owner_id=42)
     owner = SimpleNamespace(id=42, mention="<@42>")
 
     asyncio.run(
