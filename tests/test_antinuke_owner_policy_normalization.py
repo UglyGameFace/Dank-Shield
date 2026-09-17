@@ -309,3 +309,178 @@ def test_owner_sensitive_member_role_grant_is_not_silently_skipped(monkeypatch) 
     assert captured[0]["action_key"] == "role_update"
     assert captured[0]["threshold_override"] == 1
     assert "security-sensitive role" in captured[0]["action_label"]
+
+
+def test_owner_role_color_edit_is_cosmetic_not_sparse_authority(monkeypatch) -> None:
+    incidents = _install_owner_test_doubles(monkeypatch)
+    guild = SimpleNamespace(id=9, owner_id=42)
+    owner = SimpleNamespace(id=42, mention="<@42>")
+    before = SimpleNamespace(
+        permissions=SimpleNamespace(administrator=False),
+        colour=1,
+        position=5,
+    )
+    after = SimpleNamespace(
+        permissions=SimpleNamespace(administrator=False),
+        colour=2,
+        position=5,
+    )
+
+    asyncio.run(
+        incident._process_owner_destructive_event(  # noqa: SLF001
+            guild,
+            entry=_entry("role_update", owner, before=before, after=after),
+            action_key="role_update",
+            action_label="Role settings mutation",
+            target_label="@helpers",
+            threshold_key="antinuke_role_delete_threshold",
+            threshold_override=1,
+        )
+    )
+
+    assert incidents == []
+    assert anti_nuke._ACTION_WINDOWS == {}  # noqa: SLF001
+
+
+def test_owner_single_message_delete_is_bounded_not_one_strike(monkeypatch) -> None:
+    incidents = _install_owner_test_doubles(monkeypatch)
+    guild = SimpleNamespace(id=10, owner_id=42)
+    owner = SimpleNamespace(id=42, mention="<@42>")
+
+    for index in range(4):
+        asyncio.run(
+            incident._process_owner_destructive_event(  # noqa: SLF001
+                guild,
+                entry=_entry("message_delete", owner),
+                action_key="message_delete",
+                action_label="Message deletion",
+                target_label=f"message-{index}",
+                threshold_key="antinuke_channel_delete_threshold",
+                threshold_override=1,
+            )
+        )
+    assert incidents == []
+
+    asyncio.run(
+        incident._process_owner_destructive_event(  # noqa: SLF001
+            guild,
+            entry=_entry("message_delete", owner),
+            action_key="message_delete",
+            action_label="Message deletion",
+            target_label="message-5",
+            threshold_key="antinuke_channel_delete_threshold",
+            threshold_override=1,
+        )
+    )
+
+    assert len(incidents) == 1
+    assert incidents[0]["title"] == "⚠️ AntiNuke Owner Activity Burst Warning"
+    assert "message_delete 5/5" in incidents[0]["count_label"]
+
+
+def test_owner_onboarding_update_is_bounded_not_one_strike(monkeypatch) -> None:
+    incidents = _install_owner_test_doubles(monkeypatch)
+    guild = SimpleNamespace(id=11, owner_id=42)
+    owner = SimpleNamespace(id=42, mention="<@42>")
+
+    asyncio.run(
+        incident._process_owner_destructive_event(  # noqa: SLF001
+            guild,
+            entry=_entry("onboarding_update", owner),
+            action_key="onboarding_update",
+            action_label="Guild onboarding mutation",
+            target_label="Onboarding",
+            threshold_key="antinuke_channel_delete_threshold",
+            threshold_override=1,
+        )
+    )
+
+    assert incidents == []
+
+
+def test_owner_stage_delete_is_bounded_not_one_strike(monkeypatch) -> None:
+    incidents = _install_owner_test_doubles(monkeypatch)
+    guild = SimpleNamespace(id=12, owner_id=42)
+    owner = SimpleNamespace(id=42, mention="<@42>")
+
+    asyncio.run(
+        incident._process_owner_destructive_event(  # noqa: SLF001
+            guild,
+            entry=_entry("stage_instance_delete", owner),
+            action_key="stage_delete",
+            action_label="Stage instance deletion",
+            target_label="Stage",
+            threshold_key="antinuke_channel_delete_threshold",
+            threshold_override=1,
+        )
+    )
+
+    assert incidents == []
+
+
+def test_owner_webhook_authority_change_remains_immediate(monkeypatch) -> None:
+    incidents = _install_owner_test_doubles(monkeypatch)
+    guild = SimpleNamespace(id=13, owner_id=42)
+    owner = SimpleNamespace(id=42, mention="<@42>")
+
+    asyncio.run(
+        incident._process_owner_destructive_event(  # noqa: SLF001
+            guild,
+            entry=_entry("webhook_update", owner),
+            action_key="webhook_update",
+            action_label="Webhook mutation",
+            target_label="Webhook",
+            threshold_key="antinuke_role_delete_threshold",
+            threshold_override=None,
+        )
+    )
+
+    assert len(incidents) == 1
+    assert incidents[0]["title"] == "🚨 AntiNuke Owner-Compromise Warning"
+
+
+def test_owner_integration_create_remains_immediate(monkeypatch) -> None:
+    incidents = _install_owner_test_doubles(monkeypatch)
+    guild = SimpleNamespace(id=14, owner_id=42)
+    owner = SimpleNamespace(id=42, mention="<@42>")
+
+    asyncio.run(
+        incident._process_owner_destructive_event(  # noqa: SLF001
+            guild,
+            entry=_entry("integration_create", owner),
+            action_key="integration_create",
+            action_label="Integration creation",
+            target_label="Integration",
+            threshold_key="antinuke_role_delete_threshold",
+            threshold_override=None,
+        )
+    )
+
+    assert len(incidents) == 1
+    assert incidents[0]["title"] == "🚨 AntiNuke Owner-Compromise Warning"
+
+
+def test_owner_vanity_change_is_bounded_not_cosmetic_or_immediate(monkeypatch) -> None:
+    incidents = _install_owner_test_doubles(monkeypatch)
+    guild = SimpleNamespace(id=15, owner_id=42)
+    owner = SimpleNamespace(id=42, mention="<@42>")
+
+    asyncio.run(
+        incident._process_owner_destructive_event(  # noqa: SLF001
+            guild,
+            entry=_entry(
+                "guild_update",
+                owner,
+                before=SimpleNamespace(vanity_url_code="old"),
+                after=SimpleNamespace(vanity_url_code="new"),
+            ),
+            action_key="channel_update",
+            action_label="Server identity/security mutation",
+            target_label="Server settings • vanity_url_code",
+            threshold_key="antinuke_channel_delete_threshold",
+            threshold_override=1,
+        )
+    )
+
+    assert incidents == []
+    assert anti_nuke._ACTION_WINDOWS  # noqa: SLF001
