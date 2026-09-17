@@ -112,15 +112,16 @@ def normalize_targets(targets: Iterable[ContextualRepairTarget]) -> tuple[Contex
     return tuple(out)
 
 
-def audit_context(
+def _audit_rows_from_channels(
     guild: discord.Guild,
     targets: Iterable[ContextualRepairTarget],
+    channels: dict[int, discord.abc.GuildChannel | None],
     *,
     manual_issues: Iterable[str] = (),
 ) -> ContextualRepairAudit:
     rows: list[ContextualTargetAudit] = []
     for target in normalize_targets(targets):
-        channel = guild.get_channel(int(target.channel_id))
+        channel = channels.get(int(target.channel_id))
         if not isinstance(channel, discord.abc.GuildChannel):
             rows.append(
                 ContextualTargetAudit(
@@ -144,6 +145,62 @@ def audit_context(
     return ContextualRepairAudit(
         targets=rows,
         manual_issues=[str(item).strip() for item in manual_issues if str(item).strip()],
+    )
+
+
+def audit_context(
+    guild: discord.Guild,
+    targets: Iterable[ContextualRepairTarget],
+    *,
+    manual_issues: Iterable[str] = (),
+) -> ContextualRepairAudit:
+    normalized = normalize_targets(targets)
+    channels = {
+        int(target.channel_id): guild.get_channel(int(target.channel_id))
+        for target in normalized
+    }
+    return _audit_rows_from_channels(
+        guild,
+        normalized,
+        channels,
+        manual_issues=manual_issues,
+    )
+
+
+async def _audit_context_fresh(
+    guild: discord.Guild,
+    targets: Iterable[ContextualRepairTarget],
+    *,
+    manual_issues: Iterable[str] = (),
+) -> ContextualRepairAudit:
+    """Re-audit targets from Discord after mutation instead of trusting cache.
+
+    ``GuildChannel.set_permissions`` returns after Discord accepts the overwrite,
+    while the gateway cache may still contain the pre-repair channel object. A
+    same-tick cache-only audit can therefore report permissions as still missing.
+    Fetch each exact target over HTTP first, falling back to cache only when the
+    refresh itself is unavailable.
+    """
+
+    normalized = normalize_targets(targets)
+    channels: dict[int, discord.abc.GuildChannel | None] = {}
+    fetch_channel = getattr(guild, "fetch_channel", None)
+    for target in normalized:
+        channel_id = int(target.channel_id)
+        fresh: Any = None
+        if callable(fetch_channel):
+            try:
+                fresh = await fetch_channel(channel_id)
+            except Exception:
+                fresh = None
+        if not isinstance(fresh, discord.abc.GuildChannel):
+            fresh = guild.get_channel(channel_id)
+        channels[channel_id] = fresh if isinstance(fresh, discord.abc.GuildChannel) else None
+    return _audit_rows_from_channels(
+        guild,
+        normalized,
+        channels,
+        manual_issues=manual_issues,
     )
 
 
@@ -224,7 +281,11 @@ async def repair_context(
         if not repaired.ok:
             result.ok = False
 
-    after = audit_context(guild, normalized, manual_issues=manual_issues)
+    after = await _audit_context_fresh(
+        guild,
+        normalized,
+        manual_issues=manual_issues,
+    )
     result.after = after
     result.remaining_issues = remaining_issue_lines(after)
     if result.remaining_issues:
