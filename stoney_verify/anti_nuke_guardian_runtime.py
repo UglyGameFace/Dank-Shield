@@ -22,7 +22,8 @@ from . import anti_nuke
 _ACTIONS: dict[str, tuple[str, str, str, Optional[int]]] = {
     "guild_update": ("Server identity/security mutation", "antinuke_channel_delete_threshold", "channel_update", None),
     "channel_create": ("Channel creation", "antinuke_channel_delete_threshold", "channel_create", None),
-    "channel_update": ("Channel settings mutation", "antinuke_channel_delete_threshold", "channel_update", None),
+    # Generic CHANNEL_UPDATE also covers ordinary edits such as names/topics.
+    # Permission overwrites have distinct Discord audit actions handled below.
     "channel_delete": ("Channel deletion", "antinuke_channel_delete_threshold", "channel_delete", None),
     "overwrite_create": ("Channel overwrite creation", "antinuke_channel_delete_threshold", "channel_update", None),
     "overwrite_update": ("Channel overwrite mutation", "antinuke_channel_delete_threshold", "channel_update", None),
