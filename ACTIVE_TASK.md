@@ -1,69 +1,75 @@
 # ACTIVE TASK
 
-## DS-AUD-CONTEXTUAL-REPAIR-LIVE-REGRESSION — Fix false Fix Issues failures
+## DS-AUD-PROTECTION-CONTEXTUAL-REPAIR — Move Protection-owned access onto same-screen repair
 
-**Status:** IMPLEMENTATION / VALIDATION
+**Status:** INVESTIGATION / IMPLEMENTATION
 
-**Branch:** `audit/contextual-repair-permission-cache-fix`
-**Base main:** `6b8abf9f66db55251c2c2e133526d1ac867c5755`
-**Previous integrated task:** PR #248 merged and verified on `main` at `6b8abf9f66db55251c2c2e133526d1ac867c5755`.
+**Branch:** `audit/protection-contextual-repair`
+**Base main:** `98290563f7244af198c4384a595cb66cdc76e0e3`
+**Previous integrated task:** PR #250 fixed the live contextual permission-repair false failures and is merged/verified on `main` at `98290563f7244af198c4384a595cb66cdc76e0e3`.
 
-## User-reported production regression
+## Outcome target
 
-The guided setup `Fix Issues` action reported four targets as not repaired:
+Extend the shared same-screen repair contract into the normal public `/dank protection` experience for exact Protection-owned Discord resources. Safe bot-only access problems should expose `Fix Issues`, re-audit from fresh Discord state, and refresh the same Protection Center. Unsafe/server-level prerequisites remain `Manual Fix Needed`.
 
-- Verification start channel: still missing `send_messages`, `embed_links`, `attach_files`
-- Ticket archive category: still missing `view_channel`
-- Ticket transcripts channel: claimed Dank Shield lacked Manage Channels and could not repair its own overwrite
-- Moderation log channel: same Manage Channels blocker
+## Findings so far
 
-This regression takes the Single Active Task Lock. Do not move to Protection or any later audit item until this task is implemented, exact-head validated, merged, and verified on `main`.
+1. Invite Shield public targeting/cleanup already has native feature ownership from PRs #242/#243. Do not re-open or replace that work in this task.
+2. AntiNuke permission health is primarily server-level containment/readiness state. Missing server permissions, trust/hierarchy, and Strict Lockdown prerequisites are not channel-overwrite repairs and remain manual.
+3. Protection Live Stats is an exact-resource case. `security_stats.py` persists the owned stats category ID in `security_stats_category_id` and exact counter channel IDs in `security_stats_channel_ids`.
+4. Live Stats needs Manage Channels to create/rename the display and Manage Roles / Manage Permissions to maintain channel permission overwrites. Those server-level prerequisites remain manual when unavailable.
+5. Contextual repair must use only the persisted category/channel IDs. The stats service may retain its own recovery logic for normal product maintenance, but this repair button must not guess replacement resources by name.
+6. Shared permission mutation remains owned by `permission_repair_core`; this task must not add feature-local `set_permissions()` calls.
 
-## Root causes
+## Scope
 
-1. `permission_repair_core.audit_target()` used `effective.manage_channels` as the prerequisite for `GuildChannel.set_permissions(...)`. Discord's Edit Channel Permissions endpoint actually requires `MANAGE_ROLES` (shown as Manage Permissions in channel UI). That produced false manual blockers when Manage Channels was absent but overwrite editing was authorized.
-2. `contextual_permission_repair.repair_context()` called `set_permissions(...)` and then immediately re-audited `guild.get_channel(...)`. discord.py sends the overwrite update over HTTP, while the gateway-backed channel object can still contain the pre-repair overwrite until the Channel Update event arrives. A same-tick cache-only audit can therefore claim a successful repair is still missing.
+- normal public `/dank protection` Protection Center
+- enabled Live Stats exact saved category and counter-channel resources
+- same-screen `Fix Issues` / `Access Healthy` / `Manual Fix Needed` state
+- fresh Discord re-audit after repair
+- preservation of AntiNuke manual/server-level blockers
+- focused regression coverage and task bookkeeping
 
-## Implementation
+Out of scope:
+- Invite Shield picker/cleanup redesign or retired guard resurrection
+- AntiNuke policy/threshold redesign
+- role movement or trust-list changes
+- clearing explicit denies automatically
+- widening member/@everyone visibility
+- changing Live Stats audience-lock semantics
+- remaining Protection non-invite picker/guard cleanup, which stays in its later backlog unit
 
-- permission-overwrite authorization now checks effective `manage_roles`, not `manage_channels`
-- Discord Forbidden wording now identifies Manage Roles / Manage Permissions rather than falsely naming Manage Channels
-- the contextual post-repair audit fetches each exact configured target from Discord over HTTP before deciding whether repair succeeded
-- if the HTTP refresh itself fails, the audit falls back to the cached channel and remains fail-closed rather than claiming success
-- no member/@everyone visibility changes, Administrator grants, target guessing, role movement, or explicit-deny clearing were added
-- all permission mutation remains in `permission_repair_core`
+## Safety contract
 
-## Regression coverage
-
-`tests/test_contextual_permission_repair_live_regression.py` covers:
-
-- Manage Roles present + Manage Channels absent does not block overwrite repair
-- missing Manage Roles produces the manual overwrite blocker
-- successful mutation followed by a stale cached channel is verified against a fresh Discord channel
-- failed fresh fetch falls back to cache and does not falsely claim healthy access
+- exact persisted Protection resources only
+- no guessed channels/categories
+- no Administrator grant
+- no role hierarchy movement
+- no @everyone/member/staff visibility widening
+- no automatic explicit-deny clearing
+- server-level permission/readiness blockers remain manual
+- all bot-overwrite mutation stays in the shared permission repair owner
 
 ## Validation gate
 
-- focused regression tests pass
-- full unit suite passes
-- Python compile and standalone audits pass
-- every triggered PR workflow succeeds on the exact final head
-- final branch is 0 behind current `main`
-- changed-file scope is limited to the repair core, contextual re-audit, focused tests, and task bookkeeping
+- prove the production Protection Center composition path
+- focused Protection contextual-repair regressions pass
+- exact final branch is 0 behind current `main`
+- changed-file scope is task-owned only
+- full required GitHub Actions pass on exact final head
 - no unresolved review/thread issue
-- exact validated head is merged
-- resulting merge commit is verified as current `main`
+- merge only the exact validated head
+- verify resulting merge commit as current `main`
 
-## Backlog after this regression closes
+## Backlog after this task
 
-1. Protection contextual repair adoption
-2. remaining VC-specific repair cleanup
-3. Embed / Status contextual repair adoption
-4. admin-only `/dank tickettool-check` contextual repair adoption
-5. `/dank protection` remaining non-invite picker/guard cleanup
-6. `/dank design` picker migration
-7. admin-only legacy setup picker cleanup
+1. remaining VC-specific repair cleanup
+2. Embed / Status contextual repair adoption
+3. admin-only `/dank tickettool-check` contextual repair adoption
+4. `/dank protection` remaining non-invite picker/guard cleanup
+5. `/dank design` picker migration
+6. admin-only legacy setup picker cleanup
 
 ## Next step
 
-Open the corrective PR, inspect the exact diff, run the full exact-head validation wave, fix any regression found, merge only the final validated head, verify `main`, then release this lock.
+Implement the Protection Center Live Stats same-screen repair path using exact saved IDs and the shared permission-repair owner, add focused regression coverage, then run exact-head validation.
