@@ -1,98 +1,123 @@
 # ACTIVE TASK
 
-## DS-AUD-MODLOG-MEMBERLOGS-CONTEXTUAL-REPAIR — Make logging routes self-repairing
+## DS-AUD-MODLOG-MEMBERLOGS-CONTEXTUAL-REPAIR — Repair the failed logging contextual integration
 
-**Outcome target:** Extend the merged same-screen permission-repair contract into the normal public Modlog and Member Logs workflows. When those surfaces can prove Dank Shield itself is missing safe access to an already configured log route, the same screen must expose one repair action, re-audit immediately, and leave only unsafe or configuration-level blockers for the administrator.
+**Outcome target:** Restore the intended same-screen permission-repair contract for normal public Modlog Health and `/dank member-logs`. Safe Dank Shield channel-access problems must expose one repair action, re-audit immediately, refresh the same response, and leave only unsafe or configuration-level blockers for the administrator.
 
-**Status:** IMPLEMENTATION / VALIDATION
+**Status:** REOPENED — CORRECTIVE IMPLEMENTATION / VALIDATION
 
-**Branch:** `audit/modlog-memberlogs-contextual-repair`
-**Base main:** `df85757d53b38338f829ff7ac618599015546cdf`
+**Corrective branch:** `audit/modlog-memberlogs-contextual-repair-fix`
+**Base main:** `b8c798422dfd8d56c8dd7a6159c20cdcf1d6804a`
+**Failed merged implementation:** PR #247, merge commit `b8c798422dfd8d56c8dd7a6159c20cdcf1d6804a`, PR head `9f75754c88caec92946f2ad468e266b932e31783`
 **Previous integrated task:** PR #246 merged at `df85757d53b38338f829ff7ac618599015546cdf`
 
 ## Scope
 
+- investigate and correct PR #247 only; do not advance the audit backlog while this lock is active
 - canonical public Modlog Tracking → Health path through `modlog_tracking_service` and `public_modlog_group.open_modlog_health`
-- canonical public `/dank member-logs` route installed by `public_member_lifecycle_runtime` through the authoritative member lifecycle router
-- reuse of `contextual_permission_repair` / `permission_repair_core`; no feature-local Discord overwrite mutation
-- exact configured/resolved Modlog, live join card, live exit card, and staff audit routes
-- same-screen `Fix Issues` / `Access Healthy` / `Manual Fix Needed` behavior
-- post-repair re-audit and refreshed status on the same workflow
-- focused regressions and task/PR bookkeeping
+- canonical public `/dank member-logs` callback owned by `startup_guards/member_lifecycle_router_guard.py` and installed through `public_member_lifecycle_runtime`
+- reuse `contextual_permission_repair` / `permission_repair_core`; no feature-local Discord overwrite mutation
+- preserve exact configured/resolved Modlog, live join card, live exit card, and staff audit targets
+- preserve safe/manual classification and same-screen `Fix Issues` / `Access Healthy` / `Manual Fix Needed` behavior
+- focused regression coverage for the concrete runtime binding failure
 
 Out of scope unless tracing proves a direct dependency:
-- changing which event families Modlog records
+- Profile / Self Roles work or the already-created `audit/profile-selfroles-contextual-repair` branch
+- changing Modlog event-family ownership
 - changing Welcome Card or Exit Card content/routing semantics
 - creating or guessing replacement log channels
-- making private staff log channels public
-- changing member/staff role visibility
-- clearing explicit denies without the existing explicit confirmation flow
-- broad startup-guard retirement
-- Profile / Self Roles / Protection / Embed / Status contextual repair adoption
+- widening @everyone, member, or staff visibility
+- clearing explicit denies automatically
+- broad startup-guard retirement or unrelated cleanup
 
-## Findings
+## Concrete failure
 
-1. PR #246 merged the shared contextual repair contract into normal public Ticket surfaces and is verified on `main`.
-2. Normal public Modlog Tracking is owned by `modlog_tracking_service.ModlogTrackingView`. Its **Health** button calls `public_modlog_group.open_modlog_health()`. That health path diagnoses the saved modlog channel and missing bot permissions but was read-only.
-3. `public_modlog_group._missing_perms()` checks target-effective View Channel, Send Messages, Embed Links, Read Message History plus the server-level View Audit Log prerequisite. The channel bits are safe contextual-repair candidates; View Audit Log is not a channel-overwrite fix and remains manual.
-4. `/dank member-logs` is a normal public child even though its current callback lives in `startup_guards/member_lifecycle_router_guard.py`. Production ownership is explicit: `public_member_lifecycle_runtime` imports that router and calls `install()`, and the startup-ownership audit marks it as the authoritative live feature owner.
-5. `/dank member-logs` resolves three live routes after every save: the Welcome Card Studio join route, Exit Card Studio exit route, and a staff audit/modlog route. Those exact resolved text channels provide deterministic repair targets without guessing replacements.
-6. The shared repair core already defines `welcome` and `logs` minimum profiles with View Channel, Send Messages, Embed Links, Attach Files, and Read Message History. That matches image-card/log delivery needs and keeps mutation centralized.
-7. Member-log invite attribution also needs the server-level Manage Server capability. That prerequisite cannot be repaired through a channel overwrite and remains a precise manual warning.
-8. `public_modlog_group._modlog_channel()` can discover a channel by name when no saved route exists. The new health display may report that discovery, but contextual repair deliberately refuses to target it until the administrator saves an exact route.
-9. The late public setup gate runs after the authoritative member lifecycle command has installed, so it can safely compose the existing `/dank member-logs` callback without adding a second command owner.
+PR #247 merged while two checks were still running, but the completed exact-head record is fully green: Dank Shield CI, Profile Runtime Diagnostics, Application Command Size Diagnostics, Ticket Owner Emergency Override, and Dank Design Regression CI all completed successfully on `9f75754c88caec92946f2ad468e266b932e31783`. The failure is therefore not a red-CI merge.
 
-## Implemented execution path
+The merged runtime integration is nevertheless inactive. `apply_logging_contextual_permission_repair()` tries to assign `member_logs_command.callback = contextual_member_logs_callback`. This repository pins `discord.py==2.7.1`; `discord.app_commands.Command.callback` is a getter-only property backed by `_callback`, with no setter. The assignment raises `AttributeError`. PR #247's atomic rollback then restores the Modlog Health function too, so neither Member Logs nor Modlog contextual repair remains active and startup reports the logging contextual repair activation as false.
 
-- added `public_logging_contextual_permission_repair` and activate it from the existing late public setup gate
-- Modlog Tracking → Health now renders a same-screen contextual repair control
-- Modlog repair targets only a saved Modlog channel ID using the `logs` profile; name-discovered channels are display-only until explicitly saved
-- View Audit Log stays a manual server-level prerequisite
-- `/dank member-logs` keeps its authoritative save callback, then gains a contextual repair view on the same response
-- Member Logs repair targets the exact resolved live join card (`welcome`), live exit card (`logs`), and configured staff audit route (`logs`)
-- missing join/exit routes, stale configured staff routes, and missing Manage Server for invite attribution remain manual
-- every repair delegates to `contextual_permission_repair.repair_context()` and refreshes the same surface with a fresh config/audit
-- runtime binding is atomic: if the existing Member Logs command cannot be resolved, Modlog Health is not partially patched
-- no feature-local `set_permissions` mutation, explicit-deny clearing, role mutation, Administrator grant, or visibility widening was added
+## Root cause
 
-## Validation added
+The regression is a **runtime callback wrapping problem** caused by treating a real `discord.app_commands.Command` like a mutable test double. `tests/test_logging_contextual_permission_repair.py` used `SimpleNamespace(callback=...)`, so assignment succeeded in CI and failed to model the pinned discord.py command object. The registration order itself is valid: `public_member_lifecycle_runtime` installs `/dank member-logs` before `public_setup_gate` applies contextual integrations.
 
-`tests/test_logging_contextual_permission_repair.py` covers:
-- saved-ID-only Modlog target mapping and `logs` profile
-- no guessed Modlog repair target when mapping is absent
-- exact resolved Member Logs route mapping and `welcome` / `logs` profiles
-- unresolved Member Logs routes never becoming guessed repair targets
-- Modlog mapping + View Audit Log remaining manual
-- Member Logs route gaps + Manage Server remaining manual
-- optional absent staff audit route not being invented as a channel problem
-- no feature-local `set_permissions` or explicit-deny clearing path
+## Production execution path
+
+- `commands_ext` registers `public_member_lifecycle_runtime` before `public_setup_gate`
+- `public_member_lifecycle_runtime` imports the authoritative member lifecycle router and calls `install()`
+- the router registers `/dank member-logs` as a real `discord.app_commands.Command` around `_member_logs_command`
+- `public_setup_gate` later calls `apply_logging_contextual_permission_repair()`
+- PR #247 failed at assignment to the read-only `Command.callback`, which triggered its rollback and removed the Modlog patch as well
+- Modlog Tracking's Health button and `/dank modlog health` both resolve `public_modlog_group.open_modlog_health` at call time, so replacing that module function remains the correct Modlog integration point
+
+## Corrective changes
+
+- keep `_member_logs_command` as the authoritative Member Logs callback instead of replacing the framework command callback after registration
+- after the canonical Member Logs response succeeds, call `attach_member_logs_contextual_repair()` to edit that same response with `MemberLogsRepairView`
+- gate Member Logs decoration on the shared logging integration activation flag so Modlog + Member Logs activation remains atomic
+- keep Modlog Health patching through the existing module function
+- remove the obsolete `_ORIGINAL_MEMBER_LOGS_CALLBACK` state and callback-assignment/rollback logic
+- do not mutate discord.py private `_callback`
+- do not add any new `set_permissions()` implementation
+
+## Validation coverage
+
+`tests/test_logging_contextual_permission_repair.py` must cover:
+- saved-ID-only Modlog targeting and `logs` profile
+- no guessed Modlog repair target
+- exact resolved Member Logs routes and `welcome` / `logs` profiles
+- unresolved routes and server-level permissions remain manual
+- no feature-local `set_permissions` / explicit-deny clearing
 - late public bootstrap activation
-- atomic binding when `/dank member-logs` is unavailable
-- preservation of the authoritative Member Logs save callback before the repair view is attached
+- missing Member Logs command prevents partial Modlog activation
+- the pinned `app_commands.Command.callback` property is read-only
+- activation succeeds with a real `app_commands.Command` without replacing its callback
+- authoritative Member Logs source calls the contextual response decorator
+- Member Logs decoration is disabled until atomic activation succeeds
+- activated Member Logs response receives the repair view
 
-Local container validation was unavailable because the runtime cannot resolve GitHub for a clone. GitHub Actions on the exact final PR head is the validation authority.
+Local cloning remains unavailable because this execution environment cannot resolve `github.com`. GitHub Actions on the exact corrective PR head is the executable validation authority.
 
 ## Validation gate
 
-- normal public Modlog and Member Logs execution paths proven by source tracing
+Before this task can be closed:
+- corrective branch is 0 behind `main`
+- final changed-file scope is reviewed and contains only task-owned implementation/tests/bookkeeping
 - focused logging contextual-repair regressions pass
-- exact final branch 0 behind `main`
-- final changed-file scope contains only task-owned implementation/tests/bookkeeping
-- full required GitHub Actions pass on the exact final head
-- no review/thread issue ignored
-- no merge until exact-head validation and scope review are clean
+- Python compile passes
+- full unit suite passes
+- Claim-first ticket security passes
+- Managed category SQL smoke test passes
+- every other triggered workflow finishes successfully on the exact final head
+- review threads and PR reviews are checked
+- no unexplained drift or unrelated change remains
+- merge uses the exact validated head
+- `main` is verified at the resulting merge commit
+
+Any commit that changes the corrective PR head resets exact-head validation.
+
+## Cleanup / conflicts
+
+- shared permission mutation ownership remains in `contextual_permission_repair` / `permission_repair_core`
+- the failed post-registration Member Logs callback wrapper is removed rather than layered with another workaround
+- no private discord.py callback field mutation is introduced
+- the previously created `audit/profile-selfroles-contextual-repair` branch remains untouched
+
+## Blockers / risks
+
+- no current implementation blocker
+- local clone/test execution is unavailable in this environment because GitHub DNS resolution fails; exact-head GitHub Actions is required before merge
 
 ## Backlog after this task
 
-- Profile / Self Roles contextual repair adoption
-- Protection contextual repair adoption
-- remaining VC-specific repair cleanup
-- Embed / Status contextual repair adoption
-- admin-only `/dank tickettool-check` contextual repair adoption
-- `/dank protection` remaining non-invite picker/guard cleanup
-- `/dank design` picker migration
-- admin-only legacy setup picker cleanup
+1. Profile / Self Roles contextual repair adoption
+2. Protection contextual repair adoption
+3. remaining VC-specific repair cleanup
+4. Embed / Status contextual repair adoption
+5. admin-only `/dank tickettool-check` contextual repair adoption
+6. remaining `/dank protection` non-invite picker/guard cleanup
+7. `/dank design` picker migration
+8. admin-only legacy setup picker cleanup
 
 ## Next step
 
-Normalize this task to one final commit, open the draft PR, run exact-head focused/full CI, inspect any concrete failure, perform final scope/drift/review checks, merge only when the exact final head is clean, verify `main`, then release the lock and move to Profile / Self Roles contextual repair.
+Commit the corrective implementation and regressions as one focused tree, open the corrective PR, validate the exact head through every required workflow, inspect scope/reviews/drift, merge only that validated head, then verify the resulting merge commit is the current `main` before releasing this task lock.

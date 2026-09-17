@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Optional
 
+import discord
 import pytest
+from discord import app_commands
 
 from stoney_verify.commands_ext import public_logging_contextual_permission_repair as repair
 from stoney_verify.commands_ext import public_setup_gate as gate
@@ -132,6 +135,12 @@ def test_late_public_bootstrap_activates_logging_contextual_repair() -> None:
     assert "logging_contextual_repair" in source
 
 
+def test_app_command_callback_is_read_only_in_supported_discord_runtime() -> None:
+    descriptor = inspect.getattr_static(app_commands.Command, "callback")
+    assert isinstance(descriptor, property)
+    assert descriptor.fset is None
+
+
 def test_apply_is_atomic_when_member_logs_command_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     async def old_modlog_health(_interaction: Any) -> None:
         return None
@@ -139,55 +148,87 @@ def test_apply_is_atomic_when_member_logs_command_is_unavailable(monkeypatch: py
     fake_group = SimpleNamespace(get_command=lambda _name: None)
     monkeypatch.setattr(repair, "_PATCHED", False)
     monkeypatch.setattr(repair, "_ORIGINAL_MODLOG_HEALTH", None)
-    monkeypatch.setattr(repair, "_ORIGINAL_MEMBER_LOGS_CALLBACK", None)
     monkeypatch.setattr(repair.modlog, "open_modlog_health", old_modlog_health)
     monkeypatch.setattr(repair, "dank_group", fake_group)
 
     assert repair.apply_logging_contextual_permission_repair() is False
     assert repair.modlog.open_modlog_health is old_modlog_health
     assert repair._ORIGINAL_MODLOG_HEALTH is None
-    assert repair._ORIGINAL_MEMBER_LOGS_CALLBACK is None
 
 
-def test_apply_binds_modlog_health_and_existing_member_logs_command(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_apply_supports_real_read_only_app_command_without_replacing_callback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def old_modlog_health(_interaction: Any) -> None:
         return None
 
-    async def old_member_logs(_interaction: Any, **_kwargs: Any) -> None:
-        return None
+    async def old_member_logs(
+        interaction: discord.Interaction,
+        public_welcome: Optional[discord.TextChannel] = None,
+        join_leave_log: Optional[discord.TextChannel] = None,
+        staff_audit_log: Optional[discord.TextChannel] = None,
+    ) -> None:
+        _ = interaction, public_welcome, join_leave_log, staff_audit_log
 
-    command = SimpleNamespace(callback=old_member_logs)
+    command = app_commands.command(
+        name="member-logs",
+        description="Configure member logs.",
+    )(old_member_logs)
     fake_group = SimpleNamespace(
         get_command=lambda name: command if name == "member-logs" else None
     )
 
     monkeypatch.setattr(repair, "_PATCHED", False)
     monkeypatch.setattr(repair, "_ORIGINAL_MODLOG_HEALTH", None)
-    monkeypatch.setattr(repair, "_ORIGINAL_MEMBER_LOGS_CALLBACK", None)
     monkeypatch.setattr(repair.modlog, "open_modlog_health", old_modlog_health)
     monkeypatch.setattr(repair, "dank_group", fake_group)
 
     assert repair.apply_logging_contextual_permission_repair() is True
     assert repair.modlog.open_modlog_health is repair.open_contextual_modlog_health
-    assert command.callback is repair.contextual_member_logs_callback
-    assert repair._ORIGINAL_MODLOG_HEALTH is old_modlog_health
-    assert repair._ORIGINAL_MEMBER_LOGS_CALLBACK is old_member_logs
+    assert command.callback is old_member_logs
+    source = inspect.getsource(repair.apply_logging_contextual_permission_repair)
+    assert ".callback =" not in source
+    assert "._callback" not in source
 
 
-def test_member_logs_wrapper_preserves_canonical_save_callback_then_adds_view(
+def test_authoritative_member_logs_callback_attaches_contextual_repair() -> None:
+    root = Path(__file__).resolve().parents[1]
+    source = (
+        root
+        / "stoney_verify"
+        / "startup_guards"
+        / "member_lifecycle_router_guard.py"
+    ).read_text(encoding="utf-8")
+
+    assert "attach_member_logs_contextual_repair" in source
+    assert "await attach_member_logs_contextual_repair(interaction)" in source
+
+
+def test_member_logs_attachment_is_gated_by_atomic_activation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[Any, Any, Any]] = []
     edits: list[dict[str, Any]] = []
 
-    async def original(
-        interaction: Any,
-        public_welcome: Any = None,
-        join_leave_log: Any = None,
-        staff_audit_log: Any = None,
-    ) -> None:
-        _ = interaction
-        calls.append((public_welcome, join_leave_log, staff_audit_log))
+    async def edit_original_response(**kwargs: Any) -> None:
+        edits.append(kwargs)
+
+    monkeypatch.setattr(repair, "_PATCHED", False)
+    monkeypatch.setattr(repair, "_member_user_authorized", lambda _interaction: True)
+    interaction = SimpleNamespace(
+        guild=SimpleNamespace(id=77),
+        user=SimpleNamespace(id=88),
+        edit_original_response=edit_original_response,
+    )
+
+    run(repair.attach_member_logs_contextual_repair(interaction))
+
+    assert edits == []
+
+
+def test_member_logs_authoritative_response_gets_repair_view_after_activation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    edits: list[dict[str, Any]] = []
 
     async def config(_guild_id: int, refresh: bool = False) -> object:
         assert refresh is True
@@ -197,7 +238,7 @@ def test_member_logs_wrapper_preserves_canonical_save_callback_then_adds_view(
         edits.append(kwargs)
 
     fake_view = object()
-    monkeypatch.setattr(repair, "_ORIGINAL_MEMBER_LOGS_CALLBACK", original)
+    monkeypatch.setattr(repair, "_PATCHED", True)
     monkeypatch.setattr(repair, "_member_user_authorized", lambda _interaction: True)
     monkeypatch.setattr(repair, "get_guild_config", config)
     monkeypatch.setattr(repair, "MemberLogsRepairView", lambda **_kwargs: fake_view)
@@ -207,18 +248,7 @@ def test_member_logs_wrapper_preserves_canonical_save_callback_then_adds_view(
         user=SimpleNamespace(id=88),
         edit_original_response=edit_original_response,
     )
-    welcome = object()
-    leave = object()
-    staff = object()
 
-    run(
-        repair.contextual_member_logs_callback(
-            interaction,
-            public_welcome=welcome,
-            join_leave_log=leave,
-            staff_audit_log=staff,
-        )
-    )
+    run(repair.attach_member_logs_contextual_repair(interaction))
 
-    assert calls == [(welcome, leave, staff)]
     assert edits == [{"view": fake_view}]

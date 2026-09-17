@@ -386,6 +386,17 @@ async def _member_logs_command(
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
+        try:
+            from stoney_verify.commands_ext.public_logging_contextual_permission_repair import (
+                attach_member_logs_contextual_repair,
+            )
+
+            await attach_member_logs_contextual_repair(interaction)
+        except Exception as exc:
+            _log(
+                "member-logs contextual repair decoration failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
     except Exception as exc:
         try:
             await interaction.response.send_message(
