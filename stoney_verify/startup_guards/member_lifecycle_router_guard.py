@@ -4,8 +4,8 @@ from __future__ import annotations
 
 Welcome Card Studio owns the member-facing welcome card, while the configured
 join/leave route owns the operational member-joined event log. Exit Card Studio
-owns the member-facing leave card. Staff audit/modlog listeners remain separate
-and are never folded into these public lifecycle cards.
+owns the member-facing leave card. Staff audit remains a separate route, and
+staff audit/modlog listeners are never folded into these public lifecycle cards.
 """
 
 from typing import Any, Optional
