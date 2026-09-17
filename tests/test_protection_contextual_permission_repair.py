@@ -31,16 +31,16 @@ def test_protection_integration_owns_no_discord_overwrite_mutation() -> None:
 
 
 def test_live_stats_targets_use_only_exact_persisted_ids() -> None:
-    specs = repair._target_specs(_full_cfg())
+    cfg = _full_cfg()
+    specs = repair._target_specs(cfg)
     assert specs[0].channel_id == 100
     assert specs[0].label == "Live Stats category"
     assert specs[0].feature == "tickets"
     assert specs[0].mode == "minimum"
 
-    saved_ids = {
-        int(value)
-        for value in _full_cfg()[repair.SECURITY_STATS_CHANNEL_IDS_KEY].values()  # type: ignore[union-attr]
-    }
+    raw_ids = cfg[repair.SECURITY_STATS_CHANNEL_IDS_KEY]
+    assert isinstance(raw_ids, dict)
+    saved_ids = {int(value) for value in raw_ids.values()}
     child_ids = {spec.channel_id for spec in specs[1:]}
     assert child_ids == saved_ids
 
@@ -56,7 +56,7 @@ def test_disabled_live_stats_has_no_contextual_targets() -> None:
     assert repair._target_specs(cfg) == ()
 
 
-def test_missing_saved_mapping_stays_manual_instead_of_guessing() -> None:
+def test_missing_saved_mapping_stays_manual_instead_of_guessing(monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = _full_cfg()
     cfg[repair.SECURITY_STATS_CATEGORY_ID_KEY] = "0"
     cfg[repair.SECURITY_STATS_CHANNEL_IDS_KEY] = {}
@@ -68,19 +68,13 @@ def test_missing_saved_mapping_stays_manual_instead_of_guessing() -> None:
             administrator=False,
         )
 
-    guild = SimpleNamespace(me=FakeMember())
-    original_member = repair.discord.Member
-    try:
-        repair.discord.Member = FakeMember  # type: ignore[assignment]
-        lines = repair._manual_prerequisites(guild, cfg)
-    finally:
-        repair.discord.Member = original_member  # type: ignore[assignment]
-
+    monkeypatch.setattr(repair.discord, "Member", FakeMember)
+    lines = repair._manual_prerequisites(SimpleNamespace(me=FakeMember()), cfg)
     assert any("saved stats category mapping is missing" in line for line in lines)
     assert any("saved counter mappings are missing" in line for line in lines)
 
 
-def test_server_level_live_stats_permissions_remain_manual() -> None:
+def test_server_level_live_stats_permissions_remain_manual(monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = _full_cfg()
 
     class FakeMember:
@@ -90,14 +84,8 @@ def test_server_level_live_stats_permissions_remain_manual() -> None:
             administrator=False,
         )
 
-    guild = SimpleNamespace(me=FakeMember())
-    original_member = repair.discord.Member
-    try:
-        repair.discord.Member = FakeMember  # type: ignore[assignment]
-        lines = repair._manual_prerequisites(guild, cfg)
-    finally:
-        repair.discord.Member = original_member  # type: ignore[assignment]
-
+    monkeypatch.setattr(repair.discord, "Member", FakeMember)
+    lines = repair._manual_prerequisites(SimpleNamespace(me=FakeMember()), cfg)
     text = " ".join(lines)
     assert "server-level Manage Channels" in text
     assert "server-level Manage Roles / Manage Permissions" in text
@@ -126,8 +114,20 @@ def test_button_contract_has_three_expected_states() -> None:
     )
     assert repair._button_state(repairable)[:2] == ("Fix Issues", "🛠️")
 
-    manual = repair.ProtectionStatsAudit(
+    mixed = repair.ProtectionStatsAudit(
         rows=repairable.rows,
+        manual_issues=["Separate manual prerequisite"],
+    )
+    assert repair._button_state(mixed)[:2] == ("Fix Issues", "🛠️")
+
+    blocked_audit = SimpleNamespace(missing=["view_channel"], can_apply=False)
+    manual = repair.ProtectionStatsAudit(
+        rows=[
+            repair.ProtectionStatsRow(
+                spec=repair.ProtectionStatsTarget(1, "Stats", "tickets", "minimum"),
+                audit=blocked_audit,
+            )
+        ],
         manual_issues=["Server permission missing"],
     )
     assert repair._button_state(manual)[:2] == ("Manual Fix Needed", "⚠️")
@@ -201,19 +201,14 @@ def test_repair_uses_shared_core_and_fresh_reaudit(monkeypatch: pytest.MonkeyPat
             failed_targets=[],
         )
 
-    original_channel = repair.discord.abc.GuildChannel
-    original_member = repair.discord.Member
     monkeypatch.setattr(repair.discord.abc, "GuildChannel", FakeChannel)
     monkeypatch.setattr(repair.discord, "Member", FakeMember)
     monkeypatch.setattr(repair.core, "audit_target", fake_audit)
     monkeypatch.setattr(repair.core, "apply_target_repair", fake_apply)
-    try:
-        after, changed, failed = asyncio.run(
-            repair.repair_protection_stats(guild, cfg, actor_id=99)
-        )
-    finally:
-        repair.discord.abc.GuildChannel = original_channel  # type: ignore[assignment]
-        repair.discord.Member = original_member  # type: ignore[assignment]
+
+    after, changed, failed = asyncio.run(
+        repair.repair_protection_stats(guild, cfg, actor_id=99)
+    )
 
     assert after.healthy is True
     assert failed == []
@@ -222,6 +217,31 @@ def test_repair_uses_shared_core_and_fresh_reaudit(monkeypatch: pytest.MonkeyPat
     assert guild.fetches
     assert calls[0] == (100, "tickets", "minimum")
     assert all(mode == "full" for _cid, _feature, mode in calls[1:])
+
+
+def test_repair_keeps_safe_targets_repairable_when_manual_issue_also_exists() -> None:
+    repairable = SimpleNamespace(missing=["view_channel"], can_apply=True)
+    audit = repair.ProtectionStatsAudit(
+        rows=[
+            repair.ProtectionStatsRow(
+                spec=repair.ProtectionStatsTarget(1, "Stats", "tickets", "minimum"),
+                audit=repairable,
+            )
+        ],
+        manual_issues=["Another prerequisite stays manual"],
+    )
+    assert audit.repairable_count == 1
+    assert repair._button_state(audit)[0] == "Fix Issues"
+
+
+def test_callback_refreshes_same_component_message() -> None:
+    source = inspect.getsource(repair.ProtectionAccessButton.callback)
+    refresh = inspect.getsource(repair._refresh_same_screen)
+    assert "await _defer_update(interaction)" in source
+    assert "await _refresh_same_screen(" in source
+    assert "interaction.edit_original_response(" in refresh
+    assert "interaction.followup.send(" not in refresh
+    assert "center._refresh_panel(" not in source
 
 
 def test_late_public_bootstrap_activates_protection_contextual_repair() -> None:
