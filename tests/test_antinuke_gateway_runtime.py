@@ -276,11 +276,16 @@ def test_panic_covers_high_risk_creation_and_authority_paths() -> None:
     assert expected.issubset(guardian._PANIC_ACTIONS)
 
 
-def test_main_installs_gateway_runtime_before_app_run() -> None:
-    source = Path("main.py").read_text(encoding="utf-8")
+def test_main_installs_gateway_runtime_through_pre_app_coordinator() -> None:
+    main_source = Path("main.py").read_text(encoding="utf-8")
+    coordinator_source = Path(
+        "stoney_verify/anti_nuke_runtime_coordinator.py"
+    ).read_text(encoding="utf-8")
 
-    assert "def _install_anti_nuke_gateway_runtime" in source
-    assert "_install_anti_nuke_gateway_runtime()" in source
-    assert source.index("_install_anti_nuke_gateway_runtime()") < source.index(
+    assert '"gateway"' in coordinator_source
+    assert '"install_anti_nuke_gateway_runtime"' in coordinator_source
+    assert "def _install_anti_nuke_gateway_runtime" not in main_source
+    assert main_source.index("    install_anti_nuke_pre_app(bot)") < main_source.index(
         "from stoney_verify.app import run as _run_dank_shield"
     )
+
