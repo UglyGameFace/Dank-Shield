@@ -229,6 +229,52 @@ def test_routine_guild_update_is_ignored(monkeypatch) -> None:
     _reset()
 
 
+def test_cosmetic_guild_identity_update_is_ignored(monkeypatch) -> None:
+    _reset()
+    guild = FakeGuild()
+    actor = _actor(605)
+    processed: list[int] = []
+    entry = FakeEntry(
+        9105,
+        "guild_update",
+        guild,
+        actor=actor,
+        before=SimpleNamespace(name="The 420 Lobby", icon="old"),
+        after=SimpleNamespace(name="The 420 Garden", icon="new"),
+    )
+
+    async def fake_process(*_args, **_kwargs):
+        processed.append(1)
+
+    monkeypatch.setattr(guardian, "_process", fake_process)
+    asyncio.run(guardian._on_audit_log_entry_create(entry))
+
+    assert processed == []
+    assert guardian._panic_weight("guild_update", entry) == 0
+    assert anti_nuke._audit_entry_seen(entry) is False
+    assert guild.id not in guardian._PANIC_EVENTS
+    _reset()
+
+
+def test_guild_update_panic_weight_tracks_security_severity() -> None:
+    routine = SimpleNamespace(
+        before=SimpleNamespace(name="A"),
+        after=SimpleNamespace(name="B"),
+    )
+    bounded = SimpleNamespace(
+        before=SimpleNamespace(verification_level=3),
+        after=SimpleNamespace(verification_level=0),
+    )
+    immediate = SimpleNamespace(
+        before=SimpleNamespace(mfa_level=0),
+        after=SimpleNamespace(mfa_level=1),
+    )
+
+    assert guardian._panic_weight("guild_update", routine) == 0
+    assert guardian._panic_weight("guild_update", bounded) == 2
+    assert guardian._panic_weight("guild_update", immediate) == 4
+
+
 def test_identity_or_security_guild_update_is_enforced(monkeypatch) -> None:
     _reset()
     guild = FakeGuild()
@@ -250,47 +296,39 @@ def test_identity_or_security_guild_update_is_enforced(monkeypatch) -> None:
     asyncio.run(guardian._on_audit_log_entry_create(entry))
 
     assert processed and processed[0][0] == "guild_update"
-    assert "name" in processed[0][1]
+    assert "name" not in processed[0][1]
     assert "verification_level" in processed[0][1]
     assert anti_nuke._audit_entry_seen(entry) is True
     _reset()
 
 
-def test_two_critical_guild_updates_from_two_actors_trigger_panic() -> None:
+def test_distributed_security_guild_updates_still_trigger_weighted_panic() -> None:
     _reset()
     guild = FakeGuild()
     first = _actor(603)
     second = _actor(604)
-    first_entry = FakeEntry(
-        9103,
-        "guild_update",
-        guild,
-        actor=first,
-        before=SimpleNamespace(name="Server"),
-        after=SimpleNamespace(name="Defaced A"),
-    )
-    second_entry = FakeEntry(
-        9104,
-        "guild_update",
-        guild,
-        actor=second,
-        before=SimpleNamespace(icon="old"),
-        after=SimpleNamespace(icon="new"),
+    entries = (
+        (first, FakeEntry(9103, "guild_update", guild, actor=first,
+            before=SimpleNamespace(verification_level=3),
+            after=SimpleNamespace(verification_level=0))),
+        (second, FakeEntry(9104, "guild_update", guild, actor=second,
+            before=SimpleNamespace(explicit_content_filter=2),
+            after=SimpleNamespace(explicit_content_filter=0))),
+        (first, FakeEntry(9106, "guild_update", guild, actor=first,
+            before=SimpleNamespace(vanity_url_code="safe"),
+            after=SimpleNamespace(vanity_url_code="changed"))),
+        (second, FakeEntry(9107, "guild_update", guild, actor=second,
+            before=SimpleNamespace(features=["COMMUNITY"]),
+            after=SimpleNamespace(features=[]))),
     )
 
-    assert guardian._panic_state(
-        guild,
-        first,
-        "guild_update",
-        entry=first_entry,
-    )[1] is False
-    active, triggered, observed = guardian._panic_state(
-        guild,
-        second,
-        "guild_update",
-        entry=second_entry,
-    )
+    results = [
+        guardian._panic_state(guild, actor, "guild_update", entry=entry)
+        for actor, entry in entries
+    ]
 
+    assert all(triggered is False for _active, triggered, _observed in results[:3])
+    active, triggered, observed = results[-1]
     assert active is True
     assert triggered is True
     assert {actor.id for actor in observed} == {603, 604}

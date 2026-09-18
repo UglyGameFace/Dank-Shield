@@ -177,14 +177,46 @@ def test_guardian_final_surface_is_expanded_but_first_strike_stays_scoped() -> N
         assert guardian._ACTIONS["scheduled_event_create"][3] is None  # noqa: SLF001
 
         for field in (
-            "system_channel_id",
+            "verification_level",
+            "explicit_content_filter",
             "rules_channel_id",
             "public_updates_channel_id",
             "safety_alerts_channel_id",
-            "preferred_locale",
             "features",
+            "mfa_level",
+            "owner",
+            "vanity_url_code",
         ):
             assert field in guardian._GUILD_UPDATE_SECURITY_FIELDS  # noqa: SLF001
+
+        for field in (
+            "name",
+            "icon",
+            "description",
+            "default_message_notifications",
+            "afk_channel_id",
+            "afk_timeout",
+            "system_channel_id",
+            "system_channel_flags",
+            "preferred_locale",
+            "premium_progress_bar_enabled",
+        ):
+            assert field not in guardian._GUILD_UPDATE_SECURITY_FIELDS  # noqa: SLF001
+
+        routine_entry = SimpleNamespace(
+            before=SimpleNamespace(name="Old", afk_timeout=300),
+            after=SimpleNamespace(name="New", afk_timeout=600),
+        )
+        assert guardian._guild_update_security_fields(routine_entry) == []  # noqa: SLF001
+
+        security_entry = SimpleNamespace(
+            before=SimpleNamespace(verification_level=3, rules_channel_id=10),
+            after=SimpleNamespace(verification_level=0, rules_channel_id=11),
+        )
+        assert set(guardian._guild_update_security_fields(security_entry)) == {  # noqa: SLF001
+            "rules_channel_id",
+            "verification_level",
+        }
     finally:
         guardian._ACTIONS.clear()  # noqa: SLF001
         guardian._ACTIONS.update(old_actions)  # noqa: SLF001
