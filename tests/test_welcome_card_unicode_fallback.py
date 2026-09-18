@@ -4,7 +4,7 @@ from io import BytesIO
 
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from stoney_verify import unicode_font_fallback as fallback
 from stoney_verify import welcome_card_typography_engine as engine
