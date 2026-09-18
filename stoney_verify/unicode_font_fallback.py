@@ -185,6 +185,7 @@ def _font_family_priority(family: str) -> tuple[int, str]:
     folded = family.casefold()
     exact = {
         "noto sans": 0,
+        "stix two math": 4,
         "noto sans math": 5,
         "noto sans symbols": 6,
         "noto sans symbols 2": 7,
@@ -237,7 +238,10 @@ def _registered_fallback_paths(bold: bool) -> tuple[str, ...]:
     families = [
         str(family)
         for family in families
-        if str(family).casefold().startswith("noto")
+        if (
+            str(family).casefold().startswith("noto")
+            or str(family).casefold() == "stix two math"
+        )
     ]
     families.sort(key=_font_family_priority)
 
