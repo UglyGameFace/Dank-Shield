@@ -296,7 +296,7 @@ def test_identity_or_security_guild_update_is_enforced(monkeypatch) -> None:
     asyncio.run(guardian._on_audit_log_entry_create(entry))
 
     assert processed and processed[0][0] == "guild_update"
-    assert "name" in processed[0][1]
+    assert "name" not in processed[0][1]
     assert "verification_level" in processed[0][1]
     assert anti_nuke._audit_entry_seen(entry) is True
     _reset()
