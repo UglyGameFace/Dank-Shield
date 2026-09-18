@@ -1,114 +1,79 @@
 # ACTIVE TASK
 
-## DS-SEC-ROLE-UPDATE-SEVERITY — Stop cosmetic role edits from becoming destructive AntiNuke evidence
+## DS-SEC-OWNER-AUDIT-CLAIM-RACE — Preserve owner authority evidence for the incident policy
 
-**Status:** FINAL EXACT-HEAD VALIDATION
+**Status:** INVESTIGATION / IMPLEMENTATION
 
-**Branch:** `fix/antinuke-role-update-severity`
-**Base main:** `f40f8cd0b6f66dae0f622564c3a1fb7511316bbb`
-**Validated implementation head:** `5605cc0914b653468aa2a101534e15baf20e9216`
+**Branch:** `fix/antinuke-owner-audit-claim-race`
+**Base main:** `5d1ba5d3681bcba1c9ffbe7c20a0fcf4583436ff`
 
 ## Previous task closed
 
-PR #257 (`DS-SEC-GUILD-UPDATE-SEVERITY`) merged as `f40f8cd0b6f66dae0f622564c3a1fb7511316bbb`, became `main`, contains exact validated PR head `4ebbd1d99ff14af62c0aa5387e7623f138d178cc` as its second parent, and `discloud/commit` reported success.
+PR #258 (`DS-SEC-ROLE-UPDATE-SEVERITY`) merged as `5d1ba5d3681bcba1c9ffbe7c20a0fcf4583436ff`, became `main`, contains exact validated PR head `68ef8034b4e17b2ef6cb5882a45c2c4eafe87b67` as its second parent, and `discloud/commit` reported success.
 
-The Single Active Task Lock is this role-update severity normalization only.
+The Single Active Task Lock is this audit-claim race only.
+
+## Problem
+
+The native event fallbacks for high-risk role authority changes can race the canonical `on_audit_log_entry_create` incident path.
+
+Three native handlers currently:
+
+- look up the recent audit entry
+- atomically consume/mark that entry as seen
+- only then inspect the actor
+- return immediately when the actor is the physical guild owner
+
+Those handlers are:
+
+- dangerous role creation
+- dangerous role permission escalation
+- security-sensitive member role grants
+
+PR #253 made the incident runtime the authoritative owner-severity classifier for exactly those actions. If a native Discord event callback wins the race, the owner audit entry can be marked seen before the incident listener receives it. The native handler then returns because the actor is the owner, and the later incident listener can no longer classify/report the owner event.
+
+That makes owner-compromise detection depend on gateway event ordering, which is not a safe ownership boundary.
 
 ## Root cause
 
-Guardian generic `role_update` classification mixed authority/hierarchy changes with routine presentation edits.
+`anti_nuke._claim_recent_audit_entry()` always consumes a found entry before returning it. Specialized native role-security handlers need the actor from that entry in order to know whether they should defer to the owner incident path, but by the time they know, the evidence has already been consumed.
 
-The old guardian classified all of these as destructive role-update evidence:
+The audit listener path itself is correct: `anti_nuke_incident_runtime._process_owner_special_action()` consumes and routes owner role-create, dangerous role-update, and security-sensitive member-role-update evidence through the severity-aware owner policy.
 
-- dangerous permission changes
-- role hierarchy position changes
-- role name changes
-- hoist changes
-- mentionable changes
-- color/colour changes
-- icon changes
-- unicode emoji changes
+## Intended behavior
 
-That disagreed with both the native AntiNuke listener, which only treats dangerous role permission mutations as destructive evidence, and the owner policy, which already treats role presentation edits as benign.
+- native high-risk role fallbacks remain atomic for normal non-owner actors
+- the physical guild owner's matching role-authority entry remains unconsumed when a native fallback sees it first
+- the native handler still returns without rollback/containment against the owner
+- the incident audit listener remains the sole owner of owner severity classification/reporting
+- bot behavior remains unchanged
+- ordinary threshold-event claims, webhook claims, member-role removals, timeouts, channel events, and bot-add behavior remain unchanged
 
-## Implemented behavior
+## Implementation scope
 
-Role updates now use severity-aware classification:
+Add the smallest claim option needed for these three specialized native fallback handlers:
 
-- **routine / ignored:** name, hoist, mentionable, colour/color, icon, unicode emoji
-- **bounded security:** dangerous permission mutation/removal without permission addition
-- **bounded hierarchy:** role position change
-- **immediate escalation:** dangerous permission addition, still owned by the gateway-fast escalation path
+- allow `_claim_recent_audit_entry()` to preserve a matching physical-owner entry instead of marking it seen
+- use that option only in dangerous role create, dangerous role permission escalation, and security-sensitive member-role grant handlers
+- keep non-owner claims atomic and one-shot
+- add race-focused regressions proving preserved owner entries remain available to the incident path while non-owner entries are still consumed exactly once
 
-Additional hardening:
+## Validation / merge gate
 
-- cosmetic role edits now contribute panic weight 0
-- bounded permission/hierarchy mutations contribute panic weight 2
-- dangerous permission additions retain immediate panic weight 4 when classified with full entry context
-- guardian routine role fields are regression-locked to incident runtime's authoritative owner routine role fields
-- audit-entry consumption remains after classification, so ignored cosmetic role edits are not prematurely consumed
-- sparse recovery behavior remains unchanged
+Before merge:
 
-## Preserved behavior
-
-- dangerous role permission additions still use gateway rollback/containment
-- dangerous permission removals/mutations remain monitored
-- role hierarchy changes remain monitored
-- owner severity behavior from PR #253 remains unchanged
-- guild-update severity normalization from PR #257 remains unchanged
-- Strict Lockdown and fail-closed fallback behavior remain unchanged
-
-## Exact implementation-head validation
-
-Exact head `5605cc0914b653468aa2a101534e15baf20e9216` passed the complete workflow set:
-
-- Dank Shield CI #2294: **success**
-  - committed diff whitespace: **success**
-  - Python compile: **success**
-  - full unit suite: **success**
-  - standalone tool checks: **success**
-  - public setup/isolation audit: **success**
-  - canonical public command surface audit: **success**
-  - public command/startup friction audit: **success**
-  - public invite permissions audit: **success**
-  - setup safety audit: **success**
-  - Dank Design Smart Auto-Detect audit: **success**
-  - role truth ownership audit: **success**
-  - event boundary ownership audit: **success**
-  - Claim-first ticket security: **success**
-  - Managed category SQL smoke test: **success**
-- Application Command Size Diagnostics #1276: **success**
-- Dank Design Regression CI #518: **success**
-- Ticket Owner Emergency Override #865: **success**
-- Profile Runtime Diagnostics #1025: **success**
-
-## Final diff / review audit
-
-At implementation head `5605cc0914b653468aa2a101534e15baf20e9216`:
-
-- branch is 0 commits behind current `main` `f40f8cd0b6f66dae0f622564c3a1fb7511316bbb`
-- PR is mergeable
-- exactly 4 task-related files are changed:
-  - `ACTIVE_TASK.md`
-  - `stoney_verify/anti_nuke_guardian_runtime.py`
-  - `tests/test_antinuke_competitive_hardening.py`
-  - `tests/test_antinuke_owner_policy_normalization.py`
-- no unresolved review blockers are present
-
-## Final exact-head gate
-
-This bookkeeping commit changes the PR head SHA. The new final head must independently pass the complete required and companion workflow set before merge.
-
-After the final wave:
-
-1. confirm the branch remains 0 behind current `main` with the same 4 files
-2. confirm no review blocker appeared
-3. mark PR #258 ready
-4. merge using the exact validated final SHA
-5. verify the resulting `main` merge commit has that exact PR head as a parent
-6. require `discloud/commit: success`
-7. release the Single Active Task Lock
+- owner-preserving audit-claim regressions pass
+- existing atomic claim race tests remain green
+- owner policy normalization and role-update severity regressions remain green
+- gateway authority escalation and sparse recovery regressions remain green
+- full compile/unit/standalone/security/event-boundary suite passes
+- Claim-first ticket security and Managed category SQL smoke pass
+- all companion workflows pass on exact final head
+- branch is 0 behind current `main`
+- final diff is task-limited with no unresolved review blocker
+- merge only exact validated SHA
+- verify resulting `main` merge parent and require `discloud/commit: success`
 
 ## Next step
 
-Run the final exact-head workflow wave created by this bookkeeping commit, then merge PR #258 only if every gate remains green.
+Implement owner-preserving claim semantics for the three specialized native role-security fallbacks and add focused race regression coverage.
