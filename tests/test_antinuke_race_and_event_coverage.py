@@ -17,8 +17,9 @@ class FakeAuditEntry:
 
 
 class FakeAuditGuild:
-    def __init__(self, entries) -> None:
+    def __init__(self, entries, *, owner_id: int = 999) -> None:
         self.id = 987
+        self.owner_id = owner_id
         self.entries = list(entries)
 
     async def audit_logs(self, *, limit, action):
@@ -63,6 +64,105 @@ def test_targetless_audit_claim_is_atomic_under_concurrency(monkeypatch) -> None
     assert sum(item is entry for item in claimed) == 1
     assert sum(item is None for item in claimed) == 1
     _reset_runtime_state()
+
+
+def test_owner_preserving_claim_leaves_entry_for_incident_listener(monkeypatch) -> None:
+    _reset_runtime_state()
+    owner = SimpleNamespace(id=999, roles=[], mention="<@999>")
+    entry = FakeAuditEntry(22345, actor=owner)
+    guild = FakeAuditGuild([entry], owner_id=owner.id)
+    monkeypatch.setattr(anti_nuke, "_audit_action", lambda _name: object())
+
+    claimed = asyncio.run(
+        anti_nuke._claim_recent_audit_entry(
+            guild,
+            "role_update",
+            retries=1,
+            preserve_guild_owner=True,
+        )
+    )
+
+    assert claimed is entry
+    assert anti_nuke._audit_entry_seen(entry) is False
+
+    # The canonical audit listener can still claim the exact same entry once.
+    claimed_by_incident = asyncio.run(
+        anti_nuke._claim_recent_audit_entry(
+            guild,
+            "role_update",
+            retries=1,
+        )
+    )
+    assert claimed_by_incident is entry
+    assert anti_nuke._audit_entry_seen(entry) is True
+
+    claimed_again = asyncio.run(
+        anti_nuke._claim_recent_audit_entry(
+            guild,
+            "role_update",
+            retries=1,
+        )
+    )
+    assert claimed_again is None
+    _reset_runtime_state()
+
+
+def test_owner_preserving_mode_still_consumes_non_owner_atomically(monkeypatch) -> None:
+    _reset_runtime_state()
+    actor = SimpleNamespace(id=444, roles=[], mention="<@444>")
+    entry = FakeAuditEntry(32345, actor=actor)
+    guild = FakeAuditGuild([entry], owner_id=999)
+    monkeypatch.setattr(anti_nuke, "_audit_action", lambda _name: object())
+
+    first = asyncio.run(
+        anti_nuke._claim_recent_audit_entry(
+            guild,
+            "member_role_update",
+            retries=1,
+            preserve_guild_owner=True,
+        )
+    )
+    second = asyncio.run(
+        anti_nuke._claim_recent_audit_entry(
+            guild,
+            "member_role_update",
+            retries=1,
+            preserve_guild_owner=True,
+        )
+    )
+
+    assert first is entry
+    assert second is None
+    assert anti_nuke._audit_entry_seen(entry) is True
+    _reset_runtime_state()
+
+
+def test_specialized_native_role_fallbacks_preserve_only_owner_evidence() -> None:
+    source = open("stoney_verify/anti_nuke.py", "r", encoding="utf-8").read()
+
+    functions = (
+        "_handle_role_permission_escalation",
+        "_handle_member_dangerous_role_grant",
+        "_handle_dangerous_role_create",
+    )
+    for index, name in enumerate(functions):
+        start = source.index(f"async def {name}(")
+        next_positions = [
+            source.find(f"async def {other}(", start + 1)
+            for other in functions
+            if source.find(f"async def {other}(", start + 1) > start
+        ]
+        generic_next = source.find("\n\nasync def ", start + 1)
+        if generic_next > start:
+            next_positions.append(generic_next)
+        end = min(next_positions) if next_positions else len(source)
+        segment = source[start:end]
+        assert "preserve_guild_owner=True" in segment, name
+
+    bot_add_start = source.index("async def _handle_bot_add(")
+    bot_add_end = source.find("\n\nasync def ", bot_add_start + 1)
+    bot_add_segment = source[bot_add_start:bot_add_end]
+    assert "preserve_guild_owner=True" not in bot_add_segment
 
 
 def test_webhook_handler_covers_create_update_and_delete(monkeypatch) -> None:

@@ -948,8 +948,15 @@ async def _claim_recent_audit_entry(
     *,
     target_id: Optional[int] = None,
     retries: int = _AUDIT_LOOKUP_RETRIES,
+    preserve_guild_owner: bool = False,
 ) -> Optional[Any]:
-    """Atomically find and consume one audit entry for an event callback."""
+    """Atomically claim one audit entry, optionally preserving owner evidence.
+
+    Some native event fallbacks need the audit actor only to decide whether the
+    canonical owner incident listener must own classification. In those paths a
+    physical-guild-owner entry must remain unconsumed so gateway event ordering
+    cannot suppress the later severity-aware owner policy.
+    """
 
     key = (int(guild.id), str(action_name))
     lock = _lock_for(_AUDIT_CLAIM_LOCKS, key)
@@ -962,6 +969,13 @@ async def _claim_recent_audit_entry(
         )
         if entry is None:
             return None
+
+        if preserve_guild_owner:
+            actor_id = _safe_int(getattr(getattr(entry, "user", None), "id", 0), 0)
+            owner_id = _safe_int(getattr(guild, "owner_id", 0), 0)
+            if actor_id > 0 and actor_id == owner_id:
+                return entry
+
         if _consume_audit_entry(entry):
             return None
         return entry
@@ -1380,6 +1394,7 @@ async def _handle_role_permission_escalation(
         guild,
         "role_update",
         target_id=int(after.id),
+        preserve_guild_owner=True,
     )
     if entry is None:
         return
@@ -1478,6 +1493,7 @@ async def _handle_member_dangerous_role_grant(
         guild,
         "member_role_update",
         target_id=int(after.id),
+        preserve_guild_owner=True,
     )
     if entry is None:
         return
@@ -1656,6 +1672,7 @@ async def _handle_dangerous_role_create(role: discord.Role) -> None:
         guild,
         "role_create",
         target_id=int(role.id),
+        preserve_guild_owner=True,
     )
     if entry is None:
         return
