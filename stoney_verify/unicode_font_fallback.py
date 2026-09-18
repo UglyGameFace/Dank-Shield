@@ -20,7 +20,7 @@ from io import BytesIO
 import math
 from pathlib import Path
 import unicodedata
-from typing import Iterable, Optional, Sequence
+from typing import Optional, Sequence
 
 from fontTools.ttLib import TTFont
 from PIL import Image, ImageDraw, ImageFont
