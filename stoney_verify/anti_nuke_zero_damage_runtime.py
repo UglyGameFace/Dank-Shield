@@ -79,14 +79,21 @@ _STRICT_ACTIONS = frozenset({
     "onboarding_update", "home_settings_update",
 })
 
-_GUILD_FIELDS = frozenset({
-    "name", "icon", "banner", "splash", "discovery_splash", "verification_level",
-    "default_message_notifications", "explicit_content_filter", "afk_channel_id",
-    "afk_timeout", "system_channel_id", "system_channel_flags", "rules_channel_id",
-    "public_updates_channel_id", "preferred_locale", "features", "description",
-    "premium_progress_bar_enabled", "safety_alerts_channel_id", "mfa_level",
-    "owner", "vanity_url_code",
-})
+# Extended guild-update coverage is security-only. Routine profile and
+# housekeeping fields must never be promoted back into destructive evidence.
+_GUILD_SECURITY_FIELDS = frozenset(
+    {
+        "verification_level",
+        "explicit_content_filter",
+        "rules_channel_id",
+        "public_updates_channel_id",
+        "safety_alerts_channel_id",
+        "features",
+        "mfa_level",
+        "owner",
+        "vanity_url_code",
+    }
+)
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -414,7 +421,7 @@ def _patch_guardian() -> bool:
                 1,
             )
     guardian._GUILD_UPDATE_SECURITY_FIELDS = frozenset(  # noqa: SLF001
-        set(guardian._GUILD_UPDATE_SECURITY_FIELDS) | set(_GUILD_FIELDS)  # noqa: SLF001
+        set(guardian._GUILD_UPDATE_SECURITY_FIELDS) | set(_GUILD_SECURITY_FIELDS)  # noqa: SLF001
     )
     guardian._PANIC_WEIGHTS.update(  # noqa: SLF001
         {name: (4 if name in _STRICT_ACTIONS else 2) for name in _EXTENDED_ACTIONS}

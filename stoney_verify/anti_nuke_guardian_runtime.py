@@ -20,7 +20,7 @@ from . import anti_nuke
 
 
 _ACTIONS: dict[str, tuple[str, str, str, Optional[int]]] = {
-    "guild_update": ("Server identity/security mutation", "antinuke_channel_delete_threshold", "channel_update", None),
+    "guild_update": ("Server security/authority mutation", "antinuke_channel_delete_threshold", "channel_update", None),
     "channel_create": ("Channel creation", "antinuke_channel_delete_threshold", "channel_create", None),
     # Generic CHANNEL_UPDATE also covers ordinary edits such as names/topics.
     # Permission overwrites have distinct Discord audit actions handled below.
@@ -49,10 +49,40 @@ _ACTIONS: dict[str, tuple[str, str, str, Optional[int]]] = {
     "automod_rule_delete": ("Discord AutoMod rule deletion", "antinuke_role_delete_threshold", "role_delete", None),
 }
 
-_GUILD_UPDATE_SECURITY_FIELDS = frozenset({
-    "name", "icon", "banner", "splash", "discovery_splash", "vanity_url_code",
-    "description", "verification_level", "explicit_content_filter", "mfa_level", "owner",
-})
+# Routine server profile/housekeeping edits are legitimate administration, not
+# destructive evidence. Keep security fields aligned with the owner severity model.
+_GUILD_UPDATE_IMMEDIATE_FIELDS = frozenset({"owner", "mfa_level"})
+_GUILD_UPDATE_BOUNDED_FIELDS = frozenset(
+    {
+        "verification_level",
+        "explicit_content_filter",
+        "rules_channel_id",
+        "public_updates_channel_id",
+        "safety_alerts_channel_id",
+        "features",
+        "vanity_url_code",
+    }
+)
+_GUILD_UPDATE_SECURITY_FIELDS = frozenset(
+    set(_GUILD_UPDATE_IMMEDIATE_FIELDS) | set(_GUILD_UPDATE_BOUNDED_FIELDS)
+)
+_GUILD_UPDATE_ROUTINE_FIELDS = frozenset(
+    {
+        "name",
+        "icon",
+        "banner",
+        "splash",
+        "discovery_splash",
+        "description",
+        "default_message_notifications",
+        "afk_channel_id",
+        "afk_timeout",
+        "system_channel_id",
+        "system_channel_flags",
+        "preferred_locale",
+        "premium_progress_bar_enabled",
+    }
+)
 
 _PANIC_WEIGHTS: dict[str, int] = {
     "guild_update": 4, "bot_add": 4, "channel_create": 2, "channel_delete": 3,
@@ -473,7 +503,18 @@ def _role_update_panic_weight(entry: Any) -> int:
     return 1
 
 
+def _guild_update_panic_weight(entry: Any) -> int:
+    fields = set(_guild_update_security_fields(entry))
+    if not fields:
+        return 0
+    if fields.intersection(_GUILD_UPDATE_IMMEDIATE_FIELDS):
+        return 4
+    return 2
+
+
 def _panic_weight(action_name: str, entry: Any = None) -> int:
+    if action_name == "guild_update" and entry is not None:
+        return _guild_update_panic_weight(entry)
     if action_name == "role_update" and entry is not None:
         return _role_update_panic_weight(entry)
     return max(0, int(_PANIC_WEIGHTS.get(str(action_name), 0)))
@@ -500,7 +541,11 @@ def _panic_state(guild: discord.Guild, actor: Any, action_name: str, *, entry: A
     score = sum(seen_weight for *_prefix, seen_weight in window)
     moderation_events = sum(1 for _seen_at, _seen_id, _seen_actor, seen_action, _seen_weight in window if seen_action in _PANIC_MODERATION_ACTIONS)
     high_risk_events = sum(1 for _seen_at, _seen_id, _seen_actor, seen_action, seen_weight in window if seen_action not in _PANIC_MODERATION_ACTIONS and seen_weight >= 2)
-    severe_events = [(seen_id, seen_action) for _seen_at, seen_id, _seen_actor, seen_action, _seen_weight in window if seen_action in _PANIC_SEVERE_ACTIONS]
+    severe_events = [
+        (seen_id, seen_action)
+        for _seen_at, seen_id, _seen_actor, seen_action, seen_weight in window
+        if seen_action in _PANIC_SEVERE_ACTIONS and seen_weight >= 3
+    ]
     severe_actors = {seen_id for seen_id, _seen_action in severe_events}
     enough_actors = len(actors) >= _PANIC_ACTOR_THRESHOLD
     weighted_attack = score >= _PANIC_SCORE_THRESHOLD and high_risk_events >= _PANIC_HIGH_RISK_MIN_EVENTS
