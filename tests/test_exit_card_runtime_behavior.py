@@ -122,7 +122,7 @@ def test_exit_studio_sends_one_image_card_with_no_departed_member_ping(
     assert not getattr(embed.footer, "text", None)
 
 
-def test_live_exit_image_normalizes_decorative_unicode_without_rewriting_embed(
+def test_live_exit_image_preserves_decorative_unicode_without_rewriting_embed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _guild, channel, member = _world()
@@ -146,7 +146,7 @@ def test_live_exit_image_normalizes_decorative_unicode_without_rewriting_embed(
     result = asyncio.run(runtime.send_live_exit_card(member))
 
     assert result.sent is True
-    assert seen["display_name"] == "Eyez Of Bob"
+    assert seen["display_name"] == "𝓔𝔂𝓮𝔃 𝓞𝓯 𝓑𝓸𝓫"
     embed = channel.sent[0]["embed"]
     assert isinstance(embed, discord.Embed)
     assert "𝓔𝔂𝓮𝔃 𝓞𝓯 𝓑𝓸𝓫" in (embed.description or "")
