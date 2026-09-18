@@ -85,6 +85,12 @@ def _graphemes(text: str) -> list[str]:
     return clusters
 
 
+def grapheme_clusters(text: str) -> tuple[str, ...]:
+    """Return Unicode extended grapheme clusters without rewriting text."""
+
+    return tuple(_graphemes(str(text or "")))
+
+
 def _required_codepoints(text: str) -> frozenset[int]:
     required: set[int] = set()
     for character in text:
@@ -586,6 +592,7 @@ __all__ = [
     "FontRun",
     "FontSource",
     "fallback_sources",
+    "grapheme_clusters",
     "load_font",
     "measure_text",
     "render_text_mask",
