@@ -17,6 +17,11 @@ from typing import Any, Optional
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 from . import welcome_card_renderer as legacy
+from .unicode_font_fallback import (
+    grapheme_clusters,
+    measure_text as measure_unicode_text,
+    render_text_mask as render_unicode_text_mask,
+)
 
 CARD_WIDTH = legacy.CARD_WIDTH
 CARD_HEIGHT = legacy.CARD_HEIGHT
@@ -318,6 +323,8 @@ def _crop_mask(mask: Image.Image, *, margin: int = 0) -> Image.Image:
 
 
 def _tracked_mask(text: str, *, font: ImageFont.ImageFont, tracking: int) -> Image.Image:
+    """Legacy single-face mask helper retained for controlled/static text tests."""
+
     probe = ImageDraw.Draw(Image.new("L", (8, 8), 0))
     padding = 10
     metrics: list[tuple[str, tuple[int, int, int, int], int]] = []
@@ -335,6 +342,82 @@ def _tracked_mask(text: str, *, font: ImageFont.ImageFont, tracking: int) -> Ima
         draw.text((cursor - box[0], padding - box[1]), character, font=font, fill=255)
         cursor += width + max(0, tracking)
     return _crop_mask(mask, margin=1)
+
+
+def _custom_font_for_style(
+    style: WelcomeCardFontStyle,
+    custom_font_bytes: Optional[bytes],
+) -> Optional[bytes]:
+    return custom_font_bytes if style.key == CUSTOM_FONT_STYLE_KEY else None
+
+
+def _unicode_mask(
+    text: str,
+    *,
+    style: WelcomeCardFontStyle,
+    size: int,
+    bold: bool,
+    tracking: int = 0,
+    custom_font_bytes: Optional[bytes] = None,
+) -> Image.Image:
+    mask = render_unicode_text_mask(
+        text,
+        size=size,
+        primary_paths=_family_candidates(style.family, bold=bold),
+        bold=bold,
+        custom_font_bytes=_custom_font_for_style(style, custom_font_bytes),
+        tracking=tracking,
+        padding=6,
+    )
+    if mask.getbbox():
+        return _crop_mask(mask, margin=1)
+
+    # Keep a last-resort local face so a missing optional font pack never makes
+    # the whole card blank.  This path does not rewrite the Unicode string.
+    font = _font(
+        size,
+        style=style,
+        bold=bold,
+        custom_font_bytes=custom_font_bytes,
+    )
+    return _tracked_mask(text, font=font, tracking=tracking)
+
+
+def _unicode_width(
+    text: str,
+    *,
+    style: WelcomeCardFontStyle,
+    size: int,
+    bold: bool,
+    custom_font_bytes: Optional[bytes] = None,
+) -> int:
+    width = measure_unicode_text(
+        text,
+        size=size,
+        primary_paths=_family_candidates(style.family, bold=bold),
+        bold=bold,
+        custom_font_bytes=_custom_font_for_style(style, custom_font_bytes),
+        tracking=0,
+    )
+    if width > 0:
+        return width
+    font = _font(
+        size,
+        style=style,
+        bold=bold,
+        custom_font_bytes=custom_font_bytes,
+    )
+    draw = ImageDraw.Draw(Image.new("L", (8, 8), 0))
+    return int(draw.textlength(text, font=font))
+
+
+def _safe_card_text(value: Any, *, fallback: str, max_graphemes: int) -> str:
+    text = " ".join(str(value or "").replace("\n", " ").split()).strip() or fallback
+    clusters = list(grapheme_clusters(text))
+    if len(clusters) <= max(1, int(max_graphemes)):
+        return text
+    keep = max(1, int(max_graphemes) - 1)
+    return "".join(clusters[:keep]).rstrip() + "…"
 
 
 def _shear_mask(mask: Image.Image, shear: float) -> Image.Image:
@@ -466,12 +549,16 @@ def _styled_tile(
     secondary: tuple[int, int, int],
     custom_font_bytes: Optional[bytes] = None,
 ) -> Image.Image:
-    rendered_text = text.upper() if style.uppercase_name and role == "name" else text
-    font = _font(size, style=style, bold=True, custom_font_bytes=custom_font_bytes)
-    mask = _tracked_mask(
+    # Dynamic Discord names are never case-folded or compatibility-normalized.
+    # Styles still own visual effects, but not the member's spelling.
+    rendered_text = text
+    mask = _unicode_mask(
         rendered_text,
-        font=font,
+        style=style,
+        size=size,
+        bold=True,
         tracking=style.tracking if role in {"name", "welcome"} else 0,
+        custom_font_bytes=custom_font_bytes,
     )
     mask = _transform_mask(mask, style)
 
@@ -559,7 +646,7 @@ def _fitted_tile(
     secondary: tuple[int, int, int],
     custom_font_bytes: Optional[bytes] = None,
 ) -> tuple[str, Image.Image]:
-    candidate = text.upper() if style.uppercase_name and role == "name" else text
+    candidate = text
     minimum = max(8, int(min_size))
     for size in range(max(int(start_size), minimum), minimum - 1, -2):
         tile = _styled_tile(
@@ -575,8 +662,9 @@ def _fitted_tile(
             return candidate, tile
 
     suffix = "..."
-    base_text = candidate
-    while base_text:
+    clusters = list(grapheme_clusters(candidate))
+    while clusters:
+        base_text = "".join(clusters)
         attempt = base_text.rstrip() + suffix
         tile = _styled_tile(
             attempt,
@@ -589,7 +677,7 @@ def _fitted_tile(
         )
         if _fits(tile, max_width=max_width, max_height=max_height):
             return attempt, tile
-        base_text = base_text[:-1]
+        clusters.pop()
     return "", Image.new("RGBA", (1, 1), (0, 0, 0, 0))
 
 
@@ -718,22 +806,115 @@ def _fit_subtitle(
     style: WelcomeCardFontStyle,
     max_width: int,
     custom_font_bytes: Optional[bytes],
-) -> tuple[str, ImageFont.ImageFont]:
+) -> tuple[str, int]:
     prefix_base = f"to {server}"
     tail = f"You are the {ordinal} member!"
     for size in range(style.subtitle_start_size, style.subtitle_min_size - 1, -1):
-        font = _font(size, style=style, bold=True, custom_font_bytes=custom_font_bytes)
-        draw = ImageDraw.Draw(Image.new("L", (8, 8), 0))
-        width = int(draw.textlength(prefix_base, font=font)) + 64 + int(draw.textlength(tail, font=font))
+        width = (
+            _unicode_width(
+                prefix_base,
+                style=style,
+                size=size,
+                bold=True,
+                custom_font_bytes=custom_font_bytes,
+            )
+            + 64
+            + _unicode_width(
+                tail,
+                style=style,
+                size=size,
+                bold=True,
+                custom_font_bytes=custom_font_bytes,
+            )
+        )
         if width <= max_width:
-            return prefix_base, font
-    font = _font(style.subtitle_min_size, style=style, bold=True, custom_font_bytes=custom_font_bytes)
-    draw = ImageDraw.Draw(Image.new("L", (8, 8), 0))
-    allowed = max(24, max_width - 64 - int(draw.textlength(tail, font=font)))
-    text = prefix_base
-    while text and int(draw.textlength(text + "...", font=font)) > allowed:
-        text = text[:-1]
-    return text.rstrip() + ("..." if text != prefix_base else ""), font
+            return prefix_base, size
+
+    size = style.subtitle_min_size
+    allowed = max(
+        24,
+        max_width
+        - 64
+        - _unicode_width(
+            tail,
+            style=style,
+            size=size,
+            bold=True,
+            custom_font_bytes=custom_font_bytes,
+        ),
+    )
+    clusters = list(grapheme_clusters(prefix_base))
+    while clusters:
+        attempt = "".join(clusters).rstrip() + "..."
+        if (
+            _unicode_width(
+                attempt,
+                style=style,
+                size=size,
+                bold=True,
+                custom_font_bytes=custom_font_bytes,
+            )
+            <= allowed
+        ):
+            return attempt, size
+        clusters.pop()
+    return "", size
+
+
+def _plain_text_tile(
+    text: str,
+    *,
+    style: WelcomeCardFontStyle,
+    size: int,
+    color: tuple[int, int, int],
+    custom_font_bytes: Optional[bytes],
+) -> Image.Image:
+    mask = _unicode_mask(
+        text,
+        style=style,
+        size=size,
+        bold=True,
+        tracking=0,
+        custom_font_bytes=custom_font_bytes,
+    )
+    mask = _crop_mask(mask, margin=2)
+    outline = _dilate(mask, 1)
+    tile = Image.new("RGBA", mask.size, (0, 0, 0, 0))
+    stroke = Image.new("RGBA", mask.size, (0, 0, 0, 0))
+    stroke.putalpha(outline.point(lambda value: int(value * 0.86)))
+    tile.alpha_composite(stroke)
+    fill = Image.new("RGBA", mask.size, (*color, 0))
+    fill.putalpha(mask)
+    tile.alpha_composite(fill)
+    return tile
+
+
+def _draw_plain_unicode(
+    canvas: Image.Image,
+    *,
+    x: int,
+    y: int,
+    text: str,
+    style: WelcomeCardFontStyle,
+    size: int,
+    color: tuple[int, int, int],
+    custom_font_bytes: Optional[bytes],
+) -> int:
+    tile = _plain_text_tile(
+        text,
+        style=style,
+        size=size,
+        color=color,
+        custom_font_bytes=custom_font_bytes,
+    )
+    canvas.alpha_composite(tile, (int(x), int(y)))
+    return _unicode_width(
+        text,
+        style=style,
+        size=size,
+        bold=True,
+        custom_font_bytes=custom_font_bytes,
+    )
 
 
 def _draw_subtitle(
@@ -743,25 +924,60 @@ def _draw_subtitle(
     y: int,
     prefix: str,
     ordinal: str,
-    font: ImageFont.ImageFont,
+    size: int,
+    style: WelcomeCardFontStyle,
+    custom_font_bytes: Optional[bytes],
     text_color: tuple[int, int, int],
     primary: tuple[int, int, int],
     secondary: tuple[int, int, int],
 ) -> None:
     draw = ImageDraw.Draw(canvas, "RGBA")
-    common = {"font": font, "stroke_width": 1, "stroke_fill": (0, 0, 0, 220)}
-    draw.text((x, y), prefix, fill=(*text_color, 250), **common)
-    cursor = x + int(draw.textlength(prefix, font=font)) + 16
+    cursor = x + _draw_plain_unicode(
+        canvas,
+        x=x,
+        y=y,
+        text=prefix,
+        style=style,
+        size=size,
+        color=text_color,
+        custom_font_bytes=custom_font_bytes,
+    ) + 16
     _draw_sparkle(draw, (cursor + 7, y + 15), 14, secondary)
     cursor += 27
     _draw_member_icon(draw, (cursor, y + 3), 19, primary)
     cursor += 26
+
     lead = "You are the "
-    draw.text((cursor, y), lead, fill=(*text_color, 250), **common)
-    cursor += int(draw.textlength(lead, font=font))
-    draw.text((cursor, y), ordinal, fill=(*primary, 255), **common)
-    cursor += int(draw.textlength(ordinal, font=font))
-    draw.text((cursor, y), " member!", fill=(*text_color, 250), **common)
+    cursor += _draw_plain_unicode(
+        canvas,
+        x=cursor,
+        y=y,
+        text=lead,
+        style=style,
+        size=size,
+        color=text_color,
+        custom_font_bytes=custom_font_bytes,
+    )
+    cursor += _draw_plain_unicode(
+        canvas,
+        x=cursor,
+        y=y,
+        text=ordinal,
+        style=style,
+        size=size,
+        color=primary,
+        custom_font_bytes=custom_font_bytes,
+    )
+    _draw_plain_unicode(
+        canvas,
+        x=cursor,
+        y=y,
+        text=" member!",
+        style=style,
+        size=size,
+        color=text_color,
+        custom_font_bytes=custom_font_bytes,
+    )
 
 
 def render_welcome_card(
@@ -813,8 +1029,8 @@ def render_welcome_card(
         legacy._avatar_layer(avatar_bytes, theme, primary=primary, secondary=secondary)
     )
 
-    name = legacy._safe_text(display_name, fallback="New Member", max_chars=64)
-    server = legacy._safe_text(server_name, fallback="Your Server", max_chars=72)
+    name = _safe_card_text(display_name, fallback="New Member", max_graphemes=64)
+    server = _safe_card_text(server_name, fallback="Your Server", max_graphemes=72)
     ordinal = legacy._ordinal(member_count)
     x = 420
     _draw_theme_label(canvas, theme=theme, primary=primary, secondary=secondary)
@@ -851,7 +1067,7 @@ def render_welcome_card(
     line_y = 270
     draw.line((x, line_y, 1135, line_y), fill=(*primary, 190), width=3)
     _draw_sparkle(draw, (782, line_y), 14, secondary)
-    prefix, subtitle_font = _fit_subtitle(
+    prefix, subtitle_size = _fit_subtitle(
         server,
         ordinal,
         style=style,
@@ -864,7 +1080,9 @@ def render_welcome_card(
         y=294,
         prefix=prefix,
         ordinal=ordinal,
-        font=subtitle_font,
+        size=subtitle_size,
+        style=style,
+        custom_font_bytes=custom_font_bytes,
         text_color=theme.text,
         primary=primary,
         secondary=secondary,
@@ -883,7 +1101,7 @@ def render_font_catalog(
     custom_font_bytes: Optional[bytes] = None,
     custom_font_name: str = "Uploaded Font",
 ) -> bytes:
-    name = legacy._safe_text(display_name, fallback="New Member", max_chars=30)
+    name = _safe_card_text(display_name, fallback="New Member", max_graphemes=30)
     entries: list[tuple[WelcomeCardFontStyle, Optional[bytes], str]] = [
         (style, None, style.label) for style in FONT_STYLES.values()
     ]
