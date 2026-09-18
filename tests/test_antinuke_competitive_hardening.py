@@ -123,20 +123,153 @@ def test_structural_multi_actor_attack_triggers_before_large_event_count() -> No
     _reset()
 
 
-def test_cosmetic_role_edit_has_low_panic_weight() -> None:
+def test_cosmetic_role_edit_has_zero_panic_weight() -> None:
     entry = SimpleNamespace(
         before=SimpleNamespace(name="Old", position=4, permissions=SimpleNamespace()),
         after=SimpleNamespace(name="New", position=4, permissions=SimpleNamespace()),
     )
-    assert guardian._panic_weight("role_update", entry) == 1
+    assert guardian._panic_weight("role_update", entry) == 0
 
 
-def test_role_position_change_is_high_risk_for_panic() -> None:
+def test_role_position_change_has_bounded_panic_weight() -> None:
     entry = SimpleNamespace(
         before=SimpleNamespace(name="Staff", position=4, permissions=SimpleNamespace()),
         after=SimpleNamespace(name="Staff", position=7, permissions=SimpleNamespace()),
     )
+    assert guardian._panic_weight("role_update", entry) == 2
+
+
+def test_dangerous_permission_removal_has_bounded_panic_weight() -> None:
+    entry = SimpleNamespace(
+        before=SimpleNamespace(
+            position=4,
+            permissions=SimpleNamespace(administrator=True),
+        ),
+        after=SimpleNamespace(
+            position=4,
+            permissions=SimpleNamespace(administrator=False),
+        ),
+    )
+    assert guardian._panic_weight("role_update", entry) == 2
+
+
+def test_dangerous_permission_addition_remains_immediate_panic_weight() -> None:
+    entry = SimpleNamespace(
+        before=SimpleNamespace(
+            position=4,
+            permissions=SimpleNamespace(administrator=False),
+        ),
+        after=SimpleNamespace(
+            position=4,
+            permissions=SimpleNamespace(administrator=True),
+        ),
+    )
     assert guardian._panic_weight("role_update", entry) == 4
+
+
+def test_cosmetic_role_update_is_ignored_by_guardian(monkeypatch) -> None:
+    _reset()
+    guild = FakeGuild()
+    actor = _actor(351)
+    processed: list[str] = []
+    entry = FakeEntry(
+        9051,
+        "role_update",
+        guild,
+        actor=actor,
+        before=SimpleNamespace(
+            name="Helpers",
+            colour=1,
+            position=4,
+            permissions=SimpleNamespace(),
+        ),
+        after=SimpleNamespace(
+            name="Support",
+            colour=2,
+            position=4,
+            permissions=SimpleNamespace(),
+        ),
+    )
+
+    async def fake_process(_guild, _entry, _actor, action_name, _spec):
+        processed.append(action_name)
+
+    monkeypatch.setattr(guardian, "_process", fake_process)
+    asyncio.run(guardian._on_audit_log_entry_create(entry))
+
+    assert processed == []
+    assert guardian._role_update_routine_fields(entry) == ["colour", "name"]  # noqa: SLF001
+    assert anti_nuke._audit_entry_seen(entry) is False
+    _reset()
+
+
+def test_role_position_change_remains_bounded_guardian_evidence(monkeypatch) -> None:
+    _reset()
+    guild = FakeGuild()
+    actor = _actor(352)
+    processed: list[tuple[str, tuple]] = []
+    entry = FakeEntry(
+        9052,
+        "role_update",
+        guild,
+        actor=actor,
+        before=SimpleNamespace(
+            name="Staff",
+            position=4,
+            permissions=SimpleNamespace(),
+        ),
+        after=SimpleNamespace(
+            name="Staff",
+            position=7,
+            permissions=SimpleNamespace(),
+        ),
+    )
+
+    async def fake_process(_guild, _entry, _actor, action_name, spec):
+        processed.append((action_name, spec))
+
+    monkeypatch.setattr(guardian, "_process", fake_process)
+    asyncio.run(guardian._on_audit_log_entry_create(entry))
+
+    assert len(processed) == 1
+    assert processed[0][0] == "role_update"
+    assert processed[0][1][2] == "role_update"
+    assert processed[0][1][3] is None
+    assert anti_nuke._audit_entry_seen(entry) is True
+    _reset()
+
+
+def test_dangerous_permission_removal_remains_guardian_evidence(monkeypatch) -> None:
+    _reset()
+    guild = FakeGuild()
+    actor = _actor(353)
+    processed: list[str] = []
+    entry = FakeEntry(
+        9053,
+        "role_update",
+        guild,
+        actor=actor,
+        before=SimpleNamespace(
+            name="Staff",
+            position=4,
+            permissions=SimpleNamespace(administrator=True),
+        ),
+        after=SimpleNamespace(
+            name="Staff",
+            position=4,
+            permissions=SimpleNamespace(administrator=False),
+        ),
+    )
+
+    async def fake_process(_guild, _entry, _actor, action_name, _spec):
+        processed.append(action_name)
+
+    monkeypatch.setattr(guardian, "_process", fake_process)
+    asyncio.run(guardian._on_audit_log_entry_create(entry))
+
+    assert processed == ["role_update"]
+    assert anti_nuke._audit_entry_seen(entry) is True
+    _reset()
 
 
 def test_discordpy_member_role_add_maps_to_after_roles() -> None:
