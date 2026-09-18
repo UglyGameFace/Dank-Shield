@@ -1,79 +1,96 @@
 # ACTIVE TASK
 
-## DS-SEC-OWNER-AUDIT-CLAIM-RACE — Preserve owner authority evidence for the incident policy
+## DS-WELCOME-UNICODE-260 — Preserve exact Unicode in lifecycle cards
 
-**Status:** INVESTIGATION / IMPLEMENTATION
+**Status:** IMPLEMENTATION / VALIDATION
 
-**Branch:** `fix/antinuke-owner-audit-claim-race`
-**Base main:** `5d1ba5d3681bcba1c9ffbe7c20a0fcf4583436ff`
+**Branch:** `fix/welcome-card-unicode-rendering`
+**Base main:** `84f4b3ca5bec12037fd992e9d7e0d9271f5d6d87`
 
-## Previous task closed
+## Active task lock
 
-PR #258 (`DS-SEC-ROLE-UPDATE-SEVERITY`) merged as `5d1ba5d3681bcba1c9ffbe7c20a0fcf4583436ff`, became `main`, contains exact validated PR head `68ef8034b4e17b2ef6cb5882a45c2c4eafe87b67` as its second parent, and `discloud/commit` reported success.
-
-The Single Active Task Lock is this audit-claim race only.
+The Single Active Task Lock is exact Unicode rendering for Welcome Card Studio
+and the shared exit-card typography path. No unrelated redesign or cleanup is
+in scope.
 
 ## Problem
 
-The native event fallbacks for high-risk role authority changes can race the canonical `on_audit_log_entry_create` incident path.
+Discord display names may contain mathematical alphabets, symbols, non-Latin
+scripts, combining sequences, and emoji. The lifecycle image path currently
+cannot render that input faithfully.
 
-Three native handlers currently:
+Two mechanisms cause the regression:
 
-- look up the recent audit entry
-- atomically consume/mark that entry as seen
-- only then inspect the actor
-- return immediately when the actor is the physical guild owner
+- `lifecycle_card_text.image_safe_text()` applies NFKC compatibility
+  normalization, intentionally rewriting names such as `𝔼𝕪𝕖𝕫` to `Eyez`.
+- `welcome_card_typography_engine` renders dynamic text through one Pillow
+  font at a time. Missing cmap entries therefore become replacement/tofu boxes.
 
-Those handlers are:
+Some styles also uppercase member names before rendering, which conflicts with
+the exact-display-name requirement.
 
-- dangerous role creation
-- dangerous role permission escalation
-- security-sensitive member role grants
+## Required behavior
 
-PR #253 made the incident runtime the authoritative owner-severity classifier for exactly those actions. If a native Discord event callback wins the race, the owner audit entry can be marked seen before the incident listener receives it. The native handler then returns because the actor is the owner, and the later incident listener can no longer classify/report the owner event.
+- preserve the exact Discord Unicode spelling of member and guild display text
+- collapse only card-incompatible line/repeated whitespace
+- keep the selected/custom visual font when it contains the requested glyphs
+- fall back per grapheme cluster when the preferred font lacks coverage
+- keep adjacent same-font clusters together so RAQM can shape Arabic/Indic runs
+- disable manual letter tracking where it would break complex shaping
+- cover Western/math/symbol, RTL, South Asian, Southeast Asian, African, CJK,
+  and emoji text with bundled Noto fallback packs
+- never use NFKC/transliteration as a rendering workaround
+- retain existing card dimensions, effects, fitting, custom fonts, and vector
+  card icons
 
-That makes owner-compromise detection depend on gateway event ordering, which is not a safe ownership boundary.
+## Execution path
 
-## Root cause
+`welcome_card_runtime.py`
+→ `lifecycle_card_text.image_card_member()`
+→ `welcome_card_service.py`
+→ `welcome_card_typography_engine.py`
+→ PNG
 
-`anti_nuke._claim_recent_audit_entry()` always consumes a found entry before returning it. Specialized native role-security handlers need the actor from that entry in order to know whether they should defer to the owner incident path, but by the time they know, the evidence has already been consumed.
+Exit cards share the same text adapter and typography engine through
+`exit_card_runtime.py` / `exit_card_renderer.py`.
 
-The audit listener path itself is correct: `anti_nuke_incident_runtime._process_owner_special_action()` consumes and routes owner role-create, dangerous role-update, and security-sensitive member-role-update evidence through the severity-aware owner policy.
+## Changes
 
-## Intended behavior
-
-- native high-risk role fallbacks remain atomic for normal non-owner actors
-- the physical guild owner's matching role-authority entry remains unconsumed when a native fallback sees it first
-- the native handler still returns without rollback/containment against the owner
-- the incident audit listener remains the sole owner of owner severity classification/reporting
-- bot behavior remains unchanged
-- ordinary threshold-event claims, webhook claims, member-role removals, timeouts, channel events, and bot-add behavior remain unchanged
-
-## Implementation scope
-
-Add the smallest claim option needed for these three specialized native fallback handlers:
-
-- allow `_claim_recent_audit_entry()` to preserve a matching physical-owner entry instead of marking it seen
-- use that option only in dangerous role create, dangerous role permission escalation, and security-sensitive member-role grant handlers
-- keep non-owner claims atomic and one-shot
-- add race-focused regressions proving preserved owner entries remain available to the incident path while non-owner entries are still consumed exactly once
+- add a Unicode-aware font fallback/shaping helper
+- install deterministic Noto fallback packs plus regex grapheme segmentation
+- preserve original lifecycle Unicode text instead of NFKC normalization
+- route styled name/welcome text and dynamic subtitle text through fallback
+  measurement/rendering
+- remove style-driven uppercasing of dynamic member names
+- add Unicode/fallback/custom-font regression coverage
 
 ## Validation / merge gate
 
 Before merge:
 
-- owner-preserving audit-claim regressions pass
-- existing atomic claim race tests remain green
-- owner policy normalization and role-update severity regressions remain green
-- gateway authority escalation and sparse recovery regressions remain green
-- full compile/unit/standalone/security/event-boundary suite passes
-- Claim-first ticket security and Managed category SQL smoke pass
-- all companion workflows pass on exact final head
-- branch is 0 behind current `main`
-- final diff is task-limited with no unresolved review blocker
-- merge only exact validated SHA
-- verify resulting `main` merge parent and require `discloud/commit: success`
+- exact-text adapter regressions pass
+- deterministic primary→fallback glyph selection regressions pass
+- mixed decorative, Greek, accented, RTL, CJK, and emoji card renders pass
+- custom-font missing glyphs fall back rather than tofu
+- existing Welcome Card Studio / custom-font / exit-card regressions pass
+- full Python compile and applicable repository CI pass on exact final head
+- required protected-branch checks pass
+- final diff is task-limited and branch is current with main
+- merge only the exact validated SHA
+- verify resulting main and deployment status
+
+## Cleanup / conflicts
+
+The old NFKC workaround and its tests are superseded by the fallback renderer
+and must not remain as duplicate behavior. Existing single-font helpers may
+remain only where they render controlled static ASCII or are required by
+backward-compatible tests.
+
+## Backlog
+
+None. Unrelated findings remain outside this task.
 
 ## Next step
 
-Implement owner-preserving claim semantics for the three specialized native role-security fallbacks and add focused race regression coverage.
+Wire the shared typography engine to the Unicode fallback helper, add focused
+renderer regressions, then run exact-head validation.
