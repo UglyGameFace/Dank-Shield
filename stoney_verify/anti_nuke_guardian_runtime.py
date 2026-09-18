@@ -84,6 +84,18 @@ _GUILD_UPDATE_ROUTINE_FIELDS = frozenset(
     }
 )
 
+_ROLE_UPDATE_ROUTINE_FIELDS = frozenset(
+    {
+        "name",
+        "hoist",
+        "mentionable",
+        "colour",
+        "color",
+        "icon",
+        "unicode_emoji",
+    }
+)
+
 _PANIC_WEIGHTS: dict[str, int] = {
     "guild_update": 4, "bot_add": 4, "channel_create": 2, "channel_delete": 3,
     "overwrite_create": 3, "overwrite_update": 3, "overwrite_delete": 3,
@@ -472,7 +484,28 @@ async def _rollback_untrusted_creation(guild: discord.Guild, entry: Any, actor: 
         return result
 
 
+def _role_update_position_changed(entry: Any) -> bool:
+    before = getattr(entry, "before", None)
+    after = getattr(entry, "after", None)
+    if before is None or after is None:
+        return False
+    old = getattr(before, "position", None)
+    new = getattr(after, "position", None)
+    return old != new and (old is not None or new is not None)
+
+
+def _role_update_routine_fields(entry: Any) -> list[str]:
+    return _changed_diff_fields(entry, _ROLE_UPDATE_ROUTINE_FIELDS)
+
+
 def _generic_role_update(entry: Any) -> bool:
+    """Return True only for bounded role security/hierarchy evidence.
+
+    Dangerous permission additions are owned by the gateway-fast escalation path.
+    Cosmetic role presentation edits are legitimate administration and stay out of
+    destructive counters entirely.
+    """
+
     before = getattr(entry, "before", None)
     after = getattr(entry, "after", None)
     if before is None or after is None:
@@ -481,26 +514,21 @@ def _generic_role_update(entry: Any) -> bool:
         return False
     if anti_nuke.dangerous_permissions_changed(before, after):
         return True
-    for attr in ("position", "name", "hoist", "mentionable", "colour", "color", "icon", "unicode_emoji"):
-        old = getattr(before, attr, None)
-        new = getattr(after, attr, None)
-        if old != new and (old is not None or new is not None):
-            return True
-    return False
+    return _role_update_position_changed(entry)
 
 
 def _role_update_panic_weight(entry: Any) -> int:
     before = getattr(entry, "before", None)
     after = getattr(entry, "after", None)
     if before is None or after is None:
-        return 1
+        return 0
+    if anti_nuke.dangerous_permissions_added(before, after):
+        return 4
     if anti_nuke.dangerous_permissions_changed(before, after):
-        return 4
-    old_position = getattr(before, "position", None)
-    new_position = getattr(after, "position", None)
-    if old_position != new_position and (old_position is not None or new_position is not None):
-        return 4
-    return 1
+        return 2
+    if _role_update_position_changed(entry):
+        return 2
+    return 0
 
 
 def _guild_update_panic_weight(entry: Any) -> int:

@@ -55,6 +55,10 @@ def test_guardian_guild_update_fields_match_owner_severity_policy() -> None:
     assert guardian._GUILD_UPDATE_ROUTINE_FIELDS == incident._OWNER_GUILD_ROUTINE_FIELDS  # noqa: SLF001
 
 
+def test_guardian_role_routine_fields_match_owner_severity_policy() -> None:
+    assert guardian._ROLE_UPDATE_ROUTINE_FIELDS == incident._OWNER_ROLE_ROUTINE_FIELDS  # noqa: SLF001
+
+
 def test_cosmetic_owner_role_edit_is_not_compromise_evidence(monkeypatch) -> None:
     incidents = _install_owner_test_doubles(monkeypatch)
     guild = SimpleNamespace(id=1, owner_id=42)
