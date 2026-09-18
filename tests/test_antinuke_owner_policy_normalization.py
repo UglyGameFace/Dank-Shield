@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from stoney_verify import anti_nuke
 from stoney_verify import anti_nuke_incident_runtime as incident
 from stoney_verify import anti_nuke_gateway_runtime as gateway
+from stoney_verify import anti_nuke_guardian_runtime as guardian
 
 
 def _settings() -> dict:
@@ -46,6 +47,12 @@ def _install_owner_test_doubles(monkeypatch):
     anti_nuke._ACTION_WINDOWS.clear()  # noqa: SLF001
     anti_nuke._TRIGGER_COOLDOWNS.clear()  # noqa: SLF001
     return incidents
+
+
+def test_guardian_guild_update_fields_match_owner_severity_policy() -> None:
+    assert guardian._GUILD_UPDATE_IMMEDIATE_FIELDS == incident._OWNER_GUILD_IMMEDIATE_FIELDS  # noqa: SLF001
+    assert guardian._GUILD_UPDATE_BOUNDED_FIELDS == incident._OWNER_GUILD_BOUNDED_FIELDS  # noqa: SLF001
+    assert guardian._GUILD_UPDATE_ROUTINE_FIELDS == incident._OWNER_GUILD_ROUTINE_FIELDS  # noqa: SLF001
 
 
 def test_cosmetic_owner_role_edit_is_not_compromise_evidence(monkeypatch) -> None:
