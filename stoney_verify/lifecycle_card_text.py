@@ -2,30 +2,19 @@ from __future__ import annotations
 
 """Image-safe text adapters for canonical join/exit lifecycle cards.
 
-Discord can display compatibility alphabets such as mathematical bold/script
-letters that the Pillow fonts available in production do not necessarily
-contain. Keep the original Discord-facing member text untouched, but normalize
-only the copy handed to the bitmap renderer so those names remain readable.
+Lifecycle image text preserves the exact Discord Unicode spelling.  The bitmap
+renderer owns font fallback and shaping; this adapter only collapses line breaks
+and repeated whitespace because card labels are single-line surfaces.
 """
 
-import unicodedata
 from typing import Any
 
 
 def image_safe_text(value: Any, *, fallback: str) -> str:
-    """Return readable text for Pillow without changing Discord-facing text.
-
-    NFKC maps decorative compatibility alphabets (for example 𝔼𝕪𝕖𝕫) back to
-    their ordinary Unicode equivalents while preserving normal names, accents,
-    emoji, and non-Latin scripts. Whitespace is collapsed because cards are
-    single-line display surfaces.
-    """
+    """Return exact Unicode card text with single-line whitespace cleanup."""
 
     raw = " ".join(str(value or "").replace("\n", " ").split()).strip()
-    if not raw:
-        raw = fallback
-    normalized = unicodedata.normalize("NFKC", raw)
-    return normalized.strip() or fallback
+    return raw or fallback
 
 
 class _ImageCardGuild:

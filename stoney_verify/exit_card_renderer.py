@@ -80,8 +80,8 @@ def render_exit_card(
         )
     )
 
-    name = legacy._safe_text(display_name, fallback="Member", max_chars=64)
-    server = legacy._safe_text(server_name, fallback="Your Server", max_chars=72)
+    name = engine._safe_card_text(display_name, fallback="Member", max_graphemes=64)
+    server = engine._safe_card_text(server_name, fallback="Your Server", max_graphemes=72)
     x = 420
     engine._draw_theme_label(
         canvas,

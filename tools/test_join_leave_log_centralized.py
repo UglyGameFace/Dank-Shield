@@ -78,8 +78,11 @@ for leaked_marker in (
     if leaked_marker in join_runtime or leaked_marker in exit_runtime:
         failures.append(f"live lifecycle runtime still exposes internal marker: {leaked_marker}")
 
-if 'unicodedata.normalize("NFKC", raw)' not in card_text:
-    failures.append("lifecycle bitmap text no longer normalizes compatibility Unicode")
+if 'unicodedata.normalize("NFKC", raw)' in card_text:
+    failures.append("lifecycle bitmap text must preserve exact Unicode instead of NFKC-normalizing it")
+
+if "return raw or fallback" not in card_text:
+    failures.append("lifecycle bitmap text no longer preserves the exact cleaned Unicode string")
 
 retired_public_sender_markers = [
     "join log sent guild=",

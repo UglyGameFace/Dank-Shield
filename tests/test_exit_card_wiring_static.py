@@ -44,8 +44,9 @@ def test_exit_runtime_owns_live_gate_route_image_and_fallback() -> None:
     assert "exit_card_channel_id" in RUNTIME
 
 
-def test_image_text_adapter_is_shared_by_join_and_exit_bitmap_paths() -> None:
-    assert 'unicodedata.normalize("NFKC", raw)' in CARD_TEXT
+def test_image_text_adapter_preserves_unicode_for_join_and_exit_bitmap_paths() -> None:
+    assert 'unicodedata.normalize("NFKC", raw)' not in CARD_TEXT
+    assert "return raw or fallback" in CARD_TEXT
     assert "class ImageCardMember" in CARD_TEXT
 
 

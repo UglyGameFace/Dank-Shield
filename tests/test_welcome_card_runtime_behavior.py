@@ -113,7 +113,7 @@ def test_studio_enabled_sends_without_legacy_join_toggle(
     assert isinstance(channel.sent[0]["file"], discord.File)
 
 
-def test_live_image_normalizes_decorative_unicode_without_changing_discord_text(
+def test_live_image_preserves_decorative_unicode_without_changing_discord_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _guild, channel, member = _world()
@@ -137,7 +137,7 @@ def test_live_image_normalizes_decorative_unicode_without_changing_discord_text(
     result = asyncio.run(runtime.send_live_welcome_card(member))
 
     assert result.sent is True
-    assert seen["display_name"] == "Eyez Of Bob"
+    assert seen["display_name"] == "𝔼𝕪𝕖𝕫 𝕆𝕗 𝔹𝕠𝕓"
     embed = channel.sent[0]["embed"]
     assert isinstance(embed, discord.Embed)
     assert "𝔼𝕪𝕖𝕫 𝕆𝕗 𝔹𝕠𝕓" in (embed.description or "")

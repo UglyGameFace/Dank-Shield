@@ -70,8 +70,9 @@ def test_studio_preview_uses_exact_live_embed_and_image_fallback_paths() -> None
     assert "Preview fallback • dank_shield:welcome_card_runtime:v1" in STUDIO
 
 
-def test_image_text_adapter_normalizes_only_bitmap_member_copy() -> None:
-    assert 'unicodedata.normalize("NFKC", raw)' in CARD_TEXT
+def test_image_text_adapter_preserves_exact_bitmap_member_copy() -> None:
+    assert 'unicodedata.normalize("NFKC", raw)' not in CARD_TEXT
+    assert "return raw or fallback" in CARD_TEXT
     assert "class ImageCardMember" in CARD_TEXT
     assert "def display_name" in CARD_TEXT
     assert "def guild" in CARD_TEXT
