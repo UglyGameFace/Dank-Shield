@@ -33,7 +33,8 @@ def test_rules_and_protection_copy_explains_non_rename_behavior() -> None:
     assert "Protection" in V2
     assert "Start Clean Redesign" in V2
     assert "keeps protection" in V2
-    assert "Reset This Category/Channel" in V2
+    assert 'label="Reset This Category"' in LEGACY
+    assert 'label="Reset This Channel"' in LEGACY
     assert "Narrower rules always win" in V2
     assert "Protection is separate" in V2
     assert "Reset All Rules + Protection" in LEGACY
