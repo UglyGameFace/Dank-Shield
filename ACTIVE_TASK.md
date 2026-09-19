@@ -1,140 +1,120 @@
 # ACTIVE TASK
 
 ## ID
-DS-DESIGNER-262 — Server Designer UX + font system hardening
+DS-WELCOME-UNICODE-REGRESSION-263 — Guarantee long-tail Unicode glyph coverage in lifecycle cards
 
 ## Status
-IMPLEMENTATION COMPLETE — final exact-head CI and merge gate
+IMPLEMENTATION / VALIDATION
+
+## Branch
+`fix/welcome-card-long-tail-unicode`
+
+## Base main
+`e1ed7093983fffd5e947b1a240e3d455df80dc1e`
 
 ## Single active-task lock
-Only this Server Designer improvement task is active. Do not switch to unrelated
-work until this task is investigated, implemented, validated on the exact final
-head, cleaned up, merged, and verified on main.
+Only this deployed welcome/exit-card Unicode regression is active. Do not move
+to unrelated work until the live-font coverage fix is implemented, tested,
+validated on the exact final head, merged, and verified on deployed main.
 
-## User-visible goals
-- Make **Design Entire Server** substantially easier to understand and use on mobile.
-- Let the server-wide workflow choose and preview better Unicode font styles directly.
-- Expand the curated theme/font catalog without reintroducing crossed ownership.
-- Prevent a successful design Apply from later appearing to "randomly revert".
-- Preserve preview-first safety, saved-rule precedence, protection, exact-item editing,
-  and Undo.
+## Production evidence
+A post-PR-260 live Discord welcome at approximately 2026-09-19 17:03 local time
+showed the Discord mention/embed preserving the member's stylized Unicode name
+while the generated welcome-card PNG rendered several characters as tofu boxes.
 
-## Analysis / root cause
-### Font UX
-- The naming engine already had a broad Unicode transformation system, but the
-  consolidated Server Designer only exposed Theme, Strength, and Separator.
-- Font choice was hidden inside theme presets even though Channel Name Fonts had a
-  richer visual catalog elsewhere.
-- Font labels/maps were duplicated across Channel Builder compatibility layers, which
-  made adding a style in one place easy to miss in another.
-- Server-wide format locks derived font only from the selected theme, so an explicit
-  server font override would have been lost when a global rule was synchronized.
+Representative live text:
 
-### Unexpected reversion
-- Current Server Designer has no background "enforce saved design" loop.
-- Plain channel-name edits are not classified as destructive AntiNuke channel-update
-  events; overwrite mutations are handled separately.
-- The active reviewed-Apply flow did contain one explicit post-success reversal path:
-  after every successful live rename batch it attempted to persist durable Undo history,
-  and if that file write raised, it called `compensate_applied(...)` and renamed the
-  entire successful batch back.
-- That behavior exactly produces the reported symptom: the design visibly finishes,
-  then the names return without the user pressing Undo.
-- Durable Undo storage failure alone must not mutate live names after a successful Apply.
+`PᗩᗰƐᒪᗩ`
+
+The missing characters are from Unified Canadian Aboriginal Syllabics (for
+example U+15E9, U+15F0, U+14AA), mixed with ordinary Latin/Latin-Extended text.
+
+PR #260 is present on main and Discloud reported `discloud/commit: success`.
+This is therefore a real production coverage gap, not an old deployment.
+
+## Root cause
+PR #260 correctly removed destructive NFKC normalization and added grapheme-aware
+font fallback, but its fallback inventory was still incomplete:
+
+- the production fallback registry intentionally admitted only Noto families and
+  STIX Two Math
+- the installed JustMyType packs cover many common scripts but do not include a
+  Canadian Aboriginal face
+- Discloud's `APT=canvas` environment supplies common rendering libraries and
+  Liberation fonts, not a guaranteed long-tail Unicode safety-net font
+- the regression suite used `PΛMELA` with Greek Lambda rather than the actual
+  Canadian-syllabics lookalikes, so CI never exercised this block
+- when no face fully covered a grapheme, the renderer ultimately selected the
+  best partial face, which preserved the code point but produced a missing-glyph box
+
+## Required behavior
+- preserve the exact Discord display-name string
+- never transliterate, compatibility-normalize, strip, or silently substitute
+  assigned Unicode characters
+- retain themed/custom fonts whenever they cover the requested grapheme
+- use script-specific Noto/STIX fallbacks next
+- provide deterministic app-local long-tail fonts on Discloud rather than relying
+  on whatever fonts happen to exist in the host image
+- use a broad quality fallback before the last-resort pan-Unicode face
+- cover all printable Unicode Plane 0 characters with an actual fallback glyph,
+  while retaining current higher-plane Noto/STIX/emoji support and adding an
+  upper-plane Unifont safety net
+- fail the deployment build if pinned fallback fonts cannot be downloaded or
+  fail integrity verification, rather than deploying known tofu behavior
 
 ## Implementation
-### Server Designer
-- Added an owned **Font** selector between Theme and Strength.
-- Added **Theme Default** so users can return cleanly to a preset's recommended font.
-- Theme changes intentionally clear the explicit font override and restore preset ownership.
-- Added live font samples in the picker and current Server Designer summary.
-- Added a combined category/channel style example before Preview.
-- Current font and category-frame state are visible on the same screen.
-- Controls fit Discord's five-row component limit:
-  1. Theme
-  2. Font
-  3. Strength
-  4. Separator
-  5. Preview / separator preview / clean redesign
-- Simplified button labels for mobile.
+- add `tools/provision_unicode_fonts.py`
+  - provisions pinned GNU FreeSans, GNU Unifont Plane 0, and GNU Unifont Upper
+  - validates exact byte size and pinned digest
+  - uses alternate GNU mirrors for Unifont
+  - writes atomically into `.runtime_fonts/`
+  - fails closed on network/integrity failure
+- add `BUILD=python tools/provision_unicode_fonts.py` to Discloud deployment
+- ignore `.runtime_fonts/` in Git
+- make the renderer append app-local long-tail faces after preferred/custom and
+  script-specific registered faces
+- prefer FreeSans for better-looking long-tail glyphs, then use Unifont as the
+  standardized-Unicode safety net
+- keep common system FreeSans locations as an extra portability path
+- add the exact live Canadian-syllabics name to tracking, coverage, and full-card
+  rendering regressions
+- add deterministic synthetic-font tests proving the long-tail source is chosen
+  for the missing Canadian-syllabics graphemes
+- add provisioner integrity/fail-closed/deployment-wiring tests
 
-### Font catalog
-- Added exact **Clean Sans** and **Double-Struck** Unicode styles.
-- Added curated themes that use more of the supported catalog:
-  - Night Gothic
-  - Neon Rush
-  - Terminal Neon
-  - Fullwidth Arcade
-  - Small Caps Social
-  - Modern Minimal
-  - Double-Struck Luxe
-  - Luxury Script
-- Kept the theme and font counts under Discord's 25-option select limit.
-- Updated the canonical runtime, exact-proof, full-catalog, setup gallery, and active
-  queued font flow so the new styles do not exist in only one UI.
-- Added shared font labels/previews in the Server Design naming engine.
+## Validation gate
+Before merge:
 
-### Reversion hardening
-- Successful reviewed Apply now uses durable Undo storage when available.
-- If durable Undo persistence fails, the live design **stays applied** and an emergency
-  memory-only Undo snapshot is retained.
-- The completion screen explicitly warns that memory-only Undo disappears on restart.
-- Successful Apply is no longer compensated merely because Undo-history persistence failed.
-- Real rename/apply failures and separator-setting persistence failures still compensate,
-  because those indicate an incomplete or internally inconsistent transaction.
-
-## Validation added / updated
-- Server selector ownership now covers Theme + Font + Strength + Separator.
-- Explicit server font survives global-lock synchronization.
-- Theme Default / theme changes restore predictable preset font ownership.
-- Font picker stays within Discord select limits and includes visual samples.
-- New Unicode styles transform and normalize back to the original base name.
-- Runtime/full-catalog/exact-proof font maps are checked for catalog parity.
-- Durable Undo write failure is behavior-tested to fall back to memory.
-- Static regression forbids the old "Apply Reversed Because Undo History Could Not Be Saved"
-  successful-apply path.
-
-## Validation completed on final code head `699e8199c46815c6b195256c4737a54ec706a7f7`
-- Dank Shield CI: **PASS**
-  - Python compile: PASS
-  - full unit suite: **1688 passed, 9 warnings**
-  - standalone tools: PASS
-  - public setup/command/invite/setup-safety audits: PASS
-  - Dank Design Smart Auto-Detect audit: PASS
-  - role-truth and event-boundary audits: PASS
-- Dank Design Regression CI: **PASS**
-  - focused Design Studio suite: **113 passed, 1 warning**
-  - Smart Auto-Detect audit: PASS
-  - redundancy/ownership audit: PASS
-  - UX/static audits: PASS
-- Channel Builder Queue Sanity: PASS
-- Application Command Size Diagnostics: PASS
-- Profile Runtime Diagnostics: PASS
-- Schema Authority SQL: PASS
-- DS Backlog 027 Validation: PASS
-- Ticket Owner Emergency Override: PASS
-- PR was mergeable and **0 commits behind main** at this validation point.
-- Final diff review removed unrelated dormant compatibility-file edits and kept the
-  changes scoped to active Server Designer/font ownership, tests, audits, and this task record.
-
-## Final gate
-This task-record update is documentation-only and changes the PR SHA. Re-run required
-CI on that exact final head. If it stays green, mark PR #262 ready, merge it, and verify
-main contains the validated branch head.
-
-After that main verification, this task is **COMPLETE** without another code change.
-Live Discord acceptance remains a deployment smoke test, not a reason to reopen or
-rewrite already-green code unless the deployed behavior exposes a concrete regression.
+- exact live text `PᗩᗰƐᒪᗩ` resolves every visible grapheme to a face whose cmap
+  actually contains it
+- exact live text renders a non-empty full welcome card without replacement boxes
+  under the production fallback path
+- custom-font fallback behavior remains correct
+- Arabic/Indic/emoji grapheme shaping/tracking protections remain green
+- lifecycle adapter still contains no NFKC/transliteration workaround
+- provisioner tests prove checksum validation, mirror fallback, atomic install,
+  and fail-closed behavior
+- Discloud config statically requires the provisioner build step
+- full compile/unit/standalone/audit suite passes
+- all companion workflows pass on the exact final head
+- branch is 0 behind current main
+- final diff remains task-limited
+- merge only the exact validated SHA
+- verify merged main contains the validated head
+- require post-merge `discloud/commit: success`; because the build step is
+  fail-closed, that status is also evidence that the pinned font assets were
+  provisioned successfully
 
 ## Risk / compatibility
-- Existing saved themes and font IDs remain valid.
-- Existing saved narrow rules remain authoritative over the server draft.
-- Decorative fonts remain visibly marked as readability-risky.
-- Upside Down remains available only as a legacy decode/compatibility transform and is
-  no longer offered as a live selectable design font because it cannot safely round-trip.
-- This task does not change permissions, channel order, topics, ticket placement, roles,
-  verification, or protection policy.
+The app does not commit or expose font binaries in Git. The provisioner downloads
+pinned upstream font files during deployment. The fallback faces are used only
+when higher-priority fonts lack a requested grapheme, so existing visual styles
+remain unchanged for ordinary names.
+
+Private Use Area and unassigned Unicode still cannot have a universal standardized
+appearance because no standard glyph exists for them. Assigned standardized
+Unicode is preserved.
 
 ## Next step
-Run exact-head CI for this documentation-only finalization commit. If all required
-checks stay green, mark PR #262 ready, merge it, and verify the merged result on main.
+Run targeted Unicode/provisioner tests, open the regression PR, inspect exact-head
+CI, fix any task-local failures, then merge and verify the Discloud deployment.
