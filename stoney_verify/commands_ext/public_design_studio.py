@@ -21,6 +21,7 @@ from typing import Any, Awaitable, Callable, Mapping
 import discord
 
 from stoney_verify.interaction_guard import run_guarded_interaction, safe_send_interaction
+from stoney_verify.services import server_design_plan_service as plan_service
 from stoney_verify.services import server_design_studio as studio
 from stoney_verify.services import server_design_rule_service as rule_service
 
@@ -391,14 +392,14 @@ def _current_format_lock(options: Mapping[str, Any], *, scope: str = "global") -
     font = _safe_str(options.get("font") or getattr(theme, "font", "normal"), "normal").lower().replace("-", "_")
     if font not in studio.DESIGN_FONT_STYLES:
         font = _safe_str(getattr(theme, "font", "normal"), "normal").lower().replace("-", "_")
-    theme_separator = _safe_str(getattr(theme, "channel_separator", "bar_full"), "bar_full")
+    separator_id = plan_service.effective_server_separator_id(options)
 
     return {
         "scope": scope,
         "theme_id": _safe_str(getattr(theme, "id", "gothic_clean"), "gothic_clean"),
         "strength": strength,
         "font": font,
-        "separator_id": rule_service.effective_draft_separator(options, theme_separator=theme_separator),
+        "separator_id": separator_id,
         "category_frame_id": _safe_str(getattr(theme, "category_frame", "line"), "line"),
         "emoji_override": _safe_str(options.get("emoji_override"), ""),
         "exact_match": bool(options.get("exact_match", False)),
