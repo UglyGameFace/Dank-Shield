@@ -55,6 +55,14 @@ def test_current_format_lock_never_silently_rewrites_strength() -> None:
     assert lock["strength"] == 2
 
 
+def test_gothic_default_separator_matches_planner_ui_and_saved_global_rule() -> None:
+    options = {"theme_id": "gothic_clean", "strength": 4}
+    normalized = plan_service.normalize_plan_options(options, strict=True)
+    assert normalized["separator_id"] == "pipe_spaced"
+    assert plan_service.effective_server_separator_id(options) == "pipe_spaced"
+    assert public_studio._current_format_lock(options)["separator_id"] == "pipe_spaced"
+
+
 def test_current_format_lock_honors_explicit_server_font_override() -> None:
     lock = public_studio._current_format_lock(
         {"theme_id": "gothic_clean", "strength": 4, "font": "double_struck"}
