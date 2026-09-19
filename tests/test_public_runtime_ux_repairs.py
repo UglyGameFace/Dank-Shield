@@ -154,13 +154,17 @@ def test_allow_listed_protected_items_saves_exact_full_overrides(
         saved.update(options)
 
     class Response:
-        async def edit_message(self, **kwargs: Any) -> None:
-            edited.update(kwargs)
+        async def defer(self, **kwargs: Any) -> None:
+            edited["deferred"] = kwargs
+
+    async def edit_original_response(**kwargs: Any) -> None:
+        edited.update(kwargs)
 
     interaction = SimpleNamespace(
         guild=SimpleNamespace(id=9001),
         user=SimpleNamespace(id=77),
         response=Response(),
+        edit_original_response=edit_original_response,
     )
 
     monkeypatch.setattr(legacy, "_require_design_permission", allow)
@@ -179,6 +183,7 @@ def test_allow_listed_protected_items_saves_exact_full_overrides(
     assert rules["10"] == "full"
     assert rules["20"] == "full"
     assert rules["99"] == "never"
+    assert edited["deferred"]["ephemeral"] is True
     assert edited["embed"].title == "🔓 Protected Items Can Now Be Styled"
     assert isinstance(edited["view"], design_v2.DesignHomeView)
 

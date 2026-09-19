@@ -287,6 +287,33 @@ async def _guard_design_action(
     )
 
 
+class LegacyDesignView(discord.ui.View):
+    """Safe error boundary for legacy editor surfaces still used by V2."""
+
+    async def on_error(
+        self,
+        interaction: discord.Interaction,
+        error: Exception,
+        item: discord.ui.Item[Any],
+    ) -> None:
+        try:
+            print(f"⚠️ Dank Design legacy component failed: {type(error).__name__}: {error}")
+        except Exception:
+            pass
+        try:
+            await safe_send_interaction(
+                interaction,
+                content=(
+                    "❌ Dank Design stopped this action safely. Nothing else was changed. "
+                    "Reopen /dank home → **Server Design** and try again."
+                ),
+                ephemeral=True,
+                action_name="design.legacy.component_error",
+            )
+        except Exception:
+            pass
+
+
 async def _load_design_options(guild_id: int) -> dict[str, Any]:
     default = {"theme_id": "gothic_clean", "strength": 4, "icon_mode": "replace_missing", "protection_rules": {}, "protection_item_rules": {}}
     key = _guild_key(int(guild_id))
@@ -963,11 +990,12 @@ class CategoryFormatLockSelect(discord.ui.ChannelSelect):
         guild = interaction.guild
         assert guild is not None
         category = self.values[0]
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _save_category_lock(interaction, int(category.id))
         embed = _format_locks_embed(guild, options)
         embed.title = "✅ Category Format Lock Saved"
-        embed.description = f"Saved the saved design rule for {category.mention}. Future scans will use this lock for the category and its children unless a channel override exists."
-        await interaction.response.edit_message(embed=embed, view=FormatLocksView())
+        embed.description = f"Saved the design rule for {category.mention}. Future scans will use this lock for the category and its children unless a channel override exists."
+        await interaction.edit_original_response(embed=embed, view=FormatLocksView())
 
 
 class ChannelFormatLockSelect(discord.ui.ChannelSelect):
@@ -1000,14 +1028,15 @@ class ChannelFormatLockSelect(discord.ui.ChannelSelect):
         guild = interaction.guild
         assert guild is not None
         channel = self.values[0]
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _save_channel_lock(interaction, int(channel.id))
         embed = _format_locks_embed(guild, options)
         embed.title = "✅ Channel Override Lock Saved"
-        embed.description = f"Saved the saved design rule as an exact override for {channel.mention}."
-        await interaction.response.edit_message(embed=embed, view=FormatLocksView())
+        embed.description = f"Saved the design rule as an exact override for {channel.mention}."
+        await interaction.edit_original_response(embed=embed, view=FormatLocksView())
 
 
-class CategoryFormatLockPickerView(discord.ui.View):
+class CategoryFormatLockPickerView(LegacyDesignView):
     def __init__(self) -> None:
         super().__init__(timeout=900)
         self.add_item(CategoryFormatLockSelect())
@@ -1017,11 +1046,12 @@ class CategoryFormatLockPickerView(discord.ui.View):
         if not await _require_design_permission(interaction):
             return
         assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(interaction.guild.id))
-        await interaction.response.edit_message(embed=_format_locks_embed(interaction.guild, options), view=FormatLocksView())
+        await interaction.edit_original_response(embed=_format_locks_embed(interaction.guild, options), view=FormatLocksView())
 
 
-class ChannelFormatLockPickerView(discord.ui.View):
+class ChannelFormatLockPickerView(LegacyDesignView):
     def __init__(self) -> None:
         super().__init__(timeout=900)
         self.add_item(ChannelFormatLockSelect())
@@ -1031,11 +1061,43 @@ class ChannelFormatLockPickerView(discord.ui.View):
         if not await _require_design_permission(interaction):
             return
         assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(interaction.guild.id))
-        await interaction.response.edit_message(embed=_format_locks_embed(interaction.guild, options), view=FormatLocksView())
+        await interaction.edit_original_response(embed=_format_locks_embed(interaction.guild, options), view=FormatLocksView())
 
 
-class FormatLocksView(discord.ui.View):
+class ResetAllDesignStateConfirmView(LegacyDesignView):
+    def __init__(self) -> None:
+        super().__init__(timeout=300)
+
+    @discord.ui.button(label="Yes, Reset Rules + Protection", emoji="⚠️", style=discord.ButtonStyle.danger, custom_id="dank_design:clear_all_locks_confirm", row=0)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        options = await _clear_all_locks(interaction)
+        embed = _format_locks_embed(guild, options)
+        embed.title = "🧹 All Saved Design Rules + Protection Reset"
+        embed.description = (
+            "Global, category, channel, exact manual-name, exact-item protection, and saved name-level protection overrides were cleared. "
+            "The ordinary server draft remains selected; built-in protection defaults still apply."
+        )
+        await interaction.edit_original_response(embed=embed, view=FormatLocksView())
+
+    @discord.ui.button(label="Cancel", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:clear_all_locks_cancel", row=0)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        options = await _load_design_options(int(guild.id))
+        await interaction.edit_original_response(embed=_format_locks_embed(guild, options), view=FormatLocksView())
+
+
+class FormatLocksView(LegacyDesignView):
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
@@ -1045,11 +1107,12 @@ class FormatLocksView(discord.ui.View):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _save_global_lock(interaction)
         embed = _format_locks_embed(guild, options)
         embed.title = "✅ Global Format Lock Saved"
         embed.description = "Future scans will use this format as the server default unless a category or channel override exists."
-        await interaction.response.edit_message(embed=embed, view=FormatLocksView())
+        await interaction.edit_original_response(embed=embed, view=FormatLocksView())
 
     @discord.ui.button(label="Lock Category", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="dank_design:open_category_lock", row=1)
     async def open_category_lock(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1079,30 +1142,37 @@ class FormatLocksView(discord.ui.View):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _clear_global_lock(interaction)
         embed = _format_locks_embed(guild, options)
         embed.title = "🧹 Global Format Lock Cleared"
-        await interaction.response.edit_message(embed=embed, view=FormatLocksView())
+        await interaction.edit_original_response(embed=embed, view=FormatLocksView())
 
-    @discord.ui.button(label="Reset All Design Overrides", emoji="⚠️", style=discord.ButtonStyle.danger, custom_id="dank_design:clear_all_locks", row=2)
+    @discord.ui.button(label="Reset All Rules + Protection", emoji="⚠️", style=discord.ButtonStyle.danger, custom_id="dank_design:clear_all_locks", row=2)
     async def clear_all(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
-        guild = interaction.guild
-        assert guild is not None
-        options = await _clear_all_locks(interaction)
-        embed = _format_locks_embed(guild, options)
-        embed.title = "🧹 All Design Overrides Reset"
-        embed.description = "Global, category, channel, exact manual-name, exact-item protection, and saved name-level protection overrides were cleared. The ordinary server draft remains selected; built-in protection defaults still apply."
-        await interaction.response.edit_message(embed=embed, view=FormatLocksView())
+        embed = discord.Embed(
+            title="⚠️ Reset Every Saved Design Rule + Protection Override?",
+            description=(
+                "This is the broad reset. It clears **all saved layout/name exceptions and all saved protection overrides**. "
+                "It does not rename channels now, and it does not change permissions or other server settings.\n\n"
+                "For an ordinary server redesign, use **Design Entire Server → Start Clean Redesign** instead. "
+                "That safer option keeps protection rules."
+            ),
+            color=discord.Color.orange(),
+        )
+        embed.set_footer(text="Nothing is cleared until you confirm")
+        await interaction.response.edit_message(embed=embed, view=ResetAllDesignStateConfirmView())
 
     @discord.ui.button(label="Back to Design Studio", emoji="🎨", style=discord.ButtonStyle.secondary, custom_id="dank_design:format_locks_back", row=4)
     async def back_to_studio(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
         assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(interaction.guild.id))
-        await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
+        await interaction.edit_original_response(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
 
 
 
@@ -1430,6 +1500,7 @@ async def _open_exact_format_editor(interaction: discord.Interaction, *, scope: 
         guild = interaction.guild
         assert guild is not None
 
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
         lock = _initial_editor_lock(options, scope=scope, target_id=int(target_id), guild=guild)
         key = _format_editor_key(int(guild.id), int(interaction.user.id), scope, int(target_id))
@@ -1438,7 +1509,7 @@ async def _open_exact_format_editor(interaction: discord.Interaction, *, scope: 
         embed = _exact_format_embed(guild, scope=scope, target_id=int(target_id), lock=lock)
         view = ExactFormatEditorViewFactory(guild, scope, int(target_id), lock)
 
-        await interaction.response.edit_message(embed=embed, view=view)
+        await interaction.edit_original_response(embed=embed, view=view)
 
     await _guard_design_action(interaction, f"design.exact.open.{scope}", action, defer=False)
 
@@ -2075,7 +2146,7 @@ class SeparatorExamplesBackButton(discord.ui.Button):
         await _guard_design_action(interaction, "design.exact.examples.back", action, defer=False)
 
 
-class SeparatorExamplesView(discord.ui.View):
+class SeparatorExamplesView(LegacyDesignView):
     def __init__(self, guild: discord.Guild, *, scope: str, target_id: int, lock: Mapping[str, Any], page: int = 0) -> None:
         super().__init__(timeout=900)
         self.scope = scope
@@ -2144,7 +2215,7 @@ async def _save_exact_and_preview(interaction: discord.Interaction, *, scope: st
 
 
 
-class ExactFormatEditorView(discord.ui.View):
+class ExactFormatEditorView(LegacyDesignView):
     def __init__(self, *, scope: str, target_id: int) -> None:
         super().__init__(timeout=900)
         self.scope = scope
@@ -2161,13 +2232,14 @@ class ExactFormatEditorView(discord.ui.View):
                 return
             guild = interaction.guild
             assert guild is not None
+            await interaction.response.defer(ephemeral=True, thinking=False)
             key = _format_editor_key(int(guild.id), int(interaction.user.id), self.scope, self.target_id)
             lock = dict(_FORMAT_EDITOR_DRAFTS.get(key) or {})
             if not lock:
                 options = await _load_design_options(int(guild.id))
                 lock = _initial_editor_lock(options, scope=self.scope, target_id=self.target_id, guild=guild)
                 _FORMAT_EDITOR_DRAFTS[key] = lock
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 embed=_separator_gallery_embed(guild, scope=self.scope, target_id=self.target_id, lock=lock, page=0),
                 view=SeparatorExamplesView(guild, scope=self.scope, target_id=self.target_id, lock=lock, page=0),
             )
@@ -2190,6 +2262,7 @@ class ExactFormatEditorView(discord.ui.View):
             guild = interaction.guild
             assert guild is not None
 
+            await interaction.response.defer(ephemeral=True, thinking=False)
             options = await _load_design_options(int(guild.id))
             current = _live_majority_exact_lock(guild, options, scope=self.scope, target_id=self.target_id)
             if not current:
@@ -2204,7 +2277,7 @@ class ExactFormatEditorView(discord.ui.View):
             key = _format_editor_key(int(guild.id), int(interaction.user.id), self.scope, self.target_id)
             _FORMAT_EDITOR_DRAFTS[key] = current
 
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 embed=_exact_format_embed(guild, scope=self.scope, target_id=self.target_id, lock=current),
                 view=ExactFormatEditorViewFactory(guild, self.scope, self.target_id, current),
             )
@@ -2447,7 +2520,14 @@ async def _preview_scope(
     created_at = _store_pending(
         int(guild.id),
         int(interaction.user.id),
-        {"items": items, "options": dict(repair_options), "mode": mode, "scope_title": scope_title},
+        {
+            "items": items,
+            "options": dict(repair_options),
+            "mode": mode,
+            "scope_title": scope_title,
+            "category_id": str(int(category_id)) if category_id is not None else "",
+            "channel_id": str(int(channel_id)) if channel_id is not None else "",
+        },
     )
     has_blockers = any(item.get("status") == "failed" for item in items)
     has_changes = any(item.get("status") == "changed" for item in items)
@@ -2621,7 +2701,7 @@ class ChannelPickButton(discord.ui.Button):
         )
 
 
-class CategoryEditorPickerView(discord.ui.View):
+class CategoryEditorPickerView(LegacyDesignView):
     def __init__(self, guild: discord.Guild, *, page: int = 0) -> None:
         super().__init__(timeout=900)
         categories = list(getattr(guild, "categories", []) or [])
@@ -2654,7 +2734,7 @@ class CategoryPageButton(discord.ui.Button):
         await interaction.response.edit_message(embed=_category_editor_embed(guild, page=self.page), view=CategoryEditorPickerView(guild, page=self.page))
 
 
-class ChannelEditorPickerView(discord.ui.View):
+class ChannelEditorPickerView(LegacyDesignView):
     def __init__(self, guild: discord.Guild, *, page: int = 0, category_id: int | None = None) -> None:
         super().__init__(timeout=900)
 
@@ -2778,21 +2858,36 @@ class DirectRenameModal(discord.ui.Modal):
             guild = interaction.guild
             assert guild is not None
 
+            await interaction.response.defer(ephemeral=True, thinking=False)
             channel = await _direct_rename_fetch_target(guild, self.target_id, guild.get_channel(self.target_id))
             if channel is None:
-                await interaction.response.send_message("That item no longer exists.", ephemeral=True)
+                await safe_send_interaction(
+                    interaction,
+                    content="That item no longer exists.",
+                    ephemeral=True,
+                    action_name="design.direct_rename.missing",
+                )
                 return
 
             old_name = _safe_str(getattr(channel, "name", ""), "unknown")
             requested_name = _safe_str(self.new_name.value, "").strip()
             if not requested_name:
-                await interaction.response.send_message("Name cannot be blank.", ephemeral=True)
+                await safe_send_interaction(
+                    interaction,
+                    content="Name cannot be blank.",
+                    ephemeral=True,
+                    action_name="design.direct_rename.blank",
+                )
                 return
             if self.scope != "category" and _direct_rename_has_unsafe_channel_icon(requested_name):
-                await interaction.response.send_message(
-                    "❌ That icon is unsafe for channel names. `#️⃣` and square placeholder icons can break into blocks. "
-                    "Pick a real emoji/icon, or use it on a category only.",
+                await safe_send_interaction(
+                    interaction,
+                    content=(
+                        "❌ That icon is unsafe for channel names. `#️⃣` and square placeholder icons can break into blocks. "
+                        "Pick a real emoji/icon, or use it on a category only."
+                    ),
                     ephemeral=True,
+                    action_name="design.direct_rename.unsafe_icon",
                 )
                 return
 
@@ -2802,13 +2897,20 @@ class DirectRenameModal(discord.ui.Modal):
                     reason=f"Dank Design direct rename by {interaction.user} ({interaction.user.id})",
                 )
             except discord.Forbidden:
-                await interaction.response.send_message(
-                    "❌ I cannot rename that. I need **Manage Channels**, and my role must be high enough.",
+                await safe_send_interaction(
+                    interaction,
+                    content="❌ I cannot rename that. I need **Manage Channels**, and my role must be high enough.",
                     ephemeral=True,
+                    action_name="design.direct_rename.forbidden",
                 )
                 return
             except discord.HTTPException as exc:
-                await interaction.response.send_message(f"❌ Discord rejected that rename: `{exc}`", ephemeral=True)
+                await safe_send_interaction(
+                    interaction,
+                    content=f"❌ Discord rejected that rename: `{exc}`",
+                    ephemeral=True,
+                    action_name="design.direct_rename.discord_rejected",
+                )
                 return
 
             refreshed = await _direct_rename_fetch_target(guild, self.target_id, channel)
@@ -2832,16 +2934,24 @@ class DirectRenameModal(discord.ui.Modal):
                 except Exception:
                     pass
                 if rolled_back:
-                    await interaction.response.send_message(
-                        "❌ The exact-name rule could not be saved, so the rename was rolled back. "
-                        f"Nothing was left half-applied. Error: `{type(exc).__name__}`",
+                    await safe_send_interaction(
+                        interaction,
+                        content=(
+                            "❌ The exact-name rule could not be saved, so the rename was rolled back. "
+                            f"Nothing was left half-applied. Error: `{type(exc).__name__}`"
+                        ),
                         ephemeral=True,
+                        action_name="design.direct_rename.rule_save_rolled_back",
                     )
                 else:
-                    await interaction.response.send_message(
-                        "⚠️ Discord accepted the rename, but Dank Design could not save its exact-name rule or roll it back. "
-                        "Do not run a design Apply until persistence is repaired.",
+                    await safe_send_interaction(
+                        interaction,
+                        content=(
+                            "⚠️ Discord accepted the rename, but Dank Design could not save its exact-name rule or roll it back. "
+                            "Do not run a design Apply until persistence is repaired."
+                        ),
                         ephemeral=True,
+                        action_name="design.direct_rename.persistence_failure",
                     )
                 return
 
@@ -2869,11 +2979,13 @@ class DirectRenameModal(discord.ui.Modal):
                 inline=False,
             )
             try:
-                await interaction.response.edit_message(embed=embed, view=view)
+                await interaction.edit_original_response(embed=embed, view=view)
             except Exception:
-                await interaction.response.send_message(
-                    f"✅ Renamed and saved exact name: `{old_name}` → `{actual_name}`",
+                await safe_send_interaction(
+                    interaction,
+                    content=f"✅ Renamed and saved exact name: `{old_name}` → `{actual_name}`",
                     ephemeral=True,
+                    action_name="design.direct_rename.success_fallback",
                 )
 
         await _guard_design_action(interaction, "design.direct_rename", action, defer=False)
@@ -2953,7 +3065,7 @@ def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
     embed.set_footer(text="Rename is instant • Preview Fixes and Custom Format use Apply later")
     return _clean_design_embed(embed)
 
-class CategoryEditorActionView(discord.ui.View):
+class CategoryEditorActionView(LegacyDesignView):
     def __init__(self, category_id: int) -> None:
         super().__init__(timeout=900)
         self.category_id = int(category_id)
@@ -3075,7 +3187,7 @@ class CategoryEditorActionView(discord.ui.View):
         assert guild is not None
         await interaction.response.edit_message(embed=_category_editor_embed(guild, page=0), view=CategoryEditorPickerView(guild, page=0))
 
-class ChannelEditorActionView(discord.ui.View):
+class ChannelEditorActionView(LegacyDesignView):
     def __init__(self, channel_id: int, *, category_id: int | None = None) -> None:
         super().__init__(timeout=900)
         self.channel_id = int(channel_id)
@@ -3199,8 +3311,9 @@ class BackToDesignButton(discord.ui.Button):
         if not await _require_design_permission(interaction):
             return
         assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(interaction.guild.id))
-        await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
+        await interaction.edit_original_response(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
 
 
 class BackToCategoryButton(discord.ui.Button):
@@ -3370,8 +3483,9 @@ class LockManagerButton(discord.ui.Button):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=_format_lock_manager_embed(guild, options, page=0),
             view=LockManagerView(guild, options, page=0),
         )
@@ -3397,11 +3511,12 @@ class LockRemoveButton(discord.ui.Button):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _remove_format_lock(interaction, scope=self.scope, target_id=self.target_id)
         embed = _format_lock_manager_embed(guild, options, page=0)
         embed.title = "🗑️ One Saved Rule Removed"
         embed.description = "Removed only the listed rule. Another exact or broader rule may still apply. Use **Reset This Category/Channel** in the item editor to remove every same-item override at once."
-        await interaction.response.edit_message(embed=embed, view=LockManagerView(guild, options, page=0))
+        await interaction.edit_original_response(embed=embed, view=LockManagerView(guild, options, page=0))
 
 
 class LockManagerPageButton(discord.ui.Button):
@@ -3420,14 +3535,15 @@ class LockManagerPageButton(discord.ui.Button):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=_format_lock_manager_embed(guild, options, page=self.page),
             view=LockManagerView(guild, options, page=self.page),
         )
 
 
-class LockManagerView(discord.ui.View):
+class LockManagerView(LegacyDesignView):
     def __init__(self, guild: discord.Guild, options: Mapping[str, Any], *, page: int = 0) -> None:
         super().__init__(timeout=900)
 
@@ -3464,11 +3580,12 @@ class CleanStaleLocksButton(discord.ui.Button):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options, removed = await _clean_stale_format_locks(interaction)
         embed = _format_lock_manager_embed(guild, options, page=0)
         embed.title = "🧹 Stale Format Locks Cleaned"
         embed.description = f"Removed **{removed}** stale lock(s)."
-        await interaction.response.edit_message(embed=embed, view=LockManagerView(guild, options, page=0))
+        await interaction.edit_original_response(embed=embed, view=LockManagerView(guild, options, page=0))
 
 
 class BackToLocksOrDesignButton(discord.ui.Button):
@@ -3486,8 +3603,9 @@ class BackToLocksOrDesignButton(discord.ui.Button):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
-        await interaction.response.edit_message(embed=_format_locks_embed(guild, options), view=FormatLocksView() if "FormatLocksView" in globals() else DesignHomeView(options))
+        await interaction.edit_original_response(embed=_format_locks_embed(guild, options), view=FormatLocksView() if "FormatLocksView" in globals() else DesignHomeView(options))
 
 
 
@@ -3639,7 +3757,7 @@ def _protection_manager_embed(guild: discord.Guild, options: Mapping[str, Any]) 
     return _clean_design_embed(embed)
 
 
-class ProtectionManagerView(discord.ui.View):
+class ProtectionManagerView(LegacyDesignView):
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
@@ -3649,6 +3767,7 @@ class ProtectionManagerView(discord.ui.View):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options, changed = await _set_default_protection_rules(interaction, mode="font_only")
         embed = _protection_manager_embed(guild, options)
         embed.title = "🔤 Default Protected Names Allow Font + Layout"
@@ -3657,7 +3776,7 @@ class ProtectionManagerView(discord.ui.View):
             value=f"**{changed}** default protected name rule(s) now allow separator + font styling while still blocking category-frame/full styling.",
             inline=False,
         )
-        await interaction.response.edit_message(embed=embed, view=ProtectionManagerView())
+        await interaction.edit_original_response(embed=embed, view=ProtectionManagerView())
 
     @discord.ui.button(label="Restore Default Protection", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_design:protection_restore_defaults", row=0)
     async def restore_defaults(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3665,11 +3784,12 @@ class ProtectionManagerView(discord.ui.View):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options, changed = await _set_default_protection_rules(interaction, mode=None)
         embed = _protection_manager_embed(guild, options)
         embed.title = "↩️ Default Protection Restored"
         embed.add_field(name="Updated", value=f"Removed **{changed}** default protected-name override(s).", inline=False)
-        await interaction.response.edit_message(embed=embed, view=ProtectionManagerView())
+        await interaction.edit_original_response(embed=embed, view=ProtectionManagerView())
 
     @discord.ui.button(label="Pick Category", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="dank_design:protection_pick_category", row=1)
     async def pick_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3692,8 +3812,9 @@ class ProtectionManagerView(discord.ui.View):
         if not await _require_design_permission(interaction):
             return
         assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(interaction.guild.id))
-        await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
+        await interaction.edit_original_response(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
 
 
 class ProtectionModeSelect(discord.ui.Select):
@@ -3714,6 +3835,7 @@ class ProtectionModeSelect(discord.ui.Select):
             return await interaction.response.send_message("That channel/category no longer exists.", ephemeral=True)
         selected = self.values[0]
         mode = None if selected == "__clear__" else selected
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _save_protection_rule(interaction, target_id=self.channel_id, mode=mode)
         base = _base_for_channel(channel)
         inherited = _inherited_protection_mode(options, base)
@@ -3726,10 +3848,10 @@ class ProtectionModeSelect(discord.ui.Select):
         else:
             parent = getattr(channel, "category", None)
             view = ChannelEditorActionView(self.channel_id, category_id=_safe_int(getattr(parent, "id", 0), 0) or None)
-        await interaction.response.edit_message(embed=embed, view=view)
+        await interaction.edit_original_response(embed=embed, view=view)
 
 
-class ProtectionModeView(discord.ui.View):
+class ProtectionModeView(LegacyDesignView):
     def __init__(self, *, channel_id: int, current: str | None = None) -> None:
         super().__init__(timeout=900)
         self.channel_id = int(channel_id)
@@ -3743,7 +3865,9 @@ class ProtectionModeView(discord.ui.View):
         assert guild is not None
         channel = guild.get_channel(self.channel_id)
         if channel is None:
-            return await interaction.response.edit_message(embed=_protection_manager_embed(guild, await _load_design_options(int(guild.id))), view=ProtectionManagerView())
+            await interaction.response.defer(ephemeral=True, thinking=False)
+            options = await _load_design_options(int(guild.id))
+            return await interaction.edit_original_response(embed=_protection_manager_embed(guild, options), view=ProtectionManagerView())
         if isinstance(channel, discord.CategoryChannel):
             await interaction.response.edit_message(embed=_category_action_embed(channel), view=CategoryEditorActionView(self.channel_id))
         else:
@@ -3759,6 +3883,7 @@ async def _open_protection_mode_editor(interaction: discord.Interaction, *, chan
     channel = guild.get_channel(int(channel_id))
     if channel is None:
         return await interaction.response.send_message("That channel/category no longer exists.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True, thinking=False)
     options = await _load_design_options(int(guild.id))
     base = _base_for_channel(channel)
     exact = _protection_item_rules(options).get(str(int(channel.id)))
@@ -3773,7 +3898,7 @@ async def _open_protection_mode_editor(interaction: discord.Interaction, *, chan
     )
     embed.add_field(name="Exact override", value=f"**{_protection_mode_label(exact)}**" if exact else "None", inline=True)
     embed.add_field(name="Inherited behavior", value=f"**{_protection_mode_label(inherited)}**", inline=True)
-    await interaction.response.edit_message(embed=embed, view=ProtectionModeView(channel_id=int(channel.id), current=exact))
+    await interaction.edit_original_response(embed=embed, view=ProtectionModeView(channel_id=int(channel.id), current=exact))
 
 
 STYLE_CHANGE_SEPARATOR_IDS: tuple[str, ...] = (
@@ -4090,7 +4215,9 @@ def _style_change_separator_after(current_name: str, separator_id: str) -> tuple
 
     emoji, body = _style_change_icon_and_body(before, parsed)
 
-    warnings: list[str] = ["Style Change only touched the channel separator; emoji/name/font were preserved."]
+    # The preview embed already states the separator-only scope once.
+    # Repeating the same warning on every row makes mobile previews unreadable.
+    warnings: list[str] = []
     blockers: list[str] = []
 
     spec = _style_change_separator_spec(separator_id)
@@ -4310,15 +4437,16 @@ class StyleChangeSeparatorSelect(discord.ui.Select):
         assert guild is not None
 
         selected = _safe_str(self.values[0], "bar_heavy")
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=_style_change_embed(guild, options, separator_id=selected),
             view=StyleChangeView(separator_id=selected),
         )
 
 
 
-class StyleChangeView(discord.ui.View):
+class StyleChangeView(LegacyDesignView):
     def __init__(self, *, separator_id: str = "bar_heavy") -> None:
         super().__init__(timeout=900)
         self.separator_id = _safe_str(separator_id, "bar_heavy")
@@ -4365,8 +4493,9 @@ class StyleChangeView(discord.ui.View):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=_home_embed(guild, options),
             view=DesignHomeView(options),
         )
@@ -4374,14 +4503,14 @@ class StyleChangeView(discord.ui.View):
 
 
 
-class DesignHomeView(discord.ui.View):
+class DesignHomeView(LegacyDesignView):
     """Import-time compatibility symbol; V2 replaces it before public use."""
 
     def __init__(self, options: Mapping[str, Any] | None = None) -> None:
         super().__init__(timeout=900)
 
 
-class DesignPreviewView(discord.ui.View):
+class DesignPreviewView(LegacyDesignView):
     """Import-time base only; V2 owns every active reviewed Apply surface."""
 
     def __init__(self, *, can_apply: bool, pending_created_at: float | None = None) -> None:

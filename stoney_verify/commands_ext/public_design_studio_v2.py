@@ -48,6 +48,16 @@ def _rule_counts(options: Mapping[str, Any]) -> dict[str, int]:
     return legacy._lock_count(options)  # type: ignore[attr-defined]
 
 
+def _layout_override_count(options: Mapping[str, Any]) -> int:
+    counts = _rule_counts(options)
+    return (
+        int(counts.get("global", 0))
+        + int(counts.get("categories", 0))
+        + int(counts.get("channels", 0))
+        + int(counts.get("manual_names", 0))
+    )
+
+
 class DesignView(discord.ui.View):
     """Shared safe component error boundary for consolidated Studio screens."""
 
@@ -109,7 +119,7 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
     embed.add_field(
         name="Choose what you want to do",
         value=(
-            "🌐 **Design Entire Server** — choose the reusable theme/strength, then preview exact names.\n"
+            "🌐 **Design Entire Server** — choose theme, strength, and separator together, then preview exact names.\n"
             "✏️ **Edit One Category / Channel** — rename or style one exact item.\n"
             "🩺 **Fix Inconsistent Names** — scan first, then build a safe Smart Repair preview.\n"
             "🔐 **Saved Rules & Protection** — manage what future previews enforce; this does not rename anything by itself.\n"
@@ -131,8 +141,10 @@ async def _go_home(interaction: discord.Interaction) -> None:
         return
     guild = interaction.guild
     assert guild is not None
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=False)
     options = await _load_design_options(int(guild.id))
-    await interaction.response.edit_message(embed=_home_embed(guild, options), view=DesignHomeView(options))
+    await interaction.edit_original_response(embed=_home_embed(guild, options), view=DesignHomeView(options))
 
 
 async def _store_preview(
@@ -179,11 +191,12 @@ class DesignServerThemeSelect(discord.ui.Select):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
         options["theme_id"] = self.values[0]
         legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
         await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
-        await interaction.response.edit_message(embed=_design_server_embed(guild, options), view=DesignServerView(options))
+        await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
 
 
 class DesignServerStrengthSelect(discord.ui.Select):
@@ -207,42 +220,151 @@ class DesignServerStrengthSelect(discord.ui.Select):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
         options["strength"] = max(1, min(5, _safe_int(self.values[0], 4)))
         legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
         await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
-        await interaction.response.edit_message(embed=_design_server_embed(guild, options), view=DesignServerView(options))
+        await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
+
+
+class DesignServerSeparatorSelect(discord.ui.Select):
+    def __init__(self, current: str) -> None:
+        selected = _safe_str(current, "bar_heavy")
+        super().__init__(
+            placeholder="3) Choose the channel separator",
+            min_values=1,
+            max_values=1,
+            options=legacy._style_change_separator_options(selected),  # type: ignore[attr-defined]
+            row=2,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        options = await _load_design_options(int(guild.id))
+        selected = _safe_str(self.values[0], "bar_heavy")
+        options["separator_id"] = selected
+        legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
+        await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
+        await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
+
+
+def _design_server_separator(options: Mapping[str, Any]) -> str:
+    theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
+    return rule_service.effective_draft_separator(
+        options,
+        theme_separator=_safe_str(getattr(theme, "channel_separator", "none"), "none"),
+    )
 
 
 def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> discord.Embed:
     theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
+    separator_id = _design_server_separator(options)
+    narrow_count = _layout_override_count(options)
     embed = discord.Embed(
         title="🌐 Design Entire Server",
         description=(
-            "Choose the reusable server design. Theme and strength are **saved as settings immediately**, "
-            "but they do **not** rename a single Discord channel/category.\n\n"
-            "When the settings look right, press **Preview Server Changes**, review the exact names, then Apply."
+            "Set the server-wide style below. **Changing these menus does not rename anything.** "
+            "When it looks right, preview the exact names, then Apply.\n\n"
+            "Use **Preview Separator Only** when the separator is the only thing you want to touch."
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(name="Theme", value=f"**{getattr(theme, 'label', 'Gothic Clean')}**", inline=True)
     embed.add_field(name="Strength", value=f"**{_safe_int(options.get('strength'), 4)}/5**", inline=True)
     embed.add_field(
-        name="Batch safety",
-        value="The whole batch is preflighted before the first rename. If anything is stale, **nothing is renamed** and you preview again.",
+        name="Separator",
+        value=f"**{legacy._separator_choice_label(separator_id)}**",  # type: ignore[attr-defined]
+        inline=True,
+    )
+    if narrow_count:
+        embed.add_field(
+            name="⚠️ Old design overrides are active",
+            value=(
+                f"**{narrow_count}** saved layout/name override(s) can make some channels ignore the server-wide style. "
+                "Use **Start Clean Redesign** to clear those old design exceptions **without removing protection rules**."
+            ),
+            inline=False,
+        )
+    embed.set_footer(text="Nothing is renamed until Apply • Apply rechecks the whole preview first")
+    return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
+
+
+def _clean_redesign_embed(options: Mapping[str, Any]) -> discord.Embed:
+    count = _layout_override_count(options)
+    embed = discord.Embed(
+        title="🧹 Start a Clean Redesign?",
+        description=(
+            f"This will clear **{count}** saved layout/name override(s) that can make a server-wide redesign look inconsistent.\n\n"
+            "**It does not rename anything now.** Your selected Theme, Strength, and Separator stay selected. "
+            "Protection rules stay intact, and permissions, roles, topics, channel order, tickets, and verification are untouched."
+        ),
+        color=discord.Color.orange(),
+    )
+    embed.add_field(
+        name="What gets cleared",
+        value="Global format lock • Category layout rules • Channel layout rules • Exact manual-name overrides",
         inline=False,
     )
-    embed.set_footer(text="Choose settings → Preview Server Changes → Apply Reviewed Changes")
+    embed.add_field(
+        name="What stays",
+        value="Server draft • Exact-item protection • Name protection • Every non-design server setting",
+        inline=False,
+    )
+    embed.set_footer(text="Confirm clears saved design exceptions only • Preview still required before any rename")
     return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
+
+
+class CleanRedesignConfirmView(DesignView):
+    def __init__(self, options: Mapping[str, Any]) -> None:
+        super().__init__(timeout=300)
+        self.options = dict(options)
+
+    @discord.ui.button(label="Clear Saved Design Overrides", emoji="🧹", style=discord.ButtonStyle.danger, custom_id="dank_design_v2:clean_redesign_confirm", row=0)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        options = await _load_design_options(int(guild.id))
+        updated = rule_service.reset_layout_overrides(options)
+        legacy._clear_format_editor_drafts(int(guild.id))  # type: ignore[attr-defined]
+        await legacy._save_options(interaction, updated)  # type: ignore[attr-defined]
+        embed = _design_server_embed(guild, updated)
+        embed.title = "✅ Clean Redesign Ready"
+        embed.description = (
+            "Old saved layout/name exceptions were cleared. **Protection rules were kept.** "
+            "Choose the server Theme, Strength, and Separator you want, then preview before applying."
+        )
+        await interaction.edit_original_response(embed=embed, view=DesignServerView(updated))
+
+    @discord.ui.button(label="Cancel", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:clean_redesign_cancel", row=0)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.edit_message(
+            embed=_design_server_embed(guild, self.options),
+            view=DesignServerView(self.options),
+        )
 
 
 class DesignServerView(DesignView):
     def __init__(self, options: Mapping[str, Any]) -> None:
         super().__init__(timeout=900)
+        self.options = dict(options)
         self.add_item(DesignServerThemeSelect(_safe_str(options.get("theme_id"), "gothic_clean")))
         self.add_item(DesignServerStrengthSelect(_safe_int(options.get("strength"), 4)))
+        self.add_item(DesignServerSeparatorSelect(_design_server_separator(options)))
+        self.clean_redesign.disabled = _layout_override_count(options) == 0
 
-    @discord.ui.button(label="Preview Server Changes", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design_v2:server_preview", row=2)
+    @discord.ui.button(label="Preview Entire Server", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design_v2:server_preview", row=3)
     async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -253,22 +375,49 @@ class DesignServerView(DesignView):
         items, plan_options, _analysis = await plans.build_saved_design_plan(guild, options)
         await _store_preview(interaction, items, plan_options, mode="preview_server_v2", title="👁️ Server Design Preview")
 
-    @discord.ui.button(label="Change Separators Only", emoji="⚡", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:separator_only", row=2)
+    @discord.ui.button(label="Preview Separator Only", emoji="⚡", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:separator_only", row=3)
     async def separator_only(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=True)
         options = await _load_design_options(int(guild.id))
-        theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
-        current = rule_service.effective_draft_separator(
+        selected = _design_server_separator(options)
+        items = legacy._build_channel_separator_style_change_plan(  # type: ignore[attr-defined]
+            guild,
             options,
-            theme_separator=_safe_str(getattr(theme, "channel_separator", "none"), "none"),
+            separator_id=selected,
         )
-        selected = "bar_heavy" if current == "none" else current
+        has_blockers = any(item.get("status") == "failed" for item in items)
+        has_changes = any(item.get("status") == "changed" for item in items)
+        created_at = legacy._store_pending(  # type: ignore[attr-defined]
+            int(guild.id),
+            int(interaction.user.id),
+            {
+                "items": items,
+                "options": dict(options),
+                "mode": "style_change_separator",
+                "style_change_dimension": "channel_separator",
+                "separator_id": selected,
+            },
+        )
+        await interaction.edit_original_response(
+            embed=legacy._style_change_preview_embed(guild, items, separator_id=selected),  # type: ignore[attr-defined]
+            view=LegacyStyleChangePreviewView(
+                can_apply=not has_blockers and has_changes,
+                has_blockers=has_blockers,
+                pending_created_at=created_at,
+            ),
+        )
+
+    @discord.ui.button(label="Start Clean Redesign", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:clean_redesign", row=4)
+    async def clean_redesign(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
         await interaction.response.edit_message(
-            embed=legacy._style_change_embed(guild, options, separator_id=selected),  # type: ignore[attr-defined]
-            view=legacy.StyleChangeView(separator_id=selected),
+            embed=_clean_redesign_embed(self.options),
+            view=CleanRedesignConfirmView(self.options),
         )
 
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:server_back", row=4)
@@ -494,9 +643,10 @@ def _saved_rules_embed(guild: discord.Guild, options: Mapping[str, Any]) -> disc
     embed.add_field(
         name="Which tool does what",
         value=(
-            "**Layout Rules** = global/category/channel visual rules, plus **Reset All Design Overrides**.\n"
+            "**Layout Rules** = inspect or add global/category/channel visual rules.\n"
             "**Remove One Rule** = remove exactly one listed saved rule or clean deleted-item rows.\n"
-            "**Protection** = manage exact-item and normalized-name protection. For every same-item override, use **Reset This Category/Channel** in the item editor."
+            "**Protection** = manage exact-item and normalized-name protection.\n"
+            "For a clean server-wide redesign, use **Design Entire Server → Start Clean Redesign**; it clears old layout/name exceptions but keeps protection."
         ),
         inline=False,
     )
@@ -514,8 +664,9 @@ class SavedRulesView(DesignView):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
-        await interaction.response.edit_message(embed=legacy._format_locks_embed(guild, options), view=legacy.FormatLocksView())  # type: ignore[attr-defined]
+        await interaction.edit_original_response(embed=legacy._format_locks_embed(guild, options), view=legacy.FormatLocksView())  # type: ignore[attr-defined]
 
     @discord.ui.button(label="Remove One Rule", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:unlock", row=0)
     async def unlock(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -523,8 +674,9 @@ class SavedRulesView(DesignView):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
-        await interaction.response.edit_message(embed=legacy._format_lock_manager_embed(guild, options, page=0), view=legacy.LockManagerView(guild, options, page=0))  # type: ignore[attr-defined]
+        await interaction.edit_original_response(embed=legacy._format_lock_manager_embed(guild, options, page=0), view=legacy.LockManagerView(guild, options, page=0))  # type: ignore[attr-defined]
 
     @discord.ui.button(label="Protection", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:protection", row=1)
     async def protection(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -532,8 +684,9 @@ class SavedRulesView(DesignView):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
-        await interaction.response.edit_message(embed=legacy._protection_manager_embed(guild, options), view=legacy.ProtectionManagerView())  # type: ignore[attr-defined]
+        await interaction.edit_original_response(embed=legacy._protection_manager_embed(guild, options), view=legacy.ProtectionManagerView())  # type: ignore[attr-defined]
 
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:rules_back", row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -552,8 +705,9 @@ class DesignHomeView(DesignView):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
-        await interaction.response.edit_message(embed=_design_server_embed(guild, options), view=DesignServerView(options))
+        await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
 
     @discord.ui.button(label="Edit One Category / Channel", emoji="✏️", style=discord.ButtonStyle.primary, custom_id="dank_design_v2:edit", row=0)
     async def edit_one(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -573,8 +727,9 @@ class DesignHomeView(DesignView):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
-        await interaction.response.edit_message(embed=_saved_rules_embed(guild, options), view=SavedRulesView())
+        await interaction.edit_original_response(embed=_saved_rules_embed(guild, options), view=SavedRulesView())
 
     @discord.ui.button(label="Undo Last Apply", emoji="↩️", style=discord.ButtonStyle.danger, custom_id="dank_design_v2:rollback", row=2)
     async def rollback(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -669,12 +824,19 @@ async def _open_undo(interaction: discord.Interaction) -> None:
         return
     guild = interaction.guild
     assert guild is not None
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=False)
     latest = await legacy._latest_rollback_snapshot(int(guild.id))  # type: ignore[attr-defined]
     if not latest:
-        await interaction.response.send_message("No applied Dank Design batch is available to undo.", ephemeral=True)
+        await legacy.safe_send_interaction(  # type: ignore[attr-defined]
+            interaction,
+            content="No applied Dank Design batch is available to undo.",
+            ephemeral=True,
+            action_name="design.v2.undo.none",
+        )
         return
     created_at = _safe_float(latest.get("created_at"), 0.0)
-    await interaction.response.edit_message(embed=_undo_preview_embed(latest), view=UndoConfirmView(snapshot_created_at=created_at))
+    await interaction.edit_original_response(embed=_undo_preview_embed(latest), view=UndoConfirmView(snapshot_created_at=created_at))
 
 
 class DoneView(DesignView):
@@ -707,12 +869,16 @@ class UndoConfirmView(DesignView):
             await interaction.response.send_message("⏳ A Dank Design job is already running for this server.", ephemeral=True)
             return
 
+        await interaction.response.defer(ephemeral=True, thinking=False)
         latest = await legacy._latest_rollback_snapshot(int(guild.id))  # type: ignore[attr-defined]
         if not _snapshot_matches(latest, self.snapshot_created_at):
-            await interaction.response.send_message("❌ This Undo preview is obsolete. Open Undo Last Apply again.", ephemeral=True)
+            await interaction.edit_original_response(
+                content="❌ This Undo preview is obsolete. Open Undo Last Apply again.",
+                embed=None,
+                view=DoneView(can_rollback=bool(latest)),
+            )
             return
 
-        await interaction.response.defer(ephemeral=True, thinking=False)
         async with lock:
             latest = await legacy._latest_rollback_snapshot(int(guild.id))  # type: ignore[attr-defined]
             if not _snapshot_matches(latest, self.snapshot_created_at):
@@ -790,6 +956,81 @@ async def _persist_separator_settings(
     )
     await legacy._save_options(interaction, updated)  # type: ignore[attr-defined]
     return previous
+
+
+async def _return_from_reviewed_preview(
+    interaction: discord.Interaction,
+    pending_created_at: float | None,
+) -> None:
+    if not await _require_design_permission(interaction):
+        return
+    guild = interaction.guild
+    assert guild is not None
+
+    key = legacy._key(int(guild.id), int(interaction.user.id))  # type: ignore[attr-defined]
+    payload = legacy._PENDING.get(key) or {}  # type: ignore[attr-defined]
+    if not legacy._pending_matches(payload, pending_created_at):  # type: ignore[attr-defined]
+        await _go_home(interaction)
+        return
+
+    mode = _safe_str(payload.get("mode"), "")
+    if mode in {"preview_server_v2", "style_change_separator"}:
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        options = await _load_design_options(int(guild.id))
+        await interaction.edit_original_response(
+            embed=_design_server_embed(guild, options),
+            view=DesignServerView(options),
+        )
+        return
+
+    if mode == "consistency_check_v2":
+        await interaction.response.edit_message(embed=_review_embed(), view=ReviewRepairView())
+        return
+
+    if mode == "category_editor":
+        category_id = _safe_int(payload.get("category_id"), 0)
+        category = guild.get_channel(category_id) if category_id > 0 else None
+        if isinstance(category, discord.CategoryChannel):
+            await interaction.response.edit_message(
+                embed=legacy._category_action_embed(category),  # type: ignore[attr-defined]
+                view=legacy.CategoryEditorActionView(category_id),  # type: ignore[attr-defined]
+            )
+        else:
+            await interaction.response.edit_message(
+                embed=legacy._category_editor_embed(guild, page=0),  # type: ignore[attr-defined]
+                view=legacy.CategoryEditorPickerView(guild, page=0),  # type: ignore[attr-defined]
+            )
+        return
+
+    if mode == "channel_editor":
+        channel_id = _safe_int(payload.get("channel_id"), 0)
+        channel = guild.get_channel(channel_id) if channel_id > 0 else None
+        if channel is not None:
+            parent = getattr(channel, "category", None)
+            category_id = _safe_int(getattr(parent, "id", 0), 0) or None
+            await interaction.response.edit_message(
+                embed=legacy._channel_action_embed(channel),  # type: ignore[attr-defined]
+                view=legacy.ChannelEditorActionView(channel_id, category_id=category_id),  # type: ignore[attr-defined]
+            )
+        else:
+            await interaction.response.edit_message(
+                embed=legacy._channel_editor_embed(guild, page=0),  # type: ignore[attr-defined]
+                view=legacy.ChannelEditorPickerView(guild, page=0),  # type: ignore[attr-defined]
+            )
+        return
+
+    if mode in {"category_exact_format", "channel_exact_format"}:
+        target_id = _safe_int(payload.get("target_id"), 0)
+        if target_id > 0:
+            scope = "category" if mode.startswith("category_") else "channel"
+            await legacy._open_exact_format_editor(  # type: ignore[attr-defined]
+                interaction,
+                scope=scope,
+                target_id=target_id,
+            )
+            return
+
+    await _go_home(interaction)
 
 
 class ReviewedPreviewView(DesignView):
@@ -972,9 +1213,9 @@ class ReviewedPreviewView(DesignView):
             embed.add_field(name="Undo ready", value="The previous names were saved durably before this Apply was finalized.", inline=False)
         await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=bool(snapshot)))
 
-    @discord.ui.button(label="Back to Studio", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:preview_back", row=0)
+    @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:preview_back", row=0)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _go_home(interaction)
+        await _return_from_reviewed_preview(interaction, self.pending_created_at)
 
 
 class LegacyStyleChangePreviewView(ReviewedPreviewView):
@@ -1012,11 +1253,12 @@ async def open_design_studio(interaction: discord.Interaction) -> None:
         return
     guild = interaction.guild
     assert guild is not None
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=True)
     options = await _load_design_options(int(guild.id))
-    await interaction.response.send_message(
+    await interaction.edit_original_response(
         embed=_home_embed(guild, options),
         view=DesignHomeView(options),
-        ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),
     )
 

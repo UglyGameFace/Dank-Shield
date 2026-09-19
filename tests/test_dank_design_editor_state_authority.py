@@ -89,7 +89,10 @@ def test_direct_rename_runs_inside_guard_and_saves_exact_name() -> None:
     block = PUBLIC_STUDIO[start:end]
     assert 'await _guard_design_action(interaction, "design.direct_rename", action, defer=False)' in block
     assert "await _save_manual_name_override(" in block
-    assert block.index("guild = interaction.guild") < block.index("await channel.edit(")
+    assert block.index("guild = interaction.guild") < block.index("await interaction.response.defer")
+    assert block.index("await interaction.response.defer") < block.index("await _direct_rename_fetch_target")
+    assert block.index("await interaction.response.defer") < block.index("await channel.edit(")
+    assert "await interaction.edit_original_response(embed=embed, view=view)" in block
 
 
 def test_direct_rename_refresh_prefers_live_api() -> None:
@@ -114,6 +117,39 @@ def test_item_lock_buttons_capture_live_item_style_not_global_preset() -> None:
     assert 'scope="category", target_id=self.category_id, target=category' in PUBLIC_STUDIO
     assert 'scope="channel", target_id=self.channel_id, target=channel' in PUBLIC_STUDIO
     assert "async def _save_live_target_format_lock(" in PUBLIC_STUDIO
+
+
+def test_broad_reset_requires_explicit_confirmation() -> None:
+    view_start = PUBLIC_STUDIO.index("class FormatLocksView")
+    view_end = PUBLIC_STUDIO.index("# ---------------------------------------------------------------------------\n# Custom Format Editor", view_start)
+    view = PUBLIC_STUDIO[view_start:view_end]
+
+    assert 'label="Reset All Rules + Protection"' in view
+    clear_start = view.index("async def clear_all")
+    clear_end = view.index("@discord.ui.button", clear_start + 1)
+    clear_block = view[clear_start:clear_end]
+    assert "ResetAllDesignStateConfirmView()" in clear_block
+    assert "_clear_all_locks(interaction)" not in clear_block
+
+    confirm_start = PUBLIC_STUDIO.index("class ResetAllDesignStateConfirmView")
+    confirm_end = PUBLIC_STUDIO.index("class FormatLocksView", confirm_start)
+    confirm = PUBLIC_STUDIO[confirm_start:confirm_end]
+    assert "_clear_all_locks(interaction)" in confirm
+    assert "await interaction.response.defer" in confirm
+
+
+def test_layout_rule_saves_acknowledge_before_storage_io() -> None:
+    for start_marker, call in (
+        ("class CategoryFormatLockSelect", "_save_category_lock"),
+        ("class ChannelFormatLockSelect", "_save_channel_lock"),
+        ("class FormatLocksView", "_save_global_lock"),
+    ):
+        start = PUBLIC_STUDIO.index(start_marker)
+        call_at = PUBLIC_STUDIO.index(call, start)
+        block_start = PUBLIC_STUDIO.rfind("async def ", start, call_at)
+        block = PUBLIC_STUDIO[block_start:call_at + len(call)]
+        assert "await interaction.response.defer" in block
+        assert block.index("await interaction.response.defer") < block.index(call)
 
 
 def test_config_saves_invalidate_old_pending_previews() -> None:
