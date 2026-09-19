@@ -2,10 +2,6 @@ from __future__ import annotations
 
 """Preview/apply channel font renames from the Discord setup font tool.
 
-Compatibility note: the live formatter is owned by channel_builder_runtime, so
-new exact Unicode styles added there (including Clean Sans and Double-Struck)
-flow through this legacy preview without a second local font map.
-
 Scale rules:
 - per-guild/per-user pending plans only
 - per-guild apply/undo lock
