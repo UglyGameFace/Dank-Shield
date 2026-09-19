@@ -17,11 +17,32 @@ DEFAULT_DELAY_SECONDS = 2.0
 MAX_PLAN_ITEMS = 150
 
 FONT_STYLES = (
-    "normal", "bold_sans", "italic_sans", "bold_italic_sans", "monospace", "fullwidth",
-    "serif_bold", "serif_italic", "serif_bold_italic", "script", "bold_script",
+    "normal", "sans", "bold_sans", "italic_sans", "bold_italic_sans", "monospace", "fullwidth",
+    "serif_bold", "serif_italic", "serif_bold_italic", "double_struck", "script", "bold_script",
     "fraktur", "bold_fraktur", "circled", "parenthesized", "small_caps", "upside_down",
 )
-RISKY_FONTS = {"script", "bold_script", "fraktur", "bold_fraktur", "circled", "parenthesized", "upside_down"}
+FONT_STYLE_LABELS: dict[str, str] = {
+    "normal": "Normal",
+    "sans": "Clean Sans",
+    "bold_sans": "Bold Sans",
+    "italic_sans": "Italic Sans",
+    "bold_italic_sans": "Bold Italic Sans",
+    "monospace": "Monospace",
+    "fullwidth": "Fullwidth",
+    "serif_bold": "Serif Bold",
+    "serif_italic": "Serif Italic",
+    "serif_bold_italic": "Serif Bold Italic",
+    "double_struck": "Double-Struck",
+    "script": "Script",
+    "bold_script": "Bold Script",
+    "fraktur": "Fraktur / Gothic",
+    "bold_fraktur": "Bold Fraktur",
+    "circled": "Circled",
+    "parenthesized": "Parenthesized",
+    "small_caps": "Small Caps",
+    "upside_down": "Upside Down",
+}
+RISKY_FONTS = {"double_struck", "script", "bold_script", "fraktur", "bold_fraktur", "circled", "parenthesized", "upside_down"}
 DEFAULT_PROTECTED_NAMES = {
     "mod-log", "logs", "audit-log", "transcripts", "transcript", "archive", "archives",
     "staff-chat", "staff", "bot-commands", "setup", "active-tickets", "archived-tickets",
@@ -200,11 +221,19 @@ CATEGORY_FRAMES_BY_ID = {spec.id: spec for spec in CATEGORY_FRAMES}
 THEMES: tuple[ThemePreset, ...] = (
     ThemePreset("420_lounge", "🍃 420 Lounge", "line", "bar_full", "normal", "420_lounge"),
     ThemePreset("gothic_clean", "🕯 Gothic Clean", "line", "bar_full", "fraktur", "gothic"),
+    ThemePreset("night_gothic", "🦇 Night Gothic", "top_box", "bar_heavy", "bold_fraktur", "gothic"),
     ThemePreset("lit_hype", "🔥 Lit / Hype", "premium_line", "premium_sparkle", "bold_sans", "lit"),
+    ThemePreset("neon_rush", "⚡ Neon Rush", "premium_line", "sparkle_small", "bold_italic_sans", "gaming"),
     ThemePreset("cyber_bot_hub", "🤖 Cyber Bot Hub", "heavy_line", "tri_right", "monospace", "bot_utility"),
+    ThemePreset("terminal_neon", "⌨️ Terminal Neon", "heavy_line", "tech_corner", "monospace", "bot_utility"),
     ThemePreset("gaming_arcade", "🎮 Gaming Arcade", "premium_line", "tri_right", "bold_sans", "gaming"),
+    ThemePreset("fullwidth_arcade", "🕹 Fullwidth Arcade", "heavy_line", "tri_outline", "fullwidth", "gaming"),
     ThemePreset("chill_social", "🌊 Chill Social", "line", "small_dot", "normal", "social"),
+    ThemePreset("small_caps_social", "💬 Small Caps Social", "line", "middle_dot", "small_caps", "social"),
+    ThemePreset("modern_minimal", "✨ Modern Minimal", "line", "bar_thin", "sans", "social"),
     ThemePreset("premium_clean", "💎 Premium Clean", "lenticular", "bar_thin", "serif_bold", "premium"),
+    ThemePreset("double_struck_luxe", "🔮 Double-Struck Luxe", "lenticular", "diamond_star", "double_struck", "premium"),
+    ThemePreset("luxury_script", "🥂 Luxury Script", "dreamy", "small_dot", "bold_script", "premium"),
     ThemePreset("staff_security", "🛡 Staff / Security", "heavy_line", "bar_heavy", "bold_sans", "staff_security"),
     ThemePreset("support_ticket", "🎫 Support / Ticket Server", "line", "bar_full", "normal", "ticket_support"),
 )
@@ -264,6 +293,8 @@ def fallback_ladder(style: str) -> tuple[str, ...]:
         "small_caps": ("small_caps", "bold_sans", "monospace", "fullwidth"),
         "parenthesized": ("parenthesized", "circled", "bold_sans", "monospace", "fullwidth"),
         "circled": ("circled", "parenthesized", "bold_sans", "monospace", "fullwidth"),
+        "double_struck": ("double_struck", "serif_bold", "bold_sans", "monospace", "fullwidth"),
+        "sans": ("sans", "bold_sans", "monospace", "fullwidth"),
     }
     seen: list[str] = []
     for item in (*close.get(style, (style, "bold_sans", "monospace", "fullwidth")), "bold_sans", "monospace", "fullwidth", "normal"):
@@ -437,6 +468,19 @@ def transform_text_safe(value: Any, font: str, *, fallback_order: Iterable[str] 
         substitutions.append(TransformSubstitution(ch, style, replacement_style, replacement, "requested font has no distinct glyph for this character"))
     final = "".join(out)
     return final or plain, substitutions
+
+
+def font_label(font: Any) -> str:
+    style = safe_str(font or "normal").lower().replace("-", "_")
+    return FONT_STYLE_LABELS.get(style, style.replace("_", " ").title())
+
+
+def font_preview(font: Any, *, sample: str = "general-chat") -> str:
+    style = safe_str(font or "normal").lower().replace("-", "_")
+    if style not in FONT_STYLES:
+        style = "normal"
+    rendered, _substitutions = transform_text_safe(sample, style, fallback_order=fallback_ladder(style))
+    return rendered or sample
 
 
 def _already_semantically_matches_design(before: str, *, base: str, font: str, expected_after: str) -> bool:
@@ -723,8 +767,8 @@ def design_score(items: list[dict[str, Any]]) -> dict[str, int | str]:
 
 __all__ = [
     "CATEGORY_FRAMES", "DEFAULT_DELAY_SECONDS", "DEFAULT_PROTECTED_NAMES", "DISCORD_NAME_LIMIT", "FONT_STYLES",
-    "ICON_PACKS", "MAX_PLAN_ITEMS", "SEPARATOR_LIBRARY", "THEMES", "build_styled_name", "category_frame_preview",
-    "design_score", "detect_duplicate_outputs", "fallback_ladder", "normalize_base_name", "parse_channel_name",
-    "preview_lines", "separator_preview", "strip_known_unicode_fonts", "summarize_plan", "suggested_icon",
-    "transform_text_safe", "validate_separator",
+    "FONT_STYLE_LABELS", "ICON_PACKS", "MAX_PLAN_ITEMS", "SEPARATOR_LIBRARY", "THEMES", "build_styled_name",
+    "category_frame_preview", "design_score", "detect_duplicate_outputs", "fallback_ladder", "font_label",
+    "font_preview", "normalize_base_name", "parse_channel_name", "preview_lines", "separator_preview",
+    "strip_known_unicode_fonts", "summarize_plan", "suggested_icon", "transform_text_safe", "validate_separator",
 ]
