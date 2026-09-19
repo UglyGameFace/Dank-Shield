@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from pathlib import Path
 
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
@@ -127,8 +128,67 @@ def test_partial_custom_font_uses_fallback_without_rewriting_text(tmp_path, monk
 def test_complex_text_disables_manual_tracking() -> None:
     assert fallback.safe_tracking("TRACKED", 4) == 4
     assert fallback.safe_tracking("PΛMELA", 4) == 0
+    assert fallback.safe_tracking("PᗩᗰƐᒪᗩ", 4) == 0
     assert fallback.safe_tracking("محمد", 4) == 0
     assert fallback.safe_tracking("👩🏽‍💻", 4) == 0
+
+
+
+def test_long_tail_fallback_covers_live_canadian_syllabics_name(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    primary = _write_font(tmp_path, "primary-ascii.ttf", "PAMELA")
+    long_tail = _write_font(tmp_path, "long-tail.ttf", "PᗩᗰƐᒪᗩ")
+    monkeypatch.setattr(fallback, "_registered_fallback_paths", lambda _bold: ())
+    monkeypatch.setattr(
+        fallback,
+        "_long_tail_fallback_paths",
+        lambda: (str(long_tail),),
+    )
+
+    sample = "PᗩᗰƐᒪᗩ"
+    runs = fallback.resolve_font_runs(
+        sample,
+        primary_paths=(str(primary),),
+        bold=True,
+    )
+
+    assert "".join(run.text for run in runs) == sample
+    assert all(fallback.source_supports(run.source, run.text) for run in runs)
+    assert any(run.source.path == str(long_tail) for run in runs)
+    assert any(
+        any(0x1400 <= ord(character) <= 0x167F for character in run.text)
+        and run.source.path == str(long_tail)
+        for run in runs
+    )
+
+
+def test_long_tail_runtime_font_order_prefers_freesans_before_unifont(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / ".runtime_fonts"
+    runtime_dir.mkdir()
+    for name in (
+        "FreeSans.ttf",
+        "unifont-17.0.03.otf",
+        "unifont_upper-17.0.03.otf",
+    ):
+        (runtime_dir / name).write_bytes(b"font")
+
+    monkeypatch.setattr(fallback, "_RUNTIME_FONT_DIR", runtime_dir)
+    monkeypatch.setattr(fallback, "_SYSTEM_LONG_TAIL_PATHS", ())
+    fallback._long_tail_fallback_paths.cache_clear()
+
+    paths = fallback._long_tail_fallback_paths()
+
+    assert [Path(path).name for path in paths] == [
+        "FreeSans.ttf",
+        "unifont-17.0.03.otf",
+        "unifont_upper-17.0.03.otf",
+    ]
+    fallback._long_tail_fallback_paths.cache_clear()
 
 
 def test_dynamic_name_is_not_uppercased_by_visual_style() -> None:
@@ -162,6 +222,7 @@ def test_production_fallback_stack_covers_representative_discord_names() -> None
     primary = engine._family_candidates(style.family, bold=True)
     samples = (
         "PΛMELA",
+        "PᗩᗰƐᒪᗩ",
         "𝓐𝓷𝓰𝓮𝓵♡",
         "José",
         "玩家123",
@@ -187,6 +248,7 @@ def test_production_fallback_stack_covers_representative_discord_names() -> None
 def test_representative_unicode_names_render_full_welcome_cards() -> None:
     for sample in (
         "PΛMELA",
+        "PᗩᗰƐᒪᗩ",
         "𝓐𝓷𝓰𝓮𝓵♡",
         "José",
         "玩家123",
