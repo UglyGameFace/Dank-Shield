@@ -64,7 +64,7 @@ font fallback, but its fallback inventory was still incomplete:
 
 ## Implementation
 - add `tools/provision_unicode_fonts.py`
-  - provisions pinned GNU FreeSans, GNU Unifont Plane 0, and GNU Unifont Upper
+  - provisions a pinned official Noto Sans Canadian Aboriginal variable face, GNU Unifont Plane 0, and GNU Unifont Upper
   - validates exact byte size and pinned digest
   - uses alternate GNU mirrors for Unifont
   - writes atomically into `.runtime_fonts/`
@@ -73,7 +73,7 @@ font fallback, but its fallback inventory was still incomplete:
 - ignore `.runtime_fonts/` in Git
 - make the renderer append app-local long-tail faces after preferred/custom and
   script-specific registered faces
-- prefer FreeSans for better-looking long-tail glyphs, then use Unifont as the
+- prefer the dedicated Noto Canadian Aboriginal face for the live UCAS glyphs, use any available system FreeSans as an extra broad fallback, then use Unifont as the
   standardized-Unicode safety net
 - keep common system FreeSans locations as an extra portability path
 - add the exact live Canadian-syllabics name to tracking, coverage, and full-card
@@ -106,7 +106,7 @@ Before merge:
   provisioned successfully
 
 ## Risk / compatibility
-The app does not commit or expose font binaries in Git. The provisioner downloads
+The app does not commit font binaries in Git. The provisioner downloads
 pinned upstream font files during deployment. The fallback faces are used only
 when higher-priority fonts lack a requested grapheme, so existing visual styles
 remain unchanged for ordinary names.
