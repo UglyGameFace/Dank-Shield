@@ -62,7 +62,7 @@ def test_server_designer_owns_separator_selection_and_preview() -> None:
     server = V2[server_start:server_end]
 
     assert "class DesignServerSeparatorSelect" in server
-    assert 'label="Preview Separator Only"' in server
+    assert 'label="Preview Separator"' in server
     assert 'legacy._build_channel_separator_style_change_plan' in server
     assert 'view=LegacyStyleChangePreviewView(' in server
     assert "legacy.StyleChangeView(" not in server
@@ -70,7 +70,8 @@ def test_server_designer_owns_separator_selection_and_preview() -> None:
 
 def test_server_designer_acknowledges_selects_before_config_io() -> None:
     for class_name, next_marker in (
-        ("class DesignServerThemeSelect", "class DesignServerStrengthSelect"),
+        ("class DesignServerThemeSelect", "class DesignServerFontSelect"),
+        ("class DesignServerFontSelect", "class DesignServerStrengthSelect"),
         ("class DesignServerStrengthSelect", "class DesignServerSeparatorSelect"),
         ("class DesignServerSeparatorSelect", "def _design_server_separator"),
     ):
@@ -81,12 +82,24 @@ def test_server_designer_acknowledges_selects_before_config_io() -> None:
         assert block.index("await interaction.response.defer") < block.index("await _load_design_options")
 
 
+def test_server_font_picker_is_native_and_theme_reset_is_predictable() -> None:
+    server_start = V2.index("class DesignServerThemeSelect")
+    server_end = V2.index("def _edit_one_embed", server_start)
+    server = V2[server_start:server_end]
+    assert "class DesignServerFontSelect" in server
+    assert 'value="__theme__"' in server
+    assert 'options.pop("font", None)' in server
+    assert 'options["font"] = selected' in server
+    assert "studio.font_preview" in server
+    assert "Style example" in server
+
+
 def test_clean_redesign_is_native_confirmed_and_protection_preserving() -> None:
     server_start = V2.index("class DesignServerView")
     server_end = V2.index("def _edit_one_embed", server_start)
     server = V2[server_start:server_end]
 
-    assert 'label="Start Clean Redesign"' in server
+    assert 'label="Clean Redesign"' in server
     assert "class CleanRedesignConfirmView" in V2
     assert "rule_service.reset_layout_overrides(options)" in V2
     assert "Clear Saved Design Overrides" in V2
