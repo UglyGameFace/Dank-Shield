@@ -10,6 +10,7 @@ import pytest
 from stoney_verify.commands_ext import public_design_group
 from stoney_verify.commands_ext import public_design_studio as legacy
 from stoney_verify.commands_ext import public_design_studio_v2 as studio_v2
+from stoney_verify.services import server_design_apply_service as apply_service
 from stoney_verify.services import server_design_plan_service as plan_service
 from stoney_verify.services import server_design_repair_confidence as repair_confidence
 from stoney_verify.services import server_design_studio as studio
@@ -156,6 +157,38 @@ def test_smart_auto_detect_decorative_simplification_is_blocked() -> None:
     result = repair_confidence.evaluate_repair_plan([item], context="smart_category_auto_detect")
     assert result["apply_allowed"] is False
     assert result["counts"].get(repair_confidence.BLOCKED_AESTHETIC_DOWNGRADE) == 1
+
+
+def test_successful_apply_snapshot_failure_falls_back_to_memory_without_revert(monkeypatch: pytest.MonkeyPatch) -> None:
+    legacy._LAST_SNAPSHOTS.clear()
+
+    async def broken_persist(_guild_id: int, _snapshot: dict[str, object]) -> None:
+        raise OSError("read-only snapshot store")
+
+    monkeypatch.setattr(legacy, "_persist_rollback_snapshot", broken_persist)
+    prepared = apply_service.PreparedRename(
+        channel_id=123,
+        channel=SimpleNamespace(name="new-name"),
+        item={
+            "channel_id": "123",
+            "before": "old-name",
+            "after": "new-name",
+            "status": "changed",
+        },
+        before="old-name",
+        after="new-name",
+    )
+
+    snapshot, durable = asyncio.run(
+        studio_v2._store_snapshot_with_memory_fallback(999, 42, [prepared])
+    )
+
+    assert snapshot is not None
+    assert durable is False
+    assert snapshot["durable"] is False
+    assert snapshot["items"][0]["old_name"] == "old-name"
+    assert snapshot["items"][0]["new_name"] == "new-name"
+    assert legacy._LAST_SNAPSHOTS["999"][-1]["durable"] is False
 
 
 def test_one_reviewed_apply_component() -> None:
