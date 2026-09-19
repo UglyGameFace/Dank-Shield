@@ -4,7 +4,7 @@
 DS-WELCOME-UNICODE-LONGTAIL — Deterministic long-tail lifecycle-card Unicode fallback
 
 ## Status
-IMPLEMENTED — validation and exact-head merge gate pending
+IMPLEMENTATION + FUNCTIONAL VALIDATION COMPLETE — final exact-head CI and merge gate
 
 ## Single active-task lock
 Only the lifecycle-card long-tail Unicode fallback task is active. Do not admit
@@ -59,22 +59,42 @@ Exit cards share the same lifecycle text adapter and Unicode fallback engine.
 - no unrelated Server Designer behavior is changed
 - the bundled font is unmodified and kept with its OFL-1.1 license
 
-## Validation / merge gate
-Pending on the exact final branch head:
-- targeted Unicode fallback tests
-- full unit suite
-- Python compile
-- standalone repository audits
-- Dank Shield CI
-- Dank Design Regression CI and companion required workflows
-- final diff / accidental-change inspection
-- branch currentness against main
+## Functional validation completed on head `b623c89a39c30a93cb1d8bf22a98d43e756f285e`
+- committed-diff whitespace check: PASS
+- Python compile: PASS
+- full unit suite: **1689 passed, 9 warnings, 0 failures**
+- exact live-name regression for `ᗩ ᗰ ᒪ`: included in the green full suite
+- standalone repository tool checks: PASS
+- public setup, command surface/friction, invite permissions, setup safety: PASS
+- Dank Design Smart Auto-Detect, role-truth, and event-boundary audits: PASS
+- Claim-first ticket security: PASS
+- Managed category SQL smoke test: PASS
+- Dank Shield CI: PASS
+- Dank Design Regression CI: PASS
+- Application Command Size Diagnostics: PASS
+- Profile Runtime Diagnostics: PASS
+- Ticket Owner Emergency Override: PASS
+- branch was 0 commits behind `main` at validation time
+- deployment packaging inspection found no .gitignore/Discloud exclusion for bundled .ttf assets
+
+The first CI attempt on `08bff77940eb10bb246ee4ac8554dae3b8961ded`
+stopped at `git diff --check` because the upstream OFL text carried one trailing
+space. The license text whitespace was normalized only; no production behavior
+changed. The corrected functional head above then passed the complete gate.
+
+## Final merge gate
+This task-record update is documentation-only and changes the PR head. Re-run all
+required PR workflows on the new exact final head. If they remain green:
+- confirm branch is still 0 behind current `main`
+- perform final changed-file/diff cleanup inspection
+- mark PR #264 ready
 - merge only the exact validated SHA
-- post-merge main verification and `discloud/commit: success`
+- verify resulting `main` contains that head and requires `discloud/commit: success`
 
 ## Backlog
 None added from this task.
 
 ## Next step
-Open the task PR, run targeted and full CI on the exact head, fix only failures
-that share this task's root cause, then complete the merge and deployment gate.
+Run exact-head CI for this documentation-only finalization commit. If all required
+checks remain green, perform the final diff/currentness gate, mark PR #264 ready,
+merge the exact validated head, and verify the deployed main commit.
