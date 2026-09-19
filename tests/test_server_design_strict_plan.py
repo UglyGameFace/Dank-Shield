@@ -126,5 +126,5 @@ def test_new_unicode_fonts_transform_and_decode_cleanly() -> None:
 
 def test_curated_theme_catalog_only_uses_supported_fonts() -> None:
     assert {"modern_minimal", "double_struck_luxe", "night_gothic", "luxury_script"} <= set(studio.THEMES_BY_ID)
-    assert all(theme.font in studio.FONT_STYLES for theme in studio.THEMES)
+    assert all(theme.font in studio.DESIGN_FONT_STYLES for theme in studio.THEMES)
     assert len(studio.THEMES) <= 25
