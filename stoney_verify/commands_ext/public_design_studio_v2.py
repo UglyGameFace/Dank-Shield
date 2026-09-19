@@ -268,9 +268,9 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
     embed = discord.Embed(
         title="🌐 Design Entire Server",
         description=(
-            "Choose the server draft in one place. Theme, strength, and separator are **saved as draft settings immediately**, "
-            "but they do **not** rename a single Discord channel/category.\n\n"
-            "Use **Preview Entire Server** for the full saved design, or **Preview Separator Only** when you only want to change the channel separator."
+            "Set the server-wide style below. **Changing these menus does not rename anything.** "
+            "When it looks right, preview the exact names, then Apply.\n\n"
+            "Use **Preview Separator Only** when the separator is the only thing you want to touch."
         ),
         color=discord.Color.blurple(),
     )
@@ -283,19 +283,14 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
     )
     if narrow_count:
         embed.add_field(
-            name="Saved exceptions",
+            name="⚠️ Old design overrides are active",
             value=(
-                f"**{narrow_count}** saved layout/name override(s) still outrank the server draft. "
-                "Use **Start Clean Redesign** below to clear only those old design exceptions while keeping protection rules intact."
+                f"**{narrow_count}** saved layout/name override(s) can make some channels ignore the server-wide style. "
+                "Use **Start Clean Redesign** to clear those old design exceptions **without removing protection rules**."
             ),
             inline=False,
         )
-    embed.add_field(
-        name="Batch safety",
-        value="Every Apply is preflighted before the first rename. If anything is stale, **nothing is renamed** and you preview again.",
-        inline=False,
-    )
-    embed.set_footer(text="Draft settings only → Preview one scope → Apply reviewed names")
+    embed.set_footer(text="Nothing is renamed until Apply • Apply rechecks the whole preview first")
     return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
 
 
