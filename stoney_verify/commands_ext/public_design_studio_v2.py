@@ -954,6 +954,81 @@ async def _persist_separator_settings(
     return previous
 
 
+async def _return_from_reviewed_preview(
+    interaction: discord.Interaction,
+    pending_created_at: float | None,
+) -> None:
+    if not await _require_design_permission(interaction):
+        return
+    guild = interaction.guild
+    assert guild is not None
+
+    key = legacy._key(int(guild.id), int(interaction.user.id))  # type: ignore[attr-defined]
+    payload = legacy._PENDING.get(key) or {}  # type: ignore[attr-defined]
+    if not legacy._pending_matches(payload, pending_created_at):  # type: ignore[attr-defined]
+        await _go_home(interaction)
+        return
+
+    mode = _safe_str(payload.get("mode"), "")
+    if mode in {"preview_server_v2", "style_change_separator"}:
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        options = await _load_design_options(int(guild.id))
+        await interaction.edit_original_response(
+            embed=_design_server_embed(guild, options),
+            view=DesignServerView(options),
+        )
+        return
+
+    if mode == "consistency_check_v2":
+        await interaction.response.edit_message(embed=_review_embed(), view=ReviewRepairView())
+        return
+
+    if mode == "category_editor":
+        category_id = _safe_int(payload.get("category_id"), 0)
+        category = guild.get_channel(category_id) if category_id > 0 else None
+        if isinstance(category, discord.CategoryChannel):
+            await interaction.response.edit_message(
+                embed=legacy._category_action_embed(category),  # type: ignore[attr-defined]
+                view=legacy.CategoryEditorActionView(category_id),  # type: ignore[attr-defined]
+            )
+        else:
+            await interaction.response.edit_message(
+                embed=legacy._category_editor_embed(guild, page=0),  # type: ignore[attr-defined]
+                view=legacy.CategoryEditorPickerView(guild, page=0),  # type: ignore[attr-defined]
+            )
+        return
+
+    if mode == "channel_editor":
+        channel_id = _safe_int(payload.get("channel_id"), 0)
+        channel = guild.get_channel(channel_id) if channel_id > 0 else None
+        if channel is not None:
+            parent = getattr(channel, "category", None)
+            category_id = _safe_int(getattr(parent, "id", 0), 0) or None
+            await interaction.response.edit_message(
+                embed=legacy._channel_action_embed(channel),  # type: ignore[attr-defined]
+                view=legacy.ChannelEditorActionView(channel_id, category_id=category_id),  # type: ignore[attr-defined]
+            )
+        else:
+            await interaction.response.edit_message(
+                embed=legacy._channel_editor_embed(guild, page=0),  # type: ignore[attr-defined]
+                view=legacy.ChannelEditorPickerView(guild, page=0),  # type: ignore[attr-defined]
+            )
+        return
+
+    if mode in {"category_exact_format", "channel_exact_format"}:
+        target_id = _safe_int(payload.get("target_id"), 0)
+        if target_id > 0:
+            scope = "category" if mode.startswith("category_") else "channel"
+            await legacy._open_exact_format_editor(  # type: ignore[attr-defined]
+                interaction,
+                scope=scope,
+                target_id=target_id,
+            )
+            return
+
+    await _go_home(interaction)
+
+
 class ReviewedPreviewView(DesignView):
     """One transactional preview/apply owner for every active Studio batch flow."""
 
@@ -1134,9 +1209,9 @@ class ReviewedPreviewView(DesignView):
             embed.add_field(name="Undo ready", value="The previous names were saved durably before this Apply was finalized.", inline=False)
         await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=bool(snapshot)))
 
-    @discord.ui.button(label="Back to Studio", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:preview_back", row=0)
+    @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:preview_back", row=0)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _go_home(interaction)
+        await _return_from_reviewed_preview(interaction, self.pending_created_at)
 
 
 class LegacyStyleChangePreviewView(ReviewedPreviewView):
