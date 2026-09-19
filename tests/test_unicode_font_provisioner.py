@@ -65,12 +65,14 @@ def test_corrupt_download_fails_closed_without_installing(tmp_path, monkeypatch)
 def test_pinned_production_assets_cover_quality_and_last_resort_layers() -> None:
     by_name = {asset.filename: asset for asset in provisioner.ASSETS}
 
-    assert "FreeSans.ttf" in by_name
+    assert "NotoSansCanadianAboriginal-Variable.ttf" in by_name
     assert "unifont-17.0.03.otf" in by_name
     assert "unifont_upper-17.0.03.otf" in by_name
 
-    assert by_name["FreeSans.ttf"].digest_kind == "git-sha1"
-    assert by_name["FreeSans.ttf"].digest == "9db958532c12ef7f4aa22fab57a0f71e82acdd38"
+    canadian = by_name["NotoSansCanadianAboriginal-Variable.ttf"]
+    assert canadian.digest_kind == "git-sha1"
+    assert canadian.digest == "b20ba0705bfac6e3c1655ea854522c041bd00a69"
+    assert canadian.size == 292524
     assert by_name["unifont-17.0.03.otf"].digest == (
         "26071c5a97533cefdcbc6b0645e7ee279413049079f09f592b26916ca6c21bf5"
     )
