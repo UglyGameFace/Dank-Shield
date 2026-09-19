@@ -2831,21 +2831,36 @@ class DirectRenameModal(discord.ui.Modal):
             guild = interaction.guild
             assert guild is not None
 
+            await interaction.response.defer(ephemeral=True, thinking=False)
             channel = await _direct_rename_fetch_target(guild, self.target_id, guild.get_channel(self.target_id))
             if channel is None:
-                await interaction.response.send_message("That item no longer exists.", ephemeral=True)
+                await safe_send_interaction(
+                    interaction,
+                    content="That item no longer exists.",
+                    ephemeral=True,
+                    action_name="design.direct_rename.missing",
+                )
                 return
 
             old_name = _safe_str(getattr(channel, "name", ""), "unknown")
             requested_name = _safe_str(self.new_name.value, "").strip()
             if not requested_name:
-                await interaction.response.send_message("Name cannot be blank.", ephemeral=True)
+                await safe_send_interaction(
+                    interaction,
+                    content="Name cannot be blank.",
+                    ephemeral=True,
+                    action_name="design.direct_rename.blank",
+                )
                 return
             if self.scope != "category" and _direct_rename_has_unsafe_channel_icon(requested_name):
-                await interaction.response.send_message(
-                    "❌ That icon is unsafe for channel names. `#️⃣` and square placeholder icons can break into blocks. "
-                    "Pick a real emoji/icon, or use it on a category only.",
+                await safe_send_interaction(
+                    interaction,
+                    content=(
+                        "❌ That icon is unsafe for channel names. `#️⃣` and square placeholder icons can break into blocks. "
+                        "Pick a real emoji/icon, or use it on a category only."
+                    ),
                     ephemeral=True,
+                    action_name="design.direct_rename.unsafe_icon",
                 )
                 return
 
@@ -2855,13 +2870,20 @@ class DirectRenameModal(discord.ui.Modal):
                     reason=f"Dank Design direct rename by {interaction.user} ({interaction.user.id})",
                 )
             except discord.Forbidden:
-                await interaction.response.send_message(
-                    "❌ I cannot rename that. I need **Manage Channels**, and my role must be high enough.",
+                await safe_send_interaction(
+                    interaction,
+                    content="❌ I cannot rename that. I need **Manage Channels**, and my role must be high enough.",
                     ephemeral=True,
+                    action_name="design.direct_rename.forbidden",
                 )
                 return
             except discord.HTTPException as exc:
-                await interaction.response.send_message(f"❌ Discord rejected that rename: `{exc}`", ephemeral=True)
+                await safe_send_interaction(
+                    interaction,
+                    content=f"❌ Discord rejected that rename: `{exc}`",
+                    ephemeral=True,
+                    action_name="design.direct_rename.discord_rejected",
+                )
                 return
 
             refreshed = await _direct_rename_fetch_target(guild, self.target_id, channel)
@@ -2885,16 +2907,24 @@ class DirectRenameModal(discord.ui.Modal):
                 except Exception:
                     pass
                 if rolled_back:
-                    await interaction.response.send_message(
-                        "❌ The exact-name rule could not be saved, so the rename was rolled back. "
-                        f"Nothing was left half-applied. Error: `{type(exc).__name__}`",
+                    await safe_send_interaction(
+                        interaction,
+                        content=(
+                            "❌ The exact-name rule could not be saved, so the rename was rolled back. "
+                            f"Nothing was left half-applied. Error: `{type(exc).__name__}`"
+                        ),
                         ephemeral=True,
+                        action_name="design.direct_rename.rule_save_rolled_back",
                     )
                 else:
-                    await interaction.response.send_message(
-                        "⚠️ Discord accepted the rename, but Dank Design could not save its exact-name rule or roll it back. "
-                        "Do not run a design Apply until persistence is repaired.",
+                    await safe_send_interaction(
+                        interaction,
+                        content=(
+                            "⚠️ Discord accepted the rename, but Dank Design could not save its exact-name rule or roll it back. "
+                            "Do not run a design Apply until persistence is repaired."
+                        ),
                         ephemeral=True,
+                        action_name="design.direct_rename.persistence_failure",
                     )
                 return
 
@@ -2922,11 +2952,13 @@ class DirectRenameModal(discord.ui.Modal):
                 inline=False,
             )
             try:
-                await interaction.response.edit_message(embed=embed, view=view)
+                await interaction.edit_original_response(embed=embed, view=view)
             except Exception:
-                await interaction.response.send_message(
-                    f"✅ Renamed and saved exact name: `{old_name}` → `{actual_name}`",
+                await safe_send_interaction(
+                    interaction,
+                    content=f"✅ Renamed and saved exact name: `{old_name}` → `{actual_name}`",
                     ephemeral=True,
+                    action_name="design.direct_rename.success_fallback",
                 )
 
         await _guard_design_action(interaction, "design.direct_rename", action, defer=False)
