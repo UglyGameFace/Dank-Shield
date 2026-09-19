@@ -149,6 +149,17 @@ def test_compatibility_rule_and_protection_actions_ack_before_storage() -> None:
         assert block.index("await interaction.response.defer") < block.index(io_marker)
 
 
+def test_undo_confirmation_acknowledges_before_durable_snapshot_read() -> None:
+    start = V2.index("class UndoConfirmView")
+    end = V2.index("async def _persist_separator_settings", start)
+    block = V2[start:end]
+    confirm_start = block.index("async def confirm")
+    cancel_start = block.index("async def cancel", confirm_start)
+    confirm = block[confirm_start:cancel_start]
+    assert confirm.index("await interaction.response.defer") < confirm.index("await legacy._latest_rollback_snapshot")
+    assert "await interaction.edit_original_response" in confirm
+
+
 def test_reviewed_preview_back_returns_to_originating_workflow() -> None:
     helper_start = V2.index("async def _return_from_reviewed_preview")
     helper_end = V2.index("class ReviewedPreviewView", helper_start)
