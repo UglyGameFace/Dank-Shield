@@ -82,6 +82,26 @@ def test_server_designer_acknowledges_selects_before_config_io() -> None:
         assert block.index("await interaction.response.defer") < block.index("await _load_design_options")
 
 
+def test_exact_item_editor_reuses_the_canonical_safe_font_catalog() -> None:
+    assert "EDITOR_FONT_IDS = tuple(" in LEGACY
+    assert "for font_id in studio.FONT_STYLES" in LEGACY
+    assert 'if font_id != "upside_down"' in LEGACY
+    assert "studio.font_label(font_id)" in LEGACY
+    assert "font_id in studio.RISKY_FONTS" in LEGACY
+    assert '"sans"' not in LEGACY[LEGACY.index("EDITOR_FONT_IDS = tuple("):LEGACY.index("def _format_editor_key")]
+    assert '"double_struck"' not in LEGACY[LEGACY.index("EDITOR_FONT_IDS = tuple("):LEGACY.index("def _format_editor_key")]
+
+
+def test_server_preview_repeats_the_selected_style_before_apply() -> None:
+    start = V2.index("async def _store_preview")
+    end = V2.index("def _design_server_font", start)
+    block = V2[start:end]
+    assert 'mode == "preview_server_v2"' in block
+    assert 'name="Selected server style"' in block
+    assert "studio.font_preview(font)" in block
+    assert "Saved category/channel/exact rules still win" in block
+
+
 def test_server_font_picker_is_native_and_theme_reset_is_predictable() -> None:
     server_start = V2.index("class DesignServerThemeSelect")
     server_end = V2.index("def _edit_one_embed", server_start)
