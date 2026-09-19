@@ -194,7 +194,7 @@ async def _store_preview(
 def _design_server_font(options: Mapping[str, Any]) -> str:
     theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
     explicit = _safe_str(options.get("font"), "").lower().replace("-", "_")
-    if explicit in studio.FONT_STYLES:
+    if explicit in studio.DESIGN_FONT_STYLES:
         return explicit
     fallback = _safe_str(getattr(theme, "font", "normal"), "normal").lower().replace("-", "_")
     return fallback if fallback in studio.FONT_STYLES else "normal"
@@ -284,7 +284,7 @@ class DesignServerFontSelect(discord.ui.Select):
                 default=explicit not in studio.FONT_STYLES,
             )
         ]
-        for style in studio.FONT_STYLES:
+        for style in studio.DESIGN_FONT_STYLES:
             decorative = style in getattr(studio, "RISKY_FONTS", set())
             note = "Decorative · preview recommended" if decorative else "Readable"
             choices.append(
@@ -313,7 +313,7 @@ class DesignServerFontSelect(discord.ui.Select):
         selected = _safe_str(self.values[0], "__theme__").lower().replace("-", "_")
         if selected == "__theme__":
             options.pop("font", None)
-        elif selected in studio.FONT_STYLES:
+        elif selected in studio.DESIGN_FONT_STYLES:
             options["font"] = selected
         else:
             raise ValueError("Unsupported Dank Design font selection.")
