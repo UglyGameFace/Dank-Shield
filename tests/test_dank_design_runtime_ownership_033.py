@@ -83,13 +83,9 @@ def test_server_designer_acknowledges_selects_before_config_io() -> None:
 
 
 def test_exact_item_editor_reuses_the_canonical_safe_font_catalog() -> None:
-    assert "EDITOR_FONT_IDS = tuple(" in LEGACY
-    assert "for font_id in studio.FONT_STYLES" in LEGACY
-    assert 'if font_id != "upside_down"' in LEGACY
+    assert "EDITOR_FONT_IDS = studio.DESIGN_FONT_STYLES" in LEGACY
     assert "studio.font_label(font_id)" in LEGACY
     assert "font_id in studio.RISKY_FONTS" in LEGACY
-    assert '"sans"' not in LEGACY[LEGACY.index("EDITOR_FONT_IDS = tuple("):LEGACY.index("def _format_editor_key")]
-    assert '"double_struck"' not in LEGACY[LEGACY.index("EDITOR_FONT_IDS = tuple("):LEGACY.index("def _format_editor_key")]
 
 
 def test_server_preview_repeats_the_selected_style_before_apply() -> None:
