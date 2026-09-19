@@ -43,11 +43,42 @@ def test_native_plan_has_no_retired_runtime_magic_flag() -> None:
 
 
 def test_separator_entry_uses_saved_authority_not_live_majority_guess() -> None:
+    helper_start = V2.index("def _design_server_separator")
+    helper_end = V2.index("def _design_server_embed", helper_start)
+    helper = V2[helper_start:helper_end]
+    assert "effective_draft_separator" in helper
+
     start = V2.index("async def separator_only")
     end = V2.index("async def back", start)
     block = V2[start:end]
-    assert "effective_draft_separator" in block
+    assert "_design_server_separator" in block
     assert "_infer_live_majority_context" not in block
+    assert "legacy.StyleChangeView" not in block
+
+
+def test_server_designer_owns_separator_selection_and_preview() -> None:
+    server_start = V2.index("class DesignServerThemeSelect")
+    server_end = V2.index("def _edit_one_embed", server_start)
+    server = V2[server_start:server_end]
+
+    assert "class DesignServerSeparatorSelect" in server
+    assert 'label="Preview Separator Only"' in server
+    assert 'legacy._build_channel_separator_style_change_plan' in server
+    assert 'view=LegacyStyleChangePreviewView(' in server
+    assert "legacy.StyleChangeView(" not in server
+
+
+def test_server_designer_acknowledges_selects_before_config_io() -> None:
+    for class_name, next_marker in (
+        ("class DesignServerThemeSelect", "class DesignServerStrengthSelect"),
+        ("class DesignServerStrengthSelect", "class DesignServerSeparatorSelect"),
+        ("class DesignServerSeparatorSelect", "def _design_server_separator"),
+    ):
+        start = V2.index(class_name)
+        end = V2.index(next_marker, start)
+        block = V2[start:end]
+        assert "await interaction.response.defer" in block
+        assert block.index("await interaction.response.defer") < block.index("await _load_design_options")
 
 
 def test_historical_design_mutators_are_removed() -> None:
