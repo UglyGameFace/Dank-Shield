@@ -31,13 +31,15 @@ def test_legacy_category_frame_protection_aliases_to_full() -> None:
     assert result.category_frame_id == "lenticular"
 
 
-def test_consolidated_theme_selectors_fail_closed_and_sync_active_global_lock() -> None:
+def test_consolidated_server_selectors_fail_closed_and_sync_active_global_lock() -> None:
     theme_start = V2.index("class DesignServerThemeSelect")
     strength_start = V2.index("class DesignServerStrengthSelect", theme_start)
-    end = V2.index("def _design_server_embed", strength_start)
+    separator_start = V2.index("class DesignServerSeparatorSelect", strength_start)
+    end = V2.index("def _design_server_embed", separator_start)
     block = V2[theme_start:end]
-    assert block.count("await legacy._save_options(interaction, options)") == 2
-    assert block.count("legacy._sync_enabled_global_lock(options)") == 2
+    assert block.count("await legacy._save_options(interaction, options)") == 3
+    assert block.count("legacy._sync_enabled_global_lock(options)") == 3
+    assert 'options["separator_id"] = selected' in block
     assert "picked_font" not in block
     assert 'options["strength"] = 4' not in block
     assert "class ThemeSelect" not in PUBLIC
