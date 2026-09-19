@@ -4,7 +4,7 @@
 DS-DESIGNER-262 — Server Designer UX + font system hardening
 
 ## Status
-IN PROGRESS — implementation and regression validation
+IMPLEMENTATION COMPLETE — final exact-head CI and merge gate
 
 ## Single active-task lock
 Only this Server Designer improvement task is active. Do not switch to unrelated
@@ -70,8 +70,8 @@ head, cleaned up, merged, and verified on main.
   - Double-Struck Luxe
   - Luxury Script
 - Kept the theme and font counts under Discord's 25-option select limit.
-- Updated runtime, exact-proof, full-catalog, setup gallery, Channel Builder scope,
-  and queue fallback layers so the new styles do not exist in only one UI.
+- Updated the canonical runtime, exact-proof, full-catalog, setup gallery, and active
+  queued font flow so the new styles do not exist in only one UI.
 - Added shared font labels/previews in the Server Design naming engine.
 
 ### Reversion hardening
@@ -94,29 +94,47 @@ head, cleaned up, merged, and verified on main.
 - Static regression forbids the old "Apply Reversed Because Undo History Could Not Be Saved"
   successful-apply path.
 
-## Validation still required
-- Exact-head Python compile.
-- Dank Design focused regression suite.
-- Full Dank Shield CI.
-- Existing public command/setup/design audits.
-- Final diff review for stale duplicated font labels/maps and unrelated edits.
-- Main-currentness / mergeability check.
-- Live Discord acceptance after deployment:
-  - Theme → Font → Strength → Separator flow
-  - live examples update correctly
-  - Preview Server / Apply
-  - no spontaneous post-success reversion
-  - memory-only Undo warning path if durable storage is unavailable
+## Validation completed on final code head `699e8199c46815c6b195256c4737a54ec706a7f7`
+- Dank Shield CI: **PASS**
+  - Python compile: PASS
+  - full unit suite: **1688 passed, 9 warnings**
+  - standalone tools: PASS
+  - public setup/command/invite/setup-safety audits: PASS
+  - Dank Design Smart Auto-Detect audit: PASS
+  - role-truth and event-boundary audits: PASS
+- Dank Design Regression CI: **PASS**
+  - focused Design Studio suite: **113 passed, 1 warning**
+  - Smart Auto-Detect audit: PASS
+  - redundancy/ownership audit: PASS
+  - UX/static audits: PASS
+- Channel Builder Queue Sanity: PASS
+- Application Command Size Diagnostics: PASS
+- Profile Runtime Diagnostics: PASS
+- Schema Authority SQL: PASS
+- DS Backlog 027 Validation: PASS
+- Ticket Owner Emergency Override: PASS
+- PR was mergeable and **0 commits behind main** at this validation point.
+- Final diff review removed unrelated dormant compatibility-file edits and kept the
+  changes scoped to active Server Designer/font ownership, tests, audits, and this task record.
+
+## Final gate
+This task-record update is documentation-only and changes the PR SHA. Re-run required
+CI on that exact final head. If it stays green, mark PR #262 ready, merge it, and verify
+main contains the validated branch head.
+
+After that main verification, this task is **COMPLETE** without another code change.
+Live Discord acceptance remains a deployment smoke test, not a reason to reopen or
+rewrite already-green code unless the deployed behavior exposes a concrete regression.
 
 ## Risk / compatibility
 - Existing saved themes and font IDs remain valid.
 - Existing saved narrow rules remain authoritative over the server draft.
 - Decorative fonts remain visibly marked as readability-risky.
-- Upside Down remains catalogued but is still proof/compatibility constrained in live
-  Channel Name Fonts paths.
+- Upside Down remains available only as a legacy decode/compatibility transform and is
+  no longer offered as a live selectable design font because it cannot safely round-trip.
 - This task does not change permissions, channel order, topics, ticket placement, roles,
   verification, or protection policy.
 
 ## Next step
-Create the focused draft PR, run exact-head CI, fix every task-related regression,
-then review and merge only after the final head is green.
+Run exact-head CI for this documentation-only finalization commit. If all required
+checks stay green, mark PR #262 ready, merge it, and verify the merged result on main.
