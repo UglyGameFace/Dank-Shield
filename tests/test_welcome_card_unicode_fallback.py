@@ -133,7 +133,6 @@ def test_complex_text_disables_manual_tracking() -> None:
     assert fallback.safe_tracking("👩🏽‍💻", 4) == 0
 
 
-
 def test_long_tail_fallback_covers_live_canadian_syllabics_name(
     tmp_path,
     monkeypatch,
@@ -164,7 +163,7 @@ def test_long_tail_fallback_covers_live_canadian_syllabics_name(
     )
 
 
-def test_long_tail_runtime_font_order_prefers_freesans_before_unifont(
+def test_long_tail_runtime_font_order_prefers_quality_face_before_unifont(
     tmp_path,
     monkeypatch,
 ) -> None:
