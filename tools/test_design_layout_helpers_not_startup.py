@@ -28,7 +28,7 @@ def main() -> int:
         failures.append("native design registrar still mutates canonical registry state")
     if "majority.build_category_aware_options" not in PLAN:
         failures.append("native plan service lost category-aware planning")
-    if "persist_separator_choice" not in RULES or "reset_all_overrides" not in RULES:
+    if "persist_separator_choice" not in RULES or "reset_all_overrides" not in RULES or "reset_layout_overrides" not in RULES:
         failures.append("saved-rule service is missing separator/reset authority")
     if "__use_live_majority_layout" in PLAN:
         failures.append("retired runtime-magic design flag remains in plan service")
