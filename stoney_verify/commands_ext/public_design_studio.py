@@ -2493,7 +2493,14 @@ async def _preview_scope(
     created_at = _store_pending(
         int(guild.id),
         int(interaction.user.id),
-        {"items": items, "options": dict(repair_options), "mode": mode, "scope_title": scope_title},
+        {
+            "items": items,
+            "options": dict(repair_options),
+            "mode": mode,
+            "scope_title": scope_title,
+            "category_id": str(int(category_id)) if category_id is not None else "",
+            "channel_id": str(int(channel_id)) if channel_id is not None else "",
+        },
     )
     has_blockers = any(item.get("status") == "failed" for item in items)
     has_changes = any(item.get("status") == "changed" for item in items)
