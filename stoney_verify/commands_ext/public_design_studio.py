@@ -389,7 +389,7 @@ def _current_format_lock(options: Mapping[str, Any], *, scope: str = "global") -
     theme = _theme_from_options(options)
     strength = max(1, min(5, _safe_int(options.get("strength"), 4)))
     font = _safe_str(options.get("font") or getattr(theme, "font", "normal"), "normal").lower().replace("-", "_")
-    if font not in studio.FONT_STYLES:
+    if font not in studio.DESIGN_FONT_STYLES:
         font = _safe_str(getattr(theme, "font", "normal"), "normal").lower().replace("-", "_")
     theme_separator = _safe_str(getattr(theme, "channel_separator", "bar_full"), "bar_full")
 
@@ -1190,11 +1190,7 @@ EDITOR_SEPARATOR_IDS = (
     "bracket_lenticular",
 )
 
-EDITOR_FONT_IDS = tuple(
-    font_id
-    for font_id in studio.FONT_STYLES
-    if font_id != "upside_down"
-)
+EDITOR_FONT_IDS = studio.DESIGN_FONT_STYLES
 
 
 def _format_editor_key(guild_id: int, user_id: int, scope: str, target_id: int) -> str:
