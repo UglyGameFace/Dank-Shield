@@ -1190,11 +1190,10 @@ EDITOR_SEPARATOR_IDS = (
     "bracket_lenticular",
 )
 
-EDITOR_FONT_IDS = (
-    "normal", "fraktur", "bold_fraktur", "bold_sans", "serif_bold",
-    "monospace", "fullwidth", "small_caps", "script", "bold_script",
-    "italic_sans", "bold_italic_sans", "serif_italic", "serif_bold_italic",
-    "circled", "parenthesized",
+EDITOR_FONT_IDS = tuple(
+    font_id
+    for font_id in studio.FONT_STYLES
+    if font_id != "upside_down"
 )
 
 
@@ -1782,25 +1781,8 @@ def _exact_font_example_text(font_id: str) -> str:
 
 def _exact_font_option_label(font_id: str) -> str:
     font_id = _safe_str(font_id, "normal").lower().replace("-", "_")
-    labels = {
-        "normal": "Normal Text",
-        "fraktur": "Gothic / Fraktur",
-        "bold_fraktur": "Bold Gothic",
-        "bold_sans": "Bold Clean",
-        "serif_bold": "Bold Serif",
-        "monospace": "Monospace",
-        "fullwidth": "Full-width",
-        "small_caps": "Small Caps",
-        "script": "Script",
-        "bold_script": "Bold Script",
-        "italic_sans": "Italic Clean",
-        "bold_italic_sans": "Bold Italic Clean",
-        "serif_italic": "Italic Serif",
-        "serif_bold_italic": "Bold Italic Serif",
-        "circled": "Circled",
-        "parenthesized": "Parenthesized",
-    }
-    return labels.get(font_id, font_id.replace("_", " ").title())[:100]
+    label = studio.font_label(font_id)
+    return ("Normal Text" if font_id == "normal" else label)[:100]
 
 
 def _exact_font_option_description(font_id: str) -> str:
@@ -1808,7 +1790,8 @@ def _exact_font_option_description(font_id: str) -> str:
     example = _exact_font_example_text(font_id)
     if font_id == "normal":
         return "Most readable/searchable. Example: gaming-news"
-    return f"Example: {example}"[:100]
+    risk = "Decorative; preview carefully" if font_id in studio.RISKY_FONTS else "Readable style"
+    return f"{risk}. Example: {example}"[:100]
 
 
 def _exact_separator_preview_text(separator_id: str, *, emoji: str = "🎮", name: str = "gaming-news") -> str:
