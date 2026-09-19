@@ -353,7 +353,9 @@ class DesignServerStrengthSelect(discord.ui.Select):
 class DesignServerSeparatorSelect(discord.ui.Select):
     def __init__(self, options: Mapping[str, Any]) -> None:
         theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
-        theme_separator = _safe_str(getattr(theme, "channel_separator", "none"), "none")
+        theme_options = dict(options)
+        theme_options.pop("separator_id", None)
+        theme_separator = plans.theme_default_separator_id(theme_options)
         explicit = _safe_str(options.get("separator_id"), "")
         selected = _design_server_separator(options)
         choices: list[discord.SelectOption] = [
@@ -396,11 +398,7 @@ class DesignServerSeparatorSelect(discord.ui.Select):
 
 
 def _design_server_separator(options: Mapping[str, Any]) -> str:
-    theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
-    return rule_service.effective_draft_separator(
-        options,
-        theme_separator=_safe_str(getattr(theme, "channel_separator", "none"), "none"),
-    )
+    return plans.effective_server_separator_id(options)
 
 
 def _separator_override_active(options: Mapping[str, Any]) -> bool:
