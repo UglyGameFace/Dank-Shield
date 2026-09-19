@@ -81,6 +81,31 @@ def test_server_designer_acknowledges_selects_before_config_io() -> None:
         assert block.index("await interaction.response.defer") < block.index("await _load_design_options")
 
 
+def test_clean_redesign_is_native_confirmed_and_protection_preserving() -> None:
+    server_start = V2.index("class DesignServerView")
+    server_end = V2.index("def _edit_one_embed", server_start)
+    server = V2[server_start:server_end]
+
+    assert 'label="Start Clean Redesign"' in server
+    assert "class CleanRedesignConfirmView" in V2
+    assert "rule_service.reset_layout_overrides(options)" in V2
+    assert "Clear Saved Design Overrides" in V2
+    assert "Protection rules were kept" in V2
+
+
+def test_design_navigation_acknowledges_before_config_reads() -> None:
+    home_start = V2.index("class DesignHomeView")
+    home_end = V2.index("def _snapshot_matches", home_start)
+    home = V2[home_start:home_end]
+
+    for method_name in ("async def design_server", "async def rules"):
+        start = home.index(method_name)
+        next_method = home.find("\n    @discord.ui.button", start + 1)
+        block = home[start:] if next_method < 0 else home[start:next_method]
+        assert "await interaction.response.defer" in block
+        assert block.index("await interaction.response.defer") < block.index("await _load_design_options")
+
+
 def test_historical_design_mutators_are_removed() -> None:
     assert not list((ROOT / "tools").glob("apply_dank_design_*.py"))
     assert not list((ROOT / "tools").glob("apply_p0_int_design_*.py"))
