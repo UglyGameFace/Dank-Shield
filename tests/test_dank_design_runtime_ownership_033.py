@@ -46,7 +46,7 @@ def test_separator_entry_uses_saved_authority_not_live_majority_guess() -> None:
     helper_start = V2.index("def _design_server_separator")
     helper_end = V2.index("def _design_server_embed", helper_start)
     helper = V2[helper_start:helper_end]
-    assert "effective_draft_separator" in helper
+    assert "plans.effective_server_separator_id(options)" in helper
 
     start = V2.index("async def separator_only")
     end = V2.index("async def back", start)
