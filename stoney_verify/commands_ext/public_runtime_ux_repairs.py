@@ -386,6 +386,7 @@ class ProtectedItemsView(discord.ui.View):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await legacy._load_design_options(int(guild.id))
         raw_rules = options.get("protection_item_rules")
         rules = dict(raw_rules) if isinstance(raw_rules, Mapping) else {}
@@ -408,7 +409,7 @@ class ProtectedItemsView(discord.ui.View):
             ),
             color=discord.Color.green(),
         )
-        await interaction.response.edit_message(embed=embed, view=design_v2.DesignHomeView(options))
+        await interaction.edit_original_response(embed=embed, view=design_v2.DesignHomeView(options))
 
     async def _back(self, interaction: discord.Interaction) -> None:
         await design_v2._go_home(interaction)
