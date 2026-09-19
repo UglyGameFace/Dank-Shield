@@ -173,6 +173,15 @@ def test_undo_confirmation_acknowledges_before_durable_snapshot_read() -> None:
     assert "await interaction.edit_original_response" in confirm
 
 
+def test_successful_apply_does_not_auto_revert_when_undo_storage_fails() -> None:
+    start = V2.index("class ReviewedPreviewView")
+    end = V2.index("class LegacyStyleChangePreviewView", start)
+    block = V2[start:end]
+    assert "_store_snapshot_with_memory_fallback" in block
+    assert "Apply Reversed Because Undo History Could Not Be Saved" not in block
+    assert "will not automatically revert a successful Apply" in block
+
+
 def test_reviewed_preview_back_returns_to_originating_workflow() -> None:
     helper_start = V2.index("async def _return_from_reviewed_preview")
     helper_end = V2.index("class ReviewedPreviewView", helper_start)
