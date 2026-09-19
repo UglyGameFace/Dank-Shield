@@ -149,6 +149,33 @@ def test_compatibility_rule_and_protection_actions_ack_before_storage() -> None:
         assert block.index("await interaction.response.defer") < block.index(io_marker)
 
 
+def test_reviewed_preview_back_returns_to_originating_workflow() -> None:
+    helper_start = V2.index("async def _return_from_reviewed_preview")
+    helper_end = V2.index("class ReviewedPreviewView", helper_start)
+    helper = V2[helper_start:helper_end]
+
+    assert 'mode in {"preview_server_v2", "style_change_separator"}' in helper
+    assert 'mode == "consistency_check_v2"' in helper
+    assert 'mode == "category_editor"' in helper
+    assert 'mode == "channel_editor"' in helper
+    assert 'mode in {"category_exact_format", "channel_exact_format"}' in helper
+    assert "_design_server_embed" in helper
+    assert "_review_embed()" in helper
+    assert "legacy._open_exact_format_editor" in helper
+
+    preview_start = V2.index("class ReviewedPreviewView")
+    preview_end = V2.index("class LegacyStyleChangePreviewView", preview_start)
+    preview = V2[preview_start:preview_end]
+    assert 'label="Back"' in preview
+    assert "_return_from_reviewed_preview(interaction, self.pending_created_at)" in preview
+
+    scope_start = LEGACY.index("async def _preview_scope")
+    scope_end = LEGACY.index("def _category_editor_embed", scope_start)
+    scope = LEGACY[scope_start:scope_end]
+    assert '"category_id": str(int(category_id)) if category_id is not None else ""' in scope
+    assert '"channel_id": str(int(channel_id)) if channel_id is not None else ""' in scope
+
+
 def test_historical_design_mutators_are_removed() -> None:
     assert not list((ROOT / "tools").glob("apply_dank_design_*.py"))
     assert not list((ROOT / "tools").glob("apply_p0_int_design_*.py"))
