@@ -171,7 +171,7 @@ def test_long_tail_runtime_font_order_prefers_freesans_before_unifont(
     runtime_dir = tmp_path / ".runtime_fonts"
     runtime_dir.mkdir()
     for name in (
-        "FreeSans.ttf",
+        "NotoSansCanadianAboriginal-Variable.ttf",
         "unifont-17.0.03.otf",
         "unifont_upper-17.0.03.otf",
     ):
@@ -184,7 +184,7 @@ def test_long_tail_runtime_font_order_prefers_freesans_before_unifont(
     paths = fallback._long_tail_fallback_paths()
 
     assert [Path(path).name for path in paths] == [
-        "FreeSans.ttf",
+        "NotoSansCanadianAboriginal-Variable.ttf",
         "unifont-17.0.03.otf",
         "unifont_upper-17.0.03.otf",
     ]
