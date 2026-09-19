@@ -131,8 +131,10 @@ async def _go_home(interaction: discord.Interaction) -> None:
         return
     guild = interaction.guild
     assert guild is not None
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=False)
     options = await _load_design_options(int(guild.id))
-    await interaction.response.edit_message(embed=_home_embed(guild, options), view=DesignHomeView(options))
+    await interaction.edit_original_response(embed=_home_embed(guild, options), view=DesignHomeView(options))
 
 
 async def _store_preview(
@@ -179,11 +181,12 @@ class DesignServerThemeSelect(discord.ui.Select):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
         options["theme_id"] = self.values[0]
         legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
         await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
-        await interaction.response.edit_message(embed=_design_server_embed(guild, options), view=DesignServerView(options))
+        await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
 
 
 class DesignServerStrengthSelect(discord.ui.Select):
@@ -207,32 +210,87 @@ class DesignServerStrengthSelect(discord.ui.Select):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
         options["strength"] = max(1, min(5, _safe_int(self.values[0], 4)))
         legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
         await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
-        await interaction.response.edit_message(embed=_design_server_embed(guild, options), view=DesignServerView(options))
+        await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
+
+
+class DesignServerSeparatorSelect(discord.ui.Select):
+    def __init__(self, current: str) -> None:
+        selected = _safe_str(current, "bar_heavy")
+        super().__init__(
+            placeholder="3) Choose the channel separator",
+            min_values=1,
+            max_values=1,
+            options=legacy._style_change_separator_options(selected),  # type: ignore[attr-defined]
+            row=2,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        options = await _load_design_options(int(guild.id))
+        selected = _safe_str(self.values[0], "bar_heavy")
+        options["separator_id"] = selected
+        legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
+        await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
+        await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
+
+
+def _design_server_separator(options: Mapping[str, Any]) -> str:
+    theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
+    return rule_service.effective_draft_separator(
+        options,
+        theme_separator=_safe_str(getattr(theme, "channel_separator", "none"), "none"),
+    )
 
 
 def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> discord.Embed:
     theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
+    separator_id = _design_server_separator(options)
+    counts = _rule_counts(options)
+    narrow_count = (
+        counts.get("categories", 0)
+        + counts.get("channels", 0)
+        + counts.get("manual_names", 0)
+    )
     embed = discord.Embed(
         title="🌐 Design Entire Server",
         description=(
-            "Choose the reusable server design. Theme and strength are **saved as settings immediately**, "
+            "Choose the server draft in one place. Theme, strength, and separator are **saved as draft settings immediately**, "
             "but they do **not** rename a single Discord channel/category.\n\n"
-            "When the settings look right, press **Preview Server Changes**, review the exact names, then Apply."
+            "Use **Preview Entire Server** for the full saved design, or **Preview Separator Only** when you only want to change the channel separator."
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(name="Theme", value=f"**{getattr(theme, 'label', 'Gothic Clean')}**", inline=True)
     embed.add_field(name="Strength", value=f"**{_safe_int(options.get('strength'), 4)}/5**", inline=True)
     embed.add_field(
+        name="Separator",
+        value=f"**{legacy._separator_choice_label(separator_id)}**",  # type: ignore[attr-defined]
+        inline=True,
+    )
+    if narrow_count:
+        embed.add_field(
+            name="Saved exceptions",
+            value=(
+                f"**{narrow_count}** category/channel/exact-name override(s) are still saved and outrank the server draft. "
+                "That is intentional. Use **Saved Rules & Protection → Layout Rules** if you want to remove old exceptions before a clean redesign."
+            ),
+            inline=False,
+        )
+    embed.add_field(
         name="Batch safety",
-        value="The whole batch is preflighted before the first rename. If anything is stale, **nothing is renamed** and you preview again.",
+        value="Every Apply is preflighted before the first rename. If anything is stale, **nothing is renamed** and you preview again.",
         inline=False,
     )
-    embed.set_footer(text="Choose settings → Preview Server Changes → Apply Reviewed Changes")
+    embed.set_footer(text="Draft settings only → Preview one scope → Apply reviewed names")
     return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
 
 
@@ -241,8 +299,9 @@ class DesignServerView(DesignView):
         super().__init__(timeout=900)
         self.add_item(DesignServerThemeSelect(_safe_str(options.get("theme_id"), "gothic_clean")))
         self.add_item(DesignServerStrengthSelect(_safe_int(options.get("strength"), 4)))
+        self.add_item(DesignServerSeparatorSelect(_design_server_separator(options)))
 
-    @discord.ui.button(label="Preview Server Changes", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design_v2:server_preview", row=2)
+    @discord.ui.button(label="Preview Entire Server", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design_v2:server_preview", row=3)
     async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -253,22 +312,40 @@ class DesignServerView(DesignView):
         items, plan_options, _analysis = await plans.build_saved_design_plan(guild, options)
         await _store_preview(interaction, items, plan_options, mode="preview_server_v2", title="👁️ Server Design Preview")
 
-    @discord.ui.button(label="Change Separators Only", emoji="⚡", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:separator_only", row=2)
+    @discord.ui.button(label="Preview Separator Only", emoji="⚡", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:separator_only", row=3)
     async def separator_only(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=True)
         options = await _load_design_options(int(guild.id))
-        theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
-        current = rule_service.effective_draft_separator(
+        selected = _design_server_separator(options)
+        items = legacy._build_channel_separator_style_change_plan(  # type: ignore[attr-defined]
+            guild,
             options,
-            theme_separator=_safe_str(getattr(theme, "channel_separator", "none"), "none"),
+            separator_id=selected,
         )
-        selected = "bar_heavy" if current == "none" else current
-        await interaction.response.edit_message(
-            embed=legacy._style_change_embed(guild, options, separator_id=selected),  # type: ignore[attr-defined]
-            view=legacy.StyleChangeView(separator_id=selected),
+        has_blockers = any(item.get("status") == "failed" for item in items)
+        has_changes = any(item.get("status") == "changed" for item in items)
+        created_at = legacy._store_pending(  # type: ignore[attr-defined]
+            int(guild.id),
+            int(interaction.user.id),
+            {
+                "items": items,
+                "options": dict(options),
+                "mode": "style_change_separator",
+                "style_change_dimension": "channel_separator",
+                "separator_id": selected,
+            },
+        )
+        await interaction.edit_original_response(
+            embed=legacy._style_change_preview_embed(guild, items, separator_id=selected),  # type: ignore[attr-defined]
+            view=LegacyStyleChangePreviewView(
+                can_apply=not has_blockers and has_changes,
+                has_blockers=has_blockers,
+                pending_created_at=created_at,
+            ),
         )
 
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:server_back", row=4)
