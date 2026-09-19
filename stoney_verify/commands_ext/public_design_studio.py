@@ -382,7 +382,7 @@ def _current_format_lock(options: Mapping[str, Any], *, scope: str = "global") -
     """Build a reusable lock from the current server draft.
 
     An explicitly saved separator is part of the draft and must win over the
-    theme default. Otherwise changing Theme/Strength while a global lock is
+    theme default. Otherwise changing Theme/Font/Strength while a global lock is
     enabled can silently resurrect the theme separator the user already replaced.
     """
 
@@ -686,7 +686,7 @@ def _format_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> dis
     embed = discord.Embed(
         title="🔐 Saved Layout Rules",
         description=(
-            "Your server draft and saved locks are separate on purpose. Changing the server Theme/Strength updates an active global lock, "
+            "Your server draft and saved locks are separate on purpose. Changing the server Theme/Font/Strength updates an active global lock, "
             "but never overwrites category/channel/exact-name rules."
         ),
         color=discord.Color.blurple(),
@@ -1159,7 +1159,7 @@ class FormatLocksView(LegacyDesignView):
             description=(
                 "This is the broad reset. It clears **all saved layout/name exceptions and all saved protection overrides**. "
                 "It does not rename channels now, and it does not change permissions or other server settings.\n\n"
-                "For an ordinary server redesign, use **Design Entire Server → Start Clean Redesign** instead. "
+                "For an ordinary server redesign, use **Design Entire Server → Clean Redesign** instead. "
                 "That safer option keeps protection rules."
             ),
             color=discord.Color.orange(),
