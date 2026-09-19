@@ -63,7 +63,7 @@ def test_server_style_controls_are_only_inside_design_server() -> None:
 def test_server_font_picker_fits_discord_and_exposes_full_catalog() -> None:
     view = studio_v2.DesignServerView({"theme_id": "gothic_clean", "strength": 4})
     picker = next(item for item in view.children if isinstance(item, studio_v2.DesignServerFontSelect))
-    assert len(picker.options) == len(studio.FONT_STYLES) + 1
+    assert len(picker.options) == len(studio.DESIGN_FONT_STYLES) + 1
     assert len(picker.options) <= 25
     values = {str(option.value) for option in picker.options}
     assert {"__theme__", "sans", "double_struck", "fraktur", "small_caps"} <= values
