@@ -14,3 +14,4 @@ build/
 *.bak
 .dank_login_backoff_until
 .dank_command_sync_state.json
+.runtime_fonts/
