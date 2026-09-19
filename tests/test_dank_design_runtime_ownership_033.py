@@ -106,6 +106,49 @@ def test_design_navigation_acknowledges_before_config_reads() -> None:
         assert block.index("await interaction.response.defer") < block.index("await _load_design_options")
 
 
+def test_io_backed_design_routes_acknowledge_before_work() -> None:
+    exact_start = LEGACY.index("async def _open_exact_format_editor")
+    exact_end = LEGACY.index("async def _update_exact_draft", exact_start)
+    exact_open = LEGACY[exact_start:exact_end]
+    assert exact_open.index("await interaction.response.defer") < exact_open.index("await _load_design_options")
+    assert "await interaction.edit_original_response" in exact_open
+
+    examples_start = LEGACY.index("async def layout_examples")
+    examples_end = LEGACY.index("async def save_and_preview", examples_start)
+    examples = LEGACY[examples_start:examples_end]
+    assert examples.index("await interaction.response.defer") < examples.index("await _load_design_options")
+
+    style_start = LEGACY.index("async def use_server_style")
+    style_end = LEGACY.index("async def set_emoji", style_start)
+    style = LEGACY[style_start:style_end]
+    assert style.index("await interaction.response.defer") < style.index("await _load_design_options")
+
+    undo_start = V2.index("async def _open_undo")
+    undo_end = V2.index("class UndoConfirmView", undo_start)
+    undo = V2[undo_start:undo_end]
+    assert undo.index("await interaction.response.defer") < undo.index("await legacy._latest_rollback_snapshot")
+    assert "await interaction.edit_original_response" in undo
+
+
+def test_compatibility_rule_and_protection_actions_ack_before_storage() -> None:
+    checks = (
+        ("class LockRemoveButton", "class LockManagerPageButton", "_remove_format_lock"),
+        ("class LockManagerPageButton", "class LockManagerView", "_load_design_options"),
+        ("class CleanStaleLocksButton", "class BackToLocksOrDesignButton", "_clean_stale_format_locks"),
+        ("class BackToLocksOrDesignButton", "# ---------------------------------------------------------------------------\n# Protection Manager", "_load_design_options"),
+        ("async def allow_font_defaults", "async def restore_defaults", "_set_default_protection_rules"),
+        ("async def restore_defaults", '@discord.ui.button(label="Pick Category"', "_set_default_protection_rules"),
+        ("class ProtectionModeSelect", "class ProtectionModeView", "_save_protection_rule"),
+        ("class StyleChangeSeparatorSelect", "class StyleChangeView", "_load_design_options"),
+    )
+    for start_marker, end_marker, io_marker in checks:
+        start = LEGACY.index(start_marker)
+        end = LEGACY.index(end_marker, start)
+        block = LEGACY[start:end]
+        assert "await interaction.response.defer" in block
+        assert block.index("await interaction.response.defer") < block.index(io_marker)
+
+
 def test_historical_design_mutators_are_removed() -> None:
     assert not list((ROOT / "tools").glob("apply_dank_design_*.py"))
     assert not list((ROOT / "tools").glob("apply_p0_int_design_*.py"))
