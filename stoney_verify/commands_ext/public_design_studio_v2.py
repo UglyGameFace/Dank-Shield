@@ -829,12 +829,19 @@ async def _open_undo(interaction: discord.Interaction) -> None:
         return
     guild = interaction.guild
     assert guild is not None
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=False)
     latest = await legacy._latest_rollback_snapshot(int(guild.id))  # type: ignore[attr-defined]
     if not latest:
-        await interaction.response.send_message("No applied Dank Design batch is available to undo.", ephemeral=True)
+        await legacy.safe_send_interaction(  # type: ignore[attr-defined]
+            interaction,
+            content="No applied Dank Design batch is available to undo.",
+            ephemeral=True,
+            action_name="design.v2.undo.none",
+        )
         return
     created_at = _safe_float(latest.get("created_at"), 0.0)
-    await interaction.response.edit_message(embed=_undo_preview_embed(latest), view=UndoConfirmView(snapshot_created_at=created_at))
+    await interaction.edit_original_response(embed=_undo_preview_embed(latest), view=UndoConfirmView(snapshot_created_at=created_at))
 
 
 class DoneView(DesignView):
