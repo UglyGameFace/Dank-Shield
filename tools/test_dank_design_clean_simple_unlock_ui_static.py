@@ -47,6 +47,8 @@ def test_current_design_contract_keeps_preview_first_safety() -> None:
     assert "Preview Entire Server" in V2
     assert "Preview Separator Only" in V2
     assert "DesignServerSeparatorSelect" in V2
+    assert "Start Clean Redesign" in V2
+    assert "Clear Saved Design Overrides" in V2
     assert "Apply Reviewed Changes" in V2
     assert "Nothing is renamed" in V2
     assert "Undo Last Apply" in V2
