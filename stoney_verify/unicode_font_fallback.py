@@ -7,10 +7,11 @@ names are not restricted to that font's cmap.  This module keeps the original
 Unicode text intact, chooses a face per grapheme cluster, groups adjacent
 clusters back into shaped runs, and asks Pillow/RAQM to shape each run.
 
-Fallback fonts are discovered through JustMyType.  The production requirements
-install Noto packs for Western/math/symbol, RTL, South Asian, Southeast Asian,
-African, CJK, and monochrome emoji coverage.  System Noto faces are considered
-as well.  No transliteration or compatibility normalization happens here.
+Fallback fonts are discovered through JustMyType. The production requirements
+install Noto packs for common script families, while deployment provisions a
+Canadian-Aboriginal Noto face plus GNU Unifont Plane 0/upper safety nets for
+long-tail coverage. No transliteration or compatibility normalization happens
+here.
 """
 
 from dataclasses import dataclass, field
@@ -650,7 +651,6 @@ __all__ = [
     "fallback_sources",
     "grapheme_clusters",
     "load_font",
-    "_long_tail_fallback_paths",
     "measure_text",
     "render_text_mask",
     "resolve_font_runs",
