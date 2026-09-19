@@ -42,9 +42,8 @@ _STYLE_LABELS: dict[str, str] = {
     "circled": "Circled",
     "parenthesized": "Parenthesized",
     "small_caps": "Small Caps",
-    "upside_down": "Upside Down",
 }
-_RISKY_STYLES = {"double_struck", "script", "bold_script", "fraktur", "bold_fraktur", "circled", "parenthesized", "upside_down"}
+_RISKY_STYLES = {"double_struck", "script", "bold_script", "fraktur", "bold_fraktur", "circled", "parenthesized"}
 _SCOPE_LABELS: dict[str, str] = {
     "whole_name": "Style generated name",
     "text_only": "Text only — keep emoji",
