@@ -287,6 +287,33 @@ async def _guard_design_action(
     )
 
 
+class LegacyDesignView(discord.ui.View):
+    """Safe error boundary for legacy editor surfaces still used by V2."""
+
+    async def on_error(
+        self,
+        interaction: discord.Interaction,
+        error: Exception,
+        item: discord.ui.Item[Any],
+    ) -> None:
+        try:
+            print(f"⚠️ Dank Design legacy component failed: {type(error).__name__}: {error}")
+        except Exception:
+            pass
+        try:
+            await safe_send_interaction(
+                interaction,
+                content=(
+                    "❌ Dank Design stopped this action safely. Nothing else was changed. "
+                    "Reopen /dank home → **Server Design** and try again."
+                ),
+                ephemeral=True,
+                action_name="design.legacy.component_error",
+            )
+        except Exception:
+            pass
+
+
 async def _load_design_options(guild_id: int) -> dict[str, Any]:
     default = {"theme_id": "gothic_clean", "strength": 4, "icon_mode": "replace_missing", "protection_rules": {}, "protection_item_rules": {}}
     key = _guild_key(int(guild_id))
@@ -1009,7 +1036,7 @@ class ChannelFormatLockSelect(discord.ui.ChannelSelect):
         await interaction.edit_original_response(embed=embed, view=FormatLocksView())
 
 
-class CategoryFormatLockPickerView(discord.ui.View):
+class CategoryFormatLockPickerView(LegacyDesignView):
     def __init__(self) -> None:
         super().__init__(timeout=900)
         self.add_item(CategoryFormatLockSelect())
@@ -1024,7 +1051,7 @@ class CategoryFormatLockPickerView(discord.ui.View):
         await interaction.edit_original_response(embed=_format_locks_embed(interaction.guild, options), view=FormatLocksView())
 
 
-class ChannelFormatLockPickerView(discord.ui.View):
+class ChannelFormatLockPickerView(LegacyDesignView):
     def __init__(self) -> None:
         super().__init__(timeout=900)
         self.add_item(ChannelFormatLockSelect())
@@ -1039,7 +1066,7 @@ class ChannelFormatLockPickerView(discord.ui.View):
         await interaction.edit_original_response(embed=_format_locks_embed(interaction.guild, options), view=FormatLocksView())
 
 
-class ResetAllDesignStateConfirmView(discord.ui.View):
+class ResetAllDesignStateConfirmView(LegacyDesignView):
     def __init__(self) -> None:
         super().__init__(timeout=300)
 
@@ -1070,7 +1097,7 @@ class ResetAllDesignStateConfirmView(discord.ui.View):
         await interaction.edit_original_response(embed=_format_locks_embed(guild, options), view=FormatLocksView())
 
 
-class FormatLocksView(discord.ui.View):
+class FormatLocksView(LegacyDesignView):
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
@@ -2119,7 +2146,7 @@ class SeparatorExamplesBackButton(discord.ui.Button):
         await _guard_design_action(interaction, "design.exact.examples.back", action, defer=False)
 
 
-class SeparatorExamplesView(discord.ui.View):
+class SeparatorExamplesView(LegacyDesignView):
     def __init__(self, guild: discord.Guild, *, scope: str, target_id: int, lock: Mapping[str, Any], page: int = 0) -> None:
         super().__init__(timeout=900)
         self.scope = scope
@@ -2188,7 +2215,7 @@ async def _save_exact_and_preview(interaction: discord.Interaction, *, scope: st
 
 
 
-class ExactFormatEditorView(discord.ui.View):
+class ExactFormatEditorView(LegacyDesignView):
     def __init__(self, *, scope: str, target_id: int) -> None:
         super().__init__(timeout=900)
         self.scope = scope
@@ -2674,7 +2701,7 @@ class ChannelPickButton(discord.ui.Button):
         )
 
 
-class CategoryEditorPickerView(discord.ui.View):
+class CategoryEditorPickerView(LegacyDesignView):
     def __init__(self, guild: discord.Guild, *, page: int = 0) -> None:
         super().__init__(timeout=900)
         categories = list(getattr(guild, "categories", []) or [])
@@ -2707,7 +2734,7 @@ class CategoryPageButton(discord.ui.Button):
         await interaction.response.edit_message(embed=_category_editor_embed(guild, page=self.page), view=CategoryEditorPickerView(guild, page=self.page))
 
 
-class ChannelEditorPickerView(discord.ui.View):
+class ChannelEditorPickerView(LegacyDesignView):
     def __init__(self, guild: discord.Guild, *, page: int = 0, category_id: int | None = None) -> None:
         super().__init__(timeout=900)
 
@@ -3038,7 +3065,7 @@ def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
     embed.set_footer(text="Rename is instant • Preview Fixes and Custom Format use Apply later")
     return _clean_design_embed(embed)
 
-class CategoryEditorActionView(discord.ui.View):
+class CategoryEditorActionView(LegacyDesignView):
     def __init__(self, category_id: int) -> None:
         super().__init__(timeout=900)
         self.category_id = int(category_id)
@@ -3160,7 +3187,7 @@ class CategoryEditorActionView(discord.ui.View):
         assert guild is not None
         await interaction.response.edit_message(embed=_category_editor_embed(guild, page=0), view=CategoryEditorPickerView(guild, page=0))
 
-class ChannelEditorActionView(discord.ui.View):
+class ChannelEditorActionView(LegacyDesignView):
     def __init__(self, channel_id: int, *, category_id: int | None = None) -> None:
         super().__init__(timeout=900)
         self.channel_id = int(channel_id)
@@ -3516,7 +3543,7 @@ class LockManagerPageButton(discord.ui.Button):
         )
 
 
-class LockManagerView(discord.ui.View):
+class LockManagerView(LegacyDesignView):
     def __init__(self, guild: discord.Guild, options: Mapping[str, Any], *, page: int = 0) -> None:
         super().__init__(timeout=900)
 
@@ -3730,7 +3757,7 @@ def _protection_manager_embed(guild: discord.Guild, options: Mapping[str, Any]) 
     return _clean_design_embed(embed)
 
 
-class ProtectionManagerView(discord.ui.View):
+class ProtectionManagerView(LegacyDesignView):
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
@@ -3824,7 +3851,7 @@ class ProtectionModeSelect(discord.ui.Select):
         await interaction.edit_original_response(embed=embed, view=view)
 
 
-class ProtectionModeView(discord.ui.View):
+class ProtectionModeView(LegacyDesignView):
     def __init__(self, *, channel_id: int, current: str | None = None) -> None:
         super().__init__(timeout=900)
         self.channel_id = int(channel_id)
@@ -4419,7 +4446,7 @@ class StyleChangeSeparatorSelect(discord.ui.Select):
 
 
 
-class StyleChangeView(discord.ui.View):
+class StyleChangeView(LegacyDesignView):
     def __init__(self, *, separator_id: str = "bar_heavy") -> None:
         super().__init__(timeout=900)
         self.separator_id = _safe_str(separator_id, "bar_heavy")
@@ -4476,14 +4503,14 @@ class StyleChangeView(discord.ui.View):
 
 
 
-class DesignHomeView(discord.ui.View):
+class DesignHomeView(LegacyDesignView):
     """Import-time compatibility symbol; V2 replaces it before public use."""
 
     def __init__(self, options: Mapping[str, Any] | None = None) -> None:
         super().__init__(timeout=900)
 
 
-class DesignPreviewView(discord.ui.View):
+class DesignPreviewView(LegacyDesignView):
     """Import-time base only; V2 owns every active reviewed Apply surface."""
 
     def __init__(self, *, can_apply: bool, pending_created_at: float | None = None) -> None:
