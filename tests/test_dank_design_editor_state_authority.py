@@ -116,6 +116,39 @@ def test_item_lock_buttons_capture_live_item_style_not_global_preset() -> None:
     assert "async def _save_live_target_format_lock(" in PUBLIC_STUDIO
 
 
+def test_broad_reset_requires_explicit_confirmation() -> None:
+    view_start = PUBLIC_STUDIO.index("class FormatLocksView")
+    view_end = PUBLIC_STUDIO.index("# ---------------------------------------------------------------------------\n# Custom Format Editor", view_start)
+    view = PUBLIC_STUDIO[view_start:view_end]
+
+    assert 'label="Reset All Rules + Protection"' in view
+    clear_start = view.index("async def clear_all")
+    clear_end = view.index("@discord.ui.button", clear_start + 1)
+    clear_block = view[clear_start:clear_end]
+    assert "ResetAllDesignStateConfirmView()" in clear_block
+    assert "_clear_all_locks(interaction)" not in clear_block
+
+    confirm_start = PUBLIC_STUDIO.index("class ResetAllDesignStateConfirmView")
+    confirm_end = PUBLIC_STUDIO.index("class FormatLocksView", confirm_start)
+    confirm = PUBLIC_STUDIO[confirm_start:confirm_end]
+    assert "_clear_all_locks(interaction)" in confirm
+    assert "await interaction.response.defer" in confirm
+
+
+def test_layout_rule_saves_acknowledge_before_storage_io() -> None:
+    for start_marker, call in (
+        ("class CategoryFormatLockSelect", "_save_category_lock"),
+        ("class ChannelFormatLockSelect", "_save_channel_lock"),
+        ("class FormatLocksView", "_save_global_lock"),
+    ):
+        start = PUBLIC_STUDIO.index(start_marker)
+        call_at = PUBLIC_STUDIO.index(call, start)
+        block_start = PUBLIC_STUDIO.rfind("async def ", start, call_at)
+        block = PUBLIC_STUDIO[block_start:call_at + len(call)]
+        assert "await interaction.response.defer" in block
+        assert block.index("await interaction.response.defer") < block.index(call)
+
+
 def test_config_saves_invalidate_old_pending_previews() -> None:
     assert "def _invalidate_pending_for_guild" in PUBLIC_STUDIO
     save_start = PUBLIC_STUDIO.index("async def _save_design_options")
