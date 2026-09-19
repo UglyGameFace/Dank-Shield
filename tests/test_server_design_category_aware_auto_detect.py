@@ -22,6 +22,8 @@ def _record(record_id: int, category_id: int | None, name: str, *, kind: str = "
 
 def test_exact_font_detection_distinguishes_supported_lettering_families() -> None:
     for font in (
+        "sans",
+        "double_struck",
         "fraktur",
         "bold_fraktur",
         "bold_sans",
