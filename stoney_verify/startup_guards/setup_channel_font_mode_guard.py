@@ -25,6 +25,7 @@ _RUNTIME_FONT_OPTIONS: dict[str, dict[str, str]] = {}
 
 _STYLE_LABELS: dict[str, str] = {
     "normal": "Normal",
+    "sans": "Clean Sans",
     "bold_sans": "Bold Sans",
     "italic_sans": "Italic Sans",
     "bold_italic_sans": "Bold Italic Sans",
@@ -33,6 +34,7 @@ _STYLE_LABELS: dict[str, str] = {
     "serif_bold": "Serif Bold",
     "serif_italic": "Serif Italic",
     "serif_bold_italic": "Serif Bold Italic",
+    "double_struck": "Double-Struck",
     "script": "Script",
     "bold_script": "Bold Script",
     "fraktur": "Fraktur / Gothic",
@@ -40,15 +42,15 @@ _STYLE_LABELS: dict[str, str] = {
     "circled": "Circled",
     "parenthesized": "Parenthesized",
     "small_caps": "Small Caps",
-    "upside_down": "Upside Down",
 }
-_RISKY_STYLES = {"script", "bold_script", "fraktur", "bold_fraktur", "circled", "parenthesized", "upside_down"}
+_RISKY_STYLES = {"double_struck", "script", "bold_script", "fraktur", "bold_fraktur", "circled", "parenthesized"}
 _SCOPE_LABELS: dict[str, str] = {
     "whole_name": "Style generated name",
     "text_only": "Text only — keep emoji",
 }
 _STYLE_EXAMPLES: dict[str, tuple[str, str]] = {
     "normal": ("gaming-clips", "🔥・general-chat"),
+    "sans": ("𝗀𝖺𝗆𝗂𝗇𝗀-𝖼𝗅𝗂𝗉𝗌", "🔥・𝗀𝖾𝗇𝖾𝗋𝖺𝗅-𝖼𝗁𝖺𝗍"),
     "bold_sans": ("𝗴𝗮𝗺𝗶𝗻𝗴-𝗰𝗹𝗶𝗽𝘀", "🔥・𝗴𝗲𝗻𝗲𝗿𝗮𝗹-𝗰𝗵𝗮𝘁"),
     "italic_sans": ("𝘨𝘢𝘮𝘪𝘯𝘨-𝘤𝘭𝘪𝘱𝘴", "🔥・𝘨𝘦𝘯𝘦𝘳𝘢𝘭-𝘤𝘩𝘢𝘵"),
     "bold_italic_sans": ("𝙜𝙖𝙢𝙞𝙣𝙜-𝙘𝙡𝙞𝙥𝙨", "🔥・𝙜𝙚𝙣𝙚𝙧𝙖𝙡-𝙘𝙝𝙖𝙩"),
@@ -57,6 +59,7 @@ _STYLE_EXAMPLES: dict[str, tuple[str, str]] = {
     "serif_bold": ("𝐠𝐚𝐦𝐢𝐧𝐠-𝐜𝐥𝐢𝐩𝐬", "🔥・𝐠𝐞𝐧𝐞𝐫𝐚𝐥-𝐜𝐡𝐚𝐭"),
     "serif_italic": ("𝑔𝑎𝑚𝑖𝑛𝑔-𝑐𝑙𝑖𝑝𝑠", "🔥・𝑔𝑒𝑛𝑒𝑟𝑎𝑙-𝑐ℎ𝑎𝑡"),
     "serif_bold_italic": ("𝒈𝒂𝒎𝒊𝒏𝒈-𝒄𝒍𝒊𝒑𝒔", "🔥・𝒈𝒆𝒏𝒆𝒓𝒂𝒍-𝒄𝒉𝒂𝒕"),
+    "double_struck": ("𝕘𝕒𝕞𝕚𝕟𝕘-𝕔𝕝𝕚𝕡𝕤", "🔥・𝕘𝕖𝕟𝕖𝕣𝕒𝕝-𝕔𝕙𝕒𝕥"),
     "script": ("𝑔𝒶𝓂𝒾𝓃𝑔-𝒸𝓁𝒾𝓅𝓈", "🔥・𝑔𝑒𝓃𝑒𝓇𝒶𝓁-𝒸𝒽𝒶𝓉"),
     "bold_script": ("𝓰𝓪𝓶𝓲𝓷𝓰-𝓬𝓵𝓲𝓹𝓼", "🔥・𝓰𝓮𝓷𝓮𝓻𝓪𝓵-𝓬𝓱𝓪𝓽"),
     "fraktur": ("𝔤𝔞𝔪𝔦𝔫𝔤-𝔠𝔩𝔦𝔭𝔰", "🔥・𝔤𝔢𝔫𝔢𝔯𝔞𝔩-𝔠𝔥𝔞𝔱"),

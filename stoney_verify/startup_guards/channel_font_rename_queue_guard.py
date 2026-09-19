@@ -164,6 +164,7 @@ def _selected_style(options: dict[str, str]) -> str:
 def _font_label(style: str) -> str:
     labels = {
         "normal": "Normal",
+        "sans": "Clean Sans",
         "bold_sans": "Bold Sans",
         "italic_sans": "Italic Sans",
         "bold_italic_sans": "Bold Italic Sans",
@@ -172,6 +173,7 @@ def _font_label(style: str) -> str:
         "serif_bold": "Serif Bold",
         "serif_italic": "Serif Italic",
         "serif_bold_italic": "Serif Bold Italic",
+        "double_struck": "Double-Struck",
         "script": "Script",
         "bold_script": "Bold Script",
         "fraktur": "Fraktur",
@@ -193,6 +195,8 @@ def _compatible_font_chain(options: dict[str, str]) -> tuple[str, ...]:
         "small_caps": ("bold_sans", "monospace", "fullwidth"),
         "parenthesized": ("circled", "bold_sans", "monospace", "fullwidth"),
         "circled": ("bold_sans", "monospace", "fullwidth"),
+        "sans": ("bold_sans", "monospace", "fullwidth"),
+        "double_struck": ("serif_bold", "bold_sans", "monospace", "fullwidth"),
         "serif_italic": ("serif_bold_italic", "italic_sans", "bold_italic_sans", "bold_sans", "monospace", "fullwidth"),
         "serif_bold_italic": ("serif_italic", "bold_italic_sans", "bold_sans", "monospace", "fullwidth"),
     }

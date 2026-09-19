@@ -52,17 +52,21 @@ _MATH_ALPHA_BASES: dict[str, tuple[int, int]] = {
     "BOLD": (0x1D400, 0x1D41A),
     "ITALIC": (0x1D434, 0x1D44E),
     "BOLD ITALIC": (0x1D468, 0x1D482),
+    "SANS-SERIF": (0x1D5A0, 0x1D5BA),
     "SANS-SERIF BOLD": (0x1D5D4, 0x1D5EE),
     "SANS-SERIF ITALIC": (0x1D608, 0x1D622),
     "SANS-SERIF BOLD ITALIC": (0x1D63C, 0x1D656),
     "MONOSPACE": (0x1D670, 0x1D68A),
+    "DOUBLE-STRUCK": (0x1D538, 0x1D552),
     "BOLD SCRIPT": (0x1D4D0, 0x1D4EA),
     "BOLD FRAKTUR": (0x1D56C, 0x1D586),
 }
 
 _MATH_DIGIT_BASES: dict[str, int] = {
     "BOLD": 0x1D7CE,
+    "SANS-SERIF": 0x1D7E2,
     "SANS-SERIF BOLD": 0x1D7EC,
+    "DOUBLE-STRUCK": 0x1D7D8,
     "MONOSPACE": 0x1D7F6,
 }
 
@@ -130,6 +134,8 @@ def _explicit(rows: list[tuple[str, int | str]]) -> dict[str, str]:
 
 def _unicode_map(style: str) -> dict[str, str]:
     style = safe_str(style).lower().replace("-", "_")
+    if style == "sans":
+        return _math_letters("SANS-SERIF", digit_prefix="SANS-SERIF")
     if style == "bold_sans":
         return _math_letters("SANS-SERIF BOLD", digit_prefix="SANS-SERIF BOLD")
     if style == "italic_sans":
@@ -146,6 +152,20 @@ def _unicode_map(style: str) -> dict[str, str]:
         return _math_letters("ITALIC", special={"h": chr(0x210E)})
     if style == "serif_bold_italic":
         return _math_letters("BOLD ITALIC")
+    if style == "double_struck":
+        return _math_letters(
+            "DOUBLE-STRUCK",
+            digit_prefix="DOUBLE-STRUCK",
+            special={
+                "C": chr(0x2102),
+                "H": chr(0x210D),
+                "N": chr(0x2115),
+                "P": chr(0x2119),
+                "Q": chr(0x211A),
+                "R": chr(0x211D),
+                "Z": chr(0x2124),
+            },
+        )
     if style == "script":
         return _math_letters(
             "SCRIPT",
@@ -242,6 +262,8 @@ def _fallback_styles_for(style: str) -> tuple[str, ...]:
         "small_caps": ("small_caps", "bold_sans", "monospace", "fullwidth"),
         "parenthesized": ("parenthesized", "circled", "bold_sans", "monospace", "fullwidth"),
         "circled": ("circled", "parenthesized", "bold_sans", "monospace", "fullwidth"),
+        "double_struck": ("double_struck", "serif_bold", "bold_sans", "monospace", "fullwidth"),
+        "sans": ("sans", "bold_sans", "monospace", "fullwidth"),
     }
     return close.get(style, (style, "bold_sans", "monospace", "fullwidth"))
 

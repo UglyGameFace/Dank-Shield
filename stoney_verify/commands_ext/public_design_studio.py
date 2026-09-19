@@ -21,6 +21,7 @@ from typing import Any, Awaitable, Callable, Mapping
 import discord
 
 from stoney_verify.interaction_guard import run_guarded_interaction, safe_send_interaction
+from stoney_verify.services import server_design_plan_service as plan_service
 from stoney_verify.services import server_design_studio as studio
 from stoney_verify.services import server_design_rule_service as rule_service
 
@@ -382,21 +383,23 @@ def _current_format_lock(options: Mapping[str, Any], *, scope: str = "global") -
     """Build a reusable lock from the current server draft.
 
     An explicitly saved separator is part of the draft and must win over the
-    theme default. Otherwise changing Theme/Strength while a global lock is
+    theme default. Otherwise changing Theme/Font/Strength while a global lock is
     enabled can silently resurrect the theme separator the user already replaced.
     """
 
     theme = _theme_from_options(options)
     strength = max(1, min(5, _safe_int(options.get("strength"), 4)))
-    font = _safe_str(getattr(theme, "font", "normal"), "normal").lower().replace("-", "_")
-    theme_separator = _safe_str(getattr(theme, "channel_separator", "bar_full"), "bar_full")
+    font = _safe_str(options.get("font") or getattr(theme, "font", "normal"), "normal").lower().replace("-", "_")
+    if font not in studio.DESIGN_FONT_STYLES:
+        font = _safe_str(getattr(theme, "font", "normal"), "normal").lower().replace("-", "_")
+    separator_id = plan_service.effective_server_separator_id(options)
 
     return {
         "scope": scope,
         "theme_id": _safe_str(getattr(theme, "id", "gothic_clean"), "gothic_clean"),
         "strength": strength,
         "font": font,
-        "separator_id": rule_service.effective_draft_separator(options, theme_separator=theme_separator),
+        "separator_id": separator_id,
         "category_frame_id": _safe_str(getattr(theme, "category_frame", "line"), "line"),
         "emoji_override": _safe_str(options.get("emoji_override"), ""),
         "exact_match": bool(options.get("exact_match", False)),
@@ -684,7 +687,7 @@ def _format_locks_embed(guild: discord.Guild, options: Mapping[str, Any]) -> dis
     embed = discord.Embed(
         title="🔐 Saved Layout Rules",
         description=(
-            "Your server draft and saved locks are separate on purpose. Changing the server Theme/Strength updates an active global lock, "
+            "Your server draft and saved locks are separate on purpose. Changing the server Theme/Font/Strength updates an active global lock, "
             "but never overwrites category/channel/exact-name rules."
         ),
         color=discord.Color.blurple(),
@@ -1157,7 +1160,7 @@ class FormatLocksView(LegacyDesignView):
             description=(
                 "This is the broad reset. It clears **all saved layout/name exceptions and all saved protection overrides**. "
                 "It does not rename channels now, and it does not change permissions or other server settings.\n\n"
-                "For an ordinary server redesign, use **Design Entire Server → Start Clean Redesign** instead. "
+                "For an ordinary server redesign, use **Design Entire Server → Clean Redesign** instead. "
                 "That safer option keeps protection rules."
             ),
             color=discord.Color.orange(),
@@ -1188,12 +1191,7 @@ EDITOR_SEPARATOR_IDS = (
     "bracket_lenticular",
 )
 
-EDITOR_FONT_IDS = (
-    "normal", "fraktur", "bold_fraktur", "bold_sans", "serif_bold",
-    "monospace", "fullwidth", "small_caps", "script", "bold_script",
-    "italic_sans", "bold_italic_sans", "serif_italic", "serif_bold_italic",
-    "circled", "parenthesized",
-)
+EDITOR_FONT_IDS = studio.DESIGN_FONT_STYLES
 
 
 def _format_editor_key(guild_id: int, user_id: int, scope: str, target_id: int) -> str:
@@ -1349,7 +1347,7 @@ def _live_target_exact_lock(
             majority.detect_font_id(studio, name),
             "normal",
         ).lower().replace("-", "_")
-        lock["font"] = detected_font if detected_font in studio.FONT_STYLES else "normal"
+        lock["font"] = detected_font if detected_font in studio.DESIGN_FONT_STYLES else "normal"
 
         if scope == "channel":
             separator = majority.detect_channel_separator(studio, name)
@@ -1780,25 +1778,8 @@ def _exact_font_example_text(font_id: str) -> str:
 
 def _exact_font_option_label(font_id: str) -> str:
     font_id = _safe_str(font_id, "normal").lower().replace("-", "_")
-    labels = {
-        "normal": "Normal Text",
-        "fraktur": "Gothic / Fraktur",
-        "bold_fraktur": "Bold Gothic",
-        "bold_sans": "Bold Clean",
-        "serif_bold": "Bold Serif",
-        "monospace": "Monospace",
-        "fullwidth": "Full-width",
-        "small_caps": "Small Caps",
-        "script": "Script",
-        "bold_script": "Bold Script",
-        "italic_sans": "Italic Clean",
-        "bold_italic_sans": "Bold Italic Clean",
-        "serif_italic": "Italic Serif",
-        "serif_bold_italic": "Bold Italic Serif",
-        "circled": "Circled",
-        "parenthesized": "Parenthesized",
-    }
-    return labels.get(font_id, font_id.replace("_", " ").title())[:100]
+    label = studio.font_label(font_id)
+    return ("Normal Text" if font_id == "normal" else label)[:100]
 
 
 def _exact_font_option_description(font_id: str) -> str:
@@ -1806,7 +1787,8 @@ def _exact_font_option_description(font_id: str) -> str:
     example = _exact_font_example_text(font_id)
     if font_id == "normal":
         return "Most readable/searchable. Example: gaming-news"
-    return f"Example: {example}"[:100]
+    risk = "Decorative; preview carefully" if font_id in studio.RISKY_FONTS else "Readable style"
+    return f"{risk}. Example: {example}"[:100]
 
 
 def _exact_separator_preview_text(separator_id: str, *, emoji: str = "🎮", name: str = "gaming-news") -> str:
