@@ -35,6 +35,17 @@ _VARIATION_SELECTORS = frozenset(
     list(range(0xFE00, 0xFE10)) + list(range(0xE0100, 0xE01F0))
 )
 _ZWJ = 0x200D
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_RUNTIME_FONT_DIR = _PROJECT_ROOT / ".runtime_fonts"
+_LONG_TAIL_FONT_NAMES = (
+    "FreeSans.ttf",
+    "unifont-17.0.03.otf",
+    "unifont_upper-17.0.03.otf",
+)
+_SYSTEM_LONG_TAIL_PATHS = (
+    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    "/usr/share/fonts/opentype/freefont/FreeSans.otf",
+)
 
 
 @dataclass(frozen=True)
@@ -274,6 +285,30 @@ def _source_key_for_path(path: str, *, prefix: str) -> str:
     return f"{prefix}:{Path(path).name}:{sha256(path.encode('utf-8', 'ignore')).hexdigest()[:10]}"
 
 
+@lru_cache(maxsize=1)
+def _long_tail_fallback_paths() -> tuple[str, ...]:
+    """Return deterministic app-local fallbacks followed by common system copies."""
+
+    candidates = [
+        *(_RUNTIME_FONT_DIR / name for name in _LONG_TAIL_FONT_NAMES),
+        *(Path(path) for path in _SYSTEM_LONG_TAIL_PATHS),
+    ]
+    paths: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        path = str(candidate)
+        if path in seen:
+            continue
+        try:
+            if not candidate.is_file():
+                continue
+        except Exception:
+            continue
+        seen.add(path)
+        paths.append(path)
+    return tuple(paths)
+
+
 def fallback_sources(
     *,
     primary_paths: Sequence[str],
@@ -318,6 +353,21 @@ def fallback_sources(
         sources.append(
             FontSource(
                 key=_source_key_for_path(path, prefix="fallback"),
+                path=path,
+            )
+        )
+
+    # App-local long-tail faces are intentionally last.  Preferred/theme/custom
+    # fonts and script-specific Noto faces win first; FreeSans then fills broad
+    # historical/script gaps, and GNU Unifont is the final standardized-Unicode
+    # safety net instead of a tofu box.
+    for path in _long_tail_fallback_paths():
+        if path in seen_paths:
+            continue
+        seen_paths.add(path)
+        sources.append(
+            FontSource(
+                key=_source_key_for_path(path, prefix="long-tail"),
                 path=path,
             )
         )
@@ -598,6 +648,7 @@ __all__ = [
     "fallback_sources",
     "grapheme_clusters",
     "load_font",
+    "_long_tail_fallback_paths",
     "measure_text",
     "render_text_mask",
     "resolve_font_runs",
