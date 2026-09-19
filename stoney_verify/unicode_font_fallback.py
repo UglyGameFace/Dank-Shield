@@ -38,7 +38,7 @@ _ZWJ = 0x200D
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _RUNTIME_FONT_DIR = _PROJECT_ROOT / ".runtime_fonts"
 _LONG_TAIL_FONT_NAMES = (
-    "FreeSans.ttf",
+    "NotoSansCanadianAboriginal-Variable.ttf",
     "unifont-17.0.03.otf",
     "unifont_upper-17.0.03.otf",
 )
@@ -357,9 +357,10 @@ def fallback_sources(
             )
         )
 
-    # App-local long-tail faces are intentionally last.  Preferred/theme/custom
-    # fonts and script-specific Noto faces win first; FreeSans then fills broad
-    # historical/script gaps, and GNU Unifont is the final standardized-Unicode
+    # App-local long-tail faces are intentionally last. Preferred/theme/custom
+    # fonts and registered script faces win first; the provisioned Canadian-
+    # Aboriginal Noto face fixes the live UCAS gap, optional system FreeSans adds
+    # broad quality coverage, and GNU Unifont is the final standardized-Unicode
     # safety net instead of a tofu box.
     for path in _long_tail_fallback_paths():
         if path in seen_paths:
