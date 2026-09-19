@@ -31,10 +31,12 @@ def test_rules_and_protection_copy_explains_non_rename_behavior() -> None:
     assert "Layout Rules" in V2
     assert "Remove One Rule" in V2
     assert "Protection" in V2
-    assert "Reset All Design Overrides" in V2
+    assert "Start Clean Redesign" in V2
+    assert "keeps protection" in V2
     assert "Reset This Category/Channel" in V2
     assert "Narrower rules always win" in V2
     assert "Protection is separate" in V2
+    assert "Reset All Rules + Protection" in LEGACY
 
 
 def test_exact_item_editor_makes_immediate_rename_exception_explicit() -> None:
