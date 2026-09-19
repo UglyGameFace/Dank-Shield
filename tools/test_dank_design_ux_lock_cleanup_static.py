@@ -31,7 +31,7 @@ def test_rules_and_protection_copy_explains_non_rename_behavior() -> None:
     assert "Layout Rules" in V2
     assert "Remove One Rule" in V2
     assert "Protection" in V2
-    assert "Start Clean Redesign" in V2
+    assert "Clean Redesign" in V2
     assert "keeps protection" in V2
     assert 'label="Reset This Category"' in LEGACY
     assert 'label="Reset This Channel"' in LEGACY

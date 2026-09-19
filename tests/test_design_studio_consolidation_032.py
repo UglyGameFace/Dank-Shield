@@ -10,6 +10,7 @@ import pytest
 from stoney_verify.commands_ext import public_design_group
 from stoney_verify.commands_ext import public_design_studio as legacy
 from stoney_verify.commands_ext import public_design_studio_v2 as studio_v2
+from stoney_verify.services import server_design_apply_service as apply_service
 from stoney_verify.services import server_design_plan_service as plan_service
 from stoney_verify.services import server_design_repair_confidence as repair_confidence
 from stoney_verify.services import server_design_studio as studio
@@ -47,14 +48,78 @@ def test_clean_redesign_button_only_enables_when_layout_exceptions_exist() -> No
     assert crossed_button.disabled is False
 
 
-def test_theme_and_strength_are_only_inside_design_server() -> None:
+def test_server_style_controls_are_only_inside_design_server() -> None:
     assert "DesignServerThemeSelect" in V2
+    assert "DesignServerFontSelect" in V2
     assert "DesignServerStrengthSelect" in V2
     home_start = V2.index("class DesignHomeView")
     home_end = V2.index("def _snapshot_matches", home_start)
     home = V2[home_start:home_end]
     assert "DesignServerThemeSelect" not in home
+    assert "DesignServerFontSelect" not in home
     assert "DesignServerStrengthSelect" not in home
+
+
+def test_server_font_picker_fits_discord_and_exposes_full_catalog() -> None:
+    view = studio_v2.DesignServerView({"theme_id": "gothic_clean", "strength": 4})
+    picker = next(item for item in view.children if isinstance(item, studio_v2.DesignServerFontSelect))
+    assert len(picker.options) == len(studio.DESIGN_FONT_STYLES) + 1
+    assert len(picker.options) <= 25
+    values = {str(option.value) for option in picker.options}
+    assert {"__theme__", "sans", "double_struck", "fraktur", "small_caps"} <= values
+    assert any("𝕘" in str(option.description) for option in picker.options if option.value == "double_struck")
+
+
+def test_server_separator_picker_can_follow_theme_or_hold_custom_choice() -> None:
+    theme_default = studio_v2.DesignServerView(
+        {"theme_id": "gaming_arcade", "strength": 4}
+    )
+    picker = next(
+        item for item in theme_default.children
+        if isinstance(item, studio_v2.DesignServerSeparatorSelect)
+    )
+    defaults = [option for option in picker.options if option.default]
+    assert len(defaults) == 1
+    assert defaults[0].value == "__theme__"
+    assert "Theme Default" in str(defaults[0].label)
+
+    custom = studio_v2.DesignServerView(
+        {"theme_id": "gaming_arcade", "strength": 4, "separator_id": "middle_dot"}
+    )
+    custom_picker = next(
+        item for item in custom.children
+        if isinstance(item, studio_v2.DesignServerSeparatorSelect)
+    )
+    custom_defaults = [option for option in custom_picker.options if option.default]
+    assert len(custom_defaults) == 1
+    assert custom_defaults[0].value == "middle_dot"
+
+
+
+def test_gothic_theme_default_separator_matches_real_preview_plan() -> None:
+    options = {"theme_id": "gothic_clean", "strength": 4}
+    assert studio_v2._design_server_separator(options) == "pipe_spaced"
+    view = studio_v2.DesignServerView(options)
+    picker = next(
+        item for item in view.children
+        if isinstance(item, studio_v2.DesignServerSeparatorSelect)
+    )
+    selected = [option for option in picker.options if option.default]
+    assert len(selected) == 1
+    assert selected[0].value == "__theme__"
+    assert "Spaced" in str(selected[0].label) or "|" in str(selected[0].description)
+
+
+def test_server_design_embed_shows_font_and_live_style_examples() -> None:
+    embed = studio_v2._design_server_embed(
+        SimpleNamespace(),
+        {"theme_id": "double_struck_luxe", "strength": 4},
+    )
+    fields = {str(field.name): str(field.value) for field in embed.fields}
+    assert "Font" in fields
+    assert "Style example" in fields
+    assert "Double-Struck" in fields["Font"]
+    assert "𝕘" in fields["Font"]
 
 
 def test_active_registration_does_not_activate_runtime_monkey_patches() -> None:
@@ -132,6 +197,38 @@ def test_smart_auto_detect_decorative_simplification_is_blocked() -> None:
     result = repair_confidence.evaluate_repair_plan([item], context="smart_category_auto_detect")
     assert result["apply_allowed"] is False
     assert result["counts"].get(repair_confidence.BLOCKED_AESTHETIC_DOWNGRADE) == 1
+
+
+def test_successful_apply_snapshot_failure_falls_back_to_memory_without_revert(monkeypatch: pytest.MonkeyPatch) -> None:
+    legacy._LAST_SNAPSHOTS.clear()
+
+    async def broken_persist(_guild_id: int, _snapshot: dict[str, object]) -> None:
+        raise OSError("read-only snapshot store")
+
+    monkeypatch.setattr(legacy, "_persist_rollback_snapshot", broken_persist)
+    prepared = apply_service.PreparedRename(
+        channel_id=123,
+        channel=SimpleNamespace(name="new-name"),
+        item={
+            "channel_id": "123",
+            "before": "old-name",
+            "after": "new-name",
+            "status": "changed",
+        },
+        before="old-name",
+        after="new-name",
+    )
+
+    snapshot, durable = asyncio.run(
+        studio_v2._store_snapshot_with_memory_fallback(999, 42, [prepared])
+    )
+
+    assert snapshot is not None
+    assert durable is False
+    assert snapshot["durable"] is False
+    assert snapshot["items"][0]["old_name"] == "old-name"
+    assert snapshot["items"][0]["new_name"] == "new-name"
+    assert legacy._LAST_SNAPSHOTS["999"][-1]["durable"] is False
 
 
 def test_one_reviewed_apply_component() -> None:

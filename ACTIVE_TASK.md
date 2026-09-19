@@ -1,145 +1,140 @@
 # ACTIVE TASK
 
-## DS-DESIGNER-261 — Uncross Server Designer state and interaction flow
+## ID
+DS-DESIGNER-262 — Server Designer UX + font system hardening
 
-**Status:** AUTOMATED VALIDATION PASSED; FINAL HEAD REVALIDATION
+## Status
+IMPLEMENTATION COMPLETE — final exact-head CI and merge gate
 
-**Branch:** `fix/server-designer-v2-ownership`
-**Base main:** `2420f9dc8dccd8283d03acdc74982a0bbc76554d`
+## Single active-task lock
+Only this Server Designer improvement task is active. Do not switch to unrelated
+work until this task is investigated, implemented, validated on the exact final
+head, cleaned up, merged, and verified on main.
 
-## Active task lock
+## User-visible goals
+- Make **Design Entire Server** substantially easier to understand and use on mobile.
+- Let the server-wide workflow choose and preview better Unicode font styles directly.
+- Expand the curated theme/font catalog without reintroducing crossed ownership.
+- Prevent a successful design Apply from later appearing to "randomly revert".
+- Preserve preview-first safety, saved-rule precedence, protection, exact-item editing,
+  and Undo.
 
-The Single Active Task Lock is the Server Designer workflow shown in the Sep 18
-Discord screenshots: server-wide theme/strength/separator editing, its preview
-handoffs, and the interaction acknowledgement path that was timing out. No
-unrelated Dank Shield cleanup or redesign is admitted.
+## Analysis / root cause
+### Font UX
+- The naming engine already had a broad Unicode transformation system, but the
+  consolidated Server Designer only exposed Theme, Strength, and Separator.
+- Font choice was hidden inside theme presets even though Channel Name Fonts had a
+  richer visual catalog elsewhere.
+- Font labels/maps were duplicated across Channel Builder compatibility layers, which
+  made adding a style in one place easy to miss in another.
+- Server-wide format locks derived font only from the selected theme, so an explicit
+  server font override would have been lost when a global rule was synchronized.
 
-## User-visible failure
+### Unexpected reversion
+- Current Server Designer has no background "enforce saved design" loop.
+- Plain channel-name edits are not classified as destructive AntiNuke channel-update
+  events; overwrite mutations are handled separately.
+- The active reviewed-Apply flow did contain one explicit post-success reversal path:
+  after every successful live rename batch it attempted to persist durable Undo history,
+  and if that file write raised, it called `compensate_applied(...)` and renamed the
+  entire successful batch back.
+- That behavior exactly produces the reported symptom: the design visibly finishes,
+  then the names return without the user pressing Undo.
+- Durable Undo storage failure alone must not mutate live names after a successful Apply.
 
-The server-wide design screen was visually and behaviorally inconsistent:
+## Implementation
+### Server Designer
+- Added an owned **Font** selector between Theme and Strength.
+- Added **Theme Default** so users can return cleanly to a preset's recommended font.
+- Theme changes intentionally clear the explicit font override and restore preset ownership.
+- Added live font samples in the picker and current Server Designer summary.
+- Added a combined category/channel style example before Preview.
+- Current font and category-frame state are visible on the same screen.
+- Controls fit Discord's five-row component limit:
+  1. Theme
+  2. Font
+  3. Strength
+  4. Separator
+  5. Preview / separator preview / clean redesign
+- Simplified button labels for mobile.
 
-- **Design Entire Server** was owned by V2, but **Change Separators Only**
-  handed the user into the legacy `StyleChangeView` surface.
-- legacy separator selection rebuilt live-style analysis before acknowledging
-  the Discord interaction, so a normal selection could sit disabled and produce
-  **"Dank Shield didn't respond in time"**.
-- theme/strength selection also performed config I/O before acknowledging the
-  interaction, exposing the same timeout class under slow DB/runtime conditions.
-- the server-wide page hid the current separator and did not make it obvious
-  that saved category/channel/exact-name exceptions still outrank the server
-  draft, which made a clean redesign look like unrelated designer settings were
-  crossing.
+### Font catalog
+- Added exact **Clean Sans** and **Double-Struck** Unicode styles.
+- Added curated themes that use more of the supported catalog:
+  - Night Gothic
+  - Neon Rush
+  - Terminal Neon
+  - Fullwidth Arcade
+  - Small Caps Social
+  - Modern Minimal
+  - Double-Struck Luxe
+  - Luxury Script
+- Kept the theme and font counts under Discord's 25-option select limit.
+- Updated the canonical runtime, exact-proof, full-catalog, setup gallery, and active
+  queued font flow so the new styles do not exist in only one UI.
+- Added shared font labels/previews in the Server Design naming engine.
 
-## Execution path
+### Reversion hardening
+- Successful reviewed Apply now uses durable Undo storage when available.
+- If durable Undo persistence fails, the live design **stays applied** and an emergency
+  memory-only Undo snapshot is retained.
+- The completion screen explicitly warns that memory-only Undo disappears on restart.
+- Successful Apply is no longer compensated merely because Undo-history persistence failed.
+- Real rename/apply failures and separator-setting persistence failures still compensate,
+  because those indicate an incomplete or internally inconsistent transaction.
 
-`/dank home`
-→ **Server Design**
-→ `public_design_studio_v2.DesignServerView`
-→ theme / strength / separator draft settings
-→ either full saved-design planner or separator-only planner
-→ one reviewed V2 Apply owner
-→ `server_design_apply_service`
+## Validation added / updated
+- Server selector ownership now covers Theme + Font + Strength + Separator.
+- Explicit server font survives global-lock synchronization.
+- Theme Default / theme changes restore predictable preset font ownership.
+- Font picker stays within Discord select limits and includes visual samples.
+- New Unicode styles transform and normalize back to the original base name.
+- Runtime/full-catalog/exact-proof font maps are checked for catalog parity.
+- Durable Undo write failure is behavior-tested to fall back to memory.
+- Static regression forbids the old "Apply Reversed Because Undo History Could Not Be Saved"
+  successful-apply path.
 
-Legacy `public_design_studio.py` remains a backend/compatibility source for
-mature planner/editor primitives, but the server-wide separator workflow no
-longer navigates into the legacy `StyleChangeView`.
-
-## Root cause
-
-The consolidated V2 shell still had a user-facing ownership hole: its
-server-wide separator button explicitly constructed the legacy separator embed
-and legacy view. That legacy view performed expensive live analysis before
-responding to the component interaction. The V2 theme/strength callbacks also
-waited for config reads/writes before acknowledging Discord.
-
-This was both a state-authority problem and a Discord interaction-timing
-problem, not merely a cosmetic layout issue.
-
-## Implemented changes
-
-- Server Designer now keeps **theme, strength, and channel separator** together
-  on the same V2 screen.
-- Added a V2-owned separator selector.
-- Replaced the legacy handoff with two explicit preview scopes:
-  **Preview Entire Server** and **Preview Separator Only**.
-- Separator-only preview now builds the existing safe planner directly and
-  enters the shared reviewed-Apply flow without opening `legacy.StyleChangeView`.
-- Theme, strength, and separator selectors acknowledge the Discord interaction
-  before config I/O.
-- Back-to-home navigation now acknowledges before reloading config.
-- The screen shows the current separator and warns when saved narrow overrides
-  will intentionally outrank the server draft.
-- Existing transactional apply, stale-preview protection, protection rules,
-  rollback snapshots, and separator persistence are preserved.
-
-## Validation added
-
-- regression coverage verifies the separator path no longer constructs
-  `legacy.StyleChangeView`
-- regression coverage verifies V2 owns separator selection and preview
-- regression coverage verifies all three server-design selectors defer before
-  config I/O
-- the static UX contract now requires both preview scopes and the V2 separator
-  selector
-
-## Validation results
-
-On implementation head `44d2b2359df33f27dc0252b9ae2c1606ae14229e`:
-
-- Dank Design Regression CI: **PASS**
+## Validation completed on final code head `699e8199c46815c6b195256c4737a54ec706a7f7`
 - Dank Shield CI: **PASS**
-- Python compile / committed-diff whitespace: **PASS**
-- full unit suite: **1658 passed**, 9 warnings, 0 failures
-- standalone repository tool checks: **PASS**
-- public setup audit: **PASS**
-- public command surface audit: **PASS**
-- public command friction audit: **PASS**
-- public invite/permissions audit: **PASS**
-- setup safety audit: **PASS**
-- Dank Design Smart Auto-Detect audit: **PASS**
-- role-truth audit: **PASS**
-- event-boundary audit: **PASS**
-- Claim-first ticket security: **PASS**
-- Managed category SQL smoke test: **PASS**
-- Application Command Size Diagnostics: **PASS**
-- Profile Runtime Diagnostics: **PASS**
-- Ticket Owner Emergency Override: **PASS**
-- branch was 0 commits behind `main` when implementation validation began
+  - Python compile: PASS
+  - full unit suite: **1688 passed, 9 warnings**
+  - standalone tools: PASS
+  - public setup/command/invite/setup-safety audits: PASS
+  - Dank Design Smart Auto-Detect audit: PASS
+  - role-truth and event-boundary audits: PASS
+- Dank Design Regression CI: **PASS**
+  - focused Design Studio suite: **113 passed, 1 warning**
+  - Smart Auto-Detect audit: PASS
+  - redundancy/ownership audit: PASS
+  - UX/static audits: PASS
+- Channel Builder Queue Sanity: PASS
+- Application Command Size Diagnostics: PASS
+- Profile Runtime Diagnostics: PASS
+- Schema Authority SQL: PASS
+- DS Backlog 027 Validation: PASS
+- Ticket Owner Emergency Override: PASS
+- PR was mergeable and **0 commits behind main** at this validation point.
+- Final diff review removed unrelated dormant compatibility-file edits and kept the
+  changes scoped to active Server Designer/font ownership, tests, audits, and this task record.
 
-The first Dank Design run exposed one stale regression assertion that still
-expected only the old theme/strength selectors. The implementation now owns a
-third separator selector, so that task-local assertion was updated and the
-entire exact implementation head passed afterward.
+## Final gate
+This task-record update is documentation-only and changes the PR SHA. Re-run required
+CI on that exact final head. If it stays green, mark PR #262 ready, merge it, and verify
+main contains the validated branch head.
 
-A live Discord acceptance pass is still required to prove the original
-component-timeout/wonky-screen reproduction is gone in the deployed bot.
+After that main verification, this task is **COMPLETE** without another code change.
+Live Discord acceptance remains a deployment smoke test, not a reason to reopen or
+rewrite already-green code unless the deployed behavior exposes a concrete regression.
 
-## Cleanup / conflict inspection
-
-The task deliberately does not delete the legacy separator classes because
-mature exact-item compatibility code still references the legacy module. The
-public server-wide path no longer enters that legacy view. Broader removal of
-legacy compatibility code would be a separate task unless validation proves it
-is required for correctness here.
-
-## Blockers / risks
-
-- this task-record commit changes the PR head, so all required checks must pass
-  again on the new exact final head before the PR can be considered merge-ready
-- live Discord interaction timing has not yet been acceptance-tested because
-  this branch is not the deployed bot
-- saved narrow rules still outrank the server draft by design; the UI now makes
-  that explicit instead of silently looking like crossed state
-
-## Backlog
-
-- Consider a later dedicated migration that removes the remaining late
-  presentation monkey-patches from `public_runtime_ux_repairs.py` after their
-  channel-editor/protection behavior is moved natively. This is not required for
-  the current server-wide flow fix.
+## Risk / compatibility
+- Existing saved themes and font IDs remain valid.
+- Existing saved narrow rules remain authoritative over the server draft.
+- Decorative fonts remain visibly marked as readability-risky.
+- Upside Down remains available only as a legacy decode/compatibility transform and is
+  no longer offered as a live selectable design font because it cannot safely round-trip.
+- This task does not change permissions, channel order, topics, ticket placement, roles,
+  verification, or protection policy.
 
 ## Next step
-
-Re-run all required checks on this task-record head, re-check main-currentness
-and the final diff, then keep PR #261 unmerged until the live Discord acceptance
-pass can verify the original timeout and crossed-screen behavior.
+Run exact-head CI for this documentation-only finalization commit. If all required
+checks stay green, mark PR #262 ready, merge it, and verify the merged result on main.
