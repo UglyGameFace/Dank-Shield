@@ -84,6 +84,7 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
     options = options or {}
     theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
     counts = _rule_counts(options)
+    active_font = _design_server_font(options)
     embed = discord.Embed(
         title="🎨 Dank Design Studio",
         description=(
@@ -99,6 +100,7 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
         name="Current server design settings",
         value=(
             f"Theme: **{getattr(theme, 'label', 'Gothic Clean')}**\n"
+            f"Font: **{studio.font_label(active_font)}**\n"
             f"Strength: **{_safe_int(options.get('strength'), 4)}/5**\n"
             f"Separator: **{legacy._separator_choice_label(rule_service.effective_draft_separator(options, theme_separator=_safe_str(getattr(theme, 'channel_separator', 'none'), 'none')))}**\n"  # type: ignore[attr-defined]
             f"Global rule: **{'On' if counts.get('global') else 'Off'}**"
@@ -119,7 +121,7 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
     embed.add_field(
         name="Choose what you want to do",
         value=(
-            "🌐 **Design Entire Server** — choose theme, strength, and separator together, then preview exact names.\n"
+            "🌐 **Design Entire Server** — choose theme, font, strength, and separator together with live examples.\n"
             "✏️ **Edit One Category / Channel** — rename or style one exact item.\n"
             "🩺 **Fix Inconsistent Names** — scan first, then build a safe Smart Repair preview.\n"
             "🔐 **Saved Rules & Protection** — manage what future previews enforce; this does not rename anything by itself.\n"
@@ -170,12 +172,62 @@ async def _store_preview(
     )
 
 
+def _design_server_font(options: Mapping[str, Any]) -> str:
+    theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
+    explicit = _safe_str(options.get("font"), "").lower().replace("-", "_")
+    if explicit in studio.FONT_STYLES:
+        return explicit
+    fallback = _safe_str(getattr(theme, "font", "normal"), "normal").lower().replace("-", "_")
+    return fallback if fallback in studio.FONT_STYLES else "normal"
+
+
+def _font_override_active(options: Mapping[str, Any]) -> bool:
+    return _safe_str(options.get("font"), "").lower().replace("-", "_") in studio.FONT_STYLES
+
+
+def _design_server_examples(options: Mapping[str, Any]) -> tuple[str, str]:
+    theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
+    font = _design_server_font(options)
+    separator = _design_server_separator(options)
+    strength = max(1, min(5, _safe_int(options.get("strength"), 4)))
+    frame = _safe_str(options.get("category_frame_id") or getattr(theme, "category_frame", "line"), "line")
+
+    category = studio.build_styled_name(
+        "the-420-lobby",
+        kind="category",
+        theme_id=_safe_str(getattr(theme, "id", "gothic_clean"), "gothic_clean"),
+        strength=strength,
+        icon_mode="replace_missing",
+        protection_rules={},
+        protection_mode="full",
+        separator_id=separator,
+        category_frame_id=frame,
+        font=font,
+        emoji_override="🍃",
+        exact_match=True,
+    )
+    channel = studio.build_styled_name(
+        "general-chat",
+        kind="text",
+        theme_id=_safe_str(getattr(theme, "id", "gothic_clean"), "gothic_clean"),
+        strength=strength,
+        icon_mode="replace_missing",
+        protection_rules={},
+        protection_mode="full",
+        separator_id=separator,
+        category_frame_id=frame,
+        font=font,
+        emoji_override="💬",
+        exact_match=True,
+    )
+    return _safe_str(category.after, "the-420-lobby"), _safe_str(channel.after, "general-chat")
+
 class DesignServerThemeSelect(discord.ui.Select):
     def __init__(self, current: str) -> None:
         choices: list[discord.SelectOption] = []
         for theme in studio.THEMES[:25]:
-            font = str(getattr(theme, "font", "normal") or "normal").replace("_", " ").title()
-            frame = str(getattr(theme, "category_frame", "plain") or "plain").replace("_", " ").title()
+            font = studio.font_label(getattr(theme, "font", "normal"))
+            frame = legacy._category_frame_choice_label(getattr(theme, "category_frame", "plain"))  # type: ignore[attr-defined]
             choices.append(
                 discord.SelectOption(
                     label=theme.label[:100],
@@ -194,10 +246,61 @@ class DesignServerThemeSelect(discord.ui.Select):
         await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
         options["theme_id"] = self.values[0]
+        options.pop("font", None)
         legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
         await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
         await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
 
+
+class DesignServerFontSelect(discord.ui.Select):
+    def __init__(self, options: Mapping[str, Any]) -> None:
+        theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
+        theme_font = _safe_str(getattr(theme, "font", "normal"), "normal").lower().replace("-", "_")
+        explicit = _safe_str(options.get("font"), "").lower().replace("-", "_")
+        choices: list[discord.SelectOption] = [
+            discord.SelectOption(
+                label=f"Theme Default · {studio.font_label(theme_font)}"[:100],
+                value="__theme__",
+                description=f"{studio.font_preview(theme_font)} · follows the selected theme"[:100],
+                default=explicit not in studio.FONT_STYLES,
+            )
+        ]
+        for style in studio.FONT_STYLES:
+            decorative = style in getattr(studio, "RISKY_FONTS", set())
+            note = "Decorative · preview recommended" if decorative else "Readable"
+            choices.append(
+                discord.SelectOption(
+                    label=(f"⚠️ {studio.font_label(style)}" if decorative else studio.font_label(style))[:100],
+                    value=style,
+                    description=f"{studio.font_preview(style)} · {note}"[:100],
+                    default=explicit == style,
+                )
+            )
+        super().__init__(
+            placeholder="2) Choose the server font",
+            min_values=1,
+            max_values=1,
+            options=choices[:25],
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        options = await _load_design_options(int(guild.id))
+        selected = _safe_str(self.values[0], "__theme__").lower().replace("-", "_")
+        if selected == "__theme__":
+            options.pop("font", None)
+        elif selected in studio.FONT_STYLES:
+            options["font"] = selected
+        else:
+            raise ValueError("Unsupported Dank Design font selection.")
+        legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
+        await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
+        await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
 
 class DesignServerStrengthSelect(discord.ui.Select):
     LABELS = {
@@ -213,7 +316,7 @@ class DesignServerStrengthSelect(discord.ui.Select):
             discord.SelectOption(label=label, value=str(value), default=value == current, description=description)
             for value, (label, description) in self.LABELS.items()
         ]
-        super().__init__(placeholder="2) Choose how much styling to use", min_values=1, max_values=1, options=choices, row=1)
+        super().__init__(placeholder="3) Choose how much styling to use", min_values=1, max_values=1, options=choices, row=2)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         if not await _require_design_permission(interaction):
@@ -232,11 +335,11 @@ class DesignServerSeparatorSelect(discord.ui.Select):
     def __init__(self, current: str) -> None:
         selected = _safe_str(current, "bar_heavy")
         super().__init__(
-            placeholder="3) Choose the channel separator",
+            placeholder="4) Choose the channel separator",
             min_values=1,
             max_values=1,
             options=legacy._style_change_separator_options(selected),  # type: ignore[attr-defined]
-            row=2,
+            row=3,
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -264,33 +367,59 @@ def _design_server_separator(options: Mapping[str, Any]) -> str:
 def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> discord.Embed:
     theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
     separator_id = _design_server_separator(options)
+    font = _design_server_font(options)
+    strength = max(1, min(5, _safe_int(options.get("strength"), 4)))
+    frame = _safe_str(options.get("category_frame_id") or getattr(theme, "category_frame", "line"), "line")
     narrow_count = _layout_override_count(options)
+    category_example, channel_example = _design_server_examples(options)
+    font_source = "custom override" if _font_override_active(options) else "theme default"
+
     embed = discord.Embed(
         title="🌐 Design Entire Server",
         description=(
-            "Set the server-wide style below. **Changing these menus does not rename anything.** "
-            "When it looks right, preview the exact names, then Apply.\n\n"
-            "Use **Preview Separator Only** when the separator is the only thing you want to touch."
+            "Build the server-wide look in one screen. **Nothing is renamed while you choose options.** "
+            "The examples update with your saved draft; Preview shows the exact live-server changes before Apply."
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(name="Theme", value=f"**{getattr(theme, 'label', 'Gothic Clean')}**", inline=True)
-    embed.add_field(name="Strength", value=f"**{_safe_int(options.get('strength'), 4)}/5**", inline=True)
+    embed.add_field(
+        name="Font",
+        value=f"**{studio.font_label(font)}** · {font_source}\n`{studio.font_preview(font)}`",
+        inline=True,
+    )
+    embed.add_field(name="Strength", value=f"**{strength}/5**", inline=True)
     embed.add_field(
         name="Separator",
         value=f"**{legacy._separator_choice_label(separator_id)}**",  # type: ignore[attr-defined]
         inline=True,
     )
+    embed.add_field(
+        name="Category frame",
+        value=f"**{legacy._category_frame_choice_label(frame)}**",  # type: ignore[attr-defined]
+        inline=True,
+    )
+    embed.add_field(
+        name="Style example",
+        value=f"Category: `{category_example}`\nChannel: `{channel_example}`",
+        inline=False,
+    )
+    if strength < 3 and font != "normal":
+        embed.add_field(
+            name="ℹ️ Font is selected but not active yet",
+            value="Strength **3+** enables font styling. Raise Strength when you want the selected font applied.",
+            inline=False,
+        )
     if narrow_count:
         embed.add_field(
             name="⚠️ Old design overrides are active",
             value=(
-                f"**{narrow_count}** saved layout/name override(s) can make some channels ignore the server-wide style. "
-                "Use **Start Clean Redesign** to clear those old design exceptions **without removing protection rules**."
+                f"**{narrow_count}** saved layout/name override(s) can make some channels ignore this server-wide style. "
+                "Use **Clean Redesign** to clear those old design exceptions **without removing protection rules**."
             ),
             inline=False,
         )
-    embed.set_footer(text="Nothing is renamed until Apply • Apply rechecks the whole preview first")
+    embed.set_footer(text="Choose → Preview → Apply • Theme Default makes Font follow the selected theme")
     return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
 
 
@@ -360,11 +489,12 @@ class DesignServerView(DesignView):
         super().__init__(timeout=900)
         self.options = dict(options)
         self.add_item(DesignServerThemeSelect(_safe_str(options.get("theme_id"), "gothic_clean")))
+        self.add_item(DesignServerFontSelect(options))
         self.add_item(DesignServerStrengthSelect(_safe_int(options.get("strength"), 4)))
         self.add_item(DesignServerSeparatorSelect(_design_server_separator(options)))
         self.clean_redesign.disabled = _layout_override_count(options) == 0
 
-    @discord.ui.button(label="Preview Entire Server", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design_v2:server_preview", row=3)
+    @discord.ui.button(label="Preview Server", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design_v2:server_preview", row=4)
     async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -375,7 +505,7 @@ class DesignServerView(DesignView):
         items, plan_options, _analysis = await plans.build_saved_design_plan(guild, options)
         await _store_preview(interaction, items, plan_options, mode="preview_server_v2", title="👁️ Server Design Preview")
 
-    @discord.ui.button(label="Preview Separator Only", emoji="⚡", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:separator_only", row=3)
+    @discord.ui.button(label="Preview Separator", emoji="⚡", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:separator_only", row=4)
     async def separator_only(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -411,7 +541,7 @@ class DesignServerView(DesignView):
             ),
         )
 
-    @discord.ui.button(label="Start Clean Redesign", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:clean_redesign", row=4)
+    @discord.ui.button(label="Clean Redesign", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:clean_redesign", row=4)
     async def clean_redesign(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
