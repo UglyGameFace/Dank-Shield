@@ -187,6 +187,30 @@ def test_reviewed_preview_back_returns_to_originating_workflow() -> None:
     assert '"channel_id": str(int(channel_id)) if channel_id is not None else ""' in scope
 
 
+def test_legacy_editor_surfaces_share_safe_component_error_boundary() -> None:
+    assert "class LegacyDesignView(discord.ui.View)" in LEGACY
+    assert "async def on_error(" in LEGACY
+    assert 'action_name="design.legacy.component_error"' in LEGACY
+
+    for class_name in (
+        "CategoryFormatLockPickerView",
+        "ChannelFormatLockPickerView",
+        "ResetAllDesignStateConfirmView",
+        "FormatLocksView",
+        "SeparatorExamplesView",
+        "ExactFormatEditorView",
+        "CategoryEditorPickerView",
+        "ChannelEditorPickerView",
+        "CategoryEditorActionView",
+        "ChannelEditorActionView",
+        "LockManagerView",
+        "ProtectionManagerView",
+        "ProtectionModeView",
+        "StyleChangeView",
+    ):
+        assert f"class {class_name}(LegacyDesignView):" in LEGACY
+
+
 def test_historical_design_mutators_are_removed() -> None:
     assert not list((ROOT / "tools").glob("apply_dank_design_*.py"))
     assert not list((ROOT / "tools").glob("apply_p0_int_design_*.py"))
