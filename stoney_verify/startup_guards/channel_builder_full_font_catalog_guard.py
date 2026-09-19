@@ -29,6 +29,8 @@ def full_unicode_map(style: str) -> dict[str, str]:
     z = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     d = "0123456789"
     style = str(style or "").strip().lower().replace("-", "_")
+    if style == "sans":
+        return {**_range(z, 0x1D5A0), **_range(a, 0x1D5BA), **_range(d, 0x1D7E2)}
     if style == "bold_sans":
         return {**_range(z, 0x1D5D4), **_range(a, 0x1D5EE), **_range(d, 0x1D7EC)}
     if style == "italic_sans":
@@ -45,6 +47,13 @@ def full_unicode_map(style: str) -> dict[str, str]:
         return {**_range(z, 0x1D434), **_range(a, 0x1D44E), "h": "ℎ"}
     if style == "serif_bold_italic":
         return {**_range(z, 0x1D468), **_range(a, 0x1D482)}
+    if style == "double_struck":
+        return {
+            **_range(z, 0x1D538),
+            **_range(a, 0x1D552),
+            **_range(d, 0x1D7D8),
+            "C": "ℂ", "H": "ℍ", "N": "ℕ", "P": "ℙ", "Q": "ℚ", "R": "ℝ", "Z": "ℤ",
+        }
     if style == "script":
         return {**_range(z, 0x1D49C), **_range(a, 0x1D4B6), "B": "ℬ", "E": "ℰ", "F": "ℱ", "H": "ℋ", "I": "ℐ", "L": "ℒ", "M": "ℳ", "R": "ℛ", "e": "ℯ", "g": "ℊ", "o": "ℴ"}
     if style == "bold_script":
