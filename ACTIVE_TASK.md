@@ -2,7 +2,7 @@
 
 ## DS-DESIGNER-261 — Uncross Server Designer state and interaction flow
 
-**Status:** IMPLEMENTED, VALIDATION PENDING
+**Status:** AUTOMATED VALIDATION PASSED; FINAL HEAD REVALIDATION
 
 **Branch:** `fix/server-designer-v2-ownership`
 **Base main:** `2420f9dc8dccd8283d03acdc74982a0bbc76554d`
@@ -82,11 +82,37 @@ problem, not merely a cosmetic layout issue.
 - the static UX contract now requires both preview scopes and the V2 separator
   selector
 
-## Validation status
+## Validation results
 
-Not yet complete. Repository CI and the relevant Dank Design regression suite
-must run on the exact final head. A live Discord acceptance pass is also still
-needed to confirm the original timeout/wonky-screen reproduction is gone.
+On implementation head `44d2b2359df33f27dc0252b9ae2c1606ae14229e`:
+
+- Dank Design Regression CI: **PASS**
+- Dank Shield CI: **PASS**
+- Python compile / committed-diff whitespace: **PASS**
+- full unit suite: **1658 passed**, 9 warnings, 0 failures
+- standalone repository tool checks: **PASS**
+- public setup audit: **PASS**
+- public command surface audit: **PASS**
+- public command friction audit: **PASS**
+- public invite/permissions audit: **PASS**
+- setup safety audit: **PASS**
+- Dank Design Smart Auto-Detect audit: **PASS**
+- role-truth audit: **PASS**
+- event-boundary audit: **PASS**
+- Claim-first ticket security: **PASS**
+- Managed category SQL smoke test: **PASS**
+- Application Command Size Diagnostics: **PASS**
+- Profile Runtime Diagnostics: **PASS**
+- Ticket Owner Emergency Override: **PASS**
+- branch was 0 commits behind `main` when implementation validation began
+
+The first Dank Design run exposed one stale regression assertion that still
+expected only the old theme/strength selectors. The implementation now owns a
+third separator selector, so that task-local assertion was updated and the
+entire exact implementation head passed afterward.
+
+A live Discord acceptance pass is still required to prove the original
+component-timeout/wonky-screen reproduction is gone in the deployed bot.
 
 ## Cleanup / conflict inspection
 
@@ -98,8 +124,10 @@ is required for correctness here.
 
 ## Blockers / risks
 
-- exact-head CI has not run yet
-- live Discord interaction timing has not yet been acceptance-tested
+- this task-record commit changes the PR head, so all required checks must pass
+  again on the new exact final head before the PR can be considered merge-ready
+- live Discord interaction timing has not yet been acceptance-tested because
+  this branch is not the deployed bot
 - saved narrow rules still outrank the server draft by design; the UI now makes
   that explicit instead of silently looking like crossed state
 
@@ -112,6 +140,6 @@ is required for correctness here.
 
 ## Next step
 
-Open a focused PR, run exact-head CI and Dank Design regressions, inspect the
-final diff for unrelated changes, then perform the live Discord acceptance pass
-before merging.
+Re-run all required checks on this task-record head, re-check main-currentness
+and the final diff, then keep PR #261 unmerged until the live Discord acceptance
+pass can verify the original timeout and crossed-screen behavior.
