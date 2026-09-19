@@ -110,3 +110,21 @@ def test_known_separator_is_not_swallowed_into_icon_prefix() -> None:
     assert separator_only["emoji"] == ""
     assert separator_only["separator"] == "│"
     assert separator_only["base_name"] == "free-games"
+
+
+def test_new_unicode_fonts_transform_and_decode_cleanly() -> None:
+    for style in ("sans", "double_struck"):
+        rendered, substitutions = studio.transform_text_safe(
+            "general-chat-420",
+            style,
+            fallback_order=studio.fallback_ladder(style),
+        )
+        assert rendered != "general-chat-420"
+        assert substitutions == []
+        assert studio.normalize_base_name(rendered) == "general-chat-420"
+
+
+def test_curated_theme_catalog_only_uses_supported_fonts() -> None:
+    assert {"modern_minimal", "double_struck_luxe", "night_gothic", "luxury_script"} <= set(studio.THEMES_BY_ID)
+    assert all(theme.font in studio.FONT_STYLES for theme in studio.THEMES)
+    assert len(studio.THEMES) <= 25
