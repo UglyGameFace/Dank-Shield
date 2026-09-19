@@ -42,6 +42,25 @@ def _strict_lock_map(value: Any) -> dict[str, Any]:
     return out
 
 
+def theme_default_separator_id(options: Mapping[str, Any]) -> str:
+    """Return the separator the selected theme really uses in native planning."""
+
+    theme_id = str(options.get("theme_id") or "gothic_clean").strip() or "gothic_clean"
+    theme = studio.THEMES_BY_ID.get(theme_id, studio.THEMES_BY_ID["gothic_clean"])
+
+    # Gothic Clean intentionally uses a readable spaced ASCII pipe in the live
+    # plan even though the historical catalog entry still carries bar_full.
+    if theme_id == "gothic_clean":
+        return majority.ensure_separator_spec(studio, "|", "spaced")
+
+    return str(getattr(theme, "channel_separator", "none") or "none").strip() or "none"
+
+
+def effective_server_separator_id(options: Mapping[str, Any]) -> str:
+    explicit = str(options.get("separator_id") or "").strip()
+    return explicit or theme_default_separator_id(options)
+
+
 def normalize_plan_options(options: Mapping[str, Any], *, strict: bool = True) -> dict[str, Any]:
     """Apply native compatibility defaults without replacing live functions."""
 
@@ -49,9 +68,10 @@ def normalize_plan_options(options: Mapping[str, Any], *, strict: bool = True) -
 
     # Preserve the established Gothic Clean spaced-pipe default without a guard
     # rewriting the ThemePreset tuple. An explicit saved separator always wins.
-    majority.ensure_separator_spec(studio, "|", "spaced")
-    if str(out.get("theme_id") or "gothic_clean") == "gothic_clean" and not str(out.get("separator_id") or "").strip():
-        out["separator_id"] = "pipe_spaced"
+    if not str(out.get("separator_id") or "").strip():
+        default_separator = theme_default_separator_id(out)
+        if str(out.get("theme_id") or "gothic_clean") == "gothic_clean":
+            out["separator_id"] = default_separator
 
     # Preserve the old visual-name policy without mutating the global protected
     # name set. Explicit per-name owner choices remain authoritative.
@@ -282,6 +302,8 @@ __all__ = [
     "build_saved_design_plan",
     "build_scoped_repair_plan",
     "confidence_allows_apply",
+    "effective_server_separator_id",
     "live_records",
     "normalize_plan_options",
+    "theme_default_separator_id",
 ]
