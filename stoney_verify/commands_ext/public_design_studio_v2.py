@@ -893,7 +893,11 @@ async def _store_durable_snapshot(guild_id: int, user_id: int, prepared: list[ap
     return payload
 
 
-async def _store_residual_snapshot(guild_id: int, user_id: int, prepared: list[apply_service.PreparedRename]) -> tuple[dict[str, Any] | None, bool]:
+async def _store_snapshot_with_memory_fallback(
+    guild_id: int,
+    user_id: int,
+    prepared: list[apply_service.PreparedRename],
+) -> tuple[dict[str, Any] | None, bool]:
     if not prepared:
         return None, False
     try:
@@ -908,7 +912,22 @@ async def _store_residual_snapshot(guild_id: int, user_id: int, prepared: list[a
             "persistence_error": type(exc).__name__,
         }
         _remember_snapshot(guild_id, payload)
+        try:
+            print(
+                "⚠️ Dank Design durable Undo snapshot failed; keeping successful live names "
+                f"with memory-only Undo guild={int(guild_id)} error={type(exc).__name__}"
+            )
+        except Exception:
+            pass
         return payload, False
+
+
+async def _store_residual_snapshot(
+    guild_id: int,
+    user_id: int,
+    prepared: list[apply_service.PreparedRename],
+) -> tuple[dict[str, Any] | None, bool]:
+    return await _store_snapshot_with_memory_fallback(guild_id, user_id, prepared)
 
 
 async def _pop_snapshot_if_current(guild_id: int, created_at: float) -> bool:
@@ -1286,42 +1305,13 @@ class ReviewedPreviewView(DesignView):
                     return
 
             snapshot: dict[str, Any] | None = None
+            snapshot_durable = False
             if result.applied:
-                try:
-                    snapshot = await _store_durable_snapshot(int(guild.id), int(interaction.user.id), result.applied)
-                except Exception as snapshot_exc:
-                    settings_restore_error = ""
-                    if separator_previous_options is not None:
-                        try:
-                            await legacy._save_options(interaction, separator_previous_options)  # type: ignore[attr-defined]
-                        except Exception as restore_exc:
-                            settings_restore_error = type(restore_exc).__name__
-                    restored, residual, rollback_failures = await apply_service.compensate_applied(
-                        guild,
-                        result.applied,
-                        user_id=int(interaction.user.id),
-                        delay_seconds=studio.DEFAULT_DELAY_SECONDS,
-                    )
-                    emergency, durable = await _store_residual_snapshot(int(guild.id), int(interaction.user.id), residual)
-                    legacy._PENDING.pop(key, None)  # type: ignore[attr-defined]
-                    embed = discord.Embed(
-                        title="⚠️ Apply Reversed Because Undo History Could Not Be Saved",
-                        description=(
-                            f"Durable Undo history failed with **{type(snapshot_exc).__name__}**. Dank Design did not silently leave an unprotected batch. "
-                            + (
-                                f"Automatically restored **{restored}** rename(s); no applied design was left behind."
-                                if not residual
-                                else f"Automatic restore left **{len(residual)}** row(s) changed. An {'durable' if durable else 'emergency memory-only'} Undo record was retained for them."
-                            )
-                        ),
-                        color=discord.Color.orange(),
-                    )
-                    if rollback_failures:
-                        embed.add_field(name="Restore attention", value="\n".join(f"• {line}" for line in rollback_failures[:8])[:1024], inline=False)
-                    if settings_restore_error:
-                        embed.add_field(name="Saved-setting attention", value=f"The previous separator setting could not be restored automatically (`{settings_restore_error}`). Do not run another design Apply until that setting is reviewed.", inline=False)
-                    await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=bool(emergency)))
-                    return
+                snapshot, snapshot_durable = await _store_snapshot_with_memory_fallback(
+                    int(guild.id),
+                    int(interaction.user.id),
+                    result.applied,
+                )
 
             legacy._PENDING.pop(key, None)  # type: ignore[attr-defined]
 
@@ -1339,8 +1329,21 @@ class ReviewedPreviewView(DesignView):
             description=description,
             color=discord.Color.green(),
         )
-        if snapshot:
-            embed.add_field(name="Undo ready", value="The previous names were saved durably before this Apply was finalized.", inline=False)
+        if snapshot and snapshot_durable:
+            embed.add_field(
+                name="Undo ready",
+                value="The previous names were saved durably for Undo.",
+                inline=False,
+            )
+        elif snapshot:
+            embed.add_field(
+                name="⚠️ Undo is memory-only",
+                value=(
+                    "The design **stays applied**. Durable Undo storage was unavailable, so this Undo snapshot lasts only until the bot restarts. "
+                    "Dank Design will not automatically revert a successful Apply just because Undo-history storage failed."
+                ),
+                inline=False,
+            )
         await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=bool(snapshot)))
 
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:preview_back", row=0)
