@@ -963,11 +963,12 @@ class CategoryFormatLockSelect(discord.ui.ChannelSelect):
         guild = interaction.guild
         assert guild is not None
         category = self.values[0]
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _save_category_lock(interaction, int(category.id))
         embed = _format_locks_embed(guild, options)
         embed.title = "✅ Category Format Lock Saved"
-        embed.description = f"Saved the saved design rule for {category.mention}. Future scans will use this lock for the category and its children unless a channel override exists."
-        await interaction.response.edit_message(embed=embed, view=FormatLocksView())
+        embed.description = f"Saved the design rule for {category.mention}. Future scans will use this lock for the category and its children unless a channel override exists."
+        await interaction.edit_original_response(embed=embed, view=FormatLocksView())
 
 
 class ChannelFormatLockSelect(discord.ui.ChannelSelect):
@@ -1000,11 +1001,12 @@ class ChannelFormatLockSelect(discord.ui.ChannelSelect):
         guild = interaction.guild
         assert guild is not None
         channel = self.values[0]
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _save_channel_lock(interaction, int(channel.id))
         embed = _format_locks_embed(guild, options)
         embed.title = "✅ Channel Override Lock Saved"
-        embed.description = f"Saved the saved design rule as an exact override for {channel.mention}."
-        await interaction.response.edit_message(embed=embed, view=FormatLocksView())
+        embed.description = f"Saved the design rule as an exact override for {channel.mention}."
+        await interaction.edit_original_response(embed=embed, view=FormatLocksView())
 
 
 class CategoryFormatLockPickerView(discord.ui.View):
@@ -1017,8 +1019,9 @@ class CategoryFormatLockPickerView(discord.ui.View):
         if not await _require_design_permission(interaction):
             return
         assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(interaction.guild.id))
-        await interaction.response.edit_message(embed=_format_locks_embed(interaction.guild, options), view=FormatLocksView())
+        await interaction.edit_original_response(embed=_format_locks_embed(interaction.guild, options), view=FormatLocksView())
 
 
 class ChannelFormatLockPickerView(discord.ui.View):
@@ -1031,8 +1034,40 @@ class ChannelFormatLockPickerView(discord.ui.View):
         if not await _require_design_permission(interaction):
             return
         assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(interaction.guild.id))
-        await interaction.response.edit_message(embed=_format_locks_embed(interaction.guild, options), view=FormatLocksView())
+        await interaction.edit_original_response(embed=_format_locks_embed(interaction.guild, options), view=FormatLocksView())
+
+
+class ResetAllDesignStateConfirmView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=300)
+
+    @discord.ui.button(label="Yes, Reset Rules + Protection", emoji="⚠️", style=discord.ButtonStyle.danger, custom_id="dank_design:clear_all_locks_confirm", row=0)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        options = await _clear_all_locks(interaction)
+        embed = _format_locks_embed(guild, options)
+        embed.title = "🧹 All Saved Design Rules + Protection Reset"
+        embed.description = (
+            "Global, category, channel, exact manual-name, exact-item protection, and saved name-level protection overrides were cleared. "
+            "The ordinary server draft remains selected; built-in protection defaults still apply."
+        )
+        await interaction.edit_original_response(embed=embed, view=FormatLocksView())
+
+    @discord.ui.button(label="Cancel", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:clear_all_locks_cancel", row=0)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        options = await _load_design_options(int(guild.id))
+        await interaction.edit_original_response(embed=_format_locks_embed(guild, options), view=FormatLocksView())
 
 
 class FormatLocksView(discord.ui.View):
@@ -1045,11 +1080,12 @@ class FormatLocksView(discord.ui.View):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _save_global_lock(interaction)
         embed = _format_locks_embed(guild, options)
         embed.title = "✅ Global Format Lock Saved"
         embed.description = "Future scans will use this format as the server default unless a category or channel override exists."
-        await interaction.response.edit_message(embed=embed, view=FormatLocksView())
+        await interaction.edit_original_response(embed=embed, view=FormatLocksView())
 
     @discord.ui.button(label="Lock Category", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="dank_design:open_category_lock", row=1)
     async def open_category_lock(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1079,30 +1115,37 @@ class FormatLocksView(discord.ui.View):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _clear_global_lock(interaction)
         embed = _format_locks_embed(guild, options)
         embed.title = "🧹 Global Format Lock Cleared"
-        await interaction.response.edit_message(embed=embed, view=FormatLocksView())
+        await interaction.edit_original_response(embed=embed, view=FormatLocksView())
 
-    @discord.ui.button(label="Reset All Design Overrides", emoji="⚠️", style=discord.ButtonStyle.danger, custom_id="dank_design:clear_all_locks", row=2)
+    @discord.ui.button(label="Reset All Rules + Protection", emoji="⚠️", style=discord.ButtonStyle.danger, custom_id="dank_design:clear_all_locks", row=2)
     async def clear_all(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
-        guild = interaction.guild
-        assert guild is not None
-        options = await _clear_all_locks(interaction)
-        embed = _format_locks_embed(guild, options)
-        embed.title = "🧹 All Design Overrides Reset"
-        embed.description = "Global, category, channel, exact manual-name, exact-item protection, and saved name-level protection overrides were cleared. The ordinary server draft remains selected; built-in protection defaults still apply."
-        await interaction.response.edit_message(embed=embed, view=FormatLocksView())
+        embed = discord.Embed(
+            title="⚠️ Reset Every Saved Design Rule + Protection Override?",
+            description=(
+                "This is the broad reset. It clears **all saved layout/name exceptions and all saved protection overrides**. "
+                "It does not rename channels now, and it does not change permissions or other server settings.\n\n"
+                "For an ordinary server redesign, use **Design Entire Server → Start Clean Redesign** instead. "
+                "That safer option keeps protection rules."
+            ),
+            color=discord.Color.orange(),
+        )
+        embed.set_footer(text="Nothing is cleared until you confirm")
+        await interaction.response.edit_message(embed=embed, view=ResetAllDesignStateConfirmView())
 
     @discord.ui.button(label="Back to Design Studio", emoji="🎨", style=discord.ButtonStyle.secondary, custom_id="dank_design:format_locks_back", row=4)
     async def back_to_studio(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
         assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(interaction.guild.id))
-        await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
+        await interaction.edit_original_response(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
 
 
 
