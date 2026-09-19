@@ -1346,7 +1346,7 @@ def _live_target_exact_lock(
             majority.detect_font_id(studio, name),
             "normal",
         ).lower().replace("-", "_")
-        lock["font"] = detected_font if detected_font in studio.FONT_STYLES else "normal"
+        lock["font"] = detected_font if detected_font in studio.DESIGN_FONT_STYLES else "normal"
 
         if scope == "channel":
             separator = majority.detect_channel_separator(studio, name)
