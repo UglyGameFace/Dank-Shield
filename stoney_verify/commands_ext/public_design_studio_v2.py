@@ -166,8 +166,27 @@ async def _store_preview(
     )
     has_blockers = any(item.get("status") == "failed" for item in items)
     has_changes = any(item.get("status") == "changed" for item in items)
+    preview_embed = legacy._preview_embed(guild, items, title=title)  # type: ignore[attr-defined]
+    if mode == "preview_server_v2":
+        theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
+        font = _design_server_font(options)
+        separator_id = _design_server_separator(options)
+        frame = _safe_str(options.get("category_frame_id") or getattr(theme, "category_frame", "line"), "line")
+        preview_embed.insert_field_at(
+            0,
+            name="Selected server style",
+            value=(
+                f"Theme: **{getattr(theme, 'label', 'Gothic Clean')}**\n"
+                f"Font: **{studio.font_label(font)}** · `{studio.font_preview(font)}`\n"
+                f"Strength: **{max(1, min(5, _safe_int(options.get('strength'), 4)))}/5**\n"
+                f"Separator: **{legacy._separator_choice_label(separator_id)}**\n"  # type: ignore[attr-defined]
+                f"Categories: **{legacy._category_frame_choice_label(frame)}**\n"  # type: ignore[attr-defined]
+                "Saved category/channel/exact rules still win for their own items."
+            )[:1024],
+            inline=False,
+        )
     await interaction.edit_original_response(
-        embed=legacy._preview_embed(guild, items, title=title),  # type: ignore[attr-defined]
+        embed=preview_embed,
         view=ReviewedPreviewView(can_apply=not has_blockers and has_changes, pending_created_at=created_at),
     )
 
@@ -233,7 +252,7 @@ class DesignServerThemeSelect(discord.ui.Select):
                     label=theme.label[:100],
                     value=theme.id,
                     default=theme.id == current,
-                    description=f"Font: {font} • Categories: {frame}"[:100],
+                    description=f"{studio.font_preview(getattr(theme, 'font', 'normal'))} • {font} • {frame}"[:100],
                 )
             )
         super().__init__(placeholder="1) Choose the server theme", min_values=1, max_values=1, options=choices, row=0)
