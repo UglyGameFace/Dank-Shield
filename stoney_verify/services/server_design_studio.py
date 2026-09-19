@@ -42,6 +42,7 @@ FONT_STYLE_LABELS: dict[str, str] = {
     "small_caps": "Small Caps",
     "upside_down": "Upside Down",
 }
+DESIGN_FONT_STYLES = tuple(style for style in FONT_STYLES if style != "upside_down")
 RISKY_FONTS = {"double_struck", "script", "bold_script", "fraktur", "bold_fraktur", "circled", "parenthesized", "upside_down"}
 DEFAULT_PROTECTED_NAMES = {
     "mod-log", "logs", "audit-log", "transcripts", "transcript", "archive", "archives",
@@ -766,8 +767,8 @@ def design_score(items: list[dict[str, Any]]) -> dict[str, int | str]:
 
 
 __all__ = [
-    "CATEGORY_FRAMES", "DEFAULT_DELAY_SECONDS", "DEFAULT_PROTECTED_NAMES", "DISCORD_NAME_LIMIT", "FONT_STYLES",
-    "FONT_STYLE_LABELS", "ICON_PACKS", "MAX_PLAN_ITEMS", "SEPARATOR_LIBRARY", "THEMES", "build_styled_name",
+    "CATEGORY_FRAMES", "DEFAULT_DELAY_SECONDS", "DEFAULT_PROTECTED_NAMES", "DESIGN_FONT_STYLES", "DISCORD_NAME_LIMIT",
+    "FONT_STYLES", "FONT_STYLE_LABELS", "ICON_PACKS", "MAX_PLAN_ITEMS", "SEPARATOR_LIBRARY", "THEMES", "build_styled_name",
     "category_frame_preview", "design_score", "detect_duplicate_outputs", "fallback_ladder", "font_label",
     "font_preview", "normalize_base_name", "parse_channel_name", "preview_lines", "separator_preview",
     "strip_known_unicode_fonts", "summarize_plan", "suggested_icon", "transform_text_safe", "validate_separator",
