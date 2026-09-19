@@ -119,7 +119,7 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
     embed.add_field(
         name="Choose what you want to do",
         value=(
-            "🌐 **Design Entire Server** — choose the reusable theme/strength, then preview exact names.\n"
+            "🌐 **Design Entire Server** — choose theme, strength, and separator together, then preview exact names.\n"
             "✏️ **Edit One Category / Channel** — rename or style one exact item.\n"
             "🩺 **Fix Inconsistent Names** — scan first, then build a safe Smart Repair preview.\n"
             "🔐 **Saved Rules & Protection** — manage what future previews enforce; this does not rename anything by itself.\n"
@@ -648,9 +648,10 @@ def _saved_rules_embed(guild: discord.Guild, options: Mapping[str, Any]) -> disc
     embed.add_field(
         name="Which tool does what",
         value=(
-            "**Layout Rules** = global/category/channel visual rules, plus **Reset All Design Overrides**.\n"
+            "**Layout Rules** = inspect or add global/category/channel visual rules.\n"
             "**Remove One Rule** = remove exactly one listed saved rule or clean deleted-item rows.\n"
-            "**Protection** = manage exact-item and normalized-name protection. For every same-item override, use **Reset This Category/Channel** in the item editor."
+            "**Protection** = manage exact-item and normalized-name protection.\n"
+            "For a clean server-wide redesign, use **Design Entire Server → Start Clean Redesign**; it clears old layout/name exceptions but keeps protection."
         ),
         inline=False,
     )
