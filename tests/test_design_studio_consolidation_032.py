@@ -95,6 +95,21 @@ def test_server_separator_picker_can_follow_theme_or_hold_custom_choice() -> Non
     assert custom_defaults[0].value == "middle_dot"
 
 
+
+def test_gothic_theme_default_separator_matches_real_preview_plan() -> None:
+    options = {"theme_id": "gothic_clean", "strength": 4}
+    assert studio_v2._design_server_separator(options) == "pipe_spaced"
+    view = studio_v2.DesignServerView(options)
+    picker = next(
+        item for item in view.children
+        if isinstance(item, studio_v2.DesignServerSeparatorSelect)
+    )
+    selected = [option for option in picker.options if option.default]
+    assert len(selected) == 1
+    assert selected[0].value == "__theme__"
+    assert "Spaced" in str(selected[0].label) or "|" in str(selected[0].description)
+
+
 def test_server_design_embed_shows_font_and_live_style_examples() -> None:
     embed = studio_v2._design_server_embed(
         SimpleNamespace(),
