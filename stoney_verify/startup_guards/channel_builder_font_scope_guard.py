@@ -43,7 +43,6 @@ def _range_map(chars: str, start: int) -> dict[str, str]:
 
 def _maps() -> dict[str, dict[str, str]]:
     return {
-        "sans": {**_range_map(_Z, 0x1D5A0), **_range_map(_A, 0x1D5BA), **_range_map(_D, 0x1D7E2)},
         "bold_sans": {**_range_map(_Z, 0x1D5D4), **_range_map(_A, 0x1D5EE), **_range_map(_D, 0x1D7EC)},
         "italic_sans": {**_range_map(_Z, 0x1D608), **_range_map(_A, 0x1D622)},
         "bold_italic_sans": {**_range_map(_Z, 0x1D63C), **_range_map(_A, 0x1D656)},
@@ -52,12 +51,6 @@ def _maps() -> dict[str, dict[str, str]]:
         "serif_bold": {**_range_map(_Z, 0x1D400), **_range_map(_A, 0x1D41A), **_range_map(_D, 0x1D7CE)},
         "serif_italic": {**_range_map(_Z, 0x1D434), **_range_map(_A, 0x1D44E)},
         "serif_bold_italic": {**_range_map(_Z, 0x1D468), **_range_map(_A, 0x1D482)},
-        "double_struck": {
-            **_range_map(_Z, 0x1D538),
-            **_range_map(_A, 0x1D552),
-            **_range_map(_D, 0x1D7D8),
-            "C": "ℂ", "H": "ℍ", "N": "ℕ", "P": "ℙ", "Q": "ℚ", "R": "ℝ", "Z": "ℤ",
-        },
         "script": {**_range_map(_Z, 0x1D49C), **_range_map(_A, 0x1D4B6)},
         "bold_script": {**_range_map(_Z, 0x1D4D0), **_range_map(_A, 0x1D4EA)},
         "fraktur": {**_range_map(_Z, 0x1D504), **_range_map(_A, 0x1D51E)},
