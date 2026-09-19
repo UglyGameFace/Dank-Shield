@@ -388,7 +388,9 @@ def _current_format_lock(options: Mapping[str, Any], *, scope: str = "global") -
 
     theme = _theme_from_options(options)
     strength = max(1, min(5, _safe_int(options.get("strength"), 4)))
-    font = _safe_str(getattr(theme, "font", "normal"), "normal").lower().replace("-", "_")
+    font = _safe_str(options.get("font") or getattr(theme, "font", "normal"), "normal").lower().replace("-", "_")
+    if font not in studio.FONT_STYLES:
+        font = _safe_str(getattr(theme, "font", "normal"), "normal").lower().replace("-", "_")
     theme_separator = _safe_str(getattr(theme, "channel_separator", "bar_full"), "bar_full")
 
     return {
