@@ -351,13 +351,28 @@ class DesignServerStrengthSelect(discord.ui.Select):
 
 
 class DesignServerSeparatorSelect(discord.ui.Select):
-    def __init__(self, current: str) -> None:
-        selected = _safe_str(current, "bar_heavy")
+    def __init__(self, options: Mapping[str, Any]) -> None:
+        theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
+        theme_separator = _safe_str(getattr(theme, "channel_separator", "none"), "none")
+        explicit = _safe_str(options.get("separator_id"), "")
+        selected = _design_server_separator(options)
+        choices: list[discord.SelectOption] = [
+            discord.SelectOption(
+                label=f"Theme Default · {legacy._separator_choice_label(theme_separator)}"[:100],  # type: ignore[attr-defined]
+                value="__theme__",
+                description=f"{studio.separator_preview(theme_separator)} · follows the selected theme"[:100],
+                default=not bool(explicit),
+            )
+        ]
+        for option in legacy._style_change_separator_options(selected):  # type: ignore[attr-defined]
+            option.default = bool(explicit and str(option.value) == selected)
+            choices.append(option)
+
         super().__init__(
             placeholder="4) Choose the channel separator",
             min_values=1,
             max_values=1,
-            options=legacy._style_change_separator_options(selected),  # type: ignore[attr-defined]
+            options=choices[:25],
             row=3,
         )
 
@@ -368,8 +383,13 @@ class DesignServerSeparatorSelect(discord.ui.Select):
         assert guild is not None
         await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
-        selected = _safe_str(self.values[0], "bar_heavy")
-        options["separator_id"] = selected
+        selected = _safe_str(self.values[0], "__theme__")
+        if selected == "__theme__":
+            options.pop("separator_id", None)
+        else:
+            if selected not in studio.SEPARATORS_BY_ID:
+                raise ValueError("Unsupported Dank Design separator selection.")
+            options["separator_id"] = selected
         legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
         await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
         await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
@@ -383,6 +403,10 @@ def _design_server_separator(options: Mapping[str, Any]) -> str:
     )
 
 
+def _separator_override_active(options: Mapping[str, Any]) -> bool:
+    return bool(_safe_str(options.get("separator_id"), ""))
+
+
 def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> discord.Embed:
     theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
     separator_id = _design_server_separator(options)
@@ -392,6 +416,7 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
     narrow_count = _layout_override_count(options)
     category_example, channel_example = _design_server_examples(options)
     font_source = "custom override" if _font_override_active(options) else "theme default"
+    separator_source = "custom override" if _separator_override_active(options) else "theme default"
 
     embed = discord.Embed(
         title="🌐 Design Entire Server",
@@ -410,7 +435,7 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
     embed.add_field(name="Strength", value=f"**{strength}/5**", inline=True)
     embed.add_field(
         name="Separator",
-        value=f"**{legacy._separator_choice_label(separator_id)}**",  # type: ignore[attr-defined]
+        value=f"**{legacy._separator_choice_label(separator_id)}** · {separator_source}",  # type: ignore[attr-defined]
         inline=True,
     )
     embed.add_field(
@@ -510,7 +535,7 @@ class DesignServerView(DesignView):
         self.add_item(DesignServerThemeSelect(_safe_str(options.get("theme_id"), "gothic_clean")))
         self.add_item(DesignServerFontSelect(options))
         self.add_item(DesignServerStrengthSelect(_safe_int(options.get("strength"), 4)))
-        self.add_item(DesignServerSeparatorSelect(_design_server_separator(options)))
+        self.add_item(DesignServerSeparatorSelect(options))
         self.clean_redesign.disabled = _layout_override_count(options) == 0
 
     @discord.ui.button(label="Preview Server", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design_v2:server_preview", row=4)
