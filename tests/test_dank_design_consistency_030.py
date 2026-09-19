@@ -33,12 +33,15 @@ def test_legacy_category_frame_protection_aliases_to_full() -> None:
 
 def test_consolidated_server_selectors_fail_closed_and_sync_active_global_lock() -> None:
     theme_start = V2.index("class DesignServerThemeSelect")
-    strength_start = V2.index("class DesignServerStrengthSelect", theme_start)
+    font_start = V2.index("class DesignServerFontSelect", theme_start)
+    strength_start = V2.index("class DesignServerStrengthSelect", font_start)
     separator_start = V2.index("class DesignServerSeparatorSelect", strength_start)
     end = V2.index("def _design_server_embed", separator_start)
     block = V2[theme_start:end]
-    assert block.count("await legacy._save_options(interaction, options)") == 3
-    assert block.count("legacy._sync_enabled_global_lock(options)") == 3
+    assert block.count("await legacy._save_options(interaction, options)") == 4
+    assert block.count("legacy._sync_enabled_global_lock(options)") == 4
+    assert 'options["font"] = selected' in block
+    assert 'options.pop("font", None)' in block
     assert 'options["separator_id"] = selected' in block
     assert "picked_font" not in block
     assert 'options["strength"] = 4' not in block
@@ -49,6 +52,18 @@ def test_consolidated_server_selectors_fail_closed_and_sync_active_global_lock()
 def test_current_format_lock_never_silently_rewrites_strength() -> None:
     lock = public_studio._current_format_lock({"theme_id": "gothic_clean", "strength": 2})
     assert lock["strength"] == 2
+
+
+def test_current_format_lock_honors_explicit_server_font_override() -> None:
+    lock = public_studio._current_format_lock(
+        {"theme_id": "gothic_clean", "strength": 4, "font": "double_struck"}
+    )
+    assert lock["font"] == "double_struck"
+
+    invalid = public_studio._current_format_lock(
+        {"theme_id": "gothic_clean", "strength": 4, "font": "not-a-font"}
+    )
+    assert invalid["font"] == "fraktur"
 
 
 def test_rule_counts_include_exact_protection_overrides() -> None:
