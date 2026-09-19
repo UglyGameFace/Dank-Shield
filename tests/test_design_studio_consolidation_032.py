@@ -70,6 +70,31 @@ def test_server_font_picker_fits_discord_and_exposes_full_catalog() -> None:
     assert any("𝕘" in str(option.description) for option in picker.options if option.value == "double_struck")
 
 
+def test_server_separator_picker_can_follow_theme_or_hold_custom_choice() -> None:
+    theme_default = studio_v2.DesignServerView(
+        {"theme_id": "gaming_arcade", "strength": 4}
+    )
+    picker = next(
+        item for item in theme_default.children
+        if isinstance(item, studio_v2.DesignServerSeparatorSelect)
+    )
+    defaults = [option for option in picker.options if option.default]
+    assert len(defaults) == 1
+    assert defaults[0].value == "__theme__"
+    assert "Theme Default" in str(defaults[0].label)
+
+    custom = studio_v2.DesignServerView(
+        {"theme_id": "gaming_arcade", "strength": 4, "separator_id": "middle_dot"}
+    )
+    custom_picker = next(
+        item for item in custom.children
+        if isinstance(item, studio_v2.DesignServerSeparatorSelect)
+    )
+    custom_defaults = [option for option in custom_picker.options if option.default]
+    assert len(custom_defaults) == 1
+    assert custom_defaults[0].value == "middle_dot"
+
+
 def test_server_design_embed_shows_font_and_live_style_examples() -> None:
     embed = studio_v2._design_server_embed(
         SimpleNamespace(),
