@@ -1473,6 +1473,7 @@ async def _open_exact_format_editor(interaction: discord.Interaction, *, scope: 
         guild = interaction.guild
         assert guild is not None
 
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
         lock = _initial_editor_lock(options, scope=scope, target_id=int(target_id), guild=guild)
         key = _format_editor_key(int(guild.id), int(interaction.user.id), scope, int(target_id))
@@ -1481,7 +1482,7 @@ async def _open_exact_format_editor(interaction: discord.Interaction, *, scope: 
         embed = _exact_format_embed(guild, scope=scope, target_id=int(target_id), lock=lock)
         view = ExactFormatEditorViewFactory(guild, scope, int(target_id), lock)
 
-        await interaction.response.edit_message(embed=embed, view=view)
+        await interaction.edit_original_response(embed=embed, view=view)
 
     await _guard_design_action(interaction, f"design.exact.open.{scope}", action, defer=False)
 
