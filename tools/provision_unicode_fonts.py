@@ -4,8 +4,8 @@ from __future__ import annotations
 
 Discloud's Canvas image supplies common Latin fonts but does not guarantee the
 long-tail Unicode faces needed by arbitrary Discord display names.  Deployment
-therefore installs a small quality fallback plus GNU Unifont Plane 0/upper
-fallbacks into the app directory before startup.
+therefore installs a dedicated Canadian-Aboriginal Noto face plus GNU Unifont
+Plane 0/upper safety nets into the app directory before startup.
 
 The downloads are pinned and integrity checked.  A failed or changed download
 fails the build instead of silently deploying a renderer that produces tofu
@@ -38,15 +38,16 @@ class FontAsset:
 
 ASSETS: tuple[FontAsset, ...] = (
     FontAsset(
-        filename="FreeSans.ttf",
+        filename="NotoSansCanadianAboriginal-Variable.ttf",
         urls=(
-            "https://raw.githubusercontent.com/opensourcedesign/fonts/"
-            "96da5c8b6cdc1b91d2ee58efef3f0402f5a47217/"
-            "gnu-freefont_freesans/FreeSans.ttf",
+            "https://raw.githubusercontent.com/google/fonts/"
+            "f2bd09badbc763d8757951d52deec29da27e85fb/"
+            "ofl/notosanscanadianaboriginal/"
+            "NotoSansCanadianAboriginal%5Bwght%5D.ttf",
         ),
-        size=714456,
-        # GitHub blob object for the exact pinned file.
-        digest="9db958532c12ef7f4aa22fab57a0f71e82acdd38",
+        size=292524,
+        # GitHub blob object for the exact pinned Google Fonts file.
+        digest="b20ba0705bfac6e3c1655ea854522c041bd00a69",
         digest_kind="git-sha1",
     ),
     FontAsset(
