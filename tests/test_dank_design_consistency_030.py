@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from stoney_verify.commands_ext import public_design_studio as public_studio
+from stoney_verify.services import server_design_plan_service as plan_service
 from stoney_verify.services import server_design_studio as studio
 
 PUBLIC = Path("stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
