@@ -125,6 +125,13 @@ def test_reset_all_design_overrides_clears_every_advertised_override_layer_but_p
     assert updated["separator_id"] == "bar_heavy"
 
 
+def test_separator_only_rows_do_not_repeat_scope_warning_on_every_example() -> None:
+    after, warnings, blockers = legacy._style_change_separator_after("🎮┃gaming-news", "bar_thin")
+    assert blockers == []
+    assert warnings == []
+    assert after != "🎮┃gaming-news"
+
+
 def test_separator_protection_modes_are_cumulative_and_exact_safe() -> None:
     assert rules.protection_allows_separator("never") is False
     assert rules.protection_allows_separator("emoji_only") is False
