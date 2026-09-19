@@ -4149,7 +4149,9 @@ def _style_change_separator_after(current_name: str, separator_id: str) -> tuple
 
     emoji, body = _style_change_icon_and_body(before, parsed)
 
-    warnings: list[str] = ["Style Change only touched the channel separator; emoji/name/font were preserved."]
+    # The preview embed already states the separator-only scope once.
+    # Repeating the same warning on every row makes mobile previews unreadable.
+    warnings: list[str] = []
     blockers: list[str] = []
 
     spec = _style_change_separator_spec(separator_id)
