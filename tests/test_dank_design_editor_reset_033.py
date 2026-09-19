@@ -73,6 +73,32 @@ def test_reset_item_removes_all_same_item_override_layers() -> None:
     assert updated["protection_rules"]["general"] == "full"
 
 
+def test_clean_redesign_clears_layout_exceptions_but_preserves_protection() -> None:
+    options = {
+        "theme_id": "gothic_clean",
+        "strength": 5,
+        "separator_id": "bar_heavy",
+        "format_lock_global": {"enabled": True, "separator_id": "bar_full"},
+        "category_format_locks": {"10": {"separator_id": "bar_full"}},
+        "channel_format_locks": {"11": {"separator_id": "bar_thin"}},
+        "manual_name_overrides": {"12": "staff"},
+        "protection_item_rules": {"13": "never"},
+        "protection_rules": {"staff": "never"},
+    }
+
+    updated = rules.reset_layout_overrides(options)
+
+    assert updated["format_lock_global"] == {}
+    assert updated["category_format_locks"] == {}
+    assert updated["channel_format_locks"] == {}
+    assert updated["manual_name_overrides"] == {}
+    assert updated["protection_item_rules"] == {"13": "never"}
+    assert updated["protection_rules"] == {"staff": "never"}
+    assert updated["theme_id"] == "gothic_clean"
+    assert updated["strength"] == 5
+    assert updated["separator_id"] == "bar_heavy"
+
+
 def test_reset_all_design_overrides_clears_every_advertised_override_layer_but_preserves_server_draft() -> None:
     options = {
         "theme_id": "gothic_clean",
