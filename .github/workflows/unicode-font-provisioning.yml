@@ -38,8 +38,12 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install font inspection dependency
-        run: python -m pip install -q "fonttools>=4.55.0,<5.0.0"
+      - name: Install font inspection dependencies
+        run: >-
+          python -m pip install -q
+          "fonttools>=4.55.0,<5.0.0"
+          "Pillow>=10.4.0,<12.0.0"
+          "regex>=2024.11.6,<2027.0.0"
 
       - name: Provision pinned runtime fonts
         run: python tools/provision_unicode_fonts.py
@@ -84,4 +88,33 @@ jobs:
                   "runtime fallback missing live codepoints: "
                   + ", ".join(f"U+{codepoint:04X}" for codepoint in missing)
               )
+          PY
+
+      - name: Resolve exact live name through production fallback engine
+        shell: bash
+        run: |
+          python - <<'PY'
+          from stoney_verify import unicode_font_fallback as fallback
+
+          sample = "PᗩᗰƐᒪᗩ"
+          runs = fallback.resolve_font_runs(
+              sample,
+              primary_paths=(
+                  "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+              ),
+              bold=True,
+          )
+          assert runs, "fallback engine returned no runs"
+          assert "".join(run.text for run in runs) == sample
+          uncovered = [
+              (run.text, run.source.key)
+              for run in runs
+              if not fallback.source_supports(run.source, run.text)
+          ]
+          print(
+              "resolved runs:",
+              [(run.text, run.source.key, run.source.path) for run in runs],
+          )
+          if uncovered:
+              raise SystemExit(f"fallback engine selected uncovered runs: {uncovered}")
           PY
