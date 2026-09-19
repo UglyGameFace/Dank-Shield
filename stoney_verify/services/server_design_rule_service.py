@@ -130,6 +130,17 @@ def reset_item_overrides(options: Mapping[str, Any], *, target_id: int) -> tuple
     return out, removed
 
 
+def reset_layout_overrides(options: Mapping[str, Any]) -> dict[str, Any]:
+    """Clear saved visual/name exceptions while preserving protection and draft settings."""
+
+    out = dict(options)
+    out["format_lock_global"] = {}
+    out["category_format_locks"] = {}
+    out["channel_format_locks"] = {}
+    out["manual_name_overrides"] = {}
+    return out
+
+
 def reset_all_overrides(options: Mapping[str, Any]) -> dict[str, Any]:
     """Remove every saved override layer while preserving the server draft."""
 
@@ -154,4 +165,5 @@ __all__ = [
     "removal_count",
     "reset_all_overrides",
     "reset_item_overrides",
+    "reset_layout_overrides",
 ]
