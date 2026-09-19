@@ -1,0 +1,87 @@
+name: Lifecycle Unicode Font Provisioning
+
+on:
+  pull_request:
+    paths:
+      - "discloud.config"
+      - "stoney_verify/unicode_font_fallback.py"
+      - "tools/provision_unicode_fonts.py"
+      - "tests/test_unicode_font_provisioner.py"
+      - "tests/test_welcome_card_unicode_fallback.py"
+      - ".github/workflows/unicode-font-provisioning.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "discloud.config"
+      - "stoney_verify/unicode_font_fallback.py"
+      - "tools/provision_unicode_fonts.py"
+      - "tests/test_unicode_font_provisioner.py"
+      - "tests/test_welcome_card_unicode_fallback.py"
+      - ".github/workflows/unicode-font-provisioning.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  provision-and-cover:
+    name: Provision fonts and verify live Unicode coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install font inspection dependency
+        run: python -m pip install -q "fonttools>=4.55.0,<5.0.0"
+
+      - name: Provision pinned runtime fonts
+        run: python tools/provision_unicode_fonts.py
+
+      - name: Verify pinned runtime fonts
+        run: python tools/provision_unicode_fonts.py --verify-only
+
+      - name: Verify exact live Canadian-syllabics coverage
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from fontTools.ttLib import TTFont
+
+          root = Path(".runtime_fonts")
+          sample = "PᗩᗰƐᒪᗩ"
+          required = {ord(ch) for ch in sample}
+
+          coverage = set()
+          details = {}
+          for path in sorted(root.glob("*")):
+              if path.suffix.lower() not in {".ttf", ".otf"}:
+                  continue
+              font = TTFont(str(path), lazy=True)
+              points = set()
+              try:
+                  for table in font["cmap"].tables:
+                      if table.isUnicode():
+                          points.update(table.cmap)
+              finally:
+                  font.close()
+              coverage.update(points)
+              details[path.name] = sorted(
+                  f"U+{codepoint:04X}" for codepoint in required.intersection(points)
+              )
+
+          missing = sorted(required - coverage)
+          print("live sample:", sample)
+          print("runtime coverage:", details)
+          if missing:
+              raise SystemExit(
+                  "runtime fallback missing live codepoints: "
+                  + ", ".join(f"U+{codepoint:04X}" for codepoint in missing)
+              )
+          PY
