@@ -290,8 +290,9 @@ def _long_tail_fallback_paths() -> tuple[str, ...]:
     """Return deterministic app-local fallbacks followed by common system copies."""
 
     candidates = [
-        *(_RUNTIME_FONT_DIR / name for name in _LONG_TAIL_FONT_NAMES),
+        _RUNTIME_FONT_DIR / _LONG_TAIL_FONT_NAMES[0],
         *(Path(path) for path in _SYSTEM_LONG_TAIL_PATHS),
+        *(_RUNTIME_FONT_DIR / name for name in _LONG_TAIL_FONT_NAMES[1:]),
     ]
     paths: list[str] = []
     seen: set[str] = set()
