@@ -53,6 +53,11 @@ class FontRun:
 
 _BYTES_COVERAGE: dict[str, frozenset[int]] = {}
 
+_BUNDLED_FONT_DIR = Path(__file__).resolve().parent / "assets" / "fonts"
+_BUNDLED_FONT_FILENAMES = (
+    "NotoSansCanadianAboriginal-VF.ttf",
+)
+
 
 def _graphemes(text: str) -> list[str]:
     value = str(text or "")
@@ -220,6 +225,21 @@ def _font_family_priority(family: str) -> tuple[int, str]:
     return 200, folded
 
 
+@lru_cache(maxsize=1)
+def _bundled_fallback_paths() -> tuple[str, ...]:
+    """Return deterministic long-tail fallback faces shipped with Dank Shield."""
+
+    paths: list[str] = []
+    for filename in _BUNDLED_FONT_FILENAMES:
+        candidate = _BUNDLED_FONT_DIR / filename
+        try:
+            if candidate.is_file():
+                paths.append(str(candidate))
+        except Exception:
+            continue
+    return tuple(paths)
+
+
 @lru_cache(maxsize=2)
 def _registered_fallback_paths(bold: bool) -> tuple[str, ...]:
     """Return bundled/system Noto faces registered by JustMyType."""
@@ -311,7 +331,7 @@ def fallback_sources(
             )
         )
 
-    for path in _registered_fallback_paths(bool(bold)):
+    for path in (*_bundled_fallback_paths(), *_registered_fallback_paths(bool(bold))):
         if path in seen_paths:
             continue
         seen_paths.add(path)
