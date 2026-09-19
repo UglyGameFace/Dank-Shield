@@ -2204,13 +2204,14 @@ class ExactFormatEditorView(discord.ui.View):
                 return
             guild = interaction.guild
             assert guild is not None
+            await interaction.response.defer(ephemeral=True, thinking=False)
             key = _format_editor_key(int(guild.id), int(interaction.user.id), self.scope, self.target_id)
             lock = dict(_FORMAT_EDITOR_DRAFTS.get(key) or {})
             if not lock:
                 options = await _load_design_options(int(guild.id))
                 lock = _initial_editor_lock(options, scope=self.scope, target_id=self.target_id, guild=guild)
                 _FORMAT_EDITOR_DRAFTS[key] = lock
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 embed=_separator_gallery_embed(guild, scope=self.scope, target_id=self.target_id, lock=lock, page=0),
                 view=SeparatorExamplesView(guild, scope=self.scope, target_id=self.target_id, lock=lock, page=0),
             )
@@ -2233,6 +2234,7 @@ class ExactFormatEditorView(discord.ui.View):
             guild = interaction.guild
             assert guild is not None
 
+            await interaction.response.defer(ephemeral=True, thinking=False)
             options = await _load_design_options(int(guild.id))
             current = _live_majority_exact_lock(guild, options, scope=self.scope, target_id=self.target_id)
             if not current:
@@ -2247,7 +2249,7 @@ class ExactFormatEditorView(discord.ui.View):
             key = _format_editor_key(int(guild.id), int(interaction.user.id), self.scope, self.target_id)
             _FORMAT_EDITOR_DRAFTS[key] = current
 
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 embed=_exact_format_embed(guild, scope=self.scope, target_id=self.target_id, lock=current),
                 view=ExactFormatEditorViewFactory(guild, self.scope, self.target_id, current),
             )
@@ -3242,8 +3244,9 @@ class BackToDesignButton(discord.ui.Button):
         if not await _require_design_permission(interaction):
             return
         assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(interaction.guild.id))
-        await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
+        await interaction.edit_original_response(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
 
 
 class BackToCategoryButton(discord.ui.Button):
@@ -3413,8 +3416,9 @@ class LockManagerButton(discord.ui.Button):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=_format_lock_manager_embed(guild, options, page=0),
             view=LockManagerView(guild, options, page=0),
         )
@@ -3440,11 +3444,12 @@ class LockRemoveButton(discord.ui.Button):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _remove_format_lock(interaction, scope=self.scope, target_id=self.target_id)
         embed = _format_lock_manager_embed(guild, options, page=0)
         embed.title = "🗑️ One Saved Rule Removed"
         embed.description = "Removed only the listed rule. Another exact or broader rule may still apply. Use **Reset This Category/Channel** in the item editor to remove every same-item override at once."
-        await interaction.response.edit_message(embed=embed, view=LockManagerView(guild, options, page=0))
+        await interaction.edit_original_response(embed=embed, view=LockManagerView(guild, options, page=0))
 
 
 class LockManagerPageButton(discord.ui.Button):
@@ -3463,8 +3468,9 @@ class LockManagerPageButton(discord.ui.Button):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=_format_lock_manager_embed(guild, options, page=self.page),
             view=LockManagerView(guild, options, page=self.page),
         )
@@ -3507,11 +3513,12 @@ class CleanStaleLocksButton(discord.ui.Button):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options, removed = await _clean_stale_format_locks(interaction)
         embed = _format_lock_manager_embed(guild, options, page=0)
         embed.title = "🧹 Stale Format Locks Cleaned"
         embed.description = f"Removed **{removed}** stale lock(s)."
-        await interaction.response.edit_message(embed=embed, view=LockManagerView(guild, options, page=0))
+        await interaction.edit_original_response(embed=embed, view=LockManagerView(guild, options, page=0))
 
 
 class BackToLocksOrDesignButton(discord.ui.Button):
@@ -3529,8 +3536,9 @@ class BackToLocksOrDesignButton(discord.ui.Button):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
-        await interaction.response.edit_message(embed=_format_locks_embed(guild, options), view=FormatLocksView() if "FormatLocksView" in globals() else DesignHomeView(options))
+        await interaction.edit_original_response(embed=_format_locks_embed(guild, options), view=FormatLocksView() if "FormatLocksView" in globals() else DesignHomeView(options))
 
 
 
@@ -3692,6 +3700,7 @@ class ProtectionManagerView(discord.ui.View):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options, changed = await _set_default_protection_rules(interaction, mode="font_only")
         embed = _protection_manager_embed(guild, options)
         embed.title = "🔤 Default Protected Names Allow Font + Layout"
@@ -3700,7 +3709,7 @@ class ProtectionManagerView(discord.ui.View):
             value=f"**{changed}** default protected name rule(s) now allow separator + font styling while still blocking category-frame/full styling.",
             inline=False,
         )
-        await interaction.response.edit_message(embed=embed, view=ProtectionManagerView())
+        await interaction.edit_original_response(embed=embed, view=ProtectionManagerView())
 
     @discord.ui.button(label="Restore Default Protection", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_design:protection_restore_defaults", row=0)
     async def restore_defaults(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3708,11 +3717,12 @@ class ProtectionManagerView(discord.ui.View):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options, changed = await _set_default_protection_rules(interaction, mode=None)
         embed = _protection_manager_embed(guild, options)
         embed.title = "↩️ Default Protection Restored"
         embed.add_field(name="Updated", value=f"Removed **{changed}** default protected-name override(s).", inline=False)
-        await interaction.response.edit_message(embed=embed, view=ProtectionManagerView())
+        await interaction.edit_original_response(embed=embed, view=ProtectionManagerView())
 
     @discord.ui.button(label="Pick Category", emoji="🗂️", style=discord.ButtonStyle.primary, custom_id="dank_design:protection_pick_category", row=1)
     async def pick_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3735,8 +3745,9 @@ class ProtectionManagerView(discord.ui.View):
         if not await _require_design_permission(interaction):
             return
         assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(interaction.guild.id))
-        await interaction.response.edit_message(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
+        await interaction.edit_original_response(embed=_home_embed(interaction.guild, options), view=DesignHomeView(options))
 
 
 class ProtectionModeSelect(discord.ui.Select):
@@ -3757,6 +3768,7 @@ class ProtectionModeSelect(discord.ui.Select):
             return await interaction.response.send_message("That channel/category no longer exists.", ephemeral=True)
         selected = self.values[0]
         mode = None if selected == "__clear__" else selected
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _save_protection_rule(interaction, target_id=self.channel_id, mode=mode)
         base = _base_for_channel(channel)
         inherited = _inherited_protection_mode(options, base)
@@ -3769,7 +3781,7 @@ class ProtectionModeSelect(discord.ui.Select):
         else:
             parent = getattr(channel, "category", None)
             view = ChannelEditorActionView(self.channel_id, category_id=_safe_int(getattr(parent, "id", 0), 0) or None)
-        await interaction.response.edit_message(embed=embed, view=view)
+        await interaction.edit_original_response(embed=embed, view=view)
 
 
 class ProtectionModeView(discord.ui.View):
@@ -3786,7 +3798,9 @@ class ProtectionModeView(discord.ui.View):
         assert guild is not None
         channel = guild.get_channel(self.channel_id)
         if channel is None:
-            return await interaction.response.edit_message(embed=_protection_manager_embed(guild, await _load_design_options(int(guild.id))), view=ProtectionManagerView())
+            await interaction.response.defer(ephemeral=True, thinking=False)
+            options = await _load_design_options(int(guild.id))
+            return await interaction.edit_original_response(embed=_protection_manager_embed(guild, options), view=ProtectionManagerView())
         if isinstance(channel, discord.CategoryChannel):
             await interaction.response.edit_message(embed=_category_action_embed(channel), view=CategoryEditorActionView(self.channel_id))
         else:
@@ -3802,6 +3816,7 @@ async def _open_protection_mode_editor(interaction: discord.Interaction, *, chan
     channel = guild.get_channel(int(channel_id))
     if channel is None:
         return await interaction.response.send_message("That channel/category no longer exists.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True, thinking=False)
     options = await _load_design_options(int(guild.id))
     base = _base_for_channel(channel)
     exact = _protection_item_rules(options).get(str(int(channel.id)))
@@ -3816,7 +3831,7 @@ async def _open_protection_mode_editor(interaction: discord.Interaction, *, chan
     )
     embed.add_field(name="Exact override", value=f"**{_protection_mode_label(exact)}**" if exact else "None", inline=True)
     embed.add_field(name="Inherited behavior", value=f"**{_protection_mode_label(inherited)}**", inline=True)
-    await interaction.response.edit_message(embed=embed, view=ProtectionModeView(channel_id=int(channel.id), current=exact))
+    await interaction.edit_original_response(embed=embed, view=ProtectionModeView(channel_id=int(channel.id), current=exact))
 
 
 STYLE_CHANGE_SEPARATOR_IDS: tuple[str, ...] = (
@@ -4353,8 +4368,9 @@ class StyleChangeSeparatorSelect(discord.ui.Select):
         assert guild is not None
 
         selected = _safe_str(self.values[0], "bar_heavy")
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=_style_change_embed(guild, options, separator_id=selected),
             view=StyleChangeView(separator_id=selected),
         )
@@ -4408,8 +4424,9 @@ class StyleChangeView(discord.ui.View):
             return
         guild = interaction.guild
         assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=_home_embed(guild, options),
             view=DesignHomeView(options),
         )
