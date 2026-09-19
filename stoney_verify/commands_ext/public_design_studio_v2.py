@@ -197,11 +197,11 @@ def _design_server_font(options: Mapping[str, Any]) -> str:
     if explicit in studio.DESIGN_FONT_STYLES:
         return explicit
     fallback = _safe_str(getattr(theme, "font", "normal"), "normal").lower().replace("-", "_")
-    return fallback if fallback in studio.FONT_STYLES else "normal"
+    return fallback if fallback in studio.DESIGN_FONT_STYLES else "normal"
 
 
 def _font_override_active(options: Mapping[str, Any]) -> bool:
-    return _safe_str(options.get("font"), "").lower().replace("-", "_") in studio.FONT_STYLES
+    return _safe_str(options.get("font"), "").lower().replace("-", "_") in studio.DESIGN_FONT_STYLES
 
 
 def _design_server_examples(options: Mapping[str, Any]) -> tuple[str, str]:
@@ -281,7 +281,7 @@ class DesignServerFontSelect(discord.ui.Select):
                 label=f"Theme Default · {studio.font_label(theme_font)}"[:100],
                 value="__theme__",
                 description=f"{studio.font_preview(theme_font)} · follows the selected theme"[:100],
-                default=explicit not in studio.FONT_STYLES,
+                default=explicit not in studio.DESIGN_FONT_STYLES,
             )
         ]
         for style in studio.DESIGN_FONT_STYLES:
