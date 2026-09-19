@@ -869,12 +869,16 @@ class UndoConfirmView(DesignView):
             await interaction.response.send_message("⏳ A Dank Design job is already running for this server.", ephemeral=True)
             return
 
+        await interaction.response.defer(ephemeral=True, thinking=False)
         latest = await legacy._latest_rollback_snapshot(int(guild.id))  # type: ignore[attr-defined]
         if not _snapshot_matches(latest, self.snapshot_created_at):
-            await interaction.response.send_message("❌ This Undo preview is obsolete. Open Undo Last Apply again.", ephemeral=True)
+            await interaction.edit_original_response(
+                content="❌ This Undo preview is obsolete. Open Undo Last Apply again.",
+                embed=None,
+                view=DoneView(can_rollback=bool(latest)),
+            )
             return
 
-        await interaction.response.defer(ephemeral=True, thinking=False)
         async with lock:
             latest = await legacy._latest_rollback_snapshot(int(guild.id))  # type: ignore[attr-defined]
             if not _snapshot_matches(latest, self.snapshot_created_at):
