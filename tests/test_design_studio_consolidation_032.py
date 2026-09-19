@@ -47,14 +47,38 @@ def test_clean_redesign_button_only_enables_when_layout_exceptions_exist() -> No
     assert crossed_button.disabled is False
 
 
-def test_theme_and_strength_are_only_inside_design_server() -> None:
+def test_server_style_controls_are_only_inside_design_server() -> None:
     assert "DesignServerThemeSelect" in V2
+    assert "DesignServerFontSelect" in V2
     assert "DesignServerStrengthSelect" in V2
     home_start = V2.index("class DesignHomeView")
     home_end = V2.index("def _snapshot_matches", home_start)
     home = V2[home_start:home_end]
     assert "DesignServerThemeSelect" not in home
+    assert "DesignServerFontSelect" not in home
     assert "DesignServerStrengthSelect" not in home
+
+
+def test_server_font_picker_fits_discord_and_exposes_full_catalog() -> None:
+    view = studio_v2.DesignServerView({"theme_id": "gothic_clean", "strength": 4})
+    picker = next(item for item in view.children if isinstance(item, studio_v2.DesignServerFontSelect))
+    assert len(picker.options) == len(studio.FONT_STYLES) + 1
+    assert len(picker.options) <= 25
+    values = {str(option.value) for option in picker.options}
+    assert {"__theme__", "sans", "double_struck", "fraktur", "small_caps"} <= values
+    assert any("𝕘" in str(option.description) for option in picker.options if option.value == "double_struck")
+
+
+def test_server_design_embed_shows_font_and_live_style_examples() -> None:
+    embed = studio_v2._design_server_embed(
+        SimpleNamespace(),
+        {"theme_id": "double_struck_luxe", "strength": 4},
+    )
+    fields = {str(field.name): str(field.value) for field in embed.fields}
+    assert "Font" in fields
+    assert "Style example" in fields
+    assert "Double-Struck" in fields["Font"]
+    assert "𝕘" in fields["Font"]
 
 
 def test_active_registration_does_not_activate_runtime_monkey_patches() -> None:
