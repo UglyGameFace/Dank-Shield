@@ -89,7 +89,10 @@ def test_direct_rename_runs_inside_guard_and_saves_exact_name() -> None:
     block = PUBLIC_STUDIO[start:end]
     assert 'await _guard_design_action(interaction, "design.direct_rename", action, defer=False)' in block
     assert "await _save_manual_name_override(" in block
-    assert block.index("guild = interaction.guild") < block.index("await channel.edit(")
+    assert block.index("guild = interaction.guild") < block.index("await interaction.response.defer")
+    assert block.index("await interaction.response.defer") < block.index("await _direct_rename_fetch_target")
+    assert block.index("await interaction.response.defer") < block.index("await channel.edit(")
+    assert "await interaction.edit_original_response(embed=embed, view=view)" in block
 
 
 def test_direct_rename_refresh_prefers_live_api() -> None:
