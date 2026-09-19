@@ -43,6 +43,7 @@ def test_consolidated_server_selectors_fail_closed_and_sync_active_global_lock()
     assert 'options["font"] = selected' in block
     assert 'options.pop("font", None)' in block
     assert 'options["separator_id"] = selected' in block
+    assert 'options.pop("separator_id", None)' in block
     assert "picked_font" not in block
     assert 'options["strength"] = 4' not in block
     assert "class ThemeSelect" not in PUBLIC
