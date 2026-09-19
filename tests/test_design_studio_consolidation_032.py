@@ -37,6 +37,16 @@ def test_home_has_exactly_five_explicit_workflows() -> None:
     ]
 
 
+def test_clean_redesign_button_only_enables_when_layout_exceptions_exist() -> None:
+    clean = studio_v2.DesignServerView({})
+    clean_button = next(item for item in clean.children if getattr(item, "custom_id", "") == "dank_design_v2:clean_redesign")
+    assert clean_button.disabled is True
+
+    crossed = studio_v2.DesignServerView({"channel_format_locks": {"123": {"enabled": True}}})
+    crossed_button = next(item for item in crossed.children if getattr(item, "custom_id", "") == "dank_design_v2:clean_redesign")
+    assert crossed_button.disabled is False
+
+
 def test_theme_and_strength_are_only_inside_design_server() -> None:
     assert "DesignServerThemeSelect" in V2
     assert "DesignServerStrengthSelect" in V2
