@@ -429,7 +429,7 @@ def _clean_redesign_embed(options: Mapping[str, Any]) -> discord.Embed:
         title="🧹 Start a Clean Redesign?",
         description=(
             f"This will clear **{count}** saved layout/name override(s) that can make a server-wide redesign look inconsistent.\n\n"
-            "**It does not rename anything now.** Your selected Theme, Strength, and Separator stay selected. "
+            "**It does not rename anything now.** Your selected Theme, Font, Strength, and Separator stay selected. "
             "Protection rules stay intact, and permissions, roles, topics, channel order, tickets, and verification are untouched."
         ),
         color=discord.Color.orange(),
@@ -468,7 +468,7 @@ class CleanRedesignConfirmView(DesignView):
         embed.title = "✅ Clean Redesign Ready"
         embed.description = (
             "Old saved layout/name exceptions were cleared. **Protection rules were kept.** "
-            "Choose the server Theme, Strength, and Separator you want, then preview before applying."
+            "Choose the server Theme, Font, Strength, and Separator you want, then preview before applying."
         )
         await interaction.edit_original_response(embed=embed, view=DesignServerView(updated))
 
@@ -776,7 +776,7 @@ def _saved_rules_embed(guild: discord.Guild, options: Mapping[str, Any]) -> disc
             "**Layout Rules** = inspect or add global/category/channel visual rules.\n"
             "**Remove One Rule** = remove exactly one listed saved rule or clean deleted-item rows.\n"
             "**Protection** = manage exact-item and normalized-name protection.\n"
-            "For a clean server-wide redesign, use **Design Entire Server → Start Clean Redesign**; it clears old layout/name exceptions but keeps protection."
+            "For a clean server-wide redesign, use **Design Entire Server → Clean Redesign**; it clears old layout/name exceptions but keeps protection."
         ),
         inline=False,
     )
