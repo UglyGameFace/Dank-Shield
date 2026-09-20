@@ -469,6 +469,24 @@ async def route_message(message: discord.Message) -> None:
         _log(f"route failed: {type(exc).__name__}: {exc}")
 
 
+def _merged_overwrite(
+    existing: Optional[discord.PermissionOverwrite],
+    **updates: Optional[bool],
+) -> discord.PermissionOverwrite:
+    try:
+        allow, deny = existing.pair() if existing is not None else (discord.Permissions.none(), discord.Permissions.none())
+        merged = discord.PermissionOverwrite.from_pair(allow, deny)
+    except Exception:
+        merged = discord.PermissionOverwrite()
+
+    for name, value in updates.items():
+        try:
+            setattr(merged, name, value)
+        except Exception:
+            pass
+    return merged
+
+
 def _permission_overwrite_map(
     guild: discord.Guild,
     user: discord.abc.User,
@@ -476,11 +494,15 @@ def _permission_overwrite_map(
     current: Optional[Mapping[Any, discord.PermissionOverwrite]] = None,
 ) -> dict[Any, discord.PermissionOverwrite]:
     overwrites: dict[Any, discord.PermissionOverwrite] = dict(current or {})
-    overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
+    overwrites[guild.default_role] = _merged_overwrite(
+        overwrites.get(guild.default_role),
+        view_channel=False,
+    )
 
     me = guild.me
     if isinstance(me, discord.Member):
-        overwrites[me] = discord.PermissionOverwrite(
+        overwrites[me] = _merged_overwrite(
+            overwrites.get(me),
             view_channel=True,
             send_messages=True,
             read_message_history=True,
@@ -489,7 +511,8 @@ def _permission_overwrite_map(
         )
 
     if isinstance(user, discord.Member):
-        overwrites[user] = discord.PermissionOverwrite(
+        overwrites[user] = _merged_overwrite(
+            overwrites.get(user),
             view_channel=True,
             send_messages=True,
             read_message_history=True,
@@ -521,7 +544,8 @@ async def _add_configured_staff_overwrites(
     for rid in role_ids:
         role = guild.get_role(rid)
         if role is not None and not role.is_default():
-            overwrites[role] = discord.PermissionOverwrite(
+            overwrites[role] = _merged_overwrite(
+                overwrites.get(role),
                 view_channel=True,
                 send_messages=True,
                 read_message_history=True,
