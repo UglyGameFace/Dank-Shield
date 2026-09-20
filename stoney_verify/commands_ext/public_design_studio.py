@@ -1987,6 +1987,9 @@ def _exact_frame_page_for(frame_id: str) -> int:
 
 class ExactFrameSelect(discord.ui.Select):
     def __init__(self, scope: str, target_id: int, current: str) -> None:
+        current = _safe_str(current, "plain")
+        if current not in studio.CATEGORY_FRAMES_BY_ID:
+            current = "plain"
         frames = list(studio.CATEGORY_FRAMES)
         visible = frames[:24]
         current_spec = studio.CATEGORY_FRAMES_BY_ID.get(current)
@@ -2061,6 +2064,8 @@ class ExactFrameBrowserSelect(discord.ui.Select):
         page = max(0, min(int(page), max(0, len(groups) - 1)))
         _group_label, frame_ids = groups[page] if groups else ("Frames", tuple())
         current = _safe_str(lock.get("category_frame_id"), "plain")
+        if current not in studio.CATEGORY_FRAMES_BY_ID:
+            current = "plain"
         options = [
             discord.SelectOption(
                 label=_category_frame_choice_label(frame_id)[:100],
