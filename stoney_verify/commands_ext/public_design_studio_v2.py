@@ -212,50 +212,15 @@ def _category_frame_override_active(options: Mapping[str, Any]) -> bool:
     return _safe_str(options.get("category_frame_id"), "") in studio.CATEGORY_FRAMES_BY_ID
 
 
-def _design_server_example_source_names(guild: discord.Guild | Any) -> tuple[str, str]:
-    """Use names from the server being edited; never leak project-specific demo names."""
-
-    category_name = "category-name"
-    channel_name = "channel-name"
-
-    try:
-        categories = legacy._designable_editor_categories(guild)  # type: ignore[attr-defined]
-    except Exception:
-        categories = []
-    if categories:
-        category_name = studio.normalize_base_name(
-            _safe_str(getattr(categories[0], "name", ""), category_name),
-            default=category_name,
-        )
-
-    try:
-        channels = legacy._editable_channels(guild)  # type: ignore[attr-defined]
-    except Exception:
-        channels = []
-    for candidate in channels:
-        if isinstance(candidate, discord.CategoryChannel):
-            continue
-        candidate_name = studio.normalize_base_name(
-            _safe_str(getattr(candidate, "name", ""), ""),
-            default="",
-        )
-        if candidate_name:
-            channel_name = candidate_name
-            break
-
-    return category_name, channel_name
-
-
-def _design_server_examples(guild: discord.Guild | Any, options: Mapping[str, Any]) -> tuple[str, str]:
+def _design_server_examples(options: Mapping[str, Any]) -> tuple[str, str]:
     theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
     font = _design_server_font(options)
     separator = _design_server_separator(options)
     strength = max(1, min(5, _safe_int(options.get("strength"), 4)))
     frame = _design_server_category_frame(options)
-    category_source, channel_source = _design_server_example_source_names(guild)
 
     category = studio.build_styled_name(
-        category_source,
+        "category-name",
         kind="category",
         theme_id=_safe_str(getattr(theme, "id", "gothic_clean"), "gothic_clean"),
         strength=strength,
@@ -269,7 +234,7 @@ def _design_server_examples(guild: discord.Guild | Any, options: Mapping[str, An
         exact_match=True,
     )
     channel = studio.build_styled_name(
-        channel_source,
+        "channel-name",
         kind="text",
         theme_id=_safe_str(getattr(theme, "id", "gothic_clean"), "gothic_clean"),
         strength=strength,
@@ -282,7 +247,7 @@ def _design_server_examples(guild: discord.Guild | Any, options: Mapping[str, An
         emoji_override="💬",
         exact_match=True,
     )
-    return _safe_str(category.after, category_source), _safe_str(channel.after, channel_source)
+    return _safe_str(category.after, "category-name"), _safe_str(channel.after, "channel-name")
 
 class DesignServerThemeSelect(discord.ui.Select):
     def __init__(self, current: str) -> None:
@@ -480,13 +445,7 @@ def _category_frame_page_for(options: Mapping[str, Any]) -> int:
 
 
 class DesignServerCategoryFrameSelect(discord.ui.Select):
-    def __init__(
-        self,
-        options: Mapping[str, Any],
-        *,
-        page: int = 0,
-        preview_name: str = "category-name",
-    ) -> None:
+    def __init__(self, options: Mapping[str, Any], *, page: int = 0) -> None:
         groups = _category_frame_groups()
         page = max(0, min(int(page), max(0, len(groups) - 1)))
         _group_label, frame_ids = groups[page] if groups else ("Frames", tuple())
@@ -502,7 +461,7 @@ class DesignServerCategoryFrameSelect(discord.ui.Select):
                 label=f"Theme Default · {legacy._category_frame_choice_label(theme_frame)}"[:100],  # type: ignore[attr-defined]
                 value="__theme__",
                 description=(
-                    f"{studio.category_frame_preview(theme_frame, emoji='🗂️', name=preview_name)} · "
+                    f"{studio.category_frame_preview(theme_frame, emoji='🗂️', name="category-name")} · "
                     "follows the selected theme"
                 )[:100],
                 default=not override_active,
@@ -515,7 +474,7 @@ class DesignServerCategoryFrameSelect(discord.ui.Select):
                     label=legacy._category_frame_choice_label(frame.id)[:100],  # type: ignore[attr-defined]
                     value=frame.id,
                     description=(
-                        f"Result: {studio.category_frame_preview(frame.id, emoji='🗂️', name=preview_name)}"
+                        f"Result: {studio.category_frame_preview(frame.id, emoji='🗂️', name="category-name")}"
                     )[:100],
                     default=bool(override_active and explicit and frame.id == selected),
                 )
@@ -556,7 +515,7 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
     strength = max(1, min(5, _safe_int(options.get("strength"), 4)))
     frame = _design_server_category_frame(options)
     narrow_count = _layout_override_count(options)
-    category_example, channel_example = _design_server_examples(guild, options)
+    category_example, channel_example = _design_server_examples(options)
     font_source = "custom override" if _font_override_active(options) else "theme default"
     separator_source = "custom override" if _separator_override_active(options) else "theme default"
     frame_source = "custom override" if _category_frame_override_active(options) else "theme default"
@@ -648,26 +607,13 @@ def _category_frame_picker_embed(
 
 
 class DesignServerCategoryFrameView(DesignView):
-    def __init__(
-        self,
-        options: Mapping[str, Any],
-        *,
-        page: int = 0,
-        guild: discord.Guild | Any | None = None,
-    ) -> None:
+    def __init__(self, options: Mapping[str, Any], *, page: int = 0) -> None:
         super().__init__(timeout=900)
         self.options = dict(options)
-        self.preview_name = _design_server_example_source_names(guild)[0] if guild is not None else "category-name"
         groups = _category_frame_groups()
         self.total_pages = max(1, len(groups))
         self.page = max(0, min(int(page), self.total_pages - 1))
-        self.add_item(
-            DesignServerCategoryFrameSelect(
-                options,
-                page=self.page,
-                preview_name=self.preview_name,
-            )
-        )
+        self.add_item(DesignServerCategoryFrameSelect(options, page=self.page))
         self.previous.disabled = self.page <= 0
         self.next.disabled = self.page >= self.total_pages - 1
 
@@ -680,7 +626,7 @@ class DesignServerCategoryFrameView(DesignView):
         page = max(0, self.page - 1)
         await interaction.response.edit_message(
             embed=_category_frame_picker_embed(guild, self.options, page=page),
-            view=DesignServerCategoryFrameView(self.options, page=page, guild=guild),
+            view=DesignServerCategoryFrameView(self.options, page=page),
         )
 
     @discord.ui.button(label="Next", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_next", row=1)
@@ -692,7 +638,7 @@ class DesignServerCategoryFrameView(DesignView):
         page = min(self.total_pages - 1, self.page + 1)
         await interaction.response.edit_message(
             embed=_category_frame_picker_embed(guild, self.options, page=page),
-            view=DesignServerCategoryFrameView(self.options, page=page, guild=guild),
+            view=DesignServerCategoryFrameView(self.options, page=page),
         )
 
     @discord.ui.button(label="Back to Server Design", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_back", row=1)
@@ -787,7 +733,7 @@ class DesignServerView(DesignView):
         page = _category_frame_page_for(self.options)
         await interaction.response.edit_message(
             embed=_category_frame_picker_embed(guild, self.options, page=page),
-            view=DesignServerCategoryFrameView(self.options, page=page, guild=guild),
+            view=DesignServerCategoryFrameView(self.options, page=page),
         )
 
     @discord.ui.button(label="Preview Server", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design_v2:server_preview", row=4)
