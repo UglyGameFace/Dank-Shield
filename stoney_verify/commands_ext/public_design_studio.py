@@ -605,6 +605,8 @@ async def _save_global_lock(interaction: discord.Interaction) -> dict[str, Any]:
 
 async def _save_category_lock(interaction: discord.Interaction, category_id: int) -> dict[str, Any]:
     assert interaction.guild is not None
+    if _reserved_design_target(interaction.guild, int(category_id)) is not None:
+        raise RuntimeError("Share Router infrastructure cannot receive Dank Design category rules.")
     options = await _load_design_options(int(interaction.guild.id))
     _clear_manual_name_override_from_options(options, int(category_id))
     locks = _mapping_dict(options.get("category_format_locks"))
@@ -616,6 +618,8 @@ async def _save_category_lock(interaction: discord.Interaction, category_id: int
 
 async def _save_channel_lock(interaction: discord.Interaction, channel_id: int) -> dict[str, Any]:
     assert interaction.guild is not None
+    if _reserved_design_target(interaction.guild, int(channel_id)) is not None:
+        raise RuntimeError("Share Router infrastructure cannot receive Dank Design channel rules.")
     options = await _load_design_options(int(interaction.guild.id))
     _clear_manual_name_override_from_options(options, int(channel_id))
     locks = _mapping_dict(options.get("channel_format_locks"))
@@ -635,6 +639,8 @@ async def _save_manual_name_override(
     guild = interaction.guild
     if guild is None:
         raise RuntimeError("This must be used inside a server.")
+    if _reserved_design_target(guild, int(target_id)) is not None:
+        raise RuntimeError("Share Router infrastructure cannot receive Dank Design exact-name rules.")
     name = _safe_str(exact_name)
     if not name:
         raise RuntimeError("Manual name cannot be blank.")
@@ -1031,6 +1037,12 @@ class CategoryFormatLockSelect(discord.ui.ChannelSelect):
         guild = interaction.guild
         assert guild is not None
         category = self.values[0]
+        if await _reject_reserved_design_target(
+            interaction,
+            category,
+            action_name="design.format_lock.reserved_category",
+        ):
+            return
         await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _save_category_lock(interaction, int(category.id))
         embed = _format_locks_embed(guild, options)
@@ -1069,6 +1081,12 @@ class ChannelFormatLockSelect(discord.ui.ChannelSelect):
         guild = interaction.guild
         assert guild is not None
         channel = self.values[0]
+        if await _reject_reserved_design_target(
+            interaction,
+            channel,
+            action_name="design.format_lock.reserved_channel",
+        ):
+            return
         await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _save_channel_lock(interaction, int(channel.id))
         embed = _format_locks_embed(guild, options)
@@ -1535,6 +1553,13 @@ async def _open_exact_format_editor(interaction: discord.Interaction, *, scope: 
 
         guild = interaction.guild
         assert guild is not None
+        target = guild.get_channel(int(target_id))
+        if await _reject_reserved_design_target(
+            interaction,
+            target,
+            action_name=f"design.exact.open_reserved.{scope}",
+        ):
+            return
 
         await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
@@ -1739,6 +1764,8 @@ def _exact_format_sample_lines(guild: discord.Guild, *, scope: str, target_id: i
 async def _save_exact_lock(interaction: discord.Interaction, *, scope: str, target_id: int) -> dict[str, Any]:
     guild = interaction.guild
     assert guild is not None
+    if _reserved_design_target(guild, int(target_id)) is not None:
+        raise RuntimeError("Share Router infrastructure cannot receive Dank Design exact format rules.")
     key = _format_editor_key(int(guild.id), int(interaction.user.id), scope, int(target_id))
     lock = dict(_FORMAT_EDITOR_DRAFTS.get(key) or {})
     if not lock:
@@ -1776,6 +1803,8 @@ async def _save_live_target_format_lock(
     assert guild is not None
     options = await _load_design_options(int(guild.id))
     live_target = target or await _direct_rename_fetch_target(guild, int(target_id), guild.get_channel(int(target_id)))
+    if live_target is not None and is_share_router_design_resource(live_target):
+        raise RuntimeError("Share Router infrastructure cannot receive Dank Design live format rules.")
     lock = _live_target_exact_lock(
         guild,
         options,
@@ -2015,6 +2044,13 @@ async def _update_exact_draft(
         return
     guild = interaction.guild
     assert guild is not None
+    target = guild.get_channel(int(target_id))
+    if await _reject_reserved_design_target(
+        interaction,
+        target,
+        action_name="design.exact.reserved",
+    ):
+        return
     key = _format_editor_key(int(guild.id), int(interaction.user.id), scope, int(target_id))
     current = dict(_FORMAT_EDITOR_DRAFTS.get(key) or {})
     if not current:
@@ -3747,6 +3783,8 @@ def _protection_mode_label(mode: str) -> str:
 async def _save_protection_rule(interaction: discord.Interaction, *, target_id: int, mode: str | None) -> dict[str, Any]:
     guild = interaction.guild
     assert guild is not None
+    if _reserved_design_target(guild, int(target_id)) is not None:
+        raise RuntimeError("Share Router infrastructure is always reserved from Dank Design.")
     options = await _load_design_options(int(guild.id))
     rules = _protection_item_rules(options)
     key = str(int(target_id))
@@ -3902,6 +3940,12 @@ class ProtectionModeSelect(discord.ui.Select):
         channel = guild.get_channel(self.channel_id)
         if channel is None:
             return await interaction.response.send_message("That channel/category no longer exists.", ephemeral=True)
+        if await _reject_reserved_design_target(
+            interaction,
+            channel,
+            action_name="design.protection.reserved",
+        ):
+            return
         selected = self.values[0]
         mode = None if selected == "__clear__" else selected
         await interaction.response.defer(ephemeral=True, thinking=False)
