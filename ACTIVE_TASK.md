@@ -52,25 +52,52 @@ Out of scope:
 
 ## Status
 
-**LOCKED — NOT IMPLEMENTED**
+**IMPLEMENTED — targeted validation passed; pending exact-head PR/main verification**
 
-## Required behavior to preserve
+## Required behavior preserved
 
 - staff-only gate remains first business rule;
 - existing Ticket Operations Center authorization remains authoritative before dispatch;
-- claim stays exempt from the extra center authorization rule exactly as today;
+- claim remains exempt from the center's extra authorization rule exactly as before;
 - canonical `ticket_group.get_command(name)` lookup remains the dispatch source;
-- commands that need extra positional information still receive the existing dedicated-flow error instead of being guessed;
-- canonical callbacks continue to own actual ticket mutations and response content;
-- component users still get a private result/failure message.
+- commands that need dedicated picker/modal information retain the existing `TypeError` business response;
+- canonical callbacks continue to own live ticket mutations and user-facing success/failure content;
+- component users still receive private responses.
 
-## Implementation rule
+## Implementation
 
-Use `stoney_verify.interaction_guard.run_guarded_interaction` as a thin wrapper around the existing runner body.
+`_run_ticket_command` is now a thin native interaction boundary using `run_guarded_interaction(..., defer=True)`.
 
-Prefer `defer=True` so the Ticket Operations Center interaction is acknowledged before ticket refresh/authorization I/O. Do not duplicate canonical ticket behavior. The existing canonical helpers are already response-done aware.
+The existing runner body moved to `_run_ticket_command_action` without changing staff checks, authorization ordering, canonical command lookup, or invocation arguments.
 
-Unexpected failure guidance must not claim a live ticket definitely did or did not change after an exception. It should tell staff to refresh/reopen the Ticket Operations Center and inspect the ticket state before retrying, with the Error ID available in `/dank diagnostics`.
+The previous broad `except Exception` string-flattening fallback was removed so truly unexpected failures reach the native structured Error ID path. The intentional `TypeError` dedicated-flow response remains.
+
+Because the native guard acknowledges the interaction first, the existing canonical ticket helpers remain compatible:
+- `safe_defer` already no-ops when the response is done;
+- `reply_once` already sends a followup when the response is done.
+
+Failure guidance is cautious because a canonical ticket action may have partially mutated state before an unexpected exception. Staff are told to refresh/reopen the Ticket Operations Center and inspect the current ticket state before retrying.
+
+## Validation
+
+Targeted branch validation passed:
+
+- branch started from current `main` and remains 0 commits behind;
+- production diff is 35 changed lines in `public_ticket_command_center.py`;
+- exact ticket-runner region parses successfully with Python AST;
+- the focused regression test parses successfully with Python AST;
+- focused source replay confirms:
+  - `run_guarded_interaction` owns the shared runner;
+  - the guard defers before staff/authorization/dispatch work;
+  - staff check still precedes ticket authorization;
+  - authorization still precedes canonical command lookup;
+  - canonical lookup still precedes `_invoke`;
+  - the dedicated-flow `TypeError` branch remains;
+  - the old broad `except Exception` swallow is absent;
+  - `safe_defer` and `reply_once` remain compatible with a pre-deferred interaction.
+- existing Ticket Operations Center surface tests do not pin the retired local exception shape.
+
+Full repository pytest/Actions remains subject to the known runner/DNS infrastructure problem and must not be represented as passing unless a runner actually executes steps.
 
 ## Previous completed slice
 
@@ -84,4 +111,4 @@ Unexpected failure guidance must not claim a live ticket definitely did or did n
 
 ## Next step
 
-Inspect the exact ticket runner/test assumptions, then implement the smallest native-guard wrapper and focused regression test on a fresh implementation branch.
+Open the focused PR, verify the exact final head and CI execution state, merge with an expected-head guard if the code evidence remains clean, verify the validated production/test blobs on `main`, then lock the next single P0 interaction boundary.
