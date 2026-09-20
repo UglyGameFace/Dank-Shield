@@ -2,80 +2,79 @@
 
 ## Active task / desired outcome
 
-**P0-INT-001 — Dank Design reviewed Apply / Undo native interaction guard**
+**P0-INT-001 — `/dank setup-find` result Apply native interaction guard**
 
-Migrate the consolidated Dank Design state-changing Apply and Undo interaction boundaries to the native interaction service without redesigning the existing transaction, preflight, compensation, snapshot, or navigation behavior.
+Move the state-changing setup-search result Apply boundary onto the native interaction service without changing setup validation, permission ownership, object resolution, or guild-config write semantics.
+
+## Why this is next
+
+PR #271 completed and merged the reviewed Dank Design Apply / Undo mutation guard slice. Post-merge verification on `main` confirmed the validated production and regression-test blobs exactly.
+
+The next concrete high-risk raw interaction boundary is `SetupSearchResultView.apply` in `stoney_verify/commands_ext/public_setup_find.py`.
+
+That callback:
+
+- is reached from a Discord component selection;
+- resolves and validates a selected role/channel;
+- directly calls `upsert_guild_config(...)`;
+- invalidates and refreshes guild configuration;
+- edits the interaction only after the storage mutation;
+- is not currently wrapped by `run_guarded_interaction()`.
+
+If an unexpected callback/storage/response exception occurs around that write, the current flow can fall back to generic component failure behavior without the native structured Error ID path.
 
 ## Scope
 
 In scope:
-- `ReviewedPreviewView.apply` in `public_design_studio_v2.py`;
-- consolidated Undo open/confirm boundaries;
-- safe early user responses for stale preview, missing preview, blockers, busy guild lock, and missing Undo snapshot;
-- focused regression coverage proving these mutation boundaries use `run_guarded_interaction()`;
-- update the production-readiness ledger for the exact slice completed.
+
+- `SetupSearchResultView.apply`;
+- the immediate setup-search result callback/error responses needed to keep that mutation boundary safely acknowledged;
+- use of the existing native interaction service and safe response helpers;
+- focused regression coverage proving the storage mutation remains inside the guarded action;
+- update the P0 interaction ledger for this exact slice.
 
 Out of scope:
-- changing apply/undo transaction semantics;
-- changing rename ordering, compensation, snapshot persistence, rule persistence, or delay timing;
-- migrating unrelated V2 selectors/buttons;
-- setup, tickets, verification, invite policy, command registry, settings, or startup guards.
+
+- changing setup target definitions;
+- changing setup permission policy;
+- changing object matching/validation rules;
+- changing `upsert_guild_config` payload semantics;
+- redesigning `/dank setup`, setup recommendation, setup recovery, tickets, verification, or unrelated selectors;
+- removing the global framework interaction monkey patch in this slice.
 
 ## Status
 
-**VALIDATED — targeted exact-head checks pass; full GitHub Actions cannot start a runner**
-
-## Root cause
-
-The exact-format editor slice from the older command-center entry is already native-guarded on current `main`. The consolidated V2 reviewed Apply and Undo owners are not.
-
-`ReviewedPreviewView.apply`, `_open_undo`, and `UndoConfirmView.confirm` currently execute through raw component callbacks. Their business logic has strong preflight/compensation behavior, but unexpected callback/defer/send exceptions can still escape to the view-level fallback instead of producing the native structured interaction failure record and Error ID.
-
-These are higher-risk than cosmetic editor callbacks because Apply and Undo can mutate live channel/category names.
+**LOCKED — NOT IMPLEMENTED**
 
 ## Required behavior to preserve
 
-- stale preview refusal before mutation;
-- blocker refusal before mutation;
-- per-guild design lock;
-- full-batch preflight;
-- apply compensation and residual snapshot behavior;
-- separator-setting compensation;
-- durable/memory-only Undo snapshot behavior;
-- Undo preflight and stale snapshot refusal;
-- existing progress and success embeds;
-- existing reviewed Apply / Undo navigation and custom IDs.
+- only the admin who opened the result view can use it;
+- existing setup permission checks remain authoritative;
+- missing/deleted/mismatched target objects are rejected before storage mutation;
+- blockers prevent storage mutation;
+- warnings remain visible after a valid save;
+- the exact existing config payload is written;
+- guild config cache invalidation and refreshed read still occur after a successful write;
+- successful result continues to return the saved setup summary.
 
 ## Implementation rule
 
-Use `stoney_verify.interaction_guard.run_guarded_interaction` as the native callback boundary. Keep the existing legacy guild mutation lock inside the guarded action. Use `safe_send_interaction` for early business-rule responses that currently call raw `interaction.response.send_message`.
+Use `stoney_verify.interaction_guard.run_guarded_interaction` (or an already-existing native helper that delegates to it) at the state-changing result Apply boundary.
 
-The guard error guidance must not falsely claim that a live mutation definitely did or did not occur after an unexpected exception. It must tell the user to inspect the current Server Design state before retrying and surface the Error ID through the native diagnostics path.
+Do not rewrite setup storage or validation. Prefer a thin wrapper around the existing Apply body, matching the low-churn pattern used for Dank Design in PR #271.
 
-## Validation
+Failure guidance must not falsely claim a config write definitely did or did not occur after an unexpected exception. The user should be told to reopen `/dank setup` and verify the saved value before retrying, with the native Error ID available for diagnostics.
 
-Targeted validation passed for the changed production/test surface:
+## Previous completed slice
 
-- branch remained 0 commits behind `main` during implementation;
-- production diff was reduced from a 490-line indentation-heavy form to a thin-wrapper implementation (83 changed production lines versus `main`);
-- exact changed guard helper, Undo-open wrapper, Apply wrapper/safe-send syntax, Undo-confirm wrapper/safe-send syntax, and the new regression test parse under Python 3.11 grammar;
-- focused source assertions prove reviewed Apply, Undo open, and Undo confirm call the native interaction guard;
-- no raw early `interaction.response.send_message` remains in the reviewed Apply or Undo-confirm mutation regions;
-- reviewed Apply still contains pending-preview validation, the per-guild lock, full-batch preflight, `apply_prepared`, compensation, residual snapshot handling, durable/memory fallback snapshot handling, and pending cleanup;
-- Undo confirm still contains the per-guild lock, latest-snapshot validation, stale-snapshot refusal, Undo preflight, `undo_prepared`, and conditional snapshot pop;
-- PR patch inspection found no conflict markers or trailing added whitespace;
-- PR #271 is mergeable with zero unresolved review threads.
+**PR #271 — Guard Dank Design Apply and Undo interactions**
 
-Full GitHub Actions is not a code result for this head. Fresh Dank Design Regression CI and Dank Shield CI runs completed before step 1 with `steps: null` and `logs_url: null`, including the repository Python compile job. The isolated execution container also cannot resolve `github.com`. This is the same pre-runner infrastructure failure already tracked separately; it is not represented as passing CI.
-
-## Remaining risk
-
-A complete repository checkout / pytest replay could not run in the current infrastructure. The change is therefore validated by exact changed-source Python 3.11 grammar checks, focused static regression replay, transaction-primitive preservation checks, patch hygiene, and GitHub mergeability/review state. The full suite must be restored once runner/account/DNS infrastructure is fixed.
-
-## Previous completed task
-
-PR #270 expanded category frames to 80 and removed project-specific preview leakage. It was merged and verified on `main` before this lock was opened.
+- merged as `6f7e4d60058d6c2806294721eba89b3f77640ba8`;
+- verified on `main`;
+- validated V2 blob: `82828185000d107084d0fc7731d6b378148abf60`;
+- validated regression-test blob: `85d4a043007fee77b9cb70e93bcc83678fd2cff2`;
+- full GitHub Actions remained unavailable because jobs terminated before step 1 with no steps/logs.
 
 ## Next step
 
-Update PR #271 with the final-head evidence, mark it ready, merge with an expected-head guard, verify the validated production/test blobs on `main`, then close this slice and select the next single P0-INT interaction boundary.
+Inspect the existing setup interaction helpers and exact `SetupSearchResultView.apply` call chain, then implement the smallest native-guard wrapper and focused regression test on a fresh implementation branch.
