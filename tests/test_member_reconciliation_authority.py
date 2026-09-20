@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -196,3 +197,54 @@ def test_native_sync_service_owns_authority_boundary_without_startup_monkey_patc
     assert '"departure_skip_reason"] = "authoritative_member_fetch_failed"' in sync_source
     assert "member_reconciliation_authority_guard" not in main_source
     assert not Path("stoney_verify/startup_guards/member_reconciliation_authority_guard.py").exists()
+
+
+def test_bulk_departed_reconciliation_skips_rows_already_departed(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows = [
+        {
+            "user_id": "10",
+            "in_guild": False,
+            "data_health": "left_guild",
+            "role_state": "left_guild",
+            "times_left": 3,
+        },
+        {
+            "user_id": "20",
+            "in_guild": True,
+            "data_health": "ok",
+            "role_state": "verified",
+            "times_left": 0,
+        },
+        {
+            "user_id": "30",
+            "in_guild": True,
+            "data_health": "ok",
+            "role_state": "verified",
+            "times_left": 0,
+        },
+    ]
+
+    async def fake_select(_sb, _guild_id):
+        return SimpleNamespace(data=rows)
+
+    updates: list[tuple[str, dict]] = []
+
+    async def fake_update(_sb, _guild_id, user_id, payload):
+        updates.append((str(user_id), dict(payload)))
+
+    monkeypatch.setattr(sync_service, "_guild_members_select_guild_rows_async", fake_select)
+    monkeypatch.setattr(sync_service, "_guild_members_update_safe_async", fake_update)
+
+    marked = asyncio.run(
+        sync_service._bulk_mark_departed_members_async(
+            object(),
+            "123",
+            {"30"},
+        )
+    )
+
+    assert marked == 1
+    assert [user_id for user_id, _payload in updates] == ["20"]
+    assert updates[0][1]["in_guild"] is False
+    assert updates[0][1]["role_state"] == "left_guild"
+    assert updates[0][1]["times_left"] == 1
