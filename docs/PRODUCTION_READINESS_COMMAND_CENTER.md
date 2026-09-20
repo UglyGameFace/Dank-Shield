@@ -139,7 +139,7 @@ Remaining score blockers:
 
 ### `P0-INT-001` — Replace monkey-patched interaction logger with native interaction service
 
-Status: `PARTIAL / BLOCKER — ticket runner merged; Verification Center dispatcher is next locked slice`
+Status: `PARTIAL / BLOCKER — Verification Center dispatcher guarded; pending PR/main verification`
 
 Goal:
 
@@ -157,15 +157,14 @@ Progress completed on current `main`:
 
 Next locked slice:
 
-- `_invoke` in `public_verify_command_center.py` is the shared Verification Center canonical-command dispatcher.
-- It is used by repair, grant, pending, status/diagnose, and verified/resident role-toggle actions.
-- None of its current callers depend on a return value.
-- Canonical `public_verify_group._ack()` is response-done aware, so the dispatcher can defer before canonical role/config work without fighting the canonical commands.
-- The migration must preserve exact callback/argument dispatch and leave canonical `/verify` logic authoritative.
+- The active branch places `_invoke` in `public_verify_command_center.py` behind `run_guarded_interaction(..., defer=True)`.
+- The dispatcher preserves exact callback/argument forwarding and callback results while deriving a stable `verify.center.*` action name.
+- Canonical `public_verify_group._ack()` remains response-done aware, so canonical role/config commands tolerate the pre-deferred boundary.
+- Repair, grant, pending repair, verified-role, and resident-role center actions continue to route through the shared dispatcher.
 
 Remaining before `P0-INT-001` can be marked done:
 
-- migrate and verify the locked Verification Center dispatcher;
+- merge and verify the guarded Verification Center dispatcher;
 - continue the next single highest-risk direct verification mutation boundary after that;
 - ensure diagnostics expose recent native interaction failures safely;
 - remove or disable `global_interaction_trace_guard` framework patching only after native coverage is sufficient;
@@ -326,14 +325,14 @@ Progress:
 - focused Apply/Undo static regression coverage is on `main`
 - `/dank setup-find` result Apply config writer merged in PR #273 and was verified on `main`
 - Ticket Operations Center `_run_ticket_command` merged in PR #275 and was verified on `main`
-- Verification Center `_invoke` dispatcher is the next locked native-guard slice
+- Verification Center `_invoke` dispatcher is implemented and targeted-validation-clean on the active branch
 
 Verification:
 
 - PR #271 validated immutable V2/test blobs match current `main`
 - existing Dank Design ownership/state assertions were replayed successfully against the merged shape
 - full checkout/pytest remains blocked by the known external GitHub runner/DNS infrastructure issue
-- verification callbacks are not fully migrated yet
+- verification callbacks are not fully migrated yet; the current dispatcher slice still needs PR/main verification
 
 ### Commit 3 — Startup guard inventory and migration table
 

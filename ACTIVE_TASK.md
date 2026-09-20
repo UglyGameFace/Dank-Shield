@@ -57,23 +57,50 @@ Out of scope:
 
 ## Status
 
-**LOCKED — NOT IMPLEMENTED**
+**IMPLEMENTED — targeted validation passed; pending exact-head PR/main verification**
 
-## Required behavior to preserve
+## Required behavior preserved
 
 - non-callable canonical actions still fail clearly;
 - the exact canonical callback still receives the original interaction, positional args, and kwargs;
 - canonical `/verify` commands remain authoritative for staff checks, role checks, role mutations, repair behavior, and normal messages;
-- existing center button flows continue to work with no caller return-value dependency;
+- the dispatcher preserves the canonical callback return value;
+- existing center callers continue to route through the one shared dispatcher;
 - mutations are acknowledged before slower canonical role/config work.
 
-## Implementation rule
+## Implementation
 
-Use `stoney_verify.interaction_guard.run_guarded_interaction` as a thin wrapper inside `_invoke`.
+`_invoke` now resolves the canonical callback, derives a stable action name, and executes the callback through `run_guarded_interaction(..., defer=True)`.
 
-Prefer `defer=True`; the canonical `_ack()` helper is response-done aware. Derive a stable action name from the callback function name, such as `verify.center.verify_grant_vr`.
+The wrapper preserves:
 
-Failure guidance must be cautious because a canonical verification command may have partially changed roles before an unexpected exception. Tell staff to reopen the Verification Center and inspect the member/server verification state before retrying, with the native Error ID available in `/dank diagnostics`.
+- `callback(interaction, *args, **kwargs)` argument forwarding;
+- callable validation;
+- the callback result via a captured `result`;
+- canonical `/verify` mutation ownership;
+- response compatibility because `public_verify_group._ack()` already skips defer when `interaction.response.is_done()` is true.
+
+Unexpected failures now use the native structured Error ID path. Guidance tells staff to reopen the Verification Center and inspect the current member/server verification state before retrying rather than falsely claiming no role/config mutation occurred.
+
+## Validation
+
+Targeted branch validation passed:
+
+- branch started from current `main` and remains 0 commits behind;
+- production diff is 30 changed lines in `public_verify_command_center.py`;
+- exact `_invoke` dispatcher region parses successfully with Python AST;
+- focused regression test parses successfully with Python AST;
+- focused source replay confirms:
+  - native `run_guarded_interaction` owns the shared dispatcher;
+  - `defer=True` acknowledges before canonical command work;
+  - callable validation remains present;
+  - exact interaction/args/kwargs forwarding remains present;
+  - callback results are preserved;
+  - stable action naming derives from the canonical callback name or command-name fallback;
+  - canonical `public_verify_group._ack()` remains pre-defer compatible;
+  - repair, grant, pending repair, verified-role, and resident-role actions still route through the shared dispatcher.
+
+Full repository pytest/Actions remains subject to the known runner/DNS infrastructure problem and must not be represented as passing unless a runner actually executes steps.
 
 ## Previous completed slice
 
@@ -87,4 +114,4 @@ Failure guidance must be cautious because a canonical verification command may h
 
 ## Next step
 
-Implement the smallest guarded `_invoke` dispatcher and focused regression test on a fresh branch, then validate the exact head before merge.
+Open the focused PR, verify the exact final head and CI execution state, merge with an expected-head guard if the code evidence remains clean, verify the validated production/test blobs on `main`, then lock the next single P0 interaction boundary.
