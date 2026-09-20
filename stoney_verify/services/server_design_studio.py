@@ -496,7 +496,10 @@ def parse_channel_name(value: Any, *, kind: str = "text") -> dict[str, Any]:
         "styled_unicode_name": stripped != before,
         "category_frame": kind == "category" and body != stripped,
         "duplicate_emojis": bool(emoji and _strip_leading_icon(remainder)[0]),
-        "duplicate_separators": any((sep + sep) in before for sep in _all_separator_values()),
+        # Judge duplication against the longest separator token we actually
+        # matched. Otherwise an intentional "--" is falsely reported as two
+        # copies of the shorter "-" separator that also exists in the catalog.
+        "duplicate_separators": bool(matched_separator and remainder.startswith(matched_separator)),
         "raw": before,
     }
 
