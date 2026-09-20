@@ -69,6 +69,19 @@ def test_server_category_frame_resolver_prefers_explicit_then_theme_default() ->
     ) == "top_box"
 
 
+def test_normalized_plan_drops_invalid_server_category_frame_override() -> None:
+    normalized = plan_service.normalize_plan_options(
+        {
+            "theme_id": "night_gothic",
+            "strength": 4,
+            "category_frame_id": "not-a-frame",
+        },
+        strict=True,
+    )
+    assert "category_frame_id" not in normalized
+    assert plan_service.effective_server_category_frame_id(normalized) == "top_box"
+
+
 def test_current_format_lock_honors_explicit_server_category_frame_override() -> None:
     custom = public_studio._current_format_lock(
         {
