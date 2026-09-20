@@ -4,13 +4,12 @@
 DS-SHARE-ROUTER-265 — Restore native Share Router runtime and protect proxy infrastructure
 
 ## Status
-IMPLEMENTATION IN PROGRESS — exact-head validation pending
+IMPLEMENTATION COMPLETE — exact-head CI passed; merge authorized
 
 ## Single active-task lock
-Only the Share Router production-runtime restoration is active. Do not admit
-unrelated cleanup, redesign, or feature work until this task is investigated,
-implemented, tested, validated on the exact final head, cleaned up, merged, and
-verified on main.
+Only the Share Router production-runtime restoration is active until PR #265 is
+merged and the resulting main commit is verified. No unrelated implementation
+work is admitted before that verification.
 
 ## Previous task closed
 PR #264 (lifecycle-card long-tail Unicode fallback) merged as
@@ -21,90 +20,109 @@ and the resulting main commit reports `discloud/commit: success`.
 ## User-visible problem
 The server still contains the private `SHARE ROUTES` proxy category used to
 share links from mobile into channels that Discord may omit from the native share
-sheet, especially age-restricted destinations. The feature implementation still
-exists in the repository, but current production boot does not activate it, so
-the visible proxy channels can remain while routing is dead.
+sheet, especially age-restricted destinations. The implementation still existed
+in the repository, but production boot no longer activated it, so the visible
+proxy channels could remain while routing was dead.
 
-The same proxy resources were also eligible for Dank Design renaming, which can
+The same proxy resources were eligible for Dank Design renaming, which could
 turn the plain share-sheet names into decorative names and make the old exact-name
 hub discovery create or miss duplicate infrastructure.
 
 ## Root cause
-- Share Router lives only in the historical
+- Share Router lived only in the historical
   `startup_guards/share_router_guard.py` module.
 - Normal production boot intentionally does not bulk-import historical startup
-  guards, and no current owner imports this module.
-- The compact public command surface would prune the old direct
-  `/dank share-router` child even if the historical module were imported.
-- Dank Design scans all editable categories/channels and has no structural
+  guards, and no current owner imported that module.
+- The compact public command surface would not retain the old direct
+  `/dank share-router` child as the supported configuration surface.
+- Dank Design scanned editable categories/channels without a structural
   exclusion for Share Router infrastructure.
-- The historical hub repair looks up `🔗 SHARE ROUTES` and child names by exact
-  string, so a previously styled hub is not reliably recognized.
+- Historical hub repair looked up `🔗 SHARE ROUTES` and child names by exact
+  string, so a previously styled hub was not reliably recognized.
 
-## Execution path
-Current broken path:
-Discord mobile share → `share-*` source → no active Share Router listener.
+## Final execution path
+Production runtime:
+`commands_ext.register_all_commands()`
+→ `public_share_router.register_public_share_router()`
+→ `share_router_runtime.ensure_share_router_runtime(bot)`
+→ one idempotent `on_message` listener
+→ existing per-guild Share Router persistence
+→ configured target channel.
 
-Historical path:
-`startup_guards/share_router_guard.py` import side effect
-→ `install()`
-→ `bot.add_listener(_route_message, "on_message")`
-→ local `data/share_routes.json`
-→ target channel.
+Configuration UI:
+Community Tools
+→ Share Router
+→ Create / Repair Hub
+→ Add / Change Route
+→ Dank Shield searchable guild resource browser.
 
-Dank Design conflict:
-`public_design_studio._editable_channels()`
-→ full-plan / Smart Auto-Detect / separator-only plan
-→ Share Router category and source channels treated as normal design resources.
+Dank Design boundary:
+all shared editable scans and exact editor paths reject reserved Share Router
+resources, and the transactional apply service performs a final reserved-resource
+check before renaming.
 
-## Scoped implementation
-- promote Share Router into a normal production-owned runtime with explicit,
+## Implemented changes
+- promoted Share Router to a normal production-owned runtime with explicit,
   idempotent listener installation and no import side effect;
-- keep the existing per-guild route file format/path readable so deployed saved
+- preserved the existing per-guild route file format/path so deployed saved
   routes remain compatible;
-- expose Share Router from the existing menu-first Community Tools UI instead of
+- exposed Share Router from the existing menu-first Community Tools UI without
   adding a new public slash-command child;
-- use Dank Shield's searchable guild resource browser for target selection;
-- create/repair the canonical private proxy hub without deleting unrelated
-  channels or overwriting unrelated explicit permission entries;
-- recognize and repair previously decorated Share Router names rather than
-  creating a second hub;
-- require proxy sources to remain non-age-restricted and private from
-  `@everyone`;
-- require the sender as well as the bot to have normal Discord view/send
-  permissions in the destination before routing;
-- exclude the reserved Share Router hub and canonical proxy children from every
-  Dank Design path that uses the shared editable-resource scan;
-- retire the historical startup-guard implementation to a side-effect-free
-  compatibility wrapper;
-- add focused regression coverage for ownership, resource recognition, UI
-  reachability, Designer exclusion, route safety, and legacy persistence
-  compatibility.
+- used Dank Shield's searchable guild resource browser for target selection;
+- added canonical private proxy hub create/repair without deleting unrelated
+  channels or discarding unrelated explicit permission overwrite fields;
+- recognized and repaired previously decorated Share Router names;
+- required proxy sources to remain non-age-restricted and private from
+  `@everyone`, failing closed at runtime if privacy drifts;
+- required normal destination permissions for the sender and required bot
+  source/destination permissions, including source cleanup permission when
+  delete-source is enabled;
+- rejected self-routes and kept private proxy channel mentions out of forwarded
+  public text;
+- structurally excluded Share Router resources from Dank Design batch planning,
+  Smart Auto-Detect inputs, exact editors, format/protection rules, direct
+  rename paths, preflight, apply, and undo;
+- retired the historical startup-guard implementation to a side-effect-free
+  compatibility shim;
+- documented the production ownership correction;
+- added focused regression coverage for ownership, identity, menu reachability,
+  Designer isolation, route safety, overwrite preservation, and legacy
+  persistence compatibility.
 
 ## Compatibility / safety
 - no route IDs are hardcoded;
 - no existing saved route file is renamed or discarded;
 - no destination age restriction is changed;
 - Share Router does not grant destination viewing access;
-- no unrelated guild permissions are widened;
+- no unrelated guild permission overwrite fields are discarded;
 - no automatic deletion of duplicate/legacy channels;
 - the compact public command surface remains unchanged.
 
 ## Validation
-Pending implementation head:
-- committed-diff whitespace check
-- Python compile
-- focused Share Router tests
-- full unit suite
+Exact implementation head before this bookkeeping-only status commit:
+`62aedea48515a6b49df87823a2eaf13d15975e5e`
+
+All required workflows completed successfully on that head:
 - Dank Shield CI
 - Dank Design Regression CI
-- application-command size diagnostics
-- changed-file and duplicate-implementation cleanup inspection
-- branch currentness against main
+- Application Command Size Diagnostics
+- Profile Runtime Diagnostics
+- Schema Authority SQL
+- Smart Stickies 029 / Community Tools 031
+- Ticket Owner Emergency Override
+
+The branch was mergeable and current with main when validated. This status-only
+commit must receive the same required exact-head CI before merge.
+
+## Cleanup
+- no unresolved review threads;
+- no duplicate production Share Router owner remains;
+- historical startup-guard path is compatibility-only and side-effect free;
+- no unrelated feature work included.
 
 ## Backlog
 None admitted from this task.
 
 ## Next step
-Implement the native runtime/UI/resource identity boundary and focused
-regressions, then run the exact-head validation gate.
+Run exact-head CI on this bookkeeping-only commit, then mark PR #265 ready,
+merge it, and verify the resulting main commit.
