@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from stoney_verify.share_router_resources import (
     SHARE_ROUTER_CATEGORY_KEY,
     is_share_router_category_name,
@@ -10,6 +12,7 @@ from stoney_verify.share_router_resources import (
     normalize_share_router_name,
     share_source_key,
 )
+from stoney_verify.services import server_design_apply_service as design_apply_service
 from stoney_verify.share_router_runtime import (
     _merged_overwrite,
     ensure_share_router_runtime,
@@ -113,13 +116,50 @@ def test_share_router_is_reachable_from_community_tools_with_dank_browser() -> N
     assert 'resource_kinds=("text",)' in PUBLIC_UI
 
 
-def test_dank_design_excludes_share_router_from_the_shared_editable_scan() -> None:
+@pytest.mark.asyncio
+async def test_transaction_preflight_skips_reserved_share_router_resources() -> None:
+    category = SimpleNamespace(id=101, name="✦──── 🔗 share-routes ────✦", category=None)
+    proxy = SimpleNamespace(id=102, name="「🤡」share-memes", category=category)
+    ordinary_category = SimpleNamespace(id=201, name="community", category=None)
+    ordinary = SimpleNamespace(id=202, name="share-memes", category=ordinary_category)
+
+    class Guild:
+        channels = [proxy, ordinary]
+        categories = [category, ordinary_category]
+
+        async def fetch_channels(self):
+            return [category, proxy, ordinary_category, ordinary]
+
+        def get_channel(self, channel_id: int):
+            return {101: category, 102: proxy, 201: ordinary_category, 202: ordinary}.get(channel_id)
+
+    items = [
+        {"channel_id": "102", "status": "changed", "before": proxy.name, "after": "styled-proxy"},
+        {"channel_id": "202", "status": "changed", "before": ordinary.name, "after": "styled-normal-channel"},
+    ]
+    ready, skipped, errors = await design_apply_service.preflight_plan(Guild(), items, name_limit=100)
+
+    assert errors == []
+    assert skipped == 1
+    assert [prepared.channel_id for prepared in ready] == [202]
+
+
+def test_dank_design_excludes_share_router_from_batch_and_exact_edit_paths() -> None:
     assert "from stoney_verify.share_router_resources import is_share_router_design_resource" in DESIGN
+
     start = DESIGN.index("def _editable_channels")
     end = DESIGN.index("def _can_user_design", start)
     block = DESIGN[start:end]
     assert "is_share_router_design_resource(channel)" in block
     assert block.index("is_share_router_design_resource(channel)") < block.index('if _kind(channel) != "other"')
+
+    assert "def _designable_editor_categories" in DESIGN
+    assert "def _reject_reserved_design_target" in DESIGN
+    assert "design.direct_rename.reserved" in DESIGN
+    assert "design.exact.open_reserved" in DESIGN
+    assert "design.format_lock.reserved_category" in DESIGN
+    assert "design.format_lock.reserved_channel" in DESIGN
+    assert "design.protection.reserved" in DESIGN
 
 
 def test_runtime_keeps_legacy_route_storage_and_sender_permission_boundary() -> None:
