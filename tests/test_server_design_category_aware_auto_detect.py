@@ -258,4 +258,3 @@ def test_first_class_pipe_entries_avoid_runtime_catalog_synthesis() -> None:
     assert studio.SEPARATORS_BY_ID[compact].value == "|"
     assert studio.SEPARATORS_BY_ID[spaced].value == " | "
     assert tuple(spec.id for spec in studio.SEPARATOR_LIBRARY) == before_ids
-
