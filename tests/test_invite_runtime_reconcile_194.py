@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -122,6 +123,7 @@ def test_reconcile_guild_scans_only_channels_with_required_permissions(monkeypat
     assert result == {
         "channels": 1,
         "skipped_permission": 1,
+        "skipped_inactive": 0,
         "checked": 9,
         "matched": 2,
         "allowed": 1,
@@ -272,10 +274,15 @@ def test_unavailable_guild_config_source_is_treated_as_unavailable(monkeypatch) 
 def test_reconcile_all_retries_policy_unavailable_guild_once(monkeypatch) -> None:
     guild = FakeGuild(656)
     bot = SimpleNamespace(guilds=[guild])
-    calls: list[tuple[str, bool]] = []
+    calls: list[tuple[str, bool, datetime | None, datetime | None]] = []
+    after = datetime(2026, 9, 20, 12, 0, tzinfo=timezone.utc)
+    before = datetime(2026, 9, 20, 12, 1, tzinfo=timezone.utc)
 
-    async def reconcile(_guild, *, reason, force=False):
-        calls.append((reason, force))
+    async def window(_guild):
+        return after, before
+
+    async def reconcile(_guild, *, reason, force=False, after=None, before=None):
+        calls.append((reason, force, after, before))
         if len(calls) == 1:
             return {"deferred": 1}
         return {"deferred": 0}
@@ -283,13 +290,17 @@ def test_reconcile_all_retries_policy_unavailable_guild_once(monkeypatch) -> Non
     async def no_sleep(_delay):
         return None
 
+    monkeypatch.setattr(runtime, "_recovery_window", window)
     monkeypatch.setattr(runtime, "_reconcile_guild", reconcile)
     monkeypatch.setattr(runtime, "_sleep", no_sleep)
     runtime._RECONCILE_TASK = None
 
     asyncio.run(runtime._reconcile_all(bot, reason="ready"))
 
-    assert calls == [("ready", False), ("ready-policy-retry", True)]
+    assert calls == [
+        ("ready", False, after, before),
+        ("ready-policy-retry", True, after, before),
+    ]
 
 
 def test_event_recovery_rescans_recent_channel_history(monkeypatch, capsys) -> None:
@@ -322,3 +333,63 @@ def test_event_recovery_rescans_recent_channel_history(monkeypatch, capsys) -> N
     assert calls == [(11, 75, "live-recovery:create")]
     output = capsys.readouterr().out
     assert "matched=2 allowed=1 deleted=1 failed=0" in output
+
+
+def test_reconcile_guild_skips_channel_without_messages_after_checkpoint(monkeypatch) -> None:
+    guild = FakeGuild(901)
+    channel = guild.text_channels[0]
+    runtime._LAST_GUILD_RECONCILE_AT.clear()
+
+    async def enabled(_guild):
+        return True
+
+    async def should_not_scan(*_args, **_kwargs):
+        raise AssertionError("inactive channel should not hit Discord history")
+
+    monkeypatch.setattr(runtime, "_guild_reconciliation_enabled", enabled)
+    monkeypatch.setattr(runtime, "_channel_may_have_messages_after", lambda _channel, _after: False)
+    monkeypatch.setattr(runtime.policy, "scan_channel_invites", should_not_scan)
+
+    after = datetime(2026, 9, 20, 12, 0, tzinfo=timezone.utc)
+    before = datetime(2026, 9, 20, 12, 1, tzinfo=timezone.utc)
+    result = asyncio.run(
+        runtime._reconcile_guild(
+            guild,
+            reason="ready",
+            force=True,
+            after=after,
+            before=before,
+        )
+    )
+
+    assert result["channels"] == 0
+    assert result["skipped_inactive"] == 1
+    assert result["checked"] == 0
+
+
+def test_scan_channel_forwards_fixed_recovery_window(monkeypatch) -> None:
+    guild = FakeGuild(902)
+    channel = guild.text_channels[0]
+    captured: dict[str, object] = {}
+
+    async def scan(_channel, **kwargs):
+        captured.update(kwargs)
+        return {"checked": 0, "matched": 0, "allowed": 0, "deleted": 0, "failed": 0}
+
+    monkeypatch.setattr(runtime.policy, "scan_channel_invites", scan)
+    after = datetime(2026, 9, 20, 12, 0, tzinfo=timezone.utc)
+    before = datetime(2026, 9, 20, 12, 1, tzinfo=timezone.utc)
+
+    asyncio.run(
+        runtime._scan_channel(
+            channel,
+            limit=250,
+            source="auto-reconcile:ready",
+            after=after,
+            before=before,
+        )
+    )
+
+    assert captured["after"] == after
+    assert captured["before"] == before
+    assert captured["limit"] == 250
