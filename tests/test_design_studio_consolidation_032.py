@@ -383,3 +383,17 @@ def test_existing_separator_picker_choices_remain_available_after_expansion() ->
         "bracket_lenticular",
     } <= exact_values
 
+
+def test_intentional_square_emoji_is_preserved_in_mixed_server_layout() -> None:
+    assert legacy._direct_rename_has_unsafe_channel_icon("⬜--mods-only") is False
+    assert legacy._direct_rename_has_unsafe_channel_icon("#️⃣--general") is True
+
+    after, warnings, blockers = legacy._style_change_separator_after(
+        "⬜--mods-only",
+        "double_dash",
+    )
+
+    assert after == "⬜--mods-only"
+    assert warnings == []
+    assert blockers == []
+
