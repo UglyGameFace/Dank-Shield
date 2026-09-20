@@ -1183,13 +1183,7 @@ class FormatLocksView(LegacyDesignView):
 # Custom Format Editor
 # ---------------------------------------------------------------------------
 
-EDITOR_SEPARATOR_IDS = (
-    "none", "bar_full", "bar_thin", "bar_heavy", "dash", "en_dash", "em_dash",
-    "middle_dot", "bullet", "katakana_dot", "colon", "single_angle",
-    "tri_right", "tri_small", "premium_sparkle", "premium_thin_sparkle",
-    "sparkle_small", "small_dot", "presentation_bar", "bracket_corner",
-    "bracket_lenticular",
-)
+EDITOR_SEPARATOR_IDS = studio.EXACT_EDITOR_SEPARATOR_IDS
 
 EDITOR_FONT_IDS = studio.DESIGN_FONT_STYLES
 
@@ -3883,20 +3877,7 @@ async def _open_protection_mode_editor(interaction: discord.Interaction, *, chan
     await interaction.edit_original_response(embed=embed, view=ProtectionModeView(channel_id=int(channel.id), current=exact))
 
 
-STYLE_CHANGE_SEPARATOR_IDS: tuple[str, ...] = (
-    "none",
-    "bar_heavy",
-    "bar_thin",
-    "bar_full",
-    "bar_medium",
-    "bar_bold",
-    "bar_block",
-    "dash",
-    "middle_dot",
-    "sparkle",
-    "bracket_corner",
-    "bracket_lenticular",
-)
+STYLE_CHANGE_SEPARATOR_IDS: tuple[str, ...] = studio.SERVER_DESIGN_SEPARATOR_IDS
 
 
 def _style_change_separator_preview_text(separator_id: str, *, emoji: str = "🎮", name: str = "gaming-news") -> str:
