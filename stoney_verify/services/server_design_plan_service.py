@@ -93,6 +93,12 @@ def normalize_plan_options(options: Mapping[str, Any], *, strict: bool = True) -
         if str(out.get("theme_id") or "gothic_clean") == "gothic_clean":
             out["separator_id"] = default_separator
 
+    explicit_frame = str(out.get("category_frame_id") or "").strip()
+    if explicit_frame in studio.CATEGORY_FRAMES_BY_ID:
+        out["category_frame_id"] = explicit_frame
+    else:
+        out.pop("category_frame_id", None)
+
     # Preserve the old visual-name policy without mutating the global protected
     # name set. Explicit per-name owner choices remain authoritative.
     protection = _mapping(out.get("protection_rules"))
