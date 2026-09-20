@@ -273,6 +273,7 @@ EXACT_EDITOR_SEPARATOR_IDS: tuple[str, ...] = (
 )
 
 CATEGORY_FRAMES: tuple[CategoryFrameSpec, ...] = (
+    # Core
     CategoryFrameSpec("line", "Clean Line", "─── {emoji} {name} ───", clutter=1),
     CategoryFrameSpec("heavy_line", "Heavy Line", "━━━ {emoji} {name} ━━━", clutter=2),
     CategoryFrameSpec("top_box", "Top Box", "╭── {emoji} {name} ──╮", safety="balanced", clutter=2),
@@ -283,9 +284,56 @@ CATEGORY_FRAMES: tuple[CategoryFrameSpec, ...] = (
     CategoryFrameSpec("lenticular", "Lenticular", "【 {emoji} {name} 】", safety="balanced", clutter=2),
     CategoryFrameSpec("corner", "Corner", "「 {emoji} {name} 」", safety="balanced", clutter=2),
     CategoryFrameSpec("plain", "Plain", "{emoji} {name}"),
+
+    # Boxes & brackets
+    CategoryFrameSpec("rounded_heavy", "Rounded Heavy", "╭━━ {emoji} {name} ━━╮", safety="balanced", clutter=3),
+    CategoryFrameSpec("square_light", "Square Light", "┌── {emoji} {name} ──┐", safety="balanced", clutter=2),
+    CategoryFrameSpec("square_heavy", "Square Heavy", "┏━━ {emoji} {name} ━━┓", safety="balanced", clutter=3),
+    CategoryFrameSpec("double_bottom", "Double Bottom", "╚══ {emoji} {name} ══╝", safety="decorative", clutter=4),
+    CategoryFrameSpec("white_corner", "White Corner", "『 {emoji} {name} 』", safety="balanced", clutter=2),
+    CategoryFrameSpec("tortoise", "Tortoise", "〔 {emoji} {name} 〕", safety="balanced", clutter=2),
+    CategoryFrameSpec("white_lenticular", "White Lenticular", "〖 {emoji} {name} 〗", safety="balanced", clutter=2),
+    CategoryFrameSpec("soft_bracket", "Soft Brackets", "꒰ {emoji} {name} ꒱", safety="decorative", clutter=3),
+
+    # Premium & decorative
+    CategoryFrameSpec("double_angle", "Double Angle", "《 {emoji} {name} 》", safety="balanced", clutter=2),
+    CategoryFrameSpec("math_angle", "Math Angle", "⟪ {emoji} {name} ⟫", safety="balanced", clutter=2),
+    CategoryFrameSpec("diamond_line", "Diamond Line", "◇── {emoji} {name} ──◇", safety="decorative", clutter=3),
+    CategoryFrameSpec("black_diamond_line", "Black Diamond", "◆━━ {emoji} {name} ━━◆", safety="decorative", clutter=4),
+    CategoryFrameSpec("sparkle_line", "Sparkle Line", "✧── {emoji} {name} ──✧", safety="decorative", clutter=3),
+    CategoryFrameSpec("star_line", "Star Line", "★━━ {emoji} {name} ━━★", safety="decorative", clutter=4),
+    CategoryFrameSpec("hollow_star", "Hollow Star", "☆── {emoji} {name} ──☆", safety="decorative", clutter=3),
+    CategoryFrameSpec("ornate", "Ornate Diamond", "❖══ {emoji} {name} ══❖", safety="decorative", clutter=4),
+
+    # Gothic & celestial
+    CategoryFrameSpec("gothic_cross", "Gothic Cross", "†── {emoji} {name} ──†", safety="decorative", clutter=3),
+    CategoryFrameSpec("cross_line", "Cross Line", "✚── {emoji} {name} ──✚", safety="decorative", clutter=3),
+    CategoryFrameSpec("moon", "Moon", "☾── {emoji} {name} ──☽", safety="decorative", clutter=3),
+    CategoryFrameSpec("sun", "Sun", "☼── {emoji} {name} ──☼", safety="decorative", clutter=3),
+    CategoryFrameSpec("floral", "Floral", "❧── {emoji} {name} ──❧", safety="decorative", clutter=3),
+    CategoryFrameSpec("winged", "Winged", "༺ {emoji} {name} ༻", safety="decorative", clutter=4),
+    CategoryFrameSpec("crown_line", "Crown Line", "♛── {emoji} {name} ──♛", safety="decorative", clutter=4),
+
+    # Tech & minimal
+    CategoryFrameSpec("tech_corner", "Tech Corner", "⌈── {emoji} {name} ──⌉", safety="balanced", clutter=2),
+    CategoryFrameSpec("tech_floor", "Tech Floor", "⌊── {emoji} {name} ──⌋", safety="balanced", clutter=2),
+    CategoryFrameSpec("terminal", "Terminal", "⌜ {emoji} {name} ⌝", safety="balanced", clutter=2),
+    CategoryFrameSpec("wave", "Wave", "≋ {emoji} {name} ≋", safety="balanced", clutter=2),
+    CategoryFrameSpec("chevron", "Chevron", "≫ {emoji} {name} ≪", safety="balanced", clutter=2),
+    CategoryFrameSpec("minimal_dot", "Minimal Dot", "· ─ {emoji} {name} ─ ·", safety="balanced", clutter=2),
+    CategoryFrameSpec("bullet_line", "Bullet Line", "• ━ {emoji} {name} ━ •", safety="balanced", clutter=2),
 )
 CATEGORY_FRAMES_BY_ID = {spec.id: spec for spec in CATEGORY_FRAMES}
 
+# Server-wide frame browsing is grouped so the catalog can grow past Discord's
+# 25-option select limit without hiding choices or silently truncating them.
+CATEGORY_FRAME_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Core", ("line", "heavy_line", "top_box", "bottom_box", "dreamy", "premium_line", "box", "lenticular", "corner", "plain")),
+    ("Boxes & Brackets", ("rounded_heavy", "square_light", "square_heavy", "double_bottom", "white_corner", "tortoise", "white_lenticular", "soft_bracket")),
+    ("Premium & Decorative", ("double_angle", "math_angle", "diamond_line", "black_diamond_line", "sparkle_line", "star_line", "hollow_star", "ornate")),
+    ("Gothic & Celestial", ("gothic_cross", "cross_line", "moon", "sun", "floral", "winged", "crown_line")),
+    ("Tech & Minimal", ("tech_corner", "tech_floor", "terminal", "wave", "chevron", "minimal_dot", "bullet_line")),
+)
 THEMES: tuple[ThemePreset, ...] = (
     ThemePreset("420_lounge", "🍃 420 Lounge", "line", "bar_full", "normal", "420_lounge"),
     ThemePreset("gothic_clean", "🕯 Gothic Clean", "line", "bar_full", "fraktur", "gothic"),
@@ -403,6 +451,23 @@ def category_frame_preview(frame_id: str, *, emoji: str = "🛰", name: str = "c
     return spec.template.format(emoji=emoji, name=name).strip()[:DISCORD_NAME_LIMIT]
 
 
+def category_frame_affixes(frame: CategoryFrameSpec | str) -> tuple[str, str]:
+    """Return normalized affixes surrounding a rendered frame's emoji/name body."""
+
+    spec = CATEGORY_FRAMES_BY_ID.get(frame) if isinstance(frame, str) else frame
+    if spec is None:
+        return "", ""
+
+    template = safe_str(spec.template)
+    emoji_index = template.find("{emoji}")
+    name_index = template.rfind("{name}")
+    if emoji_index < 0 or name_index < emoji_index:
+        return "", ""
+    prefix = unicodedata.normalize("NFKC", template[:emoji_index])
+    suffix = unicodedata.normalize("NFKC", template[name_index + len("{name}"):])
+    return prefix, suffix
+
+
 def _reverse_font_map() -> dict[str, str]:
     reverse: dict[str, str] = {}
     for style in FONT_STYLES:
@@ -430,7 +495,30 @@ def _all_separator_values() -> list[str]:
 
 
 def _strip_category_frame(value: str) -> str:
-    text = safe_str(value)
+    text = safe_str(value).strip()
+
+    # Strip any frame generated by the canonical catalog first. Keeping this
+    # data-driven prevents new frame choices from corrupting base-name parsing.
+    ranked = sorted(
+        CATEGORY_FRAMES,
+        key=lambda spec: sum(len(part) for part in category_frame_affixes(spec)),
+        reverse=True,
+    )
+    for spec in ranked:
+        prefix, suffix = category_frame_affixes(spec)
+        if not prefix and not suffix:
+            continue
+        if prefix and not text.startswith(prefix):
+            continue
+        if suffix and not text.endswith(suffix):
+            continue
+        end = len(text) - len(suffix) if suffix else len(text)
+        body = text[len(prefix):end].strip()
+        if body:
+            return body
+
+    # Legacy fallback for manually typed variants that resemble the original
+    # built-in frame set but do not match a canonical template exactly.
     text = re.sub(r"^[\s─━═╭╮╰╯╔╗【】「」✦⋆｡°✩]+", "", text)
     text = re.sub(r"[\s─━═╭╮╰╯╔╗【】「」✦⋆｡°✩]+$", "", text)
     return text.strip()
@@ -837,10 +925,10 @@ def design_score(items: list[dict[str, Any]]) -> dict[str, int | str]:
 
 
 __all__ = [
-    "CATEGORY_FRAMES", "DEFAULT_DELAY_SECONDS", "DEFAULT_PROTECTED_NAMES", "DESIGN_FONT_STYLES", "DISCORD_NAME_LIMIT",
+    "CATEGORY_FRAMES", "CATEGORY_FRAME_GROUPS", "DEFAULT_DELAY_SECONDS", "DEFAULT_PROTECTED_NAMES", "DESIGN_FONT_STYLES", "DISCORD_NAME_LIMIT",
     "EXACT_EDITOR_SEPARATOR_IDS", "FONT_STYLES", "FONT_STYLE_LABELS", "ICON_PACKS", "MAX_PLAN_ITEMS",
     "SEPARATOR_LIBRARY", "SERVER_DESIGN_SEPARATOR_IDS", "THEMES", "build_styled_name",
-    "category_frame_preview", "design_score", "detect_duplicate_outputs", "fallback_ladder", "font_label",
+    "category_frame_affixes", "category_frame_preview", "design_score", "detect_duplicate_outputs", "fallback_ladder", "font_label",
     "font_preview", "normalize_base_name", "parse_channel_name", "preview_lines", "separator_preview",
     "strip_known_unicode_fonts", "summarize_plan", "suggested_icon", "transform_text_safe", "validate_separator",
 ]

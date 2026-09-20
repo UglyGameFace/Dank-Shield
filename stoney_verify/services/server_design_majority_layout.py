@@ -348,17 +348,36 @@ def detect_category_frame(studio: Any, name: Any) -> dict[str, Any]:
         frame["label"] = _frame_label(frame)
         return frame
 
-    known = (
-        ("premium_line", "✦────", "────✦"),
-        ("top_box", "╭──", "──╮"),
-        ("bottom_box", "╰──", "──╯"),
-        ("box", "╔══", "══╗"),
-        ("lenticular", "【", "】"),
-        ("corner", "「", "」"),
-    )
-    for frame_id, prefix, suffix in known:
-        if raw.startswith(prefix) and raw.endswith(suffix):
-            return {"kind": frame_id, "id": frame_id, "label": _frame_label({"kind": frame_id}), "count": 0}
+    # Match the complete canonical frame catalog instead of maintaining a
+    # second hard-coded subset here. Longest affixes win if future frame
+    # templates overlap, while plain/line forms remain handled above.
+    candidates: list[tuple[int, Any, str, str]] = []
+    for spec in tuple(getattr(studio, "CATEGORY_FRAMES", tuple()) or tuple()):
+        frame_id = _text(getattr(spec, "id", ""))
+        if not frame_id or frame_id in {"plain", "line", "heavy_line"}:
+            continue
+        try:
+            prefix, suffix = studio.category_frame_affixes(spec)
+        except Exception:
+            template = _text(getattr(spec, "template", ""))
+            emoji_index = template.find("{emoji}")
+            name_index = template.rfind("{name}")
+            if emoji_index < 0 or name_index < emoji_index:
+                continue
+            prefix = template[:emoji_index]
+            suffix = template[name_index + len("{name}"):]
+        if not prefix and not suffix:
+            continue
+        candidates.append((len(prefix) + len(suffix), spec, prefix, suffix))
+
+    for _weight, spec, prefix, suffix in sorted(candidates, key=lambda item: item[0], reverse=True):
+        if prefix and not raw.startswith(prefix):
+            continue
+        if suffix and not raw.endswith(suffix):
+            continue
+        frame_id = _text(getattr(spec, "id", ""))
+        frame_label = _text(getattr(spec, "label", "")) or _frame_label({"kind": frame_id})
+        return {"kind": frame_id, "id": frame_id, "label": frame_label, "count": 0}
 
     return {"kind": "plain", "id": "plain", "label": "plain category names", "count": 0}
 

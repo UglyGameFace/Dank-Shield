@@ -1,185 +1,87 @@
 # ACTIVE TASK
 
-## ID
-DS-DESIGNER-CATEGORY-FRAME — Expose server-wide category-frame editing
+## Active task / desired outcome
+
+**DS-DESIGNER-MORE-CATEGORY-FRAMES**
+
+Expand Dank Design category-frame choices substantially while keeping every choice reachable on Discord mobile, keeping preview/apply behavior consistent, preserving existing themes, and avoiding silent truncation at Discord's 25-option select limit.
+
+## Scope
+
+- canonical category-frame catalog;
+- server-wide Design Entire Server frame picker;
+- exact category custom-format frame picker;
+- category-frame parsing / majority detection needed so new canonical frames round-trip correctly;
+- regression tests and validation for this task.
+
+Out of scope: themes, fonts, channel separators, permissions, tickets, verification, role behavior, channel ordering, topics, and unrelated server-design behavior.
 
 ## Status
-IMPLEMENTED — exact-head executable validation blocked by GitHub Actions infrastructure
 
-## Single active-task lock
-Only the Server Designer category-frame editing gap is active in this conversation
-and PR. Do not start unrelated work until this task is tested, validated, cleaned
-up, merged, and verified on main.
+**IMPLEMENTED — exact-head executable validation pending**
 
-## User-visible problem
-The **Design Entire Server** screen shows the active Category frame, for example
-**Top Box**, and already uses that value in previews, but it had no control for
-changing the frame. Theme, Font, Strength, and Separator were editable while
-Category frame was display-only.
+## Findings / root cause
 
-## Root cause
-The naming engine already had first-class category-frame support:
+The canonical catalog only contained 10 frames. The server-wide frame picker previously built one Discord string select and truncated it with `choices[:25]`, so merely adding many more frames would silently hide everything past the platform limit.
 
-- `server_design_studio.CATEGORY_FRAMES` is the canonical frame catalog;
-- `category_frame_id` already flows into `build_styled_name()`, preview planning,
-  saved rules, and persisted server-design options;
-- the exact-item editor already exposes the same frame catalog.
+The exact category editor had the same structural ceiling through `studio.CATEGORY_FRAMES[:25]`.
 
-Two directly related gaps were found in the server-wide path.
-
-First, the consolidated V2 `DesignServerView` already occupied Discord's five
-component rows:
-
-- row 0: Theme
-- row 1: Font
-- row 2: Strength
-- row 3: Separator
-- row 4: Preview Server / Preview Separator / Clean Redesign / Back
-
-That left Category frame visible in the embed but without an interactive entry
-point.
-
-Second, every server-wide selector synchronizes an enabled global format lock
-through `_sync_enabled_global_lock()`, but `_current_format_lock()` always copied
-the theme's category frame and ignored an explicit server-wide
-`category_frame_id`. Adding a picker without correcting that path would make a
-custom frame appear to save and then silently lose it whenever the global format
-lock was enabled.
-
-Follow-up inspection found two more edge cases in that same frame authority path:
-an invalid persisted frame could make the single-select UI mark both Theme Default
-and the theme frame as selected, and the planner could treat an invalid explicit
-frame as Clean Line while the UI reported the selected theme's default. Both are
-now normalized to one Theme Default state.
-
-## Execution path
-`/dank home`
-→ **Server Design**
-→ **Design Entire Server**
-→ `DesignServerView`
-→ server-wide draft options
-→ `build_saved_design_plan()`
-→ `build_design_plan()`
-→ `_effective_format_options()`
-→ `build_styled_name(..., category_frame_id=...)`
-→ reviewed preview
-→ Apply.
-
-Saved-rule precedence remains:
-channel rule → category rule → enabled global rule → server-wide draft.
+Category-frame cleanup and majority detection also used hard-coded knowledge of the original small frame set. Expanding only the UI/catalog would therefore make newer frames render correctly but fail round-trip parsing or be misdetected as plain during live-layout analysis.
 
 ## Changes
-- added a compact **Frame** action as the fifth button on the existing row-4 action
-  row; no sixth Discord row is introduced;
-- added an in-place `DesignServerCategoryFrameView` and
-  `DesignServerCategoryFrameSelect`;
-- the picker uses the canonical `CATEGORY_FRAMES` catalog and exposes all current
-  frames plus **Theme Default**;
-- Theme Default clears the explicit override, while an explicit frame remains
-  selected when Theme changes;
-- frame selections acknowledge the Discord interaction before config I/O, save
-  through the existing draft path, synchronize an enabled global format lock, and
-  return to **Design Entire Server**;
-- added canonical `theme_default_category_frame_id()` and
-  `effective_server_category_frame_id()` resolution beside the existing
-  separator resolver;
-- invalid persisted server frame overrides are removed during plan normalization,
-  so UI, preview, global-lock sync, and apply all resolve to the same theme default;
-- the frame picker now guarantees exactly one default option even if old/corrupt
-  persisted data contains an unknown frame id;
-- V2 display/preview logic and legacy global-lock construction consume that same
-  canonical resolver;
-- the summary now distinguishes **theme default** from **custom override**;
-- Strength below 4 explains that the selected category frame is saved but does not
-  become active until Strength 4+;
-- Server Design and Clean Redesign guidance now includes Category Frame.
 
-## Regression coverage added
-- consolidated server selectors now include the category-frame save/sync path;
-- explicit frame selection and Theme Default clearing are regression-locked;
-- canonical resolution prefers a valid explicit frame and safely falls back to the
-  selected theme for an invalid/missing override;
-- enabled global-lock construction preserves an explicit server-wide frame;
-- the main server-design view is locked to five row-4 buttons;
-- the picker exposes the complete canonical frame catalog and remains below
-  Discord's 25-option limit;
-- Night Gothic Theme Default resolves to Top Box;
-- explicit Lenticular and Top Box overrides are represented correctly;
-- the server-design summary identifies theme-owned versus custom frame state.
+- expanded the canonical frame catalog from **10 to 40** frames;
+- organized the catalog into five groups:
+  - Core
+  - Boxes & Brackets
+  - Premium & Decorative
+  - Gothic & Celestial
+  - Tech & Minimal
+- server-wide Frame now opens a grouped, paginated picker instead of truncating the catalog;
+- the frame browser opens on the group containing the current custom selection;
+- Theme Default remains available on every server-wide frame page;
+- exact-category custom format keeps a compact primary select and adds **Browse all 40 frames…** for the full grouped catalog;
+- exact-category browser returns to the normal custom-format editor after a choice;
+- added canonical `category_frame_affixes()` so generated frame parsing is data-driven;
+- base-name normalization now strips any canonical frame without another hard-coded character list;
+- majority detection now detects the complete canonical catalog instead of six hand-maintained frame forms.
 
-## Compatibility
-- Existing valid saved `category_frame_id` values remain authoritative.
-- No schema or persistence format changes.
-- Theme-default behavior is represented by the absence of an explicit override.
-- Category frames still require Strength 4+ to affect category names.
-- Narrow category/channel/exact rules retain their existing precedence.
-- Theme, Font, Strength, Separator, Preview Server, Preview Separator, Clean
-  Redesign, and Back remain available.
-- No permissions, tickets, roles, verification, channel order, topics, or other
-  non-design behavior changes.
+## Execution path
 
-## Validation / evidence
-Implementation source and final task diff were inspected against main.
+Server-wide:
+`/dank` → Design Entire Server → Frame → grouped frame browser → save draft → Preview Server → reviewed Apply.
 
-Current implementation evidence before this bookkeeping update:
-- latest implementation head before this record update:
-  `5b1df17e4ef386384735af51c108129bd447749c`;
-- base/current main: `33b17fae0bbbd631c8942ddeec5215f3a2394ad3`;
-- branch currentness: **0 behind main**;
-- PR #268: open, draft, mergeable;
-- unresolved review threads: **0**;
-- changed files were limited to the active task:
-  `ACTIVE_TASK.md`,
-  `public_design_studio.py`,
-  `public_design_studio_v2.py`,
-  `server_design_plan_service.py`,
-  `test_dank_design_consistency_030.py`, and
-  `test_design_studio_consolidation_032.py`;
-- final diff inspection found no unrelated runtime/schema/permission changes and no
-  second category-frame catalog.
+Exact category:
+Edit One Category / Channel → category → Custom Format → Category Header Style → Browse all frames → select → Save Rule & Preview → reviewed Apply.
 
-GitHub scheduled all normal workflows on the exact implementation head, but they
-failed before executing any step. Confirmed examples:
-- **Dank Design Regression CI** → Consolidated Design Studio regressions:
-  `steps=null`, `logs_url=null`;
-- **Dank Shield CI** → Python compile check:
-  `steps=null`, `logs_url=null`;
-- Application Command Size Diagnostics likewise has no executed steps.
+Both paths continue to use the existing canonical `category_frame_id`, design-plan construction, protection checks, preview, and apply pipeline.
 
-The same account-level pre-run Actions failure was already present on preceding
-heads. Therefore these red checks do **not** constitute test failures, but they
-also do **not** satisfy executable validation.
+## Regression coverage
 
-The current ChatGPT execution container cannot clone the private repository
-because outbound GitHub DNS/network access is unavailable, so it cannot honestly
-substitute a local pytest/compile run for the unavailable hosted runner.
+- canonical catalog contains exactly 40 frames;
+- every frame appears exactly once in grouping metadata;
+- all 40 frames are reachable through server-wide pages while every select remains under 25 options;
+- Theme Default remains singular and correct;
+- a frame in the final group reopens on the correct page and remains selected;
+- every canonical frame round-trips through base-name normalization;
+- every canonical frame is recognized by majority detection;
+- exact category editor exposes a full-catalog browse path;
+- late-catalog exact selections remain visible/defaulted without exceeding the select limit.
 
-## Cleanup
-- reused the existing canonical `CATEGORY_FRAMES` catalog;
-- centralized server category-frame default/override resolution in the plan
-  service rather than leaving V2 and legacy lock code with competing policy;
-- no temporary guards, monkey patches, alternate frame catalogs, debug code, or
-  unrelated cleanup were added;
-- the row-4 frame button is intentionally compact for the five-button mobile
-  action row.
+## Cleanup / compatibility
 
-## Conflicts
-None currently known. The branch is current with main and PR #268 reports
-mergeable.
+Existing frame IDs and theme defaults are preserved. No migrations or schema changes are required. Existing saved `category_frame_id` values remain valid.
+
+The browser is additive and uses Discord component rows within platform limits. No legacy frame IDs were renamed or removed.
 
 ## Blockers / risks
-- Exact-head Python compile, focused Dank Design pytest/audits, and broader
-  repository validation still need to execute on a working Python 3.11 runner.
-- A live Discord smoke test has not yet been performed.
-- Until executable validation passes, this PR must remain draft and must not be
-  described as fixed, complete, production-ready, or ready to merge.
+
+Executable exact-head validation has not run yet. Do not mark this task complete or merge-ready until Python 3.11 compile, focused Dank Design tests/audits, and relevant package validation pass on the final head.
 
 ## Backlog
-None.
+
+None for this task.
 
 ## Next step
-Run the repository's existing Python 3.11 Dank Design workflow-equivalent checks
-on the exact final head as soon as a runner/local repository environment is
-available. Then perform final currentness/diff review, update this record with the
-results, mark PR #268 ready only if green, merge the validated head, and verify
-main/deployment behavior.
+
+Run exact-head validation on the finalized branch. If green, record results on the PR, mark ready, merge, and verify the merged implementation on `main`.

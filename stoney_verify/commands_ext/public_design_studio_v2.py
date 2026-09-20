@@ -413,8 +413,43 @@ def _separator_override_active(options: Mapping[str, Any]) -> bool:
     return bool(_safe_str(options.get("separator_id"), ""))
 
 
+def _category_frame_groups() -> tuple[tuple[str, tuple[str, ...]], ...]:
+    groups: list[tuple[str, tuple[str, ...]]] = []
+    seen: set[str] = set()
+    for label, frame_ids in tuple(getattr(studio, "CATEGORY_FRAME_GROUPS", tuple()) or tuple()):
+        usable = tuple(
+            frame_id for frame_id in frame_ids
+            if frame_id in studio.CATEGORY_FRAMES_BY_ID and frame_id not in seen
+        )
+        if not usable:
+            continue
+        groups.append((_safe_str(label, "Frames"), usable))
+        seen.update(usable)
+
+    # Never hide a newly registered canonical frame just because someone forgot
+    # to add it to the curated grouping metadata.
+    ungrouped = tuple(frame.id for frame in studio.CATEGORY_FRAMES if frame.id not in seen)
+    if ungrouped:
+        groups.append(("More", ungrouped))
+    return tuple(groups)
+
+
+def _category_frame_page_for(options: Mapping[str, Any]) -> int:
+    if not _category_frame_override_active(options):
+        return 0
+    selected = _design_server_category_frame(options)
+    for page, (_label, frame_ids) in enumerate(_category_frame_groups()):
+        if selected in frame_ids:
+            return page
+    return 0
+
+
 class DesignServerCategoryFrameSelect(discord.ui.Select):
-    def __init__(self, options: Mapping[str, Any]) -> None:
+    def __init__(self, options: Mapping[str, Any], *, page: int = 0) -> None:
+        groups = _category_frame_groups()
+        page = max(0, min(int(page), max(0, len(groups) - 1)))
+        _group_label, frame_ids = groups[page] if groups else ("Frames", tuple())
+
         theme_options = dict(options)
         theme_options.pop("category_frame_id", None)
         theme_frame = plans.theme_default_category_frame_id(theme_options)
@@ -432,7 +467,8 @@ class DesignServerCategoryFrameSelect(discord.ui.Select):
                 default=not override_active,
             )
         ]
-        for frame in studio.CATEGORY_FRAMES:
+        for frame_id in frame_ids:
+            frame = studio.CATEGORY_FRAMES_BY_ID[frame_id]
             choices.append(
                 discord.SelectOption(
                     label=legacy._category_frame_choice_label(frame.id)[:100],  # type: ignore[attr-defined]
@@ -451,6 +487,7 @@ class DesignServerCategoryFrameSelect(discord.ui.Select):
             options=choices[:25],
             row=0,
         )
+        self.page = page
 
     async def callback(self, interaction: discord.Interaction) -> None:
         if not await _require_design_permission(interaction):
@@ -538,23 +575,73 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
     return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
 
 
-def _category_frame_picker_embed(guild: discord.Guild, options: Mapping[str, Any]) -> discord.Embed:
+def _category_frame_picker_embed(
+    guild: discord.Guild,
+    options: Mapping[str, Any],
+    *,
+    page: int = 0,
+) -> discord.Embed:
+    groups = _category_frame_groups()
+    total_pages = max(1, len(groups))
+    page = max(0, min(int(page), total_pages - 1))
+    group_label, frame_ids = groups[page] if groups else ("Frames", tuple())
+    selected = _design_server_category_frame(options)
+    selected_label = legacy._category_frame_choice_label(selected)  # type: ignore[attr-defined]
+
     embed = _design_server_embed(guild, options)
-    embed.title = "🖼️ Choose Category Frame"
+    embed.title = f"🖼️ Choose Category Frame · {group_label}"
     embed.description = (
-        "Choose how server-wide **category headers** are framed. **Theme Default** follows the selected theme; "
-        "an explicit frame stays selected when the theme changes. Nothing is renamed until you return, Preview, and Apply."
+        f"Browse **{len(studio.CATEGORY_FRAMES)} category frames** across {total_pages} style groups. "
+        "**Theme Default** follows the selected theme; an explicit frame stays selected when the theme changes. "
+        "Nothing is renamed until you return, Preview, and Apply."
+    )
+    embed.add_field(
+        name=f"Frame group {page + 1}/{total_pages}",
+        value=(
+            f"**{group_label}** · {len(frame_ids)} choices on this page\n"
+            f"Current: **{selected_label}**"
+        ),
+        inline=False,
     )
     return embed
 
 
 class DesignServerCategoryFrameView(DesignView):
-    def __init__(self, options: Mapping[str, Any]) -> None:
+    def __init__(self, options: Mapping[str, Any], *, page: int = 0) -> None:
         super().__init__(timeout=900)
         self.options = dict(options)
-        self.add_item(DesignServerCategoryFrameSelect(options))
+        groups = _category_frame_groups()
+        self.total_pages = max(1, len(groups))
+        self.page = max(0, min(int(page), self.total_pages - 1))
+        self.add_item(DesignServerCategoryFrameSelect(options, page=self.page))
+        self.previous.disabled = self.page <= 0
+        self.next.disabled = self.page >= self.total_pages - 1
 
-    @discord.ui.button(label="Back to Server Design", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_back", row=1)
+    @discord.ui.button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_prev", row=1)
+    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        page = max(0, self.page - 1)
+        await interaction.response.edit_message(
+            embed=_category_frame_picker_embed(guild, self.options, page=page),
+            view=DesignServerCategoryFrameView(self.options, page=page),
+        )
+
+    @discord.ui.button(label="Next", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_next", row=1)
+    async def next(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        page = min(self.total_pages - 1, self.page + 1)
+        await interaction.response.edit_message(
+            embed=_category_frame_picker_embed(guild, self.options, page=page),
+            view=DesignServerCategoryFrameView(self.options, page=page),
+        )
+
+    @discord.ui.button(label="Back to Server Design", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_back", row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -643,9 +730,10 @@ class DesignServerView(DesignView):
             return
         guild = interaction.guild
         assert guild is not None
+        page = _category_frame_page_for(self.options)
         await interaction.response.edit_message(
-            embed=_category_frame_picker_embed(guild, self.options),
-            view=DesignServerCategoryFrameView(self.options),
+            embed=_category_frame_picker_embed(guild, self.options, page=page),
+            view=DesignServerCategoryFrameView(self.options, page=page),
         )
 
     @discord.ui.button(label="Preview Server", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design_v2:server_preview", row=4)
