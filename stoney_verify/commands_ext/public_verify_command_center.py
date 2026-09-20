@@ -7,6 +7,7 @@ from typing import Any, Optional
 import discord
 
 from stoney_verify.interaction_guard import run_guarded_interaction
+from ..guild_config import get_guild_config
 from .common import _staff_check
 
 
@@ -411,28 +412,60 @@ class VerifyRoleSelect(discord.ui.RoleSelect):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        async def action() -> None:
+            await self._save_mapping(interaction)
+
+        await run_guarded_interaction(
+            interaction,
+            action,
+            defer=True,
+            ephemeral=True,
+            action_name=f"verify.center.role_map.{self.parent_view.logical}",
+            error_title="❌ Verification role mapping stopped unexpectedly",
+            error_guidance=(
+                "Reopen **Role Mapping** and verify the currently saved role before retrying. "
+                "Use the Error ID in `/dank diagnostics` if this keeps happening."
+            ),
+        )
+
+    async def _save_mapping(self, interaction: discord.Interaction) -> None:
         role = self.values[0] if self.values else None
         if not isinstance(role, discord.Role):
-            return await _private(interaction, "❌ Choose a server role.")
+            await _private(interaction, "❌ Choose a server role.")
+            return
         if not await _require_staff(interaction):
             return
+        guild = interaction.guild
+        if guild is None:
+            raise RuntimeError("Verification role mapping requires a server context.")
+
         from .public_verify_group import (
             _ROLE_CONFIG_KEYS,
             _ROLE_LABELS,
             _bot_can_manage_role,
+            _cfg_value,
+            _safe_int,
             _save_role_config,
         )
-        ok, why = _bot_can_manage_role(interaction.guild, role)
+        ok, why = _bot_can_manage_role(guild, role)
         if not ok:
-            return await _private(interaction, f"❌ I cannot map {role.mention}: {why}.")
+            await _private(interaction, f"❌ I cannot map {role.mention}: {why}.")
+            return
+
         config_key = _ROLE_CONFIG_KEYS[self.parent_view.logical]
         await _save_role_config(
-            interaction.guild,
+            guild,
             config_key,
             role,
             source="verification center role mapping",
             explicit_override=True,
         )
+
+        refreshed = await get_guild_config(int(guild.id), refresh=True)
+        saved_role_id = _safe_int(_cfg_value(refreshed, config_key), 0)
+        if saved_role_id != int(role.id):
+            raise RuntimeError("Verification role mapping could not be confirmed after save.")
+
         label = _ROLE_LABELS.get(self.parent_view.logical, self.parent_view.logical.title())
         await _private(interaction, f"✅ **{label}** now uses {role.mention}.")
 
