@@ -36,13 +36,10 @@ def _human_authored(message: Any) -> bool:
 def _interaction_response(message: Any) -> bool:
     """Return True when Discord marks this message as an interaction response."""
 
-    for attr in ("interaction_metadata", "interaction"):
-        try:
-            if getattr(message, attr, None) is not None:
-                return True
-        except Exception:
-            pass
-    return False
+    try:
+        return getattr(message, "interaction_metadata", None) is not None
+    except Exception:
+        return False
 
 
 def _content_text(message: Any) -> str:
