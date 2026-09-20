@@ -63,6 +63,31 @@ These modules are not evidence that a bulk startup-loader is needed. Their canon
 | `setup_permission_repair_guard` | `setup_permission_repair_services.py` | compatibility helper functions consumed by the canonical repair service | **keep feature-owned until dedicated migration** |
 | `invite_shield_sanitize_shared` | `services/invite_cleanup_service.py`, `invite_policy_engine.py` | shared invite-code/guild sanitization helpers | **keep feature-owned** |
 
+## Share Router disposition update
+
+The dedicated Share Router audit requested by the historical table has now been
+completed by DS-SHARE-ROUTER-265. The old
+`startup_guards/share_router_guard.py` path remains only as a side-effect-free
+compatibility shim; it no longer registers `/dank share-router`, attaches a
+listener at import time, or owns persistence/UI behavior.
+
+Current production ownership is explicit:
+
+`commands_ext.register_all_commands()`
+→ `commands_ext/public_share_router.register_public_share_router()`
+→ `share_router_runtime.ensure_share_router_runtime(bot)`
+→ one idempotent `on_message` listener.
+
+Configuration is menu-first under **Community Tools → Share Router**, while
+`share_router_resources.py` owns the stable functional resource identity used
+by both the router and Dank Design exclusion. Existing
+`DANK_SHARE_ROUTES_FILE` / `data/share_routes.json` route records remain
+compatible.
+
+This does **not** reactivate the historical bulk-loader model. Share Router is
+now a normal feature-owned runtime registered through the canonical public
+command-module profile.
+
 ## Channel Builder ownership correction
 
 The previous architecture note claiming Channel Builder routes were available only through `channel_builder_api_guard` is obsolete.
