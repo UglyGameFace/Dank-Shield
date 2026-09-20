@@ -693,6 +693,13 @@ async def _maybe_run_ticket_sync_once() -> None:
 
     _DID_TICKET_SYNC = True
 
+    if not _env_true("DANK_STARTUP_TICKET_BACKFILL", default=False):
+        print(
+            "ℹ️ Startup ticket sync/backfill disabled; "
+            "set DANK_STARTUP_TICKET_BACKFILL=true only for explicit repair runs."
+        )
+        return
+
     if _sync_active_ticket_channels_for_guild is None:
         print("⚠️ Ticket sync helper unavailable; skipping startup ticket sync.")
         return
