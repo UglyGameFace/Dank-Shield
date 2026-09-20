@@ -90,18 +90,26 @@ The pre-restart heartbeat is pinned in memory so activity tracking cannot advanc
 
 ### Invite attribution cache
 
-Startup cache warm:
+Normal restart performs **no eager all-guild invite baseline warm**.
 
-- shares the recovery coordinator;
-- paced between guilds;
-- skips `guild.invites()` when the bot lacks Manage Server;
-- skips `guild.vanity_invite()` unless the guild advertises `VANITY_URL`.
+- A guild with no post-restart joins makes zero invite-list REST calls for attribution.
+- The first join after a cold restart establishes the baseline but intentionally receives `invite_cache_warming`; Dank Shield does not claim an invite from lifetime use counts.
+- Later joins use measured deltas from that baseline.
+- Newly added guilds receive one invite baseline during their one-time member bootstrap.
+- Invite fetches are skipped when the bot lacks Manage Server.
+- Vanity fetches are skipped unless the guild advertises `VANITY_URL`.
 
-### Ticket history backfill
+### Ticket repair/history work
 
 Automatic all-guild startup ticket backfill is disabled by default.
 
 `DANK_STARTUP_TICKET_BACKFILL=true` is now an explicit repair/migration mode rather than a permanent boot-time history crawl.
+
+The ticket control-panel repair owner still repairs every newly created ticket immediately, but its all-open-ticket history sweep is now explicit:
+
+`DANK_STARTUP_TICKET_PANEL_REPAIR=true`
+
+When explicitly enabled, it shares the per-guild startup recovery budget.
 
 ## Changes
 
@@ -117,18 +125,26 @@ Automatic all-guild startup ticket backfill is disabled by default.
 - kept one canonical departed-only restart reconciliation in `app.py`;
 - moved full member bootstrap to `on_guild_join`;
 - suppressed database updates for rows already marked departed;
-- bounded/paced invite cache warm through the shared recovery budget;
+- removed eager all-guild invite cache warming on normal restart;
+- made cold invite attribution establish a baseline without false invite credit;
+- warm the invite baseline once for newly added guilds;
 - added invite permission and vanity-feature preflights;
 - made ticket startup history backfill opt-in;
+- made ticket control-panel startup history repair opt-in while preserving post-create repair;
 - removed the silent 50-guild startup maintenance cutoff;
+- batch public startup guild-config scope reads instead of one query per guild;
+- replaced all-guild startup task fanout in durable invite stats, ticket panel bootstrap, and AntiNuke security prewarm with fixed worker pools;
 - documented new recovery controls in `.env.example`.
 
 ## Scale invariants
 
 - No all-guild full member rewrite on every process restart.
 - No arbitrary all-channel last-250 Invite Shield crawl when no durable recovery checkpoint exists.
-- No same-guild heavy recovery overlap across activity, invite, member, or invite-cache paths.
+- No same-guild heavy recovery overlap across activity, invite, member, or explicit ticket-history repair paths.
 - Cross-guild recovery concurrency is bounded per process/shard.
+- Normal restart does not call `guild.invites()` for every idle guild.
+- Startup worker task count is bounded; semaphores do not hide O(guild-count) coroutine allocation.
+- Public startup config scoping uses bounded database batches.
 - No hard guild-count cutoff that silently abandons maintenance after guild #50.
 - New guilds still receive one authoritative bootstrap.
 - Live member/invite/ticket event ownership remains unchanged.
@@ -154,7 +170,11 @@ Focused regression coverage added/updated for:
 - no silent startup guild-count cutoff;
 - ticket startup backfill default-off behavior;
 - already-departed database write suppression;
-- invite-cache permission/vanity request preflights.
+- invite-cache permission/vanity request preflights;
+- cold invite baseline cannot falsely credit lifetime invite usage;
+- batched public guild-config startup scope;
+- fixed worker pools for startup DB/config prewarms;
+- ticket panel history repair default-off behavior.
 
 Exact-head compile/pytest/workflow validation is still pending and must not be represented as passing yet.
 
