@@ -136,6 +136,11 @@ def test_double_hyphen_is_first_class_and_round_trips_cleanly() -> None:
     assert parsed["emoji"] == "👋"
     assert parsed["separator"] == "--"
     assert parsed["base_name"] == "welcome"
+    assert parsed["duplicate_separators"] is False
+
+    accidental = studio.parse_channel_name("👋----welcome")
+    assert accidental["separator"] == "--"
+    assert accidental["duplicate_separators"] is True
 
     result = studio.build_styled_name(
         "👋--welcome",
@@ -169,3 +174,26 @@ def test_first_class_spaced_pipe_reproduces_existing_mixed_layout() -> None:
     assert result.after == "🏁 | start-here-verify"
     assert result.separator_id == "pipe_spaced"
 
+
+
+def test_real_mixed_server_separator_patterns_are_parseable() -> None:
+    cases = (
+        ("👋--welcome", "--", "welcome"),
+        ("📣-announcements", "-", "announcements"),
+        ("🚩-rules", "-", "rules"),
+        ("🎉--giveaway", "--", "giveaway"),
+        ("📊--levelups", "--", "levelups"),
+        ("❌--unverified-chat", "--", "unverified-chat"),
+        ("🎟️--support", "--", "support"),
+        ("📁transcripts", "", "transcripts"),
+        ("🗄️--mod-log", "--", "mod-log"),
+        ("⬜--mods-only", "--", "mods-only"),
+        ("🤖--price-glitch-bot", "--", "price-glitch-bot"),
+        ("🎙️--vc-verify-requests", "--", "vc-verify-requests"),
+        ("📰--welcome-exit", "--", "welcome-exit"),
+    )
+
+    for raw, separator, base_name in cases:
+        parsed = studio.parse_channel_name(raw)
+        assert parsed["separator"] == separator, raw
+        assert parsed["base_name"] == base_name, raw
