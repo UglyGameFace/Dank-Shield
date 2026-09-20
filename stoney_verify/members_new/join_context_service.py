@@ -367,23 +367,22 @@ async def _detect_join_entry_context_unlocked(member: discord.Member) -> Dict[st
     current_uses: Dict[str, int] = {}
     current_meta: Dict[str, Dict[str, Any]] = {}
 
-    try:
-        if not _can_fetch_guild_invites(guild):
-            raise discord.Forbidden(response=None, message="missing Manage Server permission")
-        invites = await guild.invites()
-        invites_ok = True
-        for invite in invites:
-            meta = invite_meta(invite)
-            code = str(meta.get("code") or "").strip()
-            if not code:
-                continue
-            current_uses[code] = int(meta.get("uses") or 0)
-            current_meta[code] = meta
-    except discord.Forbidden:
-        invites_ok = False
-    except Exception as e:
-        _warn(f"join detect invite fetch failed guild={gid}: {e!r}")
-        invites_ok = False
+    if _can_fetch_guild_invites(guild):
+        try:
+            invites = await guild.invites()
+            invites_ok = True
+            for invite in invites:
+                meta = invite_meta(invite)
+                code = str(meta.get("code") or "").strip()
+                if not code:
+                    continue
+                current_uses[code] = int(meta.get("uses") or 0)
+                current_meta[code] = meta
+        except discord.Forbidden:
+            invites_ok = False
+        except Exception as e:
+            _warn(f"join detect invite fetch failed guild={gid}: {e!r}")
+            invites_ok = False
 
     vanity_uses: Optional[int] = old_vanity_uses
     vanity_code: Optional[str] = None
