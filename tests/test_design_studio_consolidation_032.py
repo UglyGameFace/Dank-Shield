@@ -141,6 +141,21 @@ def test_server_category_frame_is_editable_without_overflowing_discord_rows() ->
     assert len(custom_defaults) == 1
     assert custom_defaults[0].value == "lenticular"
 
+    invalid_view = studio_v2.DesignServerCategoryFrameView(
+        {
+            "theme_id": "night_gothic",
+            "strength": 5,
+            "category_frame_id": "not-a-frame",
+        }
+    )
+    invalid_picker = next(
+        item for item in invalid_view.children
+        if isinstance(item, studio_v2.DesignServerCategoryFrameSelect)
+    )
+    invalid_defaults = [option for option in invalid_picker.options if option.default]
+    assert len(invalid_defaults) == 1
+    assert invalid_defaults[0].value == "__theme__"
+
 
 def test_gothic_theme_default_separator_matches_real_preview_plan() -> None:
     options = {"theme_id": "gothic_clean", "strength": 4}
