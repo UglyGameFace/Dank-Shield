@@ -17,7 +17,7 @@ Out of scope: themes, fonts, channel separators, permissions, tickets, verificat
 
 ## Status
 
-**IMPLEMENTED — exact-head validation pending**
+**IMPLEMENTED — static integrity passed; executable exact-head validation blocked by runner infrastructure**
 
 ## Findings / root cause
 
@@ -77,7 +77,9 @@ The local dirty branch `audit/persistent-interaction-compatibility` is unrelated
 
 ## Blockers / risks
 
-Exact-head Python 3.11 validation has not run yet. Do not call this complete or merge-ready until focused Dank Design tests, compile checks, relevant audits, and final diff/branch validation pass on the final head.
+Static exact-head integrity checks passed on the current branch: 80 unique canonical frame IDs, 80 unique grouped IDs, 10 groups, no missing/unknown/duplicate grouped frames, no `the-420-lobby` literal in the public designer, guild-aware preview wiring present, regression guards present, branch 0 behind main, and 0 unresolved review threads.
+
+Executable Python validation is blocked by GitHub Actions infrastructure: all PR workflows fail before any step starts, and the Dank Design job reports no steps/log URL. The isolated container also cannot resolve github.com, so the repository cannot be cloned there for an independent pytest/compile run. Keep the PR draft and do not mark complete or merge-ready until executable exact-head validation can run.
 
 ## Backlog
 
@@ -85,4 +87,4 @@ None for this task.
 
 ## Next step
 
-Run exact-head validation on `improve/server-designer-80-category-frames`. If green, open a focused PR, verify CI/review state, then merge and verify the merged result on `main`.
+Re-run executable exact-head validation when runner access is available. If green, update PR #270, mark it ready, merge, and verify the merged result on `main`.
