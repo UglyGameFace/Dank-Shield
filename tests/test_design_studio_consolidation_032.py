@@ -396,4 +396,3 @@ def test_intentional_square_emoji_is_preserved_in_mixed_server_layout() -> None:
     assert after == "⬜--mods-only"
     assert warnings == []
     assert blockers == []
-
