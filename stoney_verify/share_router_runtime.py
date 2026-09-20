@@ -439,7 +439,7 @@ async def route_message(message: discord.Message) -> None:
             _RECENT_ROUTE_KEYS[dedupe] = now
 
         if not duplicate:
-            routed = f"{text}\n\n↪️ Shared by {message.author.mention} via {message.channel.mention}"
+            routed = f"{text}\n\n↪️ Shared by {message.author.mention} via Dank Shield Share Router"
             await target.send(
                 routed[:2000],
                 allowed_mentions=discord.AllowedMentions.none(),
