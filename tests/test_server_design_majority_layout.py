@@ -108,9 +108,14 @@ def test_correct_separator_wrong_spacing_repairs_to_majority_spacing():
 
 
 def test_parser_distinguishes_doubled_separator_and_separator_inside_name_text():
-    doubled = majority.detect_channel_separator(studio, "💬 || general")
+    intentional_double_pipe = majority.detect_channel_separator(studio, "💬 || general")
+    doubled = majority.detect_channel_separator(studio, "💬 |||| general")
     inside_name = majority.detect_channel_separator(studio, "💬 general | old")
 
+    assert intentional_double_pipe["separator_id"] == "double_pipe"
+    assert intentional_double_pipe["doubled"] is False
+    assert intentional_double_pipe["spacing"] == "spaced"
+    assert doubled["token"] == "||"
     assert doubled["doubled"] is True
     assert doubled["spacing"] == "doubled"
     assert inside_name["missing"] is True
