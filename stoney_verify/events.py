@@ -1917,25 +1917,6 @@ async def on_voice_state_update(
 
 async def _run_startup_once_flags() -> None:
     try:
-        if not getattr(bot, "_invite_cache_warm_started", False):  # type: ignore[attr-defined]
-            try:
-                bot._invite_cache_warm_started = True  # type: ignore[attr-defined]
-            except Exception:
-                pass
-
-            if not _startup_task_running("_invite_cache_warm_task"):
-                async def _run_invite_cache_warm():
-                    try:
-                        await _warm_all_guild_invite_caches()
-                    except Exception as e:
-                        print("⚠️ invite cache warm error:", e)
-                        try:
-                            traceback.print_exc()
-                        except Exception:
-                            pass
-
-                _assign_startup_task("_invite_cache_warm_task", _run_invite_cache_warm())
-
         if not getattr(bot, "_stale_verification_reconcile_started", False):  # type: ignore[attr-defined]
             try:
                 bot._stale_verification_reconcile_started = True  # type: ignore[attr-defined]
