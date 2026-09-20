@@ -36,6 +36,7 @@ def test_new_guild_bootstrap_is_event_scoped_not_ready_scoped() -> None:
     assert '@bot.listen("on_guild_join")' in APP
     assert "on_guild_join_member_bootstrap" in APP
     assert "_run_full_member_sync_for_guild(guild)" in APP
+    assert "warm_invite_cache_for_guild(guild)" in APP
 
     ready = _block(
         APP,
@@ -93,15 +94,22 @@ def test_invite_surface_never_reads_deprecated_message_interaction() -> None:
     assert '("interaction_metadata", "interaction")' not in SURFACE
 
 
-def test_invite_cache_warm_uses_shared_budget_and_preflights_requests() -> None:
-    assert 'startup_recovery_slot(gid, "invite_cache_warm")' in EVENTS
-    assert "await asyncio.sleep(0.25)" in EVENTS
+def test_restart_does_not_eagerly_warm_every_guild_invite_cache() -> None:
+    startup = _block(
+        EVENTS,
+        "async def _run_startup_once_flags() -> None:",
+        "@bot.event\nasync def on_ready()",
+    )
+    assert "_warm_all_guild_invite_caches()" not in startup
+    assert "_invite_cache_warm_started" not in startup
 
     assert "def _can_fetch_guild_invites" in JOIN_CONTEXT
     assert 'getattr(permissions, "manage_guild", False)' in JOIN_CONTEXT
     assert "def _guild_has_vanity_url" in JOIN_CONTEXT
     assert '"VANITY_URL"' in JOIN_CONTEXT
     assert "if _guild_has_vanity_url(guild):" in JOIN_CONTEXT
+    assert "if not baseline_ready:" in JOIN_CONTEXT
+    assert "No invite is claimed for this join" in JOIN_CONTEXT
 
 
 def test_public_startup_scope_has_no_silent_guild_count_cutoff() -> None:
