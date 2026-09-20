@@ -315,23 +315,26 @@ async def _resolve_runtime_guilds() -> list[discord.Guild]:
     another server after public invite.
     """
     if _public_scope_enabled():
-        max_guilds = max(1, _env_int("DANK_STARTUP_MAX_GUILDS", 50))
-        guilds = _unique_guilds(list(getattr(bot, "guilds", []) or []))[:max_guilds]
+        guilds = _unique_guilds(list(getattr(bot, "guilds", []) or []))
         configured: list[discord.Guild] = []
 
-        for guild in guilds:
+        for index, guild in enumerate(guilds):
             gid = int(getattr(guild, "id", 0) or 0)
             source = await _guild_config_source(gid, refresh=False)
             if source.startswith("supabase:"):
                 configured.append(guild)
-                continue
-
-            if gid not in _SKIPPED_UNCONFIGURED_STARTUP_GUILDS:
+            elif gid not in _SKIPPED_UNCONFIGURED_STARTUP_GUILDS:
                 _SKIPPED_UNCONFIGURED_STARTUP_GUILDS.add(gid)
                 print(
                     "🌐 Public startup scope skipping unconfigured guild "
                     f"guild={gid} source={source or 'unknown'}"
                 )
+
+            if (index + 1) % 25 == 0:
+                try:
+                    await asyncio.sleep(0)
+                except Exception:
+                    pass
 
         if not configured:
             print("⚠️ Public startup scope found no configured guilds for startup maintenance.")
