@@ -654,13 +654,23 @@ async def _bootstrap_new_guild_members(guild: discord.Guild) -> None:
 
     try:
         await asyncio.sleep(5.0)
+        invite_baseline_ok = False
         async with startup_recovery_slot(gid, "member_initial_bootstrap"):
             summary = await _run_full_member_sync_for_guild(guild)
+            try:
+                from .members_new.join_context_service import warm_invite_cache_for_guild
+
+                invite_baseline_ok = bool(
+                    await warm_invite_cache_for_guild(guild)
+                )
+            except Exception:
+                invite_baseline_ok = False
         print(
             "✅ New-guild member bootstrap complete "
             f"guild={gid} active={int(summary.get('active_members_synced') or 0)} "
             f"marked_departed={int(summary.get('marked_departed') or 0)} "
-            f"errors={int(summary.get('errors') or 0)}"
+            f"errors={int(summary.get('errors') or 0)} "
+            f"invite_baseline={'ready' if invite_baseline_ok else 'lazy'}"
         )
     except asyncio.CancelledError:
         raise
