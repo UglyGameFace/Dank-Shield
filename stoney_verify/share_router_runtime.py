@@ -259,6 +259,8 @@ def route_permission_blockers(
 def route_health(guild: discord.Guild, route: Mapping[str, Any]) -> RouteHealth:
     blockers: list[str] = []
     warnings: list[str] = []
+    if not bool(route.get("enabled", True)):
+        blockers.append("Route is disabled. Use Add / Change Route to enable it again.")
     source_id = _safe_int(route.get("source_channel_id"), 0)
     target_id = _safe_int(route.get("target_channel_id"), 0)
     source = guild.get_channel(source_id)
