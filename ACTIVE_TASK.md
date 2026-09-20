@@ -4,7 +4,7 @@
 DS-DESIGNER-CATEGORY-FRAME — Expose server-wide category-frame editing
 
 ## Status
-IMPLEMENTATION COMPLETE — exact-head executable validation blocked by GitHub Actions infrastructure
+IMPLEMENTED — exact-head executable validation blocked by GitHub Actions infrastructure
 
 ## Single active-task lock
 Only the Server Designer category-frame editing gap is active in this conversation
