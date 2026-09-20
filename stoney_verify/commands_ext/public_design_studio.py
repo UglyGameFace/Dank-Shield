@@ -21,6 +21,7 @@ from typing import Any, Awaitable, Callable, Mapping
 import discord
 
 from stoney_verify.interaction_guard import run_guarded_interaction, safe_send_interaction
+from stoney_verify.share_router_resources import is_share_router_design_resource
 from stoney_verify.services import server_design_plan_service as plan_service
 from stoney_verify.services import server_design_studio as studio
 from stoney_verify.services import server_design_rule_service as rule_service
@@ -238,9 +239,46 @@ def _editable_channels(guild: discord.Guild) -> list[discord.abc.GuildChannel]:
         if cid <= 0 or cid in seen:
             continue
         seen.add(cid)
+        if is_share_router_design_resource(channel):
+            continue
         if _kind(channel) != "other":
             out.append(channel)
     return out[: studio.MAX_PLAN_ITEMS]
+
+
+def _designable_editor_categories(guild: discord.Guild) -> list[discord.CategoryChannel]:
+    return [
+        category
+        for category in list(getattr(guild, "categories", []) or [])
+        if isinstance(category, discord.CategoryChannel)
+        and not is_share_router_design_resource(category)
+    ]
+
+
+def _reserved_design_target(guild: discord.Guild, target_id: int) -> Any | None:
+    target = guild.get_channel(int(target_id))
+    return target if target is not None and is_share_router_design_resource(target) else None
+
+
+async def _reject_reserved_design_target(
+    interaction: discord.Interaction,
+    target: Any,
+    *,
+    action_name: str,
+) -> bool:
+    if target is None or not is_share_router_design_resource(target):
+        return False
+    await safe_send_interaction(
+        interaction,
+        content=(
+            "🔗 That item belongs to **Share Router** and is reserved functional infrastructure. "
+            "Dank Design will not rename, style, or save visual overrides for it. "
+            "Use **Community Tools → Share Router → Create / Repair Hub** to restore its canonical plain name."
+        ),
+        ephemeral=True,
+        action_name=action_name,
+    )
+    return True
 
 
 def _can_user_design(interaction: discord.Interaction) -> bool:
@@ -567,6 +605,8 @@ async def _save_global_lock(interaction: discord.Interaction) -> dict[str, Any]:
 
 async def _save_category_lock(interaction: discord.Interaction, category_id: int) -> dict[str, Any]:
     assert interaction.guild is not None
+    if _reserved_design_target(interaction.guild, int(category_id)) is not None:
+        raise RuntimeError("Share Router infrastructure cannot receive Dank Design category rules.")
     options = await _load_design_options(int(interaction.guild.id))
     _clear_manual_name_override_from_options(options, int(category_id))
     locks = _mapping_dict(options.get("category_format_locks"))
@@ -578,6 +618,8 @@ async def _save_category_lock(interaction: discord.Interaction, category_id: int
 
 async def _save_channel_lock(interaction: discord.Interaction, channel_id: int) -> dict[str, Any]:
     assert interaction.guild is not None
+    if _reserved_design_target(interaction.guild, int(channel_id)) is not None:
+        raise RuntimeError("Share Router infrastructure cannot receive Dank Design channel rules.")
     options = await _load_design_options(int(interaction.guild.id))
     _clear_manual_name_override_from_options(options, int(channel_id))
     locks = _mapping_dict(options.get("channel_format_locks"))
@@ -597,6 +639,8 @@ async def _save_manual_name_override(
     guild = interaction.guild
     if guild is None:
         raise RuntimeError("This must be used inside a server.")
+    if _reserved_design_target(guild, int(target_id)) is not None:
+        raise RuntimeError("Share Router infrastructure cannot receive Dank Design exact-name rules.")
     name = _safe_str(exact_name)
     if not name:
         raise RuntimeError("Manual name cannot be blank.")
@@ -993,6 +1037,12 @@ class CategoryFormatLockSelect(discord.ui.ChannelSelect):
         guild = interaction.guild
         assert guild is not None
         category = self.values[0]
+        if await _reject_reserved_design_target(
+            interaction,
+            category,
+            action_name="design.format_lock.reserved_category",
+        ):
+            return
         await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _save_category_lock(interaction, int(category.id))
         embed = _format_locks_embed(guild, options)
@@ -1031,6 +1081,12 @@ class ChannelFormatLockSelect(discord.ui.ChannelSelect):
         guild = interaction.guild
         assert guild is not None
         channel = self.values[0]
+        if await _reject_reserved_design_target(
+            interaction,
+            channel,
+            action_name="design.format_lock.reserved_channel",
+        ):
+            return
         await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _save_channel_lock(interaction, int(channel.id))
         embed = _format_locks_embed(guild, options)
@@ -1491,6 +1547,13 @@ async def _open_exact_format_editor(interaction: discord.Interaction, *, scope: 
 
         guild = interaction.guild
         assert guild is not None
+        target = guild.get_channel(int(target_id))
+        if await _reject_reserved_design_target(
+            interaction,
+            target,
+            action_name=f"design.exact.open_reserved.{scope}",
+        ):
+            return
 
         await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
@@ -1695,6 +1758,8 @@ def _exact_format_sample_lines(guild: discord.Guild, *, scope: str, target_id: i
 async def _save_exact_lock(interaction: discord.Interaction, *, scope: str, target_id: int) -> dict[str, Any]:
     guild = interaction.guild
     assert guild is not None
+    if _reserved_design_target(guild, int(target_id)) is not None:
+        raise RuntimeError("Share Router infrastructure cannot receive Dank Design exact format rules.")
     key = _format_editor_key(int(guild.id), int(interaction.user.id), scope, int(target_id))
     lock = dict(_FORMAT_EDITOR_DRAFTS.get(key) or {})
     if not lock:
@@ -1732,6 +1797,8 @@ async def _save_live_target_format_lock(
     assert guild is not None
     options = await _load_design_options(int(guild.id))
     live_target = target or await _direct_rename_fetch_target(guild, int(target_id), guild.get_channel(int(target_id)))
+    if live_target is not None and is_share_router_design_resource(live_target):
+        raise RuntimeError("Share Router infrastructure cannot receive Dank Design live format rules.")
     lock = _live_target_exact_lock(
         guild,
         options,
@@ -1971,6 +2038,13 @@ async def _update_exact_draft(
         return
     guild = interaction.guild
     assert guild is not None
+    target = guild.get_channel(int(target_id))
+    if await _reject_reserved_design_target(
+        interaction,
+        target,
+        action_name="design.exact.reserved",
+    ):
+        return
     key = _format_editor_key(int(guild.id), int(interaction.user.id), scope, int(target_id))
     current = dict(_FORMAT_EDITOR_DRAFTS.get(key) or {})
     if not current:
@@ -2345,6 +2419,8 @@ def _category_channels(guild: discord.Guild, category_id: int) -> list[discord.a
         return []
     out: list[discord.abc.GuildChannel] = []
     for channel in list(getattr(category, "channels", []) or []):
+        if is_share_router_design_resource(channel):
+            continue
         if _kind(channel) != "other":
             out.append(channel)
     return out
@@ -2355,12 +2431,25 @@ def _all_editor_channels(guild: discord.Guild) -> list[discord.abc.GuildChannel]
     seen: set[int] = set()
     for category in list(getattr(guild, "categories", []) or []):
         cid = _safe_int(getattr(category, "id", 0), 0)
+        if is_share_router_design_resource(category):
+            if cid > 0:
+                seen.add(cid)
+            for child in list(getattr(category, "channels", []) or []):
+                child_id = _safe_int(getattr(child, "id", 0), 0)
+                if child_id > 0:
+                    seen.add(child_id)
+            continue
         if cid > 0 and cid not in seen:
             seen.add(cid)
             out.append(category)
         for child in list(getattr(category, "channels", []) or []):
             child_id = _safe_int(getattr(child, "id", 0), 0)
-            if child_id > 0 and child_id not in seen and _kind(child) != "other":
+            if (
+                child_id > 0
+                and child_id not in seen
+                and not is_share_router_design_resource(child)
+                and _kind(child) != "other"
+            ):
                 seen.add(child_id)
                 out.append(child)
     for channel in list(getattr(guild, "channels", []) or []):
@@ -2384,10 +2473,18 @@ def _channel_editor_groups(guild: discord.Guild) -> list[dict[str, Any]]:
 
     for category in list(getattr(guild, "categories", []) or []):
         category_id = _safe_int(getattr(category, "id", 0), 0)
+        if is_share_router_design_resource(category):
+            if category_id > 0:
+                seen.add(category_id)
+            for child in list(getattr(category, "channels", []) or []):
+                child_id = _safe_int(getattr(child, "id", 0), 0)
+                if child_id > 0:
+                    seen.add(child_id)
+            continue
         children = [
             channel
             for channel in list(getattr(category, "channels", []) or [])
-            if _kind(channel) != "other"
+            if not is_share_router_design_resource(channel) and _kind(channel) != "other"
         ]
 
         chunks = [children[i:i + EDITOR_PAGE_SIZE] for i in range(0, len(children), EDITOR_PAGE_SIZE)] or [[]]
@@ -2410,6 +2507,8 @@ def _channel_editor_groups(guild: discord.Guild) -> list[dict[str, Any]]:
     for channel in list(getattr(guild, "channels", []) or []):
         cid = _safe_int(getattr(channel, "id", 0), 0)
         if cid <= 0 or cid in seen:
+            continue
+        if is_share_router_design_resource(channel):
             continue
         if _kind(channel) in {"category", "other"}:
             continue
@@ -2516,7 +2615,7 @@ async def _preview_scope(
     )
 
 def _category_editor_embed(guild: discord.Guild, *, page: int) -> discord.Embed:
-    categories = list(getattr(guild, "categories", []) or [])
+    categories = _designable_editor_categories(guild)
     total_pages = max(1, (len(categories) + EDITOR_PAGE_SIZE - 1) // EDITOR_PAGE_SIZE)
     page = max(0, min(page, total_pages - 1))
     start = page * EDITOR_PAGE_SIZE
@@ -2620,6 +2719,12 @@ class CategoryPickButton(discord.ui.Button):
         category = guild.get_channel(self.category_id)
         if not isinstance(category, discord.CategoryChannel):
             return await interaction.response.send_message("That category no longer exists.", ephemeral=True)
+        if await _reject_reserved_design_target(
+            interaction,
+            category,
+            action_name="design.reserved.category_pick",
+        ):
+            return
         await interaction.response.edit_message(
             embed=_category_action_embed(category),
             view=CategoryEditorActionView(self.category_id),
@@ -2645,6 +2750,12 @@ class EditCategoryFromChannelEditorButton(discord.ui.Button):
         category = guild.get_channel(self.category_id)
         if not isinstance(category, discord.CategoryChannel):
             return await interaction.response.send_message("That category no longer exists.", ephemeral=True)
+        if await _reject_reserved_design_target(
+            interaction,
+            category,
+            action_name="design.reserved.category_from_channel",
+        ):
+            return
         await interaction.response.edit_message(
             embed=_category_action_embed(category),
             view=CategoryEditorActionView(self.category_id),
@@ -2671,6 +2782,12 @@ class ChannelPickButton(discord.ui.Button):
         channel = guild.get_channel(self.channel_id)
         if channel is None:
             return await interaction.response.send_message("That channel no longer exists.", ephemeral=True)
+        if await _reject_reserved_design_target(
+            interaction,
+            channel,
+            action_name="design.reserved.channel_pick",
+        ):
+            return
         await interaction.response.edit_message(
             embed=_channel_action_embed(channel),
             view=ChannelEditorActionView(self.channel_id, category_id=self.category_id),
@@ -2680,7 +2797,7 @@ class ChannelPickButton(discord.ui.Button):
 class CategoryEditorPickerView(LegacyDesignView):
     def __init__(self, guild: discord.Guild, *, page: int = 0) -> None:
         super().__init__(timeout=900)
-        categories = list(getattr(guild, "categories", []) or [])
+        categories = _designable_editor_categories(guild)
         total_pages = max(1, (len(categories) + EDITOR_PAGE_SIZE - 1) // EDITOR_PAGE_SIZE)
         page = max(0, min(page, total_pages - 1))
         start = page * EDITOR_PAGE_SIZE
@@ -2845,6 +2962,12 @@ class DirectRenameModal(discord.ui.Modal):
                     ephemeral=True,
                     action_name="design.direct_rename.missing",
                 )
+                return
+            if await _reject_reserved_design_target(
+                interaction,
+                channel,
+                action_name="design.direct_rename.reserved",
+            ):
                 return
 
             old_name = _safe_str(getattr(channel, "name", ""), "unknown")
@@ -3656,6 +3779,8 @@ def _protection_mode_label(mode: str) -> str:
 async def _save_protection_rule(interaction: discord.Interaction, *, target_id: int, mode: str | None) -> dict[str, Any]:
     guild = interaction.guild
     assert guild is not None
+    if _reserved_design_target(guild, int(target_id)) is not None:
+        raise RuntimeError("Share Router infrastructure is always reserved from Dank Design.")
     options = await _load_design_options(int(guild.id))
     rules = _protection_item_rules(options)
     key = str(int(target_id))
@@ -3811,6 +3936,12 @@ class ProtectionModeSelect(discord.ui.Select):
         channel = guild.get_channel(self.channel_id)
         if channel is None:
             return await interaction.response.send_message("That channel/category no longer exists.", ephemeral=True)
+        if await _reject_reserved_design_target(
+            interaction,
+            channel,
+            action_name="design.protection.reserved",
+        ):
+            return
         selected = self.values[0]
         mode = None if selected == "__clear__" else selected
         await interaction.response.defer(ephemeral=True, thinking=False)

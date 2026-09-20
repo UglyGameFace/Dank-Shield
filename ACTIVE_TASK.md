@@ -12,10 +12,11 @@ feature, security, cleanup, or redesign work until this task is implemented,
 validated on the exact final head, cleaned up, merged, and verified on main.
 
 ## Previous task closed
-PR #264 (deterministic long-tail lifecycle-card Unicode fallback) merged as
-`758145be9e20d6d26240908980a6d1a4948616eb`. Its exact validated PR head was
-`f0f216ed5ea780b4edd0355d237b4a297f6fd321`, the merged main commit reports
-`discloud/commit: success`, and superseded draft PR #263 has been closed.
+PR #265 (Share Router production-runtime restoration) merged as
+`179bf2a1b30dc7b7160c14a19d5788417553c9c0`. Its validated implementation
+restores the native Share Router runtime and structurally excludes that reserved
+infrastructure from Dank Design. The merged main commit reports
+`discloud/commit: success`.
 
 ## User-visible problem
 A real server uses intentional mixed channel layouts such as:
@@ -112,7 +113,9 @@ Smart Repair / Auto-Detect:
 - verify merged main and `discloud/commit: success`
 
 ## Cleanup / conflicts
-- superseded Unicode draft PR #263 was closed before this task started
+- main advanced through PR #265 while this task was in progress
+- the conflict was resolved by preserving PR #265 Share Router ownership/isolation
+  and re-applying only this task's separator changes on top
 - no unrelated code changes are authorized
 
 ## Backlog

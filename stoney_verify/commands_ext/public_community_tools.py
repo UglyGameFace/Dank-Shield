@@ -180,7 +180,7 @@ def _center_embed() -> discord.Embed:
     )
     embed.add_field(
         name="Community",
-        value="📊 Native Discord polls • 🧱 reviewed embed builder • 👤 member/server info • 🔐 feature-aware permission check",
+        value="📊 Native Discord polls • 🧱 reviewed embed builder • 👤 member/server info • 🔐 permission check • 🔗 Share Router",
         inline=False,
     )
     embed.add_field(
@@ -351,6 +351,13 @@ class CommunityToolsView(_OwnedView):
     async def permissions(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await show_permission_check(interaction)
+
+    @discord.ui.button(label="Share Router", emoji="🔗", style=discord.ButtonStyle.secondary, row=1)
+    async def share_router(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_share_router import open_share_router
+
+        await open_share_router(interaction, replace_message=True)
 
     @discord.ui.button(label="Fun & Lookup", emoji="🎲", style=discord.ButtonStyle.secondary, row=1)
     async def fun(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
