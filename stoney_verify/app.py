@@ -16,7 +16,6 @@ from .globals import bot, DISCORD_TOKEN, GUILD_ID, get_supabase, claim_startup_f
 # commands.py defines a no-op @bot.event on_ready
 # events.py defines real runtime event behavior for:
 # - VC sweeper
-# - invite warmup
 # - stale verification reconciliation
 #
 # commands MUST load BEFORE events so events owns the final
