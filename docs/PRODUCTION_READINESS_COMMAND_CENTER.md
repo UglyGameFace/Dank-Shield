@@ -139,17 +139,11 @@ Remaining score blockers:
 
 ### `P0-INT-001` — Replace monkey-patched interaction logger with native interaction service
 
-Status: `PARTIAL / BLOCKER — setup-find config writer guarded; pending PR/main verification`
+Status: `PARTIAL / BLOCKER — setup-find merged; Ticket Operations Center runner is next locked slice`
 
 Goal:
 
 Stop generic `interaction failed` outcomes without patching Discord.py internals.
-
-Current evidence:
-
-- `stoney_verify/startup_guards/global_interaction_trace_guard.py` still patches `app_commands.CommandTree._call`, app-command invocation methods, and `discord.ui.View._scheduled_task`.
-- The native `stoney_verify/interaction_guard.py` owns structured context, `DANK-xxxxxxxx` error IDs, safe response/followup behavior, defer/send failure logging, duplicate-action locking, and the recent-failure ring.
-- The framework monkey patch cannot be removed until remaining high-risk public mutation callbacks have native coverage.
 
 Progress completed on current `main`:
 
@@ -157,30 +151,24 @@ Progress completed on current `main`:
 - `/dank design` command-open uses `run_guarded_interaction()`.
 - Exact-format editor runtime actions are native-guarded.
 - Style-change missing-icon review actions are native-guarded.
-- PR #271 native-guarded reviewed Dank Design Apply, Undo open, and Undo confirm while preserving existing preflight, compensation, guild locking, and snapshot behavior.
-- PR #271 merged as `6f7e4d60058d6c2806294721eba89b3f77640ba8` and the validated V2/test blobs were re-verified on `main`.
-- Focused regression coverage now protects the consolidated Apply/Undo mutation boundary.
+- Reviewed Dank Design Apply / Undo mutation boundaries are native-guarded and verified on `main` via PR #271.
+- `/dank setup-find` result Apply is native-guarded with defer-before-write acknowledgement and verified on `main` via PR #273.
+- Focused regressions now protect both the Design Apply/Undo and setup-find mutation boundaries.
 
 Next locked slice:
 
-- The active branch places `SetupSearchResultView.apply` in `public_setup_find.py` behind `run_guarded_interaction(..., defer=True)` before the guild-config write.
-- The existing validation/write order remains intact in a thin `_apply_result` action: object resolution → validation/blockers → `upsert_guild_config(...)` → cache invalidation → refreshed config read → success embed.
-- Post-defer result updates use `edit_original_response(...)`, and no-guild fallback uses `safe_send_interaction(...)`.
-- Unexpected mutation failures surface through the native Error ID path with cautious guidance to reopen `/dank setup` and verify the currently saved value before retrying.
-
-Important behavior notes:
-
-- Slow Protection Center config writes intentionally prefer deferred private followups over risky unacknowledged edits.
-- The older `patches/p0-int-design-exact-format-native-guard.patch` is historical cleanup debt; the runtime migration is already on `main` and the patch must not be reapplied.
-- `public_design_enhancements.py` still activates enhancement code from `startup_guards`; that remains under `P0-GUARD-001`, not this setup interaction slice.
+- `_run_ticket_command` in `public_ticket_command_center.py` is the shared Ticket Operations Center dispatch path for live ticket actions.
+- It performs staff and ticket authorization work before dispatching canonical ticket callbacks but is not behind `run_guarded_interaction()`.
+- The canonical ticket response helpers are already response-done aware, so this boundary can safely defer before authorization/DB work without rewriting the canonical commands.
+- The migration must preserve claim-first/authorization rules, command lookup, dedicated-flow errors, and canonical mutation ownership.
 
 Remaining before `P0-INT-001` can be marked done:
 
-- merge and verify the guarded `/dank setup-find` config-write boundary;
-- select and migrate the next single highest-risk ticket/verify mutation boundary;
+- migrate and verify the locked Ticket Operations Center command runner;
+- continue the next single highest-risk ticket/verify interaction boundary after that;
 - ensure diagnostics expose recent native interaction failures safely;
 - remove or disable `global_interaction_trace_guard` framework patching only after native coverage is sufficient;
-- run the full interaction/protection/design/setup test matrix once executable CI/checkout infrastructure is available.
+- run the full interaction/protection/design/setup/ticket test matrix once executable CI/checkout infrastructure is available.
 
 Exit criteria:
 
@@ -335,14 +323,15 @@ Progress:
 - style-change missing-icon review actions are native-guarded
 - reviewed Dank Design Apply / Undo native-guard slice merged in PR #271 and was verified on `main`
 - focused Apply/Undo static regression coverage is on `main`
-- `/dank setup-find` result Apply config writer is implemented and targeted-validation-clean on the active branch
+- `/dank setup-find` result Apply config writer merged in PR #273 and was verified on `main`
+- Ticket Operations Center `_run_ticket_command` is the next locked native-guard slice
 
 Verification:
 
 - PR #271 validated immutable V2/test blobs match current `main`
 - existing Dank Design ownership/state assertions were replayed successfully against the merged shape
 - full checkout/pytest remains blocked by the known external GitHub runner/DNS infrastructure issue
-- setup-find/ticket/verify callbacks are not fully migrated yet; the current setup-find slice still needs PR/main verification
+- ticket/verify callbacks are not fully migrated yet
 
 ### Commit 3 — Startup guard inventory and migration table
 
