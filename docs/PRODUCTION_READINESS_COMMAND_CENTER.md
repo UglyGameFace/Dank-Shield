@@ -139,7 +139,7 @@ Remaining score blockers:
 
 ### `P0-INT-001` — Replace monkey-patched interaction logger with native interaction service
 
-Status: `PARTIAL / BLOCKER — Apply/Undo slice validated in PR #271, pending merge/main verification`
+Status: `PARTIAL / BLOCKER — Dank Design Apply/Undo merged; setup-find config writer is next locked slice`
 
 Goal:
 
@@ -148,38 +148,39 @@ Stop generic `interaction failed` outcomes without patching Discord.py internals
 Current evidence:
 
 - `stoney_verify/startup_guards/global_interaction_trace_guard.py` still patches `app_commands.CommandTree._call`, app-command invocation methods, and `discord.ui.View._scheduled_task`.
-- The native `stoney_verify/interaction_guard.py` now owns structured context, `DANK-xxxxxxxx` error IDs, safe response/followup behavior, defer/send failure logging, duplicate-action locking, and the recent-failure ring.
-- The framework monkey patch cannot be removed until the remaining highest-risk public callbacks have native coverage.
+- The native `stoney_verify/interaction_guard.py` owns structured context, `DANK-xxxxxxxx` error IDs, safe response/followup behavior, defer/send failure logging, duplicate-action locking, and the recent-failure ring.
+- The framework monkey patch cannot be removed until remaining high-risk public mutation callbacks have native coverage.
 
 Progress completed on current `main`:
 
 - Protection Center command/button/modal/select paths use native guarded interaction wrappers.
 - `/dank design` command-open uses `run_guarded_interaction()`.
-- The exact-format editor runtime migration is already applied in `public_design_studio.py`; `_open_exact_format_editor`, layout examples, save-preview, server-style, emoji modal, and back actions use the native design guard helper.
-- Exact-format permission errors use `safe_send_interaction()`.
+- Exact-format editor runtime actions are native-guarded.
 - Style-change missing-icon review actions are native-guarded.
-- Existing static tests cover the Protection Center, Design command-open, exact-format, style-change, and consolidated ownership boundaries.
+- PR #271 native-guarded reviewed Dank Design Apply, Undo open, and Undo confirm while preserving existing preflight, compensation, guild locking, and snapshot behavior.
+- PR #271 merged as `6f7e4d60058d6c2806294721eba89b3f77640ba8` and the validated V2/test blobs were re-verified on `main`.
+- Focused regression coverage now protects the consolidated Apply/Undo mutation boundary.
 
-Current locked slice:
+Next locked slice:
 
-- PR #271 places `ReviewedPreviewView.apply` behind a thin native guard wrapper while preserving the existing pending-preview validation, guild lock, full-batch preflight, apply/compensation, separator persistence compensation, and Undo snapshot behavior.
-- PR #271 places `_open_undo` and `UndoConfirmView.confirm` behind the same native guard boundary while preserving stale-snapshot refusal, Undo preflight, rollback safety, and snapshot cleanup behavior.
-- Early stale/no-preview/blocker/busy responses use `safe_send_interaction()` instead of raw `interaction.response.send_message`.
-- The mutation error guidance intentionally does **not** promise that nothing changed after an unexpected exception; it tells the user to review current Server Design state before retrying and use the Error ID in diagnostics.
+- `SetupSearchResultView.apply` in `public_setup_find.py` is a component callback that directly writes guild setup configuration through `upsert_guild_config(...)`, invalidates the cache, refreshes config, and only then edits the interaction.
+- It is not currently behind `run_guarded_interaction()`.
+- The migration must be a thin wrapper: preserve owner/permission checks, object resolution, blockers/warnings, exact payload semantics, cache invalidation, refreshed read, and success embed.
+- Unexpected mutation failures must surface through the native Error ID path without claiming that the config definitely did or did not save; users should reopen `/dank setup` and verify current state before retrying.
 
 Important behavior notes:
 
 - Slow Protection Center config writes intentionally prefer deferred private followups over risky unacknowledged edits.
-- The older `patches/p0-int-design-exact-format-native-guard.patch` is no longer an unapplied implementation plan; the runtime migration already exists on `main`. Treat that artifact as historical cleanup debt, not something to reapply.
-- `public_design_enhancements.py` still activates enhancement code from `startup_guards`; that remains under `P0-GUARD-001`, not this interaction slice.
+- The older `patches/p0-int-design-exact-format-native-guard.patch` is historical cleanup debt; the runtime migration is already on `main` and the patch must not be reapplied.
+- `public_design_enhancements.py` still activates enhancement code from `startup_guards`; that remains under `P0-GUARD-001`, not this setup interaction slice.
 
 Remaining before `P0-INT-001` can be marked done:
 
-- merge and verify the reviewed Apply / Undo native-guard slice;
-- select and migrate the next single highest-risk raw setup/ticket/verify interaction boundary;
+- migrate and verify the locked `/dank setup-find` config-write boundary;
+- select and migrate the next single highest-risk ticket/verify mutation boundary;
 - ensure diagnostics expose recent native interaction failures safely;
 - remove or disable `global_interaction_trace_guard` framework patching only after native coverage is sufficient;
-- run the full interaction/protection/design test matrix once executable CI/checkout infrastructure is available.
+- run the full interaction/protection/design/setup test matrix once executable CI/checkout infrastructure is available.
 
 Exit criteria:
 
@@ -332,14 +333,14 @@ Progress:
 - `/dank design` command-open uses a native guarded wrapper
 - exact-format editor runtime actions are native-guarded on current `main`
 - style-change missing-icon review actions are native-guarded
-- reviewed Apply / Undo native-guard slice is validated in PR #271 and pending merge/main verification
-- focused Apply/Undo static regression coverage is included in PR #271
+- reviewed Dank Design Apply / Undo native-guard slice merged in PR #271 and was verified on `main`
+- focused Apply/Undo static regression coverage is on `main`
+- `/dank setup-find` result Apply config writer is the next locked native-guard slice
 
 Verification:
 
-- exact-format runtime presence re-verified from current `main`
-- Apply/Undo branch static assertions preserve existing transaction/preflight/compensation/snapshot primitives
-- changed helper/Apply/Undo/test surface passes targeted Python 3.11 grammar and focused exact-source validation on PR #271; merge/main verification remains
+- PR #271 validated immutable V2/test blobs match current `main`
+- existing Dank Design ownership/state assertions were replayed successfully against the merged shape
 - full checkout/pytest remains blocked by the known external GitHub runner/DNS infrastructure issue
 - setup/ticket/verify callbacks are not fully migrated yet
 
