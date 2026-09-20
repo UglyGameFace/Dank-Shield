@@ -139,7 +139,7 @@ Remaining score blockers:
 
 ### `P0-INT-001` — Replace monkey-patched interaction logger with native interaction service
 
-Status: `PARTIAL / BLOCKER — Verification dispatcher merged; direct role-mapping save integrity is next locked slice`
+Status: `PARTIAL / BLOCKER — Verification role-mapping integrity implemented; exact-head PR/main verification pending`
 
 Goal:
 
@@ -155,17 +155,18 @@ Progress completed on current `main`:
 - Ticket Operations Center shared command runner is native-guarded and verified on `main` via PR #275.
 - Verification Center shared canonical-command dispatcher is native-guarded and verified on `main` via PR #277.
 
-Next locked slice:
+Current locked slice:
 
-- `VerifyRoleSelect.callback` directly writes Verification Center role mappings.
-- Its current `_save_role_config` helper swallows persistence exceptions, so the callback can send a false success message after a failed database write.
-- A native guard alone cannot see an exception that the helper already swallowed.
-- The narrow fix must guard the callback and perform a fresh post-save config read to verify the exact selected role ID persisted before sending success.
-- The global best-effort behavior of `_save_role_config` for auto-discovery/auto-create remains out of scope.
+- `VerifyRoleSelect.callback` now runs through the native interaction guard with pre-defer acknowledgement.
+- The existing explicit-override save path is preserved.
+- After the attempted save, the callback invalidates guild-config cache and forces a fresh config read before success.
+- The exact selected role ID must be observed in the saved config or the guarded action fails with a structured Error ID.
+- Cache invalidation is required because `get_guild_config(refresh=True)` intentionally preserves stale cache when the DB is unavailable; stale state must not confirm a failed write.
+- The global best-effort behavior of `_save_role_config` for auto-discovery/auto-create remains unchanged and out of scope.
 
 Remaining before `P0-INT-001` can be marked done:
 
-- migrate and verify the locked Verification Center role-mapping save boundary;
+- exact-head validate, merge, and verify the Verification Center role-mapping save boundary;
 - continue the next single highest-risk direct verification mutation boundary after that;
 - ensure diagnostics expose recent native interaction failures safely;
 - remove or disable `global_interaction_trace_guard` framework patching only after native coverage is sufficient;
