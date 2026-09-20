@@ -634,10 +634,9 @@ class DesignServerView(DesignView):
         self.add_item(DesignServerFontSelect(options))
         self.add_item(DesignServerStrengthSelect(_safe_int(options.get("strength"), 4)))
         self.add_item(DesignServerSeparatorSelect(options))
-        self.category_frame.label = f"Frame: {legacy._category_frame_choice_label(_design_server_category_frame(options))}"[:80]  # type: ignore[attr-defined]
         self.clean_redesign.disabled = _layout_override_count(options) == 0
 
-    @discord.ui.button(label="Category Frame", emoji="🖼️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame", row=4)
+    @discord.ui.button(label="Frame", emoji="🖼️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame", row=4)
     async def category_frame(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
