@@ -2,99 +2,86 @@
 
 ## Active task / desired outcome
 
-**P0-INT-001 — `/dank setup-find` result Apply native interaction guard**
+**P0-INT-001 — Ticket Operations Center command runner native interaction guard**
 
-Move the state-changing setup-search result Apply boundary onto the native interaction service without changing setup validation, permission ownership, object resolution, or guild-config write semantics.
+Move the shared Ticket Operations Center command-dispatch boundary onto the native interaction service without changing canonical ticket authorization, lifecycle services, claim-first rules, or ticket command semantics.
 
 ## Why this is next
 
-PR #271 completed and merged the reviewed Dank Design Apply / Undo mutation guard slice. Post-merge verification on `main` confirmed the validated production and regression-test blobs exactly.
+PR #273 completed the `/dank setup-find` config-writer slice and merged as `f9307c4254ea1631cbf6e516a8197f6d329b89e0`.
 
-The next concrete high-risk raw interaction boundary is `SetupSearchResultView.apply` in `stoney_verify/commands_ext/public_setup_find.py`.
+Post-merge verification on `main` confirmed the validated production and regression-test blobs exactly:
 
-That callback:
+- `public_setup_find.py` → `637a9b0455e0ce06a3ab6450c57d8dff3be2db6c`
+- `test_public_setup_find_native_interaction_static.py` → `b6d18674b9611872a70ec28a0a7b27458fad12da`
 
-- is reached from a Discord component selection;
-- resolves and validates a selected role/channel;
-- directly calls `upsert_guild_config(...)`;
-- invalidates and refreshes guild configuration;
-- edits the interaction only after the storage mutation;
-- is not currently wrapped by `run_guarded_interaction()`.
+The next high-risk raw interaction boundary is `_run_ticket_command` in `stoney_verify/commands_ext/public_ticket_command_center.py`.
 
-If an unexpected callback/storage/response exception occurs around that write, the current flow can fall back to generic component failure behavior without the native structured Error ID path.
+That function:
+
+- is called by the Ticket Operations Center component UI;
+- performs staff and claim/authorization checks;
+- refreshes ticket state and can hit ticket authorization storage before the canonical command callback;
+- directly dispatches canonical ticket commands such as claim, unclaim, lock, unlock, info, owner, and access;
+- catches unexpected exceptions locally and only sends a plain error string;
+- does not currently use `run_guarded_interaction()`, so unexpected failures do not get the native structured Error ID path.
+
+The canonical ticket callbacks are compatible with an already-acknowledged interaction: `safe_defer` no-ops when the response is already done and `reply_once` sends a followup. That allows this shared runner to acknowledge before authorization/DB work without rewriting each ticket command.
 
 ## Scope
 
 In scope:
 
-- `SetupSearchResultView.apply`;
-- the immediate setup-search result callback/error responses needed to keep that mutation boundary safely acknowledged;
-- use of the existing native interaction service and safe response helpers;
-- focused regression coverage proving the storage mutation remains inside the guarded action;
-- update the P0 interaction ledger for this exact slice.
+- `_run_ticket_command` in `public_ticket_command_center.py`;
+- native guarded acknowledgement before authorization/dispatch work;
+- preserving the existing staff check and `authorize_ticket_action` policy;
+- preserving canonical command lookup and direct callback dispatch;
+- focused regression coverage for guard ownership, defer-before-authorization, and canonical dispatch preservation;
+- P0 interaction ledger updates for this exact slice.
 
 Out of scope:
 
-- changing setup target definitions;
-- changing setup permission policy;
-- changing object matching/validation rules;
-- changing `upsert_guild_config` payload semantics;
-- redesigning `/dank setup`, setup recommendation, setup recovery, tickets, verification, or unrelated selectors;
+- changing ticket authorization rules;
+- changing claim-first policy;
+- changing ticket lifecycle services;
+- changing ticket close/reopen/delete modal flows;
+- changing individual canonical `/ticket` command implementations in this slice;
+- changing ticket storage/schema;
+- verification or setup work;
 - removing the global framework interaction monkey patch in this slice.
 
 ## Status
 
-**IMPLEMENTED — targeted validation passed; pending exact-head PR/main verification**
+**LOCKED — NOT IMPLEMENTED**
 
-## Required behavior preserved
+## Required behavior to preserve
 
-- only the admin who opened the result view can use it;
-- existing setup permission checks remain authoritative;
-- missing/deleted/mismatched target objects are rejected before storage mutation;
-- blockers prevent storage mutation;
-- warnings remain visible after a valid save;
-- the exact existing `_payload_for(interaction, self.spec, obj)` config payload is written;
-- guild config cache invalidation and refreshed read still occur after a successful write;
-- successful result still returns the saved setup summary.
+- staff-only gate remains first business rule;
+- existing Ticket Operations Center authorization remains authoritative before dispatch;
+- claim stays exempt from the extra center authorization rule exactly as today;
+- canonical `ticket_group.get_command(name)` lookup remains the dispatch source;
+- commands that need extra positional information still receive the existing dedicated-flow error instead of being guessed;
+- canonical callbacks continue to own actual ticket mutations and response content;
+- component users still get a private result/failure message.
 
-## Implementation
+## Implementation rule
 
-`SetupSearchResultView.apply` now delegates the existing result logic through `run_guarded_interaction(..., defer=True)`.
+Use `stoney_verify.interaction_guard.run_guarded_interaction` as a thin wrapper around the existing runner body.
 
-The config-write body remains in `_apply_result` so the mature validation/storage order is not rewritten. Because the guard acknowledges the component before storage I/O, expired/rejected/success result updates now use `interaction.edit_original_response(...)`.
+Prefer `defer=True` so the Ticket Operations Center interaction is acknowledged before ticket refresh/authorization I/O. Do not duplicate canonical ticket behavior. The existing canonical helpers are already response-done aware.
 
-Unexpected failures use cautious guidance: reopen `/dank setup`, verify the currently saved value before retrying, and use the native Error ID in `/dank diagnostics`. The message does not claim that a partially completed config write definitely did or did not happen.
-
-## Validation
-
-Targeted branch validation passed:
-
-- branch started from current `main` and remains 0 commits behind;
-- production diff is 34 changed lines in `public_setup_find.py`;
-- exact `SetupSearchResultView` region parses successfully with Python AST;
-- the new focused regression test parses successfully with Python AST;
-- focused source replay confirms:
-  - `run_guarded_interaction` owns the Apply callback;
-  - the guard defers before the mutation body;
-  - `_resolve_object` and `_validate_object` still run before `upsert_guild_config`;
-  - `upsert_guild_config` still precedes cache invalidation, refreshed config read, and success embed construction;
-  - post-defer result paths use `edit_original_response`, not `interaction.response.edit_message`;
-  - the no-guild response uses `safe_send_interaction`;
-  - blockers, warnings, exact payload semantics, and setup verification footer remain present.
-- repository search found no existing setup test that requires the retired raw `interaction.response.edit_message` shape for this callback.
-
-Full repository pytest/Actions remains subject to the known runner/DNS infrastructure problem and must not be represented as passing unless a runner actually executes steps.
+Unexpected failure guidance must not claim a live ticket definitely did or did not change after an exception. It should tell staff to refresh/reopen the Ticket Operations Center and inspect the ticket state before retrying, with the Error ID available in `/dank diagnostics`.
 
 ## Previous completed slice
 
-**PR #271 — Guard Dank Design Apply and Undo interactions**
+**PR #273 — Guard setup-find config writes**
 
-- merged as `6f7e4d60058d6c2806294721eba89b3f77640ba8`;
+- merged as `f9307c4254ea1631cbf6e516a8197f6d329b89e0`;
 - verified on `main`;
-- validated V2 blob: `82828185000d107084d0fc7731d6b378148abf60`;
-- validated regression-test blob: `85d4a043007fee77b9cb70e93bcc83678fd2cff2`;
-- full GitHub Actions remained unavailable because jobs terminated before step 1 with no steps/logs.
+- validated setup source blob: `637a9b0455e0ce06a3ab6450c57d8dff3be2db6c`;
+- validated regression-test blob: `b6d18674b9611872a70ec28a0a7b27458fad12da`;
+- GitHub Actions again terminated before runner step execution with `steps: null` / `logs_url: null`.
 
 ## Next step
 
-Open the focused PR, verify the exact final head and CI execution state, merge with an expected-head guard if the code evidence remains clean, verify the validated production/test blobs on `main`, then lock the next single P0 interaction boundary.
+Inspect the exact ticket runner/test assumptions, then implement the smallest native-guard wrapper and focused regression test on a fresh implementation branch.
