@@ -105,10 +105,10 @@ def test_server_category_frame_browser_exposes_full_catalog_without_row_overflow
         for _group_label, frame_ids in studio.CATEGORY_FRAME_GROUPS
         for frame_id in frame_ids
     ]
-    assert len(grouped_ids) == 40
+    assert len(grouped_ids) == 80
     assert len(grouped_ids) == len(set(grouped_ids))
     assert set(grouped_ids) <= set(studio.CATEGORY_FRAMES_BY_ID)
-    assert len([frame for frame in studio.CATEGORY_FRAMES if frame.id in set(grouped_ids)]) == 40
+    assert len([frame for frame in studio.CATEGORY_FRAMES if frame.id in set(grouped_ids)]) == 80
 
     view = studio_v2.DesignServerView({"theme_id": "night_gothic", "strength": 5})
     frame_button = next(
@@ -123,8 +123,8 @@ def test_server_category_frame_browser_exposes_full_catalog_without_row_overflow
 
     seen: set[str] = set()
     groups = studio_v2._category_frame_groups()
-    assert len(studio.CATEGORY_FRAME_GROUPS) == 5
-    assert len(groups) >= 5
+    assert len(studio.CATEGORY_FRAME_GROUPS) == 10
+    assert len(groups) >= 10
     for page in range(len(groups)):
         page_view = studio_v2.DesignServerCategoryFrameView(
             {"theme_id": "night_gothic", "strength": 5},
@@ -156,7 +156,7 @@ def test_server_category_frame_browser_exposes_full_catalog_without_row_overflow
     custom_options = {
         "theme_id": "night_gothic",
         "strength": 5,
-        "category_frame_id": "bullet_line",
+        "category_frame_id": "ribbon_heart",
     }
     custom_page = studio_v2._category_frame_page_for(custom_options)
     assert custom_page == len(studio.CATEGORY_FRAME_GROUPS) - 1
@@ -167,7 +167,7 @@ def test_server_category_frame_browser_exposes_full_catalog_without_row_overflow
     )
     custom_defaults = [option for option in custom_picker.options if option.default]
     assert len(custom_defaults) == 1
-    assert custom_defaults[0].value == "bullet_line"
+    assert custom_defaults[0].value == "ribbon_heart"
 
     invalid_view = studio_v2.DesignServerCategoryFrameView(
         {
@@ -187,11 +187,25 @@ def test_server_category_frame_browser_exposes_full_catalog_without_row_overflow
 
 
 def test_every_category_frame_round_trips_through_parser_and_majority_detection() -> None:
+    assert len(studio.CATEGORY_FRAMES) == 80
+    assert len(studio.CATEGORY_FRAMES_BY_ID) == 80
     for frame in studio.CATEGORY_FRAMES:
         rendered = studio.category_frame_preview(frame.id, emoji="🎮", name="gaming")
+        assert len(rendered) <= studio.DISCORD_NAME_LIMIT
         assert studio.normalize_base_name(rendered) == "gaming"
         detected = majority.detect_category_frame(studio, rendered)
         assert detected["id"] == frame.id
+
+
+def test_new_category_frame_families_are_grouped_and_reachable() -> None:
+    grouped = {label: tuple(frame_ids) for label, frame_ids in studio.CATEGORY_FRAME_GROUPS}
+    assert set(("Divider & Rails", "Royal & Luxury", "Nature & Magic", "Gaming & Cyber", "Cute & Soft")) <= set(grouped)
+    assert "pointer_rail" in grouped["Divider & Rails"]
+    assert "luxury_diamond" in grouped["Royal & Luxury"]
+    assert "mystic" in grouped["Nature & Magic"]
+    assert "circuit_gate" in grouped["Gaming & Cyber"]
+    assert "ribbon_heart" in grouped["Cute & Soft"]
+    assert all(len(frame_ids) <= 24 for frame_ids in grouped.values())
 
 
 def test_exact_category_editor_can_browse_frames_beyond_first_select_page() -> None:
@@ -200,7 +214,7 @@ def test_exact_category_editor_can_browse_frames_beyond_first_select_page() -> N
     assert len(initial.options) <= 25
     assert legacy.EXACT_FRAME_BROWSE_VALUE in values
 
-    late_frame = "bullet_line"
+    late_frame = "ribbon_heart"
     late = legacy.ExactFrameSelect("category", 123, late_frame)
     late_defaults = [option for option in late.options if option.default]
     assert len(late_defaults) == 1
