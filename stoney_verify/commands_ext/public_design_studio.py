@@ -420,9 +420,9 @@ def _theme_from_options(options: Mapping[str, Any]) -> Any:
 def _current_format_lock(options: Mapping[str, Any], *, scope: str = "global") -> dict[str, Any]:
     """Build a reusable lock from the current server draft.
 
-    An explicitly saved separator is part of the draft and must win over the
-    theme default. Otherwise changing Theme/Font/Strength while a global lock is
-    enabled can silently resurrect the theme separator the user already replaced.
+    Explicit server-wide style overrides are part of the draft and must win over
+    theme defaults. Otherwise syncing an enabled global lock can silently replace
+    a user's chosen separator or category frame with the theme's value.
     """
 
     theme = _theme_from_options(options)
@@ -431,6 +431,11 @@ def _current_format_lock(options: Mapping[str, Any], *, scope: str = "global") -
     if font not in studio.DESIGN_FONT_STYLES:
         font = _safe_str(getattr(theme, "font", "normal"), "normal").lower().replace("-", "_")
     separator_id = plan_service.effective_server_separator_id(options)
+    category_frame_id = _safe_str(options.get("category_frame_id"), "")
+    if category_frame_id not in studio.CATEGORY_FRAMES_BY_ID:
+        category_frame_id = _safe_str(getattr(theme, "category_frame", "line"), "line")
+    if category_frame_id not in studio.CATEGORY_FRAMES_BY_ID:
+        category_frame_id = "line"
 
     return {
         "scope": scope,
@@ -438,7 +443,7 @@ def _current_format_lock(options: Mapping[str, Any], *, scope: str = "global") -
         "strength": strength,
         "font": font,
         "separator_id": separator_id,
-        "category_frame_id": _safe_str(getattr(theme, "category_frame", "line"), "line"),
+        "category_frame_id": category_frame_id,
         "emoji_override": _safe_str(options.get("emoji_override"), ""),
         "exact_match": bool(options.get("exact_match", False)),
         "icon_mode": _safe_str(options.get("icon_mode"), "replace_missing"),
