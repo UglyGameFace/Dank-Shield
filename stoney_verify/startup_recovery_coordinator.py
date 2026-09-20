@@ -1,85 +1,148 @@
 from __future__ import annotations
 
-"""Serialize heavyweight startup recovery work across feature owners.
+"""Bound heavyweight startup/recovery work across guilds.
 
-Discord history/member recovery is intentionally allowed to run in the
-background, but multiple authoritative sweeps must not stampede Discord and the
-database at the same time during startup or gateway resume.
+The coordinator prevents one guild from running overlapping Discord/database
+recovery paths while still allowing a small number of different guilds to make
+progress concurrently. State is loop-local and per-guild lock entries are
+released after the final waiter exits.
 """
 
 import asyncio
+import os
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import AsyncIterator
 
-_LOCK: asyncio.Lock | None = None
-_LOCK_LOOP: asyncio.AbstractEventLoop | None = None
-_CURRENT_LABEL = ""
-_WAITERS = 0
+
+def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    try:
+        value = int(str(os.getenv(name, default)).strip())
+    except Exception:
+        value = int(default)
+    return max(int(minimum), min(int(maximum), value))
 
 
-def _lock_for_current_loop() -> asyncio.Lock:
-    global _LOCK
-    global _LOCK_LOOP
+_MAX_CONCURRENT = _env_int(
+    "DANK_STARTUP_RECOVERY_MAX_CONCURRENT",
+    2,
+    minimum=1,
+    maximum=16,
+)
+
+
+@dataclass
+class _GuildSlot:
+    lock: asyncio.Lock
+    users: int = 0
+
+
+_LOOP: asyncio.AbstractEventLoop | None = None
+_GLOBAL_SEMAPHORE: asyncio.Semaphore | None = None
+_GUILD_SLOTS: dict[int, _GuildSlot] = {}
+_CURRENT: dict[int, str] = {}
+_GLOBAL_RUNNING = 0
+_GLOBAL_WAITING = 0
+
+
+def _ensure_loop_state() -> asyncio.Semaphore:
+    global _LOOP
+    global _GLOBAL_SEMAPHORE
+    global _GLOBAL_RUNNING
+    global _GLOBAL_WAITING
 
     loop = asyncio.get_running_loop()
-    if _LOCK is None or _LOCK_LOOP is not loop:
-        _LOCK = asyncio.Lock()
-        _LOCK_LOOP = loop
-    return _LOCK
+    if _LOOP is not loop:
+        _LOOP = loop
+        _GLOBAL_SEMAPHORE = asyncio.Semaphore(_MAX_CONCURRENT)
+        _GUILD_SLOTS.clear()
+        _CURRENT.clear()
+        _GLOBAL_RUNNING = 0
+        _GLOBAL_WAITING = 0
+    assert _GLOBAL_SEMAPHORE is not None
+    return _GLOBAL_SEMAPHORE
 
 
 def startup_recovery_snapshot() -> dict[str, object]:
-    lock = _LOCK
     return {
-        "locked": bool(lock.locked()) if lock is not None else False,
-        "current_label": _CURRENT_LABEL,
-        "waiters": max(0, int(_WAITERS)),
+        "max_concurrent": _MAX_CONCURRENT,
+        "running": max(0, int(_GLOBAL_RUNNING)),
+        "waiting": max(0, int(_GLOBAL_WAITING)),
+        "guild_slots": len(_GUILD_SLOTS),
+        "current": dict(_CURRENT),
     }
 
 
 @asynccontextmanager
-async def startup_recovery_slot(label: str) -> AsyncIterator[None]:
-    """Run one heavyweight startup recovery section at a time."""
+async def startup_recovery_slot(guild_id: int, label: str) -> AsyncIterator[None]:
+    """Acquire one per-guild slot plus the bounded process-wide recovery pool."""
 
-    global _CURRENT_LABEL
-    global _WAITERS
+    global _GLOBAL_RUNNING
+    global _GLOBAL_WAITING
 
+    semaphore = _ensure_loop_state()
+    gid = int(guild_id)
     safe_label = str(label or "startup-recovery")[:160]
-    lock = _lock_for_current_loop()
+
+    slot = _GUILD_SLOTS.get(gid)
+    if slot is None:
+        slot = _GuildSlot(lock=asyncio.Lock())
+        _GUILD_SLOTS[gid] = slot
+    slot.users += 1
+
     wait_started = time.monotonic()
-    _WAITERS += 1
+    acquired_guild = False
+    acquired_global = False
     try:
-        await lock.acquire()
-    finally:
-        _WAITERS = max(0, _WAITERS - 1)
+        await slot.lock.acquire()
+        acquired_guild = True
 
-    started = time.monotonic()
-    _CURRENT_LABEL = safe_label
-    wait_ms = int((started - wait_started) * 1000)
-    try:
-        print(
-            "🧯 startup_recovery slot acquired "
-            f"label={safe_label} wait_ms={wait_ms} waiters={_WAITERS}"
-        )
-    except Exception:
-        pass
-
-    try:
-        yield
-    finally:
-        elapsed_ms = int((time.monotonic() - started) * 1000)
-        _CURRENT_LABEL = ""
+        _GLOBAL_WAITING += 1
         try:
-            lock.release()
+            await semaphore.acquire()
+            acquired_global = True
         finally:
+            _GLOBAL_WAITING = max(0, _GLOBAL_WAITING - 1)
+
+        started = time.monotonic()
+        _GLOBAL_RUNNING += 1
+        _CURRENT[gid] = safe_label
+        wait_ms = int((started - wait_started) * 1000)
+        try:
+            print(
+                "🧯 startup_recovery slot acquired "
+                f"guild={gid} label={safe_label} wait_ms={wait_ms} "
+                f"running={_GLOBAL_RUNNING}/{_MAX_CONCURRENT}"
+            )
+        except Exception:
+            pass
+
+        try:
+            yield
+        finally:
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            _CURRENT.pop(gid, None)
+            _GLOBAL_RUNNING = max(0, _GLOBAL_RUNNING - 1)
             try:
                 print(
                     "🧯 startup_recovery slot released "
-                    f"label={safe_label} elapsed_ms={elapsed_ms}"
+                    f"guild={gid} label={safe_label} elapsed_ms={elapsed_ms} "
+                    f"running={_GLOBAL_RUNNING}/{_MAX_CONCURRENT}"
                 )
             except Exception:
                 pass
+    finally:
+        if acquired_global:
+            semaphore.release()
+        if acquired_guild and slot.lock.locked():
+            slot.lock.release()
+
+        slot.users = max(0, int(slot.users) - 1)
+        if slot.users <= 0 and not slot.lock.locked():
+            current = _GUILD_SLOTS.get(gid)
+            if current is slot:
+                _GUILD_SLOTS.pop(gid, None)
 
 
 __all__ = ["startup_recovery_slot", "startup_recovery_snapshot"]
