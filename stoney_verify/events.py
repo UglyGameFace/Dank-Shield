@@ -405,14 +405,26 @@ async def _warm_all_guild_invite_caches() -> None:
     except Exception:
         guilds = []
 
+    from .startup_recovery_coordinator import startup_recovery_slot
+
     warmed = 0
-    for guild in guilds:
+    for index, guild in enumerate(guilds):
         try:
-            ok = await _refresh_guild_invite_cache(guild)
+            gid = int(getattr(guild, "id", 0) or 0)
+            if gid <= 0:
+                continue
+            async with startup_recovery_slot(gid, "invite_cache_warm"):
+                ok = await _refresh_guild_invite_cache(guild)
             if ok:
                 warmed += 1
         except Exception as e:
             print(f"⚠️ [INVITES] warm cache failed guild={getattr(guild, 'id', 'unknown')}: {repr(e)}")
+
+        if index + 1 < len(guilds):
+            try:
+                await asyncio.sleep(0.25)
+            except Exception:
+                pass
 
     print(f"📨 Invite cache warm complete: guilds={len(guilds)} warmed={warmed}")
 
