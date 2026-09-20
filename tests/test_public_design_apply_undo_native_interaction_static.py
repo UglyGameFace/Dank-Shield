@@ -27,8 +27,10 @@ def test_reviewed_apply_is_native_guarded_without_changing_transaction_ownership
         offset=owner,
     )
 
-    assert 'await _guard_design_v2_action(interaction, "design.v2.apply_reviewed", action, defer=False)' in block
+    assert 'await _guard_design_v2_action(interaction, "design.v2.apply_reviewed", action)' in block
     assert "async def action() -> None:" in block
+    assert "await self._apply_reviewed_action(interaction, button)" in block
+    assert "async def _apply_reviewed_action" in block
     assert "interaction.response.send_message" not in block
 
     for safe_action in (
@@ -56,7 +58,7 @@ def test_reviewed_apply_is_native_guarded_without_changing_transaction_ownership
 def test_undo_open_is_native_guarded_and_uses_safe_send() -> None:
     block = _region("async def _open_undo(interaction: discord.Interaction) -> None:", "\n\nclass DoneView")
 
-    assert 'await _guard_design_v2_action(interaction, "design.v2.undo_open", action, defer=False)' in block
+    assert 'await _guard_design_v2_action(interaction, "design.v2.undo_open", action)' in block
     assert "await safe_send_interaction(" in block
     assert "legacy.safe_send_interaction" not in block
     assert "legacy._latest_rollback_snapshot" in block
@@ -71,7 +73,9 @@ def test_undo_confirm_is_native_guarded_without_changing_undo_safety() -> None:
         offset=owner,
     )
 
-    assert 'await _guard_design_v2_action(interaction, "design.v2.undo_confirm", action, defer=False)' in block
+    assert 'await _guard_design_v2_action(interaction, "design.v2.undo_confirm", action)' in block
+    assert "await self._confirm_undo_action(interaction, button)" in block
+    assert "async def _confirm_undo_action" in block
     assert "design.v2.undo_confirm.guild_busy" in block
     assert "interaction.response.send_message" not in block
 
