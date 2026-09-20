@@ -139,7 +139,7 @@ Remaining score blockers:
 
 ### `P0-INT-001` — Replace monkey-patched interaction logger with native interaction service
 
-Status: `PARTIAL / BLOCKER — Ticket Operations Center runner guarded; pending PR/main verification`
+Status: `PARTIAL / BLOCKER — ticket runner merged; Verification Center dispatcher is next locked slice`
 
 Goal:
 
@@ -152,23 +152,24 @@ Progress completed on current `main`:
 - Exact-format editor runtime actions are native-guarded.
 - Style-change missing-icon review actions are native-guarded.
 - Reviewed Dank Design Apply / Undo mutation boundaries are native-guarded and verified on `main` via PR #271.
-- `/dank setup-find` result Apply is native-guarded with defer-before-write acknowledgement and verified on `main` via PR #273.
-- Focused regressions now protect both the Design Apply/Undo and setup-find mutation boundaries.
+- `/dank setup-find` result Apply is native-guarded and verified on `main` via PR #273.
+- Ticket Operations Center `_run_ticket_command` is native-guarded and verified on `main` via PR #275.
 
 Next locked slice:
 
-- The active branch places `_run_ticket_command` in `public_ticket_command_center.py` behind `run_guarded_interaction(..., defer=True)` before staff/authorization/dispatch I/O.
-- The existing runner body remains in `_run_ticket_command_action`, preserving staff checks, ticket authorization, canonical command lookup, and invocation arguments.
-- The intentional dedicated-flow `TypeError` response remains; the broad unexpected-exception string swallow is removed so native Error IDs own real failures.
-- Canonical `safe_defer` / `reply_once` helpers remain response-done aware and compatible with the pre-deferred boundary.
+- `_invoke` in `public_verify_command_center.py` is the shared Verification Center canonical-command dispatcher.
+- It is used by repair, grant, pending, status/diagnose, and verified/resident role-toggle actions.
+- None of its current callers depend on a return value.
+- Canonical `public_verify_group._ack()` is response-done aware, so the dispatcher can defer before canonical role/config work without fighting the canonical commands.
+- The migration must preserve exact callback/argument dispatch and leave canonical `/verify` logic authoritative.
 
 Remaining before `P0-INT-001` can be marked done:
 
-- merge and verify the guarded Ticket Operations Center command runner;
-- continue the next single highest-risk ticket/verify interaction boundary after that;
+- migrate and verify the locked Verification Center dispatcher;
+- continue the next single highest-risk direct verification mutation boundary after that;
 - ensure diagnostics expose recent native interaction failures safely;
 - remove or disable `global_interaction_trace_guard` framework patching only after native coverage is sufficient;
-- run the full interaction/protection/design/setup/ticket test matrix once executable CI/checkout infrastructure is available.
+- run the full interaction/protection/design/setup/ticket/verify test matrix once executable CI/checkout infrastructure is available.
 
 Exit criteria:
 
@@ -324,14 +325,15 @@ Progress:
 - reviewed Dank Design Apply / Undo native-guard slice merged in PR #271 and was verified on `main`
 - focused Apply/Undo static regression coverage is on `main`
 - `/dank setup-find` result Apply config writer merged in PR #273 and was verified on `main`
-- Ticket Operations Center `_run_ticket_command` is implemented and targeted-validation-clean on the active branch
+- Ticket Operations Center `_run_ticket_command` merged in PR #275 and was verified on `main`
+- Verification Center `_invoke` dispatcher is the next locked native-guard slice
 
 Verification:
 
 - PR #271 validated immutable V2/test blobs match current `main`
 - existing Dank Design ownership/state assertions were replayed successfully against the merged shape
 - full checkout/pytest remains blocked by the known external GitHub runner/DNS infrastructure issue
-- ticket/verify callbacks are not fully migrated yet; the current ticket-runner slice still needs PR/main verification
+- verification callbacks are not fully migrated yet
 
 ### Commit 3 — Startup guard inventory and migration table
 
