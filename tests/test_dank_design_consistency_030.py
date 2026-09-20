@@ -59,6 +59,16 @@ def test_current_format_lock_never_silently_rewrites_strength() -> None:
     assert lock["strength"] == 2
 
 
+def test_server_category_frame_resolver_prefers_explicit_then_theme_default() -> None:
+    assert plan_service.theme_default_category_frame_id({"theme_id": "night_gothic"}) == "top_box"
+    assert plan_service.effective_server_category_frame_id(
+        {"theme_id": "night_gothic", "category_frame_id": "lenticular"}
+    ) == "lenticular"
+    assert plan_service.effective_server_category_frame_id(
+        {"theme_id": "night_gothic", "category_frame_id": "not-a-frame"}
+    ) == "top_box"
+
+
 def test_current_format_lock_honors_explicit_server_category_frame_override() -> None:
     custom = public_studio._current_format_lock(
         {
