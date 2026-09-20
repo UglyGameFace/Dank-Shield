@@ -139,7 +139,7 @@ Remaining score blockers:
 
 ### `P0-INT-001` — Replace monkey-patched interaction logger with native interaction service
 
-Status: `PARTIAL / BLOCKER — setup-find merged; Ticket Operations Center runner is next locked slice`
+Status: `PARTIAL / BLOCKER — Ticket Operations Center runner guarded; pending PR/main verification`
 
 Goal:
 
@@ -157,14 +157,14 @@ Progress completed on current `main`:
 
 Next locked slice:
 
-- `_run_ticket_command` in `public_ticket_command_center.py` is the shared Ticket Operations Center dispatch path for live ticket actions.
-- It performs staff and ticket authorization work before dispatching canonical ticket callbacks but is not behind `run_guarded_interaction()`.
-- The canonical ticket response helpers are already response-done aware, so this boundary can safely defer before authorization/DB work without rewriting the canonical commands.
-- The migration must preserve claim-first/authorization rules, command lookup, dedicated-flow errors, and canonical mutation ownership.
+- The active branch places `_run_ticket_command` in `public_ticket_command_center.py` behind `run_guarded_interaction(..., defer=True)` before staff/authorization/dispatch I/O.
+- The existing runner body remains in `_run_ticket_command_action`, preserving staff checks, ticket authorization, canonical command lookup, and invocation arguments.
+- The intentional dedicated-flow `TypeError` response remains; the broad unexpected-exception string swallow is removed so native Error IDs own real failures.
+- Canonical `safe_defer` / `reply_once` helpers remain response-done aware and compatible with the pre-deferred boundary.
 
 Remaining before `P0-INT-001` can be marked done:
 
-- migrate and verify the locked Ticket Operations Center command runner;
+- merge and verify the guarded Ticket Operations Center command runner;
 - continue the next single highest-risk ticket/verify interaction boundary after that;
 - ensure diagnostics expose recent native interaction failures safely;
 - remove or disable `global_interaction_trace_guard` framework patching only after native coverage is sufficient;
@@ -324,14 +324,14 @@ Progress:
 - reviewed Dank Design Apply / Undo native-guard slice merged in PR #271 and was verified on `main`
 - focused Apply/Undo static regression coverage is on `main`
 - `/dank setup-find` result Apply config writer merged in PR #273 and was verified on `main`
-- Ticket Operations Center `_run_ticket_command` is the next locked native-guard slice
+- Ticket Operations Center `_run_ticket_command` is implemented and targeted-validation-clean on the active branch
 
 Verification:
 
 - PR #271 validated immutable V2/test blobs match current `main`
 - existing Dank Design ownership/state assertions were replayed successfully against the merged shape
 - full checkout/pytest remains blocked by the known external GitHub runner/DNS infrastructure issue
-- ticket/verify callbacks are not fully migrated yet
+- ticket/verify callbacks are not fully migrated yet; the current ticket-runner slice still needs PR/main verification
 
 ### Commit 3 — Startup guard inventory and migration table
 
