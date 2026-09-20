@@ -891,17 +891,28 @@ async def finish_bulk_recovery(guild_id: int) -> Optional[int]:
 
 
 async def _run_startup_recovery() -> None:
-    """Drain restored events and reconcile guild totals with bounded concurrency."""
+    """Drain restored events with a fixed-size worker pool."""
 
     _ensure_retry_task()
     guilds = list(getattr(bot, "guilds", []) or [])
     if not guilds:
         return
 
-    semaphore = asyncio.Semaphore(max(1, int(_RECONCILE_CONCURRENCY)))
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    for guild in guilds:
+        queue.put_nowait(guild)
 
-    async def reconcile_one(guild: Any) -> None:
-        async with semaphore:
+    worker_count = min(
+        len(guilds),
+        max(1, int(_RECONCILE_CONCURRENCY)),
+    )
+
+    async def worker() -> None:
+        while True:
+            try:
+                guild = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
             try:
                 await reconcile_guild(int(guild.id))
             except Exception as exc:
@@ -909,8 +920,17 @@ async def _run_startup_recovery() -> None:
                     f"startup reconcile failed guild={getattr(guild, 'id', 0)} "
                     f"error={type(exc).__name__}: {str(exc)[:180]}"
                 )
+            finally:
+                queue.task_done()
 
-    await asyncio.gather(*(reconcile_one(guild) for guild in guilds))
+    workers = [
+        asyncio.create_task(
+            worker(),
+            name=f"durable-invite-stats-startup-{index}",
+        )
+        for index in range(worker_count)
+    ]
+    await asyncio.gather(*workers)
 
 
 def _schedule_startup_recovery() -> bool:
