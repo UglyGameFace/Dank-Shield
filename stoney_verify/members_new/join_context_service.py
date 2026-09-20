@@ -286,6 +286,25 @@ def invite_meta(invite: discord.Invite) -> Dict[str, Any]:
     }
 
 
+def _can_fetch_guild_invites(guild: discord.Guild) -> bool:
+    try:
+        member = getattr(guild, "me", None)
+        permissions = getattr(member, "guild_permissions", None)
+        return bool(
+            getattr(permissions, "administrator", False)
+            or getattr(permissions, "manage_guild", False)
+        )
+    except Exception:
+        return False
+
+
+def _guild_has_vanity_url(guild: discord.Guild) -> bool:
+    try:
+        return "VANITY_URL" in set(getattr(guild, "features", []) or [])
+    except Exception:
+        return False
+
+
 async def _warm_invite_cache_for_guild_unlocked(guild: discord.Guild) -> bool:
     gid = int(getattr(guild, "id", 0) or 0)
     if gid <= 0:
@@ -294,6 +313,10 @@ async def _warm_invite_cache_for_guild_unlocked(guild: discord.Guild) -> bool:
     current_uses: Dict[str, int] = {}
     current_meta: Dict[str, Dict[str, Any]] = {}
     vanity_uses: Optional[int] = None
+
+    if not _can_fetch_guild_invites(guild):
+        _warn(f"invite cache warm skipped guild={gid}: missing Manage Server permission")
+        return False
 
     try:
         invites = await guild.invites()
@@ -308,12 +331,13 @@ async def _warm_invite_cache_for_guild_unlocked(guild: discord.Guild) -> bool:
         _warn(f"invite cache warm failed guild={gid}: {e!r}")
         return False
 
-    try:
-        vanity = await guild.vanity_invite()
-        if vanity is not None:
-            vanity_uses = int(getattr(vanity, "uses", 0) or 0)
-    except Exception:
-        vanity_uses = None
+    if _guild_has_vanity_url(guild):
+        try:
+            vanity = await guild.vanity_invite()
+            if vanity is not None:
+                vanity_uses = int(getattr(vanity, "uses", 0) or 0)
+        except Exception:
+            vanity_uses = None
 
     _INVITE_USES_CACHE[gid] = current_uses
     _INVITE_META_CACHE[gid] = current_meta
@@ -344,6 +368,8 @@ async def _detect_join_entry_context_unlocked(member: discord.Member) -> Dict[st
     current_meta: Dict[str, Dict[str, Any]] = {}
 
     try:
+        if not _can_fetch_guild_invites(guild):
+            raise discord.Forbidden(response=None, message="missing Manage Server permission")
         invites = await guild.invites()
         invites_ok = True
         for invite in invites:
@@ -361,13 +387,14 @@ async def _detect_join_entry_context_unlocked(member: discord.Member) -> Dict[st
 
     vanity_uses: Optional[int] = old_vanity_uses
     vanity_code: Optional[str] = None
-    try:
-        vanity = await guild.vanity_invite()
-        if vanity is not None:
-            vanity_uses = int(getattr(vanity, "uses", 0) or 0)
-            vanity_code = str(getattr(vanity, "code", "") or "").strip() or None
-    except Exception:
-        pass
+    if _guild_has_vanity_url(guild):
+        try:
+            vanity = await guild.vanity_invite()
+            if vanity is not None:
+                vanity_uses = int(getattr(vanity, "uses", 0) or 0)
+                vanity_code = str(getattr(vanity, "code", "") or "").strip() or None
+        except Exception:
+            pass
 
     best_code: Optional[str] = None
     best_delta = 0
