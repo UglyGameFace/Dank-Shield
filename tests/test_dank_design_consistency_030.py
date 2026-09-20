@@ -37,14 +37,17 @@ def test_consolidated_server_selectors_fail_closed_and_sync_active_global_lock()
     font_start = V2.index("class DesignServerFontSelect", theme_start)
     strength_start = V2.index("class DesignServerStrengthSelect", font_start)
     separator_start = V2.index("class DesignServerSeparatorSelect", strength_start)
-    end = V2.index("def _design_server_embed", separator_start)
+    frame_start = V2.index("class DesignServerCategoryFrameSelect", separator_start)
+    end = V2.index("def _design_server_embed", frame_start)
     block = V2[theme_start:end]
-    assert block.count("await legacy._save_options(interaction, options)") == 4
-    assert block.count("legacy._sync_enabled_global_lock(options)") == 4
+    assert block.count("await legacy._save_options(interaction, options)") == 5
+    assert block.count("legacy._sync_enabled_global_lock(options)") == 5
     assert 'options["font"] = selected' in block
     assert 'options.pop("font", None)' in block
     assert 'options["separator_id"] = selected' in block
     assert 'options.pop("separator_id", None)' in block
+    assert 'options["category_frame_id"] = selected' in block
+    assert 'options.pop("category_frame_id", None)' in block
     assert "picked_font" not in block
     assert 'options["strength"] = 4' not in block
     assert "class ThemeSelect" not in PUBLIC
@@ -54,6 +57,49 @@ def test_consolidated_server_selectors_fail_closed_and_sync_active_global_lock()
 def test_current_format_lock_never_silently_rewrites_strength() -> None:
     lock = public_studio._current_format_lock({"theme_id": "gothic_clean", "strength": 2})
     assert lock["strength"] == 2
+
+
+def test_server_category_frame_resolver_prefers_explicit_then_theme_default() -> None:
+    assert plan_service.theme_default_category_frame_id({"theme_id": "night_gothic"}) == "top_box"
+    assert plan_service.effective_server_category_frame_id(
+        {"theme_id": "night_gothic", "category_frame_id": "lenticular"}
+    ) == "lenticular"
+    assert plan_service.effective_server_category_frame_id(
+        {"theme_id": "night_gothic", "category_frame_id": "not-a-frame"}
+    ) == "top_box"
+
+
+def test_normalized_plan_drops_invalid_server_category_frame_override() -> None:
+    normalized = plan_service.normalize_plan_options(
+        {
+            "theme_id": "night_gothic",
+            "strength": 4,
+            "category_frame_id": "not-a-frame",
+        },
+        strict=True,
+    )
+    assert "category_frame_id" not in normalized
+    assert plan_service.effective_server_category_frame_id(normalized) == "top_box"
+
+
+def test_current_format_lock_honors_explicit_server_category_frame_override() -> None:
+    custom = public_studio._current_format_lock(
+        {
+            "theme_id": "night_gothic",
+            "strength": 4,
+            "category_frame_id": "lenticular",
+        }
+    )
+    assert custom["category_frame_id"] == "lenticular"
+
+    invalid = public_studio._current_format_lock(
+        {
+            "theme_id": "night_gothic",
+            "strength": 4,
+            "category_frame_id": "not-a-frame",
+        }
+    )
+    assert invalid["category_frame_id"] == "top_box"
 
 
 def test_gothic_default_separator_matches_planner_ui_and_saved_global_rule() -> None:

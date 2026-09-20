@@ -121,7 +121,7 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
     embed.add_field(
         name="Choose what you want to do",
         value=(
-            "🌐 **Design Entire Server** — choose theme, font, strength, and separator together with live examples.\n"
+            "🌐 **Design Entire Server** — choose theme, font, strength, separator, and category frame with live examples.\n"
             "✏️ **Edit One Category / Channel** — rename or style one exact item.\n"
             "🩺 **Fix Inconsistent Names** — scan first, then build a safe Smart Repair preview.\n"
             "🔐 **Saved Rules & Protection** — manage what future previews enforce; this does not rename anything by itself.\n"
@@ -171,7 +171,7 @@ async def _store_preview(
         theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
         font = _design_server_font(options)
         separator_id = _design_server_separator(options)
-        frame = _safe_str(options.get("category_frame_id") or getattr(theme, "category_frame", "line"), "line")
+        frame = _design_server_category_frame(options)
         preview_embed.insert_field_at(
             0,
             name="Selected server style",
@@ -204,12 +204,20 @@ def _font_override_active(options: Mapping[str, Any]) -> bool:
     return _safe_str(options.get("font"), "").lower().replace("-", "_") in studio.DESIGN_FONT_STYLES
 
 
+def _design_server_category_frame(options: Mapping[str, Any]) -> str:
+    return plans.effective_server_category_frame_id(options)
+
+
+def _category_frame_override_active(options: Mapping[str, Any]) -> bool:
+    return _safe_str(options.get("category_frame_id"), "") in studio.CATEGORY_FRAMES_BY_ID
+
+
 def _design_server_examples(options: Mapping[str, Any]) -> tuple[str, str]:
     theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
     font = _design_server_font(options)
     separator = _design_server_separator(options)
     strength = max(1, min(5, _safe_int(options.get("strength"), 4)))
-    frame = _safe_str(options.get("category_frame_id") or getattr(theme, "category_frame", "line"), "line")
+    frame = _design_server_category_frame(options)
 
     category = studio.build_styled_name(
         "the-420-lobby",
@@ -405,16 +413,75 @@ def _separator_override_active(options: Mapping[str, Any]) -> bool:
     return bool(_safe_str(options.get("separator_id"), ""))
 
 
+class DesignServerCategoryFrameSelect(discord.ui.Select):
+    def __init__(self, options: Mapping[str, Any]) -> None:
+        theme_options = dict(options)
+        theme_options.pop("category_frame_id", None)
+        theme_frame = plans.theme_default_category_frame_id(theme_options)
+        explicit = _safe_str(options.get("category_frame_id"), "")
+        override_active = _category_frame_override_active(options)
+        selected = _design_server_category_frame(options)
+        choices: list[discord.SelectOption] = [
+            discord.SelectOption(
+                label=f"Theme Default · {legacy._category_frame_choice_label(theme_frame)}"[:100],  # type: ignore[attr-defined]
+                value="__theme__",
+                description=(
+                    f"{studio.category_frame_preview(theme_frame, emoji='🍃', name='the-420-lobby')} · "
+                    "follows the selected theme"
+                )[:100],
+                default=not override_active,
+            )
+        ]
+        for frame in studio.CATEGORY_FRAMES:
+            choices.append(
+                discord.SelectOption(
+                    label=legacy._category_frame_choice_label(frame.id)[:100],  # type: ignore[attr-defined]
+                    value=frame.id,
+                    description=(
+                        f"Result: {studio.category_frame_preview(frame.id, emoji='🍃', name='the-420-lobby')}"
+                    )[:100],
+                    default=bool(override_active and explicit and frame.id == selected),
+                )
+            )
+
+        super().__init__(
+            placeholder="Choose the server category frame",
+            min_values=1,
+            max_values=1,
+            options=choices[:25],
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        options = await _load_design_options(int(guild.id))
+        selected = _safe_str(self.values[0], "__theme__")
+        if selected == "__theme__":
+            options.pop("category_frame_id", None)
+        else:
+            if selected not in studio.CATEGORY_FRAMES_BY_ID:
+                raise ValueError("Unsupported Dank Design category frame selection.")
+            options["category_frame_id"] = selected
+        legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
+        await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
+        await interaction.edit_original_response(embed=_design_server_embed(guild, options), view=DesignServerView(options))
+
+
 def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> discord.Embed:
     theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
     separator_id = _design_server_separator(options)
     font = _design_server_font(options)
     strength = max(1, min(5, _safe_int(options.get("strength"), 4)))
-    frame = _safe_str(options.get("category_frame_id") or getattr(theme, "category_frame", "line"), "line")
+    frame = _design_server_category_frame(options)
     narrow_count = _layout_override_count(options)
     category_example, channel_example = _design_server_examples(options)
     font_source = "custom override" if _font_override_active(options) else "theme default"
     separator_source = "custom override" if _separator_override_active(options) else "theme default"
+    frame_source = "custom override" if _category_frame_override_active(options) else "theme default"
 
     embed = discord.Embed(
         title="🌐 Design Entire Server",
@@ -438,7 +505,7 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
     )
     embed.add_field(
         name="Category frame",
-        value=f"**{legacy._category_frame_choice_label(frame)}**",  # type: ignore[attr-defined]
+        value=f"**{legacy._category_frame_choice_label(frame)}** · {frame_source}",  # type: ignore[attr-defined]
         inline=True,
     )
     embed.add_field(
@@ -452,6 +519,12 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
             value="Strength **3+** enables font styling. Raise Strength when you want the selected font applied.",
             inline=False,
         )
+    if strength < 4:
+        embed.add_field(
+            name="ℹ️ Category frame is selected but not active yet",
+            value="Strength **4+** enables category-frame styling. You can choose the frame now and raise Strength when you want it applied.",
+            inline=False,
+        )
     if narrow_count:
         embed.add_field(
             name="⚠️ Old design overrides are active",
@@ -461,8 +534,36 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
             ),
             inline=False,
         )
-    embed.set_footer(text="Choose → Preview → Apply • Theme Default makes Font follow the selected theme")
+    embed.set_footer(text="Choose → Preview → Apply • Theme Default keeps Font, Separator, and Category Frame tied to the selected theme")
     return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
+
+
+def _category_frame_picker_embed(guild: discord.Guild, options: Mapping[str, Any]) -> discord.Embed:
+    embed = _design_server_embed(guild, options)
+    embed.title = "🖼️ Choose Category Frame"
+    embed.description = (
+        "Choose how server-wide **category headers** are framed. **Theme Default** follows the selected theme; "
+        "an explicit frame stays selected when the theme changes. Nothing is renamed until you return, Preview, and Apply."
+    )
+    return embed
+
+
+class DesignServerCategoryFrameView(DesignView):
+    def __init__(self, options: Mapping[str, Any]) -> None:
+        super().__init__(timeout=900)
+        self.options = dict(options)
+        self.add_item(DesignServerCategoryFrameSelect(options))
+
+    @discord.ui.button(label="Back to Server Design", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_back", row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.edit_message(
+            embed=_design_server_embed(guild, self.options),
+            view=DesignServerView(self.options),
+        )
 
 
 def _clean_redesign_embed(options: Mapping[str, Any]) -> discord.Embed:
@@ -471,7 +572,7 @@ def _clean_redesign_embed(options: Mapping[str, Any]) -> discord.Embed:
         title="🧹 Start a Clean Redesign?",
         description=(
             f"This will clear **{count}** saved layout/name override(s) that can make a server-wide redesign look inconsistent.\n\n"
-            "**It does not rename anything now.** Your selected Theme, Font, Strength, and Separator stay selected. "
+            "**It does not rename anything now.** Your selected Theme, Font, Strength, Separator, and Category Frame stay selected. "
             "Protection rules stay intact, and permissions, roles, topics, channel order, tickets, and verification are untouched."
         ),
         color=discord.Color.orange(),
@@ -510,7 +611,7 @@ class CleanRedesignConfirmView(DesignView):
         embed.title = "✅ Clean Redesign Ready"
         embed.description = (
             "Old saved layout/name exceptions were cleared. **Protection rules were kept.** "
-            "Choose the server Theme, Font, Strength, and Separator you want, then preview before applying."
+            "Choose the server Theme, Font, Strength, Separator, and Category Frame you want, then preview before applying."
         )
         await interaction.edit_original_response(embed=embed, view=DesignServerView(updated))
 
@@ -535,6 +636,17 @@ class DesignServerView(DesignView):
         self.add_item(DesignServerStrengthSelect(_safe_int(options.get("strength"), 4)))
         self.add_item(DesignServerSeparatorSelect(options))
         self.clean_redesign.disabled = _layout_override_count(options) == 0
+
+    @discord.ui.button(label="Frame", emoji="🖼️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame", row=4)
+    async def category_frame(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.edit_message(
+            embed=_category_frame_picker_embed(guild, self.options),
+            view=DesignServerCategoryFrameView(self.options),
+        )
 
     @discord.ui.button(label="Preview Server", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design_v2:server_preview", row=4)
     async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

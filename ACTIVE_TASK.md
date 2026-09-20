@@ -1,110 +1,185 @@
 # ACTIVE TASK
 
 ## ID
-DS-BASIC-VERIFY-TICKET-ROUTING — Stop Basic Verify users being forced into verification tickets
+DS-DESIGNER-CATEGORY-FRAME — Expose server-wide category-frame editing
 
 ## Status
-IMPLEMENTATION COMPLETE — latest-main integration complete; final exact-head validation pending
+IMPLEMENTED — exact-head executable validation blocked by GitHub Actions infrastructure
 
 ## Single active-task lock
-Only the Basic Verify / verification-ticket routing bug is active in this conversation
-and PR. Do not start unrelated work until this task is validated, cleaned up, merged,
-and verified on main.
+Only the Server Designer category-frame editing gap is active in this conversation
+and PR. Do not start unrelated work until this task is tested, validated, cleaned
+up, merged, and verified on main.
 
 ## User-visible problem
-A member using the green Basic Verify flow could still end up in a private
-verification ticket instead of receiving the normal one-click access-role update
-and retaining ordinary support-ticket access.
+The **Design Entire Server** screen shows the active Category frame, for example
+**Top Box**, and already uses that value in previews, but it had no control for
+changing the frame. Theme, Font, Strength, and Separator were editable while
+Category frame was display-only.
 
 ## Root cause
-Dank Shield had two different sources of truth for verification-mode precedence:
+The naming engine already had first-class category-frame support:
 
-- `setup_engine.verification_modes.effective_verification_mode()` correctly treats
-  an explicitly enabled Simple/Basic Verify flow as authoritative, including
-  intentional Simple + Voice configurations.
-- `startup_guards/unverified_ticket_panel_flow.py` reimplemented mode detection
-  from raw legacy flags and checked ID/Voice before Basic Verify.
+- `server_design_studio.CATEGORY_FRAMES` is the canonical frame catalog;
+- `category_frame_id` already flows into `build_styled_name()`, preview planning,
+  saved rules, and persisted server-design options;
+- the exact-item editor already exposes the same frame catalog.
 
-That duplicated policy meant a guild could correctly show and authorize Basic
-Verify while the ticket interception layer still considered the same member an
-advanced-verification user and hijacked public support-ticket creation into a
-verification ticket.
+Two directly related gaps were found in the server-wide path.
+
+First, the consolidated V2 `DesignServerView` already occupied Discord's five
+component rows:
+
+- row 0: Theme
+- row 1: Font
+- row 2: Strength
+- row 3: Separator
+- row 4: Preview Server / Preview Separator / Clean Redesign / Back
+
+That left Category frame visible in the embed but without an interactive entry
+point.
+
+Second, every server-wide selector synchronizes an enabled global format lock
+through `_sync_enabled_global_lock()`, but `_current_format_lock()` always copied
+the theme's category frame and ignored an explicit server-wide
+`category_frame_id`. Adding a picker without correcting that path would make a
+custom frame appear to save and then silently lose it whenever the global format
+lock was enabled.
+
+Follow-up inspection found two more edge cases in that same frame authority path:
+an invalid persisted frame could make the single-select UI mark both Theme Default
+and the theme frame as selected, and the planner could treat an invalid explicit
+frame as Clean Line while the UI reported the selected theme's default. Both are
+now normalized to one Theme Default state.
 
 ## Execution path
-Basic Verify:
-`BasicVerifyButton`
-→ `apply_basic_verification()`
-→ canonical Basic Verify authorization
-→ add access roles / remove Unverified.
+`/dank home`
+→ **Server Design**
+→ **Design Entire Server**
+→ `DesignServerView`
+→ server-wide draft options
+→ `build_saved_design_plan()`
+→ `build_design_plan()`
+→ `_effective_format_options()`
+→ `build_styled_name(..., category_frame_id=...)`
+→ reviewed preview
+→ Apply.
 
-Public ticket panel:
-`PublicCreateTicketPanelView.create_ticket()`
-→ `_handle_unverified_panel_click()`
-→ `_should_auto_route_unverified_ticket(guild, cfg)`
-→ canonical `effective_verification_mode(guild, cfg)`.
-
-Only canonical primary `id_verify` or `voice_verify` modes may auto-route to a
-verification ticket. `basic_button` and `disabled` remain on the normal support
-ticket path.
+Saved-rule precedence remains:
+channel rule → category rule → enabled global rule → server-wide draft.
 
 ## Changes
-- removed the duplicated raw verification-mode parser from
-  `unverified_ticket_panel_flow.py`;
-- made ticket auto-routing consume the canonical verification-mode resolver;
-- fail open to normal support routing if mode resolution itself errors, rather than
-  guessing from stale legacy flags;
-- updated the related compatibility caller to pass the guild into the canonical
-  routing decision;
-- added behavioral regression coverage for Basic-only, Simple + Voice, Voice-only,
-  allowlisted ID, and unavailable/non-allowlisted ID configurations.
+- added a compact **Frame** action as the fifth button on the existing row-4 action
+  row; no sixth Discord row is introduced;
+- added an in-place `DesignServerCategoryFrameView` and
+  `DesignServerCategoryFrameSelect`;
+- the picker uses the canonical `CATEGORY_FRAMES` catalog and exposes all current
+  frames plus **Theme Default**;
+- Theme Default clears the explicit override, while an explicit frame remains
+  selected when Theme changes;
+- frame selections acknowledge the Discord interaction before config I/O, save
+  through the existing draft path, synchronize an enabled global format lock, and
+  return to **Design Entire Server**;
+- added canonical `theme_default_category_frame_id()` and
+  `effective_server_category_frame_id()` resolution beside the existing
+  separator resolver;
+- invalid persisted server frame overrides are removed during plan normalization,
+  so UI, preview, global-lock sync, and apply all resolve to the same theme default;
+- the frame picker now guarantees exactly one default option even if old/corrupt
+  persisted data contains an unknown frame id;
+- V2 display/preview logic and legacy global-lock construction consume that same
+  canonical resolver;
+- the summary now distinguishes **theme default** from **custom override**;
+- Strength below 4 explains that the selected category frame is saved but does not
+  become active until Strength 4+;
+- Server Design and Clean Redesign guidance now includes Category Frame.
+
+## Regression coverage added
+- consolidated server selectors now include the category-frame save/sync path;
+- explicit frame selection and Theme Default clearing are regression-locked;
+- canonical resolution prefers a valid explicit frame and safely falls back to the
+  selected theme for an invalid/missing override;
+- enabled global-lock construction preserves an explicit server-wide frame;
+- the main server-design view is locked to five row-4 buttons;
+- the picker exposes the complete canonical frame catalog and remains below
+  Discord's 25-option limit;
+- Night Gothic Theme Default resolves to Top Box;
+- explicit Lenticular and Top Box overrides are represented correctly;
+- the server-design summary identifies theme-owned versus custom frame state.
 
 ## Compatibility
-- Basic Verify role mutation behavior is unchanged.
-- Voice-only verification still auto-routes to the verification-ticket flow.
-- Allowlisted ID verification still auto-routes.
-- Non-allowlisted/unavailable ID verification no longer forces a broken ticket.
-- Normal support tickets remain normal support when Basic Verify is authoritative.
-- No ticket permissions, role hierarchy, setup UI, Discord resources, or database
-  schema are changed.
+- Existing valid saved `category_frame_id` values remain authoritative.
+- No schema or persistence format changes.
+- Theme-default behavior is represented by the absence of an explicit override.
+- Category frames still require Strength 4+ to affect category names.
+- Narrow category/channel/exact rules retain their existing precedence.
+- Theme, Font, Strength, Separator, Preview Server, Preview Separator, Clean
+  Redesign, and Back remain available.
+- No permissions, tickets, roles, verification, channel order, topics, or other
+  non-design behavior changes.
 
-## Validation
-Pre-integration head `7756c5aa3003221436faaef52f2fe2cbd5b46d98`:
-- focused verification + authorization: 17 passed;
-- affected-module compile: passed;
-- repository compileall: passed;
-- diff check: passed;
-- all standalone tools: passed;
-- all eight primary CI audits: passed;
-- Ubuntu/Python 3.11.7 full suite: 1706 passed, 8 warnings, 0 failures.
+## Validation / evidence
+Implementation source and final task diff were inspected against main.
 
-The earlier Android/Termux Python 3.13 run had two font-rendering failures, and both
-reproduced unchanged on the then-current main baseline, so they were not regressions.
+Current implementation evidence before this bookkeeping update:
+- latest implementation head before this record update:
+  `5b1df17e4ef386384735af51c108129bd447749c`;
+- base/current main: `33b17fae0bbbd631c8942ddeec5215f3a2394ad3`;
+- branch currentness: **0 behind main**;
+- PR #268: open, draft, mergeable;
+- unresolved review threads: **0**;
+- changed files were limited to the active task:
+  `ACTIVE_TASK.md`,
+  `public_design_studio.py`,
+  `public_design_studio_v2.py`,
+  `server_design_plan_service.py`,
+  `test_dank_design_consistency_030.py`, and
+  `test_design_studio_consolidation_032.py`;
+- final diff inspection found no unrelated runtime/schema/permission changes and no
+  second category-frame catalog.
 
-While validation was running, PR #266 merged and advanced main to
-`2be39743c9fdf2f6728179665a4f1166e7af36a3`. Its changed files overlap this PR only at `ACTIVE_TASK.md`;
-the verification runtime and regression-test files do not overlap. This branch
-has now integrated that main commit. Exact-head validation must be repeated on
-the resulting integration commit before merge.
+GitHub scheduled all normal workflows on the exact implementation head, but they
+failed before executing any step. Confirmed examples:
+- **Dank Design Regression CI** → Consolidated Design Studio regressions:
+  `steps=null`, `logs_url=null`;
+- **Dank Shield CI** → Python compile check:
+  `steps=null`, `logs_url=null`;
+- Application Command Size Diagnostics likewise has no executed steps.
 
-GitHub-hosted Actions remain unavailable because account Actions usage is maxed,
-so equivalent checks are being run locally in Ubuntu/Python 3.11.
+The same account-level pre-run Actions failure was already present on preceding
+heads. Therefore these red checks do **not** constitute test failures, but they
+also do **not** satisfy executable validation.
+
+The current ChatGPT execution container cannot clone the private repository
+because outbound GitHub DNS/network access is unavailable, so it cannot honestly
+substitute a local pytest/compile run for the unavailable hosted runner.
 
 ## Cleanup
-The duplicated ticket-routing policy helpers were removed from the affected module.
-No unrelated cleanup is included. PR #266's Server Designer changes are inherited
-from main, not duplicated into this PR diff.
+- reused the existing canonical `CATEGORY_FRAMES` catalog;
+- centralized server category-frame default/override resolution in the plan
+  service rather than leaving V2 and legacy lock code with competing policy;
+- no temporary guards, monkey patches, alternate frame catalogs, debug code, or
+  unrelated cleanup were added;
+- the row-4 frame button is intentionally compact for the five-button mobile
+  action row.
 
 ## Conflicts
-PR #266 overlapped only in `ACTIVE_TASK.md`; current-task bookkeeping is intentionally
-kept as this PR's active record. No production-code conflict exists.
+None currently known. The branch is current with main and PR #268 reports
+mergeable.
 
 ## Blockers / risks
-GitHub-hosted CI cannot execute until Actions usage resets or billing changes.
-Final merge requires the local exact-head replacement validation to pass.
+- Exact-head Python compile, focused Dank Design pytest/audits, and broader
+  repository validation still need to execute on a working Python 3.11 runner.
+- A live Discord smoke test has not yet been performed.
+- Until executable validation passes, this PR must remain draft and must not be
+  described as fixed, complete, production-ready, or ready to merge.
 
 ## Backlog
 None.
 
 ## Next step
-Run the final exact-head Ubuntu/Python 3.11 validation on the latest-main integration
-commit, then perform final diff/currentness review and merge verification.
+Run the repository's existing Python 3.11 Dank Design workflow-equivalent checks
+on the exact final head as soon as a runner/local repository environment is
+available. Then perform final currentness/diff review, update this record with the
+results, mark PR #268 ready only if green, merge the validated head, and verify
+main/deployment behavior.

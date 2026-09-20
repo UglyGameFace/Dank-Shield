@@ -52,12 +52,14 @@ def test_server_style_controls_are_only_inside_design_server() -> None:
     assert "DesignServerThemeSelect" in V2
     assert "DesignServerFontSelect" in V2
     assert "DesignServerStrengthSelect" in V2
+    assert "DesignServerCategoryFrameSelect" in V2
     home_start = V2.index("class DesignHomeView")
     home_end = V2.index("def _snapshot_matches", home_start)
     home = V2[home_start:home_end]
     assert "DesignServerThemeSelect" not in home
     assert "DesignServerFontSelect" not in home
     assert "DesignServerStrengthSelect" not in home
+    assert "DesignServerCategoryFrameSelect" not in home
 
 
 def test_server_font_picker_fits_discord_and_exposes_full_catalog() -> None:
@@ -96,6 +98,65 @@ def test_server_separator_picker_can_follow_theme_or_hold_custom_choice() -> Non
 
 
 
+def test_server_category_frame_is_editable_without_overflowing_discord_rows() -> None:
+    view = studio_v2.DesignServerView({"theme_id": "night_gothic", "strength": 5})
+    frame_button = next(
+        item for item in view.children
+        if getattr(item, "custom_id", "") == "dank_design_v2:category_frame"
+    )
+    assert str(frame_button.label) == "Frame"
+
+    buttons = [item for item in view.children if getattr(item, "label", None) is not None]
+    assert len(buttons) == 5
+    assert all(getattr(item, "row", None) == 4 for item in buttons)
+
+    theme_default_view = studio_v2.DesignServerCategoryFrameView(
+        {"theme_id": "night_gothic", "strength": 5}
+    )
+    picker = next(
+        item for item in theme_default_view.children
+        if isinstance(item, studio_v2.DesignServerCategoryFrameSelect)
+    )
+    assert len(picker.options) == len(studio.CATEGORY_FRAMES) + 1
+    assert len(picker.options) <= 25
+    defaults = [option for option in picker.options if option.default]
+    assert len(defaults) == 1
+    assert defaults[0].value == "__theme__"
+    assert "Top Box" in str(defaults[0].label)
+    values = {str(option.value) for option in picker.options}
+    assert {"__theme__", "line", "top_box", "bottom_box", "box", "plain"} <= values
+
+    custom_view = studio_v2.DesignServerCategoryFrameView(
+        {
+            "theme_id": "night_gothic",
+            "strength": 5,
+            "category_frame_id": "lenticular",
+        }
+    )
+    custom_picker = next(
+        item for item in custom_view.children
+        if isinstance(item, studio_v2.DesignServerCategoryFrameSelect)
+    )
+    custom_defaults = [option for option in custom_picker.options if option.default]
+    assert len(custom_defaults) == 1
+    assert custom_defaults[0].value == "lenticular"
+
+    invalid_view = studio_v2.DesignServerCategoryFrameView(
+        {
+            "theme_id": "night_gothic",
+            "strength": 5,
+            "category_frame_id": "not-a-frame",
+        }
+    )
+    invalid_picker = next(
+        item for item in invalid_view.children
+        if isinstance(item, studio_v2.DesignServerCategoryFrameSelect)
+    )
+    invalid_defaults = [option for option in invalid_picker.options if option.default]
+    assert len(invalid_defaults) == 1
+    assert invalid_defaults[0].value == "__theme__"
+
+
 def test_gothic_theme_default_separator_matches_real_preview_plan() -> None:
     options = {"theme_id": "gothic_clean", "strength": 4}
     assert studio_v2._design_server_separator(options) == "pipe_spaced"
@@ -110,16 +171,31 @@ def test_gothic_theme_default_separator_matches_real_preview_plan() -> None:
     assert "Spaced" in str(selected[0].label) or "|" in str(selected[0].description)
 
 
-def test_server_design_embed_shows_font_and_live_style_examples() -> None:
+def test_server_design_embed_shows_font_frame_sources_and_live_style_examples() -> None:
     embed = studio_v2._design_server_embed(
         SimpleNamespace(),
         {"theme_id": "double_struck_luxe", "strength": 4},
     )
     fields = {str(field.name): str(field.value) for field in embed.fields}
     assert "Font" in fields
+    assert "Category frame" in fields
     assert "Style example" in fields
     assert "Double-Struck" in fields["Font"]
     assert "𝕘" in fields["Font"]
+    assert "theme default" in fields["Category frame"]
+    assert "Lenticular" in fields["Category frame"]
+
+    custom = studio_v2._design_server_embed(
+        SimpleNamespace(),
+        {
+            "theme_id": "double_struck_luxe",
+            "strength": 4,
+            "category_frame_id": "top_box",
+        },
+    )
+    custom_fields = {str(field.name): str(field.value) for field in custom.fields}
+    assert "Top Box" in custom_fields["Category frame"]
+    assert "custom override" in custom_fields["Category frame"]
 
 
 def test_active_registration_does_not_activate_runtime_monkey_patches() -> None:
