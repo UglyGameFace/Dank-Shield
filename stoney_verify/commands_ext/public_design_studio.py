@@ -1239,13 +1239,7 @@ class FormatLocksView(LegacyDesignView):
 # Custom Format Editor
 # ---------------------------------------------------------------------------
 
-EDITOR_SEPARATOR_IDS = (
-    "none", "bar_full", "bar_thin", "bar_heavy", "dash", "en_dash", "em_dash",
-    "middle_dot", "bullet", "katakana_dot", "colon", "single_angle",
-    "tri_right", "tri_small", "premium_sparkle", "premium_thin_sparkle",
-    "sparkle_small", "small_dot", "presentation_bar", "bracket_corner",
-    "bracket_lenticular",
-)
+EDITOR_SEPARATOR_IDS = studio.EXACT_EDITOR_SEPARATOR_IDS
 
 EDITOR_FONT_IDS = studio.DESIGN_FONT_STYLES
 
@@ -2902,8 +2896,10 @@ def _direct_rename_has_unsafe_channel_icon(name: str) -> bool:
     if raw.startswith("#"):
         return True
 
-    failed = {"□", "▢", "▣", "◻", "◻️", "◽", "▫", "⬜", "🔲"}
-    return any(raw.startswith(icon) for icon in failed)
+    # Stable Unicode square symbols/emoji such as ⬜ are legitimate owner
+    # choices. The actual Discord hazard here is the keycap built from a
+    # literal "#", not square-looking glyphs themselves.
+    return False
 
 
 async def _direct_rename_fetch_target(
@@ -2988,8 +2984,8 @@ class DirectRenameModal(discord.ui.Modal):
                 await safe_send_interaction(
                     interaction,
                     content=(
-                        "❌ That icon is unsafe for channel names. `#️⃣` and square placeholder icons can break into blocks. "
-                        "Pick a real emoji/icon, or use it on a category only."
+                        "❌ `#️⃣` is unsafe for channel names because it starts with Discord's literal channel-marker character. "
+                        "Pick a different emoji/icon, or use it on a category only."
                     ),
                     ephemeral=True,
                     action_name="design.direct_rename.unsafe_icon",
@@ -4014,20 +4010,7 @@ async def _open_protection_mode_editor(interaction: discord.Interaction, *, chan
     await interaction.edit_original_response(embed=embed, view=ProtectionModeView(channel_id=int(channel.id), current=exact))
 
 
-STYLE_CHANGE_SEPARATOR_IDS: tuple[str, ...] = (
-    "none",
-    "bar_heavy",
-    "bar_thin",
-    "bar_full",
-    "bar_medium",
-    "bar_bold",
-    "bar_block",
-    "dash",
-    "middle_dot",
-    "sparkle",
-    "bracket_corner",
-    "bracket_lenticular",
-)
+STYLE_CHANGE_SEPARATOR_IDS: tuple[str, ...] = studio.SERVER_DESIGN_SEPARATOR_IDS
 
 
 def _style_change_separator_preview_text(separator_id: str, *, emoji: str = "🎮", name: str = "gaming-news") -> str:
@@ -4175,10 +4158,6 @@ def _style_change_visible_name_body(current_name: str, parsed: Mapping[str, Any]
 
 
 
-def _style_change_failed_icon_placeholders() -> set[str]:
-    return {"□", "▢", "▣", "◻", "◻️", "◽", "▫", "⬜", "🔲"}
-
-
 def _style_change_separator_chars() -> set[str]:
     return set("|｜│┃❘❙❚⎮¦︱-–—―━─═·•∙⋅*✦✧✪✫✬✭❖◆◇▪▫▬[]{}()<>【】「」『』〔〕〖〗꒰꒱")
 
@@ -4204,10 +4183,6 @@ def _style_change_is_unsafe_channel_icon(icon: str) -> bool:
     if "#" in raw or base == "#":
         return True
 
-    placeholders = _style_change_failed_icon_placeholders()
-    if raw in placeholders or base in placeholders:
-        return True
-
     return False
 
 
@@ -4216,18 +4191,13 @@ def _style_change_starts_with_failed_icon_placeholder(text: str) -> bool:
     if not raw:
         return False
 
-    placeholders = _style_change_failed_icon_placeholders()
-    for icon in placeholders:
-        if raw.startswith(icon):
-            return True
-
     return _style_change_is_unsafe_channel_icon(raw[0])
 
 
 def _style_change_bad_icon_message() -> str:
     return (
-        "Leading icon looks like a failed/unsupported #️⃣ placeholder. "
-        "Choose a real emoji/icon first."
+        "Leading icon uses the unsafe #️⃣ keycap form. "
+        "Choose a different emoji/icon first."
     )
 
 
@@ -4643,6 +4613,7 @@ def _style_change_missing_emoji_items(items: list[dict[str, Any]]) -> list[dict[
             or "No leading emoji/icon" in blockers
             or "failed/unsupported #️⃣ placeholder" in blockers
             or "not safe channel-name icons" in blockers
+            or "unsafe #️⃣ keycap" in blockers
         ):
             out.append(item)
 
@@ -4706,7 +4677,7 @@ def _style_change_after_with_manual_emoji(
 
     if not emoji:
         if _style_change_is_unsafe_channel_icon(manual_emoji):
-            blockers.append("#️⃣ and square placeholder icons are not safe channel-name icons. Pick a real emoji/icon.")
+            blockers.append("#️⃣ is not a safe channel-name icon. Pick a different emoji/icon.")
         else:
             blockers.append("No emoji/icon entered.")
         return before, warnings, blockers
