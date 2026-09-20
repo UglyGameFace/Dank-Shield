@@ -730,9 +730,10 @@ class DesignServerView(DesignView):
             return
         guild = interaction.guild
         assert guild is not None
+        page = _category_frame_page_for(self.options)
         await interaction.response.edit_message(
-            embed=_category_frame_picker_embed(guild, self.options),
-            view=DesignServerCategoryFrameView(self.options),
+            embed=_category_frame_picker_embed(guild, self.options, page=page),
+            view=DesignServerCategoryFrameView(self.options, page=page),
         )
 
     @discord.ui.button(label="Preview Server", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design_v2:server_preview", row=4)
