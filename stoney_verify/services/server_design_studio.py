@@ -322,6 +322,56 @@ CATEGORY_FRAMES: tuple[CategoryFrameSpec, ...] = (
     CategoryFrameSpec("chevron", "Chevron", "≫ {emoji} {name} ≪", safety="balanced", clutter=2),
     CategoryFrameSpec("minimal_dot", "Minimal Dot", "· ─ {emoji} {name} ─ ·", safety="balanced", clutter=2),
     CategoryFrameSpec("bullet_line", "Bullet Line", "• ━ {emoji} {name} ━ •", safety="balanced", clutter=2),
+
+    # Divider & rails
+    CategoryFrameSpec("light_rail", "Light Rail", "┄┄ {emoji} {name} ┄┄", safety="balanced", clutter=2),
+    CategoryFrameSpec("heavy_rail", "Heavy Rail", "┅┅ {emoji} {name} ┅┅", safety="balanced", clutter=2),
+    CategoryFrameSpec("dotted_rail", "Dotted Rail", "┈┈ {emoji} {name} ┈┈", safety="balanced", clutter=2),
+    CategoryFrameSpec("bold_dotted_rail", "Bold Dotted Rail", "┉┉ {emoji} {name} ┉┉", safety="balanced", clutter=2),
+    CategoryFrameSpec("double_rail", "Double Rail", "══ {emoji} {name} ══", safety="balanced", clutter=3),
+    CategoryFrameSpec("triple_dot", "Triple Dot", "••• {emoji} {name} •••", safety="balanced", clutter=2),
+    CategoryFrameSpec("arrow_rail", "Arrow Rail", "▷━━ {emoji} {name} ━━◁", safety="decorative", clutter=3),
+    CategoryFrameSpec("pointer_rail", "Pointer Rail", "▶── {emoji} {name} ──◀", safety="decorative", clutter=3),
+
+    # Royal & luxury
+    CategoryFrameSpec("royal_crown", "Royal Crown", "♔══ {emoji} {name} ══♔", safety="decorative", clutter=4),
+    CategoryFrameSpec("queen_crown", "Queen Crown", "♕── {emoji} {name} ──♕", safety="decorative", clutter=4),
+    CategoryFrameSpec("fleur_line", "Fleur-de-lis", "⚜── {emoji} {name} ──⚜", safety="decorative", clutter=4),
+    CategoryFrameSpec("gem_line", "Gem Line", "💎── {emoji} {name} ──💎", safety="decorative", clutter=4),
+    CategoryFrameSpec("club_line", "Club Line", "♣── {emoji} {name} ──♣", safety="decorative", clutter=3),
+    CategoryFrameSpec("spade_line", "Spade Line", "♠── {emoji} {name} ──♠", safety="decorative", clutter=3),
+    CategoryFrameSpec("heart_line", "Heart Line", "♥── {emoji} {name} ──♥", safety="decorative", clutter=3),
+    CategoryFrameSpec("luxury_diamond", "Luxury Diamond", "◈══ {emoji} {name} ══◈", safety="decorative", clutter=4),
+
+    # Nature & magic
+    CategoryFrameSpec("leaf_line", "Leaf Line", "❦── {emoji} {name} ──❦", safety="decorative", clutter=3),
+    CategoryFrameSpec("flower_line", "Flower Line", "✿── {emoji} {name} ──✿", safety="decorative", clutter=3),
+    CategoryFrameSpec("blossom_line", "Blossom Line", "❀── {emoji} {name} ──❀", safety="decorative", clutter=3),
+    CategoryFrameSpec("snowflake_line", "Snowflake Line", "❄── {emoji} {name} ──❄", safety="decorative", clutter=3),
+    CategoryFrameSpec("magic_star", "Magic Star", "✶── {emoji} {name} ──✶", safety="decorative", clutter=3),
+    CategoryFrameSpec("constellation", "Constellation", "✦⋆ {emoji} {name} ⋆✦", safety="decorative", clutter=4),
+    CategoryFrameSpec("orbit", "Orbit", "⊹⊱ {emoji} {name} ⊰⊹", safety="decorative", clutter=4),
+    CategoryFrameSpec("mystic", "Mystic", "༄ {emoji} {name} ༄", safety="decorative", clutter=3),
+
+    # Gaming & cyber
+    CategoryFrameSpec("pixel_box", "Pixel Box", "▣━━ {emoji} {name} ━━▣", safety="decorative", clutter=4),
+    CategoryFrameSpec("pixel_outline", "Pixel Outline", "□── {emoji} {name} ──□", safety="balanced", clutter=3),
+    CategoryFrameSpec("hex_line", "Hex Line", "⬡── {emoji} {name} ──⬡", safety="decorative", clutter=3),
+    CategoryFrameSpec("hex_filled", "Filled Hex", "⬢━━ {emoji} {name} ━━⬢", safety="decorative", clutter=4),
+    CategoryFrameSpec("target_line", "Target Line", "◎── {emoji} {name} ──◎", safety="balanced", clutter=3),
+    CategoryFrameSpec("power_wave", "Power Wave", "⌁⌁ {emoji} {name} ⌁⌁", safety="balanced", clutter=2),
+    CategoryFrameSpec("scanline", "Scanline", "╾━ {emoji} {name} ━╼", safety="balanced", clutter=3),
+    CategoryFrameSpec("circuit_gate", "Circuit Gates", "┫ {emoji} {name} ┣", safety="balanced", clutter=2),
+
+    # Cute & soft
+    CategoryFrameSpec("soft_heart", "Soft Heart", "♡── {emoji} {name} ──♡", safety="decorative", clutter=3),
+    CategoryFrameSpec("soft_sparkle", "Soft Sparkle", "⋆⟡ {emoji} {name} ⟡⋆", safety="decorative", clutter=3),
+    CategoryFrameSpec("cloud", "Cloud", "☁ {emoji} {name} ☁", safety="decorative", clutter=3),
+    CategoryFrameSpec("music_line", "Music Line", "♪── {emoji} {name} ──♪", safety="decorative", clutter=3),
+    CategoryFrameSpec("bow", "Bow", "୨୧ {emoji} {name} ୨୧", safety="decorative", clutter=4),
+    CategoryFrameSpec("starry_soft", "Starry Soft", "✩° {emoji} {name} °✩", safety="decorative", clutter=3),
+    CategoryFrameSpec("bubble", "Bubble", "○° {emoji} {name} °○", safety="balanced", clutter=2),
+    CategoryFrameSpec("ribbon_heart", "Ribbon Heart", "≪♡ {emoji} {name} ♡≫", safety="decorative", clutter=4),
 )
 CATEGORY_FRAMES_BY_ID = {spec.id: spec for spec in CATEGORY_FRAMES}
 
@@ -333,6 +383,11 @@ CATEGORY_FRAME_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Premium & Decorative", ("double_angle", "math_angle", "diamond_line", "black_diamond_line", "sparkle_line", "star_line", "hollow_star", "ornate")),
     ("Gothic & Celestial", ("gothic_cross", "cross_line", "moon", "sun", "floral", "winged", "crown_line")),
     ("Tech & Minimal", ("tech_corner", "tech_floor", "terminal", "wave", "chevron", "minimal_dot", "bullet_line")),
+    ("Divider & Rails", ("light_rail", "heavy_rail", "dotted_rail", "bold_dotted_rail", "double_rail", "triple_dot", "arrow_rail", "pointer_rail")),
+    ("Royal & Luxury", ("royal_crown", "queen_crown", "fleur_line", "gem_line", "club_line", "spade_line", "heart_line", "luxury_diamond")),
+    ("Nature & Magic", ("leaf_line", "flower_line", "blossom_line", "snowflake_line", "magic_star", "constellation", "orbit", "mystic")),
+    ("Gaming & Cyber", ("pixel_box", "pixel_outline", "hex_line", "hex_filled", "target_line", "power_wave", "scanline", "circuit_gate")),
+    ("Cute & Soft", ("soft_heart", "soft_sparkle", "cloud", "music_line", "bow", "starry_soft", "bubble", "ribbon_heart")),
 )
 THEMES: tuple[ThemePreset, ...] = (
     ThemePreset("420_lounge", "🍃 420 Lounge", "line", "bar_full", "normal", "420_lounge"),

@@ -220,7 +220,7 @@ def _design_server_examples(options: Mapping[str, Any]) -> tuple[str, str]:
     frame = _design_server_category_frame(options)
 
     category = studio.build_styled_name(
-        "the-420-lobby",
+        "category-name",
         kind="category",
         theme_id=_safe_str(getattr(theme, "id", "gothic_clean"), "gothic_clean"),
         strength=strength,
@@ -230,11 +230,11 @@ def _design_server_examples(options: Mapping[str, Any]) -> tuple[str, str]:
         separator_id=separator,
         category_frame_id=frame,
         font=font,
-        emoji_override="🍃",
+        emoji_override="🗂️",
         exact_match=True,
     )
     channel = studio.build_styled_name(
-        "general-chat",
+        "channel-name",
         kind="text",
         theme_id=_safe_str(getattr(theme, "id", "gothic_clean"), "gothic_clean"),
         strength=strength,
@@ -247,7 +247,7 @@ def _design_server_examples(options: Mapping[str, Any]) -> tuple[str, str]:
         emoji_override="💬",
         exact_match=True,
     )
-    return _safe_str(category.after, "the-420-lobby"), _safe_str(channel.after, "general-chat")
+    return _safe_str(category.after, "category-name"), _safe_str(channel.after, "channel-name")
 
 class DesignServerThemeSelect(discord.ui.Select):
     def __init__(self, current: str) -> None:
@@ -461,7 +461,7 @@ class DesignServerCategoryFrameSelect(discord.ui.Select):
                 label=f"Theme Default · {legacy._category_frame_choice_label(theme_frame)}"[:100],  # type: ignore[attr-defined]
                 value="__theme__",
                 description=(
-                    f"{studio.category_frame_preview(theme_frame, emoji='🍃', name='the-420-lobby')} · "
+                    f"{studio.category_frame_preview(theme_frame, emoji='🗂️', name='category-name')} · "
                     "follows the selected theme"
                 )[:100],
                 default=not override_active,
@@ -474,7 +474,7 @@ class DesignServerCategoryFrameSelect(discord.ui.Select):
                     label=legacy._category_frame_choice_label(frame.id)[:100],  # type: ignore[attr-defined]
                     value=frame.id,
                     description=(
-                        f"Result: {studio.category_frame_preview(frame.id, emoji='🍃', name='the-420-lobby')}"
+                        f"Result: {studio.category_frame_preview(frame.id, emoji='🗂️', name='category-name')}"
                     )[:100],
                     default=bool(override_active and explicit and frame.id == selected),
                 )
