@@ -167,14 +167,20 @@ async def _scan_channel(
     before: datetime | None = None,
 ) -> dict[str, Any]:
     try:
+        scan_kwargs: dict[str, Any] = {
+            "limit": max(1, min(int(limit), _AUTO_HISTORY_LIMIT)),
+            "repost_mixed": True,
+            "source": source,
+        }
+        if after is not None:
+            scan_kwargs["after"] = after
+        if before is not None:
+            scan_kwargs["before"] = before
+
         return dict(
             await policy.scan_channel_invites(
                 channel,
-                limit=max(1, min(int(limit), _AUTO_HISTORY_LIMIT)),
-                repost_mixed=True,
-                source=source,
-                after=after,
-                before=before,
+                **scan_kwargs,
             )
             or {}
         )
