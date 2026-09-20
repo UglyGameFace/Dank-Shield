@@ -40,8 +40,8 @@ During the same frame-preview path, the server-wide example was found to hard-co
 - each new group contains eight choices, well under Discord's 25-option select limit;
 - no theme default or existing saved `category_frame_id` changed;
 - removed the project-specific `the-420-lobby` preview name;
-- server-wide examples now derive a safe normalized category/channel example from the guild currently being edited;
-- frame-picker option descriptions use that guild's category example, with neutral `category-name` fallback when no category exists;
+- server-wide examples now use neutral `category-name` / `channel-name` samples, so no guild-specific name can leak into another server;
+- frame-picker option descriptions use the same neutral preview name and do not inspect live guild categories;
 - no schema or persistence migration is required.
 
 ## Execution path
@@ -67,7 +67,7 @@ Both paths continue to use the canonical `category_frame_id`, design plan, prote
 - exact-category compact picker still exposes the full-catalog browse path;
 - a final-group exact selection remains visible/defaulted without exceeding the select limit;
 - regression coverage rejects any reintroduction of `the-420-lobby` into the public designer preview;
-- preview-source regression proves current-guild category/channel names are used.
+- preview regression proves neutral samples are used and rejects reintroduction of owner-specific names.
 
 ## Cleanup / compatibility
 
@@ -77,7 +77,7 @@ The local dirty branch `audit/persistent-interaction-compatibility` is unrelated
 
 ## Blockers / risks
 
-Static exact-head integrity checks passed on the current branch: 80 unique canonical frame IDs, 80 unique grouped IDs, 10 groups, no missing/unknown/duplicate grouped frames, no `the-420-lobby` literal in the public designer, guild-aware preview wiring present, regression guards present, branch 0 behind main, and 0 unresolved review threads.
+Static exact-head integrity checks passed on the current branch: 80 unique canonical frame IDs, 80 unique grouped IDs, 10 groups, no missing/unknown/duplicate grouped frames, no `the-420-lobby` literal in the public designer, neutral preview wiring present, regression guards present, branch 0 behind main, and 0 unresolved review threads.
 
 Executable Python validation is blocked by GitHub Actions infrastructure: all PR workflows fail before any step starts, and the Dank Design job reports no steps/log URL. The isolated container also cannot resolve github.com, so the repository cannot be cloned there for an independent pytest/compile run. Keep the PR draft and do not mark complete or merge-ready until executable exact-head validation can run.
 
