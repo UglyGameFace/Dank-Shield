@@ -25,6 +25,8 @@ PR #269 already fixed the structural 25-option problem by making the frame brows
 
 The current request is therefore an additive catalog expansion rather than another picker rewrite. The authoritative browser paths already read `CATEGORY_FRAME_GROUPS` and `CATEGORY_FRAMES` dynamically, including dynamic "Browse all N frames…" copy.
 
+During the same frame-preview path, the server-wide example was found to hard-code `the-420-lobby`. That caused another guild to see a category name from the owner's server. This is the same active task because it directly controls the category-frame preview being expanded.
+
 ## Changes
 
 - preserved all existing 40 frame IDs and templates;
@@ -37,6 +39,9 @@ The current request is therefore an additive catalog expansion rather than anoth
   - Cute & Soft
 - each new group contains eight choices, well under Discord's 25-option select limit;
 - no theme default or existing saved `category_frame_id` changed;
+- removed the project-specific `the-420-lobby` preview name;
+- server-wide examples now derive a safe normalized category/channel example from the guild currently being edited;
+- frame-picker option descriptions use that guild's category example, with neutral `category-name` fallback when no category exists;
 - no schema or persistence migration is required.
 
 ## Execution path
@@ -60,7 +65,9 @@ Both paths continue to use the canonical `category_frame_id`, design plan, prote
 - every frame round-trips through base-name normalization;
 - every frame is recognized by majority detection;
 - exact-category compact picker still exposes the full-catalog browse path;
-- a final-group exact selection remains visible/defaulted without exceeding the select limit.
+- a final-group exact selection remains visible/defaulted without exceeding the select limit;
+- regression coverage rejects any reintroduction of `the-420-lobby` into the public designer preview;
+- preview-source regression proves current-guild category/channel names are used.
 
 ## Cleanup / compatibility
 
