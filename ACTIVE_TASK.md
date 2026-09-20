@@ -30,7 +30,7 @@ Out of scope:
 
 ## Status
 
-**IMPLEMENTED — source/diff inspection clean; exact-head PR validation pending**
+**IMPLEMENTED — PR #279 open as draft; targeted source validation passed; exact-head GitHub Actions execution pending**
 
 ## Findings / root cause
 
@@ -70,12 +70,18 @@ Unexpected failures stay inside the native interaction guard so staff receive a 
 
 Current branch: `audit/p0-int-verify-role-map-integrity`.
 
+Current PR: **#279 — Guard Verification Center role mapping persistence**.
+
 - branch is based on current `main` commit `f18075b84c705e16b792e0d40ac7daed0f814a61`;
 - branch is 0 commits behind `main`;
 - diff is limited to the Verification Center role-mapping production file, its focused regression test, and audit/task documentation;
 - production flow was re-read against `public_verify_group._save_role_config` and `guild_config.get_guild_config`;
 - stale-cache fallback behavior was found during review and corrected before PR validation;
-- exact-head GitHub CI/workflow execution has not yet been observed and must not be represented as passing.
+- targeted modified-region Python AST parse passed;
+- targeted source replay passed guard ownership and save → cache invalidate → refresh → verify → success ordering;
+- PR #279 initial head `add8e6bd3d1fbc426158218b19ab33b8a3409c76` produced 0 workflow runs / 0 commit statuses even though `.github/workflows/ci.yml` listens to `pull_request`;
+- this bookkeeping commit intentionally creates a PR synchronize event so workflow creation can be re-checked on the new exact head;
+- no absent workflow is represented as passing.
 
 ## Cleanup / conflicts
 
@@ -114,4 +120,4 @@ Do not investigate or modify that issue until the active task reaches its Defini
 
 ## Next step
 
-Open the focused PR from `audit/p0-int-verify-role-map-integrity`, validate the exact final head and actual workflow execution state, inspect the final diff for accidental changes, then merge only if the evidence remains clean and verify the merged blobs on `main`.
+Re-check workflow creation on PR #279's new exact head, validate the final diff and immutable production/test blobs, then mark ready/merge only if the available evidence remains clean; after merge, verify those blobs on `main`.
