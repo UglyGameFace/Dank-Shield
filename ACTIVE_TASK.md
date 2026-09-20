@@ -2,116 +2,87 @@
 
 ## Active task / desired outcome
 
-**P0-INT-001 — Verification Center canonical command dispatcher native interaction guard**
+**P0-INT-001 — Verification Center role-mapping save integrity + native interaction guard**
 
-Move the Verification Center's shared canonical-command dispatcher onto the native interaction service so its role/member mutations get structured Error IDs without rewriting the canonical `/verify` command implementations.
+Make the Verification Center's direct Role Mapping select both natively guarded and truthful about persistence. A failed guild-config write must never be followed by a false “now uses this role” success message.
 
 ## Why this is next
 
-PR #275 completed the Ticket Operations Center command-runner slice and merged as `e58bbf0c566b07bd72412d12a566d6d4e8217dc8`.
+PR #277 completed the shared Verification Center canonical-command dispatcher guard and merged as `35714aae0da9b4dcebfcb6d51abfade83f90beba`.
 
 Post-merge verification on `main` confirmed the validated production and regression-test blobs exactly:
 
-- `public_ticket_command_center.py` → `d0abd4e3dca0a4a38638fd1e8018f9d6574cbccd`
-- `test_public_ticket_command_center_native_interaction_static.py` → `e17d2fda8bdb68bcadb113bcc0b2fca38bb28191`
+- `public_verify_command_center.py` → `c1ae1b0273871025b40d4fd9da657490d75176b8`
+- `test_public_verify_command_center_native_interaction_static.py` → `1b91918bbc4c1d0f8ee8f55683d5e5cce2ac55f1`
+- canonical compatibility `public_verify_group.py` → `bb7b9c314517a21d14c0f7f16e7380e2fcf15a30`
 
-The next high-value raw interaction boundary is `_invoke` in `stoney_verify/commands_ext/public_verify_command_center.py`.
+The next direct mutation boundary is `VerifyRoleSelect.callback` in `public_verify_command_center.py`.
 
-That dispatcher is used by Verification Center actions including:
+Concrete root cause:
 
-- server-wide Pending/Unverified repair;
-- member Status and Diagnose;
-- Grant Verified + Member;
-- Restore Pending / Pending + Clear Conflicts;
-- add/remove Verified;
-- add/remove Resident.
-
-The dispatcher currently calls canonical command callbacks directly with no `run_guarded_interaction()` boundary.
-
-Current evidence also shows:
-
-- none of the Verification Center callers depend on an `_invoke` return value;
-- canonical `public_verify_group._ack()` checks `interaction.response.is_done()` before deferring, so it is compatible with a pre-deferred interaction;
-- the canonical `/verify` functions remain the owners of role hierarchy checks, role creation/discovery, config mapping, member role mutations, and their own normal response content.
+- the callback validates the selected role and then calls `public_verify_group._save_role_config(..., explicit_override=True)`;
+- `_save_role_config` catches persistence exceptions internally, prints a warning, and returns normally;
+- the callback then unconditionally tells staff `✅ ... now uses <role>`;
+- therefore a failed database write can produce a false success message;
+- because the persistence exception is swallowed before it reaches the UI callback, adding `run_guarded_interaction()` alone would not fix the bug.
 
 ## Scope
 
 In scope:
 
-- `_invoke` in `public_verify_command_center.py`;
-- native defer-before-canonical-command dispatch;
-- stable action naming derived from the canonical callback name;
-- preserving callable validation and exact callback arguments;
-- focused regression coverage proving guarded dispatch and pre-defer compatibility;
+- `VerifyRoleSelect.callback`;
+- native defer-before-save acknowledgement;
+- preserving the existing staff gate and `_bot_can_manage_role` hierarchy check;
+- preserving the existing explicit-override `_save_role_config` write path;
+- refreshing guild config after the attempted save and verifying the exact selected role ID actually persisted;
+- refusing the success message when persistence cannot be verified;
+- focused regression coverage for native guard ownership, save verification, and no false success;
 - P0 interaction ledger updates for this exact slice.
 
 Out of scope:
 
-- changing canonical `/verify` command logic;
-- changing role hierarchy or role discovery rules;
-- changing Verification Center navigation;
-- changing direct Verification Role Mapping config writes in this slice;
+- changing the broad semantics of `_save_role_config` for runtime discovery/auto-create callers;
+- changing role discovery aliases;
+- changing canonical `/verify` command behavior;
+- changing member role mutations;
 - changing Verify panel posting or setup routing;
 - ticket/setup/design work;
 - removing the global framework interaction monkey patch in this slice.
 
 ## Status
 
-**IMPLEMENTED — targeted validation passed; pending exact-head PR/main verification**
+**LOCKED — NOT IMPLEMENTED**
 
-## Required behavior preserved
+## Required behavior to preserve
 
-- non-callable canonical actions still fail clearly;
-- the exact canonical callback still receives the original interaction, positional args, and kwargs;
-- canonical `/verify` commands remain authoritative for staff checks, role checks, role mutations, repair behavior, and normal messages;
-- the dispatcher preserves the canonical callback return value;
-- existing center callers continue to route through the one shared dispatcher;
-- mutations are acknowledged before slower canonical role/config work.
+- only the owner of the Verification Center can use the view;
+- staff permission check remains authoritative;
+- invalid/non-role selections are rejected;
+- bot role hierarchy/manage-role validation remains before persistence;
+- the same logical-role → config-key mapping remains authoritative;
+- the write remains an explicit override through `_save_role_config(..., explicit_override=True)`;
+- a verified successful save still receives the existing human-readable role-mapping success message.
 
-## Implementation
+## Implementation rule
 
-`_invoke` now resolves the canonical callback, derives a stable action name, and executes the callback through `run_guarded_interaction(..., defer=True)`.
+Use `stoney_verify.interaction_guard.run_guarded_interaction` as a thin wrapper at `VerifyRoleSelect.callback`, with `defer=True`.
 
-The wrapper preserves:
+After `_save_role_config` returns, perform a fresh authoritative config read and compare the saved config key to the selected role ID. If the mapping does not match, raise an error inside the guarded action so the native Error ID path owns the failure and the callback does not send success.
 
-- `callback(interaction, *args, **kwargs)` argument forwarding;
-- callable validation;
-- the callback result via a captured `result`;
-- canonical `/verify` mutation ownership;
-- response compatibility because `public_verify_group._ack()` already skips defer when `interaction.response.is_done()` is true.
+Do not change `_save_role_config` globally in this slice because its silent best-effort behavior is also used by auto-discovery/auto-create paths. That broader semantic cleanup belongs to a separate audit item.
 
-Unexpected failures now use the native structured Error ID path. Guidance tells staff to reopen the Verification Center and inspect the current member/server verification state before retrying rather than falsely claiming no role/config mutation occurred.
-
-## Validation
-
-Targeted branch validation passed:
-
-- branch started from current `main` and remains 0 commits behind;
-- production diff is 30 changed lines in `public_verify_command_center.py`;
-- exact `_invoke` dispatcher region parses successfully with Python AST;
-- focused regression test parses successfully with Python AST;
-- focused source replay confirms:
-  - native `run_guarded_interaction` owns the shared dispatcher;
-  - `defer=True` acknowledges before canonical command work;
-  - callable validation remains present;
-  - exact interaction/args/kwargs forwarding remains present;
-  - callback results are preserved;
-  - stable action naming derives from the canonical callback name or command-name fallback;
-  - canonical `public_verify_group._ack()` remains pre-defer compatible;
-  - repair, grant, pending repair, verified-role, and resident-role actions still route through the shared dispatcher.
-
-Full repository pytest/Actions remains subject to the known runner/DNS infrastructure problem and must not be represented as passing unless a runner actually executes steps.
+Failure guidance must tell staff to reopen Role Mapping and verify the currently saved role before retrying. It must not claim the write definitely failed or definitely succeeded if the verification read itself errors.
 
 ## Previous completed slice
 
-**PR #275 — Guard Ticket Operations Center command runner**
+**PR #277 — Guard Verification Center canonical dispatcher**
 
-- merged as `e58bbf0c566b07bd72412d12a566d6d4e8217dc8`;
+- merged as `35714aae0da9b4dcebfcb6d51abfade83f90beba`;
 - verified on `main`;
-- validated ticket-center blob: `d0abd4e3dca0a4a38638fd1e8018f9d6574cbccd`;
-- validated regression-test blob: `e17d2fda8bdb68bcadb113bcc0b2fca38bb28191`;
-- GitHub Actions again terminated before runner step execution with `steps: null` / `logs_url: null`.
+- validated center blob: `c1ae1b0273871025b40d4fd9da657490d75176b8`;
+- validated regression-test blob: `1b91918bbc4c1d0f8ee8f55683d5e5cce2ac55f1`;
+- no GitHub workflow runs were created for the exact PR head before merge; this was recorded honestly rather than treated as passing CI.
 
 ## Next step
 
-Open the focused PR, verify the exact final head and CI execution state, merge with an expected-head guard if the code evidence remains clean, verify the validated production/test blobs on `main`, then lock the next single P0 interaction boundary.
+Implement the smallest guarded role-mapping callback with post-save persistence verification and focused regression coverage on a fresh implementation branch.

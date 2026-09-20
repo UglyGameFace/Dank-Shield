@@ -139,32 +139,33 @@ Remaining score blockers:
 
 ### `P0-INT-001` — Replace monkey-patched interaction logger with native interaction service
 
-Status: `PARTIAL / BLOCKER — Verification Center dispatcher guarded; pending PR/main verification`
+Status: `PARTIAL / BLOCKER — Verification dispatcher merged; direct role-mapping save integrity is next locked slice`
 
 Goal:
 
-Stop generic `interaction failed` outcomes without patching Discord.py internals.
+Stop generic `interaction failed` outcomes without patching Discord.py internals, while ensuring state-changing UI actions never report false success.
 
 Progress completed on current `main`:
 
 - Protection Center command/button/modal/select paths use native guarded interaction wrappers.
 - `/dank design` command-open uses `run_guarded_interaction()`.
 - Exact-format editor runtime actions are native-guarded.
-- Style-change missing-icon review actions are native-guarded.
 - Reviewed Dank Design Apply / Undo mutation boundaries are native-guarded and verified on `main` via PR #271.
 - `/dank setup-find` result Apply is native-guarded and verified on `main` via PR #273.
-- Ticket Operations Center `_run_ticket_command` is native-guarded and verified on `main` via PR #275.
+- Ticket Operations Center shared command runner is native-guarded and verified on `main` via PR #275.
+- Verification Center shared canonical-command dispatcher is native-guarded and verified on `main` via PR #277.
 
 Next locked slice:
 
-- The active branch places `_invoke` in `public_verify_command_center.py` behind `run_guarded_interaction(..., defer=True)`.
-- The dispatcher preserves exact callback/argument forwarding and callback results while deriving a stable `verify.center.*` action name.
-- Canonical `public_verify_group._ack()` remains response-done aware, so canonical role/config commands tolerate the pre-deferred boundary.
-- Repair, grant, pending repair, verified-role, and resident-role center actions continue to route through the shared dispatcher.
+- `VerifyRoleSelect.callback` directly writes Verification Center role mappings.
+- Its current `_save_role_config` helper swallows persistence exceptions, so the callback can send a false success message after a failed database write.
+- A native guard alone cannot see an exception that the helper already swallowed.
+- The narrow fix must guard the callback and perform a fresh post-save config read to verify the exact selected role ID persisted before sending success.
+- The global best-effort behavior of `_save_role_config` for auto-discovery/auto-create remains out of scope.
 
 Remaining before `P0-INT-001` can be marked done:
 
-- merge and verify the guarded Verification Center dispatcher;
+- migrate and verify the locked Verification Center role-mapping save boundary;
 - continue the next single highest-risk direct verification mutation boundary after that;
 - ensure diagnostics expose recent native interaction failures safely;
 - remove or disable `global_interaction_trace_guard` framework patching only after native coverage is sufficient;
@@ -175,6 +176,7 @@ Exit criteria:
 - no production startup guard patches `CommandTree`, app command internals, or `View._scheduled_task`;
 - setup/protection/design/ticket/verify state-changing callbacks use the native interaction service;
 - failing callbacks log structured context and show a useful user message;
+- state-changing UI paths do not report success unless their required persistence/mutation outcome is verified;
 - tests cover response done/not done, followup fallback, duplicate click, stale component, and exception paths.
 
 ---
@@ -325,14 +327,15 @@ Progress:
 - focused Apply/Undo static regression coverage is on `main`
 - `/dank setup-find` result Apply config writer merged in PR #273 and was verified on `main`
 - Ticket Operations Center `_run_ticket_command` merged in PR #275 and was verified on `main`
-- Verification Center `_invoke` dispatcher is implemented and targeted-validation-clean on the active branch
+- Verification Center `_invoke` dispatcher merged in PR #277 and was verified on `main`
+- Verification Center direct Role Mapping save integrity is the next locked native-guard slice
 
 Verification:
 
 - PR #271 validated immutable V2/test blobs match current `main`
 - existing Dank Design ownership/state assertions were replayed successfully against the merged shape
 - full checkout/pytest remains blocked by the known external GitHub runner/DNS infrastructure issue
-- verification callbacks are not fully migrated yet; the current dispatcher slice still needs PR/main verification
+- direct verification callbacks are not fully migrated yet
 
 ### Commit 3 — Startup guard inventory and migration table
 
