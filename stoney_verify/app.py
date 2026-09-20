@@ -265,6 +265,68 @@ def _setup_ticket_events_once() -> None:
         print("❌ ticket_events.setup(bot) failed:", repr(e))
 
 
+async def _configured_runtime_guild_ids(
+    guild_ids: list[int],
+) -> set[int] | None:
+    """Resolve configured public guilds in bounded Supabase batches."""
+
+    clean_ids = sorted(
+        {
+            int(guild_id)
+            for guild_id in guild_ids
+            if int(guild_id) > 0
+        }
+    )
+    if not clean_ids:
+        return set()
+
+    sb = get_supabase()
+    if sb is None:
+        return None
+
+    table_name = _env_str(
+        "DANK_GUILD_CONFIG_TABLE",
+        "guild_configs",
+    ) or "guild_configs"
+    batch_size = max(
+        25,
+        min(
+            500,
+            _env_int("DANK_STARTUP_CONFIG_BATCH_SIZE", 200),
+        ),
+    )
+
+    def _read() -> set[int]:
+        configured: set[int] = set()
+        for start in range(0, len(clean_ids), batch_size):
+            batch = clean_ids[start : start + batch_size]
+            response = (
+                sb.table(table_name)
+                .select("guild_id")
+                .in_("guild_id", [str(guild_id) for guild_id in batch])
+                .execute()
+            )
+            for row in list(getattr(response, "data", None) or []):
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    guild_id = int(str(row.get("guild_id") or "0"))
+                except Exception:
+                    guild_id = 0
+                if guild_id > 0:
+                    configured.add(guild_id)
+        return configured
+
+    try:
+        return await asyncio.to_thread(_read)
+    except Exception as exc:
+        print(
+            "⚠️ Public startup bulk guild-config scope failed; "
+            f"falling back to per-guild cache reads: {exc!r}"
+        )
+        return None
+
+
 async def _guild_config_source(guild_id: int, *, refresh: bool = False) -> str:
     try:
         from .guild_config import get_guild_config
@@ -317,24 +379,49 @@ async def _resolve_runtime_guilds() -> list[discord.Guild]:
     if _public_scope_enabled():
         guilds = _unique_guilds(list(getattr(bot, "guilds", []) or []))
         configured: list[discord.Guild] = []
+        configured_ids = await _configured_runtime_guild_ids(
+            [int(guild.id) for guild in guilds]
+        )
 
-        for index, guild in enumerate(guilds):
-            gid = int(getattr(guild, "id", 0) or 0)
-            source = await _guild_config_source(gid, refresh=False)
-            if source.startswith("supabase:"):
-                configured.append(guild)
-            elif gid not in _SKIPPED_UNCONFIGURED_STARTUP_GUILDS:
-                _SKIPPED_UNCONFIGURED_STARTUP_GUILDS.add(gid)
+        if configured_ids is not None:
+            configured = [
+                guild
+                for guild in guilds
+                if int(guild.id) in configured_ids
+            ]
+            skipped_ids = [
+                int(guild.id)
+                for guild in guilds
+                if int(guild.id) not in configured_ids
+            ]
+            if skipped_ids:
+                _SKIPPED_UNCONFIGURED_STARTUP_GUILDS.update(skipped_ids)
                 print(
-                    "🌐 Public startup scope skipping unconfigured guild "
-                    f"guild={gid} source={source or 'unknown'}"
+                    "🌐 Public startup scope skipped unconfigured guilds "
+                    f"count={len(skipped_ids)} sample={skipped_ids[:8]}"
                 )
+        else:
+            skipped_ids: list[int] = []
+            for index, guild in enumerate(guilds):
+                gid = int(getattr(guild, "id", 0) or 0)
+                source = await _guild_config_source(gid, refresh=False)
+                if source.startswith("supabase:"):
+                    configured.append(guild)
+                else:
+                    skipped_ids.append(gid)
+                    _SKIPPED_UNCONFIGURED_STARTUP_GUILDS.add(gid)
 
-            if (index + 1) % 25 == 0:
-                try:
-                    await asyncio.sleep(0)
-                except Exception:
-                    pass
+                if (index + 1) % 25 == 0:
+                    try:
+                        await asyncio.sleep(0)
+                    except Exception:
+                        pass
+
+            if skipped_ids:
+                print(
+                    "🌐 Public startup scope fallback skipped unconfigured guilds "
+                    f"count={len(skipped_ids)} sample={skipped_ids[:8]}"
+                )
 
         if not configured:
             print("⚠️ Public startup scope found no configured guilds for startup maintenance.")
