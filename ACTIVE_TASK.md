@@ -1,100 +1,108 @@
 # ACTIVE TASK
 
 ## ID
-DS-WELCOME-UNICODE-LONGTAIL — Deterministic long-tail lifecycle-card Unicode fallback
+DS-DESIGN-SEPARATORS-265 — First-class mixed separator coverage
 
 ## Status
-IMPLEMENTATION + FUNCTIONAL VALIDATION COMPLETE — final exact-head CI and merge gate
+INVESTIGATED — root cause confirmed; implementation in progress
 
 ## Single active-task lock
-Only the lifecycle-card long-tail Unicode fallback task is active. Do not admit
-unrelated redesign, cleanup, or feature work until this branch is validated,
-cleaned up, merged, and verified on main.
+Only the Server Designer separator-coverage task is active. Do not start unrelated
+feature, security, cleanup, or redesign work until this task is implemented,
+validated on the exact final head, cleaned up, merged, and verified on main.
 
 ## Previous task closed
-PR #262 (Server Designer UX + font system hardening) merged as
-`e1ed7093983fffd5e947b1a240e3d455df80dc1e`. Its exact final head
-`08be759a4ca87592e05ca8c600e9a5d5ab92d4b3` passed all eight required
-workflows, and the merged commit reports `discloud/commit: success`.
+PR #264 (deterministic long-tail lifecycle-card Unicode fallback) merged as
+`758145be9e20d6d26240908980a6d1a4948616eb`. Its exact validated PR head was
+`f0f216ed5ea780b4edd0355d237b4a297f6fd321`, the merged main commit reports
+`discloud/commit: success`, and superseded draft PR #263 has been closed.
 
 ## User-visible problem
-Welcome/exit cards still rendered tofu boxes for a live Discord display name
-containing `ᗩ ᗰ ᒪ`, even after PR #260 added exact-Unicode preservation and
-grapheme-aware font fallback.
+A real server uses intentional mixed channel layouts such as:
+- `👋--welcome`
+- `📣-announcements`
+- category/header layouts using a readable spaced pipe, e.g. `🏁 | start-here-verify`
+
+Dank Design can parse many separator styles internally, but double hyphen is not a
+first-class separator and the primary Server Designer / exact-item pickers expose
+only hard-coded subsets of the larger separator catalog. The result is that a user
+can create a valid style manually in Discord that the bot cannot faithfully select,
+preserve, or reproduce from its own UI.
 
 ## Root cause
-PR #260 fixed text rewriting and single-font rendering, but the production
-fallback inventory did not contain a face covering Unified Canadian Aboriginal
-Syllabics. The resolver therefore preserved the exact characters but eventually
-selected the best available unsupported face, which Pillow rendered as tofu.
-
-This is a coverage problem, not a normalization or Discord-name problem.
+1. `server_design_studio.SEPARATOR_LIBRARY` contains single hyphen but not
+   `--`, so Smart Auto-Detect sees `--` as a repeated single-hyphen separator
+   instead of an intentional two-character separator.
+2. `server_design_majority_layout.detect_channel_separator()` deliberately marks
+   repeated known tokens as `doubled`; this is correct for accidental duplicates,
+   but without a longer `--` token in the library it misclassifies the intentional
+   layout.
+3. Server-wide and exact-item UIs maintain separate hard-coded separator subsets,
+   so supported catalog entries can exist but remain unavailable from a given flow.
+4. The Gothic spaced ASCII pipe is currently synthesized dynamically by
+   `ensure_separator_spec()` instead of existing as a stable first-class catalog
+   entry.
 
 ## Execution path
-`welcome_card_runtime.py`
-→ `lifecycle_card_text.image_card_member()`
-→ `welcome_card_service.py`
-→ `welcome_card_typography_engine.py`
-→ `unicode_font_fallback.py`
-→ PNG
+Server-wide:
+`public_design_studio_v2.DesignServerSeparatorSelect`
+→ `public_design_studio._style_change_separator_options`
+→ `server_design_studio.SEPARATORS_BY_ID`
+→ `server_design_plan_service`
+→ `server_design_studio.build_styled_name`
 
-Exit cards share the same lifecycle text adapter and Unicode fallback engine.
+Exact-item:
+`public_design_studio.ExactSeparatorSelect`
+→ saved format lock
+→ `server_design_plan_service`
+→ `server_design_studio.build_styled_name`
 
-## Implementation
-- ship the official Noto Sans Canadian Aboriginal variable font inside the repo
-- retain the upstream SIL Open Font License alongside the binary
-- discover packaged fallback faces from a deterministic module-relative path
-- put packaged fallbacks ahead of environment-dependent JustMyType/system faces
-- preserve themed/custom fonts as the primary choice and only fall back for
-  grapheme clusters they cannot render
-- add the exact live sample `ᗩ ᗰ ᒪ` to production fallback coverage tests
-- add the exact live sample to full welcome-card rendering regressions
-- add a self-contained regression that disables registered/system fallbacks and
-  proves the bundled face alone covers the live name
+Smart Repair / Auto-Detect:
+`server_design_majority_layout.detect_channel_separator`
+→ `infer_*_layout`
+→ local/global repair options
+→ Server Design plan
 
-## Compatibility / cleanup
-- no NFKC/transliteration/replacement behavior is reintroduced
-- no dynamic Discord text is uppercased or rewritten
-- no existing fallback pack or custom-font behavior is removed
-- no unrelated Server Designer behavior is changed
-- the bundled font is unmodified and kept with its OFL-1.1 license
+## Required behavior
+- Treat `--` as an intentional supported separator, not an accidental duplicate.
+- Make compact pipe `|` and spaced pipe ` | ` stable first-class catalog entries.
+- Add a few common repeated ASCII variants that are safe and useful for mixed real
+  servers, without turning arbitrary punctuation inside names into separators.
+- Preserve every separator currently exposed in the server-wide and exact-item UI.
+- Keep Discord select menus within the 25-option hard limit.
+- Keep the full separator example gallery available.
+- Keep accidental repeats such as `----` detectable as doubled `--` when the
+  configured token itself is `--`.
+- Do not alter permissions, roles, topics, channel order, ticket behavior, protection,
+  Unicode font behavior, or unrelated Server Designer ownership.
 
-## Functional validation completed on head `b623c89a39c30a93cb1d8bf22a98d43e756f285e`
-- committed-diff whitespace check: PASS
-- Python compile: PASS
-- full unit suite: **1689 passed, 9 warnings, 0 failures**
-- exact live-name regression for `ᗩ ᗰ ᒪ`: included in the green full suite
-- standalone repository tool checks: PASS
-- public setup, command surface/friction, invite permissions, setup safety: PASS
-- Dank Design Smart Auto-Detect, role-truth, and event-boundary audits: PASS
-- Claim-first ticket security: PASS
-- Managed category SQL smoke test: PASS
-- Dank Shield CI: PASS
-- Dank Design Regression CI: PASS
-- Application Command Size Diagnostics: PASS
-- Profile Runtime Diagnostics: PASS
-- Ticket Owner Emergency Override: PASS
-- branch was 0 commits behind `main` at validation time
-- deployment packaging inspection found no .gitignore/Discloud exclusion for bundled .ttf assets
+## Planned implementation
+- add first-class `double_dash`, `pipe_compact`, `pipe_spaced`,
+  `double_pipe`, and `double_colon` specs to the canonical separator library
+- centralize the server-wide and exact-item curated separator ID lists in
+  `server_design_studio.py`
+- wire both Discord pickers to those canonical lists
+- make Gothic Clean use the stable `pipe_spaced` catalog entry directly
+- add regressions for parsing, auto-detect, UI exposure, select-size limits, and
+  intentional-vs-accidental doubled separator behavior
 
-The first CI attempt on `08bff77940eb10bb246ee4ac8554dae3b8961ded`
-stopped at `git diff --check` because the upstream OFL text carried one trailing
-space. The license text whitespace was normalized only; no production behavior
-changed. The corrected functional head above then passed the complete gate.
-
-## Final merge gate
-This task-record update is documentation-only and changes the PR head. Re-run all
-required PR workflows on the new exact final head. If they remain green:
-- confirm branch is still 0 behind current `main`
-- perform final changed-file/diff cleanup inspection
-- mark PR #264 ready
+## Validation required
+- targeted separator / Server Designer tests
+- full Python compile
+- full unit suite
+- Dank Design regression suite and static audits
+- all required PR workflows on the exact final head
+- final changed-file/diff inspection and main-currentness check
 - merge only the exact validated SHA
-- verify resulting `main` contains that head and requires `discloud/commit: success`
+- verify merged main and `discloud/commit: success`
+
+## Cleanup / conflicts
+- superseded Unicode draft PR #263 was closed before this task started
+- no unrelated code changes are authorized
 
 ## Backlog
 None added from this task.
 
 ## Next step
-Run exact-head CI for this documentation-only finalization commit. If all required
-checks remain green, perform the final diff/currentness gate, mark PR #264 ready,
-merge the exact validated head, and verify the deployed main commit.
+Implement the canonical separator catalog and picker ownership changes, then add the
+mixed-layout regressions before running exact-head validation.
