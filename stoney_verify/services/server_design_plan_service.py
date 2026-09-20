@@ -49,9 +49,11 @@ def theme_default_separator_id(options: Mapping[str, Any]) -> str:
     theme = studio.THEMES_BY_ID.get(theme_id, studio.THEMES_BY_ID["gothic_clean"])
 
     # Gothic Clean intentionally uses a readable spaced ASCII pipe in the live
-    # plan even though the historical catalog entry still carries bar_full.
+    # plan even though the historical theme tuple still carries bar_full. Keep
+    # that established behavior on the stable first-class catalog entry instead
+    # of synthesizing a separator into global runtime state.
     if theme_id == "gothic_clean":
-        return majority.ensure_separator_spec(studio, "|", "spaced")
+        return "pipe_spaced"
 
     return str(getattr(theme, "channel_separator", "none") or "none").strip() or "none"
 
