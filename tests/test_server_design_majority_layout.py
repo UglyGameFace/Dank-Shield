@@ -108,13 +108,16 @@ def test_correct_separator_wrong_spacing_repairs_to_majority_spacing():
 
 
 def test_parser_distinguishes_doubled_separator_and_separator_inside_name_text():
-    intentional_double_pipe = majority.detect_channel_separator(studio, "💬 || general")
-    doubled = majority.detect_channel_separator(studio, "💬 |||| general")
+    # double_pipe is the first-class compact "||" separator. A spaced " || "
+    # layout is a distinct visible value that majority detection may synthesize
+    # later; it must not be mislabeled as the compact catalog entry here.
+    intentional_double_pipe = majority.detect_channel_separator(studio, "💬||general")
+    doubled = majority.detect_channel_separator(studio, "💬||||general")
     inside_name = majority.detect_channel_separator(studio, "💬 general | old")
 
     assert intentional_double_pipe["separator_id"] == "double_pipe"
     assert intentional_double_pipe["doubled"] is False
-    assert intentional_double_pipe["spacing"] == "spaced"
+    assert intentional_double_pipe["spacing"] == "compact"
     assert doubled["token"] == "||"
     assert doubled["doubled"] is True
     assert doubled["spacing"] == "doubled"
