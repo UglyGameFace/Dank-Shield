@@ -334,12 +334,6 @@ CATEGORY_FRAME_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Gothic & Celestial", ("gothic_cross", "cross_line", "moon", "sun", "floral", "winged", "crown_line")),
     ("Tech & Minimal", ("tech_corner", "tech_floor", "terminal", "wave", "chevron", "minimal_dot", "bullet_line")),
 )
-CATEGORY_FRAME_GROUP_BY_ID = {
-    frame_id: group_label
-    for group_label, frame_ids in CATEGORY_FRAME_GROUPS
-    for frame_id in frame_ids
-}
-
 THEMES: tuple[ThemePreset, ...] = (
     ThemePreset("420_lounge", "🍃 420 Lounge", "line", "bar_full", "normal", "420_lounge"),
     ThemePreset("gothic_clean", "🕯 Gothic Clean", "line", "bar_full", "fraktur", "gothic"),
@@ -931,7 +925,7 @@ def design_score(items: list[dict[str, Any]]) -> dict[str, int | str]:
 
 
 __all__ = [
-    "CATEGORY_FRAMES", "CATEGORY_FRAME_GROUPS", "CATEGORY_FRAME_GROUP_BY_ID", "DEFAULT_DELAY_SECONDS", "DEFAULT_PROTECTED_NAMES", "DESIGN_FONT_STYLES", "DISCORD_NAME_LIMIT",
+    "CATEGORY_FRAMES", "CATEGORY_FRAME_GROUPS", "DEFAULT_DELAY_SECONDS", "DEFAULT_PROTECTED_NAMES", "DESIGN_FONT_STYLES", "DISCORD_NAME_LIMIT",
     "EXACT_EDITOR_SEPARATOR_IDS", "FONT_STYLES", "FONT_STYLE_LABELS", "ICON_PACKS", "MAX_PLAN_ITEMS",
     "SEPARATOR_LIBRARY", "SERVER_DESIGN_SEPARATOR_IDS", "THEMES", "build_styled_name",
     "category_frame_affixes", "category_frame_preview", "design_score", "detect_duplicate_outputs", "fallback_ladder", "font_label",
