@@ -10,11 +10,12 @@ owned here.
 """
 
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 import discord
 
+from stoney_verify.interaction_guard import run_guarded_interaction, safe_send_interaction
 from stoney_verify.commands_ext import public_design_studio as legacy
 from stoney_verify.services import server_design_apply_service as apply_service
 from stoney_verify.services import server_design_plan_service as plans
@@ -42,6 +43,30 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 _require_design_permission = legacy._require_design_permission  # type: ignore[attr-defined]
 _load_design_options = legacy._load_design_options  # type: ignore[attr-defined]
+
+_DESIGN_V2_MUTATION_ERROR_GUIDANCE = (
+    "Do not retry this design mutation blindly. Reopen `/dank home`, choose **Server Design**, "
+    "and review the current preview/Undo state before trying again. Use the Error ID in "
+    "`/dank diagnostics` if the failure repeats."
+)
+
+
+async def _guard_design_v2_action(
+    interaction: discord.Interaction,
+    action_name: str,
+    action: Callable[[], Awaitable[None]],
+    *,
+    defer: bool = False,
+) -> None:
+    await run_guarded_interaction(
+        interaction,
+        action,
+        defer=defer,
+        ephemeral=True,
+        action_name=action_name,
+        error_title="❌ Dank Design action stopped unexpectedly",
+        error_guidance=_DESIGN_V2_MUTATION_ERROR_GUIDANCE,
+    )
 
 
 def _rule_counts(options: Mapping[str, Any]) -> dict[str, int]:
@@ -1211,23 +1236,27 @@ def _undo_preview_embed(snapshot: Mapping[str, Any]) -> discord.Embed:
 
 
 async def _open_undo(interaction: discord.Interaction) -> None:
-    if not await _require_design_permission(interaction):
-        return
-    guild = interaction.guild
-    assert guild is not None
-    if not interaction.response.is_done():
-        await interaction.response.defer(ephemeral=True, thinking=False)
-    latest = await legacy._latest_rollback_snapshot(int(guild.id))  # type: ignore[attr-defined]
-    if not latest:
-        await legacy.safe_send_interaction(  # type: ignore[attr-defined]
-            interaction,
-            content="No applied Dank Design batch is available to undo.",
-            ephemeral=True,
-            action_name="design.v2.undo.none",
-        )
-        return
-    created_at = _safe_float(latest.get("created_at"), 0.0)
-    await interaction.edit_original_response(embed=_undo_preview_embed(latest), view=UndoConfirmView(snapshot_created_at=created_at))
+    async def action() -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=False)
+        latest = await legacy._latest_rollback_snapshot(int(guild.id))  # type: ignore[attr-defined]
+        if not latest:
+            await safe_send_interaction(
+                interaction,
+                content="No applied Dank Design batch is available to undo.",
+                ephemeral=True,
+                action_name="design.v2.undo.none",
+            )
+            return
+        created_at = _safe_float(latest.get("created_at"), 0.0)
+        await interaction.edit_original_response(embed=_undo_preview_embed(latest), view=UndoConfirmView(snapshot_created_at=created_at))
+
+    await _guard_design_v2_action(interaction, "design.v2.undo_open", action, defer=False)
+
 
 
 class DoneView(DesignView):
@@ -1251,78 +1280,87 @@ class UndoConfirmView(DesignView):
 
     @discord.ui.button(label="Confirm Undo Last Apply", emoji="↩️", style=discord.ButtonStyle.danger, custom_id="dank_design_v2:undo_confirm", row=0)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        lock = legacy._lock_for(int(guild.id))  # type: ignore[attr-defined]
-        if lock.locked():
-            await interaction.response.send_message("⏳ A Dank Design job is already running for this server.", ephemeral=True)
-            return
+        async def action() -> None:
+            if not await _require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            lock = legacy._lock_for(int(guild.id))  # type: ignore[attr-defined]
+            if lock.locked():
+                await safe_send_interaction(
+                    interaction,
+                    content="⏳ A Dank Design job is already running for this server.",
+                    ephemeral=True,
+                    action_name="design.v2.undo_confirm.guild_busy",
+                )
+                return
 
-        await interaction.response.defer(ephemeral=True, thinking=False)
-        latest = await legacy._latest_rollback_snapshot(int(guild.id))  # type: ignore[attr-defined]
-        if not _snapshot_matches(latest, self.snapshot_created_at):
-            await interaction.edit_original_response(
-                content="❌ This Undo preview is obsolete. Open Undo Last Apply again.",
-                embed=None,
-                view=DoneView(can_rollback=bool(latest)),
-            )
-            return
-
-        async with lock:
+            await interaction.response.defer(ephemeral=True, thinking=False)
             latest = await legacy._latest_rollback_snapshot(int(guild.id))  # type: ignore[attr-defined]
             if not _snapshot_matches(latest, self.snapshot_created_at):
-                await interaction.edit_original_response(content="❌ The latest Apply snapshot changed before Undo started. Nothing was changed.", embed=None, view=DoneView(can_rollback=True))
-                return
-            assert latest is not None
-            items = list(latest.get("items") or [])
-            ready, errors = await apply_service.preflight_undo(guild, items, name_limit=studio.DISCORD_NAME_LIMIT)
-            if errors:
-                embed = discord.Embed(
-                    title="❌ Undo Blocked Before Any Rename",
-                    description="**Nothing was changed and the Undo snapshot was kept.** At least one current name no longer matches the Apply snapshot.",
-                    color=discord.Color.orange(),
+                await interaction.edit_original_response(
+                    content="❌ This Undo preview is obsolete. Open Undo Last Apply again.",
+                    embed=None,
+                    view=DoneView(can_rollback=bool(latest)),
                 )
-                embed.add_field(name="What changed", value="\n".join(f"• {line}" for line in errors[:8])[:1024], inline=False)
-                await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=True))
                 return
 
-            result = await apply_service.undo_prepared(
-                guild,
-                ready,
-                user_id=int(interaction.user.id),
-                delay_seconds=studio.DEFAULT_DELAY_SECONDS,
-            )
-            if not result.ok:
-                residual = list(result.residual or [])
-                embed = discord.Embed(
-                    title="⚠️ Undo Stopped Safely",
-                    description=(
-                        f"{result.failure}\n\n"
-                        + (
-                            f"The Undo attempt could not fully restore its own partial work. **{len(residual)}** row(s) need attention. The original Undo snapshot was kept."
-                            if residual
-                            else f"Automatically restored **{result.restored_count}** partial Undo change(s). **The server is back to its pre-Undo names and the snapshot was kept.**"
-                        )
-                    ),
-                    color=discord.Color.orange(),
-                )
-                if result.rollback_failures:
-                    embed.add_field(name="Attention", value="\n".join(f"• {line}" for line in result.rollback_failures[:8])[:1024], inline=False)
-                await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=True))
-                return
+            async with lock:
+                latest = await legacy._latest_rollback_snapshot(int(guild.id))  # type: ignore[attr-defined]
+                if not _snapshot_matches(latest, self.snapshot_created_at):
+                    await interaction.edit_original_response(content="❌ The latest Apply snapshot changed before Undo started. Nothing was changed.", embed=None, view=DoneView(can_rollback=True))
+                    return
+                assert latest is not None
+                items = list(latest.get("items") or [])
+                ready, errors = await apply_service.preflight_undo(guild, items, name_limit=studio.DISCORD_NAME_LIMIT)
+                if errors:
+                    embed = discord.Embed(
+                        title="❌ Undo Blocked Before Any Rename",
+                        description="**Nothing was changed and the Undo snapshot was kept.** At least one current name no longer matches the Apply snapshot.",
+                        color=discord.Color.orange(),
+                    )
+                    embed.add_field(name="What changed", value="\n".join(f"• {line}" for line in errors[:8])[:1024], inline=False)
+                    await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=True))
+                    return
 
-            popped = await _pop_snapshot_if_current(int(guild.id), self.snapshot_created_at)
-            next_snapshot = await legacy._latest_rollback_snapshot(int(guild.id))  # type: ignore[attr-defined]
-            embed = discord.Embed(
-                title="↩️ Undo Complete",
-                description=f"Restored **{len(result.applied)}** item(s). Failed **0**. The latest Apply snapshot was {'removed' if popped else 'left in history for safety'}.",
-                color=discord.Color.green() if popped else discord.Color.orange(),
-            )
-            if not popped:
-                embed.add_field(name="History note", value="The names were restored, but history cleanup did not complete. Reopening Undo is safe because preflight will refuse stale rows.", inline=False)
-            await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=bool(next_snapshot)))
+                result = await apply_service.undo_prepared(
+                    guild,
+                    ready,
+                    user_id=int(interaction.user.id),
+                    delay_seconds=studio.DEFAULT_DELAY_SECONDS,
+                )
+                if not result.ok:
+                    residual = list(result.residual or [])
+                    embed = discord.Embed(
+                        title="⚠️ Undo Stopped Safely",
+                        description=(
+                            f"{result.failure}\n\n"
+                            + (
+                                f"The Undo attempt could not fully restore its own partial work. **{len(residual)}** row(s) need attention. The original Undo snapshot was kept."
+                                if residual
+                                else f"Automatically restored **{result.restored_count}** partial Undo change(s). **The server is back to its pre-Undo names and the snapshot was kept.**"
+                            )
+                        ),
+                        color=discord.Color.orange(),
+                    )
+                    if result.rollback_failures:
+                        embed.add_field(name="Attention", value="\n".join(f"• {line}" for line in result.rollback_failures[:8])[:1024], inline=False)
+                    await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=True))
+                    return
+
+                popped = await _pop_snapshot_if_current(int(guild.id), self.snapshot_created_at)
+                next_snapshot = await legacy._latest_rollback_snapshot(int(guild.id))  # type: ignore[attr-defined]
+                embed = discord.Embed(
+                    title="↩️ Undo Complete",
+                    description=f"Restored **{len(result.applied)}** item(s). Failed **0**. The latest Apply snapshot was {'removed' if popped else 'left in history for safety'}.",
+                    color=discord.Color.green() if popped else discord.Color.orange(),
+                )
+                if not popped:
+                    embed.add_field(name="History note", value="The names were restored, but history cleanup did not complete. Reopening Undo is safe because preflight will refuse stale rows.", inline=False)
+                await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=bool(next_snapshot)))
+
+        await _guard_design_v2_action(interaction, "design.v2.undo_confirm", action, defer=False)
+
 
     @discord.ui.button(label="Cancel", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:undo_cancel", row=0)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1434,159 +1472,183 @@ class ReviewedPreviewView(DesignView):
 
     @discord.ui.button(label="Apply Reviewed Changes", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_design_v2:apply", row=0)
     async def apply(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await _require_design_permission(interaction):
-            return
-        guild = interaction.guild
-        assert guild is not None
-        key = legacy._key(int(guild.id), int(interaction.user.id))  # type: ignore[attr-defined]
-        payload = legacy._PENDING.get(key) or {}  # type: ignore[attr-defined]
+        async def action() -> None:
+            if not await _require_design_permission(interaction):
+                return
+            guild = interaction.guild
+            assert guild is not None
+            key = legacy._key(int(guild.id), int(interaction.user.id))  # type: ignore[attr-defined]
+            payload = legacy._PENDING.get(key) or {}  # type: ignore[attr-defined]
 
-        if not legacy._pending_matches(payload, self.pending_created_at):  # type: ignore[attr-defined]
-            await interaction.response.send_message("❌ This preview is obsolete. Build a fresh preview before applying.", ephemeral=True)
-            return
-        items = list(payload.get("items") or [])
-        if not items:
-            await interaction.response.send_message("❌ No reviewed preview is available. Build the preview again.", ephemeral=True)
-            return
-        if any(item.get("status") == "failed" for item in items):
-            await interaction.response.send_message("❌ This preview has blockers. Fix them and preview again.", ephemeral=True)
-            return
-
-        lock = legacy._lock_for(int(guild.id))  # type: ignore[attr-defined]
-        if lock.locked():
-            await interaction.response.send_message("⏳ A design Apply is already running for this server.", ephemeral=True)
-            return
-
-        await interaction.response.defer(ephemeral=True, thinking=False)
-        mode = _safe_str(payload.get("mode"), "preview")
-        async with lock:
-            ready, skipped, preflight_errors = await apply_service.preflight_plan(
-                guild,
-                items,
-                name_limit=studio.DISCORD_NAME_LIMIT,
-            )
-            if preflight_errors:
-                legacy._PENDING.pop(key, None)  # type: ignore[attr-defined]
-                embed = discord.Embed(
-                    title="❌ Preview Changed Before Apply",
-                    description=(
-                        "**No names were changed.** The complete batch was checked before the first rename and at least one preview row is no longer current. "
-                        "Build a fresh preview instead of applying stale assumptions."
-                    ),
-                    color=discord.Color.orange(),
+            if not legacy._pending_matches(payload, self.pending_created_at):  # type: ignore[attr-defined]
+                await safe_send_interaction(
+                    interaction,
+                    content="❌ This preview is obsolete. Build a fresh preview before applying.",
+                    ephemeral=True,
+                    action_name="design.v2.apply_reviewed.stale_preview",
                 )
-                embed.add_field(name="What changed", value="\n".join(f"• {line}" for line in preflight_errors[:8])[:1024], inline=False)
-                await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=False))
+                return
+            items = list(payload.get("items") or [])
+            if not items:
+                await safe_send_interaction(
+                    interaction,
+                    content="❌ No reviewed preview is available. Build the preview again.",
+                    ephemeral=True,
+                    action_name="design.v2.apply_reviewed.no_preview",
+                )
+                return
+            if any(item.get("status") == "failed" for item in items):
+                await safe_send_interaction(
+                    interaction,
+                    content="❌ This preview has blockers. Fix them and preview again.",
+                    ephemeral=True,
+                    action_name="design.v2.apply_reviewed.blocked",
+                )
                 return
 
-            async def progress(done: int, total: int) -> None:
-                if done % 5 == 0 or done == total:
-                    await interaction.edit_original_response(content=f"🚀 Applying reviewed design… **{done}/{total}** changed.")
-
-            result = await apply_service.apply_prepared(
-                guild,
-                ready,
-                user_id=int(interaction.user.id),
-                delay_seconds=studio.DEFAULT_DELAY_SECONDS,
-                progress=progress,
-            )
-            if not result.ok:
-                legacy._PENDING.pop(key, None)  # type: ignore[attr-defined]
-                residual = list(result.residual or [])
-                snapshot, durable = await _store_residual_snapshot(int(guild.id), int(interaction.user.id), residual)
-                embed = discord.Embed(
-                    title="⚠️ Apply Stopped Safely",
-                    description=(
-                        f"{result.failure}\n\n"
-                        + (
-                            f"Automatically restored **{result.restored_count}** earlier rename(s). **No partial design was left behind.**"
-                            if not residual
-                            else f"Automatic compensation left **{len(residual)}** item(s) changed. An Undo snapshot was kept{' durably' if durable else ' in emergency memory'} for those rows."
-                        )
-                    ),
-                    color=discord.Color.orange(),
+            lock = legacy._lock_for(int(guild.id))  # type: ignore[attr-defined]
+            if lock.locked():
+                await safe_send_interaction(
+                    interaction,
+                    content="⏳ A design Apply is already running for this server.",
+                    ephemeral=True,
+                    action_name="design.v2.apply_reviewed.guild_busy",
                 )
-                if result.rollback_failures:
-                    embed.add_field(name="Compensation attention", value="\n".join(f"• {line}" for line in result.rollback_failures[:8])[:1024], inline=False)
-                if snapshot and not durable:
-                    embed.add_field(name="Important", value="Emergency Undo history is memory-only because durable snapshot storage failed. Use **Undo Latest Apply** before a bot restart.", inline=False)
-                await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=bool(snapshot)))
                 return
 
-            separator_previous_options: dict[str, Any] | None = None
-            if mode == "style_change_separator":
-                try:
-                    separator_previous_options = await _persist_separator_settings(interaction, payload, result.applied)
-                except Exception as settings_exc:
-                    if result.applied:
-                        restored, residual, rollback_failures = await apply_service.compensate_applied(
-                            guild,
-                            result.applied,
-                            user_id=int(interaction.user.id),
-                            delay_seconds=studio.DEFAULT_DELAY_SECONDS,
-                        )
-                    else:
-                        restored, residual, rollback_failures = 0, [], []
-                    emergency, durable = await _store_residual_snapshot(int(guild.id), int(interaction.user.id), residual)
+            await interaction.response.defer(ephemeral=True, thinking=False)
+            mode = _safe_str(payload.get("mode"), "preview")
+            async with lock:
+                ready, skipped, preflight_errors = await apply_service.preflight_plan(
+                    guild,
+                    items,
+                    name_limit=studio.DISCORD_NAME_LIMIT,
+                )
+                if preflight_errors:
                     legacy._PENDING.pop(key, None)  # type: ignore[attr-defined]
                     embed = discord.Embed(
-                        title="⚠️ Separator Apply Reversed Because Its Setting Could Not Be Saved",
+                        title="❌ Preview Changed Before Apply",
                         description=(
-                            f"Saving the selected separator failed with **{type(settings_exc).__name__}**. "
+                            "**No names were changed.** The complete batch was checked before the first rename and at least one preview row is no longer current. "
+                            "Build a fresh preview instead of applying stale assumptions."
+                        ),
+                        color=discord.Color.orange(),
+                    )
+                    embed.add_field(name="What changed", value="\n".join(f"• {line}" for line in preflight_errors[:8])[:1024], inline=False)
+                    await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=False))
+                    return
+
+                async def progress(done: int, total: int) -> None:
+                    if done % 5 == 0 or done == total:
+                        await interaction.edit_original_response(content=f"🚀 Applying reviewed design… **{done}/{total}** changed.")
+
+                result = await apply_service.apply_prepared(
+                    guild,
+                    ready,
+                    user_id=int(interaction.user.id),
+                    delay_seconds=studio.DEFAULT_DELAY_SECONDS,
+                    progress=progress,
+                )
+                if not result.ok:
+                    legacy._PENDING.pop(key, None)  # type: ignore[attr-defined]
+                    residual = list(result.residual or [])
+                    snapshot, durable = await _store_residual_snapshot(int(guild.id), int(interaction.user.id), residual)
+                    embed = discord.Embed(
+                        title="⚠️ Apply Stopped Safely",
+                        description=(
+                            f"{result.failure}\n\n"
                             + (
-                                f"Automatically restored **{restored}** live rename(s); the old saved design remains authoritative."
+                                f"Automatically restored **{result.restored_count}** earlier rename(s). **No partial design was left behind.**"
                                 if not residual
-                                else f"Automatic restore left **{len(residual)}** row(s) changed. An {'durable' if durable else 'emergency memory-only'} Undo record was retained for them."
+                                else f"Automatic compensation left **{len(residual)}** item(s) changed. An Undo snapshot was kept{' durably' if durable else ' in emergency memory'} for those rows."
                             )
                         ),
                         color=discord.Color.orange(),
                     )
-                    if rollback_failures:
-                        embed.add_field(name="Restore attention", value="\n".join(f"• {line}" for line in rollback_failures[:8])[:1024], inline=False)
-                    await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=bool(emergency)))
+                    if result.rollback_failures:
+                        embed.add_field(name="Compensation attention", value="\n".join(f"• {line}" for line in result.rollback_failures[:8])[:1024], inline=False)
+                    if snapshot and not durable:
+                        embed.add_field(name="Important", value="Emergency Undo history is memory-only because durable snapshot storage failed. Use **Undo Latest Apply** before a bot restart.", inline=False)
+                    await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=bool(snapshot)))
                     return
 
-            snapshot: dict[str, Any] | None = None
-            snapshot_durable = False
-            if result.applied:
-                snapshot, snapshot_durable = await _store_snapshot_with_memory_fallback(
-                    int(guild.id),
-                    int(interaction.user.id),
-                    result.applied,
+                separator_previous_options: dict[str, Any] | None = None
+                if mode == "style_change_separator":
+                    try:
+                        separator_previous_options = await _persist_separator_settings(interaction, payload, result.applied)
+                    except Exception as settings_exc:
+                        if result.applied:
+                            restored, residual, rollback_failures = await apply_service.compensate_applied(
+                                guild,
+                                result.applied,
+                                user_id=int(interaction.user.id),
+                                delay_seconds=studio.DEFAULT_DELAY_SECONDS,
+                            )
+                        else:
+                            restored, residual, rollback_failures = 0, [], []
+                        emergency, durable = await _store_residual_snapshot(int(guild.id), int(interaction.user.id), residual)
+                        legacy._PENDING.pop(key, None)  # type: ignore[attr-defined]
+                        embed = discord.Embed(
+                            title="⚠️ Separator Apply Reversed Because Its Setting Could Not Be Saved",
+                            description=(
+                                f"Saving the selected separator failed with **{type(settings_exc).__name__}**. "
+                                + (
+                                    f"Automatically restored **{restored}** live rename(s); the old saved design remains authoritative."
+                                    if not residual
+                                    else f"Automatic restore left **{len(residual)}** row(s) changed. An {'durable' if durable else 'emergency memory-only'} Undo record was retained for them."
+                                )
+                            ),
+                            color=discord.Color.orange(),
+                        )
+                        if rollback_failures:
+                            embed.add_field(name="Restore attention", value="\n".join(f"• {line}" for line in rollback_failures[:8])[:1024], inline=False)
+                        await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=bool(emergency)))
+                        return
+
+                snapshot: dict[str, Any] | None = None
+                snapshot_durable = False
+                if result.applied:
+                    snapshot, snapshot_durable = await _store_snapshot_with_memory_fallback(
+                        int(guild.id),
+                        int(interaction.user.id),
+                        result.applied,
+                    )
+
+                legacy._PENDING.pop(key, None)  # type: ignore[attr-defined]
+
+            if mode == "style_change_separator":
+                title = "✅ Channel Separator Applied & Saved"
+                description = f"Changed **{len(result.applied)}** live channel name(s), left **{skipped}** reviewed skip(s) untouched, and saved **{legacy._separator_choice_label(payload.get('separator_id'))}** as the authoritative separator. Failed **0**."  # type: ignore[attr-defined]
+            elif "consistency" in mode:
+                title = "✅ Inconsistent Names Repaired"
+                description = f"Changed **{len(result.applied)}** item(s). Left **{skipped}** reviewed skip(s) untouched. Failed **0**."
+            else:
+                title = "✅ Reviewed Design Applied"
+                description = f"Changed **{len(result.applied)}** item(s). Left **{skipped}** reviewed skip(s) untouched. Failed **0**."
+            embed = discord.Embed(
+                title=title,
+                description=description,
+                color=discord.Color.green(),
+            )
+            if snapshot and snapshot_durable:
+                embed.add_field(
+                    name="Undo ready",
+                    value="The previous names were saved durably for Undo.",
+                    inline=False,
                 )
+            elif snapshot:
+                embed.add_field(
+                    name="⚠️ Undo is memory-only",
+                    value=(
+                        "The design **stays applied**. Durable Undo storage was unavailable, so this Undo snapshot lasts only until the bot restarts. "
+                        "Dank Design will not automatically revert a successful Apply just because Undo-history storage failed."
+                    ),
+                    inline=False,
+                )
+            await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=bool(snapshot)))
 
-            legacy._PENDING.pop(key, None)  # type: ignore[attr-defined]
+        await _guard_design_v2_action(interaction, "design.v2.apply_reviewed", action, defer=False)
 
-        if mode == "style_change_separator":
-            title = "✅ Channel Separator Applied & Saved"
-            description = f"Changed **{len(result.applied)}** live channel name(s), left **{skipped}** reviewed skip(s) untouched, and saved **{legacy._separator_choice_label(payload.get('separator_id'))}** as the authoritative separator. Failed **0**."  # type: ignore[attr-defined]
-        elif "consistency" in mode:
-            title = "✅ Inconsistent Names Repaired"
-            description = f"Changed **{len(result.applied)}** item(s). Left **{skipped}** reviewed skip(s) untouched. Failed **0**."
-        else:
-            title = "✅ Reviewed Design Applied"
-            description = f"Changed **{len(result.applied)}** item(s). Left **{skipped}** reviewed skip(s) untouched. Failed **0**."
-        embed = discord.Embed(
-            title=title,
-            description=description,
-            color=discord.Color.green(),
-        )
-        if snapshot and snapshot_durable:
-            embed.add_field(
-                name="Undo ready",
-                value="The previous names were saved durably for Undo.",
-                inline=False,
-            )
-        elif snapshot:
-            embed.add_field(
-                name="⚠️ Undo is memory-only",
-                value=(
-                    "The design **stays applied**. Durable Undo storage was unavailable, so this Undo snapshot lasts only until the bot restarts. "
-                    "Dank Design will not automatically revert a successful Apply just because Undo-history storage failed."
-                ),
-                inline=False,
-            )
-        await interaction.edit_original_response(content=None, embed=embed, view=DoneView(can_rollback=bool(snapshot)))
 
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:preview_back", row=0)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
