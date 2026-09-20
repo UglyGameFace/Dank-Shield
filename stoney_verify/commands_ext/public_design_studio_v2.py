@@ -419,6 +419,7 @@ class DesignServerCategoryFrameSelect(discord.ui.Select):
         theme_options.pop("category_frame_id", None)
         theme_frame = plans.theme_default_category_frame_id(theme_options)
         explicit = _safe_str(options.get("category_frame_id"), "")
+        override_active = _category_frame_override_active(options)
         selected = _design_server_category_frame(options)
         choices: list[discord.SelectOption] = [
             discord.SelectOption(
@@ -428,7 +429,7 @@ class DesignServerCategoryFrameSelect(discord.ui.Select):
                     f"{studio.category_frame_preview(theme_frame, emoji='🍃', name='the-420-lobby')} · "
                     "follows the selected theme"
                 )[:100],
-                default=not _category_frame_override_active(options),
+                default=not override_active,
             )
         ]
         for frame in studio.CATEGORY_FRAMES:
@@ -439,7 +440,7 @@ class DesignServerCategoryFrameSelect(discord.ui.Select):
                     description=(
                         f"Result: {studio.category_frame_preview(frame.id, emoji='🍃', name='the-420-lobby')}"
                     )[:100],
-                    default=bool(explicit and frame.id == selected),
+                    default=bool(override_active and explicit and frame.id == selected),
                 )
             )
 
