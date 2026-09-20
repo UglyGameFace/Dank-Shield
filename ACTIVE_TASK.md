@@ -30,7 +30,7 @@ Out of scope:
 
 ## Status
 
-**IMPLEMENTED — PR #279 open as draft; targeted source validation passed; exact-head GitHub Actions execution pending**
+**IMPLEMENTED — PR #279 open as draft; targeted source validation passed; full CI validation BLOCKED because configured GitHub Actions produced no runs**
 
 ## Findings / root cause
 
@@ -80,7 +80,13 @@ Current PR: **#279 — Guard Verification Center role mapping persistence**.
 - targeted modified-region Python AST parse passed;
 - targeted source replay passed guard ownership and save → cache invalidate → refresh → verify → success ordering;
 - PR #279 initial head `add8e6bd3d1fbc426158218b19ab33b8a3409c76` produced 0 workflow runs / 0 commit statuses even though `.github/workflows/ci.yml` listens to `pull_request`;
-- this bookkeeping commit intentionally creates a PR synchronize event so workflow creation can be re-checked on the new exact head;
+- exact PR head after the bookkeeping synchronize commit: `7a5aac5ea5130ad2c684fe8dbd91f2dbc0bebfde`;
+- exact-head production blob: `2dfc0d4554f2d3cd17fe2658c951245c957736be`;
+- exact-head focused test blob: `76ed972b0c21ecc0cb8248edd5ed44055320e22d`;
+- exact-head task-record blob: `cc22aeae323453dccd46dfbf501561a7d9806882`;
+- exact-head readiness-ledger blob: `1d231b7552b410356c9cf385bdd1957f2cb08ce0`;
+- PR #279 has 0 unresolved review threads;
+- the synchronize event also produced 0 workflow runs / 0 commit statuses, so configured PR CI did not instantiate on either observed head;
 - no absent workflow is represented as passing.
 
 ## Cleanup / conflicts
@@ -93,7 +99,7 @@ Current PR: **#279 — Guard Verification Center role mapping persistence**.
 
 ## Blockers / risks
 
-- full completion still requires exact-head PR validation and post-merge verification on `main`;
+- full completion still requires executable CI or equivalent full repository validation plus post-merge verification on `main`;
 - GitHub Actions has previously failed to create/execute runners for nearby slices, so lack of runner execution must be recorded honestly rather than treated as green CI.
 
 ## Backlog
@@ -120,4 +126,4 @@ Do not investigate or modify that issue until the active task reaches its Defini
 
 ## Next step
 
-Re-check workflow creation on PR #279's new exact head, validate the final diff and immutable production/test blobs, then mark ready/merge only if the available evidence remains clean; after merge, verify those blobs on `main`.
+Obtain executable full-repository validation for exact head `7a5aac5ea5130ad2c684fe8dbd91f2dbc0bebfde`. Keep PR #279 draft until that blocker is cleared; then re-check the final diff/head, mark ready, merge, and verify the validated production/test blobs on `main`.
