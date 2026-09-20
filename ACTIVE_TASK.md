@@ -17,7 +17,7 @@ Out of scope: themes, fonts, channel separators, permissions, tickets, verificat
 
 ## Status
 
-**VALIDATED — targeted Python 3.11 grammar/runtime checks pass; full GitHub Actions execution is blocked before runner start**
+**COMPLETE — merged in PR #270 and verified on main**
 
 ## Findings / root cause
 
@@ -95,10 +95,20 @@ The production change is intentionally limited to the canonical frame data plus 
 ## Blockers / risks
 
 The repository's full Actions test suite could not execute because GitHub never starts the jobs. This is recorded as an external validation-infrastructure exception, not converted into a passing CI result. Targeted executable validation of every production line changed by this task passed as documented above.
+## Merge / main verification
+
+- PR #270 merged by squash as `24d94314c6d60669b8a11329c4b695c4a4a1631e`.
+- `main` contains the exact validated production blobs:
+  - `server_design_studio.py` → `ebe1b2a30dcbac8dfb6df1f734bf81498daa2013`
+  - `public_design_studio_v2.py` → `ce2031af4d4fa057a7271bfb97525167c9cabbd1`
+- `main` contains 80 unique canonical frame IDs and 80 unique grouped IDs.
+- `main` contains the 80-frame and neutral-preview regression guards.
+- `main` contains no `the-420-lobby` or old `general-chat` public V2 preview literal.
+- The GitHub Actions runner issue remains external infrastructure debt and is not a code failure for this completed task.
 ## Backlog
 
 None for this task.
 
 ## Next step
 
-Mark PR #270 ready, merge it, then verify the merged production blobs and behavior guards on `main`. Restore normal full-suite CI validation on subsequent work once the GitHub runner/account issue is corrected.
+Active task lock released. Resume the master audit with the next single highest-priority codebase hardening item; keep the GitHub Actions pre-runner failure tracked separately as infrastructure debt.
