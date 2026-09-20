@@ -11,6 +11,7 @@ from stoney_verify.commands_ext import public_design_group
 from stoney_verify.commands_ext import public_design_studio as legacy
 from stoney_verify.commands_ext import public_design_studio_v2 as studio_v2
 from stoney_verify.services import server_design_apply_service as apply_service
+from stoney_verify.services import server_design_majority_layout as majority
 from stoney_verify.services import server_design_plan_service as plan_service
 from stoney_verify.services import server_design_repair_confidence as repair_confidence
 from stoney_verify.services import server_design_studio as studio
@@ -98,7 +99,17 @@ def test_server_separator_picker_can_follow_theme_or_hold_custom_choice() -> Non
 
 
 
-def test_server_category_frame_is_editable_without_overflowing_discord_rows() -> None:
+def test_server_category_frame_browser_exposes_full_catalog_without_row_overflow() -> None:
+    assert len(studio.CATEGORY_FRAMES) == 40
+
+    grouped_ids = [
+        frame_id
+        for _group_label, frame_ids in studio.CATEGORY_FRAME_GROUPS
+        for frame_id in frame_ids
+    ]
+    assert len(grouped_ids) == len(set(grouped_ids))
+    assert set(grouped_ids) == set(studio.CATEGORY_FRAMES_BY_ID)
+
     view = studio_v2.DesignServerView({"theme_id": "night_gothic", "strength": 5})
     frame_button = next(
         item for item in view.children
@@ -110,43 +121,60 @@ def test_server_category_frame_is_editable_without_overflowing_discord_rows() ->
     assert len(buttons) == 5
     assert all(getattr(item, "row", None) == 4 for item in buttons)
 
+    seen: set[str] = set()
+    groups = studio_v2._category_frame_groups()
+    assert len(groups) == 5
+    for page in range(len(groups)):
+        page_view = studio_v2.DesignServerCategoryFrameView(
+            {"theme_id": "night_gothic", "strength": 5},
+            page=page,
+        )
+        picker = next(
+            item for item in page_view.children
+            if isinstance(item, studio_v2.DesignServerCategoryFrameSelect)
+        )
+        assert len(picker.options) <= 25
+        assert str(picker.options[0].value) == "__theme__"
+        seen.update(str(option.value) for option in picker.options if str(option.value) != "__theme__")
+
+    assert seen == set(studio.CATEGORY_FRAMES_BY_ID)
+
     theme_default_view = studio_v2.DesignServerCategoryFrameView(
-        {"theme_id": "night_gothic", "strength": 5}
+        {"theme_id": "night_gothic", "strength": 5},
+        page=0,
     )
     picker = next(
         item for item in theme_default_view.children
         if isinstance(item, studio_v2.DesignServerCategoryFrameSelect)
     )
-    assert len(picker.options) == len(studio.CATEGORY_FRAMES) + 1
-    assert len(picker.options) <= 25
     defaults = [option for option in picker.options if option.default]
     assert len(defaults) == 1
     assert defaults[0].value == "__theme__"
     assert "Top Box" in str(defaults[0].label)
-    values = {str(option.value) for option in picker.options}
-    assert {"__theme__", "line", "top_box", "bottom_box", "box", "plain"} <= values
 
-    custom_view = studio_v2.DesignServerCategoryFrameView(
-        {
-            "theme_id": "night_gothic",
-            "strength": 5,
-            "category_frame_id": "lenticular",
-        }
-    )
+    custom_options = {
+        "theme_id": "night_gothic",
+        "strength": 5,
+        "category_frame_id": "bullet_line",
+    }
+    custom_page = studio_v2._category_frame_page_for(custom_options)
+    assert custom_page == len(groups) - 1
+    custom_view = studio_v2.DesignServerCategoryFrameView(custom_options, page=custom_page)
     custom_picker = next(
         item for item in custom_view.children
         if isinstance(item, studio_v2.DesignServerCategoryFrameSelect)
     )
     custom_defaults = [option for option in custom_picker.options if option.default]
     assert len(custom_defaults) == 1
-    assert custom_defaults[0].value == "lenticular"
+    assert custom_defaults[0].value == "bullet_line"
 
     invalid_view = studio_v2.DesignServerCategoryFrameView(
         {
             "theme_id": "night_gothic",
             "strength": 5,
             "category_frame_id": "not-a-frame",
-        }
+        },
+        page=0,
     )
     invalid_picker = next(
         item for item in invalid_view.children
@@ -155,6 +183,45 @@ def test_server_category_frame_is_editable_without_overflowing_discord_rows() ->
     invalid_defaults = [option for option in invalid_picker.options if option.default]
     assert len(invalid_defaults) == 1
     assert invalid_defaults[0].value == "__theme__"
+
+
+def test_every_category_frame_round_trips_through_parser_and_majority_detection() -> None:
+    for frame in studio.CATEGORY_FRAMES:
+        rendered = studio.category_frame_preview(frame.id, emoji="🎮", name="gaming")
+        assert studio.normalize_base_name(rendered) == "gaming"
+        detected = majority.detect_category_frame(studio, rendered)
+        assert detected["id"] == frame.id
+
+
+def test_exact_category_editor_can_browse_frames_beyond_first_select_page() -> None:
+    initial = legacy.ExactFrameSelect("category", 123, "line")
+    values = {str(option.value) for option in initial.options}
+    assert len(initial.options) <= 25
+    assert legacy.EXACT_FRAME_BROWSE_VALUE in values
+
+    late_frame = "bullet_line"
+    late = legacy.ExactFrameSelect("category", 123, late_frame)
+    late_defaults = [option for option in late.options if option.default]
+    assert len(late_defaults) == 1
+    assert late_defaults[0].value == late_frame
+    assert legacy.EXACT_FRAME_BROWSE_VALUE in {str(option.value) for option in late.options}
+
+    page = legacy._exact_frame_page_for(late_frame)
+    browser = legacy.ExactFrameBrowserView(
+        SimpleNamespace(),
+        scope="category",
+        target_id=123,
+        lock={"category_frame_id": late_frame},
+        page=page,
+    )
+    picker = next(
+        item for item in browser.children
+        if isinstance(item, legacy.ExactFrameBrowserSelect)
+    )
+    defaults = [option for option in picker.options if option.default]
+    assert len(defaults) == 1
+    assert defaults[0].value == late_frame
+    assert len(picker.options) <= 25
 
 
 def test_gothic_theme_default_separator_matches_real_preview_plan() -> None:
