@@ -1,127 +1,110 @@
 # ACTIVE TASK
 
 ## ID
-DS-DESIGN-SEPARATORS-265 — First-class mixed separator coverage
+DS-BASIC-VERIFY-TICKET-ROUTING — Stop Basic Verify users being forced into verification tickets
 
 ## Status
-IMPLEMENTATION COMPLETE — validation in progress
+IMPLEMENTATION COMPLETE — latest-main integration complete; final exact-head validation pending
 
 ## Single active-task lock
-Only the Server Designer separator-coverage task is active. Do not start unrelated
-feature, security, cleanup, or redesign work until this task is implemented,
-validated on the exact final head, cleaned up, merged, and verified on main.
-
-## Previous task closed
-PR #265 (Share Router production-runtime restoration) merged as
-`179bf2a1b30dc7b7160c14a19d5788417553c9c0`. Its validated implementation
-restores the native Share Router runtime and structurally excludes that reserved
-infrastructure from Dank Design. The merged main commit reports
-`discloud/commit: success`.
+Only the Basic Verify / verification-ticket routing bug is active in this conversation
+and PR. Do not start unrelated work until this task is validated, cleaned up, merged,
+and verified on main.
 
 ## User-visible problem
-A real server uses intentional mixed channel layouts such as:
-- `👋--welcome`
-- `📣-announcements`
-- category/header layouts using a readable spaced pipe, e.g. `🏁 | start-here-verify`
-
-Dank Design can parse many separator styles internally, but double hyphen is not a
-first-class separator and the primary Server Designer / exact-item pickers expose
-only hard-coded subsets of the larger separator catalog. The result is that a user
-can create a valid style manually in Discord that the bot cannot faithfully select,
-preserve, or reproduce from its own UI.
+A member using the green Basic Verify flow could still end up in a private
+verification ticket instead of receiving the normal one-click access-role update
+and retaining ordinary support-ticket access.
 
 ## Root cause
-1. `server_design_studio.SEPARATOR_LIBRARY` contains single hyphen but not
-   `--`, so Smart Auto-Detect sees `--` as a repeated single-hyphen separator
-   instead of an intentional two-character separator.
-2. `server_design_majority_layout.detect_channel_separator()` deliberately marks
-   repeated known tokens as `doubled`; this is correct for accidental duplicates,
-   but without a longer `--` token in the library it misclassifies the intentional
-   layout.
-3. Server-wide and exact-item UIs maintain separate hard-coded separator subsets,
-   so supported catalog entries can exist but remain unavailable from a given flow.
-4. The Gothic spaced ASCII pipe is currently synthesized dynamically by
-   `ensure_separator_spec()` instead of existing as a stable first-class catalog
-   entry.
+Dank Shield had two different sources of truth for verification-mode precedence:
+
+- `setup_engine.verification_modes.effective_verification_mode()` correctly treats
+  an explicitly enabled Simple/Basic Verify flow as authoritative, including
+  intentional Simple + Voice configurations.
+- `startup_guards/unverified_ticket_panel_flow.py` reimplemented mode detection
+  from raw legacy flags and checked ID/Voice before Basic Verify.
+
+That duplicated policy meant a guild could correctly show and authorize Basic
+Verify while the ticket interception layer still considered the same member an
+advanced-verification user and hijacked public support-ticket creation into a
+verification ticket.
 
 ## Execution path
-Server-wide:
-`public_design_studio_v2.DesignServerSeparatorSelect`
-→ `public_design_studio._style_change_separator_options`
-→ `server_design_studio.SEPARATORS_BY_ID`
-→ `server_design_plan_service`
-→ `server_design_studio.build_styled_name`
+Basic Verify:
+`BasicVerifyButton`
+→ `apply_basic_verification()`
+→ canonical Basic Verify authorization
+→ add access roles / remove Unverified.
 
-Exact-item:
-`public_design_studio.ExactSeparatorSelect`
-→ saved format lock
-→ `server_design_plan_service`
-→ `server_design_studio.build_styled_name`
+Public ticket panel:
+`PublicCreateTicketPanelView.create_ticket()`
+→ `_handle_unverified_panel_click()`
+→ `_should_auto_route_unverified_ticket(guild, cfg)`
+→ canonical `effective_verification_mode(guild, cfg)`.
 
-Smart Repair / Auto-Detect:
-`server_design_majority_layout.detect_channel_separator`
-→ `infer_*_layout`
-→ local/global repair options
-→ Server Design plan
+Only canonical primary `id_verify` or `voice_verify` modes may auto-route to a
+verification ticket. `basic_button` and `disabled` remain on the normal support
+ticket path.
 
-## Required behavior
-- Treat `--` as an intentional supported separator, not an accidental duplicate.
-- Make compact pipe `|` and spaced pipe ` | ` stable first-class catalog entries.
-- Add a few common repeated ASCII variants that are safe and useful for mixed real
-  servers, without turning arbitrary punctuation inside names into separators.
-- Preserve every separator currently exposed in the server-wide and exact-item UI.
-- Keep Discord select menus within the 25-option hard limit.
-- Keep the full separator example gallery available.
-- Keep accidental repeats such as `----` detectable as doubled `--` when the
-  configured token itself is `--`.
-- Do not alter permissions, roles, topics, channel order, ticket behavior, protection,
-  Unicode font behavior, or unrelated Server Designer ownership.
+## Changes
+- removed the duplicated raw verification-mode parser from
+  `unverified_ticket_panel_flow.py`;
+- made ticket auto-routing consume the canonical verification-mode resolver;
+- fail open to normal support routing if mode resolution itself errors, rather than
+  guessing from stale legacy flags;
+- updated the related compatibility caller to pass the guild into the canonical
+  routing decision;
+- added behavioral regression coverage for Basic-only, Simple + Voice, Voice-only,
+  allowlisted ID, and unavailable/non-allowlisted ID configurations.
 
-## Implementation
-- added first-class `double_dash`, `pipe_compact`, `pipe_spaced`,
-  `double_pipe`, and `double_colon` specs to the canonical separator library
-- centralized server-wide and exact-item curated separator IDs in
-  `server_design_studio.py`
-- server-wide design now exposes 24 explicit separator choices plus Theme Default,
-  exactly fitting Discord's 25-option select limit
-- exact-item design exposes 25 choices while preserving every option it already had
-- both Discord picker flows now consume the canonical lists instead of owning
-  divergent hard-coded subsets
-- Gothic Clean now returns the stable first-class `pipe_spaced` catalog entry
-  directly instead of mutating the separator catalog at runtime
-- the full paginated separator example gallery still consumes the complete
-  `SEPARATOR_LIBRARY`, so the broader catalog remains browsable
+## Compatibility
+- Basic Verify role mutation behavior is unchanged.
+- Voice-only verification still auto-routes to the verification-ticket flow.
+- Allowlisted ID verification still auto-routes.
+- Non-allowlisted/unavailable ID verification no longer forces a broken ticket.
+- Normal support tickets remain normal support when Basic Verify is authoritative.
+- No ticket permissions, role hierarchy, setup UI, Discord resources, or database
+  schema are changed.
 
-## Regression coverage added
-- `👋--welcome` parses and round-trips as intentional `double_dash`
-- `👋----welcome` is still classified as an accidental doubled `--`
-- `🏁 | start-here-verify` is reproducible through first-class `pipe_spaced`
-- compact/spaced pipe lookups do not mutate the runtime separator catalog
-- server-wide picker exposes the new mixed-layout ASCII options and remains at 25
-  total choices including Theme Default
-- exact-item picker remains at Discord's 25-option limit
-- every previously exposed server-wide and exact-item separator remains available
+## Validation
+Pre-integration head `7756c5aa3003221436faaef52f2fe2cbd5b46d98`:
+- focused verification + authorization: 17 passed;
+- affected-module compile: passed;
+- repository compileall: passed;
+- diff check: passed;
+- all standalone tools: passed;
+- all eight primary CI audits: passed;
+- Ubuntu/Python 3.11.7 full suite: 1706 passed, 8 warnings, 0 failures.
 
-## Validation required
-- targeted separator / Server Designer tests
-- full Python compile
-- full unit suite
-- Dank Design regression suite and static audits
-- all required PR workflows on the exact final head
-- final changed-file/diff inspection and main-currentness check
-- merge only the exact validated SHA
-- verify merged main and `discloud/commit: success`
+The earlier Android/Termux Python 3.13 run had two font-rendering failures, and both
+reproduced unchanged on the then-current main baseline, so they were not regressions.
 
-## Cleanup / conflicts
-- main advanced through PR #265 while this task was in progress
-- the conflict was resolved by preserving PR #265 Share Router ownership/isolation
-  and re-applying only this task's separator changes on top
-- no unrelated code changes are authorized
+While validation was running, PR #266 merged and advanced main to
+`2be39743c9fdf2f6728179665a4f1166e7af36a3`. Its changed files overlap this PR only at `ACTIVE_TASK.md`;
+the verification runtime and regression-test files do not overlap. This branch
+has now integrated that main commit. Exact-head validation must be repeated on
+the resulting integration commit before merge.
+
+GitHub-hosted Actions remain unavailable because account Actions usage is maxed,
+so equivalent checks are being run locally in Ubuntu/Python 3.11.
+
+## Cleanup
+The duplicated ticket-routing policy helpers were removed from the affected module.
+No unrelated cleanup is included. PR #266's Server Designer changes are inherited
+from main, not duplicated into this PR diff.
+
+## Conflicts
+PR #266 overlapped only in `ACTIVE_TASK.md`; current-task bookkeeping is intentionally
+kept as this PR's active record. No production-code conflict exists.
+
+## Blockers / risks
+GitHub-hosted CI cannot execute until Actions usage resets or billing changes.
+Final merge requires the local exact-head replacement validation to pass.
 
 ## Backlog
-None added from this task.
+None.
 
 ## Next step
-Open the scoped draft PR and run targeted/full exact-head validation. If any same-root
-regression fails, repair it on this branch, then re-run the complete gate before the
-final bookkeeping commit and merge.
+Run the final exact-head Ubuntu/Python 3.11 validation on the latest-main integration
+commit, then perform final diff/currentness review and merge verification.
