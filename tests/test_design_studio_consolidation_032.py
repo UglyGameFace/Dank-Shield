@@ -307,3 +307,101 @@ def test_plan_defaults_preserve_gothic_pipe_and_visual_name_policy_without_globa
     assert options["separator_id"] == "pipe_spaced"
     assert options["protection_rules"]["staff"] == "never"
     assert set(plan_service.studio.DEFAULT_PROTECTED_NAMES) == before_protected
+
+
+def test_separator_picker_catalogs_expose_mixed_layouts_within_discord_limits() -> None:
+    server_view = studio_v2.DesignServerView({"theme_id": "gothic_clean", "strength": 4})
+    server_picker = next(
+        item for item in server_view.children
+        if isinstance(item, studio_v2.DesignServerSeparatorSelect)
+    )
+    server_values = {str(option.value) for option in server_picker.options}
+
+    assert len(studio.SERVER_DESIGN_SEPARATOR_IDS) == 24
+    assert len(server_picker.options) == 25
+    assert len(server_picker.options) <= 25
+    assert {
+        "__theme__",
+        "dash",
+        "double_dash",
+        "pipe_compact",
+        "pipe_spaced",
+        "double_pipe",
+        "double_colon",
+    } <= server_values
+
+    assert len(studio.EXACT_EDITOR_SEPARATOR_IDS) == 25
+    assert {
+        "double_dash",
+        "pipe_compact",
+        "pipe_spaced",
+        "double_pipe",
+    } <= set(studio.EXACT_EDITOR_SEPARATOR_IDS)
+    assert legacy.EDITOR_SEPARATOR_IDS == studio.EXACT_EDITOR_SEPARATOR_IDS
+    assert legacy.STYLE_CHANGE_SEPARATOR_IDS == studio.SERVER_DESIGN_SEPARATOR_IDS
+
+
+def test_existing_separator_picker_choices_remain_available_after_expansion() -> None:
+    server_values = set(studio.SERVER_DESIGN_SEPARATOR_IDS)
+    assert {
+        "none",
+        "bar_heavy",
+        "bar_thin",
+        "bar_full",
+        "bar_medium",
+        "bar_bold",
+        "bar_block",
+        "dash",
+        "middle_dot",
+        "sparkle",
+        "bracket_corner",
+        "bracket_lenticular",
+    } <= server_values
+
+    exact_values = set(studio.EXACT_EDITOR_SEPARATOR_IDS)
+    assert {
+        "none",
+        "bar_full",
+        "bar_thin",
+        "bar_heavy",
+        "dash",
+        "en_dash",
+        "em_dash",
+        "middle_dot",
+        "bullet",
+        "katakana_dot",
+        "colon",
+        "single_angle",
+        "tri_right",
+        "tri_small",
+        "premium_sparkle",
+        "premium_thin_sparkle",
+        "sparkle_small",
+        "small_dot",
+        "presentation_bar",
+        "bracket_corner",
+        "bracket_lenticular",
+    } <= exact_values
+
+
+def test_intentional_square_emoji_is_preserved_in_mixed_server_layout() -> None:
+    assert legacy._direct_rename_has_unsafe_channel_icon("⬜--mods-only") is False
+    assert legacy._direct_rename_has_unsafe_channel_icon("#️⃣--general") is True
+
+    after, warnings, blockers = legacy._style_change_separator_after(
+        "⬜--mods-only",
+        "double_dash",
+    )
+
+    assert after == "⬜--mods-only"
+    assert warnings == []
+    assert blockers == []
+
+
+def test_unsafe_keycap_blocker_still_routes_to_icon_repair() -> None:
+    item = {
+        "status": "failed",
+        "blockers": ["Leading icon uses the unsafe #️⃣ keycap form. Choose a different emoji/icon first."],
+    }
+
+    assert legacy._style_change_missing_emoji_items([item]) == [item]

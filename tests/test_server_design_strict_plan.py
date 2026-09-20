@@ -128,3 +128,72 @@ def test_curated_theme_catalog_only_uses_supported_fonts() -> None:
     assert {"modern_minimal", "double_struck_luxe", "night_gothic", "luxury_script"} <= set(studio.THEMES_BY_ID)
     assert all(theme.font in studio.DESIGN_FONT_STYLES for theme in studio.THEMES)
     assert len(studio.THEMES) <= 25
+
+
+def test_double_hyphen_is_first_class_and_round_trips_cleanly() -> None:
+    parsed = studio.parse_channel_name("👋--welcome")
+
+    assert parsed["emoji"] == "👋"
+    assert parsed["separator"] == "--"
+    assert parsed["base_name"] == "welcome"
+    assert parsed["duplicate_separators"] is False
+
+    accidental = studio.parse_channel_name("👋----welcome")
+    assert accidental["separator"] == "--"
+    assert accidental["duplicate_separators"] is True
+
+    result = studio.build_styled_name(
+        "👋--welcome",
+        theme_id="420_lounge",
+        strength=2,
+        separator_id="double_dash",
+        font="normal",
+        emoji_override="👋",
+        protection_mode="full",
+        exact_match=True,
+    )
+
+    assert result.status == "unchanged"
+    assert result.after == "👋--welcome"
+    assert result.separator_id == "double_dash"
+
+
+def test_first_class_spaced_pipe_reproduces_existing_mixed_layout() -> None:
+    result = studio.build_styled_name(
+        "🏁start-here-verify",
+        theme_id="gothic_clean",
+        strength=3,
+        separator_id="pipe_spaced",
+        font="normal",
+        emoji_override="🏁",
+        protection_mode="full",
+        exact_match=True,
+    )
+
+    assert studio.SEPARATORS_BY_ID["pipe_spaced"].value == " | "
+    assert result.after == "🏁 | start-here-verify"
+    assert result.separator_id == "pipe_spaced"
+
+
+
+def test_real_mixed_server_separator_patterns_are_parseable() -> None:
+    cases = (
+        ("👋--welcome", "--", "welcome"),
+        ("📣-announcements", "-", "announcements"),
+        ("🚩-rules", "-", "rules"),
+        ("🎉--giveaway", "--", "giveaway"),
+        ("📊--levelups", "--", "levelups"),
+        ("❌--unverified-chat", "--", "unverified-chat"),
+        ("🎟️--support", "--", "support"),
+        ("📁transcripts", "", "transcripts"),
+        ("🗄️--mod-log", "--", "mod-log"),
+        ("⬜--mods-only", "--", "mods-only"),
+        ("🤖--price-glitch-bot", "--", "price-glitch-bot"),
+        ("🎙️--vc-verify-requests", "--", "vc-verify-requests"),
+        ("📰--welcome-exit", "--", "welcome-exit"),
+    )
+
+    for raw, separator, base_name in cases:
+        parsed = studio.parse_channel_name(raw)
+        assert parsed["separator"] == separator, raw
+        assert parsed["base_name"] == base_name, raw

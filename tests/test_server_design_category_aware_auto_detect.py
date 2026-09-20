@@ -230,3 +230,31 @@ def test_preview_annotation_preserves_uncertain_rows_and_explains_local_safety_r
 def test_keep_existing_icon_mode_does_not_invent_placeholder_icon() -> None:
     assert studio.suggested_icon("random-channel", existing="", mode="keep_existing") == ""
     assert studio.suggested_icon("random-channel", existing="🎯", mode="keep_existing") == "🎯"
+
+
+def test_double_hyphen_is_intentional_not_accidental_duplicate() -> None:
+    intentional = majority.detect_channel_separator(studio, "👋--welcome")
+    accidental = majority.detect_channel_separator(studio, "👋----welcome")
+
+    assert intentional["token"] == "--"
+    assert intentional["separator_id"] == "double_dash"
+    assert intentional["spacing"] == "compact"
+    assert intentional["doubled"] is False
+
+    assert accidental["token"] == "--"
+    assert accidental["separator_id"] == "double_dash"
+    assert accidental["spacing"] == "doubled"
+    assert accidental["doubled"] is True
+
+
+def test_first_class_pipe_entries_avoid_runtime_catalog_synthesis() -> None:
+    before_ids = tuple(spec.id for spec in studio.SEPARATOR_LIBRARY)
+
+    compact = majority.ensure_separator_spec(studio, "|", "compact")
+    spaced = majority.ensure_separator_spec(studio, "|", "spaced")
+
+    assert compact == "pipe_compact"
+    assert spaced == "pipe_spaced"
+    assert studio.SEPARATORS_BY_ID[compact].value == "|"
+    assert studio.SEPARATORS_BY_ID[spaced].value == " | "
+    assert tuple(spec.id for spec in studio.SEPARATOR_LIBRARY) == before_ids

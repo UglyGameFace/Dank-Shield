@@ -4,7 +4,7 @@
 DS-BASIC-VERIFY-TICKET-ROUTING — Stop Basic Verify users being forced into verification tickets
 
 ## Status
-IMPLEMENTATION COMPLETE — validation pending
+IMPLEMENTATION COMPLETE — latest-main integration complete; final exact-head validation pending
 
 ## Single active-task lock
 Only the Basic Verify / verification-ticket routing bug is active in this conversation
@@ -55,7 +55,7 @@ ticket path.
   guessing from stale legacy flags;
 - updated the related compatibility caller to pass the guild into the canonical
   routing decision;
-- added regression coverage for Basic-only, Simple + Voice, Voice-only,
+- added behavioral regression coverage for Basic-only, Simple + Voice, Voice-only,
   allowlisted ID, and unavailable/non-allowlisted ID configurations.
 
 ## Compatibility
@@ -67,25 +67,44 @@ ticket path.
 - No ticket permissions, role hierarchy, setup UI, Discord resources, or database
   schema are changed.
 
-## Validation required
-- targeted verification routing regression tests;
-- verification-mode authorization tests;
-- Python compile/static checks;
-- relevant full repository CI;
-- exact-head workflow verification;
-- final diff/currentness review;
-- merge exact validated SHA and verify resulting main deployment status.
+## Validation
+Pre-integration head `7756c5aa3003221436faaef52f2fe2cbd5b46d98`:
+- focused verification + authorization: 17 passed;
+- affected-module compile: passed;
+- repository compileall: passed;
+- diff check: passed;
+- all standalone tools: passed;
+- all eight primary CI audits: passed;
+- Ubuntu/Python 3.11.7 full suite: 1706 passed, 8 warnings, 0 failures.
+
+The earlier Android/Termux Python 3.13 run had two font-rendering failures, and both
+reproduced unchanged on the then-current main baseline, so they were not regressions.
+
+While validation was running, PR #266 merged and advanced main to
+`2be39743c9fdf2f6728179665a4f1166e7af36a3`. Its changed files overlap this PR only at `ACTIVE_TASK.md`;
+the verification runtime and regression-test files do not overlap. This branch
+has now integrated that main commit. Exact-head validation must be repeated on
+the resulting integration commit before merge.
+
+GitHub-hosted Actions remain unavailable because account Actions usage is maxed,
+so equivalent checks are being run locally in Ubuntu/Python 3.11.
 
 ## Cleanup
 The duplicated ticket-routing policy helpers were removed from the affected module.
-No unrelated cleanup is included.
+No unrelated cleanup is included. PR #266's Server Designer changes are inherited
+from main, not duplicated into this PR diff.
+
+## Conflicts
+PR #266 overlapped only in `ACTIVE_TASK.md`; current-task bookkeeping is intentionally
+kept as this PR's active record. No production-code conflict exists.
 
 ## Blockers / risks
-Validation may be blocked if GitHub-hosted runners are still unavailable for this
-private repository. Do not interpret pre-run Actions failures as code failures.
+GitHub-hosted CI cannot execute until Actions usage resets or billing changes.
+Final merge requires the local exact-head replacement validation to pass.
 
 ## Backlog
 None.
 
 ## Next step
-Open the scoped draft PR and run the complete validation gate on its exact head.
+Run the final exact-head Ubuntu/Python 3.11 validation on the latest-main integration
+commit, then perform final diff/currentness review and merge verification.
