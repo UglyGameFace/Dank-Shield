@@ -246,6 +246,41 @@ def _editable_channels(guild: discord.Guild) -> list[discord.abc.GuildChannel]:
     return out[: studio.MAX_PLAN_ITEMS]
 
 
+def _designable_editor_categories(guild: discord.Guild) -> list[discord.CategoryChannel]:
+    return [
+        category
+        for category in list(getattr(guild, "categories", []) or [])
+        if isinstance(category, discord.CategoryChannel)
+        and not is_share_router_design_resource(category)
+    ]
+
+
+def _reserved_design_target(guild: discord.Guild, target_id: int) -> Any | None:
+    target = guild.get_channel(int(target_id))
+    return target if target is not None and is_share_router_design_resource(target) else None
+
+
+async def _reject_reserved_design_target(
+    interaction: discord.Interaction,
+    target: Any,
+    *,
+    action_name: str,
+) -> bool:
+    if target is None or not is_share_router_design_resource(target):
+        return False
+    await safe_send_interaction(
+        interaction,
+        content=(
+            "🔗 That item belongs to **Share Router** and is reserved functional infrastructure. "
+            "Dank Design will not rename, style, or save visual overrides for it. "
+            "Use **Community Tools → Share Router → Create / Repair Hub** to restore its canonical plain name."
+        ),
+        ephemeral=True,
+        action_name=action_name,
+    )
+    return True
+
+
 def _can_user_design(interaction: discord.Interaction) -> bool:
     try:
         return bool(interaction.guild and isinstance(interaction.user, discord.Member) and interaction.user.guild_permissions.manage_channels)
@@ -2354,6 +2389,8 @@ def _category_channels(guild: discord.Guild, category_id: int) -> list[discord.a
         return []
     out: list[discord.abc.GuildChannel] = []
     for channel in list(getattr(category, "channels", []) or []):
+        if is_share_router_design_resource(channel):
+            continue
         if _kind(channel) != "other":
             out.append(channel)
     return out
@@ -2364,12 +2401,25 @@ def _all_editor_channels(guild: discord.Guild) -> list[discord.abc.GuildChannel]
     seen: set[int] = set()
     for category in list(getattr(guild, "categories", []) or []):
         cid = _safe_int(getattr(category, "id", 0), 0)
+        if is_share_router_design_resource(category):
+            if cid > 0:
+                seen.add(cid)
+            for child in list(getattr(category, "channels", []) or []):
+                child_id = _safe_int(getattr(child, "id", 0), 0)
+                if child_id > 0:
+                    seen.add(child_id)
+            continue
         if cid > 0 and cid not in seen:
             seen.add(cid)
             out.append(category)
         for child in list(getattr(category, "channels", []) or []):
             child_id = _safe_int(getattr(child, "id", 0), 0)
-            if child_id > 0 and child_id not in seen and _kind(child) != "other":
+            if (
+                child_id > 0
+                and child_id not in seen
+                and not is_share_router_design_resource(child)
+                and _kind(child) != "other"
+            ):
                 seen.add(child_id)
                 out.append(child)
     for channel in list(getattr(guild, "channels", []) or []):
@@ -2393,10 +2443,18 @@ def _channel_editor_groups(guild: discord.Guild) -> list[dict[str, Any]]:
 
     for category in list(getattr(guild, "categories", []) or []):
         category_id = _safe_int(getattr(category, "id", 0), 0)
+        if is_share_router_design_resource(category):
+            if category_id > 0:
+                seen.add(category_id)
+            for child in list(getattr(category, "channels", []) or []):
+                child_id = _safe_int(getattr(child, "id", 0), 0)
+                if child_id > 0:
+                    seen.add(child_id)
+            continue
         children = [
             channel
             for channel in list(getattr(category, "channels", []) or [])
-            if _kind(channel) != "other"
+            if not is_share_router_design_resource(channel) and _kind(channel) != "other"
         ]
 
         chunks = [children[i:i + EDITOR_PAGE_SIZE] for i in range(0, len(children), EDITOR_PAGE_SIZE)] or [[]]
@@ -2419,6 +2477,8 @@ def _channel_editor_groups(guild: discord.Guild) -> list[dict[str, Any]]:
     for channel in list(getattr(guild, "channels", []) or []):
         cid = _safe_int(getattr(channel, "id", 0), 0)
         if cid <= 0 or cid in seen:
+            continue
+        if is_share_router_design_resource(channel):
             continue
         if _kind(channel) in {"category", "other"}:
             continue
@@ -2525,7 +2585,7 @@ async def _preview_scope(
     )
 
 def _category_editor_embed(guild: discord.Guild, *, page: int) -> discord.Embed:
-    categories = list(getattr(guild, "categories", []) or [])
+    categories = _designable_editor_categories(guild)
     total_pages = max(1, (len(categories) + EDITOR_PAGE_SIZE - 1) // EDITOR_PAGE_SIZE)
     page = max(0, min(page, total_pages - 1))
     start = page * EDITOR_PAGE_SIZE
@@ -2629,6 +2689,12 @@ class CategoryPickButton(discord.ui.Button):
         category = guild.get_channel(self.category_id)
         if not isinstance(category, discord.CategoryChannel):
             return await interaction.response.send_message("That category no longer exists.", ephemeral=True)
+        if await _reject_reserved_design_target(
+            interaction,
+            category,
+            action_name="design.reserved.category_pick",
+        ):
+            return
         await interaction.response.edit_message(
             embed=_category_action_embed(category),
             view=CategoryEditorActionView(self.category_id),
@@ -2654,6 +2720,12 @@ class EditCategoryFromChannelEditorButton(discord.ui.Button):
         category = guild.get_channel(self.category_id)
         if not isinstance(category, discord.CategoryChannel):
             return await interaction.response.send_message("That category no longer exists.", ephemeral=True)
+        if await _reject_reserved_design_target(
+            interaction,
+            category,
+            action_name="design.reserved.category_from_channel",
+        ):
+            return
         await interaction.response.edit_message(
             embed=_category_action_embed(category),
             view=CategoryEditorActionView(self.category_id),
@@ -2680,6 +2752,12 @@ class ChannelPickButton(discord.ui.Button):
         channel = guild.get_channel(self.channel_id)
         if channel is None:
             return await interaction.response.send_message("That channel no longer exists.", ephemeral=True)
+        if await _reject_reserved_design_target(
+            interaction,
+            channel,
+            action_name="design.reserved.channel_pick",
+        ):
+            return
         await interaction.response.edit_message(
             embed=_channel_action_embed(channel),
             view=ChannelEditorActionView(self.channel_id, category_id=self.category_id),
@@ -2689,7 +2767,7 @@ class ChannelPickButton(discord.ui.Button):
 class CategoryEditorPickerView(LegacyDesignView):
     def __init__(self, guild: discord.Guild, *, page: int = 0) -> None:
         super().__init__(timeout=900)
-        categories = list(getattr(guild, "categories", []) or [])
+        categories = _designable_editor_categories(guild)
         total_pages = max(1, (len(categories) + EDITOR_PAGE_SIZE - 1) // EDITOR_PAGE_SIZE)
         page = max(0, min(page, total_pages - 1))
         start = page * EDITOR_PAGE_SIZE
@@ -2852,6 +2930,12 @@ class DirectRenameModal(discord.ui.Modal):
                     ephemeral=True,
                     action_name="design.direct_rename.missing",
                 )
+                return
+            if await _reject_reserved_design_target(
+                interaction,
+                channel,
+                action_name="design.direct_rename.reserved",
+            ):
                 return
 
             old_name = _safe_str(getattr(channel, "name", ""), "unknown")
