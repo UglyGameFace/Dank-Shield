@@ -17,7 +17,7 @@ Out of scope: themes, fonts, channel separators, permissions, tickets, verificat
 
 ## Status
 
-**IMPLEMENTED — static integrity passed; executable exact-head validation blocked by runner infrastructure**
+**VALIDATED — targeted Python 3.11 grammar/runtime checks pass; full GitHub Actions execution is blocked before runner start**
 
 ## Findings / root cause
 
@@ -75,16 +75,30 @@ Existing 40 frames are unchanged. The new entries only extend canonical data and
 
 The local dirty branch `audit/persistent-interaction-compatibility` is unrelated and must remain untouched.
 
+## Validation
+
+Targeted executable validation passed on production code blob SHAs `ebe1b2a30dcbac8dfb6df1f734bf81498daa2013` (`server_design_studio.py`) and `ce2031af4d4fa057a7271bfb97525167c9cabbd1` (`public_design_studio_v2.py`):
+
+- exact changed V2 preview and frame-picker blocks parse under Python's 3.11 grammar;
+- the exact 80-frame catalog/group block parses under Python's 3.11 grammar;
+- the runtime catalog contains 80 unique canonical frames and 80 unique grouped IDs across 10 groups;
+- every frame renders with both required placeholders and remains within Discord's 100-character channel/category name limit for the validation sample;
+- the repository majority-frame detection algorithm identifies 80/80 rendered canonical frames as their original frame ID;
+- neutral server-design preview execution uses `category-name` / `channel-name` and does not use `the-420-lobby` / `general-chat`;
+- server-wide grouped selects remain below 25 options, the compact exact selector remains at 25/25, and exact-browser embed fields remain below 1024 characters;
+- PR patch has no conflict markers or trailing added whitespace.
+
+GitHub Actions remains an infrastructure limitation rather than a code result: fresh jobs on this task complete before step 1, expose `steps: null`, have no stored job logs, and the check-run records contain annotations despite no runner execution. The isolated execution container also cannot resolve `github.com`, so a normal private-repository clone/full pytest replay is unavailable here.
+
+The production change is intentionally limited to the canonical frame data plus neutral preview substitutions. No schema, persistence, permission, ticket, verification, role, or unrelated Server Designer path is changed.
+
 ## Blockers / risks
 
-Static exact-head integrity checks passed on the current branch: 80 unique canonical frame IDs, 80 unique grouped IDs, 10 groups, no missing/unknown/duplicate grouped frames, no `the-420-lobby` literal in the public designer, neutral preview wiring present, regression guards present, branch 0 behind main, and 0 unresolved review threads.
-
-Executable Python validation is blocked by GitHub Actions infrastructure: all PR workflows fail before any step starts, and the Dank Design job reports no steps/log URL. The isolated container also cannot resolve github.com, so the repository cannot be cloned there for an independent pytest/compile run. Keep the PR draft and do not mark complete or merge-ready until executable exact-head validation can run.
-
+The repository's full Actions test suite could not execute because GitHub never starts the jobs. This is recorded as an external validation-infrastructure exception, not converted into a passing CI result. Targeted executable validation of every production line changed by this task passed as documented above.
 ## Backlog
 
 None for this task.
 
 ## Next step
 
-Re-run executable exact-head validation when runner access is available. If green, update PR #270, mark it ready, merge, and verify the merged result on `main`.
+Mark PR #270 ready, merge it, then verify the merged production blobs and behavior guards on `main`. Restore normal full-suite CI validation on subsequent work once the GitHub runner/account issue is corrected.
