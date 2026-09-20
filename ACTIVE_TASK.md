@@ -46,6 +46,12 @@ the theme's category frame and ignored an explicit server-wide
 custom frame appear to save and then silently lose it whenever the global format
 lock was enabled.
 
+Follow-up inspection found two more edge cases in that same frame authority path:
+an invalid persisted frame could make the single-select UI mark both Theme Default
+and the theme frame as selected, and the planner could treat an invalid explicit
+frame as Clean Line while the UI reported the selected theme's default. Both are
+now normalized to one Theme Default state.
+
 ## Execution path
 `/dank home`
 → **Server Design**
@@ -77,6 +83,10 @@ channel rule → category rule → enabled global rule → server-wide draft.
 - added canonical `theme_default_category_frame_id()` and
   `effective_server_category_frame_id()` resolution beside the existing
   separator resolver;
+- invalid persisted server frame overrides are removed during plan normalization,
+  so UI, preview, global-lock sync, and apply all resolve to the same theme default;
+- the frame picker now guarantees exactly one default option even if old/corrupt
+  persisted data contains an unknown frame id;
 - V2 display/preview logic and legacy global-lock construction consume that same
   canonical resolver;
 - the summary now distinguishes **theme default** from **custom override**;
@@ -112,7 +122,8 @@ channel rule → category rule → enabled global rule → server-wide draft.
 Implementation source and final task diff were inspected against main.
 
 Current implementation evidence before this bookkeeping update:
-- implementation head: `f31f4ec5b7b29fabc828804c651d6a6bbf4b4be5`;
+- latest implementation head before this record update:
+  `5b1df17e4ef386384735af51c108129bd447749c`;
 - base/current main: `33b17fae0bbbd631c8942ddeec5215f3a2394ad3`;
 - branch currentness: **0 behind main**;
 - PR #268: open, draft, mergeable;
