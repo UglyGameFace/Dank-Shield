@@ -105,7 +105,7 @@ def _patch_ticket_panel_basic_verify_warning() -> None:
             if not await verify_flow._is_unverified_only_member(owner):
                 return ""
             cfg = await verify_flow._get_guild_config_safe(channel.guild.id)
-            if not verify_flow._should_auto_route_unverified_ticket(cfg):
+            if not verify_flow._should_auto_route_unverified_ticket(channel.guild, cfg):
                 return ""
         except Exception:
             pass
