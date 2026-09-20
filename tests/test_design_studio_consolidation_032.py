@@ -258,6 +258,32 @@ def test_gothic_theme_default_separator_matches_real_preview_plan() -> None:
     assert "Spaced" in str(selected[0].label) or "|" in str(selected[0].description)
 
 
+def test_server_design_preview_uses_current_guild_names_not_project_specific_examples(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        legacy,
+        "_designable_editor_categories",
+        lambda _guild: [SimpleNamespace(name="Community Hub")],
+    )
+    monkeypatch.setattr(
+        legacy,
+        "_editable_channels",
+        lambda _guild: [SimpleNamespace(name="general-chat")],
+    )
+
+    category_name, channel_name = studio_v2._design_server_example_source_names(SimpleNamespace())
+    assert category_name == "community-hub"
+    assert channel_name == "general-chat"
+    assert "the-420-lobby" not in V2
+
+    embed = studio_v2._design_server_embed(
+        SimpleNamespace(),
+        {"theme_id": "modern_minimal", "strength": 4},
+    )
+    fields = {str(field.name): str(field.value) for field in embed.fields}
+    assert "community-hub" in studio.normalize_base_name(fields["Style example"])
+    assert "the-420-lobby" not in fields["Style example"]
+
+
 def test_server_design_embed_shows_font_frame_sources_and_live_style_examples() -> None:
     embed = studio_v2._design_server_embed(
         SimpleNamespace(),
