@@ -461,7 +461,7 @@ class DesignServerCategoryFrameSelect(discord.ui.Select):
                 label=f"Theme Default · {legacy._category_frame_choice_label(theme_frame)}"[:100],  # type: ignore[attr-defined]
                 value="__theme__",
                 description=(
-                    f"{studio.category_frame_preview(theme_frame, emoji='🗂️', name="category-name")} · "
+                    f"{studio.category_frame_preview(theme_frame, emoji='🗂️', name='category-name')} · "
                     "follows the selected theme"
                 )[:100],
                 default=not override_active,
@@ -474,7 +474,7 @@ class DesignServerCategoryFrameSelect(discord.ui.Select):
                     label=legacy._category_frame_choice_label(frame.id)[:100],  # type: ignore[attr-defined]
                     value=frame.id,
                     description=(
-                        f"Result: {studio.category_frame_preview(frame.id, emoji='🗂️', name="category-name")}"
+                        f"Result: {studio.category_frame_preview(frame.id, emoji='🗂️', name='category-name')}"
                     )[:100],
                     default=bool(override_active and explicit and frame.id == selected),
                 )
