@@ -355,7 +355,11 @@ async def warm_invite_cache_for_guild(guild: discord.Guild) -> bool:
         return ok
 
 
-async def _detect_join_entry_context_unlocked(member: discord.Member) -> Dict[str, Any]:
+async def _detect_join_entry_context_unlocked(
+    member: discord.Member,
+    *,
+    baseline_ready: bool,
+) -> Dict[str, Any]:
     guild = member.guild
     gid = int(guild.id)
 
@@ -394,6 +398,31 @@ async def _detect_join_entry_context_unlocked(member: discord.Member) -> Dict[st
                 vanity_code = str(getattr(vanity, "code", "") or "").strip() or None
         except Exception:
             pass
+
+    if not baseline_ready:
+        if not invites_ok:
+            default_context = build_join_context(
+                entry_method="invite_tracking_unavailable",
+                join_source="invite_tracking_unavailable",
+                verification_source="invite_tracking_unavailable",
+                entry_reason="Joined, but the bot could not establish an invite usage baseline. Check Manage Server / invite read permissions.",
+                join_note="Invite tracking unavailable for this join.",
+                vanity_used=False,
+            )
+        else:
+            default_context = build_join_context(
+                entry_method="invite_cache_warming",
+                join_source="invite_cache_warming",
+                verification_source="invite_cache_warming",
+                entry_reason="Joined while Dank Shield established a fresh invite baseline. No invite is claimed for this join; future joins use measured deltas.",
+                join_note="Invite baseline established after restart; attribution intentionally withheld for this join.",
+                vanity_used=False,
+            )
+
+        _INVITE_USES_CACHE[gid] = current_uses
+        _INVITE_META_CACHE[gid] = current_meta
+        _VANITY_USES_CACHE[gid] = vanity_uses
+        return default_context
 
     best_code: Optional[str] = None
     best_delta = 0
@@ -492,15 +521,12 @@ async def detect_join_entry_context(member: discord.Member) -> Dict[str, Any]:
     gid = int(guild.id)
     async with invite_lock_for(gid):
         ready_before = invite_cache_ready(gid)
-        context = normalize_join_context(await _detect_join_entry_context_unlocked(member))
-        if not ready_before and str(context.get("entry_method") or "").strip().lower() == "invite_unresolved":
-            context["entry_method"] = "invite_cache_warming"
-            context["join_source"] = "invite_cache_warming"
-            context["verification_source"] = "invite_cache_warming"
-            context["entry_truth_quality"] = "partial"
-            context["entry_confidence"] = 35
-            context["entry_quality_reason"] = "Invite cache had no confirmed startup/reconnect baseline for this join."
-            context["entry_conflict"] = False
+        context = normalize_join_context(
+            await _detect_join_entry_context_unlocked(
+                member,
+                baseline_ready=ready_before,
+            )
+        )
         if str(context.get("entry_method") or "").strip().lower() != "invite_tracking_unavailable":
             mark_invite_cache_ready(gid, True)
         return normalize_join_context(context)
