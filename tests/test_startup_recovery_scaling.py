@@ -10,6 +10,7 @@ ACTIVITY = (ROOT / "stoney_verify" / "members_new" / "activity_tracker.py").read
 INVITE = (ROOT / "stoney_verify" / "invite_reconciliation_runtime.py").read_text(encoding="utf-8")
 POLICY = (ROOT / "stoney_verify" / "invite_policy_engine.py").read_text(encoding="utf-8")
 SURFACE = (ROOT / "stoney_verify" / "invite_policy_message_surface_runtime.py").read_text(encoding="utf-8")
+JOIN_CONTEXT = (ROOT / "stoney_verify" / "members_new" / "join_context_service.py").read_text(encoding="utf-8")
 COORDINATOR = (ROOT / "stoney_verify" / "startup_recovery_coordinator.py").read_text(encoding="utf-8")
 
 
@@ -53,6 +54,8 @@ def test_startup_member_departure_recovery_uses_shared_guild_slot() -> None:
 
     assert 'startup_recovery_slot(gid, "member_departure_reconcile")' in block
     assert "_run_departed_reconciliation_for_guild(guild)" in block
+    assert "_persisted_last_heartbeat_at(gid)" in block
+    assert "reason=no_durable_restart_checkpoint" in block
 
 
 def test_activity_and_invite_recovery_share_bounded_coordinator() -> None:
@@ -88,3 +91,14 @@ def test_invite_surface_never_reads_deprecated_message_interaction() -> None:
     assert 'getattr(message, "interaction_metadata", None)' in SURFACE
     assert 'getattr(message, "interaction", None)' not in SURFACE
     assert '("interaction_metadata", "interaction")' not in SURFACE
+
+
+def test_invite_cache_warm_uses_shared_budget_and_preflights_requests() -> None:
+    assert 'startup_recovery_slot(gid, "invite_cache_warm")' in EVENTS
+    assert "await asyncio.sleep(0.25)" in EVENTS
+
+    assert "def _can_fetch_guild_invites" in JOIN_CONTEXT
+    assert 'getattr(permissions, "manage_guild", False)' in JOIN_CONTEXT
+    assert "def _guild_has_vanity_url" in JOIN_CONTEXT
+    assert '"VANITY_URL"' in JOIN_CONTEXT
+    assert "if _guild_has_vanity_url(guild):" in JOIN_CONTEXT
