@@ -635,7 +635,7 @@ async def _ensure_ticket_channel_access(channel: discord.TextChannel, member: di
 async def _post_verify_ui(channel: discord.TextChannel, member: discord.Member) -> bool:
     try:
         cfg = await _get_guild_config_safe(channel.guild.id)
-        if not _should_auto_route_unverified_ticket(guild, cfg):
+        if not _should_auto_route_unverified_ticket(channel.guild, cfg):
             _log(
                 "skipped verification UI post in ticket "
                 f"guild={channel.guild.id} channel={channel.id} user={member.id} reason=basic_verify_or_no_advanced_verify"
@@ -859,7 +859,7 @@ async def _handle_unverified_panel_click(interaction: discord.Interaction) -> bo
         return False
 
     cfg = await _get_guild_config_safe(guild.id)
-    if not _should_auto_route_unverified_ticket(cfg):
+    if not _should_auto_route_unverified_ticket(guild, cfg):
         _log(
             "public ticket click allowed through normal support path "
             f"guild={guild.id} user={member.id} reason=basic_verify_or_no_advanced_verify"
