@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-
-import pytest
 
 from stoney_verify.share_router_resources import (
     SHARE_ROUTER_CATEGORY_KEY,
@@ -116,8 +115,7 @@ def test_share_router_is_reachable_from_community_tools_with_dank_browser() -> N
     assert 'resource_kinds=("text",)' in PUBLIC_UI
 
 
-@pytest.mark.asyncio
-async def test_transaction_preflight_skips_reserved_share_router_resources() -> None:
+def test_transaction_preflight_skips_reserved_share_router_resources() -> None:
     category = SimpleNamespace(id=101, name="✦──── 🔗 share-routes ────✦", category=None)
     proxy = SimpleNamespace(id=102, name="「🤡」share-memes", category=category)
     ordinary_category = SimpleNamespace(id=201, name="community", category=None)
@@ -137,7 +135,9 @@ async def test_transaction_preflight_skips_reserved_share_router_resources() -> 
         {"channel_id": "102", "status": "changed", "before": proxy.name, "after": "styled-proxy"},
         {"channel_id": "202", "status": "changed", "before": ordinary.name, "after": "styled-normal-channel"},
     ]
-    ready, skipped, errors = await design_apply_service.preflight_plan(Guild(), items, name_limit=100)
+    ready, skipped, errors = asyncio.run(
+        design_apply_service.preflight_plan(Guild(), items, name_limit=100)
+    )
 
     assert errors == []
     assert skipped == 1
