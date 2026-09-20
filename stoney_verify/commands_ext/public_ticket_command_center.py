@@ -13,6 +13,7 @@ from typing import Any, Optional
 import discord
 from discord import app_commands
 
+from stoney_verify.interaction_guard import run_guarded_interaction
 from .common import _staff_check
 from ..tickets_new.service import authorize_ticket_action
 
@@ -195,6 +196,35 @@ async def _run_ticket_command(
     channel: discord.TextChannel,
     **kwargs: Any,
 ) -> None:
+    async def action() -> None:
+        await _run_ticket_command_action(
+            interaction,
+            name=name,
+            channel=channel,
+            **kwargs,
+        )
+
+    await run_guarded_interaction(
+        interaction,
+        action,
+        defer=True,
+        ephemeral=True,
+        action_name=f"ticket.center.{name}",
+        error_title="❌ Ticket action stopped unexpectedly",
+        error_guidance=(
+            "Refresh or reopen the Ticket Operations Center and inspect the ticket's current state "
+            "before retrying. Use the Error ID in `/dank diagnostics` if this keeps happening."
+        ),
+    )
+
+
+async def _run_ticket_command_action(
+    interaction: discord.Interaction,
+    *,
+    name: str,
+    channel: discord.TextChannel,
+    **kwargs: Any,
+) -> None:
     if not await _require_staff(interaction):
         return
     if not await _authorize_ticket_command(interaction, command_name=name, channel=channel):
@@ -203,15 +233,14 @@ async def _run_ticket_command(
 
     command = ticket_group.get_command(name)
     if command is None:
-        return await _private(interaction, f"❌ Ticket action **{name}** is unavailable.")
+        await _private(interaction, f"❌ Ticket action **{name}** is unavailable.")
+        return
     try:
         await _invoke(command, interaction, channel=channel, **kwargs)
     except TypeError:
         # Commands with a required positional value are invoked by their dedicated
         # picker/modal flows and should never land here.
         await _private(interaction, f"❌ Ticket action **{name}** needs more information.")
-    except Exception as exc:
-        await _private(interaction, f"❌ Ticket action failed safely: `{type(exc).__name__}: {exc}`")
 
 
 class TicketChannelPicker(discord.ui.ChannelSelect):
