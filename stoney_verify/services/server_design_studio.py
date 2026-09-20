@@ -273,6 +273,7 @@ EXACT_EDITOR_SEPARATOR_IDS: tuple[str, ...] = (
 )
 
 CATEGORY_FRAMES: tuple[CategoryFrameSpec, ...] = (
+    # Core
     CategoryFrameSpec("line", "Clean Line", "─── {emoji} {name} ───", clutter=1),
     CategoryFrameSpec("heavy_line", "Heavy Line", "━━━ {emoji} {name} ━━━", clutter=2),
     CategoryFrameSpec("top_box", "Top Box", "╭── {emoji} {name} ──╮", safety="balanced", clutter=2),
@@ -283,8 +284,61 @@ CATEGORY_FRAMES: tuple[CategoryFrameSpec, ...] = (
     CategoryFrameSpec("lenticular", "Lenticular", "【 {emoji} {name} 】", safety="balanced", clutter=2),
     CategoryFrameSpec("corner", "Corner", "「 {emoji} {name} 」", safety="balanced", clutter=2),
     CategoryFrameSpec("plain", "Plain", "{emoji} {name}"),
+
+    # Boxes & brackets
+    CategoryFrameSpec("rounded_heavy", "Rounded Heavy", "╭━━ {emoji} {name} ━━╮", safety="balanced", clutter=3),
+    CategoryFrameSpec("square_light", "Square Light", "┌── {emoji} {name} ──┐", safety="balanced", clutter=2),
+    CategoryFrameSpec("square_heavy", "Square Heavy", "┏━━ {emoji} {name} ━━┓", safety="balanced", clutter=3),
+    CategoryFrameSpec("double_bottom", "Double Bottom", "╚══ {emoji} {name} ══╝", safety="decorative", clutter=4),
+    CategoryFrameSpec("white_corner", "White Corner", "『 {emoji} {name} 』", safety="balanced", clutter=2),
+    CategoryFrameSpec("tortoise", "Tortoise", "〔 {emoji} {name} 〕", safety="balanced", clutter=2),
+    CategoryFrameSpec("white_lenticular", "White Lenticular", "〖 {emoji} {name} 〗", safety="balanced", clutter=2),
+    CategoryFrameSpec("soft_bracket", "Soft Brackets", "꒰ {emoji} {name} ꒱", safety="decorative", clutter=3),
+
+    # Premium & decorative
+    CategoryFrameSpec("double_angle", "Double Angle", "《 {emoji} {name} 》", safety="balanced", clutter=2),
+    CategoryFrameSpec("math_angle", "Math Angle", "⟪ {emoji} {name} ⟫", safety="balanced", clutter=2),
+    CategoryFrameSpec("diamond_line", "Diamond Line", "◇── {emoji} {name} ──◇", safety="decorative", clutter=3),
+    CategoryFrameSpec("black_diamond_line", "Black Diamond", "◆━━ {emoji} {name} ━━◆", safety="decorative", clutter=4),
+    CategoryFrameSpec("sparkle_line", "Sparkle Line", "✧── {emoji} {name} ──✧", safety="decorative", clutter=3),
+    CategoryFrameSpec("star_line", "Star Line", "★━━ {emoji} {name} ━━★", safety="decorative", clutter=4),
+    CategoryFrameSpec("hollow_star", "Hollow Star", "☆── {emoji} {name} ──☆", safety="decorative", clutter=3),
+    CategoryFrameSpec("ornate", "Ornate Diamond", "❖══ {emoji} {name} ══❖", safety="decorative", clutter=4),
+
+    # Gothic & celestial
+    CategoryFrameSpec("gothic_cross", "Gothic Cross", "†── {emoji} {name} ──†", safety="decorative", clutter=3),
+    CategoryFrameSpec("cross_line", "Cross Line", "✚── {emoji} {name} ──✚", safety="decorative", clutter=3),
+    CategoryFrameSpec("moon", "Moon", "☾── {emoji} {name} ──☽", safety="decorative", clutter=3),
+    CategoryFrameSpec("sun", "Sun", "☼── {emoji} {name} ──☼", safety="decorative", clutter=3),
+    CategoryFrameSpec("floral", "Floral", "❧── {emoji} {name} ──❧", safety="decorative", clutter=3),
+    CategoryFrameSpec("winged", "Winged", "༺ {emoji} {name} ༻", safety="decorative", clutter=4),
+    CategoryFrameSpec("crown_line", "Crown Line", "♛── {emoji} {name} ──♛", safety="decorative", clutter=4),
+
+    # Tech & minimal
+    CategoryFrameSpec("tech_corner", "Tech Corner", "⌈── {emoji} {name} ──⌉", safety="balanced", clutter=2),
+    CategoryFrameSpec("tech_floor", "Tech Floor", "⌊── {emoji} {name} ──⌋", safety="balanced", clutter=2),
+    CategoryFrameSpec("terminal", "Terminal", "⌜ {emoji} {name} ⌝", safety="balanced", clutter=2),
+    CategoryFrameSpec("wave", "Wave", "≋ {emoji} {name} ≋", safety="balanced", clutter=2),
+    CategoryFrameSpec("chevron", "Chevron", "≫ {emoji} {name} ≪", safety="balanced", clutter=2),
+    CategoryFrameSpec("minimal_dot", "Minimal Dot", "· ─ {emoji} {name} ─ ·", safety="balanced", clutter=2),
+    CategoryFrameSpec("bullet_line", "Bullet Line", "• ━ {emoji} {name} ━ •", safety="balanced", clutter=2),
 )
 CATEGORY_FRAMES_BY_ID = {spec.id: spec for spec in CATEGORY_FRAMES}
+
+# Server-wide frame browsing is grouped so the catalog can grow past Discord's
+# 25-option select limit without hiding choices or silently truncating them.
+CATEGORY_FRAME_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Core", ("line", "heavy_line", "top_box", "bottom_box", "dreamy", "premium_line", "box", "lenticular", "corner", "plain")),
+    ("Boxes & Brackets", ("rounded_heavy", "square_light", "square_heavy", "double_bottom", "white_corner", "tortoise", "white_lenticular", "soft_bracket")),
+    ("Premium & Decorative", ("double_angle", "math_angle", "diamond_line", "black_diamond_line", "sparkle_line", "star_line", "hollow_star", "ornate")),
+    ("Gothic & Celestial", ("gothic_cross", "cross_line", "moon", "sun", "floral", "winged", "crown_line")),
+    ("Tech & Minimal", ("tech_corner", "tech_floor", "terminal", "wave", "chevron", "minimal_dot", "bullet_line")),
+)
+CATEGORY_FRAME_GROUP_BY_ID = {
+    frame_id: group_label
+    for group_label, frame_ids in CATEGORY_FRAME_GROUPS
+    for frame_id in frame_ids
+}
 
 THEMES: tuple[ThemePreset, ...] = (
     ThemePreset("420_lounge", "🍃 420 Lounge", "line", "bar_full", "normal", "420_lounge"),
