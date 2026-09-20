@@ -10,11 +10,12 @@ owned here.
 """
 
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 import discord
 
+from stoney_verify.interaction_guard import run_guarded_interaction, safe_send_interaction
 from stoney_verify.commands_ext import public_design_studio as legacy
 from stoney_verify.services import server_design_apply_service as apply_service
 from stoney_verify.services import server_design_plan_service as plans
@@ -42,6 +43,28 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 _require_design_permission = legacy._require_design_permission  # type: ignore[attr-defined]
 _load_design_options = legacy._load_design_options  # type: ignore[attr-defined]
+
+_DESIGN_V2_MUTATION_ERROR_GUIDANCE = (
+    "Do not retry this design mutation blindly. Reopen `/dank home`, choose **Server Design**, "
+    "and review the current preview/Undo state before trying again. Use the Error ID in "
+    "`/dank diagnostics` if the failure repeats."
+)
+
+
+async def _guard_design_v2_action(
+    interaction: discord.Interaction,
+    action_name: str,
+    action: Callable[[], Awaitable[None]],
+) -> None:
+    await run_guarded_interaction(
+        interaction,
+        action,
+        defer=False,
+        ephemeral=True,
+        action_name=action_name,
+        error_title="❌ Dank Design action stopped unexpectedly",
+        error_guidance=_DESIGN_V2_MUTATION_ERROR_GUIDANCE,
+    )
 
 
 def _rule_counts(options: Mapping[str, Any]) -> dict[str, int]:
@@ -1210,7 +1233,7 @@ def _undo_preview_embed(snapshot: Mapping[str, Any]) -> discord.Embed:
     return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
 
 
-async def _open_undo(interaction: discord.Interaction) -> None:
+async def _open_undo_action(interaction: discord.Interaction) -> None:
     if not await _require_design_permission(interaction):
         return
     guild = interaction.guild
@@ -1219,7 +1242,7 @@ async def _open_undo(interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=False)
     latest = await legacy._latest_rollback_snapshot(int(guild.id))  # type: ignore[attr-defined]
     if not latest:
-        await legacy.safe_send_interaction(  # type: ignore[attr-defined]
+        await safe_send_interaction(
             interaction,
             content="No applied Dank Design batch is available to undo.",
             ephemeral=True,
@@ -1228,6 +1251,13 @@ async def _open_undo(interaction: discord.Interaction) -> None:
         return
     created_at = _safe_float(latest.get("created_at"), 0.0)
     await interaction.edit_original_response(embed=_undo_preview_embed(latest), view=UndoConfirmView(snapshot_created_at=created_at))
+
+
+async def _open_undo(interaction: discord.Interaction) -> None:
+    async def action() -> None:
+        await _open_undo_action(interaction)
+
+    await _guard_design_v2_action(interaction, "design.v2.undo_open", action)
 
 
 class DoneView(DesignView):
@@ -1251,13 +1281,24 @@ class UndoConfirmView(DesignView):
 
     @discord.ui.button(label="Confirm Undo Last Apply", emoji="↩️", style=discord.ButtonStyle.danger, custom_id="dank_design_v2:undo_confirm", row=0)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        async def action() -> None:
+            await self._confirm_undo_action(interaction, button)
+
+        await _guard_design_v2_action(interaction, "design.v2.undo_confirm", action)
+
+    async def _confirm_undo_action(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
         guild = interaction.guild
         assert guild is not None
         lock = legacy._lock_for(int(guild.id))  # type: ignore[attr-defined]
         if lock.locked():
-            await interaction.response.send_message("⏳ A Dank Design job is already running for this server.", ephemeral=True)
+            await safe_send_interaction(
+                interaction,
+                content="⏳ A Dank Design job is already running for this server.",
+                ephemeral=True,
+                action_name="design.v2.undo_confirm.guild_busy",
+            )
             return
 
         await interaction.response.defer(ephemeral=True, thinking=False)
@@ -1434,6 +1475,12 @@ class ReviewedPreviewView(DesignView):
 
     @discord.ui.button(label="Apply Reviewed Changes", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_design_v2:apply", row=0)
     async def apply(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        async def action() -> None:
+            await self._apply_reviewed_action(interaction, button)
+
+        await _guard_design_v2_action(interaction, "design.v2.apply_reviewed", action)
+
+    async def _apply_reviewed_action(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
         guild = interaction.guild
@@ -1442,19 +1489,39 @@ class ReviewedPreviewView(DesignView):
         payload = legacy._PENDING.get(key) or {}  # type: ignore[attr-defined]
 
         if not legacy._pending_matches(payload, self.pending_created_at):  # type: ignore[attr-defined]
-            await interaction.response.send_message("❌ This preview is obsolete. Build a fresh preview before applying.", ephemeral=True)
+            await safe_send_interaction(
+                interaction,
+                content="❌ This preview is obsolete. Build a fresh preview before applying.",
+                ephemeral=True,
+                action_name="design.v2.apply_reviewed.stale_preview",
+            )
             return
         items = list(payload.get("items") or [])
         if not items:
-            await interaction.response.send_message("❌ No reviewed preview is available. Build the preview again.", ephemeral=True)
+            await safe_send_interaction(
+                interaction,
+                content="❌ No reviewed preview is available. Build the preview again.",
+                ephemeral=True,
+                action_name="design.v2.apply_reviewed.no_preview",
+            )
             return
         if any(item.get("status") == "failed" for item in items):
-            await interaction.response.send_message("❌ This preview has blockers. Fix them and preview again.", ephemeral=True)
+            await safe_send_interaction(
+                interaction,
+                content="❌ This preview has blockers. Fix them and preview again.",
+                ephemeral=True,
+                action_name="design.v2.apply_reviewed.blocked",
+            )
             return
 
         lock = legacy._lock_for(int(guild.id))  # type: ignore[attr-defined]
         if lock.locked():
-            await interaction.response.send_message("⏳ A design Apply is already running for this server.", ephemeral=True)
+            await safe_send_interaction(
+                interaction,
+                content="⏳ A design Apply is already running for this server.",
+                ephemeral=True,
+                action_name="design.v2.apply_reviewed.guild_busy",
+            )
             return
 
         await interaction.response.defer(ephemeral=True, thinking=False)
