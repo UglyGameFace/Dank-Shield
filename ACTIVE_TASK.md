@@ -4,7 +4,7 @@
 DS-DESIGN-SEPARATORS-265 — First-class mixed separator coverage
 
 ## Status
-INVESTIGATED — root cause confirmed; implementation in progress
+IMPLEMENTATION COMPLETE — validation in progress
 
 ## Single active-task lock
 Only the Server Designer separator-coverage task is active. Do not start unrelated
@@ -76,15 +76,30 @@ Smart Repair / Auto-Detect:
 - Do not alter permissions, roles, topics, channel order, ticket behavior, protection,
   Unicode font behavior, or unrelated Server Designer ownership.
 
-## Planned implementation
-- add first-class `double_dash`, `pipe_compact`, `pipe_spaced`,
+## Implementation
+- added first-class `double_dash`, `pipe_compact`, `pipe_spaced`,
   `double_pipe`, and `double_colon` specs to the canonical separator library
-- centralize the server-wide and exact-item curated separator ID lists in
+- centralized server-wide and exact-item curated separator IDs in
   `server_design_studio.py`
-- wire both Discord pickers to those canonical lists
-- make Gothic Clean use the stable `pipe_spaced` catalog entry directly
-- add regressions for parsing, auto-detect, UI exposure, select-size limits, and
-  intentional-vs-accidental doubled separator behavior
+- server-wide design now exposes 24 explicit separator choices plus Theme Default,
+  exactly fitting Discord's 25-option select limit
+- exact-item design exposes 25 choices while preserving every option it already had
+- both Discord picker flows now consume the canonical lists instead of owning
+  divergent hard-coded subsets
+- Gothic Clean now returns the stable first-class `pipe_spaced` catalog entry
+  directly instead of mutating the separator catalog at runtime
+- the full paginated separator example gallery still consumes the complete
+  `SEPARATOR_LIBRARY`, so the broader catalog remains browsable
+
+## Regression coverage added
+- `👋--welcome` parses and round-trips as intentional `double_dash`
+- `👋----welcome` is still classified as an accidental doubled `--`
+- `🏁 | start-here-verify` is reproducible through first-class `pipe_spaced`
+- compact/spaced pipe lookups do not mutate the runtime separator catalog
+- server-wide picker exposes the new mixed-layout ASCII options and remains at 25
+  total choices including Theme Default
+- exact-item picker remains at Discord's 25-option limit
+- every previously exposed server-wide and exact-item separator remains available
 
 ## Validation required
 - targeted separator / Server Designer tests
@@ -104,5 +119,6 @@ Smart Repair / Auto-Detect:
 None added from this task.
 
 ## Next step
-Implement the canonical separator catalog and picker ownership changes, then add the
-mixed-layout regressions before running exact-head validation.
+Open the scoped draft PR and run targeted/full exact-head validation. If any same-root
+regression fails, repair it on this branch, then re-run the complete gate before the
+final bookkeeping commit and merge.
