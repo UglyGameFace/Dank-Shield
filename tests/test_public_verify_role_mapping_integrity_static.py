@@ -15,7 +15,7 @@ def test_role_mapping_select_uses_native_interaction_guard() -> None:
     region = _role_select_region()
 
     assert "from stoney_verify.interaction_guard import run_guarded_interaction" in CENTER
-    assert "from ..guild_config import get_guild_config" in CENTER
+    assert "from ..guild_config import get_guild_config, invalidate_guild_config" in CENTER
     assert "async def action() -> None:" in region
     assert "await self._save_mapping(interaction)" in region
     assert "await run_guarded_interaction(" in region
@@ -49,6 +49,7 @@ def test_role_mapping_verifies_persistence_before_success() -> None:
     region = _role_select_region()
     body = region[region.index("async def _save_mapping"):]
 
+    assert "invalidate_guild_config(int(guild.id))" in body
     assert "await get_guild_config(int(guild.id), refresh=True)" in body
     assert "saved_role_id = _safe_int(_cfg_value(refreshed, config_key), 0)" in body
     assert "if saved_role_id != int(role.id):" in body
@@ -56,11 +57,12 @@ def test_role_mapping_verifies_persistence_before_success() -> None:
     assert 'await _private(interaction, f"✅ **{label}** now uses {role.mention}.")' in body
 
     save_at = body.index("await _save_role_config(")
+    invalidate_at = body.index("invalidate_guild_config(int(guild.id))")
     refresh_at = body.index("await get_guild_config(")
     verify_at = body.index("if saved_role_id != int(role.id):")
     success_at = body.index('await _private(interaction, f"✅ **{label}** now uses {role.mention}.")')
 
-    assert save_at < refresh_at < verify_at < success_at
+    assert save_at < invalidate_at < refresh_at < verify_at < success_at
 
 
 def test_role_mapping_does_not_send_success_on_unverified_save_path() -> None:
@@ -79,3 +81,15 @@ def test_role_mapping_keeps_server_context_fail_closed() -> None:
     assert "guild = interaction.guild" in body
     assert "if guild is None:" in body
     assert 'raise RuntimeError("Verification role mapping requires a server context.")' in body
+
+
+def test_role_mapping_drops_stale_cache_before_authoritative_read() -> None:
+    region = _role_select_region()
+    body = region[region.index("async def _save_mapping"):]
+
+    invalidate = "invalidate_guild_config(int(guild.id))"
+    refresh = "await get_guild_config(int(guild.id), refresh=True)"
+    success = 'await _private(interaction, f"✅ **{label}** now uses {role.mention}.")'
+
+    assert invalidate in body
+    assert body.index(invalidate) < body.index(refresh) < body.index(success)
