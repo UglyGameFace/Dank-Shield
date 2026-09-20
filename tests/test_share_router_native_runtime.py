@@ -10,7 +10,12 @@ from stoney_verify.share_router_resources import (
     normalize_share_router_name,
     share_source_key,
 )
-from stoney_verify.share_router_runtime import ensure_share_router_runtime, route_for_source
+from stoney_verify.share_router_runtime import (
+    _merged_overwrite,
+    ensure_share_router_runtime,
+    route_for_source,
+    source_age_blocker,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,6 +63,31 @@ class _FakeBot:
 
     def add_listener(self, callback, event_name: str) -> None:
         self.extra_events.setdefault(event_name, []).append(callback)
+
+
+
+
+def test_proxy_overwrite_merge_preserves_unrelated_fields() -> None:
+    import discord
+
+    existing = discord.PermissionOverwrite(
+        add_reactions=True,
+        manage_threads=False,
+    )
+    merged = _merged_overwrite(existing, view_channel=False, send_messages=True)
+
+    assert merged.add_reactions is True
+    assert merged.manage_threads is False
+    assert merged.view_channel is False
+    assert merged.send_messages is True
+
+
+def test_age_restricted_proxy_source_is_rejected() -> None:
+    source = SimpleNamespace(is_nsfw=lambda: True)
+    assert "age-restricted" in source_age_blocker(source)
+
+    normal_source = SimpleNamespace(is_nsfw=lambda: False)
+    assert source_age_blocker(normal_source) == ""
 
 
 def test_runtime_listener_install_is_explicit_and_idempotent() -> None:
