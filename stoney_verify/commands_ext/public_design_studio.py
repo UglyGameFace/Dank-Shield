@@ -4482,6 +4482,7 @@ def _style_change_missing_emoji_items(items: list[dict[str, Any]]) -> list[dict[
             or "No leading emoji/icon" in blockers
             or "failed/unsupported #️⃣ placeholder" in blockers
             or "not safe channel-name icons" in blockers
+            or "unsafe #️⃣ keycap" in blockers
         ):
             out.append(item)
 
