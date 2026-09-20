@@ -25,6 +25,7 @@ import uuid
 import discord
 
 from stoney_verify.globals import get_supabase
+from stoney_verify.startup_recovery_coordinator import startup_recovery_slot
 from stoney_verify.members_new.activity_reconciliation import (
     audit_guild_activity_scope,
     max_reconcile_gap_seconds,
@@ -45,7 +46,6 @@ _INSTALLED = False
 _HEARTBEAT_TASK: Optional[asyncio.Task] = None
 _STARTED_GUILDS: set[int] = set()
 _STARTUP_TASKS: dict[int, asyncio.Task] = {}
-_STARTUP_RECONCILE_LOCK = asyncio.Lock()
 _LOCAL_ERRORS: dict[int, str] = {}
 _LOCAL_SCOPE_ERRORS: dict[int, str] = {}
 
@@ -134,6 +134,18 @@ def _select_tracker_state_sync(guild_id: int) -> Optional[dict[str, Any]]:
         return None
 
     return dict(rows[0])
+
+
+async def persisted_last_heartbeat_at(guild_id: int) -> Optional[datetime]:
+    """Return the last durable tracker heartbeat without mutating tracker state."""
+
+    try:
+        row = await asyncio.to_thread(_select_tracker_state_sync, int(guild_id))
+    except Exception:
+        return None
+    if not row:
+        return None
+    return _safe_dt(row.get("last_heartbeat_at"))
 
 
 def evaluate_coverage_state(
@@ -765,8 +777,10 @@ async def _run_scheduled_guild_tracking(
         if delay_seconds > 0:
             await asyncio.sleep(delay_seconds)
 
-        # Only one guild may consume Discord history APIs at a time.
-        async with _STARTUP_RECONCILE_LOCK:
+        async with startup_recovery_slot(
+            gid,
+            "activity_restart_reconcile",
+        ):
             try:
                 completed = await asyncio.wait_for(
                     _start_guild_tracking(guild),
@@ -1041,6 +1055,7 @@ __all__ = [
     "ActivityCoverageStatus",
     "evaluate_coverage_state",
     "get_activity_coverage_status",
+    "persisted_last_heartbeat_at",
     "install_activity_tracker",
     "record_direct_member_activity",
 ]
