@@ -7,7 +7,7 @@ from typing import Any, Optional
 import discord
 
 from stoney_verify.interaction_guard import run_guarded_interaction
-from ..guild_config import get_guild_config
+from ..guild_config import get_guild_config, invalidate_guild_config
 from .common import _staff_check
 
 
@@ -461,6 +461,11 @@ class VerifyRoleSelect(discord.ui.RoleSelect):
             explicit_override=True,
         )
 
+        # _save_role_config intentionally swallows persistence failures for legacy
+        # auto-discovery callers. Drop any pre-save cache before verification so a
+        # failed write cannot be "confirmed" by a stale value that happens to
+        # match the selected role.
+        invalidate_guild_config(int(guild.id))
         refreshed = await get_guild_config(int(guild.id), refresh=True)
         saved_role_id = _safe_int(_cfg_value(refreshed, config_key), 0)
         if saved_role_id != int(role.id):
