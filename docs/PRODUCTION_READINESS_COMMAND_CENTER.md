@@ -139,7 +139,7 @@ Remaining score blockers:
 
 ### `P0-INT-001` — Replace monkey-patched interaction logger with native interaction service
 
-Status: `PARTIAL / BLOCKER — Apply/Undo slice in progress`
+Status: `PARTIAL / BLOCKER — Apply/Undo slice validated in PR #271, pending merge/main verification`
 
 Goal:
 
@@ -162,8 +162,8 @@ Progress completed on current `main`:
 
 Current locked slice:
 
-- `ReviewedPreviewView.apply` is being moved behind a thin native guard wrapper while preserving the existing pending-preview validation, guild lock, full-batch preflight, apply/compensation, separator persistence compensation, and Undo snapshot behavior.
-- `_open_undo` and `UndoConfirmView.confirm` are being moved behind the same native guard boundary while preserving stale-snapshot refusal, Undo preflight, rollback safety, and snapshot cleanup behavior.
+- PR #271 places `ReviewedPreviewView.apply` behind a thin native guard wrapper while preserving the existing pending-preview validation, guild lock, full-batch preflight, apply/compensation, separator persistence compensation, and Undo snapshot behavior.
+- PR #271 places `_open_undo` and `UndoConfirmView.confirm` behind the same native guard boundary while preserving stale-snapshot refusal, Undo preflight, rollback safety, and snapshot cleanup behavior.
 - Early stale/no-preview/blocker/busy responses use `safe_send_interaction()` instead of raw `interaction.response.send_message`.
 - The mutation error guidance intentionally does **not** promise that nothing changed after an unexpected exception; it tells the user to review current Server Design state before retrying and use the Error ID in diagnostics.
 
@@ -332,14 +332,14 @@ Progress:
 - `/dank design` command-open uses a native guarded wrapper
 - exact-format editor runtime actions are native-guarded on current `main`
 - style-change missing-icon review actions are native-guarded
-- reviewed Apply / Undo native-guard slice is the current locked work item
-- focused Apply/Undo static regression coverage added on the active branch
+- reviewed Apply / Undo native-guard slice is validated in PR #271 and pending merge/main verification
+- focused Apply/Undo static regression coverage is included in PR #271
 
 Verification:
 
 - exact-format runtime presence re-verified from current `main`
 - Apply/Undo branch static assertions preserve existing transaction/preflight/compensation/snapshot primitives
-- changed helper/Undo/test blocks pass targeted Python 3.11 grammar validation; final exact-head validation remains required before merge
+- changed helper/Apply/Undo/test surface passes targeted Python 3.11 grammar and focused exact-source validation on PR #271; merge/main verification remains
 - full checkout/pytest remains blocked by the known external GitHub runner/DNS infrastructure issue
 - setup/ticket/verify callbacks are not fully migrated yet
 
