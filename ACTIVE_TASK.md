@@ -2,113 +2,89 @@
 
 ## Active task / desired outcome
 
-**P0-INT-001 — Ticket Operations Center command runner native interaction guard**
+**P0-INT-001 — Verification Center canonical command dispatcher native interaction guard**
 
-Move the shared Ticket Operations Center command-dispatch boundary onto the native interaction service without changing canonical ticket authorization, lifecycle services, claim-first rules, or ticket command semantics.
+Move the Verification Center's shared canonical-command dispatcher onto the native interaction service so its role/member mutations get structured Error IDs without rewriting the canonical `/verify` command implementations.
 
 ## Why this is next
 
-PR #273 completed the `/dank setup-find` config-writer slice and merged as `f9307c4254ea1631cbf6e516a8197f6d329b89e0`.
+PR #275 completed the Ticket Operations Center command-runner slice and merged as `e58bbf0c566b07bd72412d12a566d6d4e8217dc8`.
 
 Post-merge verification on `main` confirmed the validated production and regression-test blobs exactly:
 
-- `public_setup_find.py` → `637a9b0455e0ce06a3ab6450c57d8dff3be2db6c`
-- `test_public_setup_find_native_interaction_static.py` → `b6d18674b9611872a70ec28a0a7b27458fad12da`
+- `public_ticket_command_center.py` → `d0abd4e3dca0a4a38638fd1e8018f9d6574cbccd`
+- `test_public_ticket_command_center_native_interaction_static.py` → `e17d2fda8bdb68bcadb113bcc0b2fca38bb28191`
 
-The next high-risk raw interaction boundary is `_run_ticket_command` in `stoney_verify/commands_ext/public_ticket_command_center.py`.
+The next high-value raw interaction boundary is `_invoke` in `stoney_verify/commands_ext/public_verify_command_center.py`.
 
-That function:
+That dispatcher is used by Verification Center actions including:
 
-- is called by the Ticket Operations Center component UI;
-- performs staff and claim/authorization checks;
-- refreshes ticket state and can hit ticket authorization storage before the canonical command callback;
-- directly dispatches canonical ticket commands such as claim, unclaim, lock, unlock, info, owner, and access;
-- catches unexpected exceptions locally and only sends a plain error string;
-- does not currently use `run_guarded_interaction()`, so unexpected failures do not get the native structured Error ID path.
+- server-wide Pending/Unverified repair;
+- member Status and Diagnose;
+- Grant Verified + Member;
+- Restore Pending / Pending + Clear Conflicts;
+- add/remove Verified;
+- add/remove Resident.
 
-The canonical ticket callbacks are compatible with an already-acknowledged interaction: `safe_defer` no-ops when the response is already done and `reply_once` sends a followup. That allows this shared runner to acknowledge before authorization/DB work without rewriting each ticket command.
+The dispatcher currently calls canonical command callbacks directly with no `run_guarded_interaction()` boundary.
+
+Current evidence also shows:
+
+- none of the Verification Center callers depend on an `_invoke` return value;
+- canonical `public_verify_group._ack()` checks `interaction.response.is_done()` before deferring, so it is compatible with a pre-deferred interaction;
+- the canonical `/verify` functions remain the owners of role hierarchy checks, role creation/discovery, config mapping, member role mutations, and their own normal response content.
 
 ## Scope
 
 In scope:
 
-- `_run_ticket_command` in `public_ticket_command_center.py`;
-- native guarded acknowledgement before authorization/dispatch work;
-- preserving the existing staff check and `authorize_ticket_action` policy;
-- preserving canonical command lookup and direct callback dispatch;
-- focused regression coverage for guard ownership, defer-before-authorization, and canonical dispatch preservation;
+- `_invoke` in `public_verify_command_center.py`;
+- native defer-before-canonical-command dispatch;
+- stable action naming derived from the canonical callback name;
+- preserving callable validation and exact callback arguments;
+- focused regression coverage proving guarded dispatch and pre-defer compatibility;
 - P0 interaction ledger updates for this exact slice.
 
 Out of scope:
 
-- changing ticket authorization rules;
-- changing claim-first policy;
-- changing ticket lifecycle services;
-- changing ticket close/reopen/delete modal flows;
-- changing individual canonical `/ticket` command implementations in this slice;
-- changing ticket storage/schema;
-- verification or setup work;
+- changing canonical `/verify` command logic;
+- changing role hierarchy or role discovery rules;
+- changing Verification Center navigation;
+- changing direct Verification Role Mapping config writes in this slice;
+- changing Verify panel posting or setup routing;
+- ticket/setup/design work;
 - removing the global framework interaction monkey patch in this slice.
 
 ## Status
 
-**IMPLEMENTED — targeted validation passed; pending exact-head PR/main verification**
+**LOCKED — NOT IMPLEMENTED**
 
-## Required behavior preserved
+## Required behavior to preserve
 
-- staff-only gate remains first business rule;
-- existing Ticket Operations Center authorization remains authoritative before dispatch;
-- claim remains exempt from the center's extra authorization rule exactly as before;
-- canonical `ticket_group.get_command(name)` lookup remains the dispatch source;
-- commands that need dedicated picker/modal information retain the existing `TypeError` business response;
-- canonical callbacks continue to own live ticket mutations and user-facing success/failure content;
-- component users still receive private responses.
+- non-callable canonical actions still fail clearly;
+- the exact canonical callback still receives the original interaction, positional args, and kwargs;
+- canonical `/verify` commands remain authoritative for staff checks, role checks, role mutations, repair behavior, and normal messages;
+- existing center button flows continue to work with no caller return-value dependency;
+- mutations are acknowledged before slower canonical role/config work.
 
-## Implementation
+## Implementation rule
 
-`_run_ticket_command` is now a thin native interaction boundary using `run_guarded_interaction(..., defer=True)`.
+Use `stoney_verify.interaction_guard.run_guarded_interaction` as a thin wrapper inside `_invoke`.
 
-The existing runner body moved to `_run_ticket_command_action` without changing staff checks, authorization ordering, canonical command lookup, or invocation arguments.
+Prefer `defer=True`; the canonical `_ack()` helper is response-done aware. Derive a stable action name from the callback function name, such as `verify.center.verify_grant_vr`.
 
-The previous broad `except Exception` string-flattening fallback was removed so truly unexpected failures reach the native structured Error ID path. The intentional `TypeError` dedicated-flow response remains.
-
-Because the native guard acknowledges the interaction first, the existing canonical ticket helpers remain compatible:
-- `safe_defer` already no-ops when the response is done;
-- `reply_once` already sends a followup when the response is done.
-
-Failure guidance is cautious because a canonical ticket action may have partially mutated state before an unexpected exception. Staff are told to refresh/reopen the Ticket Operations Center and inspect the current ticket state before retrying.
-
-## Validation
-
-Targeted branch validation passed:
-
-- branch started from current `main` and remains 0 commits behind;
-- production diff is 35 changed lines in `public_ticket_command_center.py`;
-- exact ticket-runner region parses successfully with Python AST;
-- the focused regression test parses successfully with Python AST;
-- focused source replay confirms:
-  - `run_guarded_interaction` owns the shared runner;
-  - the guard defers before staff/authorization/dispatch work;
-  - staff check still precedes ticket authorization;
-  - authorization still precedes canonical command lookup;
-  - canonical lookup still precedes `_invoke`;
-  - the dedicated-flow `TypeError` branch remains;
-  - the old broad `except Exception` swallow is absent;
-  - `safe_defer` and `reply_once` remain compatible with a pre-deferred interaction.
-- existing Ticket Operations Center surface tests do not pin the retired local exception shape.
-
-Full repository pytest/Actions remains subject to the known runner/DNS infrastructure problem and must not be represented as passing unless a runner actually executes steps.
+Failure guidance must be cautious because a canonical verification command may have partially changed roles before an unexpected exception. Tell staff to reopen the Verification Center and inspect the member/server verification state before retrying, with the native Error ID available in `/dank diagnostics`.
 
 ## Previous completed slice
 
-**PR #273 — Guard setup-find config writes**
+**PR #275 — Guard Ticket Operations Center command runner**
 
-- merged as `f9307c4254ea1631cbf6e516a8197f6d329b89e0`;
+- merged as `e58bbf0c566b07bd72412d12a566d6d4e8217dc8`;
 - verified on `main`;
-- validated setup source blob: `637a9b0455e0ce06a3ab6450c57d8dff3be2db6c`;
-- validated regression-test blob: `b6d18674b9611872a70ec28a0a7b27458fad12da`;
+- validated ticket-center blob: `d0abd4e3dca0a4a38638fd1e8018f9d6574cbccd`;
+- validated regression-test blob: `e17d2fda8bdb68bcadb113bcc0b2fca38bb28191`;
 - GitHub Actions again terminated before runner step execution with `steps: null` / `logs_url: null`.
 
 ## Next step
 
-Open the focused PR, verify the exact final head and CI execution state, merge with an expected-head guard if the code evidence remains clean, verify the validated production/test blobs on `main`, then lock the next single P0 interaction boundary.
+Implement the smallest guarded `_invoke` dispatcher and focused regression test on a fresh branch, then validate the exact head before merge.
