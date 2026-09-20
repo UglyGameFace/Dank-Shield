@@ -396,3 +396,13 @@ def test_intentional_square_emoji_is_preserved_in_mixed_server_layout() -> None:
     assert after == "⬜--mods-only"
     assert warnings == []
     assert blockers == []
+
+
+def test_unsafe_keycap_blocker_still_routes_to_icon_repair() -> None:
+    item = {
+        "status": "failed",
+        "blockers": ["Leading icon uses the unsafe #️⃣ keycap form. Choose a different emoji/icon first."],
+    }
+
+    assert legacy._style_change_missing_emoji_items([item]) == [item]
+
