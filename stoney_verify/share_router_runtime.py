@@ -236,6 +236,8 @@ def route_permission_blockers(
     delete_source: bool,
 ) -> list[str]:
     blockers: list[str] = []
+    if int(getattr(source, "id", 0) or 0) == int(getattr(target, "id", 0) or 0):
+        blockers.append("The proxy source and real destination must be different channels.")
     me = source.guild.me
     if not isinstance(me, discord.Member):
         return ["Dank Shield's server member could not be resolved."]
