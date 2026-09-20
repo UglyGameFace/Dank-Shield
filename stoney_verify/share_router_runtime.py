@@ -570,8 +570,20 @@ def find_share_router_category(guild: discord.Guild) -> Optional[discord.Categor
     categories = find_share_router_categories(guild)
     if not categories:
         return None
-    exact = next((category for category in categories if str(category.name) == SHARE_ROUTER_CATEGORY_NAME), None)
-    return exact or categories[0]
+
+    def score(category: discord.CategoryChannel) -> tuple[int, int]:
+        canonical_children = sum(
+            1
+            for channel in list(getattr(category, "channels", []) or [])
+            if isinstance(channel, discord.TextChannel)
+            and share_source_key(getattr(channel, "name", "")) is not None
+        )
+        exact_name = 1 if str(getattr(category, "name", "")) == SHARE_ROUTER_CATEGORY_NAME else 0
+        return canonical_children, exact_name
+
+    # Prefer the hub that already owns the proxy children. This avoids choosing
+    # an empty duplicate merely because its category name happens to be exact.
+    return max(categories, key=score)
 
 
 def find_share_source_channel(
