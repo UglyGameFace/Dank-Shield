@@ -22,7 +22,8 @@ def test_ticket_center_runner_uses_native_interaction_guard() -> None:
     assert "defer=True" in region
     assert 'action_name=f"ticket.center.{name}"' in region
     assert "Ticket action stopped unexpectedly" in region
-    assert "inspect the ticket's current state before retrying" in region
+    assert "inspect the ticket's current state" in region
+    assert "before retrying. Use the Error ID" in region
 
 
 def test_ticket_center_runner_preserves_authorization_and_canonical_dispatch() -> None:
