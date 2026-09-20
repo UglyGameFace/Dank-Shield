@@ -169,6 +169,7 @@ def test_runtime_keeps_legacy_route_storage_and_sender_permission_boundary() -> 
     assert "author_perms.view_channel" in RUNTIME
     assert "author_perms.send_messages" in RUNTIME
     assert "source_age_blocker(message.channel)" in RUNTIME
+    assert "source_privacy_blocker(message.channel)" in RUNTIME
     assert "allowed_mentions=discord.AllowedMentions.none()" in RUNTIME
 
 
