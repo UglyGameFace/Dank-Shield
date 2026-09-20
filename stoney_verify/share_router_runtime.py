@@ -617,15 +617,25 @@ async def create_or_repair_hidden_share_hub(
         channel = find_share_source_channel(category, canonical)
 
         if channel is None:
+            source_overwrites = _permission_overwrite_map(guild, actor)
+            source_overwrites = await _add_configured_staff_overwrites(guild, source_overwrites)
             channel = await guild.create_text_channel(
                 canonical,
                 category=category,
                 nsfw=False,
+                overwrites=source_overwrites,
                 reason="Dank Shield Share Router proxy source",
             )
             created.append(canonical)
         else:
-            edits: dict[str, Any] = {}
+            current_source_overwrites = dict(getattr(channel, "overwrites", {}) or {})
+            source_overwrites = _permission_overwrite_map(
+                guild,
+                actor,
+                current=current_source_overwrites,
+            )
+            source_overwrites = await _add_configured_staff_overwrites(guild, source_overwrites)
+            edits: dict[str, Any] = {"overwrites": source_overwrites}
             old_name = str(channel.name)
             if old_name != canonical:
                 edits["name"] = canonical
@@ -636,11 +646,10 @@ async def create_or_repair_hidden_share_hub(
                     repaired.append(f"{canonical} -> non-age-restricted proxy")
             except Exception:
                 warnings.append(f"Could not verify age-restriction state for {canonical}.")
-            if edits:
-                await channel.edit(
-                    **edits,
-                    reason="Dank Shield Share Router canonical proxy repair",
-                )
+            await channel.edit(
+                **edits,
+                reason="Dank Shield Share Router canonical proxy privacy/name repair",
+            )
 
         if len(matches) > 1:
             extras = [str(item.name) for item in matches if int(item.id) != int(channel.id)]
