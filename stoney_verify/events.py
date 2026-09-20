@@ -80,13 +80,11 @@ try:
         sync_member_to_supabase as new_sync_member_to_supabase,
         mark_member_left as new_mark_member_left,
         run_full_member_sync_for_guild as new_run_full_member_sync_for_guild,
-        run_departed_reconciliation_for_guild as new_run_departed_reconciliation_for_guild,
     )
 except Exception:
     new_sync_member_to_supabase = None  # type: ignore
     new_mark_member_left = None  # type: ignore
     new_run_full_member_sync_for_guild = None  # type: ignore
-    new_run_departed_reconciliation_for_guild = None  # type: ignore
 
 
 # ============================================================
@@ -1926,29 +1924,6 @@ async def _run_startup_once_flags() -> None:
 
                 _assign_startup_task("_invite_cache_warm_task", _run_invite_cache_warm())
 
-        if not getattr(bot, "_initial_member_sync_started", False):  # type: ignore[attr-defined]
-            try:
-                bot._initial_member_sync_started = True  # type: ignore[attr-defined]
-            except Exception:
-                pass
-
-            if not _startup_task_running("_initial_member_sync_task"):
-                async def _run_startup_member_sync():
-                    try:
-                        await _initial_member_sync_sweep()
-                        try:
-                            bot._initial_member_sync_done = True  # type: ignore[attr-defined]
-                        except Exception:
-                            pass
-                    except Exception as e:
-                        print("⚠️ background initial member sync error:", e)
-                        try:
-                            traceback.print_exc()
-                        except Exception:
-                            pass
-
-                _assign_startup_task("_initial_member_sync_task", _run_startup_member_sync())
-
         if not getattr(bot, "_stale_verification_reconcile_started", False):  # type: ignore[attr-defined]
             try:
                 bot._stale_verification_reconcile_started = True  # type: ignore[attr-defined]
@@ -1967,16 +1942,6 @@ async def _run_startup_once_flags() -> None:
                             pass
 
                 _assign_startup_task("_stale_verification_reconcile_task", _run_stale_verification_reconcile())
-
-        try:
-            if callable(new_run_departed_reconciliation_for_guild):
-                for guild in list(getattr(bot, "guilds", []) or []):
-                    try:
-                        await new_run_departed_reconciliation_for_guild(guild)
-                    except Exception:
-                        continue
-        except Exception:
-            pass
 
         try:
             started = await ensure_channel_cleanup_worker_started()
