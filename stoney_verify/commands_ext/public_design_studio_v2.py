@@ -121,7 +121,7 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
     embed.add_field(
         name="Choose what you want to do",
         value=(
-            "🌐 **Design Entire Server** — choose theme, font, strength, and separator together with live examples.\n"
+            "🌐 **Design Entire Server** — choose theme, font, strength, separator, and category frame with live examples.\n"
             "✏️ **Edit One Category / Channel** — rename or style one exact item.\n"
             "🩺 **Fix Inconsistent Names** — scan first, then build a safe Smart Repair preview.\n"
             "🔐 **Saved Rules & Protection** — manage what future previews enforce; this does not rename anything by itself.\n"
@@ -577,7 +577,7 @@ def _clean_redesign_embed(options: Mapping[str, Any]) -> discord.Embed:
         title="🧹 Start a Clean Redesign?",
         description=(
             f"This will clear **{count}** saved layout/name override(s) that can make a server-wide redesign look inconsistent.\n\n"
-            "**It does not rename anything now.** Your selected Theme, Font, Strength, and Separator stay selected. "
+            "**It does not rename anything now.** Your selected Theme, Font, Strength, Separator, and Category Frame stay selected. "
             "Protection rules stay intact, and permissions, roles, topics, channel order, tickets, and verification are untouched."
         ),
         color=discord.Color.orange(),
@@ -616,7 +616,7 @@ class CleanRedesignConfirmView(DesignView):
         embed.title = "✅ Clean Redesign Ready"
         embed.description = (
             "Old saved layout/name exceptions were cleared. **Protection rules were kept.** "
-            "Choose the server Theme, Font, Strength, and Separator you want, then preview before applying."
+            "Choose the server Theme, Font, Strength, Separator, and Category Frame you want, then preview before applying."
         )
         await interaction.edit_original_response(embed=embed, view=DesignServerView(updated))
 
