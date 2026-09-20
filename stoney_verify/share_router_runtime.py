@@ -389,6 +389,10 @@ async def route_message(message: discord.Message) -> None:
         if age_blocker:
             await _route_rejection_log(message, target=None, reason=age_blocker)
             return
+        privacy_blocker = source_privacy_blocker(message.channel)
+        if privacy_blocker:
+            await _route_rejection_log(message, target=None, reason=privacy_blocker)
+            return
 
         target_id = _safe_int(route.get("target_channel_id"), 0)
         target = guild.get_channel(target_id)
