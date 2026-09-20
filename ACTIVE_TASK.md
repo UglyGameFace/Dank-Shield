@@ -23,7 +23,7 @@ Out of scope:
 
 ## Status
 
-**IN PROGRESS**
+**VALIDATED — targeted exact-head checks pass; full GitHub Actions cannot start a runner**
 
 ## Root cause
 
@@ -52,14 +52,25 @@ Use `stoney_verify.interaction_guard.run_guarded_interaction` as the native call
 
 The guard error guidance must not falsely claim that a live mutation definitely did or did not occur after an unexpected exception. It must tell the user to inspect the current Server Design state before retrying and surface the Error ID through the native diagnostics path.
 
-## Validation targets
+## Validation
 
-- changed production blocks parse under Python 3.11 grammar;
-- static regression proves Apply, Undo open, and Undo confirm are native-guarded;
-- no raw early `interaction.response.send_message` remains in the guarded Apply/Undo mutation regions;
-- existing transactional ownership tests remain structurally satisfied;
-- branch remains focused and current with `main`;
-- full GitHub Actions status is recorded separately if the known pre-runner infrastructure failure persists.
+Targeted validation passed for the changed production/test surface:
+
+- branch remained 0 commits behind `main` during implementation;
+- production diff was reduced from a 490-line indentation-heavy form to a thin-wrapper implementation (83 changed production lines versus `main`);
+- exact changed guard helper, Undo-open wrapper, Apply wrapper/safe-send syntax, Undo-confirm wrapper/safe-send syntax, and the new regression test parse under Python 3.11 grammar;
+- focused source assertions prove reviewed Apply, Undo open, and Undo confirm call the native interaction guard;
+- no raw early `interaction.response.send_message` remains in the reviewed Apply or Undo-confirm mutation regions;
+- reviewed Apply still contains pending-preview validation, the per-guild lock, full-batch preflight, `apply_prepared`, compensation, residual snapshot handling, durable/memory fallback snapshot handling, and pending cleanup;
+- Undo confirm still contains the per-guild lock, latest-snapshot validation, stale-snapshot refusal, Undo preflight, `undo_prepared`, and conditional snapshot pop;
+- PR patch inspection found no conflict markers or trailing added whitespace;
+- PR #271 is mergeable with zero unresolved review threads.
+
+Full GitHub Actions is not a code result for this head. Fresh Dank Design Regression CI and Dank Shield CI runs completed before step 1 with `steps: null` and `logs_url: null`, including the repository Python compile job. The isolated execution container also cannot resolve `github.com`. This is the same pre-runner infrastructure failure already tracked separately; it is not represented as passing CI.
+
+## Remaining risk
+
+A complete repository checkout / pytest replay could not run in the current infrastructure. The change is therefore validated by exact changed-source Python 3.11 grammar checks, focused static regression replay, transaction-primitive preservation checks, patch hygiene, and GitHub mergeability/review state. The full suite must be restored once runner/account/DNS infrastructure is fixed.
 
 ## Previous completed task
 
@@ -67,4 +78,4 @@ PR #270 expanded category frames to 80 and removed project-specific preview leak
 
 ## Next step
 
-Implement the native Apply/Undo guard slice, add focused regression coverage, validate the exact head, then update the command center and merge only after the final-head evidence is clean.
+Update PR #271 with the final-head evidence, mark it ready, merge with an expected-head guard, verify the validated production/test blobs on `main`, then close this slice and select the next single P0-INT interaction boundary.
