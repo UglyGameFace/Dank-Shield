@@ -405,4 +405,3 @@ def test_unsafe_keycap_blocker_still_routes_to_icon_repair() -> None:
     }
 
     assert legacy._style_change_missing_emoji_items([item]) == [item]
-
