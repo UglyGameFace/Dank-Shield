@@ -2,128 +2,177 @@
 
 ## Active task / desired outcome
 
-**P0-INT-001 — Verification Center role-mapping save integrity + native interaction guard**
+**P0-SCALE-001 — Production startup recovery storm / crash hardening**
 
-Make the Verification Center's direct Role Mapping select both natively guarded and truthful about persistence. A failed guild-config write or unverifiable read must never be followed by a false “now uses this role” success message.
+Make Dank Shield startup/reconnect recovery safe for a public, sharded deployment without losing authoritative repair behavior.
 
-## Scope
-
-In scope:
-
-- `VerifyRoleSelect.callback` and its focused save path;
-- native defer-before-save acknowledgement;
-- existing owner/staff and role hierarchy checks;
-- existing logical-role → config-key mapping;
-- explicit-override `_save_role_config(..., explicit_override=True)`;
-- authoritative post-save verification before success;
-- focused regression coverage;
-- P0 readiness ledger updates.
-
-Out of scope:
-
-- changing the broad semantics of `_save_role_config` for discovery/auto-create callers;
-- canonical `/verify` behavior;
-- member role mutations;
-- Verify panel/setup routing;
-- ticket/setup/design work;
-- removal of the global framework interaction monkey patch.
+The bot must not launch overlapping full-guild Discord history/member sweeps or redundant database rewrites after `on_ready`. Recovery must be bounded per process, exclusive per guild, checkpointed where historical replay is required, and must not silently stop working after an arbitrary guild count.
 
 ## Status
 
-**IMPLEMENTED — PR #279 open as draft; targeted source validation passed; full CI validation BLOCKED because configured GitHub Actions produced no runs**
+**IMPLEMENTED ON `fix/startup-recovery-storm` — exact-head validation pending**
 
-## Findings / root cause
+The supplied production excerpt proves a startup traffic storm and warning amplification, but it still does **not** contain the final fatal traceback/signal/OOM line. Do not claim the exact process-termination mechanism is proven until Discloud logs show it.
 
-- `VerifyRoleSelect.callback` called `_save_role_config(..., explicit_override=True)` and then unconditionally sent a success message.
-- `_save_role_config` intentionally swallows persistence exceptions for compatibility with best-effort discovery callers.
-- Therefore the callback could report success after a failed database write.
-- A native interaction guard alone could not fix that because the helper consumed the exception before the callback saw it.
-- During branch review, a second same-root-cause hole was found: `get_guild_config(refresh=True)` preserves stale cached config when the database is unavailable. A failed save could therefore be “verified” from stale cache if the cached value happened to match the selected role.
+## Production evidence
 
-## Execution path
+Observed during the crashing startup:
 
-`VerifyRoleSelect.callback`
-→ `run_guarded_interaction(..., defer=True)`
-→ `_save_mapping`
-→ staff check
-→ server-context check
-→ `_bot_can_manage_role`
-→ explicit-override `_save_role_config`
-→ invalidate guild-config cache
-→ forced `get_guild_config(..., refresh=True)`
-→ compare persisted config key to selected role ID
-→ success message only on exact match.
+- Invite Shield recovery scanned **58 channels / 2,348 historical messages** in one guild.
+- Every scanned message could touch deprecated `Message.interaction`, producing the repeated discord.py 2.7.1 deprecation warning flood.
+- Departed-member reconciliation reported **139 current members** and **234 marked departed** for one guild, then immediately continued to another guild.
+- Activity continuity repair was also active during the same startup window.
+- Invite recovery starts about 3 seconds after ready.
+- `app.py` startup maintenance begins departed reconciliation about 5 seconds after ready.
+- activity restart reconciliation defaults to starting about 20 seconds after ready.
 
-Unexpected failures stay inside the native interaction guard so staff receive a structured Error ID and cautious recovery guidance.
+## Root cause / architecture findings
+
+The startup pressure was not one API call. Multiple independent owners were allowed to overlap:
+
+1. `invite_reconciliation_runtime` performed all-channel history recovery on ready/resume with up to 250 messages per readable channel.
+2. `events.py` scheduled a full member sync for every guild on ready.
+3. That full member sync already included departed-member reconciliation.
+4. The same `events.py` startup path then separately ran departed-member reconciliation again.
+5. `app.py` separately ran departed-member reconciliation again five seconds after ready.
+6. Departed reconciliation rewrote rows already marked departed, turning stale historical rows into repeated database writes.
+7. `events.py` warmed invite attribution for every guild independently of the other recovery systems, including unnecessary vanity requests.
+8. Startup ticket sync/backfill could inspect up to 50 recent messages per matched ticket channel on every boot.
+9. Public startup maintenance silently sliced the guild list to `DANK_STARTUP_MAX_GUILDS=50`, trading load for incorrect behavior after guild #50.
+10. The recovery systems had separate locks/queues, so they did not coordinate their Discord/database pressure across feature boundaries.
+
+## New execution model
+
+### Shared recovery budget
+
+`startup_recovery_coordinator.startup_recovery_slot(guild_id, label)`
+
+- one heavyweight recovery owner at a time for the same guild;
+- a small configurable process-wide concurrency pool across different guilds;
+- default `DANK_STARTUP_RECOVERY_MAX_CONCURRENT=2`;
+- no permanent per-guild lock table: lock entries are removed after the final user exits;
+- activity, invite recovery, member departure recovery, new-guild member bootstrap, and invite-cache warming share the same budget.
+
+### Member truth
+
+Normal restart:
+
+`on_ready`
+→ background startup runner
+→ require durable pre-restart activity heartbeat
+→ one departed-only reconciliation per configured guild
+→ shared recovery slot
+→ authoritative `fetch_members(limit=None)`
+→ skip rows already durably marked departed
+→ update only newly departed/stale rows.
+
+New guild:
+
+`on_guild_join`
+→ delayed background bootstrap
+→ shared recovery slot
+→ one full member sync.
+
+The old all-guild full member sync and duplicate `events.py` departed reconciliation were removed from startup ownership.
+
+### Invite Shield history recovery
+
+`on_ready` / `on_resumed`
+→ read immutable pre-restart `member_activity_tracker_state.last_heartbeat_at`
+→ reject missing/future/over-safe-limit recovery windows
+→ fixed `after` / `before` downtime window
+→ skip channels whose last message predates the window
+→ shared recovery slot
+→ bounded history scan only inside the downtime window
+→ central invite policy remains the only deletion authority.
+
+The pre-restart heartbeat is pinned in memory so activity tracking cannot advance the database heartbeat and accidentally collapse Invite Shield's pending recovery window.
+
+### Invite attribution cache
+
+Startup cache warm:
+
+- shares the recovery coordinator;
+- paced between guilds;
+- skips `guild.invites()` when the bot lacks Manage Server;
+- skips `guild.vanity_invite()` unless the guild advertises `VANITY_URL`.
+
+### Ticket history backfill
+
+Automatic all-guild startup ticket backfill is disabled by default.
+
+`DANK_STARTUP_TICKET_BACKFILL=true` is now an explicit repair/migration mode rather than a permanent boot-time history crawl.
 
 ## Changes
 
-- wrapped Role Mapping save execution with `run_guarded_interaction(..., defer=True, ephemeral=True)`;
-- preserved existing staff, hierarchy, role-selection, config-key, and explicit-override behavior;
-- added a forced post-save config read;
-- invalidate the guild-config cache immediately before verification so stale cache cannot satisfy the persistence check;
-- raise inside the guarded action when the saved role ID cannot be confirmed;
-- send the existing human-readable success message only after exact persisted-ID verification;
-- added focused static regression coverage for guard ownership, ordering, hierarchy preservation, explicit override, stale-cache invalidation, server-context fail-closed behavior, and no success-before-verification.
+- added `stoney_verify/startup_recovery_coordinator.py`;
+- removed deprecated `Message.interaction` fallback from Invite Shield message-surface classification;
+- added `after` / `before` support to the central invite history scanner;
+- changed native Invite Shield startup recovery to use durable restart windows;
+- added inactive-channel preflight from Discord snowflake timestamps;
+- moved activity restart history work onto the shared recovery coordinator;
+- pinned pre-restart activity heartbeats per guild for cross-system recovery consistency;
+- removed `events.py` startup full-member-sync ownership;
+- removed `events.py` duplicate departed-member reconciliation ownership;
+- kept one canonical departed-only restart reconciliation in `app.py`;
+- moved full member bootstrap to `on_guild_join`;
+- suppressed database updates for rows already marked departed;
+- bounded/paced invite cache warm through the shared recovery budget;
+- added invite permission and vanity-feature preflights;
+- made ticket startup history backfill opt-in;
+- removed the silent 50-guild startup maintenance cutoff;
+- documented new recovery controls in `.env.example`.
+
+## Scale invariants
+
+- No all-guild full member rewrite on every process restart.
+- No arbitrary all-channel last-250 Invite Shield crawl when no durable recovery checkpoint exists.
+- No same-guild heavy recovery overlap across activity, invite, member, or invite-cache paths.
+- Cross-guild recovery concurrency is bounded per process/shard.
+- No hard guild-count cutoff that silently abandons maintenance after guild #50.
+- New guilds still receive one authoritative bootstrap.
+- Live member/invite/ticket event ownership remains unchanged.
 
 ## Validation / results
 
-Current branch: `audit/p0-int-verify-role-map-integrity`.
+Branch base:
 
-Current PR: **#279 — Guard Verification Center role mapping persistence**.
+- `main` merge commit for previous task: `373080f76eb255db92dff29abdfc0761be75345c`
+- implementation branch: `fix/startup-recovery-storm`
+- branch was created directly from that merged main head.
 
-- branch is based on current `main` commit `f18075b84c705e16b792e0d40ac7daed0f814a61`;
-- branch is 0 commits behind `main`;
-- diff is limited to the Verification Center role-mapping production file, its focused regression test, and audit/task documentation;
-- production flow was re-read against `public_verify_group._save_role_config` and `guild_config.get_guild_config`;
-- stale-cache fallback behavior was found during review and corrected before PR validation;
-- targeted modified-region Python AST parse passed;
-- targeted source replay passed guard ownership and save → cache invalidate → refresh → verify → success ordering;
-- PR #279 initial head `add8e6bd3d1fbc426158218b19ab33b8a3409c76` produced 0 workflow runs / 0 commit statuses even though `.github/workflows/ci.yml` listens to `pull_request`;
-- exact PR head after the bookkeeping synchronize commit: `7a5aac5ea5130ad2c684fe8dbd91f2dbc0bebfde`;
-- exact-head production blob: `2dfc0d4554f2d3cd17fe2658c951245c957736be`;
-- exact-head focused test blob: `76ed972b0c21ecc0cb8248edd5ed44055320e22d`;
-- exact-head task-record blob: `cc22aeae323453dccd46dfbf501561a7d9806882`;
-- exact-head readiness-ledger blob: `1d231b7552b410356c9cf385bdd1957f2cb08ce0`;
-- PR #279 has 0 unresolved review threads;
-- the synchronize event also produced 0 workflow runs / 0 commit statuses, so configured PR CI did not instantiate on either observed head;
-- no absent workflow is represented as passing.
+Focused regression coverage added/updated for:
 
-## Cleanup / conflicts
+- no deprecated `Message.interaction` access;
+- Invite Shield fixed recovery-window forwarding;
+- inactive-channel history avoidance;
+- policy retry retaining the same recovery window;
+- per-guild/process-wide recovery concurrency;
+- recovery lock-state cleanup;
+- no duplicate `events.py` startup member owners;
+- new-guild-only full member bootstrap;
+- no silent startup guild-count cutoff;
+- ticket startup backfill default-off behavior;
+- already-departed database write suppression;
+- invite-cache permission/vanity request preflights.
 
-- no changes to `_save_role_config` global semantics;
-- no duplicate persistence implementation introduced;
-- no role-discovery aliases or canonical verification commands changed;
-- no unrelated runtime code included;
-- existing owner/staff/hierarchy gates remain authoritative.
-
-## Blockers / risks
-
-- full completion still requires executable CI or equivalent full repository validation plus post-merge verification on `main`;
-- GitHub Actions has previously failed to create/execute runners for nearby slices, so lack of runner execution must be recorded honestly rather than treated as green CI.
-
-## Backlog
-
-**P0 — production crash around Invite Shield reconciliation / rate-limit pressure**
-
-Confirmed separately while this task was locked:
-
-- deprecated `Message.interaction` access creates repeated warning amplification;
-- startup invite reconciliation performs REST-backed history scans across many channels;
-- observed production sweep checked 2,348 messages across 58 channels;
-- the supplied reconcile line itself completed with `failed=0`, so the exact fatal crash line remains unproven from the available excerpt.
-
-Do not investigate or modify that issue until the active task reaches its Definition of Done unless the user explicitly FORCE SWITCHes.
+Exact-head compile/pytest/workflow validation is still pending and must not be represented as passing yet.
 
 ## Previous completed slice
 
-**PR #277 — Guard Verification Center canonical dispatcher**
+**PR #279 — Guard Verification Center role mapping persistence**
 
-- merged as `35714aae0da9b4dcebfcb6d51abfade83f90beba`;
-- verified on `main`;
-- validated center blob: `c1ae1b0273871025b40d4fd9da657490d75176b8`;
-- validated regression-test blob: `1b91918bbc4c1d0f8ee8f55683d5e5cce2ac55f1`.
+- merged to `main` as `373080f76eb255db92dff29abdfc0761be75345c`;
+- production/test blobs on merged `main` match the validated PR blobs;
+- focused role-mapping regression passed 6/6 before merge;
+- GitHub-hosted Actions jobs repeatedly failed before step 1 with `steps=null`, so full CI was not falsely reported as green.
+
+## Blockers / risks
+
+- The exact Discloud process-termination line was not included in the supplied log excerpt. The startup storm is proven; the final kill mechanism is not.
+- Discord/API and Supabase load after deployment must be observed with the process-health logs to confirm the production crash loop is gone.
+- Very long Invite Shield downtime gaps intentionally fail bounded recovery rather than launching an unbounded historical crawl.
 
 ## Next step
 
-Obtain executable full-repository validation for exact head `7a5aac5ea5130ad2c684fe8dbd91f2dbc0bebfde`. Keep PR #279 draft until that blocker is cleared; then re-check the final diff/head, mark ready, merge, and verify the validated production/test blobs on `main`.
+Open a draft PR, validate the exact final head with focused and full repository checks where runners permit, inspect the final diff for unrelated changes, and only then mark the PR merge-ready. After merge, verify the exact production/test blobs on `main` before redeploying.
