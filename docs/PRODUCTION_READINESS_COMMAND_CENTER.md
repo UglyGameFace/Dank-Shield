@@ -139,7 +139,7 @@ Remaining score blockers:
 
 ### `P0-INT-001` — Replace monkey-patched interaction logger with native interaction service
 
-Status: `PARTIAL / BLOCKER`
+Status: `PARTIAL / BLOCKER — Apply/Undo slice in progress`
 
 Goal:
 
@@ -147,50 +147,46 @@ Stop generic `interaction failed` outcomes without patching Discord.py internals
 
 Current evidence:
 
-- `stoney_verify/startup_guards/global_interaction_trace_guard.py` patches `app_commands.CommandTree._call`.
-- It also patches app command invocation methods.
-- It also patches `discord.ui.View._scheduled_task`.
-- The logger captures useful fields, but the implementation is still a monkey patch.
+- `stoney_verify/startup_guards/global_interaction_trace_guard.py` still patches `app_commands.CommandTree._call`, app-command invocation methods, and `discord.ui.View._scheduled_task`.
+- The native `stoney_verify/interaction_guard.py` now owns structured context, `DANK-xxxxxxxx` error IDs, safe response/followup behavior, defer/send failure logging, duplicate-action locking, and the recent-failure ring.
+- The framework monkey patch cannot be removed until the remaining highest-risk public callbacks have native coverage.
 
-Progress completed:
+Progress completed on current `main`:
 
-- `stoney_verify/interaction_guard.py` has native structured context capture.
-- It creates `DANK-xxxxxxxx` error IDs without Discord.py private method replacement.
-- It records guild/channel/user/message/custom_id/component/command context.
-- It logs defer failures, send failures, callback exceptions, and duplicate action clicks.
-- It keeps a bounded recent-failure ring for diagnostics/tests.
-- It has native duplicate-action lock support.
-- `tests/test_interaction_guard.py` covers response/followup behavior, send failure logging, defer failure logging, safe callback errors, and duplicate locked actions.
-- `stoney_verify/commands_ext/public_protection_center.py` routes `/dank protection`, Protection Center buttons, spam editor select/actions, filter modals, refresh, and close through native guarded actions.
-- Legacy local `try/print` handling was removed from the Protection Center open path.
-- `tests/test_public_protection_center_native_interaction_static.py` prevents Protection Center from regressing back to unguarded command-open handling and verifies required guarded action names exist.
-- `stoney_verify/commands_ext/public_design_group.py` registers `/dank design` through a native `run_guarded_interaction()` wrapper instead of delegating the slash command callback to the raw studio opener.
-- `tests/test_public_design_group_native_interaction_static.py` verifies guarded `/dank design` registration and records the remaining raw callback debt in the large studio module.
-- `patches/p0-int-design-exact-format-native-guard.patch` now contains the next intended exact-format editor migration for `_open_exact_format_editor`, exact layout examples, save-preview, server-style, emoji modal, and back actions.
-- `tests/test_public_design_exact_native_guard_patch_static.py` verifies the exact-format patch artifact contains native guard helper targets and records that `public_design_studio.py` is still debt until the patch is applied.
+- Protection Center command/button/modal/select paths use native guarded interaction wrappers.
+- `/dank design` command-open uses `run_guarded_interaction()`.
+- The exact-format editor runtime migration is already applied in `public_design_studio.py`; `_open_exact_format_editor`, layout examples, save-preview, server-style, emoji modal, and back actions use the native design guard helper.
+- Exact-format permission errors use `safe_send_interaction()`.
+- Style-change missing-icon review actions are native-guarded.
+- Existing static tests cover the Protection Center, Design command-open, exact-format, style-change, and consolidated ownership boundaries.
+
+Current locked slice:
+
+- `ReviewedPreviewView.apply` is being moved behind a thin native guard wrapper while preserving the existing pending-preview validation, guild lock, full-batch preflight, apply/compensation, separator persistence compensation, and Undo snapshot behavior.
+- `_open_undo` and `UndoConfirmView.confirm` are being moved behind the same native guard boundary while preserving stale-snapshot refusal, Undo preflight, rollback safety, and snapshot cleanup behavior.
+- Early stale/no-preview/blocker/busy responses use `safe_send_interaction()` instead of raw `interaction.response.send_message`.
+- The mutation error guidance intentionally does **not** promise that nothing changed after an unexpected exception; it tells the user to review current Server Design state before retrying and use the Error ID in diagnostics.
 
 Important behavior notes:
 
-- Slow Protection Center config writes now prefer deferred private followups over risky unacknowledged edit-in-place behavior. This is intentional for reliability. A later UX pass can improve in-place refresh once every path is safely acknowledged.
-- `/dank design` command-open is guarded now, but most internal Dank Design buttons/selects/modals still live in `public_design_studio.py` and need careful small-slice migration.
-- Attempting the exact-format slice revealed a tooling constraint: the GitHub connector replaces large files as whole files. Because `public_design_studio.py` is over 5,300 lines, the exact editor runtime change was recorded as a controlled patch artifact instead of risking a corrupted full-file replacement from snippets.
-- `public_design_enhancements.py` still activates enhancement code from `startup_guards`; this is recorded under `P0-GUARD-001` and should be removed during guard migration, not buried as a new interaction patch.
+- Slow Protection Center config writes intentionally prefer deferred private followups over risky unacknowledged edits.
+- The older `patches/p0-int-design-exact-format-native-guard.patch` is no longer an unapplied implementation plan; the runtime migration already exists on `main`. Treat that artifact as historical cleanup debt, not something to reapply.
+- `public_design_enhancements.py` still activates enhancement code from `startup_guards`; that remains under `P0-GUARD-001`, not this interaction slice.
 
-Remaining before this task can be marked done:
+Remaining before `P0-INT-001` can be marked done:
 
-- apply `patches/p0-int-design-exact-format-native-guard.patch` in a real checkout, then run compile/tests
-- migrate the highest-risk setup/design/ticket/verify callbacks to `run_guarded_interaction()` or native helpers
-- migrate Dank Design internal buttons/selects/modals in smaller slices, starting with exact format editor and apply/rollback flows
-- ensure diagnostics can expose recent native interaction failures safely
-- remove or disable `global_interaction_trace_guard` framework patching only after native coverage exists
-- run interaction/protection/design static tests and compile checks in a real checkout
+- merge and verify the reviewed Apply / Undo native-guard slice;
+- select and migrate the next single highest-risk raw setup/ticket/verify interaction boundary;
+- ensure diagnostics expose recent native interaction failures safely;
+- remove or disable `global_interaction_trace_guard` framework patching only after native coverage is sufficient;
+- run the full interaction/protection/design test matrix once executable CI/checkout infrastructure is available.
 
 Exit criteria:
 
-- no production startup guard patches `CommandTree`, app command internals, or `View._scheduled_task`
-- setup/protection/design/ticket/verify callbacks can use the native helper directly
-- failing callbacks log structured context and show a useful user message
-- tests cover response done/not done, followup fallback, duplicate click, stale component, and exception paths
+- no production startup guard patches `CommandTree`, app command internals, or `View._scheduled_task`;
+- setup/protection/design/ticket/verify state-changing callbacks use the native interaction service;
+- failing callbacks log structured context and show a useful user message;
+- tests cover response done/not done, followup fallback, duplicate click, stale component, and exception paths.
 
 ---
 
@@ -332,18 +328,20 @@ Progress:
 - native duplicate-action lock support exists
 - native recent-failure ring exists for diagnostics/tests
 - interaction guard tests expanded
-- Protection Center command/button/modal/select paths now use native guarded interaction wrappers
-- Protection Center static regression test added
-- `/dank design` command-open now uses a native guarded wrapper from the public design registrar
-- public design group static regression test added
-- exact-format editor native guard patch artifact added for safe local application
-- exact-format patch static test added
+- Protection Center command/button/modal/select paths use native guarded interaction wrappers
+- `/dank design` command-open uses a native guarded wrapper
+- exact-format editor runtime actions are native-guarded on current `main`
+- style-change missing-icon review actions are native-guarded
+- reviewed Apply / Undo native-guard slice is the current locked work item
+- focused Apply/Undo static regression coverage added on the active branch
 
 Verification:
 
-- static GitHub inspection completed
-- compile/pytest still need to be run from a real checkout
-- setup/design internal/ticket/verify callbacks are not fully migrated yet
+- exact-format runtime presence re-verified from current `main`
+- Apply/Undo branch static assertions preserve existing transaction/preflight/compensation/snapshot primitives
+- changed helper/Undo/test blocks pass targeted Python 3.11 grammar validation; final exact-head validation remains required before merge
+- full checkout/pytest remains blocked by the known external GitHub runner/DNS infrastructure issue
+- setup/ticket/verify callbacks are not fully migrated yet
 
 ### Commit 3 — Startup guard inventory and migration table
 
