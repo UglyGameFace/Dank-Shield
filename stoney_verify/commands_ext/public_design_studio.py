@@ -21,6 +21,7 @@ from typing import Any, Awaitable, Callable, Mapping
 import discord
 
 from stoney_verify.interaction_guard import run_guarded_interaction, safe_send_interaction
+from stoney_verify.share_router_resources import is_share_router_design_resource
 from stoney_verify.services import server_design_plan_service as plan_service
 from stoney_verify.services import server_design_studio as studio
 from stoney_verify.services import server_design_rule_service as rule_service
@@ -238,6 +239,8 @@ def _editable_channels(guild: discord.Guild) -> list[discord.abc.GuildChannel]:
         if cid <= 0 or cid in seen:
             continue
         seen.add(cid)
+        if is_share_router_design_resource(channel):
+            continue
         if _kind(channel) != "other":
             out.append(channel)
     return out[: studio.MAX_PLAN_ITEMS]
