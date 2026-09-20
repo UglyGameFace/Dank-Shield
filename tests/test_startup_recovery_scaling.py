@@ -12,6 +12,10 @@ POLICY = (ROOT / "stoney_verify" / "invite_policy_engine.py").read_text(encoding
 SURFACE = (ROOT / "stoney_verify" / "invite_policy_message_surface_runtime.py").read_text(encoding="utf-8")
 JOIN_CONTEXT = (ROOT / "stoney_verify" / "members_new" / "join_context_service.py").read_text(encoding="utf-8")
 COORDINATOR = (ROOT / "stoney_verify" / "startup_recovery_coordinator.py").read_text(encoding="utf-8")
+PANEL_REPAIR = (ROOT / "stoney_verify" / "tickets_new" / "channel_panel_repair.py").read_text(encoding="utf-8")
+PANEL_BOOTSTRAP = (ROOT / "stoney_verify" / "tickets_new" / "panel_bootstrap.py").read_text(encoding="utf-8")
+DURABLE_INVITE_STATS = (ROOT / "stoney_verify" / "durable_invite_stats.py").read_text(encoding="utf-8")
+ANTINUKE_INCIDENT = (ROOT / "stoney_verify" / "anti_nuke_incident_runtime.py").read_text(encoding="utf-8")
 
 
 def _block(source: str, start_marker: str, end_marker: str) -> str:
@@ -128,3 +132,32 @@ def test_ticket_history_backfill_is_opt_in() -> None:
     assert 'DANK_STARTUP_TICKET_BACKFILL' in block
     assert 'default=False' in block
     assert "set DANK_STARTUP_TICKET_BACKFILL=true only for explicit repair runs" in block
+
+
+def test_public_startup_config_scope_uses_batched_lookup() -> None:
+    assert "async def _configured_runtime_guild_ids(" in APP
+    assert "DANK_STARTUP_CONFIG_BATCH_SIZE" in APP
+    assert '.select("guild_id")' in APP
+    assert '.in_("guild_id",' in APP
+    assert "asyncio.to_thread(_read)" in APP
+
+
+def test_ticket_panel_history_repair_is_explicit_and_coordinated() -> None:
+    assert 'DANK_STARTUP_TICKET_PANEL_REPAIR' in PANEL_REPAIR
+    assert '_env_true("DANK_STARTUP_TICKET_PANEL_REPAIR", False)' in PANEL_REPAIR
+    assert 'startup_recovery_slot(' in PANEL_REPAIR
+    assert '"ticket_panel_history_repair"' in PANEL_REPAIR
+
+
+def test_startup_fanout_uses_fixed_worker_pools() -> None:
+    assert "queue: asyncio.Queue[Any] = asyncio.Queue()" in DURABLE_INVITE_STATS
+    assert 'name=f"durable-invite-stats-startup-{index}"' in DURABLE_INVITE_STATS
+    assert "reconcile_one(guild)" not in DURABLE_INVITE_STATS
+
+    assert "queue: asyncio.Queue[discord.Guild] = asyncio.Queue()" in PANEL_BOOTSTRAP
+    assert 'name=f"panel-bootstrap-guild-worker-{index}"' in PANEL_BOOTSTRAP
+    assert "_run_one(guild)" not in PANEL_BOOTSTRAP
+
+    assert "queue: asyncio.Queue[discord.Guild] = asyncio.Queue()" in ANTINUKE_INCIDENT
+    assert 'name=f"antinuke-security-prewarm-{index}"' in ANTINUKE_INCIDENT
+    assert "warm(guild)" not in ANTINUKE_INCIDENT
