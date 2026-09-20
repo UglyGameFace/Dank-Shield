@@ -28,7 +28,6 @@ from stoney_verify.share_router_runtime import (
 from stoney_verify.ui import DankChoice, DankGuildResourceBrowserView, DankPickerView
 
 _ALLOWED_MENTIONS = discord.AllowedMentions.none()
-_REGISTERED = False
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -508,13 +507,9 @@ class ShareRouterView(_OwnedView):
 def register_public_share_router(bot: Any, tree: Any) -> None:
     """Attach Share Router runtime without adding a public slash-command child."""
 
-    global _REGISTERED
     _ = tree
-    if _REGISTERED:
-        return
     if not ensure_share_router_runtime(bot):
         raise RuntimeError("Share Router runtime listener could not be installed.")
-    _REGISTERED = True
 
 
 __all__ = [
