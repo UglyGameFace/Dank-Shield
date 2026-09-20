@@ -2,81 +2,75 @@
 
 ## Active task / desired outcome
 
-**DS-DESIGNER-MORE-CATEGORY-FRAMES**
+**DS-DESIGNER-EVEN-MORE-CATEGORY-FRAMES**
 
-Expand Dank Design category-frame choices substantially while keeping every choice reachable on Discord mobile, keeping preview/apply behavior consistent, preserving existing themes, and avoiding silent truncation at Discord's 25-option select limit.
+Expand Dank Design from 40 to **80** canonical category-frame choices while preserving the already-merged paginated browser, mobile reachability, preview/apply consistency, existing themes, and saved frame IDs.
 
 ## Scope
 
 - canonical category-frame catalog;
-- server-wide Design Entire Server frame picker;
-- exact category custom-format frame picker;
-- category-frame parsing / majority detection needed so new canonical frames round-trip correctly;
-- regression tests and validation for this task.
+- category-frame grouping metadata used by the server-wide and exact-category browsers;
+- regression tests for complete reachability, round-trip parsing, majority detection, Discord limits, and late-page selections;
+- exact-head validation for this expansion.
 
-Out of scope: themes, fonts, channel separators, permissions, tickets, verification, role behavior, channel ordering, topics, and unrelated server-design behavior.
+Out of scope: themes, fonts, channel separators, permissions, tickets, verification, role behavior, channel ordering, topics, and unrelated Server Designer behavior.
 
 ## Status
 
-**IMPLEMENTED — exact-head executable validation pending**
+**IMPLEMENTED — exact-head validation pending**
 
 ## Findings / root cause
 
-The canonical catalog only contained 10 frames. The server-wide frame picker previously built one Discord string select and truncated it with `choices[:25]`, so merely adding many more frames would silently hide everything past the platform limit.
+PR #269 already fixed the structural 25-option problem by making the frame browser catalog-driven and paginated, and that PR is merged on main.
 
-The exact category editor had the same structural ceiling through `studio.CATEGORY_FRAMES[:25]`.
-
-Category-frame cleanup and majority detection also used hard-coded knowledge of the original small frame set. Expanding only the UI/catalog would therefore make newer frames render correctly but fail round-trip parsing or be misdetected as plain during live-layout analysis.
+The current request is therefore an additive catalog expansion rather than another picker rewrite. The authoritative browser paths already read `CATEGORY_FRAME_GROUPS` and `CATEGORY_FRAMES` dynamically, including dynamic "Browse all N frames…" copy.
 
 ## Changes
 
-- expanded the canonical frame catalog from **10 to 40** frames;
-- organized the catalog into five groups:
-  - Core
-  - Boxes & Brackets
-  - Premium & Decorative
-  - Gothic & Celestial
-  - Tech & Minimal
-- server-wide Frame now opens a grouped, paginated picker instead of truncating the catalog;
-- the frame browser opens on the group containing the current custom selection;
-- Theme Default remains available on every server-wide frame page;
-- exact-category custom format keeps a compact primary select and adds **Browse all 40 frames…** for the full grouped catalog;
-- exact-category browser returns to the normal custom-format editor after a choice;
-- added canonical `category_frame_affixes()` so generated frame parsing is data-driven;
-- base-name normalization now strips any canonical frame without another hard-coded character list;
-- majority detection now detects the complete canonical catalog instead of six hand-maintained frame forms.
+- preserved all existing 40 frame IDs and templates;
+- added **40 new frames**, for **80 total**;
+- added five new style groups:
+  - Divider & Rails
+  - Royal & Luxury
+  - Nature & Magic
+  - Gaming & Cyber
+  - Cute & Soft
+- each new group contains eight choices, well under Discord's 25-option select limit;
+- no theme default or existing saved `category_frame_id` changed;
+- no schema or persistence migration is required.
 
 ## Execution path
 
 Server-wide:
-`/dank` → Design Entire Server → Frame → grouped frame browser → save draft → Preview Server → reviewed Apply.
+`/dank` → Design Entire Server → Frame → grouped browser → select → back → Preview Server → reviewed Apply.
 
 Exact category:
-Edit One Category / Channel → category → Custom Format → Category Header Style → Browse all frames → select → Save Rule & Preview → reviewed Apply.
+Edit One Category / Channel → category → Custom Format → Category Header Style → Browse all 80 frames → select → Save Rule & Preview → reviewed Apply.
 
-Both paths continue to use the existing canonical `category_frame_id`, design-plan construction, protection checks, preview, and apply pipeline.
+Both paths continue to use the canonical `category_frame_id`, design plan, protection checks, preview, and apply pipeline.
 
 ## Regression coverage
 
-- canonical catalog contains exactly 40 frames;
-- every frame appears exactly once in grouping metadata;
-- all 40 frames are reachable through server-wide pages while every select remains under 25 options;
-- Theme Default remains singular and correct;
+- canonical catalog and ID map both contain exactly 80 frames;
+- every grouped frame ID remains unique and canonical;
+- 10 frame groups are exposed and every group stays within Discord option limits;
+- all 80 frames are reachable through server-wide pages;
 - a frame in the final group reopens on the correct page and remains selected;
-- every canonical frame round-trips through base-name normalization;
-- every canonical frame is recognized by majority detection;
-- exact category editor exposes a full-catalog browse path;
-- late-catalog exact selections remain visible/defaulted without exceeding the select limit.
+- every canonical frame stays within Discord's name-length limit for the test preview;
+- every frame round-trips through base-name normalization;
+- every frame is recognized by majority detection;
+- exact-category compact picker still exposes the full-catalog browse path;
+- a final-group exact selection remains visible/defaulted without exceeding the select limit.
 
 ## Cleanup / compatibility
 
-Existing frame IDs and theme defaults are preserved. No migrations or schema changes are required. Existing saved `category_frame_id` values remain valid.
+Existing 40 frames are unchanged. The new entries only extend canonical data and grouping metadata; no duplicate picker implementation or fallback path was added.
 
-The browser is additive and uses Discord component rows within platform limits. No legacy frame IDs were renamed or removed.
+The local dirty branch `audit/persistent-interaction-compatibility` is unrelated and must remain untouched.
 
 ## Blockers / risks
 
-Executable exact-head validation has not run yet. Do not mark this task complete or merge-ready until Python 3.11 compile, focused Dank Design tests/audits, and relevant package validation pass on the final head.
+Exact-head Python 3.11 validation has not run yet. Do not call this complete or merge-ready until focused Dank Design tests, compile checks, relevant audits, and final diff/branch validation pass on the final head.
 
 ## Backlog
 
@@ -84,4 +78,4 @@ None for this task.
 
 ## Next step
 
-Run exact-head validation on the finalized branch. If green, record results on the PR, mark ready, merge, and verify the merged implementation on `main`.
+Run exact-head validation on `improve/server-designer-80-category-frames`. If green, open a focused PR, verify CI/review state, then merge and verify the merged result on `main`.
