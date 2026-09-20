@@ -46,6 +46,7 @@ _INSTALLED = False
 _HEARTBEAT_TASK: Optional[asyncio.Task] = None
 _STARTED_GUILDS: set[int] = set()
 _STARTUP_TASKS: dict[int, asyncio.Task] = {}
+_STARTUP_RECOVERY_HEARTBEATS: dict[int, datetime] = {}
 _LOCAL_ERRORS: dict[int, str] = {}
 _LOCAL_SCOPE_ERRORS: dict[int, str] = {}
 
@@ -137,15 +138,33 @@ def _select_tracker_state_sync(guild_id: int) -> Optional[dict[str, Any]]:
 
 
 async def persisted_last_heartbeat_at(guild_id: int) -> Optional[datetime]:
-    """Return the last durable tracker heartbeat without mutating tracker state."""
+    """Return this process's immutable pre-restart heartbeat for a guild."""
+
+    gid = int(guild_id)
+    cached = _STARTUP_RECOVERY_HEARTBEATS.get(gid)
+    if cached is not None:
+        return cached
 
     try:
-        row = await asyncio.to_thread(_select_tracker_state_sync, int(guild_id))
+        row = await asyncio.to_thread(_select_tracker_state_sync, gid)
     except Exception:
         return None
     if not row:
         return None
-    return _safe_dt(row.get("last_heartbeat_at"))
+
+    heartbeat = _safe_dt(row.get("last_heartbeat_at"))
+    stored_process = str(row.get("process_id") or "").strip()
+    if heartbeat is None:
+        return None
+
+    # Once this process has resumed the tracker, last_heartbeat_at advances.
+    # Without a cached pre-restart value that new heartbeat must never be used as
+    # a historical recovery boundary because it could hide the actual gap.
+    if stored_process == _PROCESS_ID:
+        return None
+
+    _STARTUP_RECOVERY_HEARTBEATS[gid] = heartbeat
+    return heartbeat
 
 
 def evaluate_coverage_state(
@@ -606,6 +625,16 @@ async def _start_guild_tracking(
         previous_error = str(
             (row or {}).get("last_error") or ""
         ).strip()
+
+        if (
+            previous_heartbeat is not None
+            and previous_process
+            and previous_process != _PROCESS_ID
+        ):
+            _STARTUP_RECOVERY_HEARTBEATS.setdefault(
+                gid,
+                previous_heartbeat,
+            )
 
         if (
             row
