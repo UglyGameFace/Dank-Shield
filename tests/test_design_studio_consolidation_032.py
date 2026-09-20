@@ -207,6 +207,11 @@ def test_exact_category_editor_can_browse_frames_beyond_first_select_page() -> N
     assert late_defaults[0].value == late_frame
     assert legacy.EXACT_FRAME_BROWSE_VALUE in {str(option.value) for option in late.options}
 
+    invalid = legacy.ExactFrameSelect("category", 123, "not-a-frame")
+    invalid_defaults = [option for option in invalid.options if option.default]
+    assert len(invalid_defaults) == 1
+    assert invalid_defaults[0].value == "plain"
+
     page = legacy._exact_frame_page_for(late_frame)
     browser = legacy.ExactFrameBrowserView(
         SimpleNamespace(),
