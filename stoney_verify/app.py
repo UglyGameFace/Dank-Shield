@@ -17,7 +17,6 @@ from .globals import bot, DISCORD_TOKEN, GUILD_ID, get_supabase, claim_startup_f
 # events.py defines real runtime event behavior for:
 # - VC sweeper
 # - invite warmup
-# - initial member sync
 # - stale verification reconciliation
 #
 # commands MUST load BEFORE events so events owns the final
@@ -66,6 +65,7 @@ from .members_new import service as _members_service  # noqa: F401
 from .members_new.activity_tracker import (
     install_activity_tracker as _install_activity_tracker,
 )
+from .startup_recovery_coordinator import startup_recovery_slot
 from .tickets_new import service as _tickets_service  # noqa: F401
 from .tickets_new import transcript_service as _transcript_service  # noqa: F401
 from .tickets_new import panel as _tickets_panel  # noqa: F401
@@ -102,9 +102,11 @@ except Exception as e:
 try:
     from .members_new.sync_service import (
         run_departed_reconciliation_for_guild as _run_departed_reconciliation_for_guild,
+        run_full_member_sync_for_guild as _run_full_member_sync_for_guild,
     )
 except Exception:
     _run_departed_reconciliation_for_guild = None  # type: ignore
+    _run_full_member_sync_for_guild = None  # type: ignore
 
 try:
     from .tickets_new.sync_service import (
@@ -611,13 +613,67 @@ async def _maybe_run_departed_reconcile_once() -> None:
         print("⚠️ Skipping departed reconcile: no configured guilds resolved.")
         return
 
-    for guild in guilds:
+    for index, guild in enumerate(guilds):
         try:
-            print(f"🧹 Running departed-member reconciliation guild={guild.id}...")
-            summary_departed = await _run_departed_reconciliation_for_guild(guild)
+            gid = int(guild.id)
+            print(f"🧹 Running departed-member reconciliation guild={gid}...")
+            async with startup_recovery_slot(gid, "member_departure_reconcile"):
+                summary_departed = await _run_departed_reconciliation_for_guild(guild)
             print("✅ Departed reconciliation complete:", summary_departed)
         except Exception as e:
             print(f"❌ Departed reconcile failed guild={getattr(guild, 'id', 'unknown')}:", repr(e))
+
+        if index + 1 < len(guilds):
+            try:
+                await asyncio.sleep(0.25)
+            except Exception:
+                pass
+
+
+async def _bootstrap_new_guild_members(guild: discord.Guild) -> None:
+    """Populate member truth once when Dank Shield is newly added to a guild."""
+
+    if _run_full_member_sync_for_guild is None:
+        return
+
+    gid = int(getattr(guild, "id", 0) or 0)
+    if gid <= 0:
+        return
+
+    try:
+        await asyncio.sleep(5.0)
+        async with startup_recovery_slot(gid, "member_initial_bootstrap"):
+            summary = await _run_full_member_sync_for_guild(guild)
+        print(
+            "✅ New-guild member bootstrap complete "
+            f"guild={gid} active={int(summary.get('active_members_synced') or 0)} "
+            f"marked_departed={int(summary.get('marked_departed') or 0)} "
+            f"errors={int(summary.get('errors') or 0)}"
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        print(
+            "⚠️ New-guild member bootstrap failed "
+            f"guild={gid} error={type(exc).__name__}: {str(exc)[:250]}"
+        )
+
+
+async def _schedule_new_guild_member_bootstrap(guild: discord.Guild) -> None:
+    try:
+        task = asyncio.create_task(
+            _bootstrap_new_guild_members(guild),
+            name=f"member_initial_bootstrap_{int(guild.id)}",
+        )
+        _track_background_task(
+            task,
+            label=f"member_initial_bootstrap:{int(guild.id)}",
+        )
+    except Exception as exc:
+        print(
+            "⚠️ Failed scheduling new-guild member bootstrap "
+            f"guild={getattr(guild, 'id', 0)} error={exc!r}"
+        )
 
 
 async def _maybe_run_ticket_sync_once() -> None:
@@ -945,6 +1001,11 @@ async def on_ready() -> None:
             traceback.print_exc()
         except Exception:
             pass
+
+
+@bot.listen("on_guild_join")
+async def on_guild_join_member_bootstrap(guild: discord.Guild) -> None:
+    await _schedule_new_guild_member_bootstrap(guild)
 
 
 @bot.event
