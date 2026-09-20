@@ -14,6 +14,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from stoney_verify.share_router_resources import is_share_router_design_resource
+
 ProgressCallback = Callable[[int, int], Awaitable[None]]
 
 
@@ -108,6 +110,9 @@ async def preflight_plan(
 
         if channel is None:
             errors.append(f"Missing item that was previewed as `{before or channel_id}`.")
+            continue
+        if is_share_router_design_resource(channel):
+            skipped += 1
             continue
         if not before:
             errors.append(f"Preview row `{channel_id}` has no original name.")
@@ -228,6 +233,14 @@ async def apply_prepared(
     for prepared in ready:
         channel = await _resolve_fresh_channel(guild, prepared.channel_id, prepared.channel)
         current = _text(getattr(channel, "name", ""))
+        if is_share_router_design_resource(channel):
+            return await _rollback_after_failure(
+                guild,
+                applied,
+                user_id=user_id,
+                delay_seconds=delay_seconds,
+                failure="Share Router infrastructure became reserved while Apply was running.",
+            )
         if current != prepared.before:
             return await _rollback_after_failure(
                 guild,
@@ -309,6 +322,8 @@ async def undo_prepared(
     for prepared in reversed(ready):
         channel = await _resolve_fresh_channel(guild, prepared.channel_id, prepared.channel)
         current = _text(getattr(channel, "name", ""))
+        if is_share_router_design_resource(channel):
+            continue
         if current != prepared.before:
             return await _rollback_after_failure(
                 guild,
