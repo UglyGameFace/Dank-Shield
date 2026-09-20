@@ -1955,8 +1955,44 @@ class ExactSeparatorSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction) -> None:
         await _update_exact_draft(interaction, scope=self.scope, target_id=self.target_id, patch={"separator_id": self.values[0]})
 
+EXACT_FRAME_BROWSE_VALUE = "__browse_frames__"
+
+
+def _exact_frame_groups() -> tuple[tuple[str, tuple[str, ...]], ...]:
+    groups: list[tuple[str, tuple[str, ...]]] = []
+    seen: set[str] = set()
+    for label, frame_ids in tuple(getattr(studio, "CATEGORY_FRAME_GROUPS", tuple()) or tuple()):
+        usable = tuple(
+            frame_id for frame_id in frame_ids
+            if frame_id in studio.CATEGORY_FRAMES_BY_ID and frame_id not in seen
+        )
+        if not usable:
+            continue
+        groups.append((_safe_str(label, "Frames"), usable))
+        seen.update(usable)
+
+    ungrouped = tuple(frame.id for frame in studio.CATEGORY_FRAMES if frame.id not in seen)
+    if ungrouped:
+        groups.append(("More", ungrouped))
+    return tuple(groups)
+
+
+def _exact_frame_page_for(frame_id: str) -> int:
+    selected = _safe_str(frame_id, "plain")
+    for page, (_label, frame_ids) in enumerate(_exact_frame_groups()):
+        if selected in frame_ids:
+            return page
+    return 0
+
+
 class ExactFrameSelect(discord.ui.Select):
     def __init__(self, scope: str, target_id: int, current: str) -> None:
+        frames = list(studio.CATEGORY_FRAMES)
+        visible = frames[:24]
+        current_spec = studio.CATEGORY_FRAMES_BY_ID.get(current)
+        if current_spec is not None and all(frame.id != current for frame in visible):
+            visible = visible[:23] + [current_spec]
+
         options = [
             discord.SelectOption(
                 label=_category_frame_choice_label(frame.id)[:100],
@@ -1964,20 +2000,193 @@ class ExactFrameSelect(discord.ui.Select):
                 default=frame.id == current,
                 description=_exact_frame_option_description(frame.id),
             )
-            for frame in studio.CATEGORY_FRAMES[:25]
+            for frame in visible
         ]
+        if len(frames) > len(visible):
+            options.append(
+                discord.SelectOption(
+                    label=f"Browse all {len(frames)} frames…"[:100],
+                    value=EXACT_FRAME_BROWSE_VALUE,
+                    description="Open the full grouped frame browser.",
+                )
+            )
         super().__init__(
             placeholder="3) Choose category header style",
             min_values=1,
             max_values=1,
-            options=options,
+            options=options[:25],
             row=2,
         )
         self.scope = scope
         self.target_id = int(target_id)
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await _update_exact_draft(interaction, scope=self.scope, target_id=self.target_id, patch={"category_frame_id": self.values[0]})
+        selected = _safe_str(self.values[0], "")
+        if selected != EXACT_FRAME_BROWSE_VALUE:
+            await _update_exact_draft(
+                interaction,
+                scope=self.scope,
+                target_id=self.target_id,
+                patch={"category_frame_id": selected},
+            )
+            return
+
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        lock = _exact_lock_for_user(guild, int(interaction.user.id), self.scope, self.target_id)
+        page = _exact_frame_page_for(_safe_str(lock.get("category_frame_id"), "plain"))
+        await interaction.response.edit_message(
+            embed=_exact_frame_browser_embed(
+                guild,
+                scope=self.scope,
+                target_id=self.target_id,
+                lock=lock,
+                page=page,
+            ),
+            view=ExactFrameBrowserView(
+                guild,
+                scope=self.scope,
+                target_id=self.target_id,
+                lock=lock,
+                page=page,
+            ),
+        )
+
+
+class ExactFrameBrowserSelect(discord.ui.Select):
+    def __init__(self, scope: str, target_id: int, lock: Mapping[str, Any], *, page: int = 0) -> None:
+        groups = _exact_frame_groups()
+        page = max(0, min(int(page), max(0, len(groups) - 1)))
+        _group_label, frame_ids = groups[page] if groups else ("Frames", tuple())
+        current = _safe_str(lock.get("category_frame_id"), "plain")
+        options = [
+            discord.SelectOption(
+                label=_category_frame_choice_label(frame_id)[:100],
+                value=frame_id,
+                default=frame_id == current,
+                description=_exact_frame_option_description(frame_id),
+            )
+            for frame_id in frame_ids
+        ]
+        super().__init__(
+            placeholder="Choose a category frame from this group",
+            min_values=1,
+            max_values=1,
+            options=options[:25],
+            row=0,
+        )
+        self.scope = scope
+        self.target_id = int(target_id)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _update_exact_draft(
+            interaction,
+            scope=self.scope,
+            target_id=self.target_id,
+            patch={"category_frame_id": _safe_str(self.values[0], "plain")},
+        )
+
+
+def _exact_frame_browser_embed(
+    guild: discord.Guild,
+    *,
+    scope: str,
+    target_id: int,
+    lock: Mapping[str, Any],
+    page: int = 0,
+) -> discord.Embed:
+    groups = _exact_frame_groups()
+    total_pages = max(1, len(groups))
+    page = max(0, min(int(page), total_pages - 1))
+    group_label, frame_ids = groups[page] if groups else ("Frames", tuple())
+    current = _safe_str(lock.get("category_frame_id"), "plain")
+
+    embed = discord.Embed(
+        title=f"🖼️ Category Frames · {group_label}",
+        description=(
+            f"Browse **{len(studio.CATEGORY_FRAMES)} category frames** across {total_pages} style groups. "
+            "Choosing one updates this custom-format draft only. Save Rule & Preview is still required before Apply."
+        ),
+        color=discord.Color.blurple(),
+    )
+    lines = [
+        (
+            f"{'✅' if frame_id == current else '▫️'} "
+            f"**{_category_frame_choice_label(frame_id)}** → "
+            f"`{studio.category_frame_preview(frame_id, emoji='🎮', name='gaming')}`"
+        )
+        for frame_id in frame_ids
+    ]
+    embed.add_field(
+        name=f"Group {page + 1}/{total_pages} · {group_label}",
+        value="\n".join(lines)[:1024] or "No frame choices are available.",
+        inline=False,
+    )
+    embed.set_footer(text="Pick a frame above, or move between groups. Nothing is renamed here.")
+    return _clean_design_embed(embed)
+
+
+class ExactFrameBrowserView(LegacyDesignView):
+    def __init__(
+        self,
+        guild: discord.Guild,
+        *,
+        scope: str,
+        target_id: int,
+        lock: Mapping[str, Any],
+        page: int = 0,
+    ) -> None:
+        super().__init__(timeout=900)
+        self.scope = scope
+        self.target_id = int(target_id)
+        self.lock = dict(lock)
+        groups = _exact_frame_groups()
+        self.total_pages = max(1, len(groups))
+        self.page = max(0, min(int(page), self.total_pages - 1))
+        self.add_item(ExactFrameBrowserSelect(scope, target_id, lock, page=self.page))
+        self.previous.disabled = self.page <= 0
+        self.next.disabled = self.page >= self.total_pages - 1
+
+    @discord.ui.button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:exact_frame_prev", row=1)
+    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        lock = _exact_lock_for_user(guild, int(interaction.user.id), self.scope, self.target_id)
+        page = max(0, self.page - 1)
+        await interaction.response.edit_message(
+            embed=_exact_frame_browser_embed(guild, scope=self.scope, target_id=self.target_id, lock=lock, page=page),
+            view=ExactFrameBrowserView(guild, scope=self.scope, target_id=self.target_id, lock=lock, page=page),
+        )
+
+    @discord.ui.button(label="Next", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:exact_frame_next", row=1)
+    async def next(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        lock = _exact_lock_for_user(guild, int(interaction.user.id), self.scope, self.target_id)
+        page = min(self.total_pages - 1, self.page + 1)
+        await interaction.response.edit_message(
+            embed=_exact_frame_browser_embed(guild, scope=self.scope, target_id=self.target_id, lock=lock, page=page),
+            view=ExactFrameBrowserView(guild, scope=self.scope, target_id=self.target_id, lock=lock, page=page),
+        )
+
+    @discord.ui.button(label="Back to Custom Format", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_design:exact_frame_back", row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        lock = _exact_lock_for_user(guild, int(interaction.user.id), self.scope, self.target_id)
+        await interaction.response.edit_message(
+            embed=_exact_format_embed(guild, scope=self.scope, target_id=self.target_id, lock=lock),
+            view=ExactFormatEditorViewFactory(guild, self.scope, self.target_id, lock),
+        )
+
 
 class ExactStrengthSelect(discord.ui.Select):
     def __init__(self, scope: str, target_id: int, current: int) -> None:
