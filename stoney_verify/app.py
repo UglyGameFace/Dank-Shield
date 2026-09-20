@@ -64,6 +64,7 @@ except Exception as e:
 from .members_new import service as _members_service  # noqa: F401
 from .members_new.activity_tracker import (
     install_activity_tracker as _install_activity_tracker,
+    persisted_last_heartbeat_at as _persisted_last_heartbeat_at,
 )
 from .startup_recovery_coordinator import startup_recovery_slot
 from .tickets_new import service as _tickets_service  # noqa: F401
@@ -616,6 +617,14 @@ async def _maybe_run_departed_reconcile_once() -> None:
     for index, guild in enumerate(guilds):
         try:
             gid = int(guild.id)
+            checkpoint = await _persisted_last_heartbeat_at(gid)
+            if checkpoint is None:
+                print(
+                    "ℹ️ Departed reconciliation skipped "
+                    f"guild={gid} reason=no_durable_restart_checkpoint"
+                )
+                continue
+
             print(f"🧹 Running departed-member reconciliation guild={gid}...")
             async with startup_recovery_slot(gid, "member_departure_reconcile"):
                 summary_departed = await _run_departed_reconciliation_for_guild(guild)
