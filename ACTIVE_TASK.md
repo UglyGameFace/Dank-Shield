@@ -1,100 +1,128 @@
 # ACTIVE TASK
 
 ## ID
-DS-WELCOME-UNICODE-LONGTAIL — Deterministic long-tail lifecycle-card Unicode fallback
+DS-SHARE-ROUTER-265 — Restore native Share Router runtime and protect proxy infrastructure
 
 ## Status
-IMPLEMENTATION + FUNCTIONAL VALIDATION COMPLETE — final exact-head CI and merge gate
+IMPLEMENTATION COMPLETE — exact-head CI passed; merge authorized
 
 ## Single active-task lock
-Only the lifecycle-card long-tail Unicode fallback task is active. Do not admit
-unrelated redesign, cleanup, or feature work until this branch is validated,
-cleaned up, merged, and verified on main.
+Only the Share Router production-runtime restoration is active until PR #265 is
+merged and the resulting main commit is verified. No unrelated implementation
+work is admitted before that verification.
 
 ## Previous task closed
-PR #262 (Server Designer UX + font system hardening) merged as
-`e1ed7093983fffd5e947b1a240e3d455df80dc1e`. Its exact final head
-`08be759a4ca87592e05ca8c600e9a5d5ab92d4b3` passed all eight required
-workflows, and the merged commit reports `discloud/commit: success`.
+PR #264 (lifecycle-card long-tail Unicode fallback) merged as
+`758145be9e20d6d26240908980a6d1a4948616eb`. Its exact final head
+`f0f216ed5ea780b4edd0355d237b4a297f6fd321` passed the required validation,
+and the resulting main commit reports `discloud/commit: success`.
 
 ## User-visible problem
-Welcome/exit cards still rendered tofu boxes for a live Discord display name
-containing `ᗩ ᗰ ᒪ`, even after PR #260 added exact-Unicode preservation and
-grapheme-aware font fallback.
+The server still contains the private `SHARE ROUTES` proxy category used to
+share links from mobile into channels that Discord may omit from the native share
+sheet, especially age-restricted destinations. The implementation still existed
+in the repository, but production boot no longer activated it, so the visible
+proxy channels could remain while routing was dead.
+
+The same proxy resources were eligible for Dank Design renaming, which could
+turn the plain share-sheet names into decorative names and make the old exact-name
+hub discovery create or miss duplicate infrastructure.
 
 ## Root cause
-PR #260 fixed text rewriting and single-font rendering, but the production
-fallback inventory did not contain a face covering Unified Canadian Aboriginal
-Syllabics. The resolver therefore preserved the exact characters but eventually
-selected the best available unsupported face, which Pillow rendered as tofu.
+- Share Router lived only in the historical
+  `startup_guards/share_router_guard.py` module.
+- Normal production boot intentionally does not bulk-import historical startup
+  guards, and no current owner imported that module.
+- The compact public command surface would not retain the old direct
+  `/dank share-router` child as the supported configuration surface.
+- Dank Design scanned editable categories/channels without a structural
+  exclusion for Share Router infrastructure.
+- Historical hub repair looked up `🔗 SHARE ROUTES` and child names by exact
+  string, so a previously styled hub was not reliably recognized.
 
-This is a coverage problem, not a normalization or Discord-name problem.
+## Final execution path
+Production runtime:
+`commands_ext.register_all_commands()`
+→ `public_share_router.register_public_share_router()`
+→ `share_router_runtime.ensure_share_router_runtime(bot)`
+→ one idempotent `on_message` listener
+→ existing per-guild Share Router persistence
+→ configured target channel.
 
-## Execution path
-`welcome_card_runtime.py`
-→ `lifecycle_card_text.image_card_member()`
-→ `welcome_card_service.py`
-→ `welcome_card_typography_engine.py`
-→ `unicode_font_fallback.py`
-→ PNG
+Configuration UI:
+Community Tools
+→ Share Router
+→ Create / Repair Hub
+→ Add / Change Route
+→ Dank Shield searchable guild resource browser.
 
-Exit cards share the same lifecycle text adapter and Unicode fallback engine.
+Dank Design boundary:
+all shared editable scans and exact editor paths reject reserved Share Router
+resources, and the transactional apply service performs a final reserved-resource
+check before renaming.
 
-## Implementation
-- ship the official Noto Sans Canadian Aboriginal variable font inside the repo
-- retain the upstream SIL Open Font License alongside the binary
-- discover packaged fallback faces from a deterministic module-relative path
-- put packaged fallbacks ahead of environment-dependent JustMyType/system faces
-- preserve themed/custom fonts as the primary choice and only fall back for
-  grapheme clusters they cannot render
-- add the exact live sample `ᗩ ᗰ ᒪ` to production fallback coverage tests
-- add the exact live sample to full welcome-card rendering regressions
-- add a self-contained regression that disables registered/system fallbacks and
-  proves the bundled face alone covers the live name
+## Implemented changes
+- promoted Share Router to a normal production-owned runtime with explicit,
+  idempotent listener installation and no import side effect;
+- preserved the existing per-guild route file format/path so deployed saved
+  routes remain compatible;
+- exposed Share Router from the existing menu-first Community Tools UI without
+  adding a new public slash-command child;
+- used Dank Shield's searchable guild resource browser for target selection;
+- added canonical private proxy hub create/repair without deleting unrelated
+  channels or discarding unrelated explicit permission overwrite fields;
+- recognized and repaired previously decorated Share Router names;
+- required proxy sources to remain non-age-restricted and private from
+  `@everyone`, failing closed at runtime if privacy drifts;
+- required normal destination permissions for the sender and required bot
+  source/destination permissions, including source cleanup permission when
+  delete-source is enabled;
+- rejected self-routes and kept private proxy channel mentions out of forwarded
+  public text;
+- structurally excluded Share Router resources from Dank Design batch planning,
+  Smart Auto-Detect inputs, exact editors, format/protection rules, direct
+  rename paths, preflight, apply, and undo;
+- retired the historical startup-guard implementation to a side-effect-free
+  compatibility shim;
+- documented the production ownership correction;
+- added focused regression coverage for ownership, identity, menu reachability,
+  Designer isolation, route safety, overwrite preservation, and legacy
+  persistence compatibility.
 
-## Compatibility / cleanup
-- no NFKC/transliteration/replacement behavior is reintroduced
-- no dynamic Discord text is uppercased or rewritten
-- no existing fallback pack or custom-font behavior is removed
-- no unrelated Server Designer behavior is changed
-- the bundled font is unmodified and kept with its OFL-1.1 license
+## Compatibility / safety
+- no route IDs are hardcoded;
+- no existing saved route file is renamed or discarded;
+- no destination age restriction is changed;
+- Share Router does not grant destination viewing access;
+- no unrelated guild permission overwrite fields are discarded;
+- no automatic deletion of duplicate/legacy channels;
+- the compact public command surface remains unchanged.
 
-## Functional validation completed on head `b623c89a39c30a93cb1d8bf22a98d43e756f285e`
-- committed-diff whitespace check: PASS
-- Python compile: PASS
-- full unit suite: **1689 passed, 9 warnings, 0 failures**
-- exact live-name regression for `ᗩ ᗰ ᒪ`: included in the green full suite
-- standalone repository tool checks: PASS
-- public setup, command surface/friction, invite permissions, setup safety: PASS
-- Dank Design Smart Auto-Detect, role-truth, and event-boundary audits: PASS
-- Claim-first ticket security: PASS
-- Managed category SQL smoke test: PASS
-- Dank Shield CI: PASS
-- Dank Design Regression CI: PASS
-- Application Command Size Diagnostics: PASS
-- Profile Runtime Diagnostics: PASS
-- Ticket Owner Emergency Override: PASS
-- branch was 0 commits behind `main` at validation time
-- deployment packaging inspection found no .gitignore/Discloud exclusion for bundled .ttf assets
+## Validation
+Exact implementation head before this bookkeeping-only status commit:
+`62aedea48515a6b49df87823a2eaf13d15975e5e`
 
-The first CI attempt on `08bff77940eb10bb246ee4ac8554dae3b8961ded`
-stopped at `git diff --check` because the upstream OFL text carried one trailing
-space. The license text whitespace was normalized only; no production behavior
-changed. The corrected functional head above then passed the complete gate.
+All required workflows completed successfully on that head:
+- Dank Shield CI
+- Dank Design Regression CI
+- Application Command Size Diagnostics
+- Profile Runtime Diagnostics
+- Schema Authority SQL
+- Smart Stickies 029 / Community Tools 031
+- Ticket Owner Emergency Override
 
-## Final merge gate
-This task-record update is documentation-only and changes the PR head. Re-run all
-required PR workflows on the new exact final head. If they remain green:
-- confirm branch is still 0 behind current `main`
-- perform final changed-file/diff cleanup inspection
-- mark PR #264 ready
-- merge only the exact validated SHA
-- verify resulting `main` contains that head and requires `discloud/commit: success`
+The branch was mergeable and current with main when validated. This status-only
+commit must receive the same required exact-head CI before merge.
+
+## Cleanup
+- no unresolved review threads;
+- no duplicate production Share Router owner remains;
+- historical startup-guard path is compatibility-only and side-effect free;
+- no unrelated feature work included.
 
 ## Backlog
-None added from this task.
+None admitted from this task.
 
 ## Next step
-Run exact-head CI for this documentation-only finalization commit. If all required
-checks remain green, perform the final diff/currentness gate, mark PR #264 ready,
-merge the exact validated head, and verify the deployed main commit.
+Run exact-head CI on this bookkeeping-only commit, then mark PR #265 ready,
+merge it, and verify the resulting main commit.
