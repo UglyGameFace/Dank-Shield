@@ -104,7 +104,7 @@ def test_server_category_frame_is_editable_without_overflowing_discord_rows() ->
         item for item in view.children
         if getattr(item, "custom_id", "") == "dank_design_v2:category_frame"
     )
-    assert str(frame_button.label) == "Frame: Top Box"
+    assert str(frame_button.label) == "Frame"
 
     buttons = [item for item in view.children if getattr(item, "label", None) is not None]
     assert len(buttons) == 5
