@@ -139,7 +139,7 @@ Remaining score blockers:
 
 ### `P0-INT-001` — Replace monkey-patched interaction logger with native interaction service
 
-Status: `PARTIAL / BLOCKER — Dank Design Apply/Undo merged; setup-find config writer is next locked slice`
+Status: `PARTIAL / BLOCKER — setup-find config writer guarded; pending PR/main verification`
 
 Goal:
 
@@ -163,10 +163,10 @@ Progress completed on current `main`:
 
 Next locked slice:
 
-- `SetupSearchResultView.apply` in `public_setup_find.py` is a component callback that directly writes guild setup configuration through `upsert_guild_config(...)`, invalidates the cache, refreshes config, and only then edits the interaction.
-- It is not currently behind `run_guarded_interaction()`.
-- The migration must be a thin wrapper: preserve owner/permission checks, object resolution, blockers/warnings, exact payload semantics, cache invalidation, refreshed read, and success embed.
-- Unexpected mutation failures must surface through the native Error ID path without claiming that the config definitely did or did not save; users should reopen `/dank setup` and verify current state before retrying.
+- The active branch places `SetupSearchResultView.apply` in `public_setup_find.py` behind `run_guarded_interaction(..., defer=True)` before the guild-config write.
+- The existing validation/write order remains intact in a thin `_apply_result` action: object resolution → validation/blockers → `upsert_guild_config(...)` → cache invalidation → refreshed config read → success embed.
+- Post-defer result updates use `edit_original_response(...)`, and no-guild fallback uses `safe_send_interaction(...)`.
+- Unexpected mutation failures surface through the native Error ID path with cautious guidance to reopen `/dank setup` and verify the currently saved value before retrying.
 
 Important behavior notes:
 
@@ -176,7 +176,7 @@ Important behavior notes:
 
 Remaining before `P0-INT-001` can be marked done:
 
-- migrate and verify the locked `/dank setup-find` config-write boundary;
+- merge and verify the guarded `/dank setup-find` config-write boundary;
 - select and migrate the next single highest-risk ticket/verify mutation boundary;
 - ensure diagnostics expose recent native interaction failures safely;
 - remove or disable `global_interaction_trace_guard` framework patching only after native coverage is sufficient;
@@ -335,14 +335,14 @@ Progress:
 - style-change missing-icon review actions are native-guarded
 - reviewed Dank Design Apply / Undo native-guard slice merged in PR #271 and was verified on `main`
 - focused Apply/Undo static regression coverage is on `main`
-- `/dank setup-find` result Apply config writer is the next locked native-guard slice
+- `/dank setup-find` result Apply config writer is implemented and targeted-validation-clean on the active branch
 
 Verification:
 
 - PR #271 validated immutable V2/test blobs match current `main`
 - existing Dank Design ownership/state assertions were replayed successfully against the merged shape
 - full checkout/pytest remains blocked by the known external GitHub runner/DNS infrastructure issue
-- setup/ticket/verify callbacks are not fully migrated yet
+- setup-find/ticket/verify callbacks are not fully migrated yet; the current setup-find slice still needs PR/main verification
 
 ### Commit 3 — Startup guard inventory and migration table
 

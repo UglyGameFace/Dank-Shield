@@ -9,6 +9,7 @@ import discord
 from discord import app_commands
 
 from .common import safe_defer
+from stoney_verify.interaction_guard import run_guarded_interaction, safe_send_interaction
 from .public_setup_config_writer import apply_public_setup_writer_patch, upsert_guild_config
 from .public_setup_group import (
     _channel_value,
@@ -317,12 +318,35 @@ class SetupSearchResultView(discord.ui.View):
         return await _require_setup_permission(interaction)
 
     async def apply(self, interaction: discord.Interaction, obj_id: int) -> None:
+        async def action() -> None:
+            await self._apply_result(interaction, obj_id)
+
+        await run_guarded_interaction(
+            interaction,
+            action,
+            defer=True,
+            ephemeral=True,
+            action_name="setup.find.apply",
+            error_title="❌ Setup value save stopped unexpectedly",
+            error_guidance=(
+                "Reopen `/dank setup` and verify the current saved value before retrying. "
+                "Use the Error ID in `/dank diagnostics` if this keeps happening."
+            ),
+        )
+
+    async def _apply_result(self, interaction: discord.Interaction, obj_id: int) -> None:
         guild = interaction.guild
         if guild is None:
-            return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
+            await safe_send_interaction(
+                interaction,
+                content="❌ This must be used inside a server.",
+                ephemeral=True,
+                action_name="setup.find.apply.no_guild",
+            )
+            return
         obj = _resolve_object(guild, self.spec, obj_id)
         if obj is None:
-            return await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 embed=discord.Embed(
                     title="🚫 Setup Search Result Expired",
                     description="That channel/role no longer exists or no longer matches the selected setup type.",
@@ -330,6 +354,7 @@ class SetupSearchResultView(discord.ui.View):
                 ),
                 view=None,
             )
+            return
         blockers, warnings = _validate_object(guild, self.spec, obj)
         if blockers:
             embed = discord.Embed(title="🚫 Setup Value Rejected", color=discord.Color.red())
@@ -338,7 +363,8 @@ class SetupSearchResultView(discord.ui.View):
             embed.add_field(name="Blockers", value="\n".join(f"• {item}" for item in blockers), inline=False)
             if warnings:
                 embed.add_field(name="Warnings", value="\n".join(f"• {item}" for item in warnings), inline=False)
-            return await interaction.response.edit_message(embed=embed, view=None)
+            await interaction.edit_original_response(embed=embed, view=None)
+            return
 
         await upsert_guild_config(guild.id, _payload_for(interaction, self.spec, obj))
         invalidate_guild_config(guild.id)
@@ -348,7 +374,7 @@ class SetupSearchResultView(discord.ui.View):
         if warnings:
             embed.add_field(name="Warnings", value="\n".join(f"• {item}" for item in warnings), inline=False)
         embed.set_footer(text="Run /dank setup after setup changes to verify the full configuration.")
-        await interaction.response.edit_message(embed=embed, view=None)
+        await interaction.edit_original_response(embed=embed, view=None)
 
 
 @dank_group.command(name="setup-find", description="Search all channels/roles by name or ID and save a setup value.")
