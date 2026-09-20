@@ -431,11 +431,7 @@ def _current_format_lock(options: Mapping[str, Any], *, scope: str = "global") -
     if font not in studio.DESIGN_FONT_STYLES:
         font = _safe_str(getattr(theme, "font", "normal"), "normal").lower().replace("-", "_")
     separator_id = plan_service.effective_server_separator_id(options)
-    category_frame_id = _safe_str(options.get("category_frame_id"), "")
-    if category_frame_id not in studio.CATEGORY_FRAMES_BY_ID:
-        category_frame_id = _safe_str(getattr(theme, "category_frame", "line"), "line")
-    if category_frame_id not in studio.CATEGORY_FRAMES_BY_ID:
-        category_frame_id = "line"
+    category_frame_id = plan_service.effective_server_category_frame_id(options)
 
     return {
         "scope": scope,
