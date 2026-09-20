@@ -102,3 +102,21 @@ def test_invite_cache_warm_uses_shared_budget_and_preflights_requests() -> None:
     assert "def _guild_has_vanity_url" in JOIN_CONTEXT
     assert '"VANITY_URL"' in JOIN_CONTEXT
     assert "if _guild_has_vanity_url(guild):" in JOIN_CONTEXT
+
+
+def test_public_startup_scope_has_no_silent_guild_count_cutoff() -> None:
+    assert "DANK_STARTUP_MAX_GUILDS" not in APP
+    assert "[:max_guilds]" not in APP
+    assert "for index, guild in enumerate(guilds):" in APP
+
+
+def test_ticket_history_backfill_is_opt_in() -> None:
+    block = _block(
+        APP,
+        "async def _maybe_run_ticket_sync_once() -> None:",
+        "async def _sync_beta_guild_commands_if_requested",
+    )
+
+    assert 'DANK_STARTUP_TICKET_BACKFILL' in block
+    assert 'default=False' in block
+    assert "set DANK_STARTUP_TICKET_BACKFILL=true only for explicit repair runs" in block
