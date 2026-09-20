@@ -59,6 +59,26 @@ def test_current_format_lock_never_silently_rewrites_strength() -> None:
     assert lock["strength"] == 2
 
 
+def test_current_format_lock_honors_explicit_server_category_frame_override() -> None:
+    custom = public_studio._current_format_lock(
+        {
+            "theme_id": "night_gothic",
+            "strength": 4,
+            "category_frame_id": "lenticular",
+        }
+    )
+    assert custom["category_frame_id"] == "lenticular"
+
+    invalid = public_studio._current_format_lock(
+        {
+            "theme_id": "night_gothic",
+            "strength": 4,
+            "category_frame_id": "not-a-frame",
+        }
+    )
+    assert invalid["category_frame_id"] == "top_box"
+
+
 def test_gothic_default_separator_matches_planner_ui_and_saved_global_rule() -> None:
     options = {"theme_id": "gothic_clean", "strength": 4}
     normalized = plan_service.normalize_plan_options(options, strict=True)
