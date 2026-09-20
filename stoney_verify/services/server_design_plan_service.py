@@ -63,6 +63,24 @@ def effective_server_separator_id(options: Mapping[str, Any]) -> str:
     return explicit or theme_default_separator_id(options)
 
 
+def theme_default_category_frame_id(options: Mapping[str, Any]) -> str:
+    """Return the selected theme's canonical category-frame id."""
+
+    theme_id = str(options.get("theme_id") or "gothic_clean").strip() or "gothic_clean"
+    theme = studio.THEMES_BY_ID.get(theme_id, studio.THEMES_BY_ID["gothic_clean"])
+    frame_id = str(getattr(theme, "category_frame", "line") or "line").strip() or "line"
+    return frame_id if frame_id in studio.CATEGORY_FRAMES_BY_ID else "line"
+
+
+def effective_server_category_frame_id(options: Mapping[str, Any]) -> str:
+    """Return the explicit server frame override or the selected theme default."""
+
+    explicit = str(options.get("category_frame_id") or "").strip()
+    if explicit in studio.CATEGORY_FRAMES_BY_ID:
+        return explicit
+    return theme_default_category_frame_id(options)
+
+
 def normalize_plan_options(options: Mapping[str, Any], *, strict: bool = True) -> dict[str, Any]:
     """Apply native compatibility defaults without replacing live functions."""
 
