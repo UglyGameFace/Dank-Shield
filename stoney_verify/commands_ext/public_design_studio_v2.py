@@ -205,12 +205,7 @@ def _font_override_active(options: Mapping[str, Any]) -> bool:
 
 
 def _design_server_category_frame(options: Mapping[str, Any]) -> str:
-    theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
-    explicit = _safe_str(options.get("category_frame_id"), "")
-    if explicit in studio.CATEGORY_FRAMES_BY_ID:
-        return explicit
-    fallback = _safe_str(getattr(theme, "category_frame", "line"), "line")
-    return fallback if fallback in studio.CATEGORY_FRAMES_BY_ID else "line"
+    return plans.effective_server_category_frame_id(options)
 
 
 def _category_frame_override_active(options: Mapping[str, Any]) -> bool:
@@ -420,10 +415,9 @@ def _separator_override_active(options: Mapping[str, Any]) -> bool:
 
 class DesignServerCategoryFrameSelect(discord.ui.Select):
     def __init__(self, options: Mapping[str, Any]) -> None:
-        theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
-        theme_frame = _safe_str(getattr(theme, "category_frame", "line"), "line")
-        if theme_frame not in studio.CATEGORY_FRAMES_BY_ID:
-            theme_frame = "line"
+        theme_options = dict(options)
+        theme_options.pop("category_frame_id", None)
+        theme_frame = plans.theme_default_category_frame_id(theme_options)
         explicit = _safe_str(options.get("category_frame_id"), "")
         selected = _design_server_category_frame(options)
         choices: list[discord.SelectOption] = [
