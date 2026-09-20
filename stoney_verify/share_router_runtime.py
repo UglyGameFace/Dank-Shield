@@ -422,13 +422,17 @@ async def route_message(message: discord.Message) -> None:
         me = guild.me
         if not isinstance(me, discord.Member):
             return
-        target_perms = target.permissions_for(me)
         source_perms = message.channel.permissions_for(me)
-        if not target_perms.view_channel or not target_perms.send_messages:
+        permission_blockers = route_permission_blockers(
+            message.channel,
+            target,
+            delete_source=bool(route.get("delete_source", True)),
+        )
+        if permission_blockers:
             await _route_rejection_log(
                 message,
                 target=target,
-                reason="Dank Shield cannot view/send in the configured destination.",
+                reason=permission_blockers[0],
             )
             return
 
