@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 import discord
 
+from stoney_verify.interaction_guard import run_guarded_interaction
 from .common import _staff_check
 
 
@@ -53,9 +54,32 @@ async def _replace(
 
 async def _invoke(command: Any, interaction: discord.Interaction, /, *args: Any, **kwargs: Any) -> Any:
     callback = getattr(command, "callback", command)
-    if not callable(callback):
-        raise RuntimeError("Verification action is unavailable")
-    return await callback(interaction, *args, **kwargs)
+    callback_name = str(
+        getattr(callback, "__name__", None)
+        or getattr(command, "name", None)
+        or "action"
+    ).strip().lower().replace(" ", "_")
+    result: Any = None
+
+    async def action() -> None:
+        nonlocal result
+        if not callable(callback):
+            raise RuntimeError("Verification action is unavailable")
+        result = await callback(interaction, *args, **kwargs)
+
+    await run_guarded_interaction(
+        interaction,
+        action,
+        defer=True,
+        ephemeral=True,
+        action_name=f"verify.center.{callback_name}",
+        error_title="❌ Verification action stopped unexpectedly",
+        error_guidance=(
+            "Reopen the Verification Center and inspect the member/server verification state before retrying. "
+            "Use the Error ID in `/dank diagnostics` if this keeps happening."
+        ),
+    )
+    return result
 
 
 async def _require_staff(interaction: discord.Interaction) -> bool:
