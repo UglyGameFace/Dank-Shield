@@ -4,74 +4,104 @@
 
 **P0-INT-001 — Verification Center role-mapping save integrity + native interaction guard**
 
-Make the Verification Center's direct Role Mapping select both natively guarded and truthful about persistence. A failed guild-config write must never be followed by a false “now uses this role” success message.
-
-## Why this is next
-
-PR #277 completed the shared Verification Center canonical-command dispatcher guard and merged as `35714aae0da9b4dcebfcb6d51abfade83f90beba`.
-
-Post-merge verification on `main` confirmed the validated production and regression-test blobs exactly:
-
-- `public_verify_command_center.py` → `c1ae1b0273871025b40d4fd9da657490d75176b8`
-- `test_public_verify_command_center_native_interaction_static.py` → `1b91918bbc4c1d0f8ee8f55683d5e5cce2ac55f1`
-- canonical compatibility `public_verify_group.py` → `bb7b9c314517a21d14c0f7f16e7380e2fcf15a30`
-
-The next direct mutation boundary is `VerifyRoleSelect.callback` in `public_verify_command_center.py`.
-
-Concrete root cause:
-
-- the callback validates the selected role and then calls `public_verify_group._save_role_config(..., explicit_override=True)`;
-- `_save_role_config` catches persistence exceptions internally, prints a warning, and returns normally;
-- the callback then unconditionally tells staff `✅ ... now uses <role>`;
-- therefore a failed database write can produce a false success message;
-- because the persistence exception is swallowed before it reaches the UI callback, adding `run_guarded_interaction()` alone would not fix the bug.
+Make the Verification Center's direct Role Mapping select both natively guarded and truthful about persistence. A failed guild-config write or unverifiable read must never be followed by a false “now uses this role” success message.
 
 ## Scope
 
 In scope:
 
-- `VerifyRoleSelect.callback`;
+- `VerifyRoleSelect.callback` and its focused save path;
 - native defer-before-save acknowledgement;
-- preserving the existing staff gate and `_bot_can_manage_role` hierarchy check;
-- preserving the existing explicit-override `_save_role_config` write path;
-- refreshing guild config after the attempted save and verifying the exact selected role ID actually persisted;
-- refusing the success message when persistence cannot be verified;
-- focused regression coverage for native guard ownership, save verification, and no false success;
-- P0 interaction ledger updates for this exact slice.
+- existing owner/staff and role hierarchy checks;
+- existing logical-role → config-key mapping;
+- explicit-override `_save_role_config(..., explicit_override=True)`;
+- authoritative post-save verification before success;
+- focused regression coverage;
+- P0 readiness ledger updates.
 
 Out of scope:
 
-- changing the broad semantics of `_save_role_config` for runtime discovery/auto-create callers;
-- changing role discovery aliases;
-- changing canonical `/verify` command behavior;
-- changing member role mutations;
-- changing Verify panel posting or setup routing;
+- changing the broad semantics of `_save_role_config` for discovery/auto-create callers;
+- canonical `/verify` behavior;
+- member role mutations;
+- Verify panel/setup routing;
 - ticket/setup/design work;
-- removing the global framework interaction monkey patch in this slice.
+- removal of the global framework interaction monkey patch.
 
 ## Status
 
-**LOCKED — NOT IMPLEMENTED**
+**IMPLEMENTED — source/diff inspection clean; exact-head PR validation pending**
 
-## Required behavior to preserve
+## Findings / root cause
 
-- only the owner of the Verification Center can use the view;
-- staff permission check remains authoritative;
-- invalid/non-role selections are rejected;
-- bot role hierarchy/manage-role validation remains before persistence;
-- the same logical-role → config-key mapping remains authoritative;
-- the write remains an explicit override through `_save_role_config(..., explicit_override=True)`;
-- a verified successful save still receives the existing human-readable role-mapping success message.
+- `VerifyRoleSelect.callback` called `_save_role_config(..., explicit_override=True)` and then unconditionally sent a success message.
+- `_save_role_config` intentionally swallows persistence exceptions for compatibility with best-effort discovery callers.
+- Therefore the callback could report success after a failed database write.
+- A native interaction guard alone could not fix that because the helper consumed the exception before the callback saw it.
+- During branch review, a second same-root-cause hole was found: `get_guild_config(refresh=True)` preserves stale cached config when the database is unavailable. A failed save could therefore be “verified” from stale cache if the cached value happened to match the selected role.
 
-## Implementation rule
+## Execution path
 
-Use `stoney_verify.interaction_guard.run_guarded_interaction` as a thin wrapper at `VerifyRoleSelect.callback`, with `defer=True`.
+`VerifyRoleSelect.callback`
+→ `run_guarded_interaction(..., defer=True)`
+→ `_save_mapping`
+→ staff check
+→ server-context check
+→ `_bot_can_manage_role`
+→ explicit-override `_save_role_config`
+→ invalidate guild-config cache
+→ forced `get_guild_config(..., refresh=True)`
+→ compare persisted config key to selected role ID
+→ success message only on exact match.
 
-After `_save_role_config` returns, perform a fresh authoritative config read and compare the saved config key to the selected role ID. If the mapping does not match, raise an error inside the guarded action so the native Error ID path owns the failure and the callback does not send success.
+Unexpected failures stay inside the native interaction guard so staff receive a structured Error ID and cautious recovery guidance.
 
-Do not change `_save_role_config` globally in this slice because its silent best-effort behavior is also used by auto-discovery/auto-create paths. That broader semantic cleanup belongs to a separate audit item.
+## Changes
 
-Failure guidance must tell staff to reopen Role Mapping and verify the currently saved role before retrying. It must not claim the write definitely failed or definitely succeeded if the verification read itself errors.
+- wrapped Role Mapping save execution with `run_guarded_interaction(..., defer=True, ephemeral=True)`;
+- preserved existing staff, hierarchy, role-selection, config-key, and explicit-override behavior;
+- added a forced post-save config read;
+- invalidate the guild-config cache immediately before verification so stale cache cannot satisfy the persistence check;
+- raise inside the guarded action when the saved role ID cannot be confirmed;
+- send the existing human-readable success message only after exact persisted-ID verification;
+- added focused static regression coverage for guard ownership, ordering, hierarchy preservation, explicit override, stale-cache invalidation, server-context fail-closed behavior, and no success-before-verification.
+
+## Validation / results
+
+Current branch: `audit/p0-int-verify-role-map-integrity`.
+
+- branch is based on current `main` commit `f18075b84c705e16b792e0d40ac7daed0f814a61`;
+- branch is 0 commits behind `main`;
+- diff is limited to the Verification Center role-mapping production file, its focused regression test, and audit/task documentation;
+- production flow was re-read against `public_verify_group._save_role_config` and `guild_config.get_guild_config`;
+- stale-cache fallback behavior was found during review and corrected before PR validation;
+- exact-head GitHub CI/workflow execution has not yet been observed and must not be represented as passing.
+
+## Cleanup / conflicts
+
+- no changes to `_save_role_config` global semantics;
+- no duplicate persistence implementation introduced;
+- no role-discovery aliases or canonical verification commands changed;
+- no unrelated runtime code included;
+- existing owner/staff/hierarchy gates remain authoritative.
+
+## Blockers / risks
+
+- full completion still requires exact-head PR validation and post-merge verification on `main`;
+- GitHub Actions has previously failed to create/execute runners for nearby slices, so lack of runner execution must be recorded honestly rather than treated as green CI.
+
+## Backlog
+
+**P0 — production crash around Invite Shield reconciliation / rate-limit pressure**
+
+Confirmed separately while this task was locked:
+
+- deprecated `Message.interaction` access creates repeated warning amplification;
+- startup invite reconciliation performs REST-backed history scans across many channels;
+- observed production sweep checked 2,348 messages across 58 channels;
+- the supplied reconcile line itself completed with `failed=0`, so the exact fatal crash line remains unproven from the available excerpt.
+
+Do not investigate or modify that issue until the active task reaches its Definition of Done unless the user explicitly FORCE SWITCHes.
 
 ## Previous completed slice
 
@@ -80,9 +110,8 @@ Failure guidance must tell staff to reopen Role Mapping and verify the currently
 - merged as `35714aae0da9b4dcebfcb6d51abfade83f90beba`;
 - verified on `main`;
 - validated center blob: `c1ae1b0273871025b40d4fd9da657490d75176b8`;
-- validated regression-test blob: `1b91918bbc4c1d0f8ee8f55683d5e5cce2ac55f1`;
-- no GitHub workflow runs were created for the exact PR head before merge; this was recorded honestly rather than treated as passing CI.
+- validated regression-test blob: `1b91918bbc4c1d0f8ee8f55683d5e5cce2ac55f1`.
 
 ## Next step
 
-Implement the smallest guarded role-mapping callback with post-save persistence verification and focused regression coverage on a fresh implementation branch.
+Open the focused PR from `audit/p0-int-verify-role-map-integrity`, validate the exact final head and actual workflow execution state, inspect the final diff for accidental changes, then merge only if the evidence remains clean and verify the merged blobs on `main`.
