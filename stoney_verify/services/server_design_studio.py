@@ -157,12 +157,17 @@ SEPARATOR_LIBRARY: tuple[SeparatorSpec, ...] = (
     SeparatorSpec("bar_triple_dash", "Triple Dash Bar", "Clean Vertical", "┋", safety="balanced", clutter=2),
     SeparatorSpec("bar_triple", "Triple Bar", "Clean Vertical", "┇", safety="balanced", clutter=2),
     SeparatorSpec("dash", "Dash", "Minimal", "-"),
+    SeparatorSpec("double_dash", "Double Hyphen", "Minimal", "--", clutter=1),
     SeparatorSpec("en_dash", "En Dash", "Minimal", "–"),
     SeparatorSpec("em_dash", "Em Dash", "Minimal", "—", clutter=1),
+    SeparatorSpec("pipe_compact", "Pipe", "Minimal", "|"),
+    SeparatorSpec("pipe_spaced", "Spaced Pipe", "Minimal", " | "),
+    SeparatorSpec("double_pipe", "Double Pipe", "Minimal", "||", safety="balanced", clutter=1),
     SeparatorSpec("middle_dot", "Middle Dot", "Minimal", "·"),
     SeparatorSpec("bullet", "Bullet", "Minimal", "•", clutter=1),
     SeparatorSpec("katakana_dot", "Katakana Dot", "Minimal", "・"),
     SeparatorSpec("colon", "Colon", "Minimal", ":"),
+    SeparatorSpec("double_colon", "Double Colon", "Minimal", "::", clutter=1),
     SeparatorSpec("single_angle", "Single Angle", "Minimal", "›"),
     SeparatorSpec("double_angle", "Double Angle", "Minimal", "»", safety="balanced", clutter=1),
     SeparatorSpec("wave", "Wave", "Minimal", "⌁", safety="balanced", clutter=1),
@@ -204,6 +209,68 @@ SEPARATOR_LIBRARY: tuple[SeparatorSpec, ...] = (
     SeparatorSpec("none", "No Separator", "Minimal", "", template="{emoji}{name}"),
 )
 SEPARATORS_BY_ID = {spec.id: spec for spec in SEPARATOR_LIBRARY}
+
+# Discord string-select menus can expose at most 25 choices. Server-wide design
+# reserves one choice for Theme Default, so this curated catalog intentionally
+# stays at 24 while the paginated example browser continues to expose the full
+# separator library.
+SERVER_DESIGN_SEPARATOR_IDS: tuple[str, ...] = (
+    "none",
+    "bar_heavy",
+    "bar_thin",
+    "bar_full",
+    "bar_medium",
+    "bar_bold",
+    "bar_block",
+    "dash",
+    "double_dash",
+    "en_dash",
+    "em_dash",
+    "pipe_compact",
+    "pipe_spaced",
+    "double_pipe",
+    "middle_dot",
+    "bullet",
+    "katakana_dot",
+    "colon",
+    "double_colon",
+    "single_angle",
+    "tri_right",
+    "sparkle",
+    "bracket_corner",
+    "bracket_lenticular",
+)
+
+# The exact-item editor has no Theme Default row, so it may use all 25 choices.
+# Preserve every option it already exposed and add the four mixed-layout ASCII
+# forms needed to reproduce common real-server naming schemes.
+EXACT_EDITOR_SEPARATOR_IDS: tuple[str, ...] = (
+    "none",
+    "bar_full",
+    "bar_thin",
+    "bar_heavy",
+    "dash",
+    "double_dash",
+    "en_dash",
+    "em_dash",
+    "pipe_compact",
+    "pipe_spaced",
+    "double_pipe",
+    "middle_dot",
+    "bullet",
+    "katakana_dot",
+    "colon",
+    "single_angle",
+    "tri_right",
+    "tri_small",
+    "premium_sparkle",
+    "premium_thin_sparkle",
+    "sparkle_small",
+    "small_dot",
+    "presentation_bar",
+    "bracket_corner",
+    "bracket_lenticular",
+)
 
 CATEGORY_FRAMES: tuple[CategoryFrameSpec, ...] = (
     CategoryFrameSpec("line", "Clean Line", "─── {emoji} {name} ───", clutter=1),
@@ -768,7 +835,8 @@ def design_score(items: list[dict[str, Any]]) -> dict[str, int | str]:
 
 __all__ = [
     "CATEGORY_FRAMES", "DEFAULT_DELAY_SECONDS", "DEFAULT_PROTECTED_NAMES", "DESIGN_FONT_STYLES", "DISCORD_NAME_LIMIT",
-    "FONT_STYLES", "FONT_STYLE_LABELS", "ICON_PACKS", "MAX_PLAN_ITEMS", "SEPARATOR_LIBRARY", "THEMES", "build_styled_name",
+    "EXACT_EDITOR_SEPARATOR_IDS", "FONT_STYLES", "FONT_STYLE_LABELS", "ICON_PACKS", "MAX_PLAN_ITEMS",
+    "SEPARATOR_LIBRARY", "SERVER_DESIGN_SEPARATOR_IDS", "THEMES", "build_styled_name",
     "category_frame_preview", "design_score", "detect_duplicate_outputs", "fallback_ladder", "font_label",
     "font_preview", "normalize_base_name", "parse_channel_name", "preview_lines", "separator_preview",
     "strip_known_unicode_fonts", "summarize_plan", "suggested_icon", "transform_text_safe", "validate_separator",
