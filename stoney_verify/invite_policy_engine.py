@@ -16,6 +16,7 @@ Default production posture:
 
 import re
 import time
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
@@ -882,7 +883,15 @@ async def send_invite_decision_modlog(message: discord.Message, decision: Invite
         pass
 
 
-async def scan_channel_invites(channel: Any, *, limit: int = 100, repost_mixed: bool = False, source: str = "scanner") -> dict[str, Any]:
+async def scan_channel_invites(
+    channel: Any,
+    *,
+    limit: int = 100,
+    repost_mixed: bool = False,
+    source: str = "scanner",
+    after: datetime | None = None,
+    before: datetime | None = None,
+) -> dict[str, Any]:
     result: dict[str, Any] = {
         "checked": 0,
         "matched": 0,
@@ -910,7 +919,15 @@ async def scan_channel_invites(channel: Any, *, limit: int = 100, repost_mixed: 
         return result
 
     try:
-        async for message in channel.history(limit=max(1, min(int(limit or 100), 250))):
+        history_kwargs: dict[str, Any] = {
+            "limit": max(1, min(int(limit or 100), 250)),
+        }
+        if after is not None:
+            history_kwargs["after"] = after
+        if before is not None:
+            history_kwargs["before"] = before
+
+        async for message in channel.history(**history_kwargs):
             result["checked"] += 1
             try:
                 if message.author == me:
