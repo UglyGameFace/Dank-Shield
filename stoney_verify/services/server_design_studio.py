@@ -458,7 +458,7 @@ def category_frame_preview(frame_id: str, *, emoji: str = "🛰", name: str = "c
 
 
 def category_frame_affixes(frame: CategoryFrameSpec | str) -> tuple[str, str]:
-    """Return the literal text surrounding a rendered frame's emoji/name body."""
+    """Return normalized affixes surrounding a rendered frame's emoji/name body."""
 
     spec = CATEGORY_FRAMES_BY_ID.get(frame) if isinstance(frame, str) else frame
     if spec is None:
@@ -469,7 +469,9 @@ def category_frame_affixes(frame: CategoryFrameSpec | str) -> tuple[str, str]:
     name_index = template.rfind("{name}")
     if emoji_index < 0 or name_index < emoji_index:
         return "", ""
-    return template[:emoji_index], template[name_index + len("{name}"):]
+    prefix = unicodedata.normalize("NFKC", template[:emoji_index])
+    suffix = unicodedata.normalize("NFKC", template[name_index + len("{name}"):])
+    return prefix, suffix
 
 
 def _reverse_font_map() -> dict[str, str]:
