@@ -139,11 +139,11 @@ Remaining score blockers:
 
 ### `P0-INT-001` — Replace monkey-patched interaction logger with native interaction service
 
-Status: `PARTIAL / BLOCKER — canonical Verify Panel posting guarded; pending PR/main verification`
+Status: `PARTIAL / BLOCKER — native failure history implemented in diagnostics; pending PR/main verification`
 
 Goal:
 
-Stop generic `interaction failed` outcomes without patching Discord.py internals, while ensuring state-changing UI actions never report false success.
+Stop generic `interaction failed` outcomes without patching Discord.py internals, and make native Error IDs actionable to server admins.
 
 Progress completed on current `main`:
 
@@ -152,21 +152,23 @@ Progress completed on current `main`:
 - `/dank setup-find` result Apply is native-guarded and verified on `main`.
 - Ticket Operations Center shared command runner is native-guarded and verified on `main`.
 - Verification Center shared canonical-command dispatcher is native-guarded and verified on `main`.
-- Verification Center role mapping is native-guarded and verifies persisted config before reporting success; PR #279 is merged and verified on `main`.
+- Verification Center role mapping is native-guarded and persistence-verified on `main`.
+- Canonical Verify Panel posting is native-guarded and verified on `main`.
+- Native interaction failures are stored in an in-memory recent-failure ring.
 
-Next locked slice:
+Current locked slice:
 
-- canonical `verify_panel()` is now behind `run_guarded_interaction()` on the active branch;
-- the guarded action preserves the existing `ephemeral=True, thinking=True` defer before staff/channel/posting work;
-- `post_basic_verify_panel(...)` remains the canonical live mutation owner;
-- `/verify panel`, Verification Center, and setup surfaces still share the same guarded canonical function;
-- the broad local posting exception swallow is removed so unexpected failures get native Error IDs.
+- diagnostics now consumes the native recent-failure ring on the active branch;
+- records are filtered to the current guild before rendering;
+- only Error ID, action, stage/error type, and user-notified state are shown;
+- tracebacks, raw messages, fix hints, user/channel/message IDs, and extras are excluded;
+- newest five are shown first and the field is capped below Discord limits;
+- diagnostics remains read-only and per-process.
 
 Remaining before `P0-INT-001` can be marked done:
 
-- merge and verify canonical Verify Panel posting;
-- continue the next single highest-risk direct verification mutation boundary after that;
-- ensure diagnostics expose recent native interaction failures safely;
+- merge and verify the diagnostics failure-history slice;
+- resolve remaining direct-command native-guard architecture without nested component-lock collisions;
 - remove or disable `global_interaction_trace_guard` framework patching only after native coverage is sufficient;
 - run the full interaction/protection/design/setup/ticket/verify matrix once executable CI infrastructure is restored.
 
@@ -175,6 +177,7 @@ Exit criteria:
 - no production startup guard patches `CommandTree`, app command internals, or `View._scheduled_task`;
 - setup/protection/design/ticket/verify state-changing callbacks use the native interaction service;
 - failing callbacks log structured context and show a useful user message;
+- native Error IDs can be inspected safely from the owning guild's diagnostics;
 - state-changing UI paths do not report success unless their required persistence/mutation outcome is verified;
 - tests cover response done/not done, followup fallback, duplicate click, stale component, and exception paths.
 
