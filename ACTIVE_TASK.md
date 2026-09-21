@@ -10,7 +10,7 @@ The bot must not launch overlapping full-guild Discord history/member sweeps or 
 
 ## Status
 
-**IMPLEMENTED ON `fix/startup-recovery-storm` — exact-head validation pending**
+**IMPLEMENTED ON `fix/startup-recovery-storm` — exact-head focused validation passed; full GitHub Actions execution blocked before checkout**
 
 The supplied production excerpt proves a startup traffic storm and warning amplification, but it still does **not** contain the final fatal traceback/signal/OOM line. Do not claim the exact process-termination mechanism is proven until Discloud logs show it.
 
@@ -176,7 +176,17 @@ Focused regression coverage added/updated for:
 - fixed worker pools for startup DB/config prewarms;
 - ticket panel history repair default-off behavior.
 
-Exact-head compile/pytest/workflow validation is still pending and must not be represented as passing yet.
+Exact-head validation on current head `80fc19a4b070217f12c5bc9be9d3d06ebe78496f`:
+
+- branch is mergeable, based on `main` `373080f76eb255db92dff29abdfc0761be75345c`, and 0 commits behind;
+- executable coordinator regression tests passed **2/2** against blobs whose Git SHAs exactly match the final head:
+  - `stoney_verify/startup_recovery_coordinator.py` blob `1903c611bcb866bbada568e52c77bc32a78371dc`;
+  - `tests/test_startup_recovery_coordinator.py` blob `0dced14bb61ffa83c46246d409c021a0202baf5d`;
+- exact-head source/invariant replay passed **21/21**, covering deprecated interaction access removal, startup owner dedupe, fixed recovery windows, legacy heartbeat pinning, cold invite baseline safety, write suppression, batched config lookup, explicit ticket repair modes, and fixed worker pools;
+- GitHub Actions created all six workflows for the final head, but every job failed before checkout with `steps=null`, `logs_url=null`, and no runner name, including `Python compile check`, Backlog Python regressions, Owner emergency security, command-size, focused-profile-tests, and Design regressions;
+- a prior explicit rerun on the preceding exact head produced the same pre-step failure pattern, so workflow red status is runner/infrastructure evidence rather than executed branch-test evidence.
+
+Do **not** represent the full GitHub Actions suite as passing.
 
 ## Previous completed slice
 
@@ -195,4 +205,4 @@ Exact-head compile/pytest/workflow validation is still pending and must not be r
 
 ## Next step
 
-Open a draft PR, validate the exact final head with focused and full repository checks where runners permit, inspect the final diff for unrelated changes, and only then mark the PR merge-ready. After merge, verify the exact production/test blobs on `main` before redeploying.
+Perform final diff cleanup/review on PR #280. If no code defect or unrelated scope is found, decide merge-readiness using the exact-head focused evidence plus the documented GitHub runner blocker; do not claim full CI passed. After merge, verify the exact production/test blobs on `main` before redeploying.
