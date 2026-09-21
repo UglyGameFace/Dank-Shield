@@ -7,7 +7,12 @@ ROOT = Path(__file__).resolve().parents[1]
 EVENTS = (ROOT / "stoney_verify" / "events.py").read_text(encoding="utf-8")
 APP = (ROOT / "stoney_verify" / "app.py").read_text(encoding="utf-8")
 ACTIVITY = (ROOT / "stoney_verify" / "members_new" / "activity_tracker.py").read_text(encoding="utf-8")
+ACTIVITY_RECONCILE = (ROOT / "stoney_verify" / "members_new" / "activity_reconciliation.py").read_text(encoding="utf-8")
+MEMBERSHIP = (ROOT / "stoney_verify" / "members_new" / "membership_authority.py").read_text(encoding="utf-8")
+KICK_TIMERS = (ROOT / "stoney_verify" / "commands_ext" / "kick_timers.py").read_text(encoding="utf-8")
 INVITE = (ROOT / "stoney_verify" / "invite_reconciliation_runtime.py").read_text(encoding="utf-8")
+DISCORD_API_SAFETY = (ROOT / "stoney_verify" / "startup_guards" / "discord_api_safety.py").read_text(encoding="utf-8")
+ENV_EXAMPLE = (ROOT / ".env.example").read_text(encoding="utf-8")
 POLICY = (ROOT / "stoney_verify" / "invite_policy_engine.py").read_text(encoding="utf-8")
 SURFACE = (ROOT / "stoney_verify" / "invite_policy_message_surface_runtime.py").read_text(encoding="utf-8")
 JOIN_CONTEXT = (ROOT / "stoney_verify" / "members_new" / "join_context_service.py").read_text(encoding="utf-8")
@@ -69,15 +74,50 @@ def test_startup_member_departure_recovery_uses_shared_guild_slot() -> None:
     assert "reason=no_durable_restart_checkpoint" in block
 
 
-def test_activity_and_invite_recovery_share_bounded_coordinator() -> None:
-    assert "_STARTUP_RECONCILE_LOCK" not in ACTIVITY
+def test_activity_and_invite_recovery_share_bounded_coordinator_without_parallel_activity_history() -> None:
+    # The shared coordinator bounds unrelated startup work, but Discord history
+    # reconciliation must remain single-flight. PR #280 removed this narrower
+    # lock and allowed two REST-heavy guild scans to overlap.
+    assert "_STARTUP_RECONCILE_LOCK = asyncio.Lock()" in ACTIVITY
+    assert "async with _STARTUP_RECONCILE_LOCK:" in ACTIVITY
     assert "startup_recovery_slot(" in ACTIVITY
     assert "startup_recovery_slot(" in INVITE
+    assert ACTIVITY.index("async with _STARTUP_RECONCILE_LOCK:") < ACTIVITY.index(
+        '"activity_restart_reconcile"'
+    )
 
     assert "DANK_STARTUP_RECOVERY_MAX_CONCURRENT" in COORDINATOR
     assert "_MAX_CONCURRENT" in COORDINATOR
     assert "_GUILD_SLOTS" in COORDINATOR
     assert "_GUILD_SLOTS.pop(gid, None)" in COORDINATOR
+
+
+def test_bulk_discord_recovery_paths_share_process_wide_rest_budget() -> None:
+    assert "reserve_recovery_discord_rest_requests(" in ACTIVITY_RECONCILE
+    assert "recovery_request_weight(history_limit)" in ACTIVITY_RECONCILE
+    assert "archived-public" in ACTIVITY_RECONCILE
+    assert "archived-private" in ACTIVITY_RECONCILE
+
+    assert "reserve_recovery_discord_rest_requests(" in INVITE
+    assert 'startswith("auto-reconcile:")' in INVITE
+
+    assert "reserve_recovery_discord_rest_requests(" in MEMBERSHIP
+    assert "page_size=1000" in MEMBERSHIP
+
+    assert "DANK_RECOVERY_DISCORD_REST_BUDGET_PER_30S" in DISCORD_API_SAFETY
+    assert "_RECOVERY_REST_WINDOW_SECONDS = 30.0" in DISCORD_API_SAFETY
+    assert "DANK_RECOVERY_DISCORD_REST_BUDGET_PER_30S=100" in ENV_EXAMPLE
+    assert "DANK_ACTIVITY_RECONCILE_TIMEOUT_SECONDS=180" in ENV_EXAMPLE
+
+
+def test_member_wait_timer_startup_reuses_canonical_membership_authority() -> None:
+    block = _block(
+        KICK_TIMERS,
+        "async def _resume_member_wait_timers_from_live_state(",
+        "async def member_wait_timer_resume_all()",
+    )
+    assert "collect_membership_snapshot(guild)" in block
+    assert "guild.fetch_members(limit=None)" not in block
 
 
 def test_invite_startup_recovery_uses_durable_gap_window() -> None:

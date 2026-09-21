@@ -17,7 +17,7 @@ the generic six-second spacing used for non-urgent audit lookups.
 import asyncio
 import os
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import Any, AsyncIterator, DefaultDict, Optional
 
 import discord
@@ -29,6 +29,18 @@ _AUDIT_LAST_CALL: dict[int, float] = {}
 _AUDIT_LAST_RATE_LIMIT: dict[int, float] = {}
 _CHANNEL_EDIT_LOCKS: DefaultDict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 _CHANNEL_LAST_EDIT: dict[int, float] = {}
+
+# Discloud enforces a process-wide Discord API ceiling (currently observed as
+# 300 requests / 30 seconds). discord.py protects Discord route buckets, but it
+# cannot protect a hosting-provider aggregate counter spanning unrelated routes.
+# Recovery-only callers reserve conservatively weighted request slots here so
+# startup work leaves headroom for normal moderation, interactions, and status
+# traffic instead of consuming the entire process budget.
+_RECOVERY_REST_WINDOW_SECONDS = 30.0
+_RECOVERY_REST_LOOP: asyncio.AbstractEventLoop | None = None
+_RECOVERY_REST_LOCK: asyncio.Lock | None = None
+_RECOVERY_REST_RESERVED_AT: deque[float] = deque()
+_RECOVERY_REST_WAITERS = 0
 
 # AntiNuke deliberately searches 50 recent entries for these high-risk actions.
 # That request shape is the narrow contract that lets the existing API safety layer
@@ -88,6 +100,116 @@ def _env_int(name: str, default: int) -> int:
         return max(0, int(raw))
     except Exception:
         return int(default)
+
+
+def _recovery_rest_budget_per_30s() -> int:
+    # Keep substantial headroom below Discloud's observed 300/30s process cap
+    # for live Discord traffic that is intentionally outside startup recovery.
+    return max(
+        30,
+        min(
+            200,
+            _env_int("DANK_RECOVERY_DISCORD_REST_BUDGET_PER_30S", 100),
+        ),
+    )
+
+
+def recovery_request_weight(limit: int, *, page_size: int = 100) -> int:
+    """Conservatively reserve the maximum REST pages for a bounded iterator."""
+
+    safe_limit = max(1, int(limit or 1))
+    safe_page = max(1, int(page_size or 1))
+    return max(1, (safe_limit + safe_page - 1) // safe_page)
+
+
+def _recovery_rest_now() -> float:
+    return time.monotonic()
+
+
+async def _recovery_rest_sleep(seconds: float) -> None:
+    await asyncio.sleep(seconds)
+
+
+def _ensure_recovery_rest_budget_state() -> asyncio.Lock:
+    global _RECOVERY_REST_LOOP
+    global _RECOVERY_REST_LOCK
+    global _RECOVERY_REST_WAITERS
+
+    loop = asyncio.get_running_loop()
+    if _RECOVERY_REST_LOOP is not loop:
+        _RECOVERY_REST_LOOP = loop
+        _RECOVERY_REST_LOCK = asyncio.Lock()
+        _RECOVERY_REST_RESERVED_AT.clear()
+        _RECOVERY_REST_WAITERS = 0
+
+    assert _RECOVERY_REST_LOCK is not None
+    return _RECOVERY_REST_LOCK
+
+
+def recovery_discord_rest_budget_snapshot() -> dict[str, int | float]:
+    now = _recovery_rest_now()
+    cutoff = now - _RECOVERY_REST_WINDOW_SECONDS
+    reserved = sum(1 for item in _RECOVERY_REST_RESERVED_AT if item > cutoff)
+    return {
+        "budget_per_30s": _recovery_rest_budget_per_30s(),
+        "reserved_in_window": reserved,
+        "waiting": max(0, int(_RECOVERY_REST_WAITERS)),
+        "window_seconds": _RECOVERY_REST_WINDOW_SECONDS,
+    }
+
+
+async def reserve_recovery_discord_rest_requests(
+    weight: int = 1,
+    *,
+    label: str = "recovery",
+) -> None:
+    """Reserve conservative process-wide Discord REST capacity for recovery I/O.
+
+    This does not replace discord.py's route-aware limiter. It protects the
+    stricter hosting-provider aggregate request ceiling by pacing only bulk
+    recovery paths that can otherwise span many unrelated Discord routes.
+    """
+
+    global _RECOVERY_REST_WAITERS
+
+    budget = _recovery_rest_budget_per_30s()
+    requested = max(1, min(int(weight or 1), budget))
+    safe_label = str(label or "recovery")[:120]
+    warned = False
+
+    while True:
+        lock = _ensure_recovery_rest_budget_state()
+        wait_for = 0.0
+
+        async with lock:
+            now = _recovery_rest_now()
+            cutoff = now - _RECOVERY_REST_WINDOW_SECONDS
+            while _RECOVERY_REST_RESERVED_AT and _RECOVERY_REST_RESERVED_AT[0] <= cutoff:
+                _RECOVERY_REST_RESERVED_AT.popleft()
+
+            if len(_RECOVERY_REST_RESERVED_AT) + requested <= budget:
+                _RECOVERY_REST_RESERVED_AT.extend([now] * requested)
+                return
+
+            oldest = _RECOVERY_REST_RESERVED_AT[0]
+            wait_for = max(
+                0.05,
+                (oldest + _RECOVERY_REST_WINDOW_SECONDS) - now + 0.02,
+            )
+
+        if not warned:
+            _warn(
+                "recovery REST budget pacing "
+                f"label={safe_label} weight={requested} wait={wait_for:.2f}s "
+                f"budget={budget}/30s"
+            )
+            warned = True
+
+        _RECOVERY_REST_WAITERS += 1
+        try:
+            await _recovery_rest_sleep(wait_for)
+        finally:
+            _RECOVERY_REST_WAITERS = max(0, _RECOVERY_REST_WAITERS - 1)
 
 
 def _audit_cooldown_seconds() -> float:
@@ -390,4 +512,9 @@ def install_discord_api_safety() -> None:
 
 install_discord_api_safety()
 
-__all__ = ["install_discord_api_safety"]
+__all__ = [
+    "install_discord_api_safety",
+    "recovery_discord_rest_budget_snapshot",
+    "recovery_request_weight",
+    "reserve_recovery_discord_rest_requests",
+]

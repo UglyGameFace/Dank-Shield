@@ -13,6 +13,11 @@ from typing import Any
 
 import discord
 
+from stoney_verify.startup_guards.discord_api_safety import (
+    recovery_request_weight,
+    reserve_recovery_discord_rest_requests,
+)
+
 
 @dataclass(frozen=True)
 class MembershipSnapshot:
@@ -38,6 +43,15 @@ async def collect_membership_snapshot(guild: discord.Guild) -> MembershipSnapsho
     """
 
     try:
+        # Discord's member endpoint pages at up to 1000 members. Reserve the
+        # conservative maximum number of pages from the shared recovery budget
+        # before authoritative enumeration so startup cannot collide with
+        # history/thread recovery and trip Discloud's aggregate request ceiling.
+        member_count = max(1, int(getattr(guild, "member_count", 0) or 0))
+        await reserve_recovery_discord_rest_requests(
+            recovery_request_weight(member_count, page_size=1000),
+            label=f"member fetch guild={int(guild.id)} members={member_count}",
+        )
         fetched_members = [
             member
             async for member in guild.fetch_members(limit=None)

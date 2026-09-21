@@ -65,6 +65,46 @@ def test_runtime_uses_central_scanner_and_has_ready_resume_recovery() -> None:
     assert "await _flush_bulk_recovery_stats(gid, reason=reason)" in text
 
 
+def test_startup_invite_scan_uses_recovery_budget_but_live_scan_does_not(monkeypatch) -> None:
+    guild = SimpleNamespace(id=777)
+    channel = SimpleNamespace(id=778, guild=guild)
+    reservations: list[tuple[int, str]] = []
+
+    async def reserve(weight: int, *, label: str) -> None:
+        reservations.append((int(weight), str(label)))
+
+    async def scan(_channel, **kwargs):
+        assert kwargs["repost_mixed"] is True
+        return {
+            "checked": 0,
+            "matched": 0,
+            "allowed": 0,
+            "deleted": 0,
+            "failed": 0,
+        }
+
+    monkeypatch.setattr(runtime, "reserve_recovery_discord_rest_requests", reserve)
+    monkeypatch.setattr(runtime.policy, "scan_channel_invites", scan)
+
+    asyncio.run(
+        runtime._scan_channel(
+            channel,
+            limit=250,
+            source="auto-reconcile:ready",
+        )
+    )
+    assert reservations == [(3, "invite history guild=777 channel=778")]
+
+    asyncio.run(
+        runtime._scan_channel(
+            channel,
+            limit=75,
+            source="live-recovery:create",
+        )
+    )
+    assert reservations == [(3, "invite history guild=777 channel=778")]
+
+
 def test_legacy_invite_guard_delegates_instead_of_owning_second_runtime() -> None:
     text = (
         ROOT / "stoney_verify" / "startup_guards" / "discord_invite_blocker_runtime_guard.py"
