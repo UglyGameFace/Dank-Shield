@@ -592,6 +592,22 @@ def _stats_counts(cfg: Any) -> Dict[str, int]:
         return dict(DEFAULT_SECURITY_STATS)
 
 
+def _category_has_stats_evidence(
+    category: discord.CategoryChannel,
+    preferences: Mapping[str, Any],
+) -> bool:
+    try:
+        for channel in list(getattr(category, "voice_channels", []) or []):
+            name = str(getattr(channel, "name", "") or "")
+            for key, default_prefix in STAT_CHANNEL_PREFIXES.items():
+                prefixes = [default_prefix, f"{_stat_label(preferences, key)}:"]
+                if any(name.startswith(prefix) for prefix in prefixes):
+                    return True
+    except Exception:
+        return False
+    return False
+
+
 def _find_owned_category(guild: discord.Guild, cfg: Any) -> Optional[discord.CategoryChannel]:
     try:
         category_id = _safe_int(cfg.get(SECURITY_STATS_CATEGORY_ID_KEY), 0)
@@ -603,13 +619,34 @@ def _find_owned_category(guild: discord.Guild, cfg: Any) -> Optional[discord.Cat
         if isinstance(found, discord.CategoryChannel):
             return found
 
+    # A saved stats-channel ID is stronger ownership evidence than a category
+    # name and survives a category rename.
+    for saved_id in _saved_channel_ids(cfg).values():
+        if saved_id <= 0:
+            continue
+        channel = guild.get_channel(saved_id)
+        if not isinstance(channel, discord.VoiceChannel):
+            continue
+        parent = getattr(channel, "category", None)
+        if isinstance(parent, discord.CategoryChannel):
+            return parent
+        parent_id = _safe_int(getattr(channel, "category_id", 0), 0)
+        if parent_id > 0:
+            parent = guild.get_channel(parent_id)
+            if isinstance(parent, discord.CategoryChannel):
+                return parent
+
     preferences = security_stats_preferences(cfg)
-    accepted_names = {
-        SECURITY_STATS_CATEGORY_NAME,
-        str(preferences["category_name"]),
-    }
+    desired_name = str(preferences["category_name"])
     for category in list(getattr(guild, "categories", []) or []):
-        if str(getattr(category, "name", "") or "") in accepted_names:
+        name = str(getattr(category, "name", "") or "")
+        if name == SECURITY_STATS_CATEGORY_NAME:
+            return category
+        if (
+            desired_name != SECURITY_STATS_CATEGORY_NAME
+            and name == desired_name
+            and _category_has_stats_evidence(category, preferences)
+        ):
             return category
     return None
 
@@ -851,7 +888,9 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
                 preferences=preferences,
             )
             if key not in visible_keys:
-                await _remove_hidden_stat_channel(channel, key=key)
+                removed = await _remove_hidden_stat_channel(channel, key=key)
+                if not removed and channel is not None:
+                    resolved_ids[key] = str(int(channel.id))
                 continue
             try:
                 if channel is None:
@@ -900,8 +939,12 @@ async def disable_security_stats_display(
         saved_ids = _saved_channel_ids(cfg)
         preferences = security_stats_preferences(cfg)
 
+        remaining_ids: Dict[str, str] = {}
+        cleanup_complete = True
+        keep_category_id = ""
+
         if remove_channels and category is not None:
-            owned_channels: list[discord.VoiceChannel] = []
+            owned_channels: list[tuple[str, discord.VoiceChannel]] = []
             owned_ids: set[int] = set()
             for key in STAT_CHANNEL_PREFIXES:
                 channel = _find_existing_stat_channel(
@@ -918,7 +961,7 @@ async def disable_security_stats_display(
                     continue
                 if channel_id > 0:
                     owned_ids.add(channel_id)
-                owned_channels.append(channel)
+                owned_channels.append((key, channel))
 
             try:
                 existing_category_channels = list(getattr(category, "channels", []) or [])
@@ -929,33 +972,29 @@ async def disable_security_stats_display(
                 for channel in existing_category_channels
             )
 
-            removed_all_owned = True
-            for channel in owned_channels:
-                key = next(
-                    (
-                        stat_key
-                        for stat_key, saved_id in saved_ids.items()
-                        if _safe_int(saved_id, 0) == _safe_int(getattr(channel, "id", 0), 0)
-                    ),
-                    "tracked",
-                )
-                removed_all_owned = (
-                    await _remove_hidden_stat_channel(channel, key=key)
-                    and removed_all_owned
-                )
+            for key, channel in owned_channels:
+                removed = await _remove_hidden_stat_channel(channel, key=key)
+                if not removed:
+                    cleanup_complete = False
+                    channel_id = _safe_int(getattr(channel, "id", 0), 0)
+                    if channel_id > 0:
+                        remaining_ids[key] = str(channel_id)
 
-            if not has_unowned_channels and removed_all_owned:
+            if not has_unowned_channels and cleanup_complete:
                 try:
                     await category.delete(reason="Disable Dank Shield Server Stats")
                 except (discord.Forbidden, discord.HTTPException):
-                    pass
+                    cleanup_complete = False
+                    keep_category_id = str(int(category.id))
+            elif remaining_ids:
+                keep_category_id = str(int(category.id))
 
         await upsert_guild_config(
             gid,
             {
                 SECURITY_STATS_ENABLED_KEY: False,
-                SECURITY_STATS_CATEGORY_ID_KEY: "",
-                SECURITY_STATS_CHANNEL_IDS_KEY: {},
+                SECURITY_STATS_CATEGORY_ID_KEY: keep_category_id,
+                SECURITY_STATS_CHANNEL_IDS_KEY: remaining_ids,
             },
         )
         _ACTIVE_DISPLAY_GUILDS.discard(gid)
@@ -964,7 +1003,13 @@ async def disable_security_stats_display(
         task = _EVENT_REFRESH_TASKS.pop(gid, None)
         if task is not None and not task.done():
             task.cancel()
-        return True, "✅ Server Stats are disabled and their tracked display channels were removed."
+        if cleanup_complete:
+            return True, "✅ Server Stats are disabled and their tracked display channels were removed."
+        return (
+            False,
+            "⚠️ Server Stats are disabled, but Discord blocked removal of one or more tracked channels/category. "
+            "Their IDs were kept so **Disable & Remove** can safely retry later.",
+        )
 
 
 async def refresh_security_stats_display(
@@ -1023,7 +1068,9 @@ async def refresh_security_stats_display(
                 preferences=preferences,
             )
             if key not in visible_keys:
-                await _remove_hidden_stat_channel(channel, key=key)
+                removed = await _remove_hidden_stat_channel(channel, key=key)
+                if not removed and channel is not None:
+                    resolved_ids[key] = str(int(channel.id))
                 continue
             try:
                 if channel is None:
