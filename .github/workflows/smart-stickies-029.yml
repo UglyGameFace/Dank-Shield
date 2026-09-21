@@ -19,6 +19,7 @@ on:
       - 'supabase/migrations/20260811122504_community_tools.sql'
       - 'supabase/migrations/20260812224000_smart_sticky_quiet_notices.sql'
       - 'supabase/migrations/20260905121500_community_tools_hardening.sql'
+      - 'supabase/migrations/20260921042000_quiet_notice_atomic_delivery_clear.sql'
       - '.github/workflows/smart-stickies-029.yml'
 
 permissions:
@@ -120,6 +121,7 @@ jobs:
             psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260811122504_community_tools.sql
             psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260812224000_smart_sticky_quiet_notices.sql
             psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260905121500_community_tools_hardening.sql
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260921042000_quiet_notice_atomic_delivery_clear.sql
           done
       - name: Verify RLS persistence and atomic sticky transition
         shell: bash
@@ -127,11 +129,36 @@ jobs:
           psql -v ON_ERROR_STOP=1 <<'SQL'
           insert into public.dank_quiet_notices(
               guild_id, channel_id, content, inactivity_seconds, partner_name, partner_url, auto_clear,
-              last_activity_at
+              last_activity_at, last_notice_message_id, last_notice_sent_at
           ) values (
               1001, 2001, 'Members may be in our partner community.', 7200,
-              'Partner Place', 'https://discord.gg/example', true, now()
+              'Partner Place', 'https://discord.gg/example', true, now(), 777, now()
           );
+
+          -- A stale worker must not clear a newer tracked delivery.
+          select public.clear_dank_quiet_notice_delivery(1001, 888);
+
+          do $
+          begin
+              if (select last_notice_message_id from public.dank_quiet_notices where guild_id = 1001) <> 777 then
+                  raise exception 'stale quiet-delivery clear erased the current message id';
+              end if;
+          end;
+          $;
+
+          -- The worker that actually deleted the tracked message may clear it.
+          select public.clear_dank_quiet_notice_delivery(1001, 777);
+
+          do $
+          begin
+              if (select last_notice_message_id from public.dank_quiet_notices where guild_id = 1001) is not null then
+                  raise exception 'matching quiet-delivery clear did not clear the message id';
+              end if;
+              if (select last_notice_sent_at from public.dank_quiet_notices where guild_id = 1001) is not null then
+                  raise exception 'matching quiet-delivery clear did not clear the sent timestamp';
+              end if;
+          end;
+          $;
 
           select public.save_dank_sticky_bundle(
               jsonb_build_object(
@@ -211,6 +238,12 @@ jobs:
               begin
                   perform public.save_dank_sticky_bundle('{}'::jsonb, null);
                   raise exception 'anon unexpectedly retained atomic sticky RPC access';
+              exception
+                  when insufficient_privilege then null;
+              end;
+              begin
+                  perform public.clear_dank_quiet_notice_delivery(1001, 777);
+                  raise exception 'anon unexpectedly retained quiet-delivery clear RPC access';
               exception
                   when insufficient_privilege then null;
               end;
