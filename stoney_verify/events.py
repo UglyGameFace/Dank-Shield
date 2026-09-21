@@ -79,12 +79,10 @@ try:
     from .members_new.sync_service import (
         sync_member_to_supabase as new_sync_member_to_supabase,
         mark_member_left as new_mark_member_left,
-        run_full_member_sync_for_guild as new_run_full_member_sync_for_guild,
     )
 except Exception:
     new_sync_member_to_supabase = None  # type: ignore
     new_mark_member_left = None  # type: ignore
-    new_run_full_member_sync_for_guild = None  # type: ignore
 
 
 # ============================================================
@@ -321,29 +319,6 @@ async def _mark_member_left(member: discord.Member) -> None:
         print("⚠️ _mark_member_left service delegate failed:", repr(e))
 
 
-async def _initial_member_sync_sweep() -> None:
-    try:
-        guilds = list(getattr(bot, "guilds", []) or [])
-    except Exception:
-        guilds = []
-
-    for guild in guilds:
-        try:
-            if not callable(new_run_full_member_sync_for_guild):
-                print(f"⚠️ full member sync service unavailable for guild {getattr(guild, 'id', 'unknown')}")
-                continue
-
-            summary = await new_run_full_member_sync_for_guild(guild)
-            print(
-                f"✅ Initial member sync complete for guild {guild.id}: "
-                f"active={int(summary.get('active_members_synced') or 0)} "
-                f"marked_departed={int(summary.get('marked_departed') or 0)} "
-                f"errors={int(summary.get('errors') or 0)}"
-            )
-        except Exception as e:
-            print(f"⚠️ Initial member sync failed for guild {getattr(guild, 'id', 'unknown')}: {e}")
-
-
 def _join_truth_quality(entry_method: str, *, invite_code: Optional[str] = None, invited_by: Optional[str] = None) -> Tuple[str, int, str]:
     from .members_new.join_context_service import join_truth_quality
 
@@ -397,36 +372,6 @@ async def _refresh_guild_invite_cache(guild: discord.Guild) -> bool:
     from .members_new.join_context_service import warm_invite_cache_for_guild
 
     return await warm_invite_cache_for_guild(guild)
-
-
-async def _warm_all_guild_invite_caches() -> None:
-    try:
-        guilds = list(getattr(bot, "guilds", []) or [])
-    except Exception:
-        guilds = []
-
-    from .startup_recovery_coordinator import startup_recovery_slot
-
-    warmed = 0
-    for index, guild in enumerate(guilds):
-        try:
-            gid = int(getattr(guild, "id", 0) or 0)
-            if gid <= 0:
-                continue
-            async with startup_recovery_slot(gid, "invite_cache_warm"):
-                ok = await _refresh_guild_invite_cache(guild)
-            if ok:
-                warmed += 1
-        except Exception as e:
-            print(f"⚠️ [INVITES] warm cache failed guild={getattr(guild, 'id', 'unknown')}: {repr(e)}")
-
-        if index + 1 < len(guilds):
-            try:
-                await asyncio.sleep(0.25)
-            except Exception:
-                pass
-
-    print(f"📨 Invite cache warm complete: guilds={len(guilds)} warmed={warmed}")
 
 
 async def _detect_join_entry_context(member: discord.Member) -> Dict[str, Any]:
