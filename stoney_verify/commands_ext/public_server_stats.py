@@ -142,7 +142,6 @@ async def _render_center(
     interaction: discord.Interaction,
     *,
     content: Optional[str] = None,
-    fresh_followup: bool = False,
 ) -> None:
     guild = interaction.guild
     if guild is None:
@@ -155,16 +154,6 @@ async def _render_center(
     cfg = await get_guild_config(int(guild.id), refresh=True)
     embed = _center_embed(guild, cfg)
     view = ServerStatsView(owner_id=int(interaction.user.id), cfg=cfg)
-
-    if fresh_followup:
-        await interaction.followup.send(
-            content=content,
-            embed=embed,
-            view=view,
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-        return
 
     if not interaction.response.is_done():
         await interaction.response.edit_message(
@@ -213,7 +202,9 @@ class CategoryNameModal(discord.ui.Modal):
             await interaction.response.send_message("❌ Use this inside a server.", ephemeral=True)
             return
 
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        # Modal submits should update the panel that launched them instead of
+        # spawning a second stale copy of the controls.
+        await interaction.response.defer()
         value = " ".join(str(self.category_name.value or "").replace("\n", " ").split()).strip()
         await _save_preferences(
             int(guild.id),
@@ -224,7 +215,7 @@ class CategoryNameModal(discord.ui.Modal):
         if _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False):
             ok, result = await ensure_security_stats_display(guild)
             note = result
-        await _render_center(interaction, content=note, fresh_followup=True)
+        await _render_center(interaction, content=note)
 
 
 class StatLabelModal(discord.ui.Modal):
@@ -252,7 +243,9 @@ class StatLabelModal(discord.ui.Modal):
             await interaction.response.send_message("❌ Use this inside a server.", ephemeral=True)
             return
 
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        # Modal submits should update the panel that launched them instead of
+        # spawning a second stale copy of the controls.
+        await interaction.response.defer()
         cfg = await get_guild_config(int(guild.id), refresh=True)
         prefs = security_stats_preferences(cfg)
         labels = dict(prefs["labels"])
@@ -271,7 +264,7 @@ class StatLabelModal(discord.ui.Modal):
         if _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False):
             ok, result = await ensure_security_stats_display(guild)
             note = result
-        await _render_center(interaction, content=note, fresh_followup=True)
+        await _render_center(interaction, content=note)
 
 
 class VisibleStatsSelect(discord.ui.Select):
