@@ -861,3 +861,52 @@ def test_enabled_security_event_schedules_coalesced_display_refresh(monkeypatch)
     assert result["spam_blocked"] == 12
     assert 909 in security_stats._ACTIVE_DISPLAY_GUILDS
     assert scheduled == [909]
+
+
+def test_restart_discovery_batches_enabled_stats_guilds(monkeypatch) -> None:
+    calls = []
+
+    class FakeQuery:
+        def __init__(self):
+            self.values = []
+
+        def select(self, columns: str):
+            assert columns == "guild_id,settings"
+            return self
+
+        def in_(self, column: str, values):
+            assert column == "guild_id"
+            self.values = list(values)
+            calls.append(list(values))
+            return self
+
+        def execute(self):
+            first = self.values[0]
+            return SimpleNamespace(
+                data=[
+                    {
+                        "guild_id": first,
+                        "settings": {
+                            security_stats.SECURITY_STATS_ENABLED_KEY: True,
+                        },
+                    }
+                ]
+            )
+
+    class FakeSupabase:
+        def table(self, table_name: str):
+            assert table_name == security_stats.GUILD_CONFIG_TABLE
+            return FakeQuery()
+
+    fake_bot = SimpleNamespace(
+        guilds=[SimpleNamespace(id=guild_id) for guild_id in range(1, 402)]
+    )
+    security_stats._ACTIVE_DISPLAY_GUILDS.clear()
+    monkeypatch.setattr(security_stats, "bot", fake_bot)
+    monkeypatch.setattr(security_stats, "get_supabase", lambda: FakeSupabase())
+
+    asyncio.run(security_stats._discover_persisted_stats_guilds())
+
+    assert len(calls) == 3
+    assert all(len(batch) <= security_stats._STATS_DISCOVERY_BATCH_SIZE for batch in calls)
+    assert security_stats._ACTIVE_DISPLAY_GUILDS == {1, 201, 401}
