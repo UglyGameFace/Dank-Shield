@@ -628,9 +628,11 @@ async def _start_guild_tracking(
 
         if (
             previous_heartbeat is not None
-            and previous_process
             and previous_process != _PROCESS_ID
         ):
+            # Legacy tracker rows may predate process_id. A durable heartbeat is
+            # still a valid pre-restart boundary and must be pinned before this
+            # process advances the stored state.
             _STARTUP_RECOVERY_HEARTBEATS.setdefault(
                 gid,
                 previous_heartbeat,
