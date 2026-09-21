@@ -2,103 +2,109 @@
 
 ## Active task / desired outcome
 
-**QUIET-NOTICE-001 — Recoverable Quiet Server Notice auto-clear**
+**P0-GUARD-EMBED-001 — Retire dormant global Embed newline patcher**
 
-When visible human chat resumes, an auto-clear Quiet Server Notice must disappear without losing the durable message identity if Discord or storage fails transiently. The repair must remain safe for large multi-guild deployments and must not add database work to every human message.
+Remove the obsolete `startup_guards/embed_literal_newline_guard.py` monkey patch now that production ownership inspection proves it has no runtime importer and native Dank Design text cleanup owns the useful newline behavior.
 
 ## Status
 
-**IMPLEMENTED ON CURRENT MAIN BASE — exact-head executable validation pending**
+**IMPLEMENTED — exact-head validation pending**
 
-Branch: `fix/quiet-notice-auto-clear-current-20260921`
+Branch: `audit/retire-dormant-embed-newline-guard-20260921`
 
-Rebuilt from current `main` after PR #287 because the original PR #285 branch was stale. The six implementation/test blobs are intentionally identical to the reviewed #285 versions; only stale branch history/task metadata was discarded.
+Base: current `main` after PR #288.
 
-## Root cause
+## Previous task closed
 
-The Community Tools runtime could clear `last_notice_message_id` in durable state before confirming that the corresponding Discord Quiet Server Notice was actually deleted.
+**QUIET-NOTICE-001** is complete.
 
-If Discord deletion then failed with a transient permission/API/storage error, the live notice remained visible while Dank Shield had already forgotten its message ID. Later human activity had no durable identity to retry, leaving the notice stuck indefinitely.
+PR #288 merged as `195a2d5bd37ae17fdb4dcb587e646172bac91f16`.
 
-## Correct lifecycle
+Exact implementation head `732ea825af78b8f7d185cab1878fd939e1fab08f` passed:
 
-Human activity
-→ record activity without touching delivery identity
-→ delete the tracked Discord notice
-→ only after successful/idempotent deletion, compare-and-clear the exact tracked message ID
+- diff integrity;
+- Python compile;
+- 49 focused Community Tools tests;
+- Community Tools static ownership checks;
+- PostgreSQL migrations applied twice;
+- Quiet Notice atomic SQL behavior/security smoke;
+- full suite: **1794 passed, 79 warnings, 0 failures**.
 
-Startup/reconnect uses the same recoverable ordering.
+All six implementation/test blobs were verified byte-for-byte identical on merged `main`.
+
+## Root cause / ownership finding
+
+`embed_literal_newline_guard.py` is dormant production code with dangerous import-time behavior:
+
+- no production module imports it;
+- normal startup does not iterate the historical guard inventory;
+- its only executable consumer is `tools/test_embed_literal_newline_guard.py`;
+- importing it immediately calls `apply()`;
+- `apply()` globally replaces six `discord.Embed` methods.
+
+That means the file provides no production behavior today but remains a resurrection hazard if accidentally imported later.
+
+Useful newline normalization already has a native owner:
+
+`stoney_verify/services/server_design_majority_layout.clean_design_text()`
+
+with regression coverage in:
+
+`tests/test_server_design_majority_layout.py::test_clean_design_text_replaces_literal_newline_artifacts`
 
 ## Scope
 
 In scope:
 
-- `community_quiet_notice_service.py`;
-- `community_tools_runtime.py`;
-- additive atomic quiet-notice migration;
-- Community Tools workflow SQL coverage;
-- focused runtime/service/static regressions;
-- bounded per-guild retry behavior.
+- delete `startup_guards/embed_literal_newline_guard.py`;
+- remove its inert historical startup-inventory entry;
+- delete the obsolete tool test that imports/activates the patcher;
+- strengthen startup-loader retirement coverage so the patcher stays absent;
+- preserve native Dank Design newline sanitizer/regression ownership;
+- correct the startup-ownership audit record.
 
 Out of scope:
 
-- normal sticky redesign;
-- unrelated Community Tools;
-- redesigning the pre-existing 30-second full quiet-config watcher;
-- startup/rate-limit work from #286;
-- Invite Shield work from #287;
-- unrelated verification, tickets, moderation, design, fonts, welcome, or setup systems.
+- changing native Dank Design formatting behavior;
+- changing any live startup guard;
+- `slash_command_cleanup` retirement;
+- ticket/setup/verification/member/invite compatibility families;
+- command registry redesign;
+- central settings registry work.
 
-## Implementation
+## Changes
 
-- activity persistence is non-destructive and updates only runtime activity fields;
-- activity uses one narrow PostgreSQL RPC with monotonic timestamp semantics;
-- Discord deletion happens before durable delivery identity is cleared;
-- durable clear uses a compare-and-clear RPC keyed to the expected message ID;
-- stale workers cannot erase a newer delivery;
-- `discord.NotFound` remains idempotent deletion success;
-- transient Discord/storage failures keep the delivery ID for retry;
-- activity and startup/reconnect retries use bounded per-guild backoff;
-- the runtime hot path does not allocate new service-layer per-guild lock entries;
-- no second Community Tools message listener is introduced.
+- removed historical `embed_literal_newline_guard` metadata;
+- deleted the dormant global Embed monkey patch;
+- deleted its implementation-preservation tool test;
+- loader-retirement regression now requires:
+  - retired guard file absent;
+  - retired guard metadata absent;
+  - obsolete guard test absent;
+  - native `clean_design_text` owner present;
+  - native newline regression coverage present;
+- startup ownership document now records both the already-retired panel retry path and the retired Embed patcher accurately.
 
-## Migration
+## Risk / compatibility
 
-`supabase/migrations/20260921042000_quiet_notice_atomic_delivery_clear.sql`
+Expected production runtime behavior change: **none**.
 
-Adds service-role-only functions:
+The deleted module had no production importer. Native user-facing newline cleanup remains untouched.
 
-- `record_dank_quiet_notice_activity(bigint, timestamptz)`
-- `clear_dank_quiet_notice_delivery(bigint, bigint)`
+The intended risk reduction is removal of an accidental-import path capable of mutating global `discord.Embed` behavior process-wide.
 
-The migration is additive and changes no table shape. Application calls fail closed if the migration is missing, preserving the tracked delivery identity instead of orphaning a live notice.
+## Validation required
 
-## Scale properties
-
-- no DB lookup is added to every human message;
-- normal activity remains in-memory/coalesced;
-- an actual auto-clear uses one activity RPC, one Discord delete/fetch path, and one expected-ID clear RPC;
-- retries are bounded per guild;
-- correctness does not depend on one process-local lock, so overlapping/sharded workers cannot clear newer delivery state.
-
-The existing 30-second O(N) quiet-config watcher is separate backlog and is not silently claimed solved here.
-
-## Validation required on exact final head
-
-- `git diff --check`;
+- exact-head `git diff --check`;
 - Python compile;
-- Community Tools focused regressions;
-- quiet-notice hardening regressions;
-- Community Tools static ownership checks;
-- migration applied twice against PostgreSQL;
-- SQL behavior/RLS/service-role smoke;
-- full `tests/` suite;
-- final changed-file/review-thread inspection.
-
-## Previous branch disposition
-
-PR #285 contains the original reviewed implementation but is based on stale `main`. It is superseded by the current-main rebuild and must not be merged.
+- `tools/test_startup_guard_literal_newline_registered.py`;
+- `tests/test_server_design_majority_layout.py`;
+- startup/ownership-focused tests;
+- full Python suite;
+- final changed-file/review-thread inspection;
+- merge with expected-head guard;
+- post-merge absence verification on `main`.
 
 ## Next step
 
-Open a fresh draft PR from this branch, close #285 as superseded, validate the exact new head in Termux/Ubuntu including PostgreSQL migration smoke, then merge only with an expected-head guard and verify the resulting files on `main`.
+Open a focused draft PR, inspect exact-head CI, run Termux validation if GitHub runners remain unavailable, then merge and verify the retired patcher stays absent on `main`.
