@@ -66,7 +66,7 @@ def reconcile_start_delay_seconds() -> int:
 def reconcile_timeout_seconds() -> int:
     return _env_int(
         "DANK_ACTIVITY_RECONCILE_TIMEOUT_SECONDS",
-        90,
+        180,
         minimum=30,
         maximum=600,
     )
