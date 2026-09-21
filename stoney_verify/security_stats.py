@@ -638,13 +638,11 @@ def _find_owned_category(guild: discord.Guild, cfg: Any) -> Optional[discord.Cat
 
     preferences = security_stats_preferences(cfg)
     desired_name = str(preferences["category_name"])
+    accepted_names = {SECURITY_STATS_CATEGORY_NAME, desired_name}
     for category in list(getattr(guild, "categories", []) or []):
         name = str(getattr(category, "name", "") or "")
-        if name == SECURITY_STATS_CATEGORY_NAME:
-            return category
         if (
-            desired_name != SECURITY_STATS_CATEGORY_NAME
-            and name == desired_name
+            name in accepted_names
             and _category_has_stats_evidence(category, preferences)
         ):
             return category
