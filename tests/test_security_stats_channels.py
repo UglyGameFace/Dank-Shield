@@ -562,6 +562,124 @@ def test_empty_visible_selection_falls_back_to_safe_full_default() -> None:
     assert prefs["visible_keys"] == security_stats.DEFAULT_SECURITY_STATS_VISIBLE_KEYS
 
 
+
+def test_hide_failure_stays_tracked_and_is_reported(monkeypatch) -> None:
+    security_stats._DISPLAY_LOCKS.clear()
+
+    class FakePermissions:
+        manage_channels = True
+        manage_roles = True
+        administrator = False
+
+    class FakeMember:
+        guild_permissions = FakePermissions()
+
+    class FakeRole:
+        pass
+
+    class FakeVoiceChannel:
+        def __init__(self, channel_id: int, name: str, category_id: int):
+            self.id = channel_id
+            self.name = name
+            self.category_id = category_id
+
+        async def edit(self, *, name: str, reason: str):
+            self.name = name
+
+    class FakeCategoryChannel:
+        def __init__(self):
+            self.id = 660
+            self.name = security_stats.SECURITY_STATS_CATEGORY_NAME
+            self.position = 0
+            self.voice_channels = []
+            self.channels = self.voice_channels
+
+        async def set_permissions(self, role, **kwargs):
+            return None
+
+        async def edit(self, *, name=None, position=None, reason: str):
+            if name is not None:
+                self.name = name
+            if position is not None:
+                self.position = position
+
+    category = FakeCategoryChannel()
+    status = FakeVoiceChannel(661, "🛡️ SpamGuard: ONLINE", category.id)
+    hidden = FakeVoiceChannel(662, "👥 Members: 10", category.id)
+    category.voice_channels.extend([status, hidden])
+
+    class FakeGuild:
+        id = 66
+        member_count = 10
+        me = FakeMember()
+        default_role = FakeRole()
+        categories = [category]
+
+        @staticmethod
+        def get_channel(channel_id: int):
+            if int(channel_id) == category.id:
+                return category
+            if int(channel_id) == status.id:
+                return status
+            if int(channel_id) == hidden.id:
+                return hidden
+            return None
+
+        async def create_voice_channel(self, name: str, *, category, reason: str):
+            raise AssertionError("no new channel should be needed")
+
+    state = {
+        security_stats.SECURITY_STATS_ENABLED_KEY: True,
+        security_stats.SECURITY_STATS_CATEGORY_ID_KEY: str(category.id),
+        security_stats.SECURITY_STATS_CHANNEL_IDS_KEY: {
+            "status": str(status.id),
+            "members": str(hidden.id),
+        },
+        security_stats.SECURITY_STATS_VISIBLE_KEYS_KEY: ["status"],
+    }
+    writes = []
+
+    async def fake_get_guild_config(guild_id: int, refresh: bool = False):
+        return dict(state)
+
+    async def fake_upsert_guild_config(guild_id: int, updates):
+        writes.append(dict(updates))
+        state.update(updates)
+        return dict(state)
+
+    async def fake_names(_guild, *, counts, preferences=None):
+        return {
+            key: (
+                "🛡️ SpamGuard: ONLINE"
+                if key == "status"
+                else f"{security_stats.DEFAULT_SECURITY_STATS_LABELS[key]}: 0"
+            )
+            for key in security_stats.DEFAULT_SECURITY_STATS_VISIBLE_KEYS
+        }
+
+    async def fake_remove(channel, *, key: str):
+        if channel is hidden and key == "members":
+            return False
+        return channel is None
+
+    monkeypatch.setattr(security_stats.discord, "CategoryChannel", FakeCategoryChannel)
+    monkeypatch.setattr(security_stats.discord, "VoiceChannel", FakeVoiceChannel)
+    monkeypatch.setattr(security_stats, "get_guild_config", fake_get_guild_config)
+    monkeypatch.setattr(security_stats, "upsert_guild_config", fake_upsert_guild_config)
+    monkeypatch.setattr(security_stats, "_display_names_for_guild", fake_names)
+    monkeypatch.setattr(security_stats, "_remove_hidden_stat_channel", fake_remove)
+
+    ok, note = asyncio.run(security_stats.ensure_security_stats_display(FakeGuild()))
+
+    assert ok is False
+    assert "remain tracked" in note
+    assert writes[-1][security_stats.SECURITY_STATS_CHANNEL_IDS_KEY] == {
+        "status": str(status.id),
+        "members": str(hidden.id),
+    }
+
+
+
 def test_disable_stats_preserves_category_when_it_contains_unowned_channels(monkeypatch) -> None:
     class FakeVoiceChannel:
         def __init__(self, channel_id: int, name: str, category_id: int):
