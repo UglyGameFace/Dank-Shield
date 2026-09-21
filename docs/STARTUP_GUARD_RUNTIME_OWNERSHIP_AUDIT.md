@@ -44,7 +44,6 @@ The direct `main.py` set is the production boot contract. Nothing in the histori
 | `startup_guards.basic_verification_mode_guard` | imported/applied by `sitecustomize.py` | installs Basic Verify listener/panel/sync compatibility ownership | **keep live**; verification-integrity behavior already separately validated |
 | `startup_guards.id_verify_allowlist_guard` | imported/applied by `basic_verification_mode_guard` | fail-closed legacy ID-verify compatibility and canonical ticket-flow bridge | **keep live through current owner** |
 | `startup_guards.unverified_ticket_panel_flow` | imported by `id_verify_allowlist_guard` | supplies canonical ID-ticket compatibility flow used by the allowlist owner | **keep live through current owner** |
-| `startup_guards.panel_menu_retry_guard` | dynamically imported by `usercustomize.py` | attempts to wrap ticket panel using removed `public_ticket_panel_clean_hardening` state | **retire**: current dependency was intentionally removed by DS-BACKLOG-027, so this hook cannot install working behavior |
 
 `sitecustomize.py` also contains an obsolete compatibility alias for `load_all_startup_guards`. It does not call the loader and has no valid production purpose once the loader API is retired.
 
@@ -128,7 +127,7 @@ Every module below was present in the old `_STARTUP_GUARDS` tuple. The normal bo
 
 | Family | Historical modules | Independent live evidence in this audit | Bulk-loader side-effect risk | Recommendation |
 | --- | --- | --- | --- | --- |
-| Core/process/command runtime | `embed_literal_newline_guard`, `process_health`, `command_safety`, `interaction_action_lock_guard`, `slash_command_cleanup`, `runtime_safety`, `public_startup_scope`, `event_safety`, `shard_safety`, `job_dedupe` | confirmed live: `process_health`, `command_safety`, `interaction_action_lock_guard`, `runtime_safety`, `public_startup_scope`; `global_interaction_trace_guard` had no production importer and is retired by the P0 interaction migration; `embed_literal_newline_guard` has test/tool references but no confirmed production importer; `slash_command_cleanup` is referenced by audits/other dormant guards rather than normal boot | very high: discord.py wrappers, import hooks, command-tree mutation, listeners | keep confirmed live owners; retired global interaction patcher must stay absent; **leave other unproven entries dormant / separate audit** |
+| Core/process/command runtime | `process_health`, `command_safety`, `interaction_action_lock_guard`, `slash_command_cleanup`, `runtime_safety`, `public_startup_scope`, `event_safety`, `shard_safety`, `job_dedupe` | confirmed live: `process_health`, `command_safety`, `interaction_action_lock_guard`, `runtime_safety`, `public_startup_scope`; `global_interaction_trace_guard` and `embed_literal_newline_guard` had no production importer and are retired; `slash_command_cleanup` is referenced by audits/other dormant guards rather than normal boot | very high: discord.py wrappers, import hooks, command-tree mutation, listeners | keep confirmed live owners; retired global/embed patchers must stay absent; **leave other unproven entries dormant / separate audit** |
 | Command-surface/product compatibility | `public_verify_admin_command_skip`, `automod_public_guard`, `protection_center_command_guard`, `embed_builder_command_guard`, `share_router_guard`, `setup_overview_command_guard`, `dank_shield_branding_guard`, `production_command_surface_guard` | no bulk activation; canonical public command surface is registered by `commands_ext` and its explicit profile | high: command registration/pruning/response rewriting | **leave dormant / separate audit**; never rescue by bulk loading |
 | Schema/config/queue bootstrap | `auto_schema_bootstrap`, `ticket_category_schema_bootstrap_guard`, `operation_queue_schema_guard`, `guild_operation_queue_guard`, `guild_config_write_safety`, `public_no_env_runtime_config` | schema modules are imported by tests/tools and some feature code as manifests/helpers; Supabase migrations remain the sole schema mutation authority | high: historical schema/config/queue mutation paths | retain only helper/manifests needed by current owners; **never bulk-activate**; separate consolidation audit |
 | Spam/invite protection compatibility | `spam_guard_invite_hard_block`, `spam_guard_default_state_guard`, `spam_guard_invite_override_options`, `discord_invite_blocker_runtime_guard`, `invite_live_enforcer_guard`, `protection_invite_target_precedence_guard`, `protection_center_invite_controls_guard`, `protection_center_clear_categories_guard`, `protection_center_invite_simple_flow_guard` | current invite policy/cleanup paths import specific shared helpers directly; no evidence makes the whole historical chain a boot requirement | high: message deletion, invite policy, command/UI mutation, listeners | **leave dormant unless directly feature-owned**; separate protection audit before deletion |
@@ -138,17 +137,22 @@ Every module below was present in the old `_STARTUP_GUARDS` tuple. The normal bo
 | VC compatibility | `vc_request_setup_clarity`, `vc_setup_one_press_fix`, `vc_per_guild_access_fix`, `vc_accept_claim_guard` | no bulk activation; current VC behavior must be traced in its own audit before removal | medium/high: UI/callback/claim behavior | **leave dormant / separate audit** |
 | Setup compatibility | `setup_category_modal_compat`, `protection_pack_manual_import_guard`, `protection_import_button_patch` | no bulk activation; setup uses canonical `commands_ext`/`setup_ui` paths, with selected helpers imported directly where required | medium/high: setup UI/callback ownership | **leave dormant / separate audit** |
 
-## Proven dead host path eligible for removal in this task
+## Retired dead host path
 
-`usercustomize.py` -> `panel_menu_retry_guard` -> `public_ticket_panel_clean_hardening`
+The former `usercustomize.py` -> `panel_menu_retry_guard` -> `public_ticket_panel_clean_hardening` chain is already retired on current `main`. `panel_menu_retry_guard.py` is absent, `usercustomize.py` no longer imports it, and the loader-retirement regression requires both conditions to remain true. The canonical ticket-panel owner remains unchanged.
 
-The final dependency was intentionally removed by DS-BACKLOG-027 after its stale-menu, duplicate-interaction, confirm-lock, and preflight behavior moved into the canonical ticket-panel owner. Existing ticket audits require the removed module to stay absent. `panel_menu_retry_guard.apply()` therefore cannot install today and the host hook silently swallows the failure. This is a proven dead path rather than a merely suspicious file.
+## Retired dormant embed literal-newline patcher
+
+`startup_guards/embed_literal_newline_guard.py` had no production importer. Its only executable consumer was a standalone tool test that imported the module directly, which triggered a global monkey patch over `discord.Embed.__init__`, field mutation methods, footer mutation, and author mutation solely for that test process.
+
+Current user-facing Dank Design newline cleanup is native: `services/server_design_majority_layout.clean_design_text()` owns visible newline-artifact normalization and `tests/test_server_design_majority_layout.py` covers `\\n`, `/n`, and double-escaped variants.
 
 Disposition:
 
-- remove the `usercustomize.py` dynamic import/apply block;
-- retire `panel_menu_retry_guard.py` after final reference verification;
-- keep the canonical ticket-panel owner unchanged.
+- delete `startup_guards/embed_literal_newline_guard.py`;
+- remove it from inert historical startup metadata;
+- delete the implementation-preservation tool test that imported and activated the patcher;
+- strengthen loader-retirement coverage to require the patcher and obsolete tool test to stay absent while native Dank Design newline ownership remains present.
 
 ## Loader disposition
 
