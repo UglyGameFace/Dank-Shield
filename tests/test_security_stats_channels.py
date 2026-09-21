@@ -632,3 +632,42 @@ def test_disable_stats_preserves_category_when_it_contains_unowned_channels(monk
     assert category.deleted is False
     assert writes[-1][security_stats.SECURITY_STATS_ENABLED_KEY] is False
     assert writes[-1][security_stats.SECURITY_STATS_CHANNEL_IDS_KEY] == {}
+
+
+def test_enabled_security_event_schedules_coalesced_display_refresh(monkeypatch) -> None:
+    security_stats._STATS_LOCKS.clear()
+    security_stats._ACTIVE_DISPLAY_GUILDS.discard(909)
+    scheduled = []
+    state = {
+        security_stats.SECURITY_STATS_ENABLED_KEY: True,
+        security_stats.SECURITY_STATS_COUNTS_KEY: {
+            "spam_blocked": 10,
+            "invites_blocked": 0,
+            "timeouts_issued": 0,
+            "quarantines": 0,
+        },
+    }
+
+    async def fake_get_guild_config(guild_id: int, refresh: bool = False):
+        assert guild_id == 909
+        return dict(state)
+
+    async def fake_upsert_guild_config(guild_id: int, updates):
+        state.update(updates)
+        return dict(state)
+
+    monkeypatch.setattr(security_stats, "get_guild_config", fake_get_guild_config)
+    monkeypatch.setattr(security_stats, "upsert_guild_config", fake_upsert_guild_config)
+    monkeypatch.setattr(
+        security_stats,
+        "_schedule_security_stats_refresh",
+        lambda guild_id: scheduled.append(int(guild_id)),
+    )
+
+    result = asyncio.run(
+        security_stats.record_security_event(909, spam_blocked=2)
+    )
+
+    assert result["spam_blocked"] == 12
+    assert 909 in security_stats._ACTIVE_DISPLAY_GUILDS
+    assert scheduled == [909]
