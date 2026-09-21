@@ -139,7 +139,7 @@ Remaining score blockers:
 
 ### `P0-INT-001` — Replace monkey-patched interaction logger with native interaction service
 
-Status: `PARTIAL / BLOCKER — role mapping merged; canonical Verify Panel posting is next locked slice`
+Status: `PARTIAL / BLOCKER — canonical Verify Panel posting guarded; pending PR/main verification`
 
 Goal:
 
@@ -156,14 +156,15 @@ Progress completed on current `main`:
 
 Next locked slice:
 
-- canonical `verify_panel()` is used by `/verify panel`, Verification Center, and setup surfaces;
-- it directly owns the live `post_basic_verify_panel(...)` mutation but currently catches unexpected failures locally;
-- migrate the canonical function once, rather than wrapping each caller;
-- preserve staff checks, channel selection, disabled-mode explanation, runtime-install suffix, and the Basic Verify posting service.
+- canonical `verify_panel()` is now behind `run_guarded_interaction()` on the active branch;
+- the guarded action preserves the existing `ephemeral=True, thinking=True` defer before staff/channel/posting work;
+- `post_basic_verify_panel(...)` remains the canonical live mutation owner;
+- `/verify panel`, Verification Center, and setup surfaces still share the same guarded canonical function;
+- the broad local posting exception swallow is removed so unexpected failures get native Error IDs.
 
 Remaining before `P0-INT-001` can be marked done:
 
-- migrate and verify canonical Verify Panel posting;
+- merge and verify canonical Verify Panel posting;
 - continue the next single highest-risk direct verification mutation boundary after that;
 - ensure diagnostics expose recent native interaction failures safely;
 - remove or disable `global_interaction_trace_guard` framework patching only after native coverage is sufficient;
