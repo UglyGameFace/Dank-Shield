@@ -2,113 +2,103 @@
 
 ## Active task / desired outcome
 
-**DS-INVITE-REG-001 — Restore live Invite Blocker toggle ownership**
+**QUIET-NOTICE-001 — Recoverable Quiet Server Notice auto-clear**
 
-Restore the Protection Center contract so pressing **Invite Blocker** actually toggles live Discord invite blocking, while advanced Invite Shield targeting/cleanup remains available through a separate settings action.
+When visible human chat resumes, an auto-clear Quiet Server Notice must disappear without losing the durable message identity if Discord or storage fails transiently. The repair must remain safe for large multi-guild deployments and must not add database work to every human message.
 
 ## Status
 
-**IMPLEMENTED — focused validation and exact-head CI inspection pending**
+**IMPLEMENTED ON CURRENT MAIN BASE — exact-head executable validation pending**
+
+Branch: `fix/quiet-notice-auto-clear-current-20260921`
+
+Rebuilt from current `main` after PR #287 because the original PR #285 branch was stale. The six implementation/test blobs are intentionally identical to the reviewed #285 versions; only stale branch history/task metadata was discarded.
 
 ## Root cause
 
-The Sep. 16 native Invite Shield UI migration captured the original `_toggle_invite_shield` function and then replaced `center._toggle_invite_shield` with `open_invite_shield`.
+The Community Tools runtime could clear `last_notice_message_id` in durable state before confirming that the corresponding Discord Quiet Server Notice was actually deleted.
 
-The public Protection Center button still retained the label **Invite Blocker** and still called `_toggle_invite_shield(interaction)`. Because the global function had been rebound, pressing the button opened the editor instead of toggling `automod_block_invites`.
+If Discord deletion then failed with a transient permission/API/storage error, the live notice remained visible while Dank Shield had already forgotten its message ID. Later human activity had no durable identity to retry, leaving the notice stuck indefinitely.
 
-That created a control-plane regression: a server owner could press **Invite Blocker**, configure watched bots/channels, and reasonably believe protection was enabled while the authoritative live blocker flag remained OFF.
+## Correct lifecycle
 
-## Execution path
+Human activity
+→ record activity without touching delivery identity
+→ delete the tracked Discord notice
+→ only after successful/idempotent deletion, compare-and-clear the exact tracked message ID
 
-`ProtectionCenterView.block_invites_button`
-→ `_toggle_invite_shield`
-→ guild config + Spam Guard persistence
-→ invite policy cache invalidation
-→ `globals.py` `on_message` listener
-→ `invite_policy_engine.enforce_live_invite_message`
-→ `decide_invite_message`
-→ `delete_message_if_allowed`
-
-Advanced configuration now has its own path:
-
-`ProtectionCenterView.invite_settings_button`
-→ `public_protection_invite_ui.open_invite_shield`
+Startup/reconnect uses the same recoverable ordering.
 
 ## Scope
 
 In scope:
 
-- preserve native `_toggle_invite_shield` ownership;
-- add a distinct **Invite Settings** action;
-- show authoritative live ON/OFF state in the Invite Shield editor;
-- expose one canonical/testable live enforcement boundary in `invite_policy_engine`;
-- route the guaranteed globals listener through that boundary;
-- add regressions for toggle ownership and real live human-invite deletion;
-- preserve same-server invite allowance.
+- `community_quiet_notice_service.py`;
+- `community_tools_runtime.py`;
+- additive atomic quiet-notice migration;
+- Community Tools workflow SQL coverage;
+- focused runtime/service/static regressions;
+- bounded per-guild retry behavior.
 
 Out of scope:
 
-- Quiet Server Notice PR #285;
-- startup Discord REST/rate-limit PR #286;
-- changing invite regex semantics;
-- changing Spam Guard burst policy;
-- changing allowed-user/role/channel exceptions;
-- changing same-server invite policy;
-- retiring other startup guards.
+- normal sticky redesign;
+- unrelated Community Tools;
+- redesigning the pre-existing 30-second full quiet-config watcher;
+- startup/rate-limit work from #286;
+- Invite Shield work from #287;
+- unrelated verification, tickets, moderation, design, fonts, welcome, or setup systems.
 
-## Changes
+## Implementation
 
-- `public_protection_invite_ui.py`
-  - no longer rebinds `center._toggle_invite_shield`;
-  - still captures the original toggle for the editor's own ON/OFF action;
-  - displays live blocker state as ON/OFF/UNKNOWN.
-- `public_protection_center.py`
-  - **Invite Blocker** remains the actual toggle;
-  - new **Invite Settings** button opens the advanced editor.
-- `invite_policy_engine.py`
-  - adds `enforce_live_invite_message` as the canonical testable live boundary.
-- `globals.py`
-  - guaranteed `on_message` listener delegates to the canonical live boundary.
-- tests
-  - lock separate toggle/editor ownership;
-  - prove a human-posted external `discord.gg` invite is deleted when Invite Shield is enabled;
-  - prove a same-server invite remains allowed;
-  - require the globals listener to use the canonical enforcement boundary.
+- activity persistence is non-destructive and updates only runtime activity fields;
+- activity uses one narrow PostgreSQL RPC with monotonic timestamp semantics;
+- Discord deletion happens before durable delivery identity is cleared;
+- durable clear uses a compare-and-clear RPC keyed to the expected message ID;
+- stale workers cannot erase a newer delivery;
+- `discord.NotFound` remains idempotent deletion success;
+- transient Discord/storage failures keep the delivery ID for retry;
+- activity and startup/reconnect retries use bounded per-guild backoff;
+- the runtime hot path does not allocate new service-layer per-guild lock entries;
+- no second Community Tools message listener is introduced.
 
-## Compatibility / cleanup review
+## Migration
 
-- no startup guard added;
-- no Discord.py monkey patch added;
-- no duplicate delete authority added;
-- central `invite_policy_engine` remains the only delete-decision authority;
-- live listener remains installed from `globals.py`;
-- same-server invites remain allowed by default;
-- normal non-invite links remain outside Invite Shield deletion policy;
-- PR #285 and PR #286 are untouched.
+`supabase/migrations/20260921042000_quiet_notice_atomic_delivery_clear.sql`
 
-## Validation
+Adds service-role-only functions:
 
-Pending on exact final head:
+- `record_dank_quiet_notice_activity(bigint, timestamptz)`
+- `clear_dank_quiet_notice_delivery(bigint, bigint)`
 
-- Python syntax/compile;
-- `tests/test_protection_invite_native_ui.py`;
-- `tests/test_invite_live_enforcement.py`;
-- existing invite policy/message-surface regressions;
-- invite safety audit;
-- relevant full-suite/CI lanes if runners execute;
-- final diff and review-thread inspection.
+The migration is additive and changes no table shape. Application calls fail closed if the migration is missing, preserving the tracked delivery identity instead of orphaning a live notice.
 
-## Blockers / risks
+## Scale properties
 
-GitHub Actions has recently produced runnerless failures on neighboring PRs. A red workflow with no executed steps must not be represented as a code/test failure or as successful validation.
+- no DB lookup is added to every human message;
+- normal activity remains in-memory/coalesced;
+- an actual auto-clear uses one activity RPC, one Discord delete/fetch path, and one expected-ID clear RPC;
+- retries are bounded per guild;
+- correctness does not depend on one process-local lock, so overlapping/sharded workers cannot clear newer delivery state.
 
-Live production verification still requires deployment after merge; repository tests can prove the intended runtime path but cannot prove Discord permissions/config on a deployed guild.
+The existing 30-second O(N) quiet-config watcher is separate backlog and is not silently claimed solved here.
 
-## Backlog
+## Validation required on exact final head
 
-- PR #285 Quiet Server Notice auto-clear remains separate.
-- PR #286 startup Discord REST burst shutdown remains separate.
+- `git diff --check`;
+- Python compile;
+- Community Tools focused regressions;
+- quiet-notice hardening regressions;
+- Community Tools static ownership checks;
+- migration applied twice against PostgreSQL;
+- SQL behavior/RLS/service-role smoke;
+- full `tests/` suite;
+- final changed-file/review-thread inspection.
+
+## Previous branch disposition
+
+PR #285 contains the original reviewed implementation but is based on stale `main`. It is superseded by the current-main rebuild and must not be merged.
 
 ## Next step
 
-Inspect the exact branch diff, open a focused draft PR, run/inspect all available exact-head validation, resolve any task-owned failures, then mark merge-ready only with executed evidence.
+Open a fresh draft PR from this branch, close #285 as superseded, validate the exact new head in Termux/Ubuntu including PostgreSQL migration smoke, then merge only with an expected-head guard and verify the resulting files on `main`.

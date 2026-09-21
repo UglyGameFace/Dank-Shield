@@ -17,6 +17,8 @@ from .community_tools_service import (
 from .globals import get_supabase
 
 QUIET_NOTICE_TABLE = "dank_quiet_notices"
+QUIET_CLEAR_DELIVERY_RPC = "clear_dank_quiet_notice_delivery"
+QUIET_RECORD_ACTIVITY_RPC = "record_dank_quiet_notice_activity"
 DEFAULT_INACTIVITY_SECONDS = 2 * 60 * 60
 MIN_INACTIVITY_SECONDS = 5 * 60
 MAX_INACTIVITY_SECONDS = 7 * 24 * 60 * 60
@@ -220,6 +222,60 @@ def _delete_sync(guild_id: int) -> None:
         raise CommunityStorageUnavailable(f"`{QUIET_NOTICE_TABLE}` is not writable.") from exc
 
 
+def _record_activity_sync(
+    guild_id: int,
+    activity_at: datetime,
+) -> Optional[QuietNoticeConfig]:
+    params = {
+        "p_guild_id": int(guild_id),
+        "p_activity_at": activity_at.isoformat(),
+    }
+    try:
+        resp = _require_supabase().rpc(QUIET_RECORD_ACTIVITY_RPC, params).execute()
+    except Exception as exc:
+        if isinstance(exc, CommunityStorageUnavailable):
+            raise
+        raise CommunityStorageUnavailable(
+            f"Quiet-notice activity RPC `{QUIET_RECORD_ACTIVITY_RPC}` is unavailable. Apply the quiet-notice runtime-transition migration."
+        ) from exc
+
+    data = getattr(resp, "data", None)
+    if isinstance(data, list) and len(data) == 1 and isinstance(data[0], Mapping):
+        data = data[0]
+    if data is None:
+        return None
+    if not isinstance(data, Mapping):
+        raise CommunityStorageUnavailable("Quiet-notice activity RPC returned an invalid response.")
+    return _row_to_quiet_notice(data)
+
+
+def _clear_delivery_sync(
+    guild_id: int,
+    expected_message_id: Optional[int],
+) -> Optional[QuietNoticeConfig]:
+    params = {
+        "p_guild_id": int(guild_id),
+        "p_expected_message_id": int(expected_message_id) if expected_message_id else None,
+    }
+    try:
+        resp = _require_supabase().rpc(QUIET_CLEAR_DELIVERY_RPC, params).execute()
+    except Exception as exc:
+        if isinstance(exc, CommunityStorageUnavailable):
+            raise
+        raise CommunityStorageUnavailable(
+            f"Quiet-notice atomic clear RPC `{QUIET_CLEAR_DELIVERY_RPC}` is unavailable. Apply the quiet-notice delivery-clear migration."
+        ) from exc
+
+    data = getattr(resp, "data", None)
+    if isinstance(data, list) and len(data) == 1 and isinstance(data[0], Mapping):
+        data = data[0]
+    if data is None:
+        return None
+    if not isinstance(data, Mapping):
+        raise CommunityStorageUnavailable("Quiet-notice atomic clear returned an invalid response.")
+    return _row_to_quiet_notice(data)
+
+
 async def get_quiet_notice(guild_id: int) -> Optional[QuietNoticeConfig]:
     return await asyncio.to_thread(_get_sync, int(guild_id))
 
@@ -264,26 +320,13 @@ async def record_quiet_activity(
     guild_id: int,
     *,
     activity_at: Optional[datetime] = None,
-    clear_delivery: bool = False,
 ) -> Optional[QuietNoticeConfig]:
-    lock = _LOCKS.setdefault(int(guild_id), asyncio.Lock())
-    async with lock:
-        current = await asyncio.to_thread(_get_sync, int(guild_id))
-        if current is None:
-            return None
-        observed = _safe_dt(activity_at) or utc_now()
-        existing = current.last_activity_at
-        if existing is not None and existing > observed:
-            observed = existing
-        return await asyncio.to_thread(
-            _save_sync,
-            replace(
-                current,
-                last_activity_at=observed,
-                last_notice_message_id=None if clear_delivery else current.last_notice_message_id,
-                last_notice_sent_at=None if clear_delivery else current.last_notice_sent_at,
-            ),
-        )
+    observed = _safe_dt(activity_at) or utc_now()
+    return await asyncio.to_thread(
+        _record_activity_sync,
+        int(guild_id),
+        observed,
+    )
 
 
 async def update_quiet_delivery(
@@ -307,8 +350,16 @@ async def update_quiet_delivery(
         )
 
 
-async def clear_quiet_delivery(guild_id: int) -> Optional[QuietNoticeConfig]:
-    return await update_quiet_delivery(int(guild_id), message_id=None)
+async def clear_quiet_delivery(
+    guild_id: int,
+    *,
+    expected_message_id: Optional[int] = None,
+) -> Optional[QuietNoticeConfig]:
+    return await asyncio.to_thread(
+        _clear_delivery_sync,
+        int(guild_id),
+        int(expected_message_id) if expected_message_id else None,
+    )
 
 
 async def delete_quiet_notice(guild_id: int) -> None:
@@ -322,6 +373,8 @@ __all__ = [
     "MAX_INACTIVITY_SECONDS",
     "MIN_INACTIVITY_SECONDS",
     "QuietNoticeConfig",
+    "QUIET_CLEAR_DELIVERY_RPC",
+    "QUIET_RECORD_ACTIVITY_RPC",
     "clear_quiet_delivery",
     "delete_quiet_notice",
     "get_quiet_notice",
