@@ -26,6 +26,11 @@ SECURITY_STATS_ENABLED_KEY = "security_stats_display_enabled"
 SECURITY_STATS_CATEGORY_ID_KEY = "security_stats_category_id"
 SECURITY_STATS_CHANNEL_IDS_KEY = "security_stats_channel_ids"
 SECURITY_STATS_COUNTS_KEY = "security_stats_counts"
+SECURITY_STATS_CATEGORY_NAME_KEY = "security_stats_category_name"
+SECURITY_STATS_VISIBLE_KEYS_KEY = "security_stats_visible_keys"
+SECURITY_STATS_CUSTOM_LABELS_KEY = "security_stats_custom_labels"
+SECURITY_STATS_NUMBER_STYLE_KEY = "security_stats_number_style"
+SECURITY_STATS_PLACEMENT_KEY = "security_stats_category_placement"
 
 SECURITY_STATS_REFRESH_MIN_SECONDS = 9 * 60
 
@@ -55,6 +60,13 @@ STAT_CHANNEL_PREFIXES: Dict[str, str] = {
     "claimed_tickets": "🙋 Claimed Tickets:",
     "closed_tickets": "✅ Closed Tickets:",
 }
+DEFAULT_SECURITY_STATS_VISIBLE_KEYS = tuple(STAT_CHANNEL_PREFIXES)
+DEFAULT_SECURITY_STATS_LABELS: Dict[str, str] = {
+    key: prefix[:-1] if prefix.endswith(":") else prefix
+    for key, prefix in STAT_CHANNEL_PREFIXES.items()
+}
+SECURITY_STATS_NUMBER_STYLES = {"compact", "exact"}
+SECURITY_STATS_PLACEMENTS = {"top", "keep", "bottom"}
 
 _STATS_LOCKS: Dict[int, asyncio.Lock] = {}
 _DISPLAY_LOCKS: Dict[int, asyncio.Lock] = {}
@@ -134,10 +146,96 @@ def format_security_stat_count(value: Any) -> str:
     return str(number)
 
 
-def _format_live_count(value: Optional[int]) -> str:
+def _clean_channel_text(value: Any, *, fallback: str, limit: int = 100) -> str:
+    text = " ".join(str(value or "").replace("\r", " ").replace("\n", " ").split()).strip()
+    if not text:
+        text = str(fallback)
+    return text[: max(1, int(limit))]
+
+
+def security_stats_preferences(cfg: Any) -> Dict[str, Any]:
+    try:
+        raw_category = cfg.get(SECURITY_STATS_CATEGORY_NAME_KEY, SECURITY_STATS_CATEGORY_NAME)
+    except Exception:
+        raw_category = SECURITY_STATS_CATEGORY_NAME
+    category_name = _clean_channel_text(
+        raw_category,
+        fallback=SECURITY_STATS_CATEGORY_NAME,
+        limit=100,
+    )
+
+    try:
+        raw_visible = cfg.get(SECURITY_STATS_VISIBLE_KEYS_KEY, DEFAULT_SECURITY_STATS_VISIBLE_KEYS)
+    except Exception:
+        raw_visible = DEFAULT_SECURITY_STATS_VISIBLE_KEYS
+    if isinstance(raw_visible, str):
+        raw_visible = [item.strip() for item in raw_visible.split(",")]
+    try:
+        selected = {str(item).strip() for item in list(raw_visible or [])}
+    except Exception:
+        selected = set(DEFAULT_SECURITY_STATS_VISIBLE_KEYS)
+    visible_keys = tuple(key for key in DEFAULT_SECURITY_STATS_VISIBLE_KEYS if key in selected)
+    if not visible_keys:
+        visible_keys = DEFAULT_SECURITY_STATS_VISIBLE_KEYS
+
+    try:
+        raw_labels = _mapping(cfg.get(SECURITY_STATS_CUSTOM_LABELS_KEY, {}))
+    except Exception:
+        raw_labels = {}
+    labels: Dict[str, str] = {}
+    for key in DEFAULT_SECURITY_STATS_VISIBLE_KEYS:
+        if key not in raw_labels:
+            continue
+        cleaned = _clean_channel_text(
+            raw_labels.get(key),
+            fallback=DEFAULT_SECURITY_STATS_LABELS[key],
+            limit=72,
+        ).rstrip(":").strip()
+        if cleaned and cleaned != DEFAULT_SECURITY_STATS_LABELS[key]:
+            labels[key] = cleaned
+
+    try:
+        number_style = str(cfg.get(SECURITY_STATS_NUMBER_STYLE_KEY, "compact") or "compact").strip().lower()
+    except Exception:
+        number_style = "compact"
+    if number_style not in SECURITY_STATS_NUMBER_STYLES:
+        number_style = "compact"
+
+    try:
+        placement = str(cfg.get(SECURITY_STATS_PLACEMENT_KEY, "top") or "top").strip().lower()
+    except Exception:
+        placement = "top"
+    if placement not in SECURITY_STATS_PLACEMENTS:
+        placement = "top"
+
+    return {
+        "category_name": category_name,
+        "visible_keys": visible_keys,
+        "labels": labels,
+        "number_style": number_style,
+        "placement": placement,
+    }
+
+
+def _stat_label(preferences: Mapping[str, Any], key: str) -> str:
+    labels = _mapping(preferences.get("labels", {}))
+    return _clean_channel_text(
+        labels.get(key),
+        fallback=DEFAULT_SECURITY_STATS_LABELS[key],
+        limit=72,
+    ).rstrip(":").strip() or DEFAULT_SECURITY_STATS_LABELS[key]
+
+
+def _format_stat_count(value: Any, number_style: str) -> str:
+    if str(number_style or "").strip().lower() == "exact":
+        return str(max(0, _safe_int(value, 0)))
+    return format_security_stat_count(value)
+
+
+def _format_live_count(value: Optional[int], number_style: str = "compact") -> str:
     if value is None:
         return "N/A"
-    return format_security_stat_count(value)
+    return _format_stat_count(value, number_style)
 
 
 def _guild_member_count(guild: discord.Guild) -> Optional[int]:
@@ -345,29 +443,32 @@ def _display_names(
     counts: Mapping[str, int],
     member_count: Optional[int] = None,
     ticket_counts: Optional[Mapping[str, int]] = None,
+    preferences: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, str]:
     normalized = normalize_security_stats(counts)
     tickets = _normalize_ticket_status_counts(ticket_counts)
+    prefs = dict(preferences or {})
+    number_style = str(prefs.get("number_style") or "compact")
     spam_status = (
         "ONLINE" if spam_guard_enabled is True
         else "OFFLINE" if spam_guard_enabled is False
         else "UNKNOWN"
     )
     return {
-        "status": f"🛡️ SpamGuard: {spam_status}",
-        "members": f"👥 Members: {_format_live_count(member_count)}",
-        "spam_blocked": f"🚫 Spam Blocked: {format_security_stat_count(normalized['spam_blocked'])}",
-        "invites_blocked": f"🔗 Invites Blocked: {format_security_stat_count(normalized['invites_blocked'])}",
-        "timeouts_issued": f"⏱️ Timeouts Issued: {format_security_stat_count(normalized['timeouts_issued'])}",
-        "quarantines": f"☣️ Quarantined: {format_security_stat_count(normalized['quarantines'])}",
+        "status": f"{_stat_label(prefs, 'status')}: {spam_status}",
+        "members": f"{_stat_label(prefs, 'members')}: {_format_live_count(member_count, number_style)}",
+        "spam_blocked": f"{_stat_label(prefs, 'spam_blocked')}: {_format_stat_count(normalized['spam_blocked'], number_style)}",
+        "invites_blocked": f"{_stat_label(prefs, 'invites_blocked')}: {_format_stat_count(normalized['invites_blocked'], number_style)}",
+        "timeouts_issued": f"{_stat_label(prefs, 'timeouts_issued')}: {_format_stat_count(normalized['timeouts_issued'], number_style)}",
+        "quarantines": f"{_stat_label(prefs, 'quarantines')}: {_format_stat_count(normalized['quarantines'], number_style)}",
         "open_tickets": (
-            f"🎫 Open Tickets: {_format_live_count(None if tickets is None else tickets['open_tickets'])}"
+            f"{_stat_label(prefs, 'open_tickets')}: {_format_live_count(None if tickets is None else tickets['open_tickets'], number_style)}"
         ),
         "claimed_tickets": (
-            f"🙋 Claimed Tickets: {_format_live_count(None if tickets is None else tickets['claimed_tickets'])}"
+            f"{_stat_label(prefs, 'claimed_tickets')}: {_format_live_count(None if tickets is None else tickets['claimed_tickets'], number_style)}"
         ),
         "closed_tickets": (
-            f"✅ Closed Tickets: {_format_live_count(None if tickets is None else tickets['closed_tickets'])}"
+            f"{_stat_label(prefs, 'closed_tickets')}: {_format_live_count(None if tickets is None else tickets['closed_tickets'], number_style)}"
         ),
     }
 
@@ -416,6 +517,7 @@ async def _display_names_for_guild(
     guild: discord.Guild,
     *,
     counts: Mapping[str, int],
+    preferences: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, str]:
     gid = int(guild.id)
     spam_enabled, ticket_counts = await asyncio.gather(
@@ -459,6 +561,7 @@ async def _display_names_for_guild(
         counts=display_counts,
         member_count=_guild_member_count(guild),
         ticket_counts=tickets,
+        preferences=preferences,
     )
 
 
@@ -495,8 +598,13 @@ def _find_owned_category(guild: discord.Guild, cfg: Any) -> Optional[discord.Cat
         if isinstance(found, discord.CategoryChannel):
             return found
 
+    preferences = security_stats_preferences(cfg)
+    accepted_names = {
+        SECURITY_STATS_CATEGORY_NAME,
+        str(preferences["category_name"]),
+    }
     for category in list(getattr(guild, "categories", []) or []):
-        if str(getattr(category, "name", "") or "") == SECURITY_STATS_CATEGORY_NAME:
+        if str(getattr(category, "name", "") or "") in accepted_names:
             return category
     return None
 
@@ -507,17 +615,61 @@ def _find_existing_stat_channel(
     *,
     key: str,
     saved_id: int,
+    preferences: Optional[Mapping[str, Any]] = None,
 ) -> Optional[discord.VoiceChannel]:
     if saved_id > 0:
         found = guild.get_channel(saved_id)
         if isinstance(found, discord.VoiceChannel) and int(getattr(found, "category_id", 0) or 0) == int(category.id):
             return found
 
-    prefix = STAT_CHANNEL_PREFIXES[key]
+    prefixes = [STAT_CHANNEL_PREFIXES[key]]
+    if preferences is not None:
+        custom_prefix = f"{_stat_label(preferences, key)}:"
+        if custom_prefix not in prefixes:
+            prefixes.append(custom_prefix)
     for channel in list(getattr(category, "voice_channels", []) or []):
-        if str(getattr(channel, "name", "") or "").startswith(prefix):
+        name = str(getattr(channel, "name", "") or "")
+        if any(name.startswith(prefix) for prefix in prefixes):
             return channel
     return None
+
+
+async def _apply_category_preferences(
+    guild: discord.Guild,
+    category: discord.CategoryChannel,
+    preferences: Mapping[str, Any],
+) -> None:
+    desired_name = str(preferences.get("category_name") or SECURITY_STATS_CATEGORY_NAME)
+    if str(getattr(category, "name", "") or "") != desired_name:
+        await category.edit(name=desired_name, reason="Apply Dank Shield server stats category name")
+
+    placement = str(preferences.get("placement") or "top")
+    if placement == "top":
+        if int(getattr(category, "position", -1) or -1) != 0:
+            await category.edit(position=0, reason="Place Dank Shield server stats at the top")
+    elif placement == "bottom":
+        categories = list(getattr(guild, "categories", []) or [])
+        target = max(0, len(categories) - 1)
+        if int(getattr(category, "position", -1) or -1) != target:
+            await category.edit(position=target, reason="Place Dank Shield server stats at the bottom")
+
+
+async def _remove_hidden_stat_channel(
+    channel: Optional[discord.VoiceChannel],
+    *,
+    key: str,
+) -> bool:
+    if channel is None:
+        return False
+    try:
+        await channel.delete(reason=f"Hide Dank Shield server stat: {key}")
+        return True
+    except (discord.Forbidden, discord.HTTPException) as exc:
+        print(
+            f"⚠️ security_stats hide channel failed key={key} "
+            f"error={type(exc).__name__}"
+        )
+        return False
 
 
 async def record_security_event(
@@ -579,7 +731,7 @@ async def record_spam_guard_action(
 
 
 async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str]:
-    """Create or repair the locked Discord voice-channel stats display."""
+    """Create, repair, and apply the saved per-guild Server Stats display."""
 
     gid = int(guild.id)
     async with _lock_for(_DISPLAY_LOCKS, gid):
@@ -589,13 +741,18 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
 
         perms = me.guild_permissions
         if not bool(getattr(perms, "manage_channels", False)):
-            return False, "❌ Dank Shield needs **Manage Channels** to create and update the live stats display."
+            return False, "❌ Dank Shield needs **Manage Channels** to create and update Server Stats."
         if not bool(getattr(perms, "manage_roles", False)) and not bool(getattr(perms, "administrator", False)):
-            return False, "❌ Dank Shield needs **Manage Roles** to lock the stats voice channels so members can see them but cannot join."
+            return False, "❌ Dank Shield needs **Manage Roles** to keep Server Stats visible but non-joinable."
 
         cfg = await get_guild_config(gid, refresh=True)
+        preferences = security_stats_preferences(cfg)
         counts = _stats_counts(cfg)
-        names = await _display_names_for_guild(guild, counts=counts)
+        names = await _display_names_for_guild(
+            guild,
+            counts=counts,
+            preferences=preferences,
+        )
         category = _find_owned_category(guild, cfg)
 
         try:
@@ -604,28 +761,26 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
                     guild.default_role: discord.PermissionOverwrite(view_channel=True, connect=False),
                 }
                 category = await guild.create_category(
-                    SECURITY_STATS_CATEGORY_NAME,
+                    str(preferences["category_name"]),
                     overwrites=overwrites,
-                    reason="Dank Shield live stats display",
+                    reason="Dank Shield Server Stats display",
                 )
-                try:
-                    await category.edit(position=0, reason="Place Dank Shield live stats near the top")
-                except Exception:
-                    pass
             else:
                 await category.set_permissions(
                     guild.default_role,
                     view_channel=True,
                     connect=False,
-                    reason="Keep Dank Shield stats visible but non-joinable",
+                    reason="Keep Dank Shield Server Stats visible but non-joinable",
                 )
+            await _apply_category_preferences(guild, category, preferences)
         except discord.Forbidden:
-            return False, "❌ Discord denied permission to create or lock the stats category. Check **Manage Channels** and **Manage Roles**."
+            return False, "❌ Discord denied permission to create, rename, move, or lock Server Stats. Check **Manage Channels** and **Manage Roles**."
         except discord.HTTPException as exc:
-            return False, f"❌ Discord could not create the stats category: `{type(exc).__name__}`."
+            return False, f"❌ Discord could not prepare the Server Stats category: `{type(exc).__name__}`."
 
         saved_ids = _saved_channel_ids(cfg)
         resolved_ids: Dict[str, str] = {}
+        visible_keys = set(preferences["visible_keys"])
 
         for key in STAT_CHANNEL_PREFIXES:
             channel = _find_existing_stat_channel(
@@ -633,16 +788,20 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
                 category,
                 key=key,
                 saved_id=saved_ids.get(key, 0),
+                preferences=preferences,
             )
+            if key not in visible_keys:
+                await _remove_hidden_stat_channel(channel, key=key)
+                continue
             try:
                 if channel is None:
                     channel = await guild.create_voice_channel(
                         names[key],
                         category=category,
-                        reason="Dank Shield live stats display",
+                        reason="Dank Shield Server Stats display",
                     )
                 elif channel.name != names[key]:
-                    await channel.edit(name=names[key], reason="Refresh Dank Shield live stats")
+                    await channel.edit(name=names[key], reason="Refresh Dank Shield Server Stats")
                 resolved_ids[key] = str(int(channel.id))
             except discord.Forbidden:
                 return False, f"❌ Discord denied permission while creating **{names[key]}**. Check channel permission overrides."
@@ -662,8 +821,53 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
 
         return (
             True,
-            f"✅ Live Dank Shield stats are active in **{SECURITY_STATS_CATEGORY_NAME}**. The voice channels are visible but locked so nobody can join them.",
+            f"✅ Server Stats are active in **{preferences['category_name']}** with `{len(visible_keys)}` visible counters.",
         )
+
+
+async def disable_security_stats_display(
+    guild: discord.Guild,
+    *,
+    remove_channels: bool = True,
+) -> Tuple[bool, str]:
+    """Disable future refreshes and optionally remove only the tracked stats display."""
+
+    gid = int(guild.id)
+    async with _lock_for(_DISPLAY_LOCKS, gid):
+        cfg = await get_guild_config(gid, refresh=True)
+        category = _find_owned_category(guild, cfg)
+        saved_ids = _saved_channel_ids(cfg)
+        preferences = security_stats_preferences(cfg)
+
+        if remove_channels and category is not None:
+            for key in STAT_CHANNEL_PREFIXES:
+                channel = _find_existing_stat_channel(
+                    guild,
+                    category,
+                    key=key,
+                    saved_id=saved_ids.get(key, 0),
+                    preferences=preferences,
+                )
+                if channel is not None:
+                    await _remove_hidden_stat_channel(channel, key=key)
+
+            try:
+                remaining = list(getattr(category, "channels", []) or [])
+                if not remaining:
+                    await category.delete(reason="Disable Dank Shield Server Stats")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+        await upsert_guild_config(
+            gid,
+            {
+                SECURITY_STATS_ENABLED_KEY: False,
+                SECURITY_STATS_CATEGORY_ID_KEY: "",
+                SECURITY_STATS_CHANNEL_IDS_KEY: {},
+            },
+        )
+        _LAST_REFRESH_AT.pop(gid, None)
+        return True, "✅ Server Stats are disabled and their tracked display channels were removed."
 
 
 async def refresh_security_stats_display(
@@ -671,7 +875,7 @@ async def refresh_security_stats_display(
     *,
     force: bool = False,
 ) -> bool:
-    """Refresh or repair channels inside an already-enabled owned stats category."""
+    """Refresh and self-heal an enabled per-guild Server Stats display."""
 
     gid = int(guild.id)
     cfg = await get_guild_config(gid, refresh=True)
@@ -684,37 +888,53 @@ async def refresh_security_stats_display(
 
     category = _find_owned_category(guild, cfg)
     if category is None:
-        return False
+        ok, _note = await ensure_security_stats_display(guild)
+        return bool(ok)
 
-    names = await _display_names_for_guild(guild, counts=_stats_counts(cfg))
+    preferences = security_stats_preferences(cfg)
+    names = await _display_names_for_guild(
+        guild,
+        counts=_stats_counts(cfg),
+        preferences=preferences,
+    )
     saved_ids = _saved_channel_ids(cfg)
     previous_ids = {
         key: str(value)
         for key, value in saved_ids.items()
         if int(value) > 0
     }
-    resolved_ids: Dict[str, str] = dict(previous_ids)
-    changed = False
+    resolved_ids: Dict[str, str] = {}
+    visible_keys = set(preferences["visible_keys"])
 
     async with _lock_for(_DISPLAY_LOCKS, gid):
+        try:
+            await _apply_category_preferences(guild, category, preferences)
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            print(
+                f"⚠️ security_stats category refresh failed guild={gid} "
+                f"error={type(exc).__name__}"
+            )
+
         for key in STAT_CHANNEL_PREFIXES:
             channel = _find_existing_stat_channel(
                 guild,
                 category,
                 key=key,
                 saved_id=saved_ids.get(key, 0),
+                preferences=preferences,
             )
+            if key not in visible_keys:
+                await _remove_hidden_stat_channel(channel, key=key)
+                continue
             try:
                 if channel is None:
                     channel = await guild.create_voice_channel(
                         names[key],
                         category=category,
-                        reason="Repair Dank Shield live stats display",
+                        reason="Repair Dank Shield Server Stats display",
                     )
-                    changed = True
                 elif channel.name != names[key]:
-                    await channel.edit(name=names[key], reason="Refresh Dank Shield live stats")
-                    changed = True
+                    await channel.edit(name=names[key], reason="Refresh Dank Shield Server Stats")
                 resolved_ids[key] = str(int(channel.id))
             except (discord.Forbidden, discord.HTTPException) as exc:
                 print(
@@ -723,7 +943,7 @@ async def refresh_security_stats_display(
                 )
                 continue
 
-        if resolved_ids and resolved_ids != previous_ids:
+        if resolved_ids != previous_ids:
             try:
                 await upsert_guild_config(
                     gid,
@@ -794,11 +1014,21 @@ __all__ = [
     "DEFAULT_SECURITY_STATS",
     "DEFAULT_TICKET_STATUS_COUNTS",
     "SECURITY_STATS_CATEGORY_NAME",
+    "SECURITY_STATS_CATEGORY_NAME_KEY",
+    "SECURITY_STATS_CHANNEL_IDS_KEY",
     "SECURITY_STATS_COUNTS_KEY",
+    "SECURITY_STATS_CUSTOM_LABELS_KEY",
     "SECURITY_STATS_ENABLED_KEY",
+    "SECURITY_STATS_NUMBER_STYLE_KEY",
+    "SECURITY_STATS_PLACEMENT_KEY",
+    "SECURITY_STATS_VISIBLE_KEYS_KEY",
+    "DEFAULT_SECURITY_STATS_LABELS",
+    "DEFAULT_SECURITY_STATS_VISIBLE_KEYS",
+    "disable_security_stats_display",
     "ensure_security_stats_display",
     "format_security_stat_count",
     "normalize_security_stats",
+    "security_stats_preferences",
     "record_security_event",
     "record_spam_guard_action",
     "refresh_security_stats_display",
