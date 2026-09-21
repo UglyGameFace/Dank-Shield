@@ -266,7 +266,7 @@ Ticket numbers and channel creation must stay consistent under retries, restarts
 | `global_interaction_trace_guard` | dormant historical patcher; no production importer | **retire/delete** after native interaction ownership and diagnostics replacement |
 | `interaction_action_lock_guard` | likely valid product rule | migrate to central interaction lock/idempotency service |
 | `command_safety` | likely valid validation | keep only as validation, no runtime mutation |
-| `slash_command_cleanup` | dangerous in production if mutating commands | move to explicit dev/admin migration tool or delete |
+| `slash_command_cleanup` | dormant global CommandTree patcher; useful sync behavior now native | **retire/delete with obsolete ticket command epoch shim; native owner is `command_runtime.DankCommandTree`** |
 | `protection_center_command_guard` | mutates command surface to hide aliases | migrate into deterministic command registry |
 | `protection_import_button_patch` | patch file by name | inspect, migrate valid behavior, delete patch |
 | `spam_guard_invite_hard_block` | overlap risk with invite policy engine | migrate/delete after invite policy verification |
