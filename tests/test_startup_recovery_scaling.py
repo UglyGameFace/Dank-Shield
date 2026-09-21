@@ -9,6 +9,7 @@ APP = (ROOT / "stoney_verify" / "app.py").read_text(encoding="utf-8")
 ACTIVITY = (ROOT / "stoney_verify" / "members_new" / "activity_tracker.py").read_text(encoding="utf-8")
 ACTIVITY_RECONCILE = (ROOT / "stoney_verify" / "members_new" / "activity_reconciliation.py").read_text(encoding="utf-8")
 MEMBERSHIP = (ROOT / "stoney_verify" / "members_new" / "membership_authority.py").read_text(encoding="utf-8")
+KICK_TIMERS = (ROOT / "stoney_verify" / "commands_ext" / "kick_timers.py").read_text(encoding="utf-8")
 INVITE = (ROOT / "stoney_verify" / "invite_reconciliation_runtime.py").read_text(encoding="utf-8")
 DISCORD_API_SAFETY = (ROOT / "stoney_verify" / "startup_guards" / "discord_api_safety.py").read_text(encoding="utf-8")
 ENV_EXAMPLE = (ROOT / ".env.example").read_text(encoding="utf-8")
@@ -107,6 +108,16 @@ def test_bulk_discord_recovery_paths_share_process_wide_rest_budget() -> None:
     assert "_RECOVERY_REST_WINDOW_SECONDS = 30.0" in DISCORD_API_SAFETY
     assert "DANK_RECOVERY_DISCORD_REST_BUDGET_PER_30S=100" in ENV_EXAMPLE
     assert "DANK_ACTIVITY_RECONCILE_TIMEOUT_SECONDS=180" in ENV_EXAMPLE
+
+
+def test_member_wait_timer_startup_reuses_canonical_membership_authority() -> None:
+    block = _block(
+        KICK_TIMERS,
+        "async def _resume_member_wait_timers_from_live_state(",
+        "async def member_wait_timer_resume_all()",
+    )
+    assert "collect_membership_snapshot(guild)" in block
+    assert "guild.fetch_members(limit=None)" not in block
 
 
 def test_invite_startup_recovery_uses_durable_gap_window() -> None:
