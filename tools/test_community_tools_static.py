@@ -12,6 +12,7 @@ QUIET_UI = (ROOT / "stoney_verify/commands_ext/public_quiet_notice.py").read_tex
 LOOKUPS = (ROOT / "stoney_verify/community_lookup_service.py").read_text(encoding="utf-8")
 MIGRATION = (ROOT / "supabase/migrations/20260811122504_community_tools.sql").read_text(encoding="utf-8")
 HARDENING = (ROOT / "supabase/migrations/20260905121500_community_tools_hardening.sql").read_text(encoding="utf-8")
+QUIET_CLEAR = (ROOT / "supabase/migrations/20260921042000_quiet_notice_atomic_delivery_clear.sql").read_text(encoding="utf-8")
 
 
 def test_home_routes_to_community_tools_without_expanding_dank_children() -> None:
@@ -58,6 +59,16 @@ def test_migration_persists_stickies_and_polls_service_role_only() -> None:
     assert "create or replace function public.save_dank_sticky_bundle" in HARDENING
     assert "delete from public.dank_sticky_polls" in HARDENING
     assert "grant execute on function public.save_dank_sticky_bundle(jsonb, jsonb) to service_role" in HARDENING
+
+
+def test_quiet_delivery_clear_is_database_atomic_and_service_role_only() -> None:
+    quiet_service = (ROOT / "stoney_verify/community_quiet_notice_service.py").read_text(encoding="utf-8")
+    assert 'QUIET_CLEAR_DELIVERY_RPC = "clear_dank_quiet_notice_delivery"' in quiet_service
+    assert ".rpc(QUIET_CLEAR_DELIVERY_RPC, params).execute()" in quiet_service
+    assert "for update" in QUIET_CLEAR.lower()
+    assert "last_notice_message_id is distinct from p_expected_message_id" in QUIET_CLEAR
+    assert "grant execute on function public.clear_dank_quiet_notice_delivery(bigint, bigint) to service_role" in QUIET_CLEAR
+    assert "revoke all on function public.clear_dank_quiet_notice_delivery(bigint, bigint) from anon, authenticated" in QUIET_CLEAR
 
 
 def test_poll_and_embed_posting_use_preview_publish_and_real_permissions() -> None:
