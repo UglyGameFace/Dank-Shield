@@ -390,6 +390,41 @@ def test_quiet_startup_reconcile_keeps_delivery_identity_when_delete_fails(monke
 
         assert clear_called is False
         assert runtime._quiet_configs[1].last_notice_message_id == 777
+        assert runtime._quiet_retry_after[1] > runtime_module.time.monotonic()
+
+    asyncio.run(scenario())
+
+
+def test_quiet_startup_reconcile_honors_retry_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        sent = datetime(2026, 9, 5, 10, 0, tzinfo=timezone.utc)
+        config = _quiet(
+            last_activity_at=sent + timedelta(minutes=1),
+            last_notice_message_id=777,
+            last_notice_sent_at=sent,
+            auto_clear=True,
+        )
+
+        class FakeChannel:
+            id = 20
+
+        monkeypatch.setattr(runtime_module.discord, "TextChannel", FakeChannel)
+        runtime = StickyRuntime(SimpleNamespace(get_channel=lambda channel_id: FakeChannel()))
+        runtime._quiet_configs[1] = config
+        runtime._quiet_retry_after[1] = runtime_module.time.monotonic() + 60.0
+        delete_called = False
+
+        async def fake_delete(target: QuietNoticeConfig) -> bool:
+            nonlocal delete_called
+            delete_called = True
+            return True
+
+        runtime.delete_quiet_live_message = fake_delete  # type: ignore[method-assign]
+
+        await runtime._reconcile_quiet_config(config)
+
+        assert delete_called is False
+        assert runtime._quiet_configs[1].last_notice_message_id == 777
 
     asyncio.run(scenario())
 
