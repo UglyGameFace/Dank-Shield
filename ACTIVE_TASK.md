@@ -2,81 +2,81 @@
 
 ## Active task / desired outcome
 
-**P0-INT-001 — Surface recent native interaction failures in /dank diagnostics**
+**P0-INT-001 — Retire dormant global Discord.py interaction patcher**
 
-Make native Error IDs actionable by showing a sanitized, guild-isolated recent failure summary inside the existing read-only `/dank diagnostics` report.
+Remove the obsolete `global_interaction_trace_guard` artifact now that exact boot ownership proves production does not import or apply it and the native interaction service owns the useful failure/duplicate behavior.
 
-## Why this is next
+## Why this is the active slice
 
-PR #282 completed canonical Verify Panel interaction hardening and merged as `c6e48d0a957366fd77b42d3fcee7cb97b5178431`.
+PR #283 completed native Error ID visibility in `/dank diagnostics` and merged as `6c63c45f98c3c6f208fbb0447b767b060cb96031`.
 
-Post-merge verification on `main` confirmed the validated blobs exactly:
-
-- `public_verify_basic_panel.py` → `c268e4780c446ff543f76dd2b3ad9fa9e482b7da`
-- `test_public_verify_panel_native_interaction_static.py` → `cc7f30b17a321f80097d434dd8a75deee98480ff`
-
-The native interaction service stores up to 250 recent `InteractionFailureRecord` entries in-process, and user-facing errors direct admins to `/dank diagnostics`. Before this slice, diagnostics did not consume that ring.
-
-## Status
-
-**IMPLEMENTED — targeted privacy/grammar validation passed; pending exact-head PR/main verification**
-
-## Implementation
-
-`public_diagnostics_group.py` now reads `recent_interaction_failures(limit=250)` and builds a read-only **Recent Native Interaction Failures** field.
-
-Privacy and isolation are enforced inside the helper:
-
-- records are filtered by exact `record.context.guild_id == interaction.guild.id` before any rendering;
-- only the newest five matching records are shown;
-- output includes only Error ID, sanitized action name, stage/error type, and whether the user was notified;
-- action/error tokens strip newlines and backticks;
-- raw `error_message`, `fix_hint`, `traceback_text`, `extra`, user ID, channel ID, and message ID are never rendered;
-- the summary is capped at 1,000 characters and its line body at 850 characters;
-- empty state says no failures are recorded **for this server in this process**;
-- diagnostics still has no failure-clear or mutation path.
-
-## Validation
-
-Targeted branch validation passed:
-
-- branch is 0 commits behind current `main`;
-- production diff is limited to `public_diagnostics_group.py` plus one focused privacy regression test before ledger updates;
-- production failure-helper region parses under Python 3.11 grammar;
-- focused regression test parses under Python 3.11 grammar;
-- exact source replay confirms:
-  - ring import and read-only consumption;
-  - guild filtering happens before newest-five selection/rendering;
-  - newest-first ordering;
-  - only the five allowed display attributes are accessed for output;
-  - prohibited raw/sensitive fields are absent from the helper;
-  - field and line caps remain below Discord limits;
-  - current guild ID is passed explicitly from the diagnostics command;
-  - `clear_recent_interaction_failures` is not imported or called.
-- behavioral privacy simulation with mixed-guild fake records passed:
-  - current-guild records rendered;
-  - other-guild Error IDs and secret fields did not render;
-  - newest record appeared first;
-  - newline/backtick action text was sanitized;
-  - output stayed <= 1000 characters;
-  - unrelated-guild empty state remained correct.
-
-Validated branch blobs:
+Post-merge verification on `main` confirmed the validated diagnostics/test blobs exactly:
 
 - `public_diagnostics_group.py` → `8910e492f2afc5078acbaeedd94572d7e46fb585`
 - `test_public_diagnostics_native_interaction_failures_static.py` → `893dcf65862e12afd52b1925c697d78264a05c30`
 
-Full GitHub Actions execution state must be checked on the final PR head. No absent runner execution will be represented as passing CI.
+The production-readiness ledger still described `global_interaction_trace_guard` as a live framework-patching blocker. Exact current-main ownership inspection disproved that assumption:
+
+- `main.py` explicitly says not to restore global Discord.py monkey patches;
+- `sitecustomize.py` owns only the Basic Verify compatibility path and does not import it;
+- `usercustomize.py`, `stoney_verify/app.py`, and `stoney_verify/commands.py` do not import it;
+- `startup_guards/__init__.py` is non-executable historical metadata and is not iterated by normal boot;
+- repo import/reference checks found no production import or `.apply()` owner;
+- its private patch markers and legacy trace environment knobs exist only inside the dormant file and the obsolete test that required it.
+
+Keeping a dead module capable of patching `CommandTree._call`, app-command private methods, and `View._scheduled_task` creates resurrection risk with no production benefit.
+
+## Scope
+
+In scope:
+
+- delete `stoney_verify/startup_guards/global_interaction_trace_guard.py`;
+- remove its entry from inert `LEGACY_DORMANT_STARTUP_GUARDS` metadata;
+- delete `tests/test_global_interaction_trace_guard_static.py`, which required the monkey-patch implementation to exist;
+- rewrite `tests/test_global_interaction_trace_loader_static.py` to require the retired module to stay absent from disk, startup metadata, and production boot owners;
+- document the corrected runtime ownership and retirement disposition;
+- update the P0 interaction readiness ledger.
+
+Out of scope:
+
+- changing `stoney_verify/interaction_guard.py`;
+- changing canonical interaction behavior;
+- changing ticket/setup/design/verification callbacks;
+- retiring any other startup guard;
+- changing `interaction_action_lock_guard` or unrelated historical inventory;
+- changing command registration or startup order;
+- solving remaining direct-command nested-lock architecture in this slice.
+
+## Status
+
+**IMPLEMENTED — dormant patcher deleted; targeted ownership validation pending final PR head**
+
+## Runtime behavior impact
+
+Expected runtime behavior change: **none**.
+
+The deleted module had no production importer/apply path. The task removes dormant code and historical metadata only. Native interaction handling remains feature-owned by `stoney_verify.interaction_guard` and existing public owners.
+
+## Regression rule
+
+The replacement static regression must require:
+
+- `global_interaction_trace_guard.py` does not exist;
+- its fully qualified module name is absent from historical startup metadata;
+- `main.py`, `sitecustomize.py`, `usercustomize.py`, `stoney_verify/app.py`, and `stoney_verify/commands.py` contain no reference to it;
+- native `interaction_guard.py` still owns `run_guarded_interaction`, recent failures, and duplicate-action handling;
+- native interaction service contains no `CommandTree._call`, `_invoke_with_namespace`, `_scheduled_task`, or old elite-wrapper markers.
 
 ## Previous completed slice
 
-**PR #282 — Guard canonical Verify Panel posting**
+**PR #283 — Show native interaction failures in diagnostics**
 
-- merged as `c6e48d0a957366fd77b42d3fcee7cb97b5178431`;
+- merged as `6c63c45f98c3c6f208fbb0447b767b060cb96031`;
 - verified on `main`;
-- validated production blob: `c268e4780c446ff543f76dd2b3ad9fa9e482b7da`;
-- validated regression-test blob: `cc7f30b17a321f80097d434dd8a75deee98480ff`.
+- guild isolation/privacy behavior validated;
+- diagnostics production blob: `8910e492f2afc5078acbaeedd94572d7e46fb585`;
+- regression-test blob: `893dcf65862e12afd52b1925c697d78264a05c30`.
 
 ## Next step
 
-Open the focused diagnostics PR, verify its exact head and runner state, merge with an expected-head guard if clean, then verify the validated diagnostics/test blobs on `main`.
+Validate the retirement branch against current `main`, confirm no executable references remain, open a focused PR, record exact-head CI/runner state, merge with an expected-head guard if clean, then verify the retired file remains absent on `main`.
