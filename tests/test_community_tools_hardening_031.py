@@ -429,6 +429,47 @@ def test_quiet_startup_reconcile_honors_retry_backoff(monkeypatch: pytest.Monkey
     asyncio.run(scenario())
 
 
+def test_record_quiet_activity_uses_one_narrow_atomic_rpc(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        observed = datetime(2026, 9, 5, 10, 5, tzinfo=timezone.utc)
+        response = _RpcResponse(
+            {
+                "guild_id": 1,
+                "channel_id": 20,
+                "enabled": True,
+                "content": "quiet",
+                "inactivity_seconds": 7200,
+                "auto_clear": True,
+                "last_activity_at": observed.isoformat(),
+                "last_notice_message_id": 777,
+                "last_notice_sent_at": "2026-09-05T10:00:00+00:00",
+            }
+        )
+        fake = _RpcSupabase(response)
+        monkeypatch.setattr(quiet_service, "_require_supabase", lambda: fake)
+
+        result = await quiet_service.record_quiet_activity(
+            1,
+            activity_at=observed,
+            clear_delivery=False,
+        )
+
+        assert result is not None and result.last_activity_at == observed
+        assert result.last_notice_message_id == 777
+        assert fake.calls == [
+            (
+                quiet_service.QUIET_RECORD_ACTIVITY_RPC,
+                {
+                    "p_guild_id": 1,
+                    "p_activity_at": observed.isoformat(),
+                    "p_clear_delivery": False,
+                },
+            )
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_clear_quiet_delivery_uses_one_atomic_rpc_and_preserves_newer_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
     async def scenario() -> None:
         response = _RpcResponse(
