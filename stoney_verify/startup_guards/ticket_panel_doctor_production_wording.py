@@ -38,7 +38,6 @@ def _apply_optional_guard(module_name: str, label: str) -> bool:
 
 
 def apply() -> bool:
-    epoch_ok = _apply_optional_guard("ticket_panel_command_epoch_guard", "ticket-panel slash refresh guard")
     lifecycle_lock_ok = _apply_optional_guard("ticket_lifecycle_action_lock_guard", "ticket lifecycle action lock guard")
     transcript_busy_ok = _apply_optional_guard("ticket_transcript_post_busy_guard", "ticket transcript post busy guard")
     identity_ok = _apply_optional_guard("ticket_staff_identity_guard", "ticket staff identity guard")
@@ -49,8 +48,7 @@ def apply() -> bool:
     doctor_ok = _apply_optional_guard("ticket_panel_doctor_stability_guard", "doctor stability guard")
     setup_ok = _apply_optional_guard("setup_check_existing_server_inference_guard", "setup-check inference guard")
     return bool(
-        epoch_ok
-        and lifecycle_lock_ok
+        lifecycle_lock_ok
         and transcript_busy_ok
         and identity_ok
         and voice_notice_ok
