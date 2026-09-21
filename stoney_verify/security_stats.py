@@ -939,9 +939,21 @@ async def disable_security_stats_display(
         saved_ids = _saved_channel_ids(cfg)
         preferences = security_stats_preferences(cfg)
 
-        remaining_ids: Dict[str, str] = {}
+        remaining_ids: Dict[str, str] = (
+            {
+                key: str(value)
+                for key, value in saved_ids.items()
+                if int(value) > 0
+            }
+            if not remove_channels
+            else {}
+        )
         cleanup_complete = True
-        keep_category_id = ""
+        keep_category_id = (
+            str(int(category.id))
+            if not remove_channels and category is not None
+            else ""
+        )
 
         if remove_channels and category is not None:
             owned_channels: list[tuple[str, discord.VoiceChannel]] = []
@@ -1003,6 +1015,11 @@ async def disable_security_stats_display(
         task = _EVENT_REFRESH_TASKS.pop(gid, None)
         if task is not None and not task.done():
             task.cancel()
+        if not remove_channels:
+            return (
+                True,
+                "✅ Server Stats are disabled. Existing display channels were left in place and remain tracked.",
+            )
         if cleanup_complete:
             return True, "✅ Server Stats are disabled and their tracked display channels were removed."
         return (
