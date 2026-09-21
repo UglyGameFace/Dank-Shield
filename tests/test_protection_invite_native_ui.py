@@ -165,17 +165,40 @@ def test_native_editor_preserves_original_on_off_action() -> None:
     assert 'label="Turn Shield On / Off"' in source
     assert "await _ORIGINAL_TOGGLE(interaction)" in source
     assert "_ORIGINAL_TOGGLE = original" in source
+    assert "center._toggle_invite_shield = open_invite_shield" not in source
 
 
-def test_bootstrap_binds_feature_function_not_component_callback_or_view_init() -> None:
+def test_invite_editor_exposes_authoritative_live_blocker_state() -> None:
+    enabled = invite_ui.invite_shield_embed({}, enabled=True)
+    disabled = invite_ui.invite_shield_embed({}, enabled=False)
+
+    assert "ON" in str(enabled.title)
+    assert "OFF" in str(disabled.title)
+    assert any(field.name == "Live blocker" and "actively blocked" in field.value for field in enabled.fields)
+    assert any(field.name == "Live blocker" and "currently allowed" in field.value for field in disabled.fields)
+
+
+def test_bootstrap_binds_editor_without_stealing_toggle_ownership() -> None:
     source = Path(center.__file__).read_text(encoding="utf-8")
     ui_source = Path(invite_ui.__file__).read_text(encoding="utf-8")
     commands_source = (Path(center.__file__).parents[1] / "commands.py").read_text(encoding="utf-8")
 
     assert "await _toggle_invite_shield(interaction)" in source
-    assert "center._toggle_invite_shield = open_invite_shield" in ui_source
+    assert "center._toggle_invite_shield = open_invite_shield" not in ui_source
+    assert "_ORIGINAL_TOGGLE = original" in ui_source
     assert "ProtectionCenterView.__init__ =" not in ui_source
     assert ".callback =" not in ui_source
     assert "_install_invite_policy_scope_binding" in commands_source
     assert "_install_native_invite_ui" in commands_source
     assert "startup_guards" not in commands_source[commands_source.index("# Invite target metadata"):commands_source.index("# The public Create Ticket button")]
+
+
+def test_protection_center_separates_invite_toggle_from_editor() -> None:
+    source = Path(center.__file__).read_text(encoding="utf-8")
+
+    assert 'label="Invite Blocker"' in source
+    assert "await _toggle_invite_shield(interaction)" in source
+    assert 'label="Invite Settings"' in source
+    assert 'custom_id="dank_protection:invite_settings"' in source
+    assert "from .public_protection_invite_ui import open_invite_shield" in source
+    assert "await open_invite_shield(interaction)" in source
