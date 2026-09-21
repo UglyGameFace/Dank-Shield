@@ -109,13 +109,26 @@ Current feature-owned Channel Builder guard/helper chain:
 
 A full Channel Builder redesign is out of scope for this loader-retirement change.
 
+## Retired global interaction trace patcher
+
+The P0 interaction migration confirmed that `global_interaction_trace_guard.py` had no production importer or apply path. Normal boot already used feature-owned `interaction_guard.py` boundaries, and `main.py` explicitly forbids restoring global Discord.py monkey patches.
+
+The dormant artifact patched private `CommandTree` invocation methods and `discord.ui.View._scheduled_task`. Its useful failure-ID/duplicate-action behavior is now owned by the native interaction service, and recent native failures are visible through guild-isolated `/dank diagnostics`.
+
+Disposition:
+
+- delete `startup_guards/global_interaction_trace_guard.py`;
+- remove its inert historical-registry entry;
+- remove tests that require the private framework patch implementation;
+- retain a regression that requires the retired module to stay absent from disk, startup metadata, and production boot owners.
+
 ## Historical bulk inventory: activation status by family
 
 Every module below was present in the old `_STARTUP_GUARDS` tuple. The normal boot path does **not** iterate that tuple. Therefore the tuple itself provides no production ownership. Modules already identified above as independently live remain live through their explicit owners; all others remain untouched until a dedicated importer/behavior audit proves a safe disposition.
 
 | Family | Historical modules | Independent live evidence in this audit | Bulk-loader side-effect risk | Recommendation |
 | --- | --- | --- | --- | --- |
-| Core/process/command runtime | `embed_literal_newline_guard`, `process_health`, `command_safety`, `global_interaction_trace_guard`, `interaction_action_lock_guard`, `slash_command_cleanup`, `runtime_safety`, `public_startup_scope`, `event_safety`, `shard_safety`, `job_dedupe` | confirmed live: `process_health`, `command_safety`, `interaction_action_lock_guard`, `runtime_safety`, `public_startup_scope`; `embed_literal_newline_guard` has test/tool references but no confirmed production importer; `slash_command_cleanup` is referenced by audits/other dormant guards rather than normal boot | very high: discord.py wrappers, import hooks, command-tree mutation, listeners | keep confirmed live owners; **leave others dormant / separate audit** |
+| Core/process/command runtime | `embed_literal_newline_guard`, `process_health`, `command_safety`, `interaction_action_lock_guard`, `slash_command_cleanup`, `runtime_safety`, `public_startup_scope`, `event_safety`, `shard_safety`, `job_dedupe` | confirmed live: `process_health`, `command_safety`, `interaction_action_lock_guard`, `runtime_safety`, `public_startup_scope`; `global_interaction_trace_guard` had no production importer and is retired by the P0 interaction migration; `embed_literal_newline_guard` has test/tool references but no confirmed production importer; `slash_command_cleanup` is referenced by audits/other dormant guards rather than normal boot | very high: discord.py wrappers, import hooks, command-tree mutation, listeners | keep confirmed live owners; retired global interaction patcher must stay absent; **leave other unproven entries dormant / separate audit** |
 | Command-surface/product compatibility | `public_verify_admin_command_skip`, `automod_public_guard`, `protection_center_command_guard`, `embed_builder_command_guard`, `share_router_guard`, `setup_overview_command_guard`, `dank_shield_branding_guard`, `production_command_surface_guard` | no bulk activation; canonical public command surface is registered by `commands_ext` and its explicit profile | high: command registration/pruning/response rewriting | **leave dormant / separate audit**; never rescue by bulk loading |
 | Schema/config/queue bootstrap | `auto_schema_bootstrap`, `ticket_category_schema_bootstrap_guard`, `operation_queue_schema_guard`, `guild_operation_queue_guard`, `guild_config_write_safety`, `public_no_env_runtime_config` | schema modules are imported by tests/tools and some feature code as manifests/helpers; Supabase migrations remain the sole schema mutation authority | high: historical schema/config/queue mutation paths | retain only helper/manifests needed by current owners; **never bulk-activate**; separate consolidation audit |
 | Spam/invite protection compatibility | `spam_guard_invite_hard_block`, `spam_guard_default_state_guard`, `spam_guard_invite_override_options`, `discord_invite_blocker_runtime_guard`, `invite_live_enforcer_guard`, `protection_invite_target_precedence_guard`, `protection_center_invite_controls_guard`, `protection_center_clear_categories_guard`, `protection_center_invite_simple_flow_guard` | current invite policy/cleanup paths import specific shared helpers directly; no evidence makes the whole historical chain a boot requirement | high: message deletion, invite policy, command/UI mutation, listeners | **leave dormant unless directly feature-owned**; separate protection audit before deletion |
