@@ -322,13 +322,11 @@ async def record_quiet_activity(
     activity_at: Optional[datetime] = None,
 ) -> Optional[QuietNoticeConfig]:
     observed = _safe_dt(activity_at) or utc_now()
-    lock = _LOCKS.setdefault(int(guild_id), asyncio.Lock())
-    async with lock:
-        return await asyncio.to_thread(
-            _record_activity_sync,
-            int(guild_id),
-            observed,
-        )
+    return await asyncio.to_thread(
+        _record_activity_sync,
+        int(guild_id),
+        observed,
+    )
 
 
 async def update_quiet_delivery(
@@ -357,13 +355,11 @@ async def clear_quiet_delivery(
     *,
     expected_message_id: Optional[int] = None,
 ) -> Optional[QuietNoticeConfig]:
-    lock = _LOCKS.setdefault(int(guild_id), asyncio.Lock())
-    async with lock:
-        return await asyncio.to_thread(
-            _clear_delivery_sync,
-            int(guild_id),
-            int(expected_message_id) if expected_message_id else None,
-        )
+    return await asyncio.to_thread(
+        _clear_delivery_sync,
+        int(guild_id),
+        int(expected_message_id) if expected_message_id else None,
+    )
 
 
 async def delete_quiet_notice(guild_id: int) -> None:
