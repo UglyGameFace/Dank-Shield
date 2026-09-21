@@ -355,7 +355,6 @@ class StickyRuntime:
                     saved = await record_quiet_activity(
                         guild_id,
                         activity_at=newest_observed,
-                        clear_delivery=False,
                     )
                 except CommunityStorageUnavailable:
                     # Keep the newest activity in memory, but never delete a live
