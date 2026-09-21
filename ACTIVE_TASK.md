@@ -61,9 +61,10 @@ Base: `main` at `9f6a0f62a271a1a5c423f8d168bc732c2c9455ab`
 - `reconcile_restart_gap()` collects messageable channels/threads and walks bounded history.
 - `invite_reconciliation_runtime` owns startup/resume invite catch-up and live event recovery.
 - `membership_authority.collect_membership_snapshot()` owns authoritative `guild.fetch_members(limit=None)`.
-- status reporting, live profile reconciliation, command sync, and invite-policy preflight were inspected as neighboring startup traffic.
+- status reporting, live profile reconciliation, command sync, kick/member-wait timer recovery, and invite-policy preflight were inspected as neighboring startup traffic.
 - Live profile deep reconciliation is already lazy above five guilds and is not the incident's dominant request source.
 - Startup invite recovery skips inactive channels by durable restart window and was not the dominant source in the supplied logs.
+- The observed `No member wait timers resumed from persistence/live state` startup path owned a second raw all-guild `guild.fetch_members(limit=None)` sweep beginning two seconds after ready, separate from departed-member reconciliation. That duplicate full-member enumerator was also contributing uncoordinated startup REST traffic.
 
 ## Changes
 
@@ -77,6 +78,7 @@ Base: `main` at `9f6a0f62a271a1a5c423f8d168bc732c2c9455ab`
 - Startup/resume invite history scans reserve from the shared budget.
 - **Live invite event recovery does not use the startup recovery budget**, preserving moderation responsiveness.
 - Authoritative full-member enumeration reserves from the same budget so it cannot collide unchecked with history recovery.
+- Member-wait timer live-state startup recovery no longer owns a duplicate raw `fetch_members(limit=None)` implementation; it reuses canonical `collect_membership_snapshot()` and therefore the same recovery budget/fallback behavior.
 - Raised the default activity reconciliation timeout from 90s to 180s because safe pacing may legitimately extend large-guild recovery.
 - Added production env examples for the recovery budget and paced timeout.
 - Reconciled the contradictory startup tests and added deterministic recovery-budget coverage.
@@ -102,9 +104,14 @@ Implemented focused regression coverage for:
 - startup invite scans using the budget;
 - live invite recovery bypassing the startup budget;
 - authoritative member enumeration using page-weighted budget;
+- member-wait timer startup reusing canonical membership authority instead of a second raw full-member sweep;
 - production env defaults.
 
 Validation is **not complete yet**. Exact branch compile/tests and final CI/runtime evidence are still required before any completion claim.
+
+Current validation blockers observed:
+- GitHub Actions jobs are again completing with `steps=null` and no runner-executed logs, including the generic Python compile job.
+- The local sandbox cannot resolve `github.com`, so it cannot clone/materialize the connected repository independently for an exact-head full test run.
 
 ## Cleanup / conflicts
 
