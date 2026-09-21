@@ -636,30 +636,34 @@ def test_disable_stats_preserves_category_when_it_contains_unowned_channels(monk
 
 
 
-def test_custom_category_name_alone_does_not_claim_unrelated_category(monkeypatch) -> None:
+def test_category_name_alone_does_not_claim_unrelated_category(monkeypatch) -> None:
     class FakeCategoryChannel:
-        def __init__(self):
+        def __init__(self, name: str):
             self.id = 550
-            self.name = "📈 SERVER NUMBERS"
+            self.name = name
             self.voice_channels = []
-
-    category = FakeCategoryChannel()
-
-    class FakeGuild:
-        categories = [category]
-
-        @staticmethod
-        def get_channel(_channel_id: int):
-            return None
 
     monkeypatch.setattr(security_stats.discord, "CategoryChannel", FakeCategoryChannel)
 
-    cfg = {
-        security_stats.SECURITY_STATS_CATEGORY_NAME_KEY: category.name,
-        security_stats.SECURITY_STATS_CATEGORY_ID_KEY: "",
-        security_stats.SECURITY_STATS_CHANNEL_IDS_KEY: {},
-    }
-    assert security_stats._find_owned_category(FakeGuild(), cfg) is None
+    for name in (
+        security_stats.SECURITY_STATS_CATEGORY_NAME,
+        "📈 SERVER NUMBERS",
+    ):
+        category = FakeCategoryChannel(name)
+
+        class FakeGuild:
+            categories = [category]
+
+            @staticmethod
+            def get_channel(_channel_id: int):
+                return None
+
+        cfg = {
+            security_stats.SECURITY_STATS_CATEGORY_NAME_KEY: name,
+            security_stats.SECURITY_STATS_CATEGORY_ID_KEY: "",
+            security_stats.SECURITY_STATS_CHANNEL_IDS_KEY: {},
+        }
+        assert security_stats._find_owned_category(FakeGuild(), cfg) is None
 
 
 def test_saved_stats_channel_parent_recovers_custom_category_ownership(monkeypatch) -> None:
