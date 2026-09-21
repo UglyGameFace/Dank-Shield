@@ -429,27 +429,32 @@ def test_quiet_startup_reconcile_honors_retry_backoff(monkeypatch: pytest.Monkey
     asyncio.run(scenario())
 
 
-def test_clear_quiet_delivery_expected_id_does_not_clear_newer_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_clear_quiet_delivery_uses_one_atomic_rpc_and_preserves_newer_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
     async def scenario() -> None:
-        current = _quiet(
-            last_notice_message_id=888,
-            last_notice_sent_at=datetime(2026, 9, 5, 10, 5, tzinfo=timezone.utc),
+        response = _RpcResponse(
+            {
+                "guild_id": 1,
+                "channel_id": 20,
+                "enabled": True,
+                "content": "quiet",
+                "inactivity_seconds": 7200,
+                "auto_clear": True,
+                "last_notice_message_id": 888,
+                "last_notice_sent_at": "2026-09-05T10:05:00+00:00",
+            }
         )
-        saved = False
+        fake = _RpcSupabase(response)
+        monkeypatch.setattr(quiet_service, "_require_supabase", lambda: fake)
 
-        monkeypatch.setattr(quiet_service, "_get_sync", lambda guild_id: current)
-
-        def fake_save(config: QuietNoticeConfig) -> QuietNoticeConfig:
-            nonlocal saved
-            saved = True
-            return config
-
-        monkeypatch.setattr(quiet_service, "_save_sync", fake_save)
         result = await quiet_service.clear_quiet_delivery(1, expected_message_id=777)
 
-        assert result == current
         assert result is not None and result.last_notice_message_id == 888
-        assert saved is False
+        assert fake.calls == [
+            (
+                quiet_service.QUIET_CLEAR_DELIVERY_RPC,
+                {"p_guild_id": 1, "p_expected_message_id": 777},
+            )
+        ]
 
     asyncio.run(scenario())
 
