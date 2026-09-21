@@ -378,6 +378,13 @@ def test_refresh_repairs_new_stats_channels_for_existing_opted_in_display(monkey
             self.id = 900
             self.name = security_stats.SECURITY_STATS_CATEGORY_NAME
             self.voice_channels = []
+            self.position = 0
+
+        async def edit(self, *, name=None, position=None, reason: str):
+            if name is not None:
+                self.name = name
+            if position is not None:
+                self.position = position
 
     class FakeVoiceChannel:
         def __init__(self, channel_id: int, name: str, category_id: int):
