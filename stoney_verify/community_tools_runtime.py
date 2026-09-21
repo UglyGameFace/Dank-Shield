@@ -3,6 +3,7 @@ from __future__ import annotations
 """Single-owner runtime for persistent Dank Shield Community Tools."""
 
 import asyncio
+import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Iterable, Optional
@@ -32,6 +33,7 @@ MANAGED_WEBHOOK_NAME = "Dank Shield Sticky"
 _RUNTIME_ATTR = "_dank_community_tools_runtime"
 QUIET_CHECK_SECONDS = 30
 QUIET_ACTIVITY_PERSIST_SECONDS = 60
+QUIET_RETRY_BACKOFF_SECONDS = 60
 STARTUP_RECONCILE_CONCURRENCY = 10
 
 
@@ -215,6 +217,7 @@ class StickyRuntime:
         self._quiet_last_persisted: dict[int, datetime] = {}
         self._quiet_locks: dict[int, asyncio.Lock] = {}
         self._quiet_activity_pending: set[int] = set()
+        self._quiet_retry_after: dict[int, float] = {}
         self._quiet_watch_task: Optional[asyncio.Task[Any]] = None
 
     def set_config(self, config: StickyConfig) -> None:
@@ -237,6 +240,8 @@ class StickyRuntime:
             if current is None or activity > current:
                 self._guild_last_activity[guild_id] = activity
             self._quiet_last_persisted[guild_id] = activity
+        if not config.last_notice_message_id:
+            self._quiet_retry_after.pop(guild_id, None)
         if config.enabled:
             self._ensure_quiet_watch_task()
 
@@ -246,6 +251,7 @@ class StickyRuntime:
         self._guild_last_activity.pop(guild_key, None)
         self._quiet_last_persisted.pop(guild_key, None)
         self._quiet_activity_pending.discard(guild_key)
+        self._quiet_retry_after.pop(guild_key, None)
 
     def _ensure_quiet_watch_task(self) -> None:
         task = self._quiet_watch_task
@@ -313,6 +319,12 @@ class StickyRuntime:
         if current is None or observed > current:
             self._guild_last_activity[guild_id] = observed
 
+        retry_after = self._quiet_retry_after.get(guild_id)
+        if retry_after is not None:
+            if time.monotonic() < retry_after:
+                return
+            self._quiet_retry_after.pop(guild_id, None)
+
         last_persisted = self._quiet_last_persisted.get(guild_id) or _utc(config.last_activity_at)
         persistence_due = last_persisted is None or (observed - last_persisted).total_seconds() >= QUIET_ACTIVITY_PERSIST_SECONDS
         clear_live = bool(config.auto_clear and config.last_notice_message_id)
@@ -348,7 +360,9 @@ class StickyRuntime:
                 except CommunityStorageUnavailable:
                     # Keep the newest activity in memory, but never delete a live
                     # notice unless its durable delivery identity is still retained.
+                    # Back off retries so a busy guild cannot hammer unavailable storage.
                     self._guild_last_activity[guild_id] = newest_observed
+                    self._quiet_retry_after[guild_id] = time.monotonic() + QUIET_RETRY_BACKOFF_SECONDS
                     return
                 if saved is None:
                     return
@@ -373,8 +387,10 @@ class StickyRuntime:
 
                 deleted = await self.delete_quiet_live_message(saved)
                 if not deleted:
-                    # Keep the durable message id so the next activity/startup pass
-                    # can retry without orphaning the Discord notice.
+                    # Keep the durable message id so a later activity/startup pass
+                    # can retry without orphaning the Discord notice. Back off the
+                    # hot path so busy guilds do not retry once per message.
+                    self._quiet_retry_after[guild_id] = time.monotonic() + QUIET_RETRY_BACKOFF_SECONDS
                     return
                 try:
                     cleared = await clear_quiet_delivery(
@@ -384,7 +400,8 @@ class StickyRuntime:
                 except CommunityStorageUnavailable:
                     # Discord deletion already succeeded. Retaining the id is safe:
                     # the next pass treats NotFound as a successful idempotent delete
-                    # and retries only the durable clear.
+                    # and retries only the durable clear, with bounded retry pressure.
+                    self._quiet_retry_after[guild_id] = time.monotonic() + QUIET_RETRY_BACKOFF_SECONDS
                     return
                 if cleared is not None:
                     self.set_quiet_config(cleared)
@@ -432,6 +449,12 @@ class StickyRuntime:
                 _log(f"quiet-notice startup load unavailable: {exc}")
                 quiet_configs = []
             self._quiet_configs = {int(item.guild_id): item for item in quiet_configs}
+            active_quiet_guilds = set(self._quiet_configs)
+            self._quiet_retry_after = {
+                guild_id: retry_after
+                for guild_id, retry_after in self._quiet_retry_after.items()
+                if guild_id in active_quiet_guilds
+            }
             self._guild_last_activity = {}
             self._quiet_last_persisted = {}
             now = datetime.now(timezone.utc)
