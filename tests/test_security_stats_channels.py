@@ -559,3 +559,76 @@ def test_empty_visible_selection_falls_back_to_safe_full_default() -> None:
         {security_stats.SECURITY_STATS_VISIBLE_KEYS_KEY: []}
     )
     assert prefs["visible_keys"] == security_stats.DEFAULT_SECURITY_STATS_VISIBLE_KEYS
+
+
+def test_disable_stats_preserves_category_when_it_contains_unowned_channels(monkeypatch) -> None:
+    class FakeVoiceChannel:
+        def __init__(self, channel_id: int, name: str, category_id: int):
+            self.id = channel_id
+            self.name = name
+            self.category_id = category_id
+            self.deleted = False
+
+        async def delete(self, *, reason: str):
+            self.deleted = True
+
+    class FakeCategoryChannel:
+        def __init__(self):
+            self.id = 700
+            self.name = security_stats.SECURITY_STATS_CATEGORY_NAME
+            self.voice_channels = []
+            self.channels = []
+            self.deleted = False
+
+        async def delete(self, *, reason: str):
+            self.deleted = True
+
+    category = FakeCategoryChannel()
+    owned = FakeVoiceChannel(701, "👥 Members: 42", category.id)
+    unowned = SimpleNamespace(id=799, name="owner-created-channel")
+    category.voice_channels.append(owned)
+    category.channels.extend([owned, unowned])
+
+    class FakeGuild:
+        id = 77
+
+        def __init__(self):
+            self.category = category
+
+        def get_channel(self, channel_id: int):
+            if int(channel_id) == category.id:
+                return category
+            if int(channel_id) == owned.id:
+                return owned
+            return None
+
+    state = {
+        security_stats.SECURITY_STATS_ENABLED_KEY: True,
+        security_stats.SECURITY_STATS_CATEGORY_ID_KEY: str(category.id),
+        security_stats.SECURITY_STATS_CHANNEL_IDS_KEY: {"members": str(owned.id)},
+    }
+    writes = []
+
+    async def fake_get_guild_config(guild_id: int, refresh: bool = False):
+        assert guild_id == 77
+        return dict(state)
+
+    async def fake_upsert_guild_config(guild_id: int, updates):
+        writes.append(dict(updates))
+        state.update(updates)
+        return dict(state)
+
+    monkeypatch.setattr(security_stats.discord, "CategoryChannel", FakeCategoryChannel)
+    monkeypatch.setattr(security_stats.discord, "VoiceChannel", FakeVoiceChannel)
+    monkeypatch.setattr(security_stats, "get_guild_config", fake_get_guild_config)
+    monkeypatch.setattr(security_stats, "upsert_guild_config", fake_upsert_guild_config)
+
+    ok, _note = asyncio.run(
+        security_stats.disable_security_stats_display(FakeGuild(), remove_channels=True)
+    )
+
+    assert ok is True
+    assert owned.deleted is True
+    assert category.deleted is False
+    assert writes[-1][security_stats.SECURITY_STATS_ENABLED_KEY] is False
+    assert writes[-1][security_stats.SECURITY_STATS_CHANNEL_IDS_KEY] == {}
