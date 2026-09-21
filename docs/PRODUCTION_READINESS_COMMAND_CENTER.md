@@ -138,47 +138,40 @@ Remaining score blockers:
 
 ### `P0-INT-001` — Replace monkey-patched interaction logger with native interaction service
 
-Status: `PARTIAL / BLOCKER — diagnostics failure history merged; dormant global interaction patcher retirement in progress`
+Status: `PARTIAL / BLOCKER — private framework patchers retired; direct /verify mutation coverage remains`
 
 Goal:
 
-Stop generic `interaction failed` outcomes without patching Discord.py internals, make native Error IDs actionable, and remove obsolete framework-patching artifacts once their native behavior is owned elsewhere.
+Stop generic interaction failures with feature-owned native boundaries and no private Discord.py framework mutation.
 
-Progress completed on current `main`:
+Completed on current `main`:
 
-- Protection Center command/button/modal/select paths use native guarded interaction wrappers.
-- Dank Design command-open, exact-format, reviewed Apply, and Undo mutation paths are native-guarded.
-- `/dank setup-find` result Apply is native-guarded and verified on `main`.
-- Ticket Operations Center shared command runner is native-guarded and verified on `main`.
-- Verification Center shared canonical-command dispatcher is native-guarded and verified on `main`.
-- Verification Center role mapping is native-guarded and persistence-verified on `main`.
-- Canonical Verify Panel posting is native-guarded and verified on `main`.
-- `/dank diagnostics` now exposes a guild-filtered, sanitized native interaction failure summary; PR #283 is merged and verified on `main`.
-- Production boot already does not import or apply `global_interaction_trace_guard`.
+- Protection, Design, setup-find, Ticket Operations Center, Verification Center dispatcher, Verification Center role mapping, and Verify Panel posting use native interaction guards at their authoritative UI boundaries.
+- `/dank diagnostics` exposes guild-isolated sanitized native Error ID history.
+- dormant `global_interaction_trace_guard` was deleted in PR #284 after proving it had no production importer.
+- `interaction_action_lock_guard` was already retired: its file and metadata owner are absent, and regression coverage requires native `interaction_guard` not to replace `View._scheduled_task`.
+- no current production boot owner for the retired interaction framework patchers remains.
 
 Current locked slice:
 
-- retire the dormant `global_interaction_trace_guard.py` artifact;
-- remove it from inert historical startup metadata;
-- delete the obsolete test that requires its private Discord.py patches;
-- replace the loader regression with assertions that the patcher stays absent from disk, boot owners, and historical metadata;
-- keep the native `interaction_guard.py` service unchanged.
+- guard direct `/verify grant-vr`, the highest-risk remaining canonical verify mutation;
+- use an explicit command-scoped lock key so nested invocation through the already-guarded Verification Center does not collide with the outer component `custom_id` lock;
+- preserve the existing business logic and specific Forbidden handling;
+- route unexpected partial-mutation failures through native Error IDs with cautious recovery guidance.
 
 Remaining before `P0-INT-001` can be marked done:
 
-- merge and verify dormant global interaction patcher retirement;
-- resolve remaining direct-command native-guard architecture without nested component-lock collisions;
-- confirm no other P0 interaction path still depends on private Discord.py framework mutation;
+- migrate the remaining highest-risk direct state-changing verify commands one at a time after `grant-vr`;
+- confirm no authoritative public state-changing interaction boundary depends on generic framework fallback;
 - run the full interaction/protection/design/setup/ticket/verify matrix once executable CI infrastructure is restored.
 
 Exit criteria:
 
 - no production startup guard patches `CommandTree`, app command internals, or `View._scheduled_task`;
-- setup/protection/design/ticket/verify state-changing callbacks use the native interaction service at their authoritative public boundaries;
-- failing guarded callbacks log structured context and show a useful user message;
-- native Error IDs can be inspected safely from the owning guild's diagnostics;
-- state-changing UI paths do not report success unless their required persistence/mutation outcome is verified;
-- tests prevent retired private-framework patchers from being restored.
+- authoritative setup/protection/design/ticket/verify mutation boundaries use native interaction handling;
+- failing guarded callbacks log structured context and show useful Error IDs;
+- native Error IDs are safely inspectable from the owning guild's diagnostics;
+- retired private-framework patchers are prevented from returning by regression tests.
 
 
 ---
@@ -264,7 +257,7 @@ Ticket numbers and channel creation must stay consistent under retries, restarts
 | Area / example | Current status | Required action |
 | --- | --- | --- |
 | `global_interaction_trace_guard` | dormant historical patcher; no production importer | **retire/delete** after native interaction ownership and diagnostics replacement |
-| `interaction_action_lock_guard` | likely valid product rule | migrate to central interaction lock/idempotency service |
+| `interaction_action_lock_guard` | retired scheduler patcher; file/startup owner already absent | keep retired; duplicate-action ownership is native in `interaction_guard.py` |
 | `command_safety` | likely valid validation | keep only as validation, no runtime mutation |
 | `slash_command_cleanup` | dangerous in production if mutating commands | move to explicit dev/admin migration tool or delete |
 | `protection_center_command_guard` | mutates command surface to hide aliases | migrate into deterministic command registry |
