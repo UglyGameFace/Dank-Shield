@@ -19,7 +19,7 @@ import discord
 from discord.ext import tasks
 
 from .globals import bot, get_supabase
-from .guild_config import get_guild_config, upsert_guild_config
+from .guild_config import GUILD_CONFIG_TABLE, get_guild_config, upsert_guild_config
 
 SECURITY_STATS_CATEGORY_NAME = "🛡️ DANK SHIELD STATS"
 SECURITY_STATS_ENABLED_KEY = "security_stats_display_enabled"
@@ -75,6 +75,7 @@ _ACTIVE_DISPLAY_GUILDS: set[int] = set()
 _EVENT_REFRESH_TASKS: Dict[int, asyncio.Task] = {}
 _LAST_EVENT_REFRESH_AT: Dict[int, float] = {}
 _EVENT_REFRESH_MIN_SECONDS = 15.0
+_STATS_DISCOVERY_BATCH_SIZE = 200
 _TICKET_STATS_PAGE_SIZE = 500
 _TICKET_STATS_SELECT_COLUMNS: Optional[str] = None
 _LAST_SPAM_GUARD_ENABLED: Dict[int, bool] = {}
@@ -1094,7 +1095,7 @@ def _looks_like_cached_stats_category(category: Any) -> bool:
 
 
 def _discover_cached_stats_guilds() -> None:
-    """Seed the active registry from Discord's in-memory cache without DB/API fanout."""
+    """Seed obvious default-looking displays from Discord's in-memory cache."""
     for guild in list(getattr(bot, "guilds", []) or []):
         gid = _safe_int(getattr(guild, "id", 0), 0)
         if gid <= 0:
@@ -1105,6 +1106,59 @@ def _discover_cached_stats_guilds() -> None:
             categories = []
         if any(_looks_like_cached_stats_category(category) for category in categories):
             _ACTIVE_DISPLAY_GUILDS.add(gid)
+
+
+async def _discover_persisted_stats_guilds() -> None:
+    """Recover enabled displays after restart without one DB read per guild.
+
+    A fully customized category/label set may contain none of the default names,
+    so Discord's cache alone cannot identify it. Resolve the enabled flag for the
+    guilds owned by this process in bounded Supabase batches instead of issuing a
+    config read for every guild.
+    """
+
+    guild_ids = sorted(
+        {
+            _safe_int(getattr(guild, "id", 0), 0)
+            for guild in list(getattr(bot, "guilds", []) or [])
+            if _safe_int(getattr(guild, "id", 0), 0) > 0
+        }
+    )
+    if not guild_ids:
+        return
+
+    sb = get_supabase()
+    if sb is None:
+        return
+
+    def _read_enabled() -> set[int]:
+        enabled: set[int] = set()
+        for start in range(0, len(guild_ids), _STATS_DISCOVERY_BATCH_SIZE):
+            batch = guild_ids[start : start + _STATS_DISCOVERY_BATCH_SIZE]
+            response = (
+                sb.table(GUILD_CONFIG_TABLE)
+                .select("guild_id,settings")
+                .in_("guild_id", [str(gid) for gid in batch])
+                .execute()
+            )
+            for row in list(getattr(response, "data", None) or []):
+                if not isinstance(row, Mapping):
+                    continue
+                settings = _mapping(row.get("settings"))
+                if not _safe_bool(settings.get(SECURITY_STATS_ENABLED_KEY), False):
+                    continue
+                gid = _safe_int(row.get("guild_id"), 0)
+                if gid > 0:
+                    enabled.add(gid)
+        return enabled
+
+    try:
+        _ACTIVE_DISPLAY_GUILDS.update(await asyncio.to_thread(_read_enabled))
+    except Exception as exc:
+        print(
+            "⚠️ security_stats persisted display discovery failed "
+            f"error={type(exc).__name__}"
+        )
 
 
 @tasks.loop(minutes=10)
@@ -1167,6 +1221,7 @@ async def _start_security_stats_refresh_loop() -> None:
     if refresh_all_security_stats_displays.is_running():
         return
     _discover_cached_stats_guilds()
+    await _discover_persisted_stats_guilds()
     try:
         refresh_all_security_stats_displays.start()
         print(
