@@ -2,81 +2,68 @@
 
 ## Active task / desired outcome
 
-**P0-INT-001 — Retire dormant global Discord.py interaction patcher**
+**P0-INT-001 — Guard direct /verify grant-vr mutation without nested-lock collision**
 
-Remove the obsolete `global_interaction_trace_guard` artifact now that exact boot ownership proves production does not import or apply it and the native interaction service owns the useful failure/duplicate behavior.
+Move the multi-role `/verify grant-vr` mutation boundary onto the native interaction service while preserving Verification Center delegation and avoiding collision with its already-guarded component boundary.
 
-## Why this is the active slice
+## Why this is next
 
-PR #283 completed native Error ID visibility in `/dank diagnostics` and merged as `6c63c45f98c3c6f208fbb0447b767b060cb96031`.
+PR #284 retired the dormant global interaction framework patcher and merged as `ca473dac5fd87e0c611608f8e9d3f2fe3be666c2`.
 
-Post-merge verification on `main` confirmed the validated diagnostics/test blobs exactly:
+Post-merge verification on `main` confirmed:
+- `global_interaction_trace_guard.py` is absent;
+- its obsolete implementation-preservation test is absent;
+- startup historical metadata no longer names it;
+- replacement retirement regression blob is `3c7878dd2ad5de4dc16535ac16327b98b5100377`;
+- native `interaction_guard.py` remained unchanged at `b8fa9dc52b04d43cfe58f07ee5c69e27fd885bd3`.
 
-- `public_diagnostics_group.py` → `8910e492f2afc5078acbaeedd94572d7e46fb585`
-- `test_public_diagnostics_native_interaction_failures_static.py` → `893dcf65862e12afd52b1925c697d78264a05c30`
+The readiness audits also incorrectly described `interaction_action_lock_guard` as live. Current code proves it was already retired before this slice:
+- `interaction_action_lock_guard.py` does not exist;
+- it is absent from historical startup metadata and `main.py`;
+- `tests/test_interaction_native_ownership.py` explicitly requires the retired module to stay absent and verifies importing native `interaction_guard` does not replace `discord.ui.View._scheduled_task`.
 
-The production-readiness ledger still described `global_interaction_trace_guard` as a live framework-patching blocker. Exact current-main ownership inspection disproved that assumption:
+The next real native-guard gap is a direct state-changing slash command. `/verify grant-vr` is the highest-risk first slice because it can add Verified and Resident roles, remove Pending, and repair the member's verify UI.
 
-- `main.py` explicitly says not to restore global Discord.py monkey patches;
-- `sitecustomize.py` owns only the Basic Verify compatibility path and does not import it;
-- `usercustomize.py`, `stoney_verify/app.py`, and `stoney_verify/commands.py` do not import it;
-- `startup_guards/__init__.py` is non-executable historical metadata and is not iterated by normal boot;
-- repo import/reference checks found no production import or `.apply()` owner;
-- its private patch markers and legacy trace environment knobs exist only inside the dormant file and the obsolete test that required it.
+## Nested-lock constraint
 
-Keeping a dead module capable of patching `CommandTree._call`, app-command private methods, and `View._scheduled_task` creates resurrection risk with no production benefit.
+Verification Center already calls canonical verify command callbacks through a native guard. The native default action key prioritizes a component `custom_id`, so blindly adding another default guard inside `verify_grant_vr` would reuse the outer component lock and reject itself.
+
+The direct command guard must therefore use an explicit command-scoped lock key distinct from the outer component lock.
 
 ## Scope
 
 In scope:
-
-- delete `stoney_verify/startup_guards/global_interaction_trace_guard.py`;
-- remove its entry from inert `LEGACY_DORMANT_STARTUP_GUARDS` metadata;
-- delete `tests/test_global_interaction_trace_guard_static.py`, which required the monkey-patch implementation to exist;
-- rewrite `tests/test_global_interaction_trace_loader_static.py` to require the retired module to stay absent from disk, startup metadata, and production boot owners;
-- document the corrected runtime ownership and retirement disposition;
-- update the P0 interaction readiness ledger.
+- canonical `verify_grant_vr` callback;
+- a thin guarded wrapper around its current business logic;
+- an explicit verify-command lock key safe for both slash and Verification Center invocation;
+- preserve existing early acknowledgement, staff/guild checks, role resolution/hierarchy checks, specific Forbidden response, ticket/UI repair, and success wording;
+- let unexpected mutation exceptions reach native structured Error IDs rather than the current generic `Failed: ...` response;
+- focused regression coverage for lock-key separation and business-logic preservation.
 
 Out of scope:
-
-- changing `stoney_verify/interaction_guard.py`;
-- changing canonical interaction behavior;
-- changing ticket/setup/design/verification callbacks;
-- retiring any other startup guard;
-- changing `interaction_action_lock_guard` or unrelated historical inventory;
-- changing command registration or startup order;
-- solving remaining direct-command nested-lock architecture in this slice.
+- guarding every `/verify` command in one PR;
+- changing role resolution or setup mappings;
+- changing Verification Center dispatcher behavior;
+- changing Basic Verify or ID Verify mode policy;
+- changing ticket/setup/design code;
+- changing `interaction_guard.py` global lock semantics in this slice.
 
 ## Status
 
-**IMPLEMENTED — dormant patcher deleted; targeted ownership validation pending final PR head**
+**LOCKED — NOT IMPLEMENTED**
 
-## Runtime behavior impact
+## Recovery rule
 
-Expected runtime behavior change: **none**.
-
-The deleted module had no production importer/apply path. The task removes dormant code and historical metadata only. Native interaction handling remains feature-owned by `stoney_verify.interaction_guard` and existing public owners.
-
-## Regression rule
-
-The replacement static regression must require:
-
-- `global_interaction_trace_guard.py` does not exist;
-- its fully qualified module name is absent from historical startup metadata;
-- `main.py`, `sitecustomize.py`, `usercustomize.py`, `stoney_verify/app.py`, and `stoney_verify/commands.py` contain no reference to it;
-- native `interaction_guard.py` still owns `run_guarded_interaction`, recent failures, and duplicate-action handling;
-- native interaction service contains no `CommandTree._call`, `_invoke_with_namespace`, `_scheduled_task`, or old elite-wrapper markers.
+Because multiple role mutations can partially succeed before an unexpected exception, failure guidance must not say nothing changed. It must tell staff to reopen Verification Center or run verify status/diagnostics, inspect the member's current roles, and only then retry using the Error ID.
 
 ## Previous completed slice
 
-**PR #283 — Show native interaction failures in diagnostics**
+**PR #284 — Retire dormant global interaction patcher**
 
-- merged as `6c63c45f98c3c6f208fbb0447b767b060cb96031`;
+- merged as `ca473dac5fd87e0c611608f8e9d3f2fe3be666c2`;
 - verified on `main`;
-- guild isolation/privacy behavior validated;
-- diagnostics production blob: `8910e492f2afc5078acbaeedd94572d7e46fb585`;
-- regression-test blob: `893dcf65862e12afd52b1925c697d78264a05c30`.
+- no runtime replacement was needed because the deleted module had no production owner.
 
 ## Next step
 
-Validate the retirement branch against current `main`, confirm no executable references remain, open a focused PR, record exact-head CI/runner state, merge with an expected-head guard if clean, then verify the retired file remains absent on `main`.
+Inspect the exact `verify_grant_vr` body and Verification Center call path, implement the smallest explicit-lock native wrapper, add focused regression coverage, then validate the exact final head before merge.
