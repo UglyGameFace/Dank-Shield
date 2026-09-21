@@ -90,3 +90,23 @@ def test_server_stats_does_not_expand_compact_dank_slash_children() -> None:
     ).read_text(encoding="utf-8")
     assert 'dank_children != ["home", "setup", "upload"]' in source
     assert 'label="Server Stats"' in source
+
+
+def test_server_stats_modal_saves_reuse_the_existing_panel() -> None:
+    source = (
+        ROOT / "stoney_verify/commands_ext/public_server_stats.py"
+    ).read_text(encoding="utf-8")
+
+    assert "fresh_followup" not in source
+    category_block = source[
+        source.index("class CategoryNameModal"):
+        source.index("class StatLabelModal")
+    ]
+    label_block = source[
+        source.index("class StatLabelModal"):
+        source.index("class VisibleStatsSelect")
+    ]
+    for block in (category_block, label_block):
+        assert "await interaction.response.defer()" in block
+        assert "await _render_center(interaction, content=note)" in block
+        assert "interaction.followup.send(" not in block
