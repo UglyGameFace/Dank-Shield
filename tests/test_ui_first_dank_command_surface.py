@@ -54,6 +54,7 @@ def test_home_mega_menu_preserves_all_previous_ui_destinations() -> None:
         "Roles & Profiles",
         "Logs & Activity",
         "My Profile",
+        "Server Stats",
         "Status",
         "Diagnostics",
         "Card Assets",
