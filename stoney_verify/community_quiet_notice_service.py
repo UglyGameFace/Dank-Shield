@@ -225,12 +225,10 @@ def _delete_sync(guild_id: int) -> None:
 def _record_activity_sync(
     guild_id: int,
     activity_at: datetime,
-    clear_delivery: bool,
 ) -> Optional[QuietNoticeConfig]:
     params = {
         "p_guild_id": int(guild_id),
         "p_activity_at": activity_at.isoformat(),
-        "p_clear_delivery": bool(clear_delivery),
     }
     try:
         resp = _require_supabase().rpc(QUIET_RECORD_ACTIVITY_RPC, params).execute()
@@ -322,7 +320,6 @@ async def record_quiet_activity(
     guild_id: int,
     *,
     activity_at: Optional[datetime] = None,
-    clear_delivery: bool = False,
 ) -> Optional[QuietNoticeConfig]:
     observed = _safe_dt(activity_at) or utc_now()
     lock = _LOCKS.setdefault(int(guild_id), asyncio.Lock())
@@ -331,7 +328,6 @@ async def record_quiet_activity(
             _record_activity_sync,
             int(guild_id),
             observed,
-            bool(clear_delivery),
         )
 
 
