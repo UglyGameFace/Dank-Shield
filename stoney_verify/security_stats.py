@@ -644,13 +644,14 @@ async def _apply_category_preferences(
         await category.edit(name=desired_name, reason="Apply Dank Shield server stats category name")
 
     placement = str(preferences.get("placement") or "top")
+    current_position = _safe_int(getattr(category, "position", -1), -1)
     if placement == "top":
-        if int(getattr(category, "position", -1) or -1) != 0:
+        if current_position != 0:
             await category.edit(position=0, reason="Place Dank Shield server stats at the top")
     elif placement == "bottom":
         categories = list(getattr(guild, "categories", []) or [])
         target = max(0, len(categories) - 1)
-        if int(getattr(category, "position", -1) or -1) != target:
+        if current_position != target:
             await category.edit(position=target, reason="Place Dank Shield server stats at the bottom")
 
 
