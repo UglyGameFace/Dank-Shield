@@ -31,9 +31,15 @@ def test_events_startup_no_longer_owns_member_full_sync_or_departed_reconcile() 
         "@bot.event\nasync def on_ready()",
     )
 
-    assert "_initial_member_sync_sweep()" not in block
-    assert "new_run_departed_reconciliation_for_guild" not in block
+    assert "_initial_member_sync_sweep" not in EVENTS
+    assert "new_run_full_member_sync_for_guild" not in EVENTS
+    assert "new_run_departed_reconciliation_for_guild" not in EVENTS
     assert "_initial_member_sync_started" not in block
+
+
+def test_events_has_no_dead_all_guild_invite_warm_helper() -> None:
+    assert "_warm_all_guild_invite_caches" not in EVENTS
+    assert "_invite_cache_warm_started" not in EVENTS
 
 
 def test_new_guild_bootstrap_is_event_scoped_not_ready_scoped() -> None:
