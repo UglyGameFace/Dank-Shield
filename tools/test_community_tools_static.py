@@ -64,11 +64,16 @@ def test_migration_persists_stickies_and_polls_service_role_only() -> None:
 def test_quiet_delivery_clear_is_database_atomic_and_service_role_only() -> None:
     quiet_service = (ROOT / "stoney_verify/community_quiet_notice_service.py").read_text(encoding="utf-8")
     assert 'QUIET_CLEAR_DELIVERY_RPC = "clear_dank_quiet_notice_delivery"' in quiet_service
+    assert 'QUIET_RECORD_ACTIVITY_RPC = "record_dank_quiet_notice_activity"' in quiet_service
     assert ".rpc(QUIET_CLEAR_DELIVERY_RPC, params).execute()" in quiet_service
+    assert ".rpc(QUIET_RECORD_ACTIVITY_RPC, params).execute()" in quiet_service
     assert "for update" in QUIET_CLEAR.lower()
     assert "last_notice_message_id is distinct from p_expected_message_id" in QUIET_CLEAR
+    assert "last_activity_at = case" in QUIET_CLEAR
     assert "grant execute on function public.clear_dank_quiet_notice_delivery(bigint, bigint) to service_role" in QUIET_CLEAR
+    assert "grant execute on function public.record_dank_quiet_notice_activity(bigint, timestamptz, boolean) to service_role" in QUIET_CLEAR
     assert "revoke all on function public.clear_dank_quiet_notice_delivery(bigint, bigint) from anon, authenticated" in QUIET_CLEAR
+    assert "revoke all on function public.record_dank_quiet_notice_activity(bigint, timestamptz, boolean) from anon, authenticated" in QUIET_CLEAR
 
 
 def test_poll_and_embed_posting_use_preview_publish_and_real_permissions() -> None:
