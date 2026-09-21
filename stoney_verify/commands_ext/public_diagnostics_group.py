@@ -13,7 +13,7 @@ import discord
 
 from ..globals import now_utc
 from ..guild_context import GuildContext, get_guild_context
-from ..interaction_guard import run_guarded_interaction, safe_send_interaction
+from ..interaction_guard import recent_interaction_failures, run_guarded_interaction, safe_send_interaction
 from ..members_new.activity_scope import ActivityScopeReport, audit_activity_scope, format_activity_scope_problems
 from ..startup_diagnostics import build_startup_health_report
 from .public_setup_group import dank_group
@@ -72,6 +72,41 @@ def _field_text(items: list[str], *, empty: str, limit: int = 1000) -> str:
     return "\n".join(out) or empty
 
 
+def _safe_failure_token(value: Any, *, limit: int) -> str:
+    try:
+        text = str(value or "").replace("\r", " ").replace("\n", " ").replace("`", "'").strip()
+    except Exception:
+        text = ""
+    return (text[: max(1, int(limit))] or "unknown")
+
+
+def _native_interaction_failure_field(guild_id: int) -> str:
+    current_guild_id = int(guild_id)
+    matched = [
+        record
+        for record in recent_interaction_failures(limit=250)
+        if int(getattr(getattr(record, "context", None), "guild_id", 0) or 0) == current_guild_id
+    ]
+    latest = list(reversed(matched[-5:]))
+    if not latest:
+        return "✅ None recorded for this server in this process."
+
+    lines: list[str] = []
+    for record in latest:
+        context = getattr(record, "context", None)
+        error_id = _safe_failure_token(getattr(record, "error_id", ""), limit=24)
+        action = _safe_failure_token(getattr(context, "action_name", ""), limit=72)
+        stage = _safe_failure_token(getattr(record, "stage", ""), limit=40)
+        error_type = _safe_failure_token(getattr(record, "error_type", ""), limit=48)
+        notified = "Yes" if bool(getattr(record, "sent_to_user", False)) else "No"
+        lines.append(
+            f"`{error_id}` • `{action}` • `{stage}/{error_type}` • user notified: **{notified}**"
+        )
+
+    details = _field_text(lines, empty="✅ None recorded for this server in this process.", limit=850)
+    return ("Newest first • current server • current process\n" + details)[:1000]
+
+
 def _yes_no(value: bool) -> str:
     return "Yes" if bool(value) else "No"
 
@@ -123,6 +158,7 @@ def _startup_diagnostics_embed(
     guild_context: Optional[GuildContext] = None,
     guild_context_error: Optional[BaseException] = None,
     activity_scope: Optional[ActivityScopeReport] = None,
+    interaction_failure_summary: Optional[str] = None,
 ) -> discord.Embed:
     report = build_startup_health_report()
 
@@ -181,6 +217,12 @@ def _startup_diagnostics_embed(
     else:
         embed.add_field(name="Activity Tracking Coverage", value="⚠️ Activity channel scope was not checked.", inline=False)
 
+    embed.add_field(
+        name="Recent Native Interaction Failures",
+        value=interaction_failure_summary or "⚠️ Native interaction failure history was not checked.",
+        inline=False,
+    )
+
     embed.add_field(name="Startup Blockers", value=_field_text(report.blockers, empty="✅ None"), inline=False)
     embed.add_field(name="Startup Warnings", value=_field_text(report.warnings, empty="✅ None"), inline=False)
     embed.add_field(
@@ -228,10 +270,12 @@ async def diagnostics(interaction: discord.Interaction) -> None:
             guild_context_error = e
 
         activity_scope = audit_activity_scope(interaction.guild)
+        interaction_failure_summary = _native_interaction_failure_field(int(interaction.guild.id))
         embed = _startup_diagnostics_embed(
             guild_context=guild_context,
             guild_context_error=guild_context_error,
             activity_scope=activity_scope,
+            interaction_failure_summary=interaction_failure_summary,
         )
         sent = await safe_send_interaction(
             interaction,
