@@ -139,7 +139,7 @@ Remaining score blockers:
 
 ### `P0-INT-001` — Replace monkey-patched interaction logger with native interaction service
 
-Status: `PARTIAL / BLOCKER — Verification role-mapping integrity implemented; exact-head PR/main verification pending`
+Status: `PARTIAL / BLOCKER — role mapping merged; canonical Verify Panel posting is next locked slice`
 
 Goal:
 
@@ -148,29 +148,26 @@ Stop generic `interaction failed` outcomes without patching Discord.py internals
 Progress completed on current `main`:
 
 - Protection Center command/button/modal/select paths use native guarded interaction wrappers.
-- `/dank design` command-open uses `run_guarded_interaction()`.
-- Exact-format editor runtime actions are native-guarded.
-- Reviewed Dank Design Apply / Undo mutation boundaries are native-guarded and verified on `main` via PR #271.
-- `/dank setup-find` result Apply is native-guarded and verified on `main` via PR #273.
-- Ticket Operations Center shared command runner is native-guarded and verified on `main` via PR #275.
-- Verification Center shared canonical-command dispatcher is native-guarded and verified on `main` via PR #277.
+- Dank Design command-open, exact-format, reviewed Apply, and Undo mutation paths are native-guarded.
+- `/dank setup-find` result Apply is native-guarded and verified on `main`.
+- Ticket Operations Center shared command runner is native-guarded and verified on `main`.
+- Verification Center shared canonical-command dispatcher is native-guarded and verified on `main`.
+- Verification Center role mapping is native-guarded and verifies persisted config before reporting success; PR #279 is merged and verified on `main`.
 
-Current locked slice:
+Next locked slice:
 
-- `VerifyRoleSelect.callback` now runs through the native interaction guard with pre-defer acknowledgement.
-- The existing explicit-override save path is preserved.
-- After the attempted save, the callback invalidates guild-config cache and forces a fresh config read before success.
-- The exact selected role ID must be observed in the saved config or the guarded action fails with a structured Error ID.
-- Cache invalidation is required because `get_guild_config(refresh=True)` intentionally preserves stale cache when the DB is unavailable; stale state must not confirm a failed write.
-- The global best-effort behavior of `_save_role_config` for auto-discovery/auto-create remains unchanged and out of scope.
+- canonical `verify_panel()` is used by `/verify panel`, Verification Center, and setup surfaces;
+- it directly owns the live `post_basic_verify_panel(...)` mutation but currently catches unexpected failures locally;
+- migrate the canonical function once, rather than wrapping each caller;
+- preserve staff checks, channel selection, disabled-mode explanation, runtime-install suffix, and the Basic Verify posting service.
 
 Remaining before `P0-INT-001` can be marked done:
 
-- exact-head validate, merge, and verify the Verification Center role-mapping save boundary;
+- migrate and verify canonical Verify Panel posting;
 - continue the next single highest-risk direct verification mutation boundary after that;
 - ensure diagnostics expose recent native interaction failures safely;
 - remove or disable `global_interaction_trace_guard` framework patching only after native coverage is sufficient;
-- run the full interaction/protection/design/setup/ticket/verify test matrix once executable CI/checkout infrastructure is available.
+- run the full interaction/protection/design/setup/ticket/verify matrix once executable CI infrastructure is restored.
 
 Exit criteria:
 
