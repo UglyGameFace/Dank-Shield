@@ -60,15 +60,29 @@ def _status(scope: dict[str, Any]) -> str:
     )
 
 
-def invite_shield_embed(scope: dict[str, Any], *, note: str = "") -> discord.Embed:
+def invite_shield_embed(
+    scope: dict[str, Any],
+    *,
+    enabled: bool | None = None,
+    note: str = "",
+) -> discord.Embed:
+    state_label = "ON" if enabled is True else "OFF" if enabled is False else "UNKNOWN"
+    state_text = (
+        "✅ External Discord invite links are actively blocked."
+        if enabled is True
+        else "⚪ External Discord invite links are currently allowed."
+        if enabled is False
+        else "⚠️ Live Invite Shield state could not be confirmed."
+    )
     embed = discord.Embed(
-        title="🚫 Invite Shield",
+        title=f"🚫 Invite Shield • {state_label}",
         description=(
             "Configure where Invite Shield should pay extra attention and clean old invite posts. "
             "Normal links are unaffected unless Link Shield is enabled separately."
         ),
         color=discord.Color.blurple(),
     )
+    embed.add_field(name="Live blocker", value=state_text, inline=False)
     embed.add_field(name="Current targeting", value=_status(scope), inline=False)
     embed.add_field(
         name="Fast setup",
@@ -111,6 +125,13 @@ async def _require_owner(interaction: discord.Interaction, author_id: int) -> bo
     return False
 
 
+async def _invite_shield_enabled(guild_id: int) -> bool:
+    center = _center()
+    cfg = await center.get_guild_config(int(guild_id), refresh=True)
+    spam, _source = await center._load_spam_settings(int(guild_id))
+    return bool(center._invite_shield_enabled_for_ui(cfg, spam))
+
+
 async def _turn_invite_shield_on(interaction: discord.Interaction) -> None:
     center = _center()
     guild = interaction.guild
@@ -136,13 +157,15 @@ async def _redraw(
     origin_channel_id: int,
     note: str = "",
 ) -> None:
+    guild = interaction.guild
+    enabled = await _invite_shield_enabled(int(guild.id)) if guild is not None else None
     view = InviteShieldView(
         author_id=author_id,
-        guild=interaction.guild,
+        guild=guild,
         origin_channel_id=origin_channel_id,
         scope=scope,
     )
-    embed = invite_shield_embed(scope, note=note)
+    embed = invite_shield_embed(scope, enabled=enabled, note=note)
     if not interaction.response.is_done():
         await interaction.response.edit_message(embed=embed, view=view)
     else:
@@ -466,8 +489,9 @@ async def open_invite_shield(interaction: discord.Interaction) -> None:
     if guild is None:
         return await _safe_ephemeral(interaction, "❌ This must be used inside a server.")
     scope = await load_invite_scope_settings(int(guild.id), refresh=True)
+    enabled = await _invite_shield_enabled(int(guild.id))
     channel_id = _channel_id(interaction)
-    embed = invite_shield_embed(scope)
+    embed = invite_shield_embed(scope, enabled=enabled)
     view = InviteShieldView(
         author_id=int(interaction.user.id),
         guild=guild,
@@ -481,12 +505,11 @@ async def open_invite_shield(interaction: discord.Interaction) -> None:
 
 
 def install_native_invite_ui() -> bool:
-    """Route the canonical Invite Blocker action to this native feature UI.
+    """Bind the native Invite Shield editor without stealing toggle ownership.
 
-    The Protection Center button already calls ``_toggle_invite_shield`` inside
-    its guarded interaction boundary. Rebinding that feature function keeps the
-    existing button, owner checks, and error handling intact without replacing a
-    View constructor or component callback like the retired startup guards did.
+    The Protection Center's **Invite Blocker** button must keep calling the real
+    on/off toggle. The editor is opened through its own settings action so a user
+    cannot mistake "opened settings" for "enabled protection".
     """
 
     global _INSTALLED, _ORIGINAL_TOGGLE
@@ -498,7 +521,6 @@ def install_native_invite_ui() -> bool:
         if not callable(original):
             return False
         _ORIGINAL_TOGGLE = original
-        center._toggle_invite_shield = open_invite_shield
         _INSTALLED = True
         return True
     except Exception:

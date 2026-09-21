@@ -697,25 +697,18 @@ def _install_dank_globals_invite_enforcer() -> None:
                 except Exception:
                     pass
 
-                from stoney_verify.invite_policy_engine import (
-                    decide_invite_message,
-                    delete_message_if_allowed,
-                    extract_invite_codes_from_message,
-                    send_invite_decision_modlog,
-                )
+                from stoney_verify.invite_policy_engine import enforce_live_invite_message
 
-                codes = extract_invite_codes_from_message(message)
-                if not codes:
-                    return
-
-                decision = await decide_invite_message(
+                decision = await enforce_live_invite_message(
                     message,
                     source="globals_live_enforcer",
                     refresh_policy=True,
                 )
+                if decision is None:
+                    return
 
                 if decision.should_delete:
-                    deleted = await delete_message_if_allowed(message, decision)
+                    deleted = bool(decision.delete_succeeded)
                     print(
                         "🛡️ invite_live_enforcer decision "
                         f"guild={getattr(guild, 'id', 0)} "
@@ -728,10 +721,6 @@ def _install_dank_globals_invite_enforcer() -> None:
                         f"deleted={deleted} "
                         f"error={decision.delete_error or '-'}"
                     )
-                    try:
-                        await send_invite_decision_modlog(message, decision)
-                    except Exception:
-                        pass
                     return
 
                 print(

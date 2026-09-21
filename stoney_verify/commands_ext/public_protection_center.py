@@ -1443,6 +1443,22 @@ class ProtectionCenterView(discord.ui.View):
 
         await _guard_protection_action(interaction, "protection.invite_blocker", action, defer=True)
 
+    @discord.ui.button(label="Invite Settings", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:invite_settings", row=2)
+    async def invite_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+
+        async def action() -> None:
+            from .public_protection_invite_ui import open_invite_shield
+
+            await open_invite_shield(interaction)
+
+        await _guard_protection_action(
+            interaction,
+            "protection.invite_settings",
+            action,
+            defer=True,
+        )
+
     @discord.ui.button(label="Link Shield", emoji="🔗", style=discord.ButtonStyle.secondary, custom_id="dank_protection:block_links", row=1)
     async def block_links_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
