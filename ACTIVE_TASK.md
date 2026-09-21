@@ -2,81 +2,113 @@
 
 ## Active task / desired outcome
 
-**P0-INT-001 — Retire dormant global Discord.py interaction patcher**
+**DS-INVITE-REG-001 — Restore live Invite Blocker toggle ownership**
 
-Remove the obsolete `global_interaction_trace_guard` artifact now that exact boot ownership proves production does not import or apply it and the native interaction service owns the useful failure/duplicate behavior.
+Restore the Protection Center contract so pressing **Invite Blocker** actually toggles live Discord invite blocking, while advanced Invite Shield targeting/cleanup remains available through a separate settings action.
 
-## Why this is the active slice
+## Status
 
-PR #283 completed native Error ID visibility in `/dank diagnostics` and merged as `6c63c45f98c3c6f208fbb0447b767b060cb96031`.
+**IMPLEMENTED — focused validation and exact-head CI inspection pending**
 
-Post-merge verification on `main` confirmed the validated diagnostics/test blobs exactly:
+## Root cause
 
-- `public_diagnostics_group.py` → `8910e492f2afc5078acbaeedd94572d7e46fb585`
-- `test_public_diagnostics_native_interaction_failures_static.py` → `893dcf65862e12afd52b1925c697d78264a05c30`
+The Sep. 16 native Invite Shield UI migration captured the original `_toggle_invite_shield` function and then replaced `center._toggle_invite_shield` with `open_invite_shield`.
 
-The production-readiness ledger still described `global_interaction_trace_guard` as a live framework-patching blocker. Exact current-main ownership inspection disproved that assumption:
+The public Protection Center button still retained the label **Invite Blocker** and still called `_toggle_invite_shield(interaction)`. Because the global function had been rebound, pressing the button opened the editor instead of toggling `automod_block_invites`.
 
-- `main.py` explicitly says not to restore global Discord.py monkey patches;
-- `sitecustomize.py` owns only the Basic Verify compatibility path and does not import it;
-- `usercustomize.py`, `stoney_verify/app.py`, and `stoney_verify/commands.py` do not import it;
-- `startup_guards/__init__.py` is non-executable historical metadata and is not iterated by normal boot;
-- repo import/reference checks found no production import or `.apply()` owner;
-- its private patch markers and legacy trace environment knobs exist only inside the dormant file and the obsolete test that required it.
+That created a control-plane regression: a server owner could press **Invite Blocker**, configure watched bots/channels, and reasonably believe protection was enabled while the authoritative live blocker flag remained OFF.
 
-Keeping a dead module capable of patching `CommandTree._call`, app-command private methods, and `View._scheduled_task` creates resurrection risk with no production benefit.
+## Execution path
+
+`ProtectionCenterView.block_invites_button`
+→ `_toggle_invite_shield`
+→ guild config + Spam Guard persistence
+→ invite policy cache invalidation
+→ `globals.py` `on_message` listener
+→ `invite_policy_engine.enforce_live_invite_message`
+→ `decide_invite_message`
+→ `delete_message_if_allowed`
+
+Advanced configuration now has its own path:
+
+`ProtectionCenterView.invite_settings_button`
+→ `public_protection_invite_ui.open_invite_shield`
 
 ## Scope
 
 In scope:
 
-- delete `stoney_verify/startup_guards/global_interaction_trace_guard.py`;
-- remove its entry from inert `LEGACY_DORMANT_STARTUP_GUARDS` metadata;
-- delete `tests/test_global_interaction_trace_guard_static.py`, which required the monkey-patch implementation to exist;
-- rewrite `tests/test_global_interaction_trace_loader_static.py` to require the retired module to stay absent from disk, startup metadata, and production boot owners;
-- document the corrected runtime ownership and retirement disposition;
-- update the P0 interaction readiness ledger.
+- preserve native `_toggle_invite_shield` ownership;
+- add a distinct **Invite Settings** action;
+- show authoritative live ON/OFF state in the Invite Shield editor;
+- expose one canonical/testable live enforcement boundary in `invite_policy_engine`;
+- route the guaranteed globals listener through that boundary;
+- add regressions for toggle ownership and real live human-invite deletion;
+- preserve same-server invite allowance.
 
 Out of scope:
 
-- changing `stoney_verify/interaction_guard.py`;
-- changing canonical interaction behavior;
-- changing ticket/setup/design/verification callbacks;
-- retiring any other startup guard;
-- changing `interaction_action_lock_guard` or unrelated historical inventory;
-- changing command registration or startup order;
-- solving remaining direct-command nested-lock architecture in this slice.
+- Quiet Server Notice PR #285;
+- startup Discord REST/rate-limit PR #286;
+- changing invite regex semantics;
+- changing Spam Guard burst policy;
+- changing allowed-user/role/channel exceptions;
+- changing same-server invite policy;
+- retiring other startup guards.
 
-## Status
+## Changes
 
-**IMPLEMENTED — dormant patcher deleted; targeted ownership validation pending final PR head**
+- `public_protection_invite_ui.py`
+  - no longer rebinds `center._toggle_invite_shield`;
+  - still captures the original toggle for the editor's own ON/OFF action;
+  - displays live blocker state as ON/OFF/UNKNOWN.
+- `public_protection_center.py`
+  - **Invite Blocker** remains the actual toggle;
+  - new **Invite Settings** button opens the advanced editor.
+- `invite_policy_engine.py`
+  - adds `enforce_live_invite_message` as the canonical testable live boundary.
+- `globals.py`
+  - guaranteed `on_message` listener delegates to the canonical live boundary.
+- tests
+  - lock separate toggle/editor ownership;
+  - prove a human-posted external `discord.gg` invite is deleted when Invite Shield is enabled;
+  - prove a same-server invite remains allowed;
+  - require the globals listener to use the canonical enforcement boundary.
 
-## Runtime behavior impact
+## Compatibility / cleanup review
 
-Expected runtime behavior change: **none**.
+- no startup guard added;
+- no Discord.py monkey patch added;
+- no duplicate delete authority added;
+- central `invite_policy_engine` remains the only delete-decision authority;
+- live listener remains installed from `globals.py`;
+- same-server invites remain allowed by default;
+- normal non-invite links remain outside Invite Shield deletion policy;
+- PR #285 and PR #286 are untouched.
 
-The deleted module had no production importer/apply path. The task removes dormant code and historical metadata only. Native interaction handling remains feature-owned by `stoney_verify.interaction_guard` and existing public owners.
+## Validation
 
-## Regression rule
+Pending on exact final head:
 
-The replacement static regression must require:
+- Python syntax/compile;
+- `tests/test_protection_invite_native_ui.py`;
+- `tests/test_invite_live_enforcement.py`;
+- existing invite policy/message-surface regressions;
+- invite safety audit;
+- relevant full-suite/CI lanes if runners execute;
+- final diff and review-thread inspection.
 
-- `global_interaction_trace_guard.py` does not exist;
-- its fully qualified module name is absent from historical startup metadata;
-- `main.py`, `sitecustomize.py`, `usercustomize.py`, `stoney_verify/app.py`, and `stoney_verify/commands.py` contain no reference to it;
-- native `interaction_guard.py` still owns `run_guarded_interaction`, recent failures, and duplicate-action handling;
-- native interaction service contains no `CommandTree._call`, `_invoke_with_namespace`, `_scheduled_task`, or old elite-wrapper markers.
+## Blockers / risks
 
-## Previous completed slice
+GitHub Actions has recently produced runnerless failures on neighboring PRs. A red workflow with no executed steps must not be represented as a code/test failure or as successful validation.
 
-**PR #283 — Show native interaction failures in diagnostics**
+Live production verification still requires deployment after merge; repository tests can prove the intended runtime path but cannot prove Discord permissions/config on a deployed guild.
 
-- merged as `6c63c45f98c3c6f208fbb0447b767b060cb96031`;
-- verified on `main`;
-- guild isolation/privacy behavior validated;
-- diagnostics production blob: `8910e492f2afc5078acbaeedd94572d7e46fb585`;
-- regression-test blob: `893dcf65862e12afd52b1925c697d78264a05c30`.
+## Backlog
+
+- PR #285 Quiet Server Notice auto-clear remains separate.
+- PR #286 startup Discord REST burst shutdown remains separate.
 
 ## Next step
 
-Validate the retirement branch against current `main`, confirm no executable references remain, open a focused PR, record exact-head CI/runner state, merge with an expected-head guard if clean, then verify the retired file remains absent on `main`.
+Inspect the exact branch diff, open a focused draft PR, run/inspect all available exact-head validation, resolve any task-owned failures, then mark merge-ready only with executed evidence.
