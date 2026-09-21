@@ -17,6 +17,7 @@ from .community_tools_service import (
 from .globals import get_supabase
 
 QUIET_NOTICE_TABLE = "dank_quiet_notices"
+QUIET_CLEAR_DELIVERY_RPC = "clear_dank_quiet_notice_delivery"
 DEFAULT_INACTIVITY_SECONDS = 2 * 60 * 60
 MIN_INACTIVITY_SECONDS = 5 * 60
 MAX_INACTIVITY_SECONDS = 7 * 24 * 60 * 60
@@ -220,6 +221,33 @@ def _delete_sync(guild_id: int) -> None:
         raise CommunityStorageUnavailable(f"`{QUIET_NOTICE_TABLE}` is not writable.") from exc
 
 
+def _clear_delivery_sync(
+    guild_id: int,
+    expected_message_id: Optional[int],
+) -> Optional[QuietNoticeConfig]:
+    params = {
+        "p_guild_id": int(guild_id),
+        "p_expected_message_id": int(expected_message_id) if expected_message_id else None,
+    }
+    try:
+        resp = _require_supabase().rpc(QUIET_CLEAR_DELIVERY_RPC, params).execute()
+    except Exception as exc:
+        if isinstance(exc, CommunityStorageUnavailable):
+            raise
+        raise CommunityStorageUnavailable(
+            f"Quiet-notice atomic clear RPC `{QUIET_CLEAR_DELIVERY_RPC}` is unavailable. Apply the quiet-notice delivery-clear migration."
+        ) from exc
+
+    data = getattr(resp, "data", None)
+    if isinstance(data, list) and len(data) == 1 and isinstance(data[0], Mapping):
+        data = data[0]
+    if data is None:
+        return None
+    if not isinstance(data, Mapping):
+        raise CommunityStorageUnavailable("Quiet-notice atomic clear returned an invalid response.")
+    return _row_to_quiet_notice(data)
+
+
 async def get_quiet_notice(guild_id: int) -> Optional[QuietNoticeConfig]:
     return await asyncio.to_thread(_get_sync, int(guild_id))
 
@@ -314,20 +342,10 @@ async def clear_quiet_delivery(
 ) -> Optional[QuietNoticeConfig]:
     lock = _LOCKS.setdefault(int(guild_id), asyncio.Lock())
     async with lock:
-        current = await asyncio.to_thread(_get_sync, int(guild_id))
-        if current is None:
-            return None
-        if expected_message_id is not None:
-            current_message_id = int(current.last_notice_message_id or 0)
-            if current_message_id != int(expected_message_id):
-                return current
         return await asyncio.to_thread(
-            _save_sync,
-            replace(
-                current,
-                last_notice_message_id=None,
-                last_notice_sent_at=None,
-            ),
+            _clear_delivery_sync,
+            int(guild_id),
+            int(expected_message_id) if expected_message_id else None,
         )
 
 
@@ -342,6 +360,7 @@ __all__ = [
     "MAX_INACTIVITY_SECONDS",
     "MIN_INACTIVITY_SECONDS",
     "QuietNoticeConfig",
+    "QUIET_CLEAR_DELIVERY_RPC",
     "clear_quiet_delivery",
     "delete_quiet_notice",
     "get_quiet_notice",
