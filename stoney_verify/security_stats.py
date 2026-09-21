@@ -19,7 +19,12 @@ import discord
 from discord.ext import tasks
 
 from .globals import bot, get_supabase
-from .guild_config import GUILD_CONFIG_TABLE, get_guild_config, upsert_guild_config
+from .guild_config import (
+    GUILD_CONFIG_TABLE,
+    clear_guild_config_keys,
+    get_guild_config,
+    upsert_guild_config,
+)
 
 SECURITY_STATS_CATEGORY_NAME = "🛡️ DANK SHIELD STATS"
 SECURITY_STATS_ENABLED_KEY = "security_stats_display_enabled"
@@ -999,14 +1004,19 @@ async def disable_security_stats_display(
             elif remaining_ids:
                 keep_category_id = str(int(category.id))
 
-        await upsert_guild_config(
-            gid,
-            {
-                SECURITY_STATS_ENABLED_KEY: False,
-                SECURITY_STATS_CATEGORY_ID_KEY: keep_category_id,
-                SECURITY_STATS_CHANNEL_IDS_KEY: remaining_ids,
-            },
-        )
+        updates: Dict[str, Any] = {
+            SECURITY_STATS_ENABLED_KEY: False,
+            SECURITY_STATS_CHANNEL_IDS_KEY: remaining_ids,
+        }
+        if keep_category_id:
+            updates[SECURITY_STATS_CATEGORY_ID_KEY] = keep_category_id
+        await upsert_guild_config(gid, updates)
+        if not keep_category_id:
+            await clear_guild_config_keys(
+                gid,
+                (SECURITY_STATS_CATEGORY_ID_KEY,),
+                source="server_stats.disable",
+            )
         _ACTIVE_DISPLAY_GUILDS.discard(gid)
         _LAST_REFRESH_AT.pop(gid, None)
         _LAST_EVENT_REFRESH_AT.pop(gid, None)
