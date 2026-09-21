@@ -339,27 +339,55 @@ class StickyRuntime:
             async with lock:
                 latest = self._quiet_configs.get(guild_id) or config
                 newest_observed = self._guild_last_activity.get(guild_id) or observed
-                should_clear_live = bool(
-                    latest.auto_clear
-                    and latest.last_notice_message_id
-                    and (clear_live or (_utc(latest.last_notice_sent_at) or newest_observed) <= newest_observed)
-                )
                 try:
                     saved = await record_quiet_activity(
                         guild_id,
                         activity_at=newest_observed,
-                        clear_delivery=should_clear_live,
+                        clear_delivery=False,
                     )
                 except CommunityStorageUnavailable:
-                    # Keep the newest activity in memory, but do not destroy a live
-                    # notice whose durable delivery record could not be cleared.
+                    # Keep the newest activity in memory, but never delete a live
+                    # notice unless its durable delivery identity is still retained.
                     self._guild_last_activity[guild_id] = newest_observed
                     return
-                if saved is not None:
-                    self.set_quiet_config(saved)
-                    self._quiet_last_persisted[guild_id] = newest_observed
-                    if should_clear_live:
-                        await self.delete_quiet_live_message(latest)
+                if saved is None:
+                    return
+
+                self.set_quiet_config(saved)
+                self._quiet_last_persisted[guild_id] = newest_observed
+
+                sent_at = _utc(saved.last_notice_sent_at)
+                same_observed_delivery = bool(
+                    clear_live
+                    and latest.last_notice_message_id
+                    and saved.last_notice_message_id == latest.last_notice_message_id
+                )
+                delivery_precedes_activity = sent_at is None or sent_at <= newest_observed
+                should_clear_live = bool(
+                    saved.auto_clear
+                    and saved.last_notice_message_id
+                    and (same_observed_delivery or delivery_precedes_activity)
+                )
+                if not should_clear_live:
+                    return
+
+                deleted = await self.delete_quiet_live_message(saved)
+                if not deleted:
+                    # Keep the durable message id so the next activity/startup pass
+                    # can retry without orphaning the Discord notice.
+                    return
+                try:
+                    cleared = await clear_quiet_delivery(
+                        guild_id,
+                        expected_message_id=int(saved.last_notice_message_id),
+                    )
+                except CommunityStorageUnavailable:
+                    # Discord deletion already succeeded. Retaining the id is safe:
+                    # the next pass treats NotFound as a successful idempotent delete
+                    # and retries only the durable clear.
+                    return
+                if cleared is not None:
+                    self.set_quiet_config(cleared)
         finally:
             self._quiet_activity_pending.discard(guild_id)
 
@@ -447,33 +475,45 @@ class StickyRuntime:
             return
 
     async def _reconcile_quiet_config(self, config: QuietNoticeConfig) -> None:
-        if not config.last_notice_message_id:
-            return
-        channel = self.bot.get_channel(int(config.channel_id))
-        if not isinstance(channel, discord.TextChannel):
-            return
-        activity = _utc(config.last_activity_at)
-        sent_at = _utc(config.last_notice_sent_at)
-        if config.auto_clear and activity is not None and sent_at is not None and activity > sent_at:
-            try:
-                saved = await clear_quiet_delivery(int(config.guild_id))
-            except CommunityStorageUnavailable:
+        guild_id = int(config.guild_id)
+        lock = self._quiet_locks.setdefault(guild_id, asyncio.Lock())
+        async with lock:
+            current = self._quiet_configs.get(guild_id) or config
+            if not current.last_notice_message_id:
                 return
-            if saved is not None:
-                self.set_quiet_config(saved)
-                await self.delete_quiet_live_message(config)
-            return
-        try:
-            await channel.fetch_message(int(config.last_notice_message_id))
-        except discord.NotFound:
-            try:
-                saved = await clear_quiet_delivery(int(config.guild_id))
-            except CommunityStorageUnavailable:
+            channel = self.bot.get_channel(int(current.channel_id))
+            if not isinstance(channel, discord.TextChannel):
                 return
-            if saved is not None:
-                self.set_quiet_config(saved)
-        except (discord.Forbidden, discord.HTTPException):
-            return
+            activity = _utc(current.last_activity_at)
+            sent_at = _utc(current.last_notice_sent_at)
+            if current.auto_clear and activity is not None and sent_at is not None and activity > sent_at:
+                deleted = await self.delete_quiet_live_message(current)
+                if not deleted:
+                    return
+                try:
+                    saved = await clear_quiet_delivery(
+                        guild_id,
+                        expected_message_id=int(current.last_notice_message_id),
+                    )
+                except CommunityStorageUnavailable:
+                    return
+                if saved is not None:
+                    self.set_quiet_config(saved)
+                return
+            try:
+                await channel.fetch_message(int(current.last_notice_message_id))
+            except discord.NotFound:
+                try:
+                    saved = await clear_quiet_delivery(
+                        guild_id,
+                        expected_message_id=int(current.last_notice_message_id),
+                    )
+                except CommunityStorageUnavailable:
+                    return
+                if saved is not None:
+                    self.set_quiet_config(saved)
+            except (discord.Forbidden, discord.HTTPException):
+                return
 
     async def _quiet_watch_loop(self) -> None:
         try:
@@ -778,12 +818,13 @@ class StickyRuntime:
         if isinstance(channel, discord.TextChannel):
             await self._delete_previous(channel, message_id)
 
-    async def delete_quiet_live_message(self, config: QuietNoticeConfig) -> None:
+    async def delete_quiet_live_message(self, config: QuietNoticeConfig) -> bool:
         if not config.last_notice_message_id:
-            return
+            return True
         channel = self.bot.get_channel(int(config.channel_id))
-        if isinstance(channel, discord.TextChannel):
-            await self._delete_previous(channel, config.last_notice_message_id)
+        if not isinstance(channel, discord.TextChannel):
+            return False
+        return await self._delete_previous(channel, config.last_notice_message_id)
 
 
 def ensure_community_tools_runtime(bot: Any) -> StickyRuntime:
