@@ -1,6 +1,52 @@
--- Quiet Server Notice: atomically clear a tracked delivery only when the
+-- Quiet Server Notice: atomic runtime transitions for activity and delivery state.
 -- database still points at the message the caller deleted.
 -- Service-role only. Discord users never call this function directly.
+
+-- Record activity without read-modify-writing the rest of the notice row. This
+-- prevents an overlapping worker from resurrecting stale delivery/config state.
+create or replace function public.record_dank_quiet_notice_activity(
+    p_guild_id bigint,
+    p_activity_at timestamptz,
+    p_clear_delivery boolean default false
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $
+declare
+    v_notice public.dank_quiet_notices%rowtype;
+    v_activity_at timestamptz := coalesce(p_activity_at, now());
+begin
+    if p_guild_id is null or p_guild_id <= 0 then
+        raise exception 'quiet notice guild id must be positive';
+    end if;
+
+    update public.dank_quiet_notices
+       set last_activity_at = case
+               when last_activity_at is null or last_activity_at < v_activity_at then v_activity_at
+               else last_activity_at
+           end,
+           last_notice_message_id = case when p_clear_delivery then null else last_notice_message_id end,
+           last_notice_sent_at = case when p_clear_delivery then null else last_notice_sent_at end,
+           updated_at = now()
+     where guild_id = p_guild_id
+     returning * into v_notice;
+
+    if not found then
+        return null;
+    end if;
+
+    return to_jsonb(v_notice);
+end;
+$;
+
+revoke all on function public.record_dank_quiet_notice_activity(bigint, timestamptz, boolean) from public;
+revoke all on function public.record_dank_quiet_notice_activity(bigint, timestamptz, boolean) from anon, authenticated;
+grant execute on function public.record_dank_quiet_notice_activity(bigint, timestamptz, boolean) to service_role;
+
+comment on function public.record_dank_quiet_notice_activity(bigint, timestamptz, boolean) is
+    'Atomically records monotonic quiet-notice activity without overwriting unrelated delivery or admin configuration state.';
 
 create or replace function public.clear_dank_quiet_notice_delivery(
     p_guild_id bigint,
