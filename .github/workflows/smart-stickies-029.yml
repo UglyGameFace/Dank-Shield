@@ -140,7 +140,7 @@ jobs:
 
           do $
           begin
-              if (select last_notice_message_id from public.dank_quiet_notices where guild_id = 1001) <> 777 then
+              if (select last_notice_message_id from public.dank_quiet_notices where guild_id = 1001) is distinct from 777 then
                   raise exception 'stale quiet-delivery clear erased the current message id';
               end if;
           end;
