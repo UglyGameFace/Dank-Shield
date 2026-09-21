@@ -995,6 +995,7 @@ def test_enabled_security_event_schedules_coalesced_display_refresh(monkeypatch)
     assert result["spam_blocked"] == 12
     assert 909 in security_stats._ACTIVE_DISPLAY_GUILDS
     assert scheduled == [909]
+    security_stats._ACTIVE_DISPLAY_GUILDS.discard(909)
 
 
 def test_restart_discovery_batches_enabled_stats_guilds(monkeypatch) -> None:
@@ -1044,3 +1045,4 @@ def test_restart_discovery_batches_enabled_stats_guilds(monkeypatch) -> None:
     assert len(calls) == 3
     assert all(len(batch) <= security_stats._STATS_DISCOVERY_BATCH_SIZE for batch in calls)
     assert security_stats._ACTIVE_DISPLAY_GUILDS == {1, 201, 401}
+    security_stats._ACTIVE_DISPLAY_GUILDS.clear()
