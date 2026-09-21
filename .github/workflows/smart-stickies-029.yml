@@ -137,8 +137,8 @@ jobs:
 
           -- Activity persistence must only touch runtime activity fields, preserve
           -- the tracked delivery, and remain monotonic under stale workers.
-          select public.record_dank_quiet_notice_activity(1001, now() + interval '1 day', false);
-          select public.record_dank_quiet_notice_activity(1001, now() - interval '1 day', false);
+          select public.record_dank_quiet_notice_activity(1001, now() + interval '1 day');
+          select public.record_dank_quiet_notice_activity(1001, now() - interval '1 day');
 
           do $
           begin
@@ -264,7 +264,7 @@ jobs:
                   when insufficient_privilege then null;
               end;
               begin
-                  perform public.record_dank_quiet_notice_activity(1001, now(), false);
+                  perform public.record_dank_quiet_notice_activity(1001, now());
                   raise exception 'anon unexpectedly retained quiet-activity RPC access';
               exception
                   when insufficient_privilege then null;
