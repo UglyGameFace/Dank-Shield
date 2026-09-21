@@ -17,6 +17,10 @@ import discord
 
 from stoney_verify import invite_policy_engine as policy
 from stoney_verify.startup_recovery_coordinator import startup_recovery_slot
+from stoney_verify.startup_guards.discord_api_safety import (
+    recovery_request_weight,
+    reserve_recovery_discord_rest_requests,
+)
 
 _READY_DELAY_SECONDS = 3.0
 _POLICY_RETRY_DELAY_SECONDS = 15.0
@@ -176,6 +180,20 @@ async def _scan_channel(
             scan_kwargs["after"] = after
         if before is not None:
             scan_kwargs["before"] = before
+
+        # Startup/resume recovery shares the same process-wide Discloud REST
+        # budget as authoritative activity repair. Live event recovery stays on
+        # Discord.py's normal route limiter so enforcement is not delayed by
+        # background catch-up work.
+        if str(source or "").startswith("auto-reconcile:"):
+            await reserve_recovery_discord_rest_requests(
+                recovery_request_weight(int(scan_kwargs["limit"])),
+                label=(
+                    "invite history "
+                    f"guild={int(getattr(getattr(channel, 'guild', None), 'id', 0) or 0)} "
+                    f"channel={int(getattr(channel, 'id', 0) or 0)}"
+                ),
+            )
 
         return dict(
             await policy.scan_channel_invites(
