@@ -51,6 +51,19 @@ def test_history_reconciliation_has_no_task_fanout():
     assert "for channel in channels:" in RECONCILE
     assert "per_channel_limit + 1" in RECONCILE
     assert "thread_limit + 1" in RECONCILE
+    assert "reserve_recovery_discord_rest_requests(" in RECONCILE
+    assert "recovery_request_weight(history_limit)" in RECONCILE
+
+
+def test_activity_history_lane_is_single_flight_before_shared_startup_slot():
+    start = TRACKER.index("async def _run_scheduled_guild_tracking(")
+    end = TRACKER.index("def _schedule_guild_tracking(", start)
+    block = TRACKER[start:end]
+
+    assert "_STARTUP_RECONCILE_LOCK = asyncio.Lock()" in TRACKER
+    assert block.index("async with _STARTUP_RECONCILE_LOCK:") < block.index(
+        "async with startup_recovery_slot("
+    )
 
 
 def test_coverage_defers_before_bounded_lookup():
