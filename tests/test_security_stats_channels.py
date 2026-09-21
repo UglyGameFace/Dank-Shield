@@ -444,7 +444,7 @@ def test_refresh_repairs_new_stats_channels_for_existing_opted_in_display(monkey
         state.update(updates)
         return state
 
-    async def fake_display_names_for_guild(_guild, *, counts):
+    async def fake_display_names_for_guild(_guild, *, counts, preferences=None):
         return security_stats._display_names(
             spam_guard_enabled=True,
             member_count=10,
@@ -481,3 +481,74 @@ def test_refresh_repairs_new_stats_channels_for_existing_opted_in_display(monkey
     assert writes
     latest_ids = writes[-1][security_stats.SECURITY_STATS_CHANNEL_IDS_KEY]
     assert set(latest_ids) == set(security_stats.STAT_CHANNEL_PREFIXES)
+
+
+def test_server_stats_preferences_support_custom_category_visibility_labels_and_format() -> None:
+    prefs = security_stats.security_stats_preferences(
+        {
+            security_stats.SECURITY_STATS_CATEGORY_NAME_KEY: "📈 SERVER NUMBERS",
+            security_stats.SECURITY_STATS_VISIBLE_KEYS_KEY: [
+                "members",
+                "invites_blocked",
+                "closed_tickets",
+                "not-a-real-stat",
+            ],
+            security_stats.SECURITY_STATS_CUSTOM_LABELS_KEY: {
+                "members": "🫂 Lobby Members",
+                "invites_blocked": "🧱 Invites Nuked",
+                "not-a-real-stat": "ignored",
+            },
+            security_stats.SECURITY_STATS_NUMBER_STYLE_KEY: "exact",
+            security_stats.SECURITY_STATS_PLACEMENT_KEY: "bottom",
+        }
+    )
+
+    assert prefs == {
+        "category_name": "📈 SERVER NUMBERS",
+        "visible_keys": ("members", "invites_blocked", "closed_tickets"),
+        "labels": {
+            "members": "🫂 Lobby Members",
+            "invites_blocked": "🧱 Invites Nuked",
+        },
+        "number_style": "exact",
+        "placement": "bottom",
+    }
+
+    names = security_stats._display_names(
+        spam_guard_enabled=True,
+        member_count=1284,
+        counts={"invites_blocked": 12500},
+        ticket_counts={"open_tickets": 2, "claimed_tickets": 1, "closed_tickets": 3456},
+        preferences=prefs,
+    )
+    assert names["members"] == "🫂 Lobby Members: 1284"
+    assert names["invites_blocked"] == "🧱 Invites Nuked: 12500"
+    assert names["closed_tickets"] == "✅ Closed Tickets: 3456"
+
+
+def test_enabled_missing_stats_category_self_heals_instead_of_silently_stopping(monkeypatch) -> None:
+    calls = []
+
+    async def fake_get_guild_config(guild_id: int, refresh: bool = False):
+        assert guild_id == 4242
+        assert refresh is True
+        return {security_stats.SECURITY_STATS_ENABLED_KEY: True}
+
+    async def fake_ensure(guild):
+        calls.append(int(guild.id))
+        return True, "repaired"
+
+    monkeypatch.setattr(security_stats, "get_guild_config", fake_get_guild_config)
+    monkeypatch.setattr(security_stats, "_find_owned_category", lambda _guild, _cfg: None)
+    monkeypatch.setattr(security_stats, "ensure_security_stats_display", fake_ensure)
+
+    guild = SimpleNamespace(id=4242)
+    assert asyncio.run(security_stats.refresh_security_stats_display(guild, force=True)) is True
+    assert calls == [4242]
+
+
+def test_empty_visible_selection_falls_back_to_safe_full_default() -> None:
+    prefs = security_stats.security_stats_preferences(
+        {security_stats.SECURITY_STATS_VISIBLE_KEYS_KEY: []}
+    )
+    assert prefs["visible_keys"] == security_stats.DEFAULT_SECURITY_STATS_VISIBLE_KEYS
