@@ -72,6 +72,9 @@ _STATS_LOCKS: Dict[int, asyncio.Lock] = {}
 _DISPLAY_LOCKS: Dict[int, asyncio.Lock] = {}
 _LAST_REFRESH_AT: Dict[int, float] = {}
 _ACTIVE_DISPLAY_GUILDS: set[int] = set()
+_EVENT_REFRESH_TASKS: Dict[int, asyncio.Task] = {}
+_LAST_EVENT_REFRESH_AT: Dict[int, float] = {}
+_EVENT_REFRESH_MIN_SECONDS = 15.0
 _TICKET_STATS_PAGE_SIZE = 500
 _TICKET_STATS_SELECT_COLUMNS: Optional[str] = None
 _LAST_SPAM_GUARD_ENABLED: Dict[int, bool] = {}
@@ -674,6 +677,55 @@ async def _remove_hidden_stat_channel(
         return False
 
 
+async def _run_coalesced_security_stats_refresh(guild_id: int) -> None:
+    gid = int(guild_id)
+    try:
+        now = time.monotonic()
+        remaining = _EVENT_REFRESH_MIN_SECONDS - (
+            now - float(_LAST_EVENT_REFRESH_AT.get(gid, 0.0))
+        )
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+
+        try:
+            guild = bot.get_guild(gid)
+        except Exception:
+            guild = None
+        if guild is None or gid not in _ACTIVE_DISPLAY_GUILDS:
+            return
+
+        await refresh_security_stats_display(guild, force=True)
+        _LAST_EVENT_REFRESH_AT[gid] = time.monotonic()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        print(
+            f"⚠️ security_stats event refresh failed guild={gid} "
+            f"error={type(exc).__name__}"
+        )
+    finally:
+        current = _EVENT_REFRESH_TASKS.get(gid)
+        if current is asyncio.current_task():
+            _EVENT_REFRESH_TASKS.pop(gid, None)
+
+
+def _schedule_security_stats_refresh(guild_id: int) -> None:
+    gid = int(guild_id)
+    if gid <= 0 or gid not in _ACTIVE_DISPLAY_GUILDS:
+        return
+    current = _EVENT_REFRESH_TASKS.get(gid)
+    if current is not None and not current.done():
+        return
+    try:
+        task = asyncio.create_task(
+            _run_coalesced_security_stats_refresh(gid),
+            name=f"security-stats-refresh-{gid}",
+        )
+    except RuntimeError:
+        return
+    _EVENT_REFRESH_TASKS[gid] = task
+
+
 async def record_security_event(
     guild_id: int,
     *,
@@ -709,6 +761,7 @@ async def record_security_event(
         for key, delta in deltas.items():
             counts[key] = max(0, int(counts.get(key, 0))) + int(delta)
         await upsert_guild_config(gid, {SECURITY_STATS_COUNTS_KEY: counts})
+        _schedule_security_stats_refresh(gid)
         return counts
 
 
@@ -906,6 +959,10 @@ async def disable_security_stats_display(
         )
         _ACTIVE_DISPLAY_GUILDS.discard(gid)
         _LAST_REFRESH_AT.pop(gid, None)
+        _LAST_EVENT_REFRESH_AT.pop(gid, None)
+        task = _EVENT_REFRESH_TASKS.pop(gid, None)
+        if task is not None and not task.done():
+            task.cancel()
         return True, "✅ Server Stats are disabled and their tracked display channels were removed."
 
 
