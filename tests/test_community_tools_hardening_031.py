@@ -328,6 +328,30 @@ def test_quiet_auto_clear_delete_failure_keeps_delivery_identity_for_retry(monke
         assert clear_called is False
         assert runtime._quiet_configs[1].last_notice_message_id == 777
         assert runtime._quiet_last_persisted[1] == observed
+        assert runtime._quiet_retry_after[1] > runtime_module.time.monotonic()
+
+    asyncio.run(scenario())
+
+
+def test_quiet_retry_backoff_coalesces_busy_guild_activity(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        baseline = datetime(2026, 9, 5, 10, 0, tzinfo=timezone.utc)
+        observed = baseline + timedelta(hours=2)
+        config = _quiet(
+            last_activity_at=baseline,
+            last_notice_message_id=777,
+            last_notice_sent_at=baseline + timedelta(hours=1),
+            auto_clear=True,
+        )
+        runtime = StickyRuntime(SimpleNamespace())
+        runtime._quiet_configs[1] = config
+        runtime._quiet_retry_after[1] = runtime_module.time.monotonic() + 60.0
+
+        message = SimpleNamespace(created_at=observed)
+        runtime._observe_quiet_activity(message, config)
+
+        assert runtime._guild_last_activity[1] == observed
+        assert 1 not in runtime._quiet_activity_pending
 
     asyncio.run(scenario())
 
