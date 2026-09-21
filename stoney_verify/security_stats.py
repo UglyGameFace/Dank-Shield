@@ -71,6 +71,7 @@ SECURITY_STATS_PLACEMENTS = {"top", "keep", "bottom"}
 _STATS_LOCKS: Dict[int, asyncio.Lock] = {}
 _DISPLAY_LOCKS: Dict[int, asyncio.Lock] = {}
 _LAST_REFRESH_AT: Dict[int, float] = {}
+_ACTIVE_DISPLAY_GUILDS: set[int] = set()
 _TICKET_STATS_PAGE_SIZE = 500
 _TICKET_STATS_SELECT_COLUMNS: Optional[str] = None
 _LAST_SPAM_GUARD_ENABLED: Dict[int, bool] = {}
@@ -700,6 +701,10 @@ async def record_security_event(
 
     async with _lock_for(_STATS_LOCKS, gid):
         cfg = await get_guild_config(gid, refresh=True)
+        if _stats_enabled(cfg):
+            _ACTIVE_DISPLAY_GUILDS.add(gid)
+        else:
+            _ACTIVE_DISPLAY_GUILDS.discard(gid)
         counts = _stats_counts(cfg)
         for key, delta in deltas.items():
             counts[key] = max(0, int(counts.get(key, 0))) + int(delta)
@@ -818,6 +823,7 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
                 SECURITY_STATS_COUNTS_KEY: counts,
             },
         )
+        _ACTIVE_DISPLAY_GUILDS.add(gid)
         _LAST_REFRESH_AT[gid] = time.monotonic()
 
         return (
@@ -898,6 +904,7 @@ async def disable_security_stats_display(
                 SECURITY_STATS_CHANNEL_IDS_KEY: {},
             },
         )
+        _ACTIVE_DISPLAY_GUILDS.discard(gid)
         _LAST_REFRESH_AT.pop(gid, None)
         return True, "✅ Server Stats are disabled and their tracked display channels were removed."
 
@@ -910,13 +917,15 @@ async def refresh_security_stats_display(
     """Refresh and self-heal an enabled per-guild Server Stats display."""
 
     gid = int(guild.id)
-    cfg = await get_guild_config(gid, refresh=True)
-    if not _stats_enabled(cfg):
-        return False
-
     now = time.monotonic()
     if not force and (now - float(_LAST_REFRESH_AT.get(gid, 0.0))) < SECURITY_STATS_REFRESH_MIN_SECONDS:
         return False
+
+    cfg = await get_guild_config(gid, refresh=True)
+    if not _stats_enabled(cfg):
+        _ACTIVE_DISPLAY_GUILDS.discard(gid)
+        return False
+    _ACTIVE_DISPLAY_GUILDS.add(gid)
 
     category = _find_owned_category(guild, cfg)
     if category is None:
@@ -1014,14 +1023,51 @@ async def refresh_ticket_stats_for_guild_id(guild_id: int) -> bool:
         return False
 
 
+def _looks_like_cached_stats_category(category: Any) -> bool:
+    try:
+        if str(getattr(category, "name", "") or "") == SECURITY_STATS_CATEGORY_NAME:
+            return True
+        for channel in list(getattr(category, "voice_channels", []) or []):
+            name = str(getattr(channel, "name", "") or "")
+            if any(name.startswith(prefix) for prefix in STAT_CHANNEL_PREFIXES.values()):
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _discover_cached_stats_guilds() -> None:
+    """Seed the active registry from Discord's in-memory cache without DB/API fanout."""
+    for guild in list(getattr(bot, "guilds", []) or []):
+        gid = _safe_int(getattr(guild, "id", 0), 0)
+        if gid <= 0:
+            continue
+        try:
+            categories = list(getattr(guild, "categories", []) or [])
+        except Exception:
+            categories = []
+        if any(_looks_like_cached_stats_category(category) for category in categories):
+            _ACTIVE_DISPLAY_GUILDS.add(gid)
+
+
 @tasks.loop(minutes=10)
 async def refresh_all_security_stats_displays() -> None:
-    for guild in list(getattr(bot, "guilds", []) or []):
+    # Never fan a forced config read across every guild. Only displays observed
+    # in-process are revisited; relevant events and the UI add guilds lazily.
+    for gid in tuple(_ACTIVE_DISPLAY_GUILDS):
+        try:
+            guild = bot.get_guild(int(gid))
+        except Exception:
+            guild = None
+        if guild is None:
+            _ACTIVE_DISPLAY_GUILDS.discard(int(gid))
+            _LAST_REFRESH_AT.pop(int(gid), None)
+            continue
         try:
             await refresh_security_stats_display(guild)
         except Exception as exc:
             try:
-                print(f"⚠️ security_stats refresh failed guild={guild.id} error={type(exc).__name__}")
+                print(f"⚠️ security_stats refresh failed guild={gid} error={type(exc).__name__}")
             except Exception:
                 pass
 
@@ -1031,13 +1077,39 @@ async def _before_security_stats_refresh() -> None:
     await bot.wait_until_ready()
 
 
+@bot.listen("on_member_join")
+async def _refresh_member_join_stats(member: discord.Member) -> None:
+    try:
+        await refresh_security_stats_display(member.guild)
+    except Exception as exc:
+        print(
+            f"⚠️ security_stats member-join refresh failed guild="
+            f"{getattr(getattr(member, 'guild', None), 'id', 0)} error={type(exc).__name__}"
+        )
+
+
+@bot.listen("on_member_remove")
+async def _refresh_member_remove_stats(member: discord.Member) -> None:
+    try:
+        await refresh_security_stats_display(member.guild)
+    except Exception as exc:
+        print(
+            f"⚠️ security_stats member-remove refresh failed guild="
+            f"{getattr(getattr(member, 'guild', None), 'id', 0)} error={type(exc).__name__}"
+        )
+
+
 @bot.listen("on_ready")
 async def _start_security_stats_refresh_loop() -> None:
+    _discover_cached_stats_guilds()
     if refresh_all_security_stats_displays.is_running():
         return
     try:
         refresh_all_security_stats_displays.start()
-        print("✅ security_stats: live Discord stats refresh loop started")
+        print(
+            "✅ security_stats: bounded live Discord stats refresh loop started "
+            f"active={len(_ACTIVE_DISPLAY_GUILDS)}"
+        )
     except RuntimeError:
         pass
 
