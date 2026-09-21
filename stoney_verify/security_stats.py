@@ -841,6 +841,8 @@ async def disable_security_stats_display(
         preferences = security_stats_preferences(cfg)
 
         if remove_channels and category is not None:
+            owned_channels: list[discord.VoiceChannel] = []
+            owned_ids: set[int] = set()
             for key in STAT_CHANNEL_PREFIXES:
                 channel = _find_existing_stat_channel(
                     guild,
@@ -849,15 +851,44 @@ async def disable_security_stats_display(
                     saved_id=saved_ids.get(key, 0),
                     preferences=preferences,
                 )
-                if channel is not None:
-                    await _remove_hidden_stat_channel(channel, key=key)
+                if channel is None:
+                    continue
+                channel_id = _safe_int(getattr(channel, "id", 0), 0)
+                if channel_id > 0 and channel_id in owned_ids:
+                    continue
+                if channel_id > 0:
+                    owned_ids.add(channel_id)
+                owned_channels.append(channel)
 
             try:
-                remaining = list(getattr(category, "channels", []) or [])
-                if not remaining:
+                existing_category_channels = list(getattr(category, "channels", []) or [])
+            except Exception:
+                existing_category_channels = []
+            has_unowned_channels = any(
+                _safe_int(getattr(channel, "id", 0), 0) not in owned_ids
+                for channel in existing_category_channels
+            )
+
+            removed_all_owned = True
+            for channel in owned_channels:
+                key = next(
+                    (
+                        stat_key
+                        for stat_key, saved_id in saved_ids.items()
+                        if _safe_int(saved_id, 0) == _safe_int(getattr(channel, "id", 0), 0)
+                    ),
+                    "tracked",
+                )
+                removed_all_owned = (
+                    await _remove_hidden_stat_channel(channel, key=key)
+                    and removed_all_owned
+                )
+
+            if not has_unowned_channels and removed_all_owned:
+                try:
                     await category.delete(reason="Disable Dank Shield Server Stats")
-            except (discord.Forbidden, discord.HTTPException):
-                pass
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
 
         await upsert_guild_config(
             gid,
