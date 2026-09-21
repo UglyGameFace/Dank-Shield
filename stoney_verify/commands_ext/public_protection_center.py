@@ -1503,8 +1503,6 @@ class ProtectionCenterView(discord.ui.View):
         _ = button
 
         async def action() -> None:
-            if not await _require_setup_permission(interaction):
-                return
             from .public_server_stats import open_server_stats_center
             await open_server_stats_center(interaction)
 
