@@ -122,12 +122,11 @@ Current working score: **49 / 100**
 
 Meaning: internal/testing only. Not ready for wide public release, not ready for paid premium membership, and not ready to promise seamless UX.
 
-Score moved from 48 to 49 because the native interaction foundation exists, Protection Center callbacks started migrating to it, and `/dank design` command-open now uses a guarded native wrapper. It cannot rise further until real test/compile commands are run, raw setup/design/ticket/verify callbacks are migrated, and the old framework monkey patch is removed safely.
+Score remains 49 while full executable CI is unavailable. Native interaction ownership has expanded across Protection, Design, setup-find, ticket/verify command centers, Verify Panel posting, and diagnostics; the dormant global interaction patcher is being retired rather than treated as a live runtime owner.
 
 Remaining score blockers:
 
 - large startup guard chain still controls too much behavior
-- `global_interaction_trace_guard` still patches Discord.py framework internals
 - many setup/design/ticket/verify callbacks still do raw `interaction.response.*` work
 - command registry still contains runtime pruning/mutation logic
 - settings are not yet defined through one central registry
@@ -139,11 +138,11 @@ Remaining score blockers:
 
 ### `P0-INT-001` — Replace monkey-patched interaction logger with native interaction service
 
-Status: `PARTIAL / BLOCKER — native failure history implemented in diagnostics; pending PR/main verification`
+Status: `PARTIAL / BLOCKER — diagnostics failure history merged; dormant global interaction patcher retirement in progress`
 
 Goal:
 
-Stop generic `interaction failed` outcomes without patching Discord.py internals, and make native Error IDs actionable to server admins.
+Stop generic `interaction failed` outcomes without patching Discord.py internals, make native Error IDs actionable, and remove obsolete framework-patching artifacts once their native behavior is owned elsewhere.
 
 Progress completed on current `main`:
 
@@ -154,32 +153,33 @@ Progress completed on current `main`:
 - Verification Center shared canonical-command dispatcher is native-guarded and verified on `main`.
 - Verification Center role mapping is native-guarded and persistence-verified on `main`.
 - Canonical Verify Panel posting is native-guarded and verified on `main`.
-- Native interaction failures are stored in an in-memory recent-failure ring.
+- `/dank diagnostics` now exposes a guild-filtered, sanitized native interaction failure summary; PR #283 is merged and verified on `main`.
+- Production boot already does not import or apply `global_interaction_trace_guard`.
 
 Current locked slice:
 
-- diagnostics now consumes the native recent-failure ring on the active branch;
-- records are filtered to the current guild before rendering;
-- only Error ID, action, stage/error type, and user-notified state are shown;
-- tracebacks, raw messages, fix hints, user/channel/message IDs, and extras are excluded;
-- newest five are shown first and the field is capped below Discord limits;
-- diagnostics remains read-only and per-process.
+- retire the dormant `global_interaction_trace_guard.py` artifact;
+- remove it from inert historical startup metadata;
+- delete the obsolete test that requires its private Discord.py patches;
+- replace the loader regression with assertions that the patcher stays absent from disk, boot owners, and historical metadata;
+- keep the native `interaction_guard.py` service unchanged.
 
 Remaining before `P0-INT-001` can be marked done:
 
-- merge and verify the diagnostics failure-history slice;
+- merge and verify dormant global interaction patcher retirement;
 - resolve remaining direct-command native-guard architecture without nested component-lock collisions;
-- remove or disable `global_interaction_trace_guard` framework patching only after native coverage is sufficient;
+- confirm no other P0 interaction path still depends on private Discord.py framework mutation;
 - run the full interaction/protection/design/setup/ticket/verify matrix once executable CI infrastructure is restored.
 
 Exit criteria:
 
 - no production startup guard patches `CommandTree`, app command internals, or `View._scheduled_task`;
-- setup/protection/design/ticket/verify state-changing callbacks use the native interaction service;
-- failing callbacks log structured context and show a useful user message;
+- setup/protection/design/ticket/verify state-changing callbacks use the native interaction service at their authoritative public boundaries;
+- failing guarded callbacks log structured context and show a useful user message;
 - native Error IDs can be inspected safely from the owning guild's diagnostics;
 - state-changing UI paths do not report success unless their required persistence/mutation outcome is verified;
-- tests cover response done/not done, followup fallback, duplicate click, stale component, and exception paths.
+- tests prevent retired private-framework patchers from being restored.
+
 
 ---
 
@@ -263,7 +263,7 @@ Ticket numbers and channel creation must stay consistent under retries, restarts
 
 | Area / example | Current status | Required action |
 | --- | --- | --- |
-| `global_interaction_trace_guard` | useful logic, invalid monkey-patch implementation | migrate to native interaction service |
+| `global_interaction_trace_guard` | dormant historical patcher; no production importer | **retire/delete** after native interaction ownership and diagnostics replacement |
 | `interaction_action_lock_guard` | likely valid product rule | migrate to central interaction lock/idempotency service |
 | `command_safety` | likely valid validation | keep only as validation, no runtime mutation |
 | `slash_command_cleanup` | dangerous in production if mutating commands | move to explicit dev/admin migration tool or delete |
