@@ -190,15 +190,14 @@ def test_quiet_activity_worker_persists_latest_burst_timestamp(monkeypatch: pyte
         runtime._guild_last_activity[1] = newest
         captured: dict[str, Any] = {}
 
-        async def fake_record(guild_id: int, *, activity_at: datetime, clear_delivery: bool) -> QuietNoticeConfig:
+        async def fake_record(guild_id: int, *, activity_at: datetime) -> QuietNoticeConfig:
             captured["guild_id"] = guild_id
             captured["activity_at"] = activity_at
-            captured["clear_delivery"] = clear_delivery
             return replace(config, last_activity_at=activity_at)
 
         monkeypatch.setattr(runtime_module, "record_quiet_activity", fake_record)
         await runtime._persist_quiet_activity(config, first, clear_live=False)
-        assert captured == {"guild_id": 1, "activity_at": newest, "clear_delivery": False}
+        assert captured == {"guild_id": 1, "activity_at": newest}
         assert runtime._quiet_last_persisted[1] == newest
 
     asyncio.run(scenario())
@@ -246,11 +245,9 @@ def test_quiet_auto_clear_deletes_before_clearing_delivery_identity(monkeypatch:
             guild_id: int,
             *,
             activity_at: datetime,
-            clear_delivery: bool,
         ) -> QuietNoticeConfig:
             assert guild_id == 1
             assert activity_at == observed
-            assert clear_delivery is False
             events.append("persist_activity")
             return replace(config, last_activity_at=activity_at)
 
@@ -304,10 +301,8 @@ def test_quiet_auto_clear_delete_failure_keeps_delivery_identity_for_retry(monke
             guild_id: int,
             *,
             activity_at: datetime,
-            clear_delivery: bool,
         ) -> QuietNoticeConfig:
             assert guild_id == 1
-            assert clear_delivery is False
             return replace(config, last_activity_at=activity_at)
 
         async def fake_delete(target: QuietNoticeConfig) -> bool:
@@ -451,7 +446,6 @@ def test_record_quiet_activity_uses_one_narrow_atomic_rpc(monkeypatch: pytest.Mo
         result = await quiet_service.record_quiet_activity(
             1,
             activity_at=observed,
-            clear_delivery=False,
         )
 
         assert result is not None and result.last_activity_at == observed
@@ -462,7 +456,6 @@ def test_record_quiet_activity_uses_one_narrow_atomic_rpc(monkeypatch: pytest.Mo
                 {
                     "p_guild_id": 1,
                     "p_activity_at": observed.isoformat(),
-                    "p_clear_delivery": False,
                 },
             )
         ]
