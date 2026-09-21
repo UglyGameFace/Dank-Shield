@@ -55,14 +55,28 @@ def test_reviewed_apply_is_native_guarded_without_changing_transaction_ownership
         assert required in block
 
 
-def test_undo_open_is_native_guarded_and_uses_safe_send() -> None:
-    block = _region("async def _open_undo(interaction: discord.Interaction) -> None:", "\n\nclass DoneView")
+def test_undo_open_is_native_guarded_and_action_uses_safe_send() -> None:
+    action_block = _region(
+        "async def _open_undo_action(interaction: discord.Interaction) -> None:",
+        "\n\nasync def _open_undo(interaction: discord.Interaction) -> None:",
+    )
+    wrapper_block = _region(
+        "async def _open_undo(interaction: discord.Interaction) -> None:",
+        "\n\nclass DoneView",
+    )
 
-    assert 'await _guard_design_v2_action(interaction, "design.v2.undo_open", action)' in block
-    assert "await safe_send_interaction(" in block
-    assert "legacy.safe_send_interaction" not in block
-    assert "legacy._latest_rollback_snapshot" in block
-    assert "UndoConfirmView" in block
+    # The public callback is the native interaction boundary.
+    assert 'await _guard_design_v2_action(interaction, "design.v2.undo_open", action)' in wrapper_block
+    assert "async def action() -> None:" in wrapper_block
+    assert "await _open_undo_action(interaction)" in wrapper_block
+
+    # The extracted business-action helper owns snapshot lookup and user-facing
+    # safe responses. Keeping these assertions on the helper avoids falsely
+    # requiring implementation details to live inside the thin wrapper.
+    assert "await safe_send_interaction(" in action_block
+    assert "legacy.safe_send_interaction" not in action_block
+    assert "legacy._latest_rollback_snapshot" in action_block
+    assert "UndoConfirmView" in action_block
 
 
 def test_undo_confirm_is_native_guarded_without_changing_undo_safety() -> None:

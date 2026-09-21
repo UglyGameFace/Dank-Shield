@@ -10,6 +10,7 @@ from discord import app_commands
 
 from ..globals import *  # noqa: F401,F403
 from ..globals import _parse_iso_datetime, get_supabase
+from ..members_new.membership_authority import collect_membership_snapshot
 from ..tickets import find_ticket_owner_retry, is_verification_ticket_channel
 from ..transcripts import send_tickettool_style_transcript
 from . import common as _common
@@ -1059,10 +1060,12 @@ async def _resume_member_wait_timers_from_live_state(
 
     for guild in list(getattr(bot, "guilds", []) or []):
         try:
-            try:
-                members = [m async for m in guild.fetch_members(limit=None)]
-            except Exception:
-                members = list(getattr(guild, "members", []) or [])
+            # Reuse the canonical membership enumerator instead of owning a
+            # second uncoordinated all-guild fetch_members() implementation.
+            # Its recovery REST reservation prevents this 2-second on_ready
+            # sweep from colliding unchecked with activity/invite recovery.
+            snapshot = await collect_membership_snapshot(guild)
+            members = list(snapshot.members)
 
             fallback_channel = await _resolve_unverified_chat_channel(guild)
 

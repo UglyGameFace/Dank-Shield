@@ -46,6 +46,12 @@ _INSTALLED = False
 _HEARTBEAT_TASK: Optional[asyncio.Task] = None
 _STARTED_GUILDS: set[int] = set()
 _STARTUP_TASKS: dict[int, asyncio.Task] = {}
+# Discord history reconciliation is intentionally single-flight. PR #280
+# replaced the old lock with a shared two-guild startup pool, which allowed two
+# REST-heavy history/thread scans to overlap and exceed Discloud's process-wide
+# 300 requests / 30 seconds ceiling. The shared coordinator still bounds all
+# startup work; this lock restores the narrower history-specific invariant.
+_STARTUP_RECONCILE_LOCK = asyncio.Lock()
 _STARTUP_RECOVERY_HEARTBEATS: dict[int, datetime] = {}
 _LOCAL_ERRORS: dict[int, str] = {}
 _LOCAL_SCOPE_ERRORS: dict[int, str] = {}
@@ -808,24 +814,28 @@ async def _run_scheduled_guild_tracking(
         if delay_seconds > 0:
             await asyncio.sleep(delay_seconds)
 
-        async with startup_recovery_slot(
-            gid,
-            "activity_restart_reconcile",
-        ):
-            try:
-                completed = await asyncio.wait_for(
-                    _start_guild_tracking(guild),
-                    timeout=reconcile_timeout_seconds(),
-                )
-            except asyncio.TimeoutError:
-                await _force_new_window_after_startup_failure(
-                    guild,
-                    reason=(
-                        "restart reconciliation exceeded "
-                        f"{reconcile_timeout_seconds()} seconds"
-                    ),
-                )
-                return
+        # Acquire the activity-history lane before the shared startup slot so
+        # another activity task waiting for history capacity does not occupy one
+        # of the process-wide startup slots.
+        async with _STARTUP_RECONCILE_LOCK:
+            async with startup_recovery_slot(
+                gid,
+                "activity_restart_reconcile",
+            ):
+                try:
+                    completed = await asyncio.wait_for(
+                        _start_guild_tracking(guild),
+                        timeout=reconcile_timeout_seconds(),
+                    )
+                except asyncio.TimeoutError:
+                    await _force_new_window_after_startup_failure(
+                        guild,
+                        reason=(
+                            "restart reconciliation exceeded "
+                            f"{reconcile_timeout_seconds()} seconds"
+                        ),
+                    )
+                    return
 
         if not completed:
             await _force_new_window_after_startup_failure(

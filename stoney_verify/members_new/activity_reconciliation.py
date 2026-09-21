@@ -16,6 +16,11 @@ from typing import Any, AsyncIterator
 
 import discord
 
+from stoney_verify.startup_guards.discord_api_safety import (
+    recovery_request_weight,
+    reserve_recovery_discord_rest_requests,
+)
+
 
 @dataclass
 class RestartReconciliationResult:
@@ -61,7 +66,7 @@ def reconcile_start_delay_seconds() -> int:
 def reconcile_timeout_seconds() -> int:
     return _env_int(
         "DANK_ACTIVITY_RECONCILE_TIMEOUT_SECONDS",
-        90,
+        180,
         minimum=30,
         maximum=600,
     )
@@ -384,6 +389,13 @@ async def _collect_messageables(
     for parent in parents:
         try:
             if isinstance(parent, discord.TextChannel):
+                await reserve_recovery_discord_rest_requests(
+                    1,
+                    label=(
+                        "activity archived-public "
+                        f"guild={int(guild.id)} channel={int(parent.id)}"
+                    ),
+                )
                 public_threads = parent.archived_threads(
                     limit=thread_limit + 1,
                     private=False,
@@ -420,6 +432,13 @@ async def _collect_messageables(
                         False,
                     )
                 ):
+                    await reserve_recovery_discord_rest_requests(
+                        1,
+                        label=(
+                            "activity archived-private "
+                            f"guild={int(guild.id)} channel={int(parent.id)}"
+                        ),
+                    )
                     private_threads = (
                         parent.archived_threads(
                             limit=thread_limit + 1,
@@ -449,6 +468,13 @@ async def _collect_messageables(
                         )
 
             elif isinstance(parent, discord.ForumChannel):
+                await reserve_recovery_discord_rest_requests(
+                    1,
+                    label=(
+                        "activity archived-forum "
+                        f"guild={int(guild.id)} channel={int(parent.id)}"
+                    ),
+                )
                 forum_threads = parent.archived_threads(
                     limit=thread_limit + 1,
                 )
@@ -526,8 +552,17 @@ async def reconcile_restart_gap(
     # Deliberately sequential. There is no gather(), task fanout, or
     # simultaneous channel-history buffering.
     for channel in channels:
+        history_limit = per_channel_limit + 1
+        await reserve_recovery_discord_rest_requests(
+            recovery_request_weight(history_limit),
+            label=(
+                "activity history "
+                f"guild={int(guild.id)} "
+                f"channel={int(getattr(channel, 'id', 0) or 0)}"
+            ),
+        )
         history = channel.history(
-            limit=per_channel_limit + 1,
+            limit=history_limit,
             after=after,
             before=before,
             oldest_first=True,
