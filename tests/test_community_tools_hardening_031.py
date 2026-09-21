@@ -190,15 +190,14 @@ def test_quiet_activity_worker_persists_latest_burst_timestamp(monkeypatch: pyte
         runtime._guild_last_activity[1] = newest
         captured: dict[str, Any] = {}
 
-        async def fake_record(guild_id: int, *, activity_at: datetime, clear_delivery: bool) -> QuietNoticeConfig:
+        async def fake_record(guild_id: int, *, activity_at: datetime) -> QuietNoticeConfig:
             captured["guild_id"] = guild_id
             captured["activity_at"] = activity_at
-            captured["clear_delivery"] = clear_delivery
             return replace(config, last_activity_at=activity_at)
 
         monkeypatch.setattr(runtime_module, "record_quiet_activity", fake_record)
         await runtime._persist_quiet_activity(config, first, clear_live=False)
-        assert captured == {"guild_id": 1, "activity_at": newest, "clear_delivery": False}
+        assert captured == {"guild_id": 1, "activity_at": newest}
         assert runtime._quiet_last_persisted[1] == newest
 
     asyncio.run(scenario())
@@ -225,6 +224,271 @@ def test_quiet_storage_failure_never_deletes_live_notice(monkeypatch: pytest.Mon
         await runtime._persist_quiet_activity(config, observed, clear_live=True)
         assert deleted is False
         assert runtime._guild_last_activity[1] == observed
+
+    asyncio.run(scenario())
+
+
+def test_quiet_auto_clear_deletes_before_clearing_delivery_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        observed = datetime(2026, 9, 5, 10, 2, tzinfo=timezone.utc)
+        config = _quiet(
+            last_notice_message_id=777,
+            last_notice_sent_at=observed - timedelta(hours=1),
+            auto_clear=True,
+        )
+        runtime = StickyRuntime(SimpleNamespace())
+        runtime._quiet_configs[1] = config
+        runtime._guild_last_activity[1] = observed
+        events: list[str] = []
+
+        async def fake_record(
+            guild_id: int,
+            *,
+            activity_at: datetime,
+        ) -> QuietNoticeConfig:
+            assert guild_id == 1
+            assert activity_at == observed
+            events.append("persist_activity")
+            return replace(config, last_activity_at=activity_at)
+
+        async def fake_delete(target: QuietNoticeConfig) -> bool:
+            assert target.last_notice_message_id == 777
+            events.append("delete_live")
+            return True
+
+        async def fake_clear(
+            guild_id: int,
+            *,
+            expected_message_id: int | None = None,
+        ) -> QuietNoticeConfig:
+            assert guild_id == 1
+            assert expected_message_id == 777
+            events.append("clear_delivery")
+            return replace(
+                config,
+                last_activity_at=observed,
+                last_notice_message_id=None,
+                last_notice_sent_at=None,
+            )
+
+        monkeypatch.setattr(runtime_module, "record_quiet_activity", fake_record)
+        monkeypatch.setattr(runtime_module, "clear_quiet_delivery", fake_clear)
+        runtime.delete_quiet_live_message = fake_delete  # type: ignore[method-assign]
+
+        await runtime._persist_quiet_activity(config, observed, clear_live=True)
+
+        assert events == ["persist_activity", "delete_live", "clear_delivery"]
+        assert runtime._quiet_configs[1].last_notice_message_id is None
+        assert runtime._quiet_last_persisted[1] == observed
+
+    asyncio.run(scenario())
+
+
+def test_quiet_auto_clear_delete_failure_keeps_delivery_identity_for_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        observed = datetime(2026, 9, 5, 10, 2, tzinfo=timezone.utc)
+        config = _quiet(
+            last_notice_message_id=777,
+            last_notice_sent_at=observed - timedelta(hours=1),
+            auto_clear=True,
+        )
+        runtime = StickyRuntime(SimpleNamespace())
+        runtime._quiet_configs[1] = config
+        runtime._guild_last_activity[1] = observed
+        clear_called = False
+
+        async def fake_record(
+            guild_id: int,
+            *,
+            activity_at: datetime,
+        ) -> QuietNoticeConfig:
+            assert guild_id == 1
+            return replace(config, last_activity_at=activity_at)
+
+        async def fake_delete(target: QuietNoticeConfig) -> bool:
+            assert target.last_notice_message_id == 777
+            return False
+
+        async def fake_clear(*args: Any, **kwargs: Any) -> QuietNoticeConfig:
+            nonlocal clear_called
+            clear_called = True
+            return replace(config, last_notice_message_id=None, last_notice_sent_at=None)
+
+        monkeypatch.setattr(runtime_module, "record_quiet_activity", fake_record)
+        monkeypatch.setattr(runtime_module, "clear_quiet_delivery", fake_clear)
+        runtime.delete_quiet_live_message = fake_delete  # type: ignore[method-assign]
+
+        await runtime._persist_quiet_activity(config, observed, clear_live=True)
+
+        assert clear_called is False
+        assert runtime._quiet_configs[1].last_notice_message_id == 777
+        assert runtime._quiet_last_persisted[1] == observed
+        assert runtime._quiet_retry_after[1] > runtime_module.time.monotonic()
+
+    asyncio.run(scenario())
+
+
+def test_quiet_retry_backoff_coalesces_busy_guild_activity(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        baseline = datetime(2026, 9, 5, 10, 0, tzinfo=timezone.utc)
+        observed = baseline + timedelta(hours=2)
+        config = _quiet(
+            last_activity_at=baseline,
+            last_notice_message_id=777,
+            last_notice_sent_at=baseline + timedelta(hours=1),
+            auto_clear=True,
+        )
+        runtime = StickyRuntime(SimpleNamespace())
+        runtime._quiet_configs[1] = config
+        runtime._quiet_retry_after[1] = runtime_module.time.monotonic() + 60.0
+
+        message = SimpleNamespace(created_at=observed)
+        runtime._observe_quiet_activity(message, config)
+
+        assert runtime._guild_last_activity[1] == observed
+        assert 1 not in runtime._quiet_activity_pending
+
+    asyncio.run(scenario())
+
+
+def test_quiet_startup_reconcile_keeps_delivery_identity_when_delete_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        sent = datetime(2026, 9, 5, 10, 0, tzinfo=timezone.utc)
+        config = _quiet(
+            last_activity_at=sent + timedelta(minutes=1),
+            last_notice_message_id=777,
+            last_notice_sent_at=sent,
+            auto_clear=True,
+        )
+
+        class FakeChannel:
+            id = 20
+
+        monkeypatch.setattr(runtime_module.discord, "TextChannel", FakeChannel)
+        runtime = StickyRuntime(SimpleNamespace(get_channel=lambda channel_id: FakeChannel()))
+        runtime._quiet_configs[1] = config
+        clear_called = False
+
+        async def fake_delete(target: QuietNoticeConfig) -> bool:
+            assert target.last_notice_message_id == 777
+            return False
+
+        async def fake_clear(*args: Any, **kwargs: Any) -> QuietNoticeConfig:
+            nonlocal clear_called
+            clear_called = True
+            return replace(config, last_notice_message_id=None, last_notice_sent_at=None)
+
+        monkeypatch.setattr(runtime_module, "clear_quiet_delivery", fake_clear)
+        runtime.delete_quiet_live_message = fake_delete  # type: ignore[method-assign]
+
+        await runtime._reconcile_quiet_config(config)
+
+        assert clear_called is False
+        assert runtime._quiet_configs[1].last_notice_message_id == 777
+        assert runtime._quiet_retry_after[1] > runtime_module.time.monotonic()
+
+    asyncio.run(scenario())
+
+
+def test_quiet_startup_reconcile_honors_retry_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        sent = datetime(2026, 9, 5, 10, 0, tzinfo=timezone.utc)
+        config = _quiet(
+            last_activity_at=sent + timedelta(minutes=1),
+            last_notice_message_id=777,
+            last_notice_sent_at=sent,
+            auto_clear=True,
+        )
+
+        class FakeChannel:
+            id = 20
+
+        monkeypatch.setattr(runtime_module.discord, "TextChannel", FakeChannel)
+        runtime = StickyRuntime(SimpleNamespace(get_channel=lambda channel_id: FakeChannel()))
+        runtime._quiet_configs[1] = config
+        runtime._quiet_retry_after[1] = runtime_module.time.monotonic() + 60.0
+        delete_called = False
+
+        async def fake_delete(target: QuietNoticeConfig) -> bool:
+            nonlocal delete_called
+            delete_called = True
+            return True
+
+        runtime.delete_quiet_live_message = fake_delete  # type: ignore[method-assign]
+
+        await runtime._reconcile_quiet_config(config)
+
+        assert delete_called is False
+        assert runtime._quiet_configs[1].last_notice_message_id == 777
+
+    asyncio.run(scenario())
+
+
+def test_record_quiet_activity_uses_one_narrow_atomic_rpc(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        observed = datetime(2026, 9, 5, 10, 5, tzinfo=timezone.utc)
+        response = _RpcResponse(
+            {
+                "guild_id": 1,
+                "channel_id": 20,
+                "enabled": True,
+                "content": "quiet",
+                "inactivity_seconds": 7200,
+                "auto_clear": True,
+                "last_activity_at": observed.isoformat(),
+                "last_notice_message_id": 777,
+                "last_notice_sent_at": "2026-09-05T10:00:00+00:00",
+            }
+        )
+        fake = _RpcSupabase(response)
+        monkeypatch.setattr(quiet_service, "_require_supabase", lambda: fake)
+
+        result = await quiet_service.record_quiet_activity(
+            1,
+            activity_at=observed,
+        )
+
+        assert result is not None and result.last_activity_at == observed
+        assert result.last_notice_message_id == 777
+        assert fake.calls == [
+            (
+                quiet_service.QUIET_RECORD_ACTIVITY_RPC,
+                {
+                    "p_guild_id": 1,
+                    "p_activity_at": observed.isoformat(),
+                },
+            )
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_clear_quiet_delivery_uses_one_atomic_rpc_and_preserves_newer_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        response = _RpcResponse(
+            {
+                "guild_id": 1,
+                "channel_id": 20,
+                "enabled": True,
+                "content": "quiet",
+                "inactivity_seconds": 7200,
+                "auto_clear": True,
+                "last_notice_message_id": 888,
+                "last_notice_sent_at": "2026-09-05T10:05:00+00:00",
+            }
+        )
+        fake = _RpcSupabase(response)
+        monkeypatch.setattr(quiet_service, "_require_supabase", lambda: fake)
+
+        result = await quiet_service.clear_quiet_delivery(1, expected_message_id=777)
+
+        assert result is not None and result.last_notice_message_id == 888
+        assert fake.calls == [
+            (
+                quiet_service.QUIET_CLEAR_DELIVERY_RPC,
+                {"p_guild_id": 1, "p_expected_message_id": 777},
+            )
+        ]
 
     asyncio.run(scenario())
 
