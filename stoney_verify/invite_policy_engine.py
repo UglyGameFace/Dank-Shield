@@ -883,6 +883,39 @@ async def send_invite_decision_modlog(message: discord.Message, decision: Invite
         pass
 
 
+async def enforce_live_invite_message(
+    message: discord.Message,
+    *,
+    source: str = "live",
+    refresh_policy: bool = False,
+) -> InviteDecision | None:
+    """Run the canonical live-message Invite Shield path end to end.
+
+    This is the testable runtime boundary for live Discord messages:
+    extract invite evidence, resolve the guild policy, delete only when the
+    central policy approves it, then emit the existing modlog record.
+    """
+
+    codes = extract_invite_codes_from_message(message)
+    if not codes:
+        return None
+
+    decision = await decide_invite_message(
+        message,
+        source=source,
+        refresh_policy=refresh_policy,
+    )
+    if not decision.should_delete:
+        return decision
+
+    await delete_message_if_allowed(message, decision)
+    try:
+        await send_invite_decision_modlog(message, decision)
+    except Exception:
+        pass
+    return decision
+
+
 async def scan_channel_invites(
     channel: Any,
     *,
