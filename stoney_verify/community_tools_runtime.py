@@ -504,6 +504,13 @@ class StickyRuntime:
             current = self._quiet_configs.get(guild_id) or config
             if not current.last_notice_message_id:
                 return
+
+            retry_after = self._quiet_retry_after.get(guild_id)
+            if retry_after is not None:
+                if time.monotonic() < retry_after:
+                    return
+                self._quiet_retry_after.pop(guild_id, None)
+
             channel = self.bot.get_channel(int(current.channel_id))
             if not isinstance(channel, discord.TextChannel):
                 return
@@ -512,6 +519,7 @@ class StickyRuntime:
             if current.auto_clear and activity is not None and sent_at is not None and activity > sent_at:
                 deleted = await self.delete_quiet_live_message(current)
                 if not deleted:
+                    self._quiet_retry_after[guild_id] = time.monotonic() + QUIET_RETRY_BACKOFF_SECONDS
                     return
                 try:
                     saved = await clear_quiet_delivery(
@@ -519,6 +527,7 @@ class StickyRuntime:
                         expected_message_id=int(current.last_notice_message_id),
                     )
                 except CommunityStorageUnavailable:
+                    self._quiet_retry_after[guild_id] = time.monotonic() + QUIET_RETRY_BACKOFF_SECONDS
                     return
                 if saved is not None:
                     self.set_quiet_config(saved)
@@ -532,10 +541,12 @@ class StickyRuntime:
                         expected_message_id=int(current.last_notice_message_id),
                     )
                 except CommunityStorageUnavailable:
+                    self._quiet_retry_after[guild_id] = time.monotonic() + QUIET_RETRY_BACKOFF_SECONDS
                     return
                 if saved is not None:
                     self.set_quiet_config(saved)
             except (discord.Forbidden, discord.HTTPException):
+                self._quiet_retry_after[guild_id] = time.monotonic() + QUIET_RETRY_BACKOFF_SECONDS
                 return
 
     async def _quiet_watch_loop(self) -> None:
