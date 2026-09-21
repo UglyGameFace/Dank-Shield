@@ -176,13 +176,13 @@ Focused regression coverage added/updated for:
 - fixed worker pools for startup DB/config prewarms;
 - ticket panel history repair default-off behavior.
 
-Exact-head validation on current head `80fc19a4b070217f12c5bc9be9d3d06ebe78496f`:
+Exact-head validation on the current PR #280 head:
 
 - branch is mergeable, based on `main` `373080f76eb255db92dff29abdfc0761be75345c`, and 0 commits behind;
 - executable coordinator regression tests passed **2/2** against blobs whose Git SHAs exactly match the final head:
   - `stoney_verify/startup_recovery_coordinator.py` blob `1903c611bcb866bbada568e52c77bc32a78371dc`;
   - `tests/test_startup_recovery_coordinator.py` blob `0dced14bb61ffa83c46246d409c021a0202baf5d`;
-- exact-head source/invariant replay passed **21/21**, covering deprecated interaction access removal, startup owner dedupe, fixed recovery windows, legacy heartbeat pinning, cold invite baseline safety, write suppression, batched config lookup, explicit ticket repair modes, and fixed worker pools;
+- exact-head source/invariant replay passed **23/23**, covering deprecated interaction access removal, startup owner dedupe, obsolete sweep-helper removal, fixed recovery windows, legacy heartbeat pinning, cold invite baseline safety, write suppression, batched config lookup, explicit ticket repair modes, and fixed worker pools;
 - GitHub Actions created all six workflows for the final head, but every job failed before checkout with `steps=null`, `logs_url=null`, and no runner name, including `Python compile check`, Backlog Python regressions, Owner emergency security, command-size, focused-profile-tests, and Design regressions;
 - a prior explicit rerun on the preceding exact head produced the same pre-step failure pattern, so workflow red status is runner/infrastructure evidence rather than executed branch-test evidence.
 
@@ -205,4 +205,4 @@ Do **not** represent the full GitHub Actions suite as passing.
 
 ## Next step
 
-Perform final diff cleanup/review on PR #280. If no code defect or unrelated scope is found, decide merge-readiness using the exact-head focused evidence plus the documented GitHub runner blocker; do not claim full CI passed. After merge, verify the exact production/test blobs on `main` before redeploying.
+PR #280 has completed final diff cleanup/review with no unrelated production scope found. Use the exact-head focused evidence plus the documented GitHub runner blocker to decide merge-readiness; do not claim full CI passed. After merge, verify the exact production/test blobs on `main` before redeploying.
