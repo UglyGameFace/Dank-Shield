@@ -1079,6 +1079,9 @@ async def _before_security_stats_refresh() -> None:
 
 @bot.listen("on_member_join")
 async def _refresh_member_join_stats(member: discord.Member) -> None:
+    gid = _safe_int(getattr(getattr(member, "guild", None), "id", 0), 0)
+    if gid <= 0 or gid not in _ACTIVE_DISPLAY_GUILDS:
+        return
     try:
         await refresh_security_stats_display(member.guild)
     except Exception as exc:
@@ -1090,6 +1093,9 @@ async def _refresh_member_join_stats(member: discord.Member) -> None:
 
 @bot.listen("on_member_remove")
 async def _refresh_member_remove_stats(member: discord.Member) -> None:
+    gid = _safe_int(getattr(getattr(member, "guild", None), "id", 0), 0)
+    if gid <= 0 or gid not in _ACTIVE_DISPLAY_GUILDS:
+        return
     try:
         await refresh_security_stats_display(member.guild)
     except Exception as exc:
@@ -1101,9 +1107,9 @@ async def _refresh_member_remove_stats(member: discord.Member) -> None:
 
 @bot.listen("on_ready")
 async def _start_security_stats_refresh_loop() -> None:
-    _discover_cached_stats_guilds()
     if refresh_all_security_stats_displays.is_running():
         return
+    _discover_cached_stats_guilds()
     try:
         refresh_all_security_stats_displays.start()
         print(
