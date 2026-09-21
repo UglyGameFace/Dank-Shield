@@ -74,6 +74,10 @@ def test_quiet_delivery_clear_is_database_atomic_and_service_role_only() -> None
     assert "grant execute on function public.record_dank_quiet_notice_activity(bigint, timestamptz) to service_role" in QUIET_CLEAR
     assert "revoke all on function public.clear_dank_quiet_notice_delivery(bigint, bigint) from anon, authenticated" in QUIET_CLEAR
     assert "revoke all on function public.record_dank_quiet_notice_activity(bigint, timestamptz) from anon, authenticated" in QUIET_CLEAR
+    activity_block = quiet_service.split("async def record_quiet_activity", 1)[1].split("async def update_quiet_delivery", 1)[0]
+    clear_block = quiet_service.split("async def clear_quiet_delivery", 1)[1].split("async def delete_quiet_notice", 1)[0]
+    assert "_LOCKS" not in activity_block
+    assert "_LOCKS" not in clear_block
 
 
 def test_poll_and_embed_posting_use_preview_publish_and_real_permissions() -> None:
