@@ -52,25 +52,56 @@ Out of scope:
 
 ## Status
 
-**LOCKED — NOT IMPLEMENTED**
+**IMPLEMENTED — targeted validation passed; pending exact-head PR/main verification**
 
-## Required behavior to preserve
+## Required behavior preserved
 
-- staff-only gate;
+- staff-only gate remains intact;
 - saved verification channel still wins over current channel;
 - current text channel remains the fallback;
 - Basic Verify disabled state still returns its existing explanation;
 - runtime install result still controls the success suffix;
 - `post_basic_verify_panel` remains the canonical live panel mutation owner;
-- slash/center/setup callers keep using the same `verify_panel()` API.
+- slash/center/setup callers still use the same `verify_panel()` API;
+- the old `ephemeral=True, thinking=True` acknowledgement behavior is preserved.
 
-## Implementation rule
+## Implementation
 
-Wrap the canonical `verify_panel()` boundary with `run_guarded_interaction(..., defer=True)` and keep the existing business logic in a separate action body.
+`verify_panel()` now runs behind `run_guarded_interaction`.
 
-Do not wrap only the Verification Center button. Guarding the canonical function covers all callers and avoids duplicate native wrappers.
+The guard uses `defer=False` intentionally. The first operation inside the guarded action keeps the existing:
 
-Unexpected failure guidance must be cautious because a create/replace operation may have partially completed before an exception. Staff should reopen/refresh the Verify Panel flow and inspect the target channel before retrying, with the Error ID available in `/dank diagnostics`.
+`interaction.response.defer(ephemeral=True, thinking=True)`
+
+This preserves component/slash acknowledgement behavior exactly while allowing defer failures to surface through the native guard instead of being swallowed.
+
+The live panel posting logic moved into `_verify_panel_action` without changing staff checks, channel selection, runtime install, disabled-mode handling, success suffixes, or `post_basic_verify_panel(...)` ownership.
+
+The old broad posting `except Exception` was removed so unexpected live-panel failures reach the native structured Error ID path. Recovery guidance tells staff to inspect the target channel before retrying because a create/replace operation may have partially completed.
+
+## Validation
+
+Targeted branch validation passed:
+
+- branch is 0 commits behind current `main`;
+- diff is limited to `public_verify_basic_panel.py` plus one focused regression test;
+- modified Verify Panel region parses under Python 3.11 grammar;
+- focused regression test parses under Python 3.11 grammar;
+- exact source replay confirms:
+  - native guard owns the canonical `verify_panel()` boundary;
+  - `thinking=True` defer remains the first I/O inside the guarded action;
+  - defer precedes staff check, channel selection, runtime install, and live panel posting;
+  - `post_basic_verify_panel(...)` remains the canonical mutation;
+  - disabled Basic Verify handling and both success suffixes remain present;
+  - the broad `Could not post panel: <Type>` exception swallow is gone;
+  - `/verify panel`, Verification Center, compact setup testing, and setup recommendations still call the same canonical `verify_panel()`.
+- existing Basic Verify restart/authorization tests do not require the retired broad exception shape.
+
+Validated branch blobs:
+- `public_verify_basic_panel.py` → `c268e4780c446ff543f76dd2b3ad9fa9e482b7da`
+- `test_public_verify_panel_native_interaction_static.py` → `cc7f30b17a321f80097d434dd8a75deee98480ff`
+
+Full GitHub Actions execution state must be checked on the final PR head. No absent runner execution will be represented as passing CI.
 
 ## Previous completed slice
 
@@ -84,4 +115,4 @@ Unexpected failure guidance must be cautious because a create/replace operation 
 
 ## Next step
 
-Implement the canonical Verify Panel native guard on a fresh branch, add focused regression coverage, validate exact-head ownership/order, then merge and verify on `main`.
+Open the focused PR, verify its exact head and CI execution state, merge with an expected-head guard if clean, then verify the validated production/test blobs on `main`.
