@@ -84,7 +84,7 @@ The intentional **final** public global application-command surface is exactly *
 
 `/dank` intentionally exposes only two direct children:
 
-- `/dank home` — the complete mega menu for Setup, Protection, Tickets, Verification, Welcome/Exit, Members & Moderation, Design, Roles/Profiles, Logs, Status, Diagnostics, Card Assets, Help, and profile access.
+- `/dank home` — the complete mega menu for Setup, Protection, Tickets, Verification, Welcome/Exit, Members & Moderation, Design, Roles/Profiles, Logs, Server Stats, Status, Diagnostics, Card Assets, Help, and profile access.
 - `/dank upload` — the single attachment command for a Join Card background, Exit Card background, or custom card font. This remains a command because Discord buttons cannot provide an attachment field.
 
 Former roots such as `/ticket-intake`, `/ticket-category`, and `/ticket-panel` are not public autocomplete commands anymore. Their implementation modules remain loaded and their actions are available inside `/tickets`. Likewise, former `/dank` shortcuts such as setup/status/diagnostics/welcome are reached through `/dank home` rather than separate autocomplete entries.
