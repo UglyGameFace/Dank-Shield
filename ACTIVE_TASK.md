@@ -2,27 +2,49 @@
 
 ## Active task / desired outcome
 
-**No active Dank Shield implementation task.**
+**P0-GUARD-EMBED-001 — Retire dormant global Embed newline patcher**
 
-The previous task, **P0-GUARD-EMBED-001 — Retire dormant global Embed newline patcher**, is complete.
+Remove the obsolete `startup_guards/embed_literal_newline_guard.py` monkey patch now that production ownership inspection proves it has no runtime importer and native Dank Design text cleanup owns the useful newline behavior.
 
-## Completed task
+## Status
 
-### Outcome
+**IMPLEMENTED — exact-head validation pending**
 
-The obsolete `startup_guards/embed_literal_newline_guard.py` monkey patch was retired after ownership inspection proved it had no production importer and native Dank Design cleanup already owned the useful newline behavior.
+Branch: `audit/retire-dormant-embed-newline-guard-20260921`
 
-### Root cause / ownership finding
+Base: current `main` after PR #288.
 
-The retired module was dormant production code with dangerous import-time behavior:
+## Previous task closed
 
-- no production module imported it;
-- normal startup did not iterate the historical guard inventory;
-- its only executable consumer was `tools/test_embed_literal_newline_guard.py`;
-- importing it immediately called `apply()`;
-- `apply()` globally replaced six `discord.Embed` methods.
+**QUIET-NOTICE-001** is complete.
 
-Native visible-newline cleanup remains owned by:
+PR #288 merged as `195a2d5bd37ae17fdb4dcb587e646172bac91f16`.
+
+Exact implementation head `732ea825af78b8f7d185cab1878fd939e1fab08f` passed:
+
+- diff integrity;
+- Python compile;
+- 49 focused Community Tools tests;
+- Community Tools static ownership checks;
+- PostgreSQL migrations applied twice;
+- Quiet Notice atomic SQL behavior/security smoke;
+- full suite: **1794 passed, 79 warnings, 0 failures**.
+
+All six implementation/test blobs were verified byte-for-byte identical on merged `main`.
+
+## Root cause / ownership finding
+
+`embed_literal_newline_guard.py` is dormant production code with dangerous import-time behavior:
+
+- no production module imports it;
+- normal startup does not iterate the historical guard inventory;
+- its only executable consumer is `tools/test_embed_literal_newline_guard.py`;
+- importing it immediately calls `apply()`;
+- `apply()` globally replaces six `discord.Embed` methods.
+
+That means the file provides no production behavior today but remains a resurrection hazard if accidentally imported later.
+
+Useful newline normalization already has a native owner:
 
 `stoney_verify/services/server_design_majority_layout.clean_design_text()`
 
@@ -30,52 +52,59 @@ with regression coverage in:
 
 `tests/test_server_design_majority_layout.py::test_clean_design_text_replaces_literal_newline_artifacts`
 
-### Changes
+## Scope
+
+In scope:
+
+- delete `startup_guards/embed_literal_newline_guard.py`;
+- remove its inert historical startup-inventory entry;
+- delete the obsolete tool test that imports/activates the patcher;
+- strengthen startup-loader retirement coverage so the patcher stays absent;
+- preserve native Dank Design newline sanitizer/regression ownership;
+- correct the startup-ownership audit record.
+
+Out of scope:
+
+- changing native Dank Design formatting behavior;
+- changing any live startup guard;
+- `slash_command_cleanup` retirement;
+- ticket/setup/verification/member/invite compatibility families;
+- command registry redesign;
+- central settings registry work.
+
+## Changes
 
 - removed historical `embed_literal_newline_guard` metadata;
 - deleted the dormant global Embed monkey patch;
 - deleted its implementation-preservation tool test;
-- strengthened loader-retirement coverage so the patcher stays absent;
-- preserved native Dank Design newline sanitizer/regression ownership;
-- corrected the startup ownership audit record.
+- loader-retirement regression now requires:
+  - retired guard file absent;
+  - retired guard metadata absent;
+  - obsolete guard test absent;
+  - native `clean_design_text` owner present;
+  - native newline regression coverage present;
+- startup ownership document now records both the already-retired panel retry path and the retired Embed patcher accurately.
 
-### Validation
+## Risk / compatibility
 
-Exact implementation head:
+Expected production runtime behavior change: **none**.
 
-`ee5020269ded0a40b541697eb7f4cb421969b347`
+The deleted module had no production importer. Native user-facing newline cleanup remains untouched.
 
-Passed on that exact SHA:
+The intended risk reduction is removal of an accidental-import path capable of mutating global `discord.Embed` behavior process-wide.
 
-- `git diff --check`;
+## Validation required
+
+- exact-head `git diff --check`;
 - Python compile;
-- startup guard retirement static check;
-- native Dank Design newline regression: **10 passed**;
-- startup/ownership continuation;
-- full Python suite: **1794 passed, 79 warnings, 0 failures**.
-
-PR #290 merged to `main` as:
-
-`efef78fa9ed3f5be744d2585b1e9ed93f4209566`
-
-Post-merge verification confirmed the merged commit is the current `main` head and the retired startup-guard file is absent from the production guard inventory.
-
-### Cleanup / conflicts
-
-- no production importer was introduced;
-- no native Dank Design behavior changed;
-- no unrelated startup guard was modified;
-- no unresolved review threads remained on the validated implementation head;
-- the only remaining stale item was this task ledger, corrected by the closeout change.
-
-### Blockers / risks
-
-None known for P0-GUARD-EMBED-001.
-
-### Backlog
-
-Existing unrelated audit/backlog items remain unchanged and must be handled under their own task locks.
+- `tools/test_startup_guard_literal_newline_registered.py`;
+- `tests/test_server_design_majority_layout.py`;
+- startup/ownership-focused tests;
+- full Python suite;
+- final changed-file/review-thread inspection;
+- merge with expected-head guard;
+- post-merge absence verification on `main`.
 
 ## Next step
 
-Start the next explicitly selected implementation task from a clean branch or repository with its own active-task record.
+Open a focused draft PR, inspect exact-head CI, run Termux validation if GitHub runners remain unavailable, then merge and verify the retired patcher stays absent on `main`.
