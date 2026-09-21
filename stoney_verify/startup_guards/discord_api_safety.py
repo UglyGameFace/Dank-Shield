@@ -122,6 +122,14 @@ def recovery_request_weight(limit: int, *, page_size: int = 100) -> int:
     return max(1, (safe_limit + safe_page - 1) // safe_page)
 
 
+def _recovery_rest_now() -> float:
+    return time.monotonic()
+
+
+async def _recovery_rest_sleep(seconds: float) -> None:
+    await asyncio.sleep(seconds)
+
+
 def _ensure_recovery_rest_budget_state() -> asyncio.Lock:
     global _RECOVERY_REST_LOOP
     global _RECOVERY_REST_LOCK
@@ -139,7 +147,7 @@ def _ensure_recovery_rest_budget_state() -> asyncio.Lock:
 
 
 def recovery_discord_rest_budget_snapshot() -> dict[str, int | float]:
-    now = time.monotonic()
+    now = _recovery_rest_now()
     cutoff = now - _RECOVERY_REST_WINDOW_SECONDS
     reserved = sum(1 for item in _RECOVERY_REST_RESERVED_AT if item > cutoff)
     return {
@@ -174,7 +182,7 @@ async def reserve_recovery_discord_rest_requests(
         wait_for = 0.0
 
         async with lock:
-            now = time.monotonic()
+            now = _recovery_rest_now()
             cutoff = now - _RECOVERY_REST_WINDOW_SECONDS
             while _RECOVERY_REST_RESERVED_AT and _RECOVERY_REST_RESERVED_AT[0] <= cutoff:
                 _RECOVERY_REST_RESERVED_AT.popleft()
@@ -199,7 +207,7 @@ async def reserve_recovery_discord_rest_requests(
 
         _RECOVERY_REST_WAITERS += 1
         try:
-            await asyncio.sleep(wait_for)
+            await _recovery_rest_sleep(wait_for)
         finally:
             _RECOVERY_REST_WAITERS = max(0, _RECOVERY_REST_WAITERS - 1)
 
