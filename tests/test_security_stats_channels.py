@@ -619,10 +619,19 @@ def test_disable_stats_preserves_category_when_it_contains_unowned_channels(monk
         state.update(updates)
         return dict(state)
 
+    cleared = []
+
+    async def fake_clear_guild_config_keys(guild_id: int, keys, *, source: str, actor=None):
+        cleared.append((guild_id, tuple(keys), source))
+        for key in keys:
+            state.pop(key, None)
+        return dict(state)
+
     monkeypatch.setattr(security_stats.discord, "CategoryChannel", FakeCategoryChannel)
     monkeypatch.setattr(security_stats.discord, "VoiceChannel", FakeVoiceChannel)
     monkeypatch.setattr(security_stats, "get_guild_config", fake_get_guild_config)
     monkeypatch.setattr(security_stats, "upsert_guild_config", fake_upsert_guild_config)
+    monkeypatch.setattr(security_stats, "clear_guild_config_keys", fake_clear_guild_config_keys)
 
     ok, _note = asyncio.run(
         security_stats.disable_security_stats_display(FakeGuild(), remove_channels=True)
@@ -633,6 +642,13 @@ def test_disable_stats_preserves_category_when_it_contains_unowned_channels(monk
     assert category.deleted is False
     assert writes[-1][security_stats.SECURITY_STATS_ENABLED_KEY] is False
     assert writes[-1][security_stats.SECURITY_STATS_CHANNEL_IDS_KEY] == {}
+    assert cleared == [
+        (
+            77,
+            (security_stats.SECURITY_STATS_CATEGORY_ID_KEY,),
+            "server_stats.disable",
+        )
+    ]
 
 
 
