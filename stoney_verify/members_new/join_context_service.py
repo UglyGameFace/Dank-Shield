@@ -286,6 +286,25 @@ def invite_meta(invite: discord.Invite) -> Dict[str, Any]:
     }
 
 
+def _can_fetch_guild_invites(guild: discord.Guild) -> bool:
+    try:
+        member = getattr(guild, "me", None)
+        permissions = getattr(member, "guild_permissions", None)
+        return bool(
+            getattr(permissions, "administrator", False)
+            or getattr(permissions, "manage_guild", False)
+        )
+    except Exception:
+        return False
+
+
+def _guild_has_vanity_url(guild: discord.Guild) -> bool:
+    try:
+        return "VANITY_URL" in set(getattr(guild, "features", []) or [])
+    except Exception:
+        return False
+
+
 async def _warm_invite_cache_for_guild_unlocked(guild: discord.Guild) -> bool:
     gid = int(getattr(guild, "id", 0) or 0)
     if gid <= 0:
@@ -294,6 +313,10 @@ async def _warm_invite_cache_for_guild_unlocked(guild: discord.Guild) -> bool:
     current_uses: Dict[str, int] = {}
     current_meta: Dict[str, Dict[str, Any]] = {}
     vanity_uses: Optional[int] = None
+
+    if not _can_fetch_guild_invites(guild):
+        _warn(f"invite cache warm skipped guild={gid}: missing Manage Server permission")
+        return False
 
     try:
         invites = await guild.invites()
@@ -308,12 +331,13 @@ async def _warm_invite_cache_for_guild_unlocked(guild: discord.Guild) -> bool:
         _warn(f"invite cache warm failed guild={gid}: {e!r}")
         return False
 
-    try:
-        vanity = await guild.vanity_invite()
-        if vanity is not None:
-            vanity_uses = int(getattr(vanity, "uses", 0) or 0)
-    except Exception:
-        vanity_uses = None
+    if _guild_has_vanity_url(guild):
+        try:
+            vanity = await guild.vanity_invite()
+            if vanity is not None:
+                vanity_uses = int(getattr(vanity, "uses", 0) or 0)
+        except Exception:
+            vanity_uses = None
 
     _INVITE_USES_CACHE[gid] = current_uses
     _INVITE_META_CACHE[gid] = current_meta
@@ -331,7 +355,11 @@ async def warm_invite_cache_for_guild(guild: discord.Guild) -> bool:
         return ok
 
 
-async def _detect_join_entry_context_unlocked(member: discord.Member) -> Dict[str, Any]:
+async def _detect_join_entry_context_unlocked(
+    member: discord.Member,
+    *,
+    baseline_ready: bool,
+) -> Dict[str, Any]:
     guild = member.guild
     gid = int(guild.id)
 
@@ -343,31 +371,58 @@ async def _detect_join_entry_context_unlocked(member: discord.Member) -> Dict[st
     current_uses: Dict[str, int] = {}
     current_meta: Dict[str, Dict[str, Any]] = {}
 
-    try:
-        invites = await guild.invites()
-        invites_ok = True
-        for invite in invites:
-            meta = invite_meta(invite)
-            code = str(meta.get("code") or "").strip()
-            if not code:
-                continue
-            current_uses[code] = int(meta.get("uses") or 0)
-            current_meta[code] = meta
-    except discord.Forbidden:
-        invites_ok = False
-    except Exception as e:
-        _warn(f"join detect invite fetch failed guild={gid}: {e!r}")
-        invites_ok = False
+    if _can_fetch_guild_invites(guild):
+        try:
+            invites = await guild.invites()
+            invites_ok = True
+            for invite in invites:
+                meta = invite_meta(invite)
+                code = str(meta.get("code") or "").strip()
+                if not code:
+                    continue
+                current_uses[code] = int(meta.get("uses") or 0)
+                current_meta[code] = meta
+        except discord.Forbidden:
+            invites_ok = False
+        except Exception as e:
+            _warn(f"join detect invite fetch failed guild={gid}: {e!r}")
+            invites_ok = False
 
     vanity_uses: Optional[int] = old_vanity_uses
     vanity_code: Optional[str] = None
-    try:
-        vanity = await guild.vanity_invite()
-        if vanity is not None:
-            vanity_uses = int(getattr(vanity, "uses", 0) or 0)
-            vanity_code = str(getattr(vanity, "code", "") or "").strip() or None
-    except Exception:
-        pass
+    if _guild_has_vanity_url(guild):
+        try:
+            vanity = await guild.vanity_invite()
+            if vanity is not None:
+                vanity_uses = int(getattr(vanity, "uses", 0) or 0)
+                vanity_code = str(getattr(vanity, "code", "") or "").strip() or None
+        except Exception:
+            pass
+
+    if not baseline_ready:
+        if not invites_ok:
+            default_context = build_join_context(
+                entry_method="invite_tracking_unavailable",
+                join_source="invite_tracking_unavailable",
+                verification_source="invite_tracking_unavailable",
+                entry_reason="Joined, but the bot could not establish an invite usage baseline. Check Manage Server / invite read permissions.",
+                join_note="Invite tracking unavailable for this join.",
+                vanity_used=False,
+            )
+        else:
+            default_context = build_join_context(
+                entry_method="invite_cache_warming",
+                join_source="invite_cache_warming",
+                verification_source="invite_cache_warming",
+                entry_reason="Joined while Dank Shield established a fresh invite baseline. No invite is claimed for this join; future joins use measured deltas.",
+                join_note="Invite baseline established after restart; attribution intentionally withheld for this join.",
+                vanity_used=False,
+            )
+
+        _INVITE_USES_CACHE[gid] = current_uses
+        _INVITE_META_CACHE[gid] = current_meta
+        _VANITY_USES_CACHE[gid] = vanity_uses
+        return default_context
 
     best_code: Optional[str] = None
     best_delta = 0
@@ -466,15 +521,12 @@ async def detect_join_entry_context(member: discord.Member) -> Dict[str, Any]:
     gid = int(guild.id)
     async with invite_lock_for(gid):
         ready_before = invite_cache_ready(gid)
-        context = normalize_join_context(await _detect_join_entry_context_unlocked(member))
-        if not ready_before and str(context.get("entry_method") or "").strip().lower() == "invite_unresolved":
-            context["entry_method"] = "invite_cache_warming"
-            context["join_source"] = "invite_cache_warming"
-            context["verification_source"] = "invite_cache_warming"
-            context["entry_truth_quality"] = "partial"
-            context["entry_confidence"] = 35
-            context["entry_quality_reason"] = "Invite cache had no confirmed startup/reconnect baseline for this join."
-            context["entry_conflict"] = False
+        context = normalize_join_context(
+            await _detect_join_entry_context_unlocked(
+                member,
+                baseline_ready=ready_before,
+            )
+        )
         if str(context.get("entry_method") or "").strip().lower() != "invite_tracking_unavailable":
             mark_invite_cache_ready(gid, True)
         return normalize_join_context(context)

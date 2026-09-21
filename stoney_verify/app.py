@@ -16,8 +16,6 @@ from .globals import bot, DISCORD_TOKEN, GUILD_ID, get_supabase, claim_startup_f
 # commands.py defines a no-op @bot.event on_ready
 # events.py defines real runtime event behavior for:
 # - VC sweeper
-# - invite warmup
-# - initial member sync
 # - stale verification reconciliation
 #
 # commands MUST load BEFORE events so events owns the final
@@ -65,7 +63,9 @@ except Exception as e:
 from .members_new import service as _members_service  # noqa: F401
 from .members_new.activity_tracker import (
     install_activity_tracker as _install_activity_tracker,
+    persisted_last_heartbeat_at as _persisted_last_heartbeat_at,
 )
+from .startup_recovery_coordinator import startup_recovery_slot
 from .tickets_new import service as _tickets_service  # noqa: F401
 from .tickets_new import transcript_service as _transcript_service  # noqa: F401
 from .tickets_new import panel as _tickets_panel  # noqa: F401
@@ -102,9 +102,11 @@ except Exception as e:
 try:
     from .members_new.sync_service import (
         run_departed_reconciliation_for_guild as _run_departed_reconciliation_for_guild,
+        run_full_member_sync_for_guild as _run_full_member_sync_for_guild,
     )
 except Exception:
     _run_departed_reconciliation_for_guild = None  # type: ignore
+    _run_full_member_sync_for_guild = None  # type: ignore
 
 try:
     from .tickets_new.sync_service import (
@@ -262,6 +264,68 @@ def _setup_ticket_events_once() -> None:
         print("❌ ticket_events.setup(bot) failed:", repr(e))
 
 
+async def _configured_runtime_guild_ids(
+    guild_ids: list[int],
+) -> set[int] | None:
+    """Resolve configured public guilds in bounded Supabase batches."""
+
+    clean_ids = sorted(
+        {
+            int(guild_id)
+            for guild_id in guild_ids
+            if int(guild_id) > 0
+        }
+    )
+    if not clean_ids:
+        return set()
+
+    sb = get_supabase()
+    if sb is None:
+        return None
+
+    table_name = _env_str(
+        "DANK_GUILD_CONFIG_TABLE",
+        "guild_configs",
+    ) or "guild_configs"
+    batch_size = max(
+        25,
+        min(
+            500,
+            _env_int("DANK_STARTUP_CONFIG_BATCH_SIZE", 200),
+        ),
+    )
+
+    def _read() -> set[int]:
+        configured: set[int] = set()
+        for start in range(0, len(clean_ids), batch_size):
+            batch = clean_ids[start : start + batch_size]
+            response = (
+                sb.table(table_name)
+                .select("guild_id")
+                .in_("guild_id", [str(guild_id) for guild_id in batch])
+                .execute()
+            )
+            for row in list(getattr(response, "data", None) or []):
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    guild_id = int(str(row.get("guild_id") or "0"))
+                except Exception:
+                    guild_id = 0
+                if guild_id > 0:
+                    configured.add(guild_id)
+        return configured
+
+    try:
+        return await asyncio.to_thread(_read)
+    except Exception as exc:
+        print(
+            "⚠️ Public startup bulk guild-config scope failed; "
+            f"falling back to per-guild cache reads: {exc!r}"
+        )
+        return None
+
+
 async def _guild_config_source(guild_id: int, *, refresh: bool = False) -> str:
     try:
         from .guild_config import get_guild_config
@@ -312,22 +376,50 @@ async def _resolve_runtime_guilds() -> list[discord.Guild]:
     another server after public invite.
     """
     if _public_scope_enabled():
-        max_guilds = max(1, _env_int("DANK_STARTUP_MAX_GUILDS", 50))
-        guilds = _unique_guilds(list(getattr(bot, "guilds", []) or []))[:max_guilds]
+        guilds = _unique_guilds(list(getattr(bot, "guilds", []) or []))
         configured: list[discord.Guild] = []
+        configured_ids = await _configured_runtime_guild_ids(
+            [int(guild.id) for guild in guilds]
+        )
 
-        for guild in guilds:
-            gid = int(getattr(guild, "id", 0) or 0)
-            source = await _guild_config_source(gid, refresh=False)
-            if source.startswith("supabase:"):
-                configured.append(guild)
-                continue
-
-            if gid not in _SKIPPED_UNCONFIGURED_STARTUP_GUILDS:
-                _SKIPPED_UNCONFIGURED_STARTUP_GUILDS.add(gid)
+        if configured_ids is not None:
+            configured = [
+                guild
+                for guild in guilds
+                if int(guild.id) in configured_ids
+            ]
+            skipped_ids = [
+                int(guild.id)
+                for guild in guilds
+                if int(guild.id) not in configured_ids
+            ]
+            if skipped_ids:
+                _SKIPPED_UNCONFIGURED_STARTUP_GUILDS.update(skipped_ids)
                 print(
-                    "🌐 Public startup scope skipping unconfigured guild "
-                    f"guild={gid} source={source or 'unknown'}"
+                    "🌐 Public startup scope skipped unconfigured guilds "
+                    f"count={len(skipped_ids)} sample={skipped_ids[:8]}"
+                )
+        else:
+            skipped_ids: list[int] = []
+            for index, guild in enumerate(guilds):
+                gid = int(getattr(guild, "id", 0) or 0)
+                source = await _guild_config_source(gid, refresh=False)
+                if source.startswith("supabase:"):
+                    configured.append(guild)
+                else:
+                    skipped_ids.append(gid)
+                    _SKIPPED_UNCONFIGURED_STARTUP_GUILDS.add(gid)
+
+                if (index + 1) % 25 == 0:
+                    try:
+                        await asyncio.sleep(0)
+                    except Exception:
+                        pass
+
+            if skipped_ids:
+                print(
+                    "🌐 Public startup scope fallback skipped unconfigured guilds "
+                    f"count={len(skipped_ids)} sample={skipped_ids[:8]}"
                 )
 
         if not configured:
@@ -611,13 +703,85 @@ async def _maybe_run_departed_reconcile_once() -> None:
         print("⚠️ Skipping departed reconcile: no configured guilds resolved.")
         return
 
-    for guild in guilds:
+    for index, guild in enumerate(guilds):
         try:
-            print(f"🧹 Running departed-member reconciliation guild={guild.id}...")
-            summary_departed = await _run_departed_reconciliation_for_guild(guild)
+            gid = int(guild.id)
+            checkpoint = await _persisted_last_heartbeat_at(gid)
+            if checkpoint is None:
+                print(
+                    "ℹ️ Departed reconciliation skipped "
+                    f"guild={gid} reason=no_durable_restart_checkpoint"
+                )
+                continue
+
+            print(f"🧹 Running departed-member reconciliation guild={gid}...")
+            async with startup_recovery_slot(gid, "member_departure_reconcile"):
+                summary_departed = await _run_departed_reconciliation_for_guild(guild)
             print("✅ Departed reconciliation complete:", summary_departed)
         except Exception as e:
             print(f"❌ Departed reconcile failed guild={getattr(guild, 'id', 'unknown')}:", repr(e))
+
+        if index + 1 < len(guilds):
+            try:
+                await asyncio.sleep(0.25)
+            except Exception:
+                pass
+
+
+async def _bootstrap_new_guild_members(guild: discord.Guild) -> None:
+    """Populate member truth once when Dank Shield is newly added to a guild."""
+
+    if _run_full_member_sync_for_guild is None:
+        return
+
+    gid = int(getattr(guild, "id", 0) or 0)
+    if gid <= 0:
+        return
+
+    try:
+        await asyncio.sleep(5.0)
+        invite_baseline_ok = False
+        async with startup_recovery_slot(gid, "member_initial_bootstrap"):
+            summary = await _run_full_member_sync_for_guild(guild)
+            try:
+                from .members_new.join_context_service import warm_invite_cache_for_guild
+
+                invite_baseline_ok = bool(
+                    await warm_invite_cache_for_guild(guild)
+                )
+            except Exception:
+                invite_baseline_ok = False
+        print(
+            "✅ New-guild member bootstrap complete "
+            f"guild={gid} active={int(summary.get('active_members_synced') or 0)} "
+            f"marked_departed={int(summary.get('marked_departed') or 0)} "
+            f"errors={int(summary.get('errors') or 0)} "
+            f"invite_baseline={'ready' if invite_baseline_ok else 'lazy'}"
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        print(
+            "⚠️ New-guild member bootstrap failed "
+            f"guild={gid} error={type(exc).__name__}: {str(exc)[:250]}"
+        )
+
+
+async def _schedule_new_guild_member_bootstrap(guild: discord.Guild) -> None:
+    try:
+        task = asyncio.create_task(
+            _bootstrap_new_guild_members(guild),
+            name=f"member_initial_bootstrap_{int(guild.id)}",
+        )
+        _track_background_task(
+            task,
+            label=f"member_initial_bootstrap:{int(guild.id)}",
+        )
+    except Exception as exc:
+        print(
+            "⚠️ Failed scheduling new-guild member bootstrap "
+            f"guild={getattr(guild, 'id', 0)} error={exc!r}"
+        )
 
 
 async def _maybe_run_ticket_sync_once() -> None:
@@ -627,6 +791,13 @@ async def _maybe_run_ticket_sync_once() -> None:
         return
 
     _DID_TICKET_SYNC = True
+
+    if not _env_true("DANK_STARTUP_TICKET_BACKFILL", default=False):
+        print(
+            "ℹ️ Startup ticket sync/backfill disabled; "
+            "set DANK_STARTUP_TICKET_BACKFILL=true only for explicit repair runs."
+        )
+        return
 
     if _sync_active_ticket_channels_for_guild is None:
         print("⚠️ Ticket sync helper unavailable; skipping startup ticket sync.")
@@ -945,6 +1116,11 @@ async def on_ready() -> None:
             traceback.print_exc()
         except Exception:
             pass
+
+
+@bot.listen("on_guild_join")
+async def on_guild_join_member_bootstrap(guild: discord.Guild) -> None:
+    await _schedule_new_guild_member_bootstrap(guild)
 
 
 @bot.event

@@ -160,19 +160,15 @@ def test_interaction_followup_explicit_content_invite_is_still_detected() -> Non
         restore()
 
 
-def test_legacy_interaction_marker_uses_content_only() -> None:
-    restore = _install_for_test()
-    try:
-        message = _message(
-            content="https://x.com/example/status/123",
-            bot=True,
-            embeds=[_embed_with_remote_invite(embed_type="rich")],
-            components=[_support_button()],
-            interaction=SimpleNamespace(id=888),
-        )
-        assert policy.extract_invite_codes_from_message(message) == []
-    finally:
-        restore()
+def test_deprecated_interaction_property_is_never_accessed() -> None:
+    class Message:
+        interaction_metadata = None
+
+        @property
+        def interaction(self):
+            raise AssertionError("deprecated Message.interaction must not be accessed")
+
+    assert surface._interaction_response(Message()) is False  # noqa: SLF001
 
 
 def test_runtime_is_idempotent() -> None:

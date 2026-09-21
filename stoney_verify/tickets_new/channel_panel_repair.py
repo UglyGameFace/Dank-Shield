@@ -17,6 +17,7 @@ import asyncio
 import builtins
 import importlib
 import inspect
+import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -46,6 +47,22 @@ def _warn(message: str) -> None:
         print(f"⚠️ ticket_channel_panel_repair {message}")
     except Exception:
         pass
+
+
+def _env_true(name: str, default: bool = False) -> bool:
+    try:
+        raw = os.getenv(name)
+        if raw is None:
+            return bool(default)
+        return str(raw).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "y",
+            "on",
+        }
+    except Exception:
+        return bool(default)
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -303,22 +320,47 @@ async def _startup_sweep(bot: Any) -> None:
     if _STARTUP_SWEEP_RAN:
         return
     _STARTUP_SWEEP_RAN = True
+
+    if not _env_true("DANK_STARTUP_TICKET_PANEL_REPAIR", False):
+        _log(
+            "startup history sweep disabled; "
+            "post-create repair remains active"
+        )
+        return
+
     try:
         await asyncio.sleep(12)
     except Exception:
         pass
 
+    from stoney_verify.startup_recovery_coordinator import (
+        startup_recovery_slot,
+    )
+
     checked = 0
     repaired = 0
     try:
         for guild in list(getattr(bot, "guilds", []) or []):
-            for channel in list(getattr(guild, "text_channels", []) or []):
-                if not _looks_like_open_ticket(channel):
-                    continue
-                checked += 1
-                if await ensure_ticket_channel_panel(channel, reason="startup-sweep"):
-                    repaired += 1
-        _log(f"startup ticket panel repair sweep complete checked={checked} repaired={repaired}")
+            gid = _safe_int(getattr(guild, "id", 0), 0)
+            if gid <= 0:
+                continue
+            async with startup_recovery_slot(
+                gid,
+                "ticket_panel_history_repair",
+            ):
+                for channel in list(getattr(guild, "text_channels", []) or []):
+                    if not _looks_like_open_ticket(channel):
+                        continue
+                    checked += 1
+                    if await ensure_ticket_channel_panel(
+                        channel,
+                        reason="startup-sweep",
+                    ):
+                        repaired += 1
+        _log(
+            "startup ticket panel repair sweep complete "
+            f"checked={checked} repaired={repaired}"
+        )
     except Exception as e:
         _warn(f"startup ticket panel repair sweep failed: {e!r}")
 

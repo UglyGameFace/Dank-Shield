@@ -596,10 +596,18 @@ async def _prewarm_security_state(bot: discord.Client) -> None:
     if not guilds:
         return
 
-    semaphore = asyncio.Semaphore(5)
+    queue: asyncio.Queue[discord.Guild] = asyncio.Queue()
+    for guild in guilds:
+        queue.put_nowait(guild)
 
-    async def warm(guild: discord.Guild) -> None:
-        async with semaphore:
+    worker_count = min(len(guilds), 5)
+
+    async def worker() -> None:
+        while True:
+            try:
+                guild = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
             try:
                 settings = await anti_nuke.get_antinuke_settings(
                     int(guild.id), refresh=True
@@ -615,8 +623,17 @@ async def _prewarm_security_state(bot: discord.Client) -> None:
                     f"guild={getattr(guild, 'id', 'unknown')} "
                     f"error={type(exc).__name__}: {exc}"
                 )
+            finally:
+                queue.task_done()
 
-    await asyncio.gather(*(warm(guild) for guild in guilds))
+    workers = [
+        asyncio.create_task(
+            worker(),
+            name=f"antinuke-security-prewarm-{index}",
+        )
+        for index in range(worker_count)
+    ]
+    await asyncio.gather(*workers)
 
 
 def _install_prewarm_listener(bot: discord.Client) -> bool:

@@ -10,11 +10,13 @@ events. Every delete still goes through ``invite_policy_engine``.
 
 import asyncio
 import time
+from datetime import datetime
 from typing import Any
 
 import discord
 
 from stoney_verify import invite_policy_engine as policy
+from stoney_verify.startup_recovery_coordinator import startup_recovery_slot
 
 _READY_DELAY_SECONDS = 3.0
 _POLICY_RETRY_DELAY_SECONDS = 15.0
@@ -156,14 +158,29 @@ def _channel_can_reconcile(channel: Any, bot_member: Any) -> bool:
         return False
 
 
-async def _scan_channel(channel: Any, *, limit: int, source: str) -> dict[str, Any]:
+async def _scan_channel(
+    channel: Any,
+    *,
+    limit: int,
+    source: str,
+    after: datetime | None = None,
+    before: datetime | None = None,
+) -> dict[str, Any]:
     try:
+        scan_kwargs: dict[str, Any] = {
+            "limit": max(1, min(int(limit), _AUTO_HISTORY_LIMIT)),
+            "repost_mixed": True,
+            "source": source,
+        }
+        if after is not None:
+            scan_kwargs["after"] = after
+        if before is not None:
+            scan_kwargs["before"] = before
+
         return dict(
             await policy.scan_channel_invites(
                 channel,
-                limit=max(1, min(int(limit), _AUTO_HISTORY_LIMIT)),
-                repost_mixed=True,
-                source=source,
+                **scan_kwargs,
             )
             or {}
         )
@@ -178,10 +195,67 @@ async def _scan_channel(channel: Any, *, limit: int, source: str) -> dict[str, A
         }
 
 
+async def _recovery_window(guild: Any) -> tuple[datetime, datetime] | None:
+    gid = int(getattr(guild, "id", 0) or 0)
+    if gid <= 0:
+        return None
+
+    try:
+        from stoney_verify.members_new.activity_reconciliation import max_reconcile_gap_seconds
+        from stoney_verify.members_new.activity_tracker import persisted_last_heartbeat_at
+
+        after = await persisted_last_heartbeat_at(gid)
+    except Exception as exc:
+        _log(
+            f"window_unavailable guild={gid} "
+            f"error={type(exc).__name__}: {str(exc)[:160]}"
+        )
+        return None
+
+    if after is None:
+        _log(f"skipped guild={gid} reason=no_durable_recovery_checkpoint")
+        return None
+
+    before = discord.utils.utcnow()
+    gap_seconds = (before - after).total_seconds()
+    if gap_seconds < 0:
+        _log(
+            f"skipped guild={gid} reason=recovery_checkpoint_in_future "
+            f"gap_seconds={int(gap_seconds)}"
+        )
+        return None
+
+    max_gap = int(max_reconcile_gap_seconds())
+    if gap_seconds > max_gap:
+        _log(
+            f"skipped guild={gid} reason=recovery_gap_exceeds_safe_limit "
+            f"gap_seconds={int(gap_seconds)} max_gap_seconds={max_gap}"
+        )
+        return None
+
+    return after, before
+
+
+def _channel_may_have_messages_after(channel: Any, after: datetime | None) -> bool:
+    if after is None:
+        return True
+    try:
+        message_id = int(getattr(channel, "last_message_id", 0) or 0)
+    except Exception:
+        return True
+    if message_id <= 0:
+        return False
+    try:
+        return discord.utils.snowflake_time(message_id) > after
+    except Exception:
+        return True
+
+
 def _empty_totals() -> dict[str, int]:
     return {
         "channels": 0,
         "skipped_permission": 0,
+        "skipped_inactive": 0,
         "checked": 0,
         "matched": 0,
         "allowed": 0,
@@ -221,7 +295,14 @@ async def _flush_bulk_recovery_stats(guild_id: int, *, reason: str) -> None:
         )
 
 
-async def _reconcile_guild(guild: Any, *, reason: str, force: bool = False) -> dict[str, int]:
+async def _reconcile_guild(
+    guild: Any,
+    *,
+    reason: str,
+    force: bool = False,
+    after: datetime | None = None,
+    before: datetime | None = None,
+) -> dict[str, int]:
     gid = int(getattr(guild, "id", 0) or 0)
     totals = _empty_totals()
     if gid <= 0:
@@ -245,41 +326,50 @@ async def _reconcile_guild(guild: Any, *, reason: str, force: bool = False) -> d
     bot_member = getattr(guild, "me", None)
     channels = list(getattr(guild, "text_channels", []) or [])
 
-    async def run(channel: Any) -> tuple[bool, dict[str, Any]]:
+    async def run(channel: Any) -> tuple[str, dict[str, Any]]:
         if not _channel_can_reconcile(channel, bot_member):
-            return False, {}
+            return "permission", {}
+        if not _channel_may_have_messages_after(channel, after):
+            return "inactive", {}
         result = await _scan_channel(
             channel,
             limit=_AUTO_HISTORY_LIMIT,
             source=f"auto-reconcile:{reason}",
+            after=after,
+            before=before,
         )
-        return True, result
+        return "scanned", result
 
-    for start in range(0, len(channels), _RECONCILE_CONCURRENCY):
-        batch = channels[start : start + _RECONCILE_CONCURRENCY]
-        results = await asyncio.gather(*(run(channel) for channel in batch))
-        for eligible, result in results:
-            if not eligible:
-                totals["skipped_permission"] += 1
-                continue
-            totals["channels"] += 1
-            for key in ("checked", "matched", "allowed", "deleted", "failed"):
-                totals[key] += int(result.get(key) or 0)
-            warning = str(result.get("warning") or "").strip()
-            if warning:
-                totals["warnings"] += 1
-                _log(
-                    f"channel_warning guild={gid} reason={reason} "
-                    f"warning={warning[:220]}"
-                )
+    async with startup_recovery_slot(gid, f"invite_reconcile:{reason}"):
+        for start in range(0, len(channels), _RECONCILE_CONCURRENCY):
+            batch = channels[start : start + _RECONCILE_CONCURRENCY]
+            results = await asyncio.gather(*(run(channel) for channel in batch))
+            for disposition, result in results:
+                if disposition == "permission":
+                    totals["skipped_permission"] += 1
+                    continue
+                if disposition == "inactive":
+                    totals["skipped_inactive"] += 1
+                    continue
+                totals["channels"] += 1
+                for key in ("checked", "matched", "allowed", "deleted", "failed"):
+                    totals[key] += int(result.get(key) or 0)
+                warning = str(result.get("warning") or "").strip()
+                if warning:
+                    totals["warnings"] += 1
+                    _log(
+                        f"channel_warning guild={gid} reason={reason} "
+                        f"warning={warning[:220]}"
+                    )
 
-    if totals["deleted"] > 0:
-        await _flush_bulk_recovery_stats(gid, reason=reason)
+        if totals["deleted"] > 0:
+            await _flush_bulk_recovery_stats(gid, reason=reason)
 
     _LAST_GUILD_RECONCILE_AT[gid] = time.monotonic()
     _log(
         f"guild={gid} reason={reason} channels={totals['channels']} "
-        f"skipped_permission={totals['skipped_permission']} checked={totals['checked']} "
+        f"skipped_permission={totals['skipped_permission']} "
+        f"skipped_inactive={totals['skipped_inactive']} checked={totals['checked']} "
         f"matched={totals['matched']} allowed={totals['allowed']} "
         f"deleted={totals['deleted']} failed={totals['failed']} warnings={totals['warnings']}"
     )
@@ -292,12 +382,21 @@ async def _reconcile_all(bot: Any, *, reason: str) -> None:
         if reason == "ready":
             await _sleep(_READY_DELAY_SECONDS)
 
-        deferred: list[Any] = []
+        deferred: list[tuple[Any, datetime, datetime]] = []
         for guild in list(getattr(bot, "guilds", []) or []):
             try:
-                result = await _reconcile_guild(guild, reason=reason)
+                window = await _recovery_window(guild)
+                if window is None:
+                    continue
+                after, before = window
+                result = await _reconcile_guild(
+                    guild,
+                    reason=reason,
+                    after=after,
+                    before=before,
+                )
                 if int(result.get("deferred") or 0):
-                    deferred.append(guild)
+                    deferred.append((guild, after, before))
             except Exception as exc:
                 _log(
                     f"guild_failed guild={getattr(guild, 'id', 0)} reason={reason} "
@@ -306,12 +405,14 @@ async def _reconcile_all(bot: Any, *, reason: str) -> None:
 
         if deferred:
             await _sleep(_POLICY_RETRY_DELAY_SECONDS)
-            for guild in deferred:
+            for guild, after, before in deferred:
                 try:
                     await _reconcile_guild(
                         guild,
                         reason=f"{reason}-policy-retry",
                         force=True,
+                        after=after,
+                        before=before,
                     )
                 except Exception as exc:
                     _log(

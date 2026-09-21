@@ -369,12 +369,34 @@ async def bootstrap_panel_system_for_bot(
     concurrency: int = PANEL_BOOTSTRAP_GUILD_CONCURRENCY,
 ) -> Dict[str, Any]:
     guilds = list(getattr(bot, "guilds", []) or [])
-    sem = asyncio.Semaphore(max(1, int(concurrency or 1)))
-
     results: List[Dict[str, Any]] = []
+    if not guilds:
+        return {
+            "ok": True,
+            "guilds_seen": 0,
+            "guilds_ok": 0,
+            "guilds_failed": 0,
+            "rules_repaired": 0,
+            "default_panels_created": 0,
+            "ran_at": _now_iso(),
+            "results": [],
+        }
 
-    async def _run_one(guild: discord.Guild) -> None:
-        async with sem:
+    queue: asyncio.Queue[discord.Guild] = asyncio.Queue()
+    for guild in guilds:
+        queue.put_nowait(guild)
+
+    worker_count = min(
+        len(guilds),
+        max(1, int(concurrency or 1)),
+    )
+
+    async def _worker() -> None:
+        while True:
+            try:
+                guild = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
             try:
                 result = await bootstrap_panel_system_for_guild(
                     guild,
@@ -392,8 +414,17 @@ async def bootstrap_panel_system_for_bot(
                         "error": repr(e),
                     }
                 )
+            finally:
+                queue.task_done()
 
-    await asyncio.gather(*[_run_one(guild) for guild in guilds], return_exceptions=True)
+    workers = [
+        asyncio.create_task(
+            _worker(),
+            name=f"panel-bootstrap-guild-worker-{index}",
+        )
+        for index in range(worker_count)
+    ]
+    await asyncio.gather(*workers)
 
     ok_count = sum(1 for row in results if _safe_bool(row.get("ok"), False))
     failed_count = len(results) - ok_count

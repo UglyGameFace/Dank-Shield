@@ -1621,6 +1621,14 @@ async def _bulk_mark_departed_members_async(
             if not uid or uid in active_ids:
                 continue
 
+            already_departed = bool(
+                not _safe_bool(row.get("in_guild"), True)
+                and _safe_str(row.get("data_health")).strip().lower() == "left_guild"
+                and _safe_str(row.get("role_state")).strip().lower() == "left_guild"
+            )
+            if already_departed:
+                continue
+
             payload = {
                 "in_guild": False,
                 "data_health": "left_guild",
