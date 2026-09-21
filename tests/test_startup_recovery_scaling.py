@@ -239,3 +239,9 @@ def test_server_stats_periodic_refresh_is_bounded_to_active_displays() -> None:
 
     assert 'gid not in _ACTIVE_DISPLAY_GUILDS' in SECURITY_STATS
     assert "_discover_cached_stats_guilds()" in SECURITY_STATS
+    assert "async def _discover_persisted_stats_guilds() -> None:" in SECURITY_STATS
+    assert "_STATS_DISCOVERY_BATCH_SIZE = 200" in SECURITY_STATS
+    assert '.select("guild_id,settings")' in SECURITY_STATS
+    assert '.in_("guild_id",' in SECURITY_STATS
+    assert "asyncio.to_thread(_read_enabled)" in SECURITY_STATS
+    assert "await _discover_persisted_stats_guilds()" in SECURITY_STATS
