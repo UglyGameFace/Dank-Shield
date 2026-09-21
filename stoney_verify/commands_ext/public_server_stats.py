@@ -223,7 +223,7 @@ class CategoryNameModal(discord.ui.Modal):
         note = "✅ Server Stats category name saved."
         if _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False):
             ok, result = await ensure_security_stats_display(guild)
-            note = result if ok else result
+            note = result
         await _render_center(interaction, content=note, fresh_followup=True)
 
 
@@ -270,7 +270,7 @@ class StatLabelModal(discord.ui.Modal):
         note = f"✅ **{_METRIC_TITLES[self.key]}** label saved."
         if _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False):
             ok, result = await ensure_security_stats_display(guild)
-            note = result if ok else result
+            note = result
         await _render_center(interaction, content=note, fresh_followup=True)
 
 
@@ -315,7 +315,7 @@ class VisibleStatsSelect(discord.ui.Select):
         note = f"✅ Showing **{len(chosen)}** Server Stats counters."
         if _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False):
             ok, result = await ensure_security_stats_display(guild)
-            note = result if ok else result
+            note = result
         await _render_center(interaction, content=note)
 
 
@@ -347,7 +347,11 @@ class StatLabelSelect(discord.ui.Select):
             return
         if not await _require_setup_permission(interaction):
             return
-        cfg = await get_guild_config(int(interaction.guild_id or 0), refresh=True)
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("❌ Use this inside a server.", ephemeral=True)
+            return
+        cfg = await get_guild_config(int(guild.id), refresh=True)
         prefs = security_stats_preferences(cfg)
         key = str(self.values[0])
         current = str(dict(prefs["labels"]).get(key) or DEFAULT_SECURITY_STATS_LABELS[key])
@@ -475,9 +479,12 @@ class ServerStatsView(discord.ui.View):
         target = "exact" if str(self.prefs["number_style"]) == "compact" else "compact"
         await _save_preferences(int(guild.id), {SECURITY_STATS_NUMBER_STYLE_KEY: target})
         cfg = await get_guild_config(int(guild.id), refresh=True)
+        note = f"✅ Number style set to **{target.title()}**."
         if _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False):
-            await ensure_security_stats_display(guild)
-        await _render_center(interaction, content=f"✅ Number style set to **{target.title()}**.")
+            ok, applied = await ensure_security_stats_display(guild)
+            if not ok:
+                note = applied
+        await _render_center(interaction, content=note)
 
     @discord.ui.button(
         label="Placement",
@@ -498,9 +505,12 @@ class ServerStatsView(discord.ui.View):
         target = {"top": "keep", "keep": "bottom", "bottom": "top"}.get(current, "top")
         await _save_preferences(int(guild.id), {SECURITY_STATS_PLACEMENT_KEY: target})
         cfg = await get_guild_config(int(guild.id), refresh=True)
+        note = f"✅ Category placement set to **{target.title()}**."
         if _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False):
-            await ensure_security_stats_display(guild)
-        await _render_center(interaction, content=f"✅ Category placement set to **{target.title()}**.")
+            ok, applied = await ensure_security_stats_display(guild)
+            if not ok:
+                note = applied
+        await _render_center(interaction, content=note)
 
     @discord.ui.button(
         label="Reset Look",
@@ -528,9 +538,12 @@ class ServerStatsView(discord.ui.View):
             },
         )
         cfg = await get_guild_config(int(guild.id), refresh=True)
+        note = "✅ Server Stats appearance reset to defaults."
         if _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False):
-            await ensure_security_stats_display(guild)
-        await _render_center(interaction, content="✅ Server Stats appearance reset to defaults.")
+            ok, applied = await ensure_security_stats_display(guild)
+            if not ok:
+                note = applied
+        await _render_center(interaction, content=note)
 
     @discord.ui.button(
         label="Dank Shield Home",
