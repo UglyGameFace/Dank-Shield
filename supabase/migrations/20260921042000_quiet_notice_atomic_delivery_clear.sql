@@ -1,6 +1,6 @@
 -- Quiet Server Notice: atomic runtime transitions for activity and delivery state.
--- database still points at the message the caller deleted.
--- Service-role only. Discord users never call this function directly.
+-- Activity writes preserve unrelated state; delivery clears require exact message identity.
+-- Service-role only. Discord users never call these functions directly.
 
 -- Record activity without read-modify-writing the rest of the notice row. This
 -- prevents an overlapping worker from resurrecting stale delivery/config state.
@@ -12,7 +12,7 @@ returns jsonb
 language plpgsql
 security definer
 set search_path = public, pg_temp
-as $
+as $$
 declare
     v_notice public.dank_quiet_notices%rowtype;
     v_activity_at timestamptz := coalesce(p_activity_at, now());
@@ -36,7 +36,7 @@ begin
 
     return to_jsonb(v_notice);
 end;
-$;
+$$;
 
 revoke all on function public.record_dank_quiet_notice_activity(bigint, timestamptz) from public;
 revoke all on function public.record_dank_quiet_notice_activity(bigint, timestamptz) from anon, authenticated;
