@@ -307,8 +307,28 @@ async def update_quiet_delivery(
         )
 
 
-async def clear_quiet_delivery(guild_id: int) -> Optional[QuietNoticeConfig]:
-    return await update_quiet_delivery(int(guild_id), message_id=None)
+async def clear_quiet_delivery(
+    guild_id: int,
+    *,
+    expected_message_id: Optional[int] = None,
+) -> Optional[QuietNoticeConfig]:
+    lock = _LOCKS.setdefault(int(guild_id), asyncio.Lock())
+    async with lock:
+        current = await asyncio.to_thread(_get_sync, int(guild_id))
+        if current is None:
+            return None
+        if expected_message_id is not None:
+            current_message_id = int(current.last_notice_message_id or 0)
+            if current_message_id != int(expected_message_id):
+                return current
+        return await asyncio.to_thread(
+            _save_sync,
+            replace(
+                current,
+                last_notice_message_id=None,
+                last_notice_sent_at=None,
+            ),
+        )
 
 
 async def delete_quiet_notice(guild_id: int) -> None:
