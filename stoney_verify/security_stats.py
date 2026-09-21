@@ -881,6 +881,7 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
         saved_ids = _saved_channel_ids(cfg)
         resolved_ids: Dict[str, str] = {}
         visible_keys = set(preferences["visible_keys"])
+        hidden_cleanup_failed: list[str] = []
 
         for key in STAT_CHANNEL_PREFIXES:
             channel = _find_existing_stat_channel(
@@ -894,6 +895,7 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
                 removed = await _remove_hidden_stat_channel(channel, key=key)
                 if not removed and channel is not None:
                     resolved_ids[key] = str(int(channel.id))
+                    hidden_cleanup_failed.append(key)
                 continue
             try:
                 if channel is None:
@@ -921,6 +923,17 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
         )
         _ACTIVE_DISPLAY_GUILDS.add(gid)
         _LAST_REFRESH_AT[gid] = time.monotonic()
+
+        if hidden_cleanup_failed:
+            labels = ", ".join(
+                DEFAULT_SECURITY_STATS_LABELS[key]
+                for key in hidden_cleanup_failed
+            )
+            return (
+                False,
+                "⚠️ Server Stats remain active, but Discord blocked removal of hidden counter channel(s): "
+                f"**{labels}**. They remain tracked so **Repair Display** can retry safely.",
+            )
 
         return (
             True,
