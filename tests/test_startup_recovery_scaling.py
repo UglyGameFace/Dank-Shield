@@ -21,6 +21,7 @@ PANEL_REPAIR = (ROOT / "stoney_verify" / "tickets_new" / "channel_panel_repair.p
 PANEL_BOOTSTRAP = (ROOT / "stoney_verify" / "tickets_new" / "panel_bootstrap.py").read_text(encoding="utf-8")
 DURABLE_INVITE_STATS = (ROOT / "stoney_verify" / "durable_invite_stats.py").read_text(encoding="utf-8")
 ANTINUKE_INCIDENT = (ROOT / "stoney_verify" / "anti_nuke_incident_runtime.py").read_text(encoding="utf-8")
+SECURITY_STATS = (ROOT / "stoney_verify" / "security_stats.py").read_text(encoding="utf-8")
 
 
 def _block(source: str, start_marker: str, end_marker: str) -> str:
@@ -214,3 +215,27 @@ def test_startup_fanout_uses_fixed_worker_pools() -> None:
     assert "queue: asyncio.Queue[discord.Guild] = asyncio.Queue()" in ANTINUKE_INCIDENT
     assert 'name=f"antinuke-security-prewarm-{index}"' in ANTINUKE_INCIDENT
     assert "warm(guild)" not in ANTINUKE_INCIDENT
+
+
+def test_server_stats_periodic_refresh_is_bounded_to_active_displays() -> None:
+    loop = _block(
+        SECURITY_STATS,
+        "@tasks.loop(minutes=10)\nasync def refresh_all_security_stats_displays() -> None:",
+        "@refresh_all_security_stats_displays.before_loop",
+    )
+
+    assert "_ACTIVE_DISPLAY_GUILDS" in SECURITY_STATS
+    assert "for gid in tuple(_ACTIVE_DISPLAY_GUILDS):" in loop
+    assert 'for guild in list(getattr(bot, "guilds", []) or []):' not in loop
+
+    refresh = _block(
+        SECURITY_STATS,
+        "async def refresh_security_stats_display(",
+        "async def refresh_ticket_stats_for_guild_id(",
+    )
+    assert refresh.index("SECURITY_STATS_REFRESH_MIN_SECONDS") < refresh.index(
+        "get_guild_config(gid, refresh=True)"
+    )
+
+    assert 'gid not in _ACTIVE_DISPLAY_GUILDS' in SECURITY_STATS
+    assert "_discover_cached_stats_guilds()" in SECURITY_STATS
