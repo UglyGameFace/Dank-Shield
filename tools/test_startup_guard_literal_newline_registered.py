@@ -8,6 +8,8 @@ startup_init = (ROOT / "stoney_verify/startup_guards/__init__.py").read_text(enc
 sitecustomize = (ROOT / "sitecustomize.py").read_text(encoding="utf-8")
 usercustomize = (ROOT / "usercustomize.py").read_text(encoding="utf-8")
 main_text = (ROOT / "main.py").read_text(encoding="utf-8")
+design_text = (ROOT / "stoney_verify/services/server_design_majority_layout.py").read_text(encoding="utf-8")
+design_test = (ROOT / "tests/test_server_design_majority_layout.py").read_text(encoding="utf-8")
 
 bad: list[str] = []
 
@@ -23,8 +25,19 @@ for forbidden in (
     if forbidden in startup_init:
         bad.append(f"retired bulk-loader machinery still present: {forbidden}")
 
-if "stoney_verify.startup_guards.embed_literal_newline_guard" not in startup_init:
-    bad.append("historical literal-newline guard record disappeared unexpectedly")
+if "stoney_verify.startup_guards.embed_literal_newline_guard" in startup_init:
+    bad.append("retired literal-newline guard is still present in historical startup metadata")
+
+if (ROOT / "stoney_verify/startup_guards/embed_literal_newline_guard.py").exists():
+    bad.append("retired embed_literal_newline_guard.py still exists")
+
+if (ROOT / "tools/test_embed_literal_newline_guard.py").exists():
+    bad.append("obsolete embed literal-newline guard implementation test still exists")
+
+if "def clean_design_text(" not in design_text:
+    bad.append("native Dank Design newline sanitizer is missing")
+if "test_clean_design_text_replaces_literal_newline_artifacts" not in design_test:
+    bad.append("native Dank Design newline regression coverage is missing")
 
 if "load_all_startup_guards" in sitecustomize or "load_startup_guards" in sitecustomize:
     bad.append("sitecustomize still exposes bulk-loader compatibility")
@@ -64,4 +77,4 @@ if bad:
         print(" -", item)
     raise SystemExit(1)
 
-print("PASS startup guard loader retirement and explicit main.py ownership")
+print("PASS startup guard retirements, native newline ownership, and explicit main.py ownership")
