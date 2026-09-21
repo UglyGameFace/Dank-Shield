@@ -88,7 +88,12 @@ def test_invite_startup_recovery_uses_durable_gap_window() -> None:
 def test_activity_pins_pre_restart_heartbeat_before_state_advances() -> None:
     assert "_STARTUP_RECOVERY_HEARTBEATS" in ACTIVITY
     assert "previous_process != _PROCESS_ID" in ACTIVITY
-    assert "and previous_process\n" not in ACTIVITY
+    assert (
+        "previous_heartbeat is not None\n"
+        "            and previous_process\n"
+        "            and previous_process != _PROCESS_ID"
+        not in ACTIVITY
+    )
     assert "Legacy tracker rows may predate process_id" in ACTIVITY
     assert "_STARTUP_RECOVERY_HEARTBEATS.setdefault(" in ACTIVITY
     assert "if stored_process == _PROCESS_ID:" in ACTIVITY
