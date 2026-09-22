@@ -113,6 +113,36 @@ def test_spam_guard_invite_defaults_and_prefixed_aliases_are_unchanged() -> None
     assert normalized["block_external_invites_only"] is False
     assert normalized["allow_server_invites"] is False
 
+    conflict = spam_guard._normalize_settings(
+        123,
+        {
+            "block_external_invites_only": True,
+            "spam_block_external_invites_only": False,
+            "allow_server_invites": True,
+            "spam_allow_server_invites": False,
+        },
+    )
+    assert conflict["block_external_invites_only"] is False
+    assert conflict["allow_server_invites"] is False
+
+
+def test_registry_wiring_replaces_duplicate_protection_setting_semantics() -> None:
+    scope_source = (ROOT / "stoney_verify" / "invite_scope_settings.py").read_text(encoding="utf-8")
+    policy_source = (ROOT / "stoney_verify" / "invite_policy_engine.py").read_text(encoding="utf-8")
+    recovery_source = (ROOT / "stoney_verify" / "invite_reconciliation_runtime.py").read_text(encoding="utf-8")
+    protection_source = (
+        ROOT / "stoney_verify" / "commands_ext" / "public_protection_center.py"
+    ).read_text(encoding="utf-8")
+    spam_source = (ROOT / "stoney_verify" / "spam_guard.py").read_text(encoding="utf-8")
+
+    assert "invite_scope_values" in scope_source
+    assert "_registry_invite_shield_enabled" in policy_source
+    assert "_registry_setting_ids" in policy_source
+    assert "_registry_invite_shield_enabled" in recovery_source
+    assert "_registry_invite_shield_enabled" in protection_source
+    assert "_registry_link_shield_enabled" in protection_source
+    assert "_registry_setting_bool" in spam_source
+
 
 def test_choice_setting_rejects_unknown_value_to_registered_default() -> None:
     assert (
