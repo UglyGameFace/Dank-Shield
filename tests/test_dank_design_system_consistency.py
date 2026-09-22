@@ -29,7 +29,7 @@ def _labels(view: discord.ui.View) -> set[str]:
 
 
 def test_mod_chat_formatting_only_drift_is_safe_even_in_safety_zone() -> None:
-    styled, _ = studio.transform_text_safe("mod-chat", "double_struck")
+    styled, _ = studio.transform_text_safe("mod-chat", "fraktur")
     result = confidence.score_repair_item(
         {
             "status": "changed",
@@ -46,7 +46,7 @@ def test_mod_chat_formatting_only_drift_is_safe_even_in_safety_zone() -> None:
 
 
 def test_actual_system_surface_still_requires_manual_review() -> None:
-    styled, _ = studio.transform_text_safe("mod-log", "double_struck")
+    styled, _ = studio.transform_text_safe("mod-log", "fraktur")
     result = confidence.score_repair_item(
         {
             "status": "changed",
