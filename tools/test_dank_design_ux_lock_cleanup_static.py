@@ -53,7 +53,9 @@ def test_repair_flow_is_scan_then_preview_then_apply() -> None:
     assert "Read-only scan. Nothing was renamed." in V2
     assert "Smart Repair analyzed each category independently" in V2
     assert "Saved exact/channel/category/global rules still win" in V2
-    assert "Apply is enabled only when the plan is fully reviewable and confidence is high" in V2
+    assert "Ready repairs can still be applied" in V2
+    assert "Only Ready repairs are applied" in V2
+    assert "keeps unsafe rows out of Apply" in V2
 
 
 def test_public_guidance_uses_compact_server_design_front_door() -> None:
