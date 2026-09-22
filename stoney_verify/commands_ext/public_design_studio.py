@@ -3448,7 +3448,7 @@ def _category_action_embed(category: discord.CategoryChannel) -> discord.Embed:
         name="Advanced options",
         value=(
             "**Custom Format** = choose font/separator/frame manually.\n"
-            "**Change Icon / Emoji** = replace or clear this category's saved design icon.\n"
+            "**Change Icon / Emoji** = set the category icon draft; use **Save Rule & Preview** before Apply.\n"
             "**Lock Category Rule** = remember a special rule for this category.\n"
             "**Protection / Skip Rule** = control whether this exact category is styled, partially styled, or skipped."
         ),
@@ -3487,7 +3487,7 @@ def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
         name="Advanced options",
         value=(
             "**Custom Format** = choose this item's exact font/separator settings.\n"
-            "**Change Icon / Emoji** = replace or clear this item's saved design icon.\n"
+            "**Change Icon / Emoji** = set the item icon draft; use **Save Rule & Preview** before Apply.\n"
             "**Lock Channel Rule** = remember a special rule for this item.\n"
             "**Protection / Skip Rule** = control whether this exact item is styled, partially styled, or skipped."
         ),
