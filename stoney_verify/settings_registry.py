@@ -27,6 +27,7 @@ class SettingSpec:
     aliases: tuple[str, ...] = ()
     choices: tuple[str, ...] = ()
     aliases_before_canonical: bool = False
+    aliases_preserve_presence: bool = False
     minimum: int | None = None
     maximum: int | None = None
 
@@ -138,6 +139,7 @@ PROTECTION_SETTING_SPECS: dict[str, SettingSpec] = {
         "spam_guard",
         aliases=("spam_block_external_invites_only",),
         aliases_before_canonical=True,
+        aliases_preserve_presence=True,
     ),
     ALLOW_SERVER_INVITES_KEY: SettingSpec(
         ALLOW_SERVER_INVITES_KEY,
@@ -147,6 +149,7 @@ PROTECTION_SETTING_SPECS: dict[str, SettingSpec] = {
         "spam_guard",
         aliases=("spam_allow_server_invites",),
         aliases_before_canonical=True,
+        aliases_preserve_presence=True,
     ),
     INVITE_TARGET_ALL_BOTS_KEY: SettingSpec(
         INVITE_TARGET_ALL_BOTS_KEY,
@@ -205,6 +208,7 @@ SPAM_GUARD_SETTING_SPECS: dict[str, SettingSpec] = {
         "guild_security_settings",
         aliases=("spam_blocker_enabled", "enabled"),
         aliases_before_canonical=True,
+        aliases_preserve_presence=True,
     ),
     SPAM_GUARD_MODE_KEY: SettingSpec(
         SPAM_GUARD_MODE_KEY,
@@ -215,6 +219,7 @@ SPAM_GUARD_SETTING_SPECS: dict[str, SettingSpec] = {
         aliases=("spam_mode", "mode"),
         choices=("log_only", "delete_only", "timeout", "quarantine", "kick", "ban"),
         aliases_before_canonical=True,
+        aliases_preserve_presence=True,
     ),
     SPAM_GUARD_APPLY_VERIFIED_KEY: SettingSpec(
         SPAM_GUARD_APPLY_VERIFIED_KEY,
@@ -224,6 +229,7 @@ SPAM_GUARD_SETTING_SPECS: dict[str, SettingSpec] = {
         "guild_security_settings",
         aliases=("spam_apply_to_verified_users", "apply_to_verified_users"),
         aliases_before_canonical=True,
+        aliases_preserve_presence=True,
     ),
     SPAM_GUARD_WINDOW_SECONDS_KEY: SettingSpec(
         SPAM_GUARD_WINDOW_SECONDS_KEY,
@@ -233,6 +239,7 @@ SPAM_GUARD_SETTING_SPECS: dict[str, SettingSpec] = {
         "guild_security_settings",
         aliases=("spam_window_seconds", "window_seconds"),
         aliases_before_canonical=True,
+        aliases_preserve_presence=True,
         minimum=5,
         maximum=60,
     ),
@@ -244,6 +251,7 @@ SPAM_GUARD_SETTING_SPECS: dict[str, SettingSpec] = {
         "guild_security_settings",
         aliases=("spam_message_threshold", "message_threshold"),
         aliases_before_canonical=True,
+        aliases_preserve_presence=True,
         minimum=3,
         maximum=20,
     ),
@@ -255,6 +263,7 @@ SPAM_GUARD_SETTING_SPECS: dict[str, SettingSpec] = {
         "guild_security_settings",
         aliases=("spam_duplicate_threshold", "duplicate_threshold"),
         aliases_before_canonical=True,
+        aliases_preserve_presence=True,
         minimum=2,
         maximum=12,
     ),
@@ -266,6 +275,7 @@ SPAM_GUARD_SETTING_SPECS: dict[str, SettingSpec] = {
         "guild_security_settings",
         aliases=("spam_invite_threshold", "invite_threshold"),
         aliases_before_canonical=True,
+        aliases_preserve_presence=True,
         minimum=1,
         maximum=12,
     ),
@@ -277,6 +287,7 @@ SPAM_GUARD_SETTING_SPECS: dict[str, SettingSpec] = {
         "guild_security_settings",
         aliases=("spam_multi_invite_immediate", "multi_invite_immediate"),
         aliases_before_canonical=True,
+        aliases_preserve_presence=True,
         minimum=2,
         maximum=8,
     ),
@@ -288,6 +299,7 @@ SPAM_GUARD_SETTING_SPECS: dict[str, SettingSpec] = {
         "guild_security_settings",
         aliases=("spam_delete_history", "delete_history"),
         aliases_before_canonical=True,
+        aliases_preserve_presence=True,
         minimum=1,
         maximum=30,
     ),
@@ -299,6 +311,7 @@ SPAM_GUARD_SETTING_SPECS: dict[str, SettingSpec] = {
         "guild_security_settings",
         aliases=("spam_timeout_minutes", "timeout_minutes"),
         aliases_before_canonical=True,
+        aliases_preserve_presence=True,
         minimum=1,
         maximum=1440,
     ),
@@ -310,6 +323,7 @@ SPAM_GUARD_SETTING_SPECS: dict[str, SettingSpec] = {
         "guild_security_settings",
         aliases=("spam_cooldown_seconds", "cooldown_seconds"),
         aliases_before_canonical=True,
+        aliases_preserve_presence=True,
         minimum=5,
         maximum=300,
     ),
@@ -321,6 +335,7 @@ SPAM_GUARD_SETTING_SPECS: dict[str, SettingSpec] = {
         "guild_security_settings",
         aliases=("spam_quarantine_role_id", "quarantine_role_id"),
         aliases_before_canonical=True,
+        aliases_preserve_presence=True,
     ),
     SPAM_GUARD_EXEMPT_ROLE_IDS_KEY: SettingSpec(
         SPAM_GUARD_EXEMPT_ROLE_IDS_KEY,
@@ -330,6 +345,7 @@ SPAM_GUARD_SETTING_SPECS: dict[str, SettingSpec] = {
         "guild_security_settings",
         aliases=("spam_exempt_role_ids", "exempt_role_ids"),
         aliases_before_canonical=True,
+        aliases_preserve_presence=True,
     ),
     SPAM_GUARD_INVITE_ALLOWED_ROLE_IDS_KEY: SettingSpec(
         SPAM_GUARD_INVITE_ALLOWED_ROLE_IDS_KEY,
@@ -339,6 +355,7 @@ SPAM_GUARD_SETTING_SPECS: dict[str, SettingSpec] = {
         "guild_security_settings",
         aliases=("spam_invite_allowed_role_ids", "invite_allowed_role_ids"),
         aliases_before_canonical=True,
+        aliases_preserve_presence=True,
     ),
     SPAM_GUARD_ALLOWED_CHANNEL_IDS_KEY: SettingSpec(
         SPAM_GUARD_ALLOWED_CHANNEL_IDS_KEY,
@@ -348,6 +365,7 @@ SPAM_GUARD_SETTING_SPECS: dict[str, SettingSpec] = {
         "guild_security_settings",
         aliases=("spam_allowed_channel_ids", "allowed_channel_ids"),
         aliases_before_canonical=True,
+        aliases_preserve_presence=True,
     ),
     SPAM_GUARD_EXEMPT_USER_IDS_KEY: SettingSpec(
         SPAM_GUARD_EXEMPT_USER_IDS_KEY,
@@ -357,6 +375,7 @@ SPAM_GUARD_SETTING_SPECS: dict[str, SettingSpec] = {
         "guild_security_settings",
         aliases=("spam_exempt_user_ids", "exempt_user_ids"),
         aliases_before_canonical=True,
+        aliases_preserve_presence=True,
     ),
     SPAM_GUARD_ALLOWED_INVITE_CODES_KEY: SettingSpec(
         SPAM_GUARD_ALLOWED_INVITE_CODES_KEY,
@@ -366,6 +385,7 @@ SPAM_GUARD_SETTING_SPECS: dict[str, SettingSpec] = {
         "guild_security_settings",
         aliases=("spam_allowed_invite_codes", "allowed_invite_codes"),
         aliases_before_canonical=True,
+        aliases_preserve_presence=True,
     ),
 }
 
@@ -419,19 +439,21 @@ def setting_spec(key: str) -> SettingSpec:
         raise KeyError(f"Unknown registered setting: {key}") from exc
 
 
-def _direct_value(source: Any, key: str) -> Any:
+def _direct_value(source: Any, key: str, *, include_none: bool = False) -> Any:
     if source is None:
         return _MISSING
 
     try:
-        if isinstance(source, Mapping) and key in source and source.get(key) is not None:
-            return source.get(key)
+        if isinstance(source, Mapping) and key in source:
+            value = source.get(key)
+            if include_none or value is not None:
+                return value
     except Exception:
         pass
 
     try:
         value = getattr(source, key, _MISSING)
-        if value is not _MISSING and value is not None:
+        if value is not _MISSING and (include_none or value is not None):
             return value
     except Exception:
         pass
@@ -440,7 +462,7 @@ def _direct_value(source: Any, key: str) -> Any:
         getter = getattr(source, "get", None)
         if callable(getter):
             value = getter(key, _MISSING)
-            if value is not _MISSING and value is not None:
+            if value is not _MISSING and (include_none or value is not None):
                 return value
     except Exception:
         pass
@@ -459,8 +481,10 @@ def _direct_value(source: Any, key: str) -> Any:
         except Exception:
             nested = _MISSING
 
-        if isinstance(nested, Mapping) and key in nested and nested.get(key) is not None:
-            return nested.get(key)
+        if isinstance(nested, Mapping) and key in nested:
+            value = nested.get(key)
+            if include_none or value is not None:
+                return value
 
     return _MISSING
 
@@ -473,7 +497,11 @@ def raw_setting(source: Any, key: str, default: Any = _MISSING) -> Any:
         else (spec.key, *spec.aliases)
     )
     for candidate in candidates:
-        value = _direct_value(source, candidate)
+        value = _direct_value(
+            source,
+            candidate,
+            include_none=bool(spec.aliases_preserve_presence),
+        )
         if value is not _MISSING:
             return value
 
@@ -727,6 +755,7 @@ def protection_registry_snapshot() -> dict[str, dict[str, Any]]:
             "aliases": list(spec.aliases),
             "choices": list(spec.choices),
             "aliases_before_canonical": bool(spec.aliases_before_canonical),
+            "aliases_preserve_presence": bool(spec.aliases_preserve_presence),
             "minimum": spec.minimum,
             "maximum": spec.maximum,
         }
