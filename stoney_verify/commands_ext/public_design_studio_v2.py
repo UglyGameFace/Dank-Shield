@@ -144,7 +144,7 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
     embed.add_field(
         name="Choose what you want to do",
         value=(
-            "🌐 **Design Entire Server** — choose theme, font, strength, separator, and category frame with live examples.\n"
+            "🌐 **Design Entire Server** — choose theme, font, strength, separator, category frame, and icon behavior with live examples.\n"
             "✏️ **Edit One Category / Channel** — rename or style one exact item.\n"
             "🩺 **Fix Inconsistent Names** — scan first, then build a safe Smart Repair preview.\n"
             "🔐 **Saved Rules & Protection** — manage what future previews enforce; this does not rename anything by itself.\n"
@@ -246,7 +246,6 @@ def _design_server_examples(options: Mapping[str, Any]) -> tuple[str, str]:
         separator_id=separator,
         category_frame_id=frame,
         font=font,
-        emoji_override="🗂️",
         exact_match=True,
     )
     channel = studio.build_styled_name(
@@ -260,7 +259,6 @@ def _design_server_examples(options: Mapping[str, Any]) -> tuple[str, str]:
         separator_id=separator,
         category_frame_id=frame,
         font=font,
-        emoji_override="💬",
         exact_match=True,
     )
     return _safe_str(category.after, "category-name"), _safe_str(channel.after, "channel-name")
