@@ -1565,13 +1565,300 @@ async def _return_from_reviewed_preview(
     await _go_home(interaction)
 
 
+def _repair_issue_embed(items: list[dict[str, Any]]) -> discord.Embed:
+    state = _repair_plan_state(items)
+    embed = discord.Embed(
+        title="🔎 Review Design Issues",
+        description=(
+            "This screen only appears when the current preview has something that cannot be silently auto-applied. "
+            "**Needs review** rows can be explicitly approved here. Protected and blocked rows stay unchanged until their rule or design is edited."
+        ),
+        color=discord.Color.orange(),
+    )
+
+    review_lines = _repair_issue_lines(items, repair_confidence.REVIEW_ONLY)
+    if review_lines:
+        embed.add_field(
+            name=f"Needs manual review ({state['review']})",
+            value="\n".join(review_lines[:6])[:1024],
+            inline=False,
+        )
+
+    protected = [
+        item for item in items if _safe_str(item.get("status")) == "protected"
+    ]
+    if protected:
+        lines = [
+            f"• {_safe_str(item.get('before'), 'unknown')} — protected/skipped by the current exact or name rule"
+            for item in protected[:6]
+        ]
+        embed.add_field(
+            name=f"Protected / skipped ({state['protected']})",
+            value="\n".join(lines)[:1024],
+            inline=False,
+        )
+
+    blocked = [
+        item
+        for item in items
+        if _safe_str(item.get("status")) == "failed"
+        and _repair_item_classification(item) not in {"", repair_confidence.REVIEW_ONLY}
+    ]
+    if blocked:
+        lines = [
+            (
+                f"• {_safe_str(item.get('before'), 'unknown')} -> "
+                f"{_safe_str(item.get('after'), '')} — "
+                f"{_safe_str(item.get('repair_confidence_reason'), 'Blocked for safety.')}"
+            )[:260]
+            for item in blocked[:6]
+        ]
+        embed.add_field(
+            name=f"Blocked ({state['blocked']})",
+            value="\n".join(lines)[:1024],
+            inline=False,
+        )
+
+    embed.add_field(
+        name="What approval means",
+        value=(
+            "Approving a **Needs review** row only approves that exact before -> after rename in this preview. "
+            "It does not weaken future safety checks or change protection rules."
+        ),
+        inline=False,
+    )
+    return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
+
+
+def _remove_review_blocker(item: dict[str, Any]) -> None:
+    item["blockers"] = [
+        blocker
+        for blocker in list(item.get("blockers") or [])
+        if not _safe_str(blocker).startswith("Smart Auto-Detect confidence is too low for this row:")
+    ]
+
+
+class RepairReviewApproveButton(discord.ui.Button):
+    def __init__(
+        self,
+        *,
+        item_index: int,
+        label: str,
+        pending_created_at: float,
+        row: int,
+    ) -> None:
+        super().__init__(
+            label=f"Approve {_safe_str(label, 'item')}"[:80],
+            emoji="✅",
+            style=discord.ButtonStyle.success,
+            custom_id=f"dank_design_v2:approve_review:{item_index}",
+            row=row,
+        )
+        self.item_index = int(item_index)
+        self.pending_created_at = float(pending_created_at)
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        key = legacy._key(int(guild.id), int(interaction.user.id))  # type: ignore[attr-defined]
+        payload = legacy._PENDING.get(key) or {}  # type: ignore[attr-defined]
+        if not legacy._pending_matches(payload, self.pending_created_at):  # type: ignore[attr-defined]
+            await interaction.response.send_message(
+                "❌ This preview is obsolete. Build a fresh preview first.",
+                ephemeral=True,
+            )
+            return
+
+        items = [dict(item) for item in list(payload.get("items") or [])]
+        if self.item_index < 0 or self.item_index >= len(items):
+            await interaction.response.send_message("That review row is no longer available.", ephemeral=True)
+            return
+        item = items[self.item_index]
+        if (
+            _safe_str(item.get("status")) != "failed"
+            or _repair_item_classification(item) != repair_confidence.REVIEW_ONLY
+        ):
+            await interaction.response.send_message(
+                "That row is no longer waiting for manual review.",
+                ephemeral=True,
+            )
+            return
+
+        item["repair_original_confidence_classification"] = repair_confidence.REVIEW_ONLY
+        item["repair_confidence_classification"] = repair_confidence.SAFE_AUTO_FIX
+        item["repair_confidence_score"] = 100
+        item["repair_confidence_reason"] = "Explicitly approved by the server administrator for this preview."
+        item["repair_manual_approved"] = True
+        item["status"] = "changed"
+        _remove_review_blocker(item)
+        items[self.item_index] = item
+        payload["items"] = items
+        legacy._PENDING[key] = payload  # type: ignore[attr-defined]
+
+        await _show_pending_preview(interaction, payload, self.pending_created_at)
+
+
+class RepairIssuesView(DesignView):
+    def __init__(self, items: list[dict[str, Any]], *, pending_created_at: float) -> None:
+        super().__init__(timeout=900)
+        review_indexes = [
+            index
+            for index, item in enumerate(items)
+            if _safe_str(item.get("status")) == "failed"
+            and _repair_item_classification(item) == repair_confidence.REVIEW_ONLY
+        ]
+        for display_index, item_index in enumerate(review_indexes[:6]):
+            item = items[item_index]
+            self.add_item(
+                RepairReviewApproveButton(
+                    item_index=item_index,
+                    label=_safe_str(item.get("before"), f"item {display_index + 1}"),
+                    pending_created_at=pending_created_at,
+                    row=min(2, display_index // 2),
+                )
+            )
+
+        if any(_safe_str(item.get("status")) == "protected" for item in items):
+            protection = discord.ui.Button(
+                label="Open Saved Rules & Protection",
+                emoji="🛡️",
+                style=discord.ButtonStyle.secondary,
+                custom_id="dank_design_v2:issues_protection",
+                row=3,
+            )
+            protection.callback = self._open_protection
+            self.add_item(protection)
+
+        back = discord.ui.Button(
+            label="Back to Preview",
+            emoji="⬅️",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_design_v2:issues_back",
+            row=4,
+        )
+        back.callback = self._back
+        self.add_item(back)
+        self.pending_created_at = float(pending_created_at)
+
+    async def _open_protection(self, interaction: discord.Interaction) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        options = await _load_design_options(int(guild.id))
+        await interaction.edit_original_response(
+            embed=legacy._protection_manager_embed(guild, options),  # type: ignore[attr-defined]
+            view=legacy.ProtectionManagerView(),  # type: ignore[attr-defined]
+        )
+
+    async def _back(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return
+        key = legacy._key(int(guild.id), int(interaction.user.id))  # type: ignore[attr-defined]
+        payload = legacy._PENDING.get(key) or {}  # type: ignore[attr-defined]
+        if not legacy._pending_matches(payload, self.pending_created_at):  # type: ignore[attr-defined]
+            await interaction.response.send_message(
+                "❌ This preview is obsolete. Build a fresh preview first.",
+                ephemeral=True,
+            )
+            return
+        await _show_pending_preview(interaction, payload, self.pending_created_at)
+
+
+async def _show_pending_preview(
+    interaction: discord.Interaction,
+    payload: Mapping[str, Any],
+    pending_created_at: float,
+) -> None:
+    guild = interaction.guild
+    assert guild is not None
+    items = [dict(item) for item in list(payload.get("items") or [])]
+    options = dict(payload.get("options") or {})
+    mode = _safe_str(payload.get("mode"), "preview")
+    analysis = dict(payload.get("analysis") or {})
+    has_changes = any(_safe_str(item.get("status")) == "changed" for item in items)
+    has_blockers = any(_safe_str(item.get("status")) == "failed" for item in items)
+
+    if mode == "consistency_check_v2":
+        embed = _repair_preview_embed(guild, items, options, analysis)
+        can_apply = has_changes
+    else:
+        embed = legacy._preview_embed(  # type: ignore[attr-defined]
+            guild,
+            items,
+            title=_safe_str(payload.get("scope_title"), "👁 Server Design Preview"),
+        )
+        can_apply = has_changes and not has_blockers
+
+    await interaction.response.edit_message(
+        embed=embed,
+        view=ReviewedPreviewView(
+            can_apply=can_apply,
+            pending_created_at=pending_created_at,
+            issue_count=_repair_issue_count(items),
+        ),
+    )
+
+
+async def _open_repair_issues(
+    interaction: discord.Interaction,
+    pending_created_at: float | None,
+) -> None:
+    if not await _require_design_permission(interaction):
+        return
+    guild = interaction.guild
+    assert guild is not None
+    key = legacy._key(int(guild.id), int(interaction.user.id))  # type: ignore[attr-defined]
+    payload = legacy._PENDING.get(key) or {}  # type: ignore[attr-defined]
+    if not legacy._pending_matches(payload, pending_created_at):  # type: ignore[attr-defined]
+        await interaction.response.send_message(
+            "❌ This preview is obsolete. Build a fresh preview first.",
+            ephemeral=True,
+        )
+        return
+    items = [dict(item) for item in list(payload.get("items") or [])]
+    if _repair_issue_count(items) <= 0:
+        await interaction.response.send_message(
+            "This preview has no review, protected, or blocked items.",
+            ephemeral=True,
+        )
+        return
+    await interaction.response.edit_message(
+        embed=_repair_issue_embed(items),
+        view=RepairIssuesView(items, pending_created_at=float(pending_created_at or 0.0)),
+    )
+
+
 class ReviewedPreviewView(DesignView):
     """One transactional preview/apply owner for every active Studio batch flow."""
 
-    def __init__(self, *, can_apply: bool, pending_created_at: float | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        can_apply: bool,
+        pending_created_at: float | None = None,
+        issue_count: int = 0,
+    ) -> None:
         super().__init__(timeout=900)
         self.pending_created_at = pending_created_at
         self.apply.disabled = not can_apply
+        if int(issue_count) > 0:
+            review = discord.ui.Button(
+                label=f"Review Issues ({int(issue_count)})",
+                emoji="🔎",
+                style=discord.ButtonStyle.secondary,
+                custom_id="dank_design_v2:preview_issues",
+                row=1,
+            )
+            review.callback = self._review_issues
+            self.add_item(review)
+
+    async def _review_issues(self, interaction: discord.Interaction) -> None:
+        await _open_repair_issues(interaction, self.pending_created_at)
 
     @discord.ui.button(label="Apply Reviewed Changes", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_design_v2:apply", row=0)
     async def apply(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
