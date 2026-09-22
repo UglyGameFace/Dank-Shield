@@ -6,6 +6,8 @@ from stoney_verify.commands_ext import public_protection_center as center
 
 
 ROOT = Path(__file__).resolve().parents[1]
+STARTUP_INIT = (ROOT / "stoney_verify/startup_guards/__init__.py").read_text(encoding="utf-8")
+COMMANDS_EXT = (ROOT / "stoney_verify/commands_ext/__init__.py").read_text(encoding="utf-8")
 
 
 def test_native_import_merge_normalizes_dedupes_and_preserves_existing() -> None:
@@ -51,3 +53,19 @@ def test_retired_protection_patch_files_stay_absent() -> None:
         "stoney_verify/startup_guards/protection_pack_manual_import_guard.py",
     ):
         assert not (ROOT / relative).exists()
+
+
+def test_retired_protection_patch_metadata_stays_absent() -> None:
+    for module_name in (
+        "protection_center_command_guard",
+        "protection_import_button_patch",
+        "protection_pack_manual_import_guard",
+    ):
+        assert module_name not in STARTUP_INIT
+
+
+def test_native_command_registry_already_owns_protection_alias_shape() -> None:
+    assert '"protection",' in COMMANDS_EXT
+    assert '"automod",' in COMMANDS_EXT
+    assert '"spam",' in COMMANDS_EXT
+    assert "def _runtime_command_prune_disabled()" in COMMANDS_EXT
