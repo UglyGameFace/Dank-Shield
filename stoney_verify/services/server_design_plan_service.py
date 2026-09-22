@@ -156,7 +156,7 @@ def _fail_closed_on_low_confidence(items: list[dict[str, Any]], confidence: Mapp
 
         if classification != repair_confidence.SAFE_AUTO_FIX:
             blockers = list(item.get("blockers") or [])
-            message = f"Smart Repair skipped this row: {reason}"
+            message = f"Smart Auto-Detect confidence is too low for this row: {reason}"
             if message not in blockers:
                 blockers.append(message)
             item["blockers"] = blockers
