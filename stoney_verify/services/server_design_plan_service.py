@@ -210,20 +210,22 @@ def _exclude_functional_items(items: list[dict[str, Any]], excluded_ids: set[int
     ]
 
 
-def live_records(guild: Any, *, excluded_ids: set[int] | None = None) -> list[dict[str, Any]]:
+def _exclude_functional_records(records: list[dict[str, Any]], excluded_ids: set[int]) -> list[dict[str, Any]]:
+    if not excluded_ids:
+        return [dict(record) for record in records]
+    return [
+        dict(record)
+        for record in records
+        if _positive_id(record.get("id")) not in excluded_ids
+    ]
+
+
+def live_records(guild: Any) -> list[dict[str, Any]]:
     """Use the same editable channel set as the historical Studio backend."""
 
     from stoney_verify.commands_ext import public_design_studio as legacy
 
-    blocked = set(excluded_ids or set())
-    records = list(legacy._live_majority_records_for_design(guild))  # type: ignore[attr-defined]
-    if not blocked:
-        return records
-    return [
-        dict(record)
-        for record in records
-        if _positive_id(record.get("id")) not in blocked
-    ]
+    return list(legacy._live_majority_records_for_design(guild))  # type: ignore[attr-defined]
 
 
 def _fail_closed_on_low_confidence(items: list[dict[str, Any]], confidence: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -364,7 +366,7 @@ async def build_plan(
     excluded_ids = await _functional_design_resource_ids(guild)
 
     if use_live_majority:
-        records = live_records(guild, excluded_ids=excluded_ids)
+        records = _exclude_functional_records(live_records(guild), excluded_ids)
         inferred, profiles = majority.build_category_aware_options(studio, plan_options, records)
         plan_options = normalize_plan_options(inferred, strict=strict)
         plan_options["__respect_saved_rules"] = bool(respect_saved_rules)
@@ -419,7 +421,7 @@ async def build_scoped_repair_plan(
 
     plan_options = normalize_plan_options(options, strict=True)
     excluded_ids = await _functional_design_resource_ids(guild)
-    records = live_records(guild, excluded_ids=excluded_ids)
+    records = _exclude_functional_records(live_records(guild), excluded_ids)
     inferred, profiles = majority.build_category_aware_options(studio, plan_options, records)
     plan_options = normalize_plan_options(inferred, strict=True)
     plan_options["__respect_saved_rules"] = True
