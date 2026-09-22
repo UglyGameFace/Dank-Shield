@@ -2576,9 +2576,9 @@ class ExactFormatEditorView(LegacyDesignView):
                     await interaction.response.edit_message(embed=_category_action_embed(category), view=CategoryEditorActionView(self.target_id))
                 else:
                     await interaction.response.edit_message(
-            embed=_category_editor_embed(guild, page=self.editor_page),
-            view=CategoryEditorPickerView(guild, page=self.editor_page),
-        )
+                        embed=_category_editor_embed(guild, page=0),
+                        view=CategoryEditorPickerView(guild, page=0),
+                    )
             else:
                 channel = guild.get_channel(self.target_id)
                 if channel is not None:
