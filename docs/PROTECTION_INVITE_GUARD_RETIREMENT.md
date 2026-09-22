@@ -29,6 +29,25 @@ The following modules duplicated the now-native UI or existed only to support th
 
 Deleting these as a coordinated set matters because the historical modules imported and patched one another. Removing one file while leaving the rest would preserve a charming little museum exhibit of broken imports.
 
+## Retired legacy runtime / override chain
+
+The following compatibility modules are now also retired:
+
+- `invite_live_enforcer_guard.py`
+- `discord_invite_blocker_runtime_guard.py`
+- `spam_guard_invite_hard_block.py`
+- `spam_guard_invite_override_options.py`
+- `protection_invite_target_precedence_guard.py`
+
+They no longer own any production path:
+
+- live invite messages are handled by the listener installed in `stoney_verify.globals`, which delegates to `invite_policy_engine.enforce_live_invite_message`;
+- missed-message and restart/resume recovery is owned by `invite_reconciliation_runtime`, which delegates scans to `invite_policy_engine.scan_channel_invites`;
+- guild-scoped bot/channel targeting is owned by `invite_scope_settings.py` and the native Protection Center invite UI;
+- the old hard-block override monkey patches are not read by the canonical invite policy engine.
+
+This removes a duplicate listener implementation plus a compatibility bridge stack that could be accidentally reactivated by import.
+
 ## Surviving guards adjusted
 
 `protection_center_clear_categories_guard.py` remains a dormant general Protection Center wording compatibility guard. Its Invite Shield editor imports and editor monkey patches were removed; it no longer depends on any retired Invite Shield UI guard.
@@ -47,6 +66,9 @@ Regression coverage must prove all of the following:
 4. normal boot explicitly installs the native Invite Shield UI and target-policy binding;
 5. the native UI uses `DankGuildResourceBrowserView`, not Discord raw resource selectors;
 6. historical cleanup delegates to `invite_policy_engine.scan_channel_invites` and contains no direct `message.delete` path;
-7. the existing invite-link safety audit points at the native owner rather than a deleted guard.
+7. the existing invite-link safety audit points at the native owner rather than a deleted guard;
+8. the retired runtime/override files above are absent from disk and historical startup metadata;
+9. live enforcement remains `globals.py -> enforce_live_invite_message`;
+10. recovery remains `main.py -> invite_reconciliation_runtime -> scan_channel_invites`.
 
 The older `STARTUP_GUARD_RUNTIME_OWNERSHIP_AUDIT.md` remains a historical audit of the earlier repository base. This document is the current disposition for the Invite Shield UI subset that audit intentionally deferred.
