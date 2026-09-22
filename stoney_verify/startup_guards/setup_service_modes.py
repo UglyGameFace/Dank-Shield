@@ -20,6 +20,10 @@ from typing import Any, Mapping, Optional
 import discord
 
 from stoney_verify.spam_guard_defaults import SPAM_GUARD_DEFAULT_ENABLED
+from stoney_verify.settings_registry import (
+    normalize_spam_guard_settings as _registry_normalize_spam_guard_settings,
+    spam_guard_defaults as _registry_spam_guard_defaults,
+)
 
 try:
     from stoney_verify.commands_ext.public_setup_config_writer import upsert_guild_config
@@ -316,61 +320,34 @@ def _spam_guard_module() -> Any | None:
 
 
 def _default_spam_settings(guild_id: int) -> dict[str, Any]:
-    return {
-        "guild_id": str(int(guild_id)),
-        "enabled": SPAM_GUARD_DEFAULT_ENABLED,
-        "mode": "timeout",
-        "apply_to_verified_users": True,
-        "block_external_invites_only": True,
-        "allow_server_invites": True,
-        "window_seconds": 12,
-        "message_threshold": 5,
-        "duplicate_threshold": 3,
-        "invite_threshold": 2,
-        "delete_limit": 25,
-        "timeout_minutes": 60,
-    }
+    return dict(_registry_spam_guard_defaults(int(guild_id)))
 
 
-def _normalize_spam_settings(guild_id: int, raw: Mapping[str, Any] | None) -> dict[str, Any]:
-    data = _default_spam_settings(guild_id)
-    if isinstance(raw, Mapping):
-        data.update(dict(raw))
+def _normalize_spam_settings(
+    guild_id: int,
+    raw: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    return dict(
+        _registry_normalize_spam_guard_settings(
+            int(guild_id),
+            raw if isinstance(raw, Mapping) else None,
+        )
+    )
 
+
+async def _load_spam_settings(guild_id: int) -> dict[str, Any]:
     module = _spam_guard_module()
-    normalizer = getattr(module, "_normalize_settings", None) if module is not None else None
-    if callable(normalizer):
-        try:
-            normalized = normalizer(int(guild_id), dict(data))
-            if isinstance(normalized, Mapping):
-                data.update(dict(normalized))
-        except Exception:
-            pass
-
-    data["guild_id"] = str(int(guild_id))
-    data["enabled"] = _safe_bool(data.get("enabled", data.get("spam_blocker_enabled")), SPAM_GUARD_DEFAULT_ENABLED)
-    data["mode"] = _safe_str(data.get("mode", data.get("spam_mode", "timeout")), "timeout")
-    data["apply_to_verified_users"] = _safe_bool(data.get("apply_to_verified_users"), True)
-    data["block_external_invites_only"] = _safe_bool(data.get("block_external_invites_only"), True)
-    data["allow_server_invites"] = _safe_bool(data.get("allow_server_invites"), True)
-    data["window_seconds"] = max(5, min(120, _safe_int(data.get("window_seconds"), 12)))
-    data["message_threshold"] = max(2, min(25, _safe_int(data.get("message_threshold"), 5)))
-    data["duplicate_threshold"] = max(2, min(15, _safe_int(data.get("duplicate_threshold"), 3)))
-    data["invite_threshold"] = max(1, min(10, _safe_int(data.get("invite_threshold"), 2)))
-    data["delete_limit"] = max(1, min(100, _safe_int(data.get("delete_limit"), 25)))
-    data["timeout_minutes"] = max(1, min(10080, _safe_int(data.get("timeout_minutes"), 60)))
-    return data
-
-
-def _load_spam_settings(guild_id: int) -> dict[str, Any]:
-    module = _spam_guard_module()
-    getter = getattr(module, "_fast_settings_for_ui", None) if module is not None else None
+    getter = getattr(module, "get_spam_settings", None) if module is not None else None
     if callable(getter):
         try:
-            return _normalize_spam_settings(int(guild_id), getter(int(guild_id)) or {})
-        except Exception:
-            pass
-    return _normalize_spam_settings(int(guild_id), None)
+            loaded = await getter(int(guild_id))
+            return _normalize_spam_settings(int(guild_id), loaded or {})
+        except Exception as exc:
+            _warn(
+                f"could not load canonical SpamGuard settings guild={guild_id}: "
+                f"{type(exc).__name__}: {str(exc)[:180]}"
+            )
+    return _default_spam_settings(int(guild_id))
 
 
 def _spam_persistence_label(guild_id: int) -> tuple[str, bool]:
@@ -387,7 +364,7 @@ def _spam_persistence_label(guild_id: int) -> tuple[str, bool]:
 
 async def _load_spam_actual_state(guild_id: int, service_state: Optional[ServiceState] = None, *, save_note: str = "") -> SpamGuardActualState:
     service_state = service_state or await load_service_state(guild_id)
-    settings = _load_spam_settings(guild_id)
+    settings = await _load_spam_settings(guild_id)
     label, persisted = _spam_persistence_label(guild_id)
     return SpamGuardActualState(
         service_selected=bool(service_state.spamguard),
@@ -403,87 +380,46 @@ async def _load_spam_actual_state(guild_id: int, service_state: Optional[Service
         message_threshold=_safe_int(settings.get("message_threshold"), 5),
         duplicate_threshold=_safe_int(settings.get("duplicate_threshold"), 3),
         invite_threshold=_safe_int(settings.get("invite_threshold"), 2),
-        timeout_minutes=_safe_int(settings.get("timeout_minutes"), 60),
+        timeout_minutes=_safe_int(settings.get("timeout_minutes"), 30),
         save_note=save_note,
         settings=settings,
     )
 
 
-def _spam_settings_payload(settings: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        "guild_id": str(settings.get("guild_id")),
-        "spam_blocker_enabled": _safe_bool(settings.get("enabled", settings.get("spam_blocker_enabled")), False),
-        "spam_mode": _safe_str(settings.get("mode", settings.get("spam_mode", "timeout")), "timeout"),
-        "apply_to_verified_users": _safe_bool(settings.get("apply_to_verified_users"), True),
-        "block_external_invites_only": _safe_bool(settings.get("block_external_invites_only"), True),
-        "allow_server_invites": _safe_bool(settings.get("allow_server_invites"), True),
-        "window_seconds": _safe_int(settings.get("window_seconds"), 12),
-        "message_threshold": _safe_int(settings.get("message_threshold"), 5),
-        "duplicate_threshold": _safe_int(settings.get("duplicate_threshold"), 3),
-        "invite_threshold": _safe_int(settings.get("invite_threshold"), 2),
-        "delete_limit": _safe_int(settings.get("delete_limit"), 25),
-        "timeout_minutes": _safe_int(settings.get("timeout_minutes"), 60),
-        "updated_at": now_utc().isoformat(),
-    }
-
-
-async def _persist_spam_settings(guild_id: int, settings: dict[str, Any]) -> tuple[bool, str]:
-    if get_supabase is None:
-        return False, "Supabase client is unavailable."
-    sb = get_supabase()
-    if sb is None:
-        return False, "Supabase client is unavailable."
-
-    full_payload = _spam_settings_payload(settings)
-    minimal_payload = {
-        "guild_id": str(int(guild_id)),
-        "spam_blocker_enabled": bool(full_payload["spam_blocker_enabled"]),
-        "spam_mode": str(full_payload["spam_mode"]),
-    }
-
-    def sync() -> tuple[bool, str]:
-        try:
-            sb.table("guild_security_settings").upsert(full_payload, on_conflict="guild_id").execute()
-            return True, "Saved to guild_security_settings."
-        except Exception as first:
-            try:
-                sb.table("guild_security_settings").upsert(minimal_payload, on_conflict="guild_id").execute()
-                return True, "Saved core SpamGuard settings to guild_security_settings."
-            except Exception as second:
-                return False, f"Could not persist SpamGuard settings: {type(second).__name__}: {str(second)[:180]}"
-
-    return await asyncio.to_thread(sync)
-
-
-def _cache_spam_settings(guild_id: int, settings: dict[str, Any], *, persisted: bool) -> None:
+async def _save_spam_actual_settings(
+    guild_id: int,
+    patch: Mapping[str, Any],
+    *,
+    updated_by: Any = None,
+) -> tuple[SpamGuardActualState, str]:
+    gid = int(guild_id)
+    service_state = await load_service_state(gid)
     module = _spam_guard_module()
-    cacher = getattr(module, "_cache_runtime_settings", None) if module is not None else None
-    if callable(cacher):
-        try:
-            cacher(int(guild_id), dict(settings), source="/dank setup", persisted=bool(persisted))
-            return
-        except Exception:
-            pass
+    saver = getattr(module, "save_spam_settings", None) if module is not None else None
+
+    if not callable(saver):
+        note = "SpamGuard canonical save service is unavailable; nothing was changed."
+        state = await _load_spam_actual_state(gid, service_state, save_note=note)
+        return state, note
+
     try:
-        runtime = getattr(module, "_RUNTIME_SETTINGS", None) if module is not None else None
-        if isinstance(runtime, dict):
-            payload = dict(settings)
-            payload["__meta_source"] = "/dank setup"
-            payload["__meta_persisted"] = bool(persisted)
-            runtime[int(guild_id)] = payload
-    except Exception:
-        pass
-
-
-async def _save_spam_actual_settings(guild_id: int, patch: Mapping[str, Any]) -> tuple[SpamGuardActualState, str]:
-    service_state = await load_service_state(guild_id)
-    settings = _load_spam_settings(guild_id)
-    settings.update(dict(patch))
-    settings = _normalize_spam_settings(guild_id, settings)
-    persisted, note = await _persist_spam_settings(guild_id, settings)
-    _cache_spam_settings(guild_id, settings, persisted=bool(persisted))
-    state = await _load_spam_actual_state(guild_id, service_state, save_note=note)
-    return state, note
+        saved, persisted = await saver(
+            gid,
+            dict(patch or {}),
+            updated_by=updated_by if isinstance(updated_by, discord.Member) else None,
+        )
+        _normalize_spam_settings(gid, saved if isinstance(saved, Mapping) else {})
+        label = "DB-backed" if persisted else "Runtime only (resets on restart)"
+        note = f"SpamGuard settings saved through canonical service: {label}."
+        state = await _load_spam_actual_state(gid, service_state, save_note=note)
+        return state, note
+    except Exception as exc:
+        note = (
+            "SpamGuard settings were not confirmed saved: "
+            f"{type(exc).__name__}: {str(exc)[:180]}"
+        )
+        state = await _load_spam_actual_state(gid, service_state, save_note=note)
+        return state, note
 
 
 def _spam_guard_solution_lines(state: SpamGuardActualState) -> list[str]:
@@ -574,7 +510,11 @@ async def _spamguard_update_and_show(interaction: discord.Interaction, patch: Ma
         await interaction.response.defer()
     except Exception:
         pass
-    _state, note = await _save_spam_actual_settings(guild.id, patch)
+    _state, note = await _save_spam_actual_settings(
+        guild.id,
+        patch,
+        updated_by=interaction.user,
+    )
     embed = await build_spamguard_setup_embed(guild, save_note=note)
     await interaction.edit_original_response(embed=embed, view=SpamGuardSetupView())
 
