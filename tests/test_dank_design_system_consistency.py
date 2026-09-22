@@ -308,6 +308,53 @@ def test_channel_navigation_context_is_native_not_runtime_memory() -> None:
     assert "_EDITOR_CONTEXT" not in RUNTIME_SOURCE
 
 
+def test_nested_customizations_preserve_editor_return_context_without_persisting_it() -> None:
+    draft = legacy._with_editor_return_context(
+        {"font": "fraktur", "separator_id": "bar_thin"},
+        editor_page=4,
+        editor_category_filter_id=777,
+    )
+    assert legacy._editor_return_context(draft) == (4, 777)
+
+    persisted = legacy._persistable_exact_lock(draft)
+    assert persisted["font"] == "fraktur"
+    assert persisted["separator_id"] == "bar_thin"
+    assert "__return_editor_page" not in persisted
+    assert "__return_editor_category_filter_id" not in persisted
+
+    rename = legacy.DirectRenameModal(
+        target_id=123,
+        scope="channel",
+        current_name="gaming",
+        category_id=456,
+        editor_page=4,
+        editor_category_filter_id=777,
+    )
+    assert rename.editor_page == 4
+    assert rename.editor_category_filter_id == 777
+
+    protection = legacy.ProtectionModeView(
+        channel_id=123,
+        current="full",
+        editor_page=4,
+        editor_category_filter_id=777,
+    )
+    assert protection.editor_page == 4
+    assert protection.editor_category_filter_id == 777
+
+
+def test_scoped_and_exact_previews_carry_editor_origin_for_back_navigation() -> None:
+    assert '"editor_page": max(0, int(editor_page))' in LEGACY_SOURCE
+    assert '"editor_category_filter_id": (' in LEGACY_SOURCE
+    assert "editor_page=self.editor_page" in LEGACY_SOURCE
+    assert "editor_category_filter_id=self.editor_category_filter_id" in LEGACY_SOURCE
+
+    assert 'editor_page = max(0, _safe_int(payload.get("editor_page"), 0))' in V2_SOURCE
+    assert 'payload.get("editor_category_filter_id")' in V2_SOURCE
+    assert "editor_page=editor_page" in V2_SOURCE
+    assert "editor_category_filter_id=editor_category_filter_id" in V2_SOURCE
+
+
 def test_all_primary_server_design_customizations_remain_canonical() -> None:
     for marker in (
         "class DesignServerThemeSelect",
