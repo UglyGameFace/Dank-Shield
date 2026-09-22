@@ -269,9 +269,10 @@ Ticket numbers and channel creation must stay consistent under retries, restarts
 | `slash_command_cleanup` | dormant global CommandTree patcher; useful sync behavior now native | **retire/delete with obsolete ticket command epoch shim; native owner is `command_runtime.DankCommandTree`** |
 | `protection_center_command_guard` | retired; had no production importer | native `commands_ext` registration owns `/dank protection` and legacy alias metadata |
 | `protection_import_button_patch` / `protection_pack_manual_import_guard` | retired dormant UI/config patchers | Import Pack button, modal, normalization, persistence, and interaction safety are native in `public_protection_center.py` |
-| `spam_guard_invite_hard_block` | overlap risk with invite policy engine | migrate/delete after invite policy verification |
-| `discord_invite_blocker_runtime_guard` | overlap risk with invite policy engine | inspect for direct deletes |
-| `invite_live_enforcer_guard` | loader explicitly calls `apply()` | high-risk inspection required |
+| `spam_guard_invite_hard_block` / `discord_invite_blocker_runtime_guard` | retired compatibility bridge chain | live/recovery ownership is native in `globals.py`, `invite_policy_engine`, and `invite_reconciliation_runtime` |
+
+| `invite_live_enforcer_guard` | retired duplicate listener implementation | canonical live listener is installed directly from `globals.py` and calls `enforce_live_invite_message` |
+| `spam_guard_invite_override_options` / `protection_invite_target_precedence_guard` | retired monkey-patch targeting/override chain | native `invite_scope_settings` + Protection Center invite UI own guild-scoped targeting; canonical policy ignores obsolete override patch keys |
 | `server_design_*_guard` | design behavior should be native | migrate into design service/UI |
 | `public_design_enhancements` startup-guard imports | native design path still activates startup guard modules | migrate strict/majority layout into native design services |
 | `setup_*_guard` | too many setup UX fixes at startup | classify and migrate valid UX into setup modules |
