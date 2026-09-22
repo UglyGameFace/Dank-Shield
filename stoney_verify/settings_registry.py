@@ -24,6 +24,7 @@ class SettingSpec:
     persistence: str
     aliases: tuple[str, ...] = ()
     choices: tuple[str, ...] = ()
+    aliases_before_canonical: bool = False
 
 
 AUTOMOD_ENABLED_KEY = "automod_enabled"
@@ -114,6 +115,7 @@ PROTECTION_SETTING_SPECS: dict[str, SettingSpec] = {
         "invite_policy",
         "spam_guard",
         aliases=("spam_block_external_invites_only",),
+        aliases_before_canonical=True,
     ),
     ALLOW_SERVER_INVITES_KEY: SettingSpec(
         ALLOW_SERVER_INVITES_KEY,
@@ -122,6 +124,7 @@ PROTECTION_SETTING_SPECS: dict[str, SettingSpec] = {
         "invite_policy",
         "spam_guard",
         aliases=("spam_allow_server_invites",),
+        aliases_before_canonical=True,
     ),
     INVITE_TARGET_ALL_BOTS_KEY: SettingSpec(
         INVITE_TARGET_ALL_BOTS_KEY,
@@ -230,7 +233,12 @@ def _direct_value(source: Any, key: str) -> Any:
 
 def raw_setting(source: Any, key: str, default: Any = _MISSING) -> Any:
     spec = setting_spec(key)
-    for candidate in (spec.key, *spec.aliases):
+    candidates = (
+        (*spec.aliases, spec.key)
+        if spec.aliases_before_canonical
+        else (spec.key, *spec.aliases)
+    )
+    for candidate in candidates:
         value = _direct_value(source, candidate)
         if value is not _MISSING:
             return value
@@ -345,6 +353,7 @@ def protection_registry_snapshot() -> dict[str, dict[str, Any]]:
             "persistence": spec.persistence,
             "aliases": list(spec.aliases),
             "choices": list(spec.choices),
+            "aliases_before_canonical": bool(spec.aliases_before_canonical),
         }
         for key, spec in sorted(PROTECTION_SETTING_SPECS.items())
     }
