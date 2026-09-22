@@ -74,6 +74,8 @@ def test_server_designer_acknowledges_selects_before_config_io() -> None:
         ("class DesignServerFontSelect", "class DesignServerStrengthSelect"),
         ("class DesignServerStrengthSelect", "class DesignServerSeparatorSelect"),
         ("class DesignServerSeparatorSelect", "def _design_server_separator"),
+        ("class DesignServerIconModeSelect", "class DesignServerCategoryFrameSelect"),
+        ("class DesignServerCategoryFrameSelect", "def _design_server_embed"),
     ):
         start = V2.index(class_name)
         end = V2.index(next_marker, start)
