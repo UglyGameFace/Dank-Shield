@@ -240,7 +240,7 @@ def _design_server_examples(options: Mapping[str, Any]) -> tuple[str, str]:
         kind="category",
         theme_id=_safe_str(getattr(theme, "id", "gothic_clean"), "gothic_clean"),
         strength=strength,
-        icon_mode="replace_missing",
+        icon_mode=_design_server_icon_mode(options),
         protection_rules={},
         protection_mode="full",
         separator_id=separator,
@@ -254,7 +254,7 @@ def _design_server_examples(options: Mapping[str, Any]) -> tuple[str, str]:
         kind="text",
         theme_id=_safe_str(getattr(theme, "id", "gothic_clean"), "gothic_clean"),
         strength=strength,
-        icon_mode="replace_missing",
+        icon_mode=_design_server_icon_mode(options),
         protection_rules={},
         protection_mode="full",
         separator_id=separator,
@@ -279,6 +279,7 @@ def _decorate_server_preview(embed: discord.Embed, options: Mapping[str, Any]) -
             f"Strength: **{max(1, min(5, _safe_int(options.get('strength'), 4)))}/5**\n"
             f"Separator: **{legacy._separator_choice_label(separator_id)}**\n"  # type: ignore[attr-defined]
             f"Categories: **{legacy._category_frame_choice_label(frame)}**\n"  # type: ignore[attr-defined]
+            f"Icon behavior: **{_design_server_icon_mode_label(options)}**\n"
             "Saved category/channel/exact rules still win for their own items."
         )[:1024],
         inline=False,
@@ -481,6 +482,80 @@ def _category_frame_page_for(options: Mapping[str, Any]) -> int:
     return 0
 
 
+SERVER_ICON_MODES: tuple[tuple[str, str, str], ...] = (
+    (
+        "replace_missing",
+        "Keep Existing + Fill Missing",
+        "Keep current icons and add theme-suggested icons only where an item has none.",
+    ),
+    (
+        "keep_existing",
+        "Keep Existing Only",
+        "Never add or replace an icon. Preserve each item's current icon state.",
+    ),
+    (
+        "clear",
+        "Clear Icons",
+        "Remove leading icons from items that the selected design is allowed to style.",
+    ),
+)
+
+
+def _design_server_icon_mode(options: Mapping[str, Any]) -> str:
+    selected = _safe_str(options.get("icon_mode"), "replace_missing")
+    valid = {mode for mode, _label, _description in SERVER_ICON_MODES}
+    return selected if selected in valid else "replace_missing"
+
+
+def _design_server_icon_mode_label(options: Mapping[str, Any]) -> str:
+    selected = _design_server_icon_mode(options)
+    return next(
+        (label for mode, label, _description in SERVER_ICON_MODES if mode == selected),
+        "Keep Existing + Fill Missing",
+    )
+
+
+class DesignServerIconModeSelect(discord.ui.Select):
+    def __init__(self, options: Mapping[str, Any]) -> None:
+        current = _design_server_icon_mode(options)
+        choices = [
+            discord.SelectOption(
+                label=label,
+                value=mode,
+                description=description[:100],
+                default=mode == current,
+            )
+            for mode, label, description in SERVER_ICON_MODES
+        ]
+        super().__init__(
+            placeholder="Choose server-wide icon behavior",
+            min_values=1,
+            max_values=1,
+            options=choices,
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        options = await _load_design_options(int(guild.id))
+        selected = _safe_str(self.values[0], "replace_missing")
+        valid = {mode for mode, _label, _description in SERVER_ICON_MODES}
+        if selected not in valid:
+            raise ValueError("Unsupported Dank Design icon behavior selection.")
+        options["icon_mode"] = selected
+        legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
+        await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
+        page = _category_frame_page_for(options)
+        await interaction.edit_original_response(
+            embed=_category_frame_picker_embed(guild, options, page=page),
+            view=DesignServerCategoryFrameView(options, page=page),
+        )
+
+
 class DesignServerCategoryFrameSelect(discord.ui.Select):
     def __init__(self, options: Mapping[str, Any], *, page: int = 0) -> None:
         groups = _category_frame_groups()
@@ -551,6 +626,7 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
     font = _design_server_font(options)
     strength = max(1, min(5, _safe_int(options.get("strength"), 4)))
     frame = _design_server_category_frame(options)
+    icon_mode_label = _design_server_icon_mode_label(options)
     narrow_count = _layout_override_count(options)
     category_example, channel_example = _design_server_examples(options)
     font_source = "custom override" if _font_override_active(options) else "theme default"
@@ -580,6 +656,11 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
     embed.add_field(
         name="Category frame",
         value=f"**{legacy._category_frame_choice_label(frame)}** · {frame_source}",  # type: ignore[attr-defined]
+        inline=True,
+    )
+    embed.add_field(
+        name="Icon behavior",
+        value=f"**{icon_mode_label}**",
         inline=True,
     )
     embed.add_field(
@@ -626,17 +707,18 @@ def _category_frame_picker_embed(
     selected_label = legacy._category_frame_choice_label(selected)  # type: ignore[attr-defined]
 
     embed = _design_server_embed(guild, options)
-    embed.title = f"🖼️ Choose Category Frame · {group_label}"
+    embed.title = f"🖼️ Category Frame & Icons · {group_label}"
     embed.description = (
-        f"Browse **{len(studio.CATEGORY_FRAMES)} category frames** across {total_pages} style groups. "
-        "**Theme Default** follows the selected theme; an explicit frame stays selected when the theme changes. "
+        f"Browse **{len(studio.CATEGORY_FRAMES)} category frames** across {total_pages} style groups and choose how server-wide icons behave. "
+        "**Theme Default** follows the selected theme for frames; icon behavior is an explicit server setting. "
         "Nothing is renamed until you return, Preview, and Apply."
     )
     embed.add_field(
         name=f"Frame group {page + 1}/{total_pages}",
         value=(
             f"**{group_label}** · {len(frame_ids)} choices on this page\n"
-            f"Current: **{selected_label}**"
+            f"Current frame: **{selected_label}**\n"
+            f"Icon behavior: **{_design_server_icon_mode_label(options)}**"
         ),
         inline=False,
     )
@@ -651,10 +733,11 @@ class DesignServerCategoryFrameView(DesignView):
         self.total_pages = max(1, len(groups))
         self.page = max(0, min(int(page), self.total_pages - 1))
         self.add_item(DesignServerCategoryFrameSelect(options, page=self.page))
+        self.add_item(DesignServerIconModeSelect(options))
         self.previous.disabled = self.page <= 0
         self.next.disabled = self.page >= self.total_pages - 1
 
-    @discord.ui.button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_prev", row=1)
+    @discord.ui.button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_prev", row=2)
     async def previous(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -666,7 +749,7 @@ class DesignServerCategoryFrameView(DesignView):
             view=DesignServerCategoryFrameView(self.options, page=page),
         )
 
-    @discord.ui.button(label="Next", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_next", row=1)
+    @discord.ui.button(label="Next", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_next", row=2)
     async def next(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -678,7 +761,7 @@ class DesignServerCategoryFrameView(DesignView):
             view=DesignServerCategoryFrameView(self.options, page=page),
         )
 
-    @discord.ui.button(label="Back to Server Design", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_back", row=1)
+    @discord.ui.button(label="Back to Server Design", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_back", row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -696,7 +779,7 @@ def _clean_redesign_embed(options: Mapping[str, Any]) -> discord.Embed:
         title="🧹 Start a Clean Redesign?",
         description=(
             f"This will clear **{count}** saved layout/name override(s) that can make a server-wide redesign look inconsistent.\n\n"
-            "**It does not rename anything now.** Your selected Theme, Font, Strength, Separator, and Category Frame stay selected. "
+            "**It does not rename anything now.** Your selected Theme, Font, Strength, Separator, Category Frame, and Icon Behavior stay selected. "
             "Protection rules stay intact, and permissions, roles, topics, channel order, tickets, and verification are untouched."
         ),
         color=discord.Color.orange(),
@@ -735,7 +818,7 @@ class CleanRedesignConfirmView(DesignView):
         embed.title = "✅ Clean Redesign Ready"
         embed.description = (
             "Old saved layout/name exceptions were cleared. **Protection rules were kept.** "
-            "Choose the server Theme, Font, Strength, Separator, and Category Frame you want, then preview before applying."
+            "Choose the server Theme, Font, Strength, Separator, Category Frame, and Icon Behavior you want, then preview before applying."
         )
         await interaction.edit_original_response(embed=embed, view=DesignServerView(updated))
 
@@ -761,7 +844,7 @@ class DesignServerView(DesignView):
         self.add_item(DesignServerSeparatorSelect(options))
         self.clean_redesign.disabled = _layout_override_count(options) == 0
 
-    @discord.ui.button(label="Frame", emoji="🖼️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame", row=4)
+    @discord.ui.button(label="Frame / Icons", emoji="🖼️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame", row=4)
     async def category_frame(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
