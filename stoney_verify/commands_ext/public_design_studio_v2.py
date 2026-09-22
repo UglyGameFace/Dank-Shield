@@ -1536,33 +1536,52 @@ async def _return_from_reviewed_preview(
 
     if mode == "category_editor":
         category_id = _safe_int(payload.get("category_id"), 0)
+        editor_page = max(0, _safe_int(payload.get("editor_page"), 0))
         category = guild.get_channel(category_id) if category_id > 0 else None
         if isinstance(category, discord.CategoryChannel):
             await interaction.response.edit_message(
                 embed=legacy._category_action_embed(category),  # type: ignore[attr-defined]
-                view=legacy.CategoryEditorActionView(category_id),  # type: ignore[attr-defined]
+                view=legacy.CategoryEditorActionView(  # type: ignore[attr-defined]
+                    category_id,
+                    editor_page=editor_page,
+                ),
             )
         else:
             await interaction.response.edit_message(
-                embed=legacy._category_editor_embed(guild, page=0),  # type: ignore[attr-defined]
-                view=legacy.CategoryEditorPickerView(guild, page=0),  # type: ignore[attr-defined]
+                embed=legacy._category_editor_embed(guild, page=editor_page),  # type: ignore[attr-defined]
+                view=legacy.CategoryEditorPickerView(guild, page=editor_page),  # type: ignore[attr-defined]
             )
         return
 
     if mode == "channel_editor":
         channel_id = _safe_int(payload.get("channel_id"), 0)
+        editor_page = max(0, _safe_int(payload.get("editor_page"), 0))
+        editor_category_filter_id = _safe_int(payload.get("editor_category_filter_id"), 0) or None
         channel = guild.get_channel(channel_id) if channel_id > 0 else None
         if channel is not None:
             parent = getattr(channel, "category", None)
             category_id = _safe_int(getattr(parent, "id", 0), 0) or None
             await interaction.response.edit_message(
                 embed=legacy._channel_action_embed(channel),  # type: ignore[attr-defined]
-                view=legacy.ChannelEditorActionView(channel_id, category_id=category_id),  # type: ignore[attr-defined]
+                view=legacy.ChannelEditorActionView(  # type: ignore[attr-defined]
+                    channel_id,
+                    category_id=category_id,
+                    editor_page=editor_page,
+                    editor_category_filter_id=editor_category_filter_id,
+                ),
             )
         else:
             await interaction.response.edit_message(
-                embed=legacy._channel_editor_embed(guild, page=0),  # type: ignore[attr-defined]
-                view=legacy.ChannelEditorPickerView(guild, page=0),  # type: ignore[attr-defined]
+                embed=legacy._channel_editor_embed(  # type: ignore[attr-defined]
+                    guild,
+                    page=editor_page,
+                    category_id=editor_category_filter_id,
+                ),
+                view=legacy.ChannelEditorPickerView(  # type: ignore[attr-defined]
+                    guild,
+                    page=editor_page,
+                    category_id=editor_category_filter_id,
+                ),
             )
         return
 
@@ -1570,10 +1589,14 @@ async def _return_from_reviewed_preview(
         target_id = _safe_int(payload.get("target_id"), 0)
         if target_id > 0:
             scope = "category" if mode.startswith("category_") else "channel"
+            editor_page = max(0, _safe_int(payload.get("editor_page"), 0))
+            editor_category_filter_id = _safe_int(payload.get("editor_category_filter_id"), 0) or None
             await legacy._open_exact_format_editor(  # type: ignore[attr-defined]
                 interaction,
                 scope=scope,
                 target_id=target_id,
+                editor_page=editor_page,
+                editor_category_filter_id=editor_category_filter_id,
             )
             return
 
