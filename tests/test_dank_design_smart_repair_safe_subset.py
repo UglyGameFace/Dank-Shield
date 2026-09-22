@@ -5,6 +5,7 @@ from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
+from stoney_verify.commands_ext import public_design_studio as legacy
 from stoney_verify.services import server_design_plan_service as plan_service
 from stoney_verify.services import server_design_repair_confidence as confidence
 
@@ -120,4 +121,74 @@ def test_bot_owned_live_stats_are_removed_from_design_detection(monkeypatch) -> 
         excluded,
     )
     assert [item["channel_id"] for item in filtered] == ["902"]
+
+def test_drift_plan_excludes_live_stats_before_detection_and_preview(monkeypatch) -> None:
+    category = SimpleNamespace(id=900, name="🛡️ DANK SHIELD STATS")
+    stat_channel = SimpleNamespace(id=901, name="👥 Members: 110", category_id=900, category=category)
+    ordinary = SimpleNamespace(id=902, name="gaming-lounge-global", category_id=0, category=None)
+
+    class FakeGuild:
+        id = 12346
+        categories = [category]
+        channels = [stat_channel, ordinary]
+
+        @staticmethod
+        def get_channel(channel_id: int):
+            return {900: category, 901: stat_channel, 902: ordinary}.get(int(channel_id))
+
+    async def fake_config(guild_id: int, *, refresh: bool = False):
+        assert guild_id == 12346
+        return {
+            "security_stats_display_enabled": True,
+            "security_stats_category_id": "900",
+            "security_stats_channel_ids": {"members": "901"},
+        }
+
+    seen_records: list[dict[str, object]] = []
+
+    def fake_live_records(_guild):
+        return [
+            {"id": "901", "category_id": "900", "kind": "text", "name": "👥 Members: 110"},
+            {"id": "902", "category_id": "", "kind": "text", "name": "gaming-lounge-global"},
+        ]
+
+    def fake_category_options(_studio, options, records):
+        seen_records.extend(dict(row) for row in records)
+        return dict(options), {}
+
+    async def fake_build(_guild, _options):
+        return [
+            {
+                "channel_id": "901",
+                "category_id": "900",
+                "kind": "voice",
+                "status": "changed",
+                "before": "👥 Members: 110",
+                "after": "members-110",
+                "warnings": [],
+                "blockers": [],
+            },
+            {
+                "channel_id": "902",
+                "category_id": "",
+                "kind": "text",
+                "status": "changed",
+                "before": "gaming-lounge-global",
+                "after": "gaming-lounge-globals",
+                "warnings": [],
+                "blockers": [],
+            },
+        ]
+
+    monkeypatch.setattr(plan_service, "get_guild_config", fake_config)
+    monkeypatch.setattr(plan_service, "live_records", fake_live_records)
+    monkeypatch.setattr(plan_service.majority, "build_category_aware_options", fake_category_options)
+    monkeypatch.setattr(plan_service.majority, "annotate_category_aware_plan_items", lambda _studio, rows, _options: rows)
+    monkeypatch.setattr(legacy, "build_design_plan", fake_build)
+
+    items, _options, _analysis = asyncio.run(plan_service.build_drift_repair_plan(FakeGuild(), {}))
+
+    assert [row["id"] for row in seen_records] == ["902"]
+    assert [item["channel_id"] for item in items] == ["902"]
+    assert items[0]["status"] == "changed"
 
