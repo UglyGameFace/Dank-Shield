@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 
 from stoney_verify.services import server_design_plan_service as plan_service
 from stoney_verify.services import server_design_repair_confidence as confidence
@@ -80,3 +82,42 @@ def test_consistency_preview_explicitly_applies_only_ready_subset() -> None:
     assert "failed_items and not allow_safe_subset" in V2
     assert "blocked/review rows stay untouched" in V2
     assert "blocked/review/unchanged item(s) untouched" in V2
+
+def test_bot_owned_live_stats_are_removed_from_design_detection(monkeypatch) -> None:
+    category = SimpleNamespace(id=900, name="🛡️ DANK SHIELD STATS")
+    stat_channel = SimpleNamespace(id=901, name="👥 Members: 110", category_id=900, category=category)
+    ordinary = SimpleNamespace(id=902, name="gaming-lounge-global", category_id=0, category=None)
+
+    class FakeGuild:
+        id = 12345
+        categories = [category]
+        channels = [stat_channel, ordinary]
+
+        @staticmethod
+        def get_channel(channel_id: int):
+            return {900: category, 901: stat_channel, 902: ordinary}.get(int(channel_id))
+
+    async def fake_config(guild_id: int, *, refresh: bool = False):
+        assert guild_id == 12345
+        assert refresh is False
+        return {
+            "security_stats_display_enabled": True,
+            "security_stats_category_id": "900",
+            "security_stats_channel_ids": {"members": "901"},
+        }
+
+    monkeypatch.setattr(plan_service, "get_guild_config", fake_config)
+
+    excluded = asyncio.run(plan_service._functional_design_resource_ids(FakeGuild()))
+    assert excluded == {900, 901}
+
+    filtered = plan_service._exclude_functional_items(
+        [
+            {"channel_id": "900", "status": "changed"},
+            {"channel_id": "901", "status": "changed"},
+            {"channel_id": "902", "status": "changed"},
+        ],
+        excluded,
+    )
+    assert [item["channel_id"] for item in filtered] == ["902"]
+
