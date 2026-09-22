@@ -83,6 +83,24 @@ def test_prefixed_persisted_spam_columns_keep_precedence() -> None:
     assert normalized["timeout_minutes"] == 90
 
 
+def test_persisted_null_spam_column_blocks_stale_unprefixed_fallback() -> None:
+    normalized = registry.normalize_spam_guard_settings(
+        5009,
+        {
+            "spam_window_seconds": None,
+            "window_seconds": 55,
+            "spam_blocker_enabled": None,
+            "enabled": False,
+            "spam_exempt_role_ids": None,
+            "exempt_role_ids": ["123456789012345678"],
+        },
+    )
+
+    assert normalized["window_seconds"] == 12
+    assert normalized["enabled"] is True
+    assert normalized["exempt_role_ids"] == []
+
+
 def test_spam_guard_numeric_bounds_match_runtime_contract() -> None:
     normalized = registry.normalize_spam_guard_settings(
         5003,
