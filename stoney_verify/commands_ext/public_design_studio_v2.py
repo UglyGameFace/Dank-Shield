@@ -144,7 +144,7 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
     embed.add_field(
         name="Choose what you want to do",
         value=(
-            "🌐 **Design Entire Server** — choose theme, font, strength, separator, and category frame with live examples.\n"
+            "🌐 **Design Entire Server** — choose theme, font, strength, separator, category frame, and icon behavior with live examples.\n"
             "✏️ **Edit One Category / Channel** — rename or style one exact item.\n"
             "🩺 **Fix Inconsistent Names** — scan first, then build a safe Smart Repair preview.\n"
             "🔐 **Saved Rules & Protection** — manage what future previews enforce; this does not rename anything by itself.\n"
@@ -185,32 +185,25 @@ async def _store_preview(
     created_at = legacy._store_pending(  # type: ignore[attr-defined]
         int(guild.id),
         int(interaction.user.id),
-        {"items": list(items), "options": dict(options), "mode": mode},
+        {
+            "items": list(items),
+            "options": dict(options),
+            "mode": mode,
+            "scope_title": title,
+        },
     )
     has_blockers = any(item.get("status") == "failed" for item in items)
     has_changes = any(item.get("status") == "changed" for item in items)
     preview_embed = legacy._preview_embed(guild, items, title=title)  # type: ignore[attr-defined]
     if mode == "preview_server_v2":
-        theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
-        font = _design_server_font(options)
-        separator_id = _design_server_separator(options)
-        frame = _design_server_category_frame(options)
-        preview_embed.insert_field_at(
-            0,
-            name="Selected server style",
-            value=(
-                f"Theme: **{getattr(theme, 'label', 'Gothic Clean')}**\n"
-                f"Font: **{studio.font_label(font)}** · `{studio.font_preview(font)}`\n"
-                f"Strength: **{max(1, min(5, _safe_int(options.get('strength'), 4)))}/5**\n"
-                f"Separator: **{legacy._separator_choice_label(separator_id)}**\n"  # type: ignore[attr-defined]
-                f"Categories: **{legacy._category_frame_choice_label(frame)}**\n"  # type: ignore[attr-defined]
-                "Saved category/channel/exact rules still win for their own items."
-            )[:1024],
-            inline=False,
-        )
+        _decorate_server_preview(preview_embed, options)
     await interaction.edit_original_response(
         embed=preview_embed,
-        view=ReviewedPreviewView(can_apply=not has_blockers and has_changes, pending_created_at=created_at),
+        view=ReviewedPreviewView(
+            can_apply=not has_blockers and has_changes,
+            pending_created_at=created_at,
+            issue_count=_repair_issue_count(items),
+        ),
     )
 
 
@@ -247,13 +240,12 @@ def _design_server_examples(options: Mapping[str, Any]) -> tuple[str, str]:
         kind="category",
         theme_id=_safe_str(getattr(theme, "id", "gothic_clean"), "gothic_clean"),
         strength=strength,
-        icon_mode="replace_missing",
+        icon_mode=_design_server_icon_mode(options),
         protection_rules={},
         protection_mode="full",
         separator_id=separator,
         category_frame_id=frame,
         font=font,
-        emoji_override="🗂️",
         exact_match=True,
     )
     channel = studio.build_styled_name(
@@ -261,16 +253,37 @@ def _design_server_examples(options: Mapping[str, Any]) -> tuple[str, str]:
         kind="text",
         theme_id=_safe_str(getattr(theme, "id", "gothic_clean"), "gothic_clean"),
         strength=strength,
-        icon_mode="replace_missing",
+        icon_mode=_design_server_icon_mode(options),
         protection_rules={},
         protection_mode="full",
         separator_id=separator,
         category_frame_id=frame,
         font=font,
-        emoji_override="💬",
         exact_match=True,
     )
     return _safe_str(category.after, "category-name"), _safe_str(channel.after, "channel-name")
+
+def _decorate_server_preview(embed: discord.Embed, options: Mapping[str, Any]) -> discord.Embed:
+    theme = legacy._theme_from_options(options)  # type: ignore[attr-defined]
+    font = _design_server_font(options)
+    separator_id = _design_server_separator(options)
+    frame = _design_server_category_frame(options)
+    embed.insert_field_at(
+        0,
+        name="Selected server style",
+        value=(
+            f"Theme: **{getattr(theme, 'label', 'Gothic Clean')}**\n"
+            f"Font: **{studio.font_label(font)}** · `{studio.font_preview(font)}`\n"
+            f"Strength: **{max(1, min(5, _safe_int(options.get('strength'), 4)))}/5**\n"
+            f"Separator: **{legacy._separator_choice_label(separator_id)}**\n"  # type: ignore[attr-defined]
+            f"Categories: **{legacy._category_frame_choice_label(frame)}**\n"  # type: ignore[attr-defined]
+            f"Icon behavior: **{_design_server_icon_mode_label(options)}**\n"
+            "Saved category/channel/exact rules still win for their own items."
+        )[:1024],
+        inline=False,
+    )
+    return embed
+
 
 class DesignServerThemeSelect(discord.ui.Select):
     def __init__(self, current: str) -> None:
@@ -467,6 +480,80 @@ def _category_frame_page_for(options: Mapping[str, Any]) -> int:
     return 0
 
 
+SERVER_ICON_MODES: tuple[tuple[str, str, str], ...] = (
+    (
+        "replace_missing",
+        "Keep Existing + Fill Missing",
+        "Keep current icons and add theme-suggested icons only where an item has none.",
+    ),
+    (
+        "keep_existing",
+        "Keep Existing Only",
+        "Never add or replace an icon. Preserve each item's current icon state.",
+    ),
+    (
+        "clear",
+        "Clear Icons",
+        "Remove leading icons from items that the selected design is allowed to style.",
+    ),
+)
+
+
+def _design_server_icon_mode(options: Mapping[str, Any]) -> str:
+    selected = _safe_str(options.get("icon_mode"), "replace_missing")
+    valid = {mode for mode, _label, _description in SERVER_ICON_MODES}
+    return selected if selected in valid else "replace_missing"
+
+
+def _design_server_icon_mode_label(options: Mapping[str, Any]) -> str:
+    selected = _design_server_icon_mode(options)
+    return next(
+        (label for mode, label, _description in SERVER_ICON_MODES if mode == selected),
+        "Keep Existing + Fill Missing",
+    )
+
+
+class DesignServerIconModeSelect(discord.ui.Select):
+    def __init__(self, options: Mapping[str, Any]) -> None:
+        current = _design_server_icon_mode(options)
+        choices = [
+            discord.SelectOption(
+                label=label,
+                value=mode,
+                description=description[:100],
+                default=mode == current,
+            )
+            for mode, label, description in SERVER_ICON_MODES
+        ]
+        super().__init__(
+            placeholder="Choose server-wide icon behavior",
+            min_values=1,
+            max_values=1,
+            options=choices,
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        options = await _load_design_options(int(guild.id))
+        selected = _safe_str(self.values[0], "replace_missing")
+        valid = {mode for mode, _label, _description in SERVER_ICON_MODES}
+        if selected not in valid:
+            raise ValueError("Unsupported Dank Design icon behavior selection.")
+        options["icon_mode"] = selected
+        legacy._sync_enabled_global_lock(options)  # type: ignore[attr-defined]
+        await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
+        page = _category_frame_page_for(options)
+        await interaction.edit_original_response(
+            embed=_category_frame_picker_embed(guild, options, page=page),
+            view=DesignServerCategoryFrameView(options, page=page),
+        )
+
+
 class DesignServerCategoryFrameSelect(discord.ui.Select):
     def __init__(self, options: Mapping[str, Any], *, page: int = 0) -> None:
         groups = _category_frame_groups()
@@ -537,6 +624,7 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
     font = _design_server_font(options)
     strength = max(1, min(5, _safe_int(options.get("strength"), 4)))
     frame = _design_server_category_frame(options)
+    icon_mode_label = _design_server_icon_mode_label(options)
     narrow_count = _layout_override_count(options)
     category_example, channel_example = _design_server_examples(options)
     font_source = "custom override" if _font_override_active(options) else "theme default"
@@ -566,6 +654,11 @@ def _design_server_embed(guild: discord.Guild, options: Mapping[str, Any]) -> di
     embed.add_field(
         name="Category frame",
         value=f"**{legacy._category_frame_choice_label(frame)}** · {frame_source}",  # type: ignore[attr-defined]
+        inline=True,
+    )
+    embed.add_field(
+        name="Icon behavior",
+        value=f"**{icon_mode_label}**",
         inline=True,
     )
     embed.add_field(
@@ -612,17 +705,18 @@ def _category_frame_picker_embed(
     selected_label = legacy._category_frame_choice_label(selected)  # type: ignore[attr-defined]
 
     embed = _design_server_embed(guild, options)
-    embed.title = f"🖼️ Choose Category Frame · {group_label}"
+    embed.title = f"🖼️ Category Frame & Icons · {group_label}"
     embed.description = (
-        f"Browse **{len(studio.CATEGORY_FRAMES)} category frames** across {total_pages} style groups. "
-        "**Theme Default** follows the selected theme; an explicit frame stays selected when the theme changes. "
+        f"Browse **{len(studio.CATEGORY_FRAMES)} category frames** across {total_pages} style groups and choose how server-wide icons behave. "
+        "**Theme Default** follows the selected theme for frames; icon behavior is an explicit server setting. "
         "Nothing is renamed until you return, Preview, and Apply."
     )
     embed.add_field(
         name=f"Frame group {page + 1}/{total_pages}",
         value=(
             f"**{group_label}** · {len(frame_ids)} choices on this page\n"
-            f"Current: **{selected_label}**"
+            f"Current frame: **{selected_label}**\n"
+            f"Icon behavior: **{_design_server_icon_mode_label(options)}**"
         ),
         inline=False,
     )
@@ -637,10 +731,11 @@ class DesignServerCategoryFrameView(DesignView):
         self.total_pages = max(1, len(groups))
         self.page = max(0, min(int(page), self.total_pages - 1))
         self.add_item(DesignServerCategoryFrameSelect(options, page=self.page))
+        self.add_item(DesignServerIconModeSelect(options))
         self.previous.disabled = self.page <= 0
         self.next.disabled = self.page >= self.total_pages - 1
 
-    @discord.ui.button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_prev", row=1)
+    @discord.ui.button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_prev", row=2)
     async def previous(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -652,7 +747,7 @@ class DesignServerCategoryFrameView(DesignView):
             view=DesignServerCategoryFrameView(self.options, page=page),
         )
 
-    @discord.ui.button(label="Next", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_next", row=1)
+    @discord.ui.button(label="Next", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_next", row=2)
     async def next(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -664,7 +759,7 @@ class DesignServerCategoryFrameView(DesignView):
             view=DesignServerCategoryFrameView(self.options, page=page),
         )
 
-    @discord.ui.button(label="Back to Server Design", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_back", row=1)
+    @discord.ui.button(label="Back to Server Design", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame_back", row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -682,7 +777,7 @@ def _clean_redesign_embed(options: Mapping[str, Any]) -> discord.Embed:
         title="🧹 Start a Clean Redesign?",
         description=(
             f"This will clear **{count}** saved layout/name override(s) that can make a server-wide redesign look inconsistent.\n\n"
-            "**It does not rename anything now.** Your selected Theme, Font, Strength, Separator, and Category Frame stay selected. "
+            "**It does not rename anything now.** Your selected Theme, Font, Strength, Separator, Category Frame, and Icon Behavior stay selected. "
             "Protection rules stay intact, and permissions, roles, topics, channel order, tickets, and verification are untouched."
         ),
         color=discord.Color.orange(),
@@ -721,7 +816,7 @@ class CleanRedesignConfirmView(DesignView):
         embed.title = "✅ Clean Redesign Ready"
         embed.description = (
             "Old saved layout/name exceptions were cleared. **Protection rules were kept.** "
-            "Choose the server Theme, Font, Strength, Separator, and Category Frame you want, then preview before applying."
+            "Choose the server Theme, Font, Strength, Separator, Category Frame, and Icon Behavior you want, then preview before applying."
         )
         await interaction.edit_original_response(embed=embed, view=DesignServerView(updated))
 
@@ -747,7 +842,7 @@ class DesignServerView(DesignView):
         self.add_item(DesignServerSeparatorSelect(options))
         self.clean_redesign.disabled = _layout_override_count(options) == 0
 
-    @discord.ui.button(label="Frame", emoji="🖼️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame", row=4)
+    @discord.ui.button(label="Frame / Icons", emoji="🖼️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:category_frame", row=4)
     async def category_frame(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -803,6 +898,7 @@ class DesignServerView(DesignView):
                 can_apply=not has_blockers and has_changes,
                 has_blockers=has_blockers,
                 pending_created_at=created_at,
+                issue_count=_repair_issue_count(items),
             ),
         )
 
@@ -927,13 +1023,92 @@ def _scan_embed(guild: discord.Guild, options: Mapping[str, Any], items: list[di
     return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
 
 
+def _repair_item_classification(item: Mapping[str, Any]) -> str:
+    return _safe_str(item.get("repair_confidence_classification"), "")
+
+
+def _repair_plan_state(items: list[dict[str, Any]]) -> dict[str, int]:
+    state = {
+        "matching": 0,
+        "ready": 0,
+        "review": 0,
+        "protected": 0,
+        "blocked": 0,
+        "manual_approved": 0,
+    }
+    for item in items:
+        status = _safe_str(item.get("status"), "unchanged")
+        classification = _repair_item_classification(item)
+        if bool(item.get("repair_manual_approved")):
+            state["manual_approved"] += 1
+        if status == "changed":
+            state["ready"] += 1
+        elif status == "protected":
+            state["protected"] += 1
+        elif status == "failed" and classification == repair_confidence.REVIEW_ONLY:
+            state["review"] += 1
+        elif status == "failed":
+            state["blocked"] += 1
+        else:
+            state["matching"] += 1
+    return state
+
+
+def _repair_issue_count(items: list[dict[str, Any]]) -> int:
+    state = _repair_plan_state(items)
+    return int(state["review"] + state["protected"] + state["blocked"])
+
+
+def _repair_confidence_text(items: list[dict[str, Any]], confidence: Mapping[str, Any]) -> str:
+    state = _repair_plan_state(items)
+    score = int(confidence.get("score", 0) or 0)
+    if state["blocked"] and state["ready"]:
+        label = "Partial"
+    elif state["blocked"]:
+        label = "Blocked"
+    elif state["review"] and state["ready"]:
+        label = "Partial review"
+    elif state["review"]:
+        label = "Review"
+    elif state["ready"]:
+        label = "Reviewed" if state["manual_approved"] else "High"
+    else:
+        label = "No changes"
+    return (
+        f"Apply confidence: **{label}**\n"
+        f"Detection score: **{score}/100**\n"
+        f"Ready: **{state['ready']}**\n"
+        f"Needs review: **{state['review']}**\n"
+        f"Blocked: **{state['blocked']}**\n"
+        f"Protected: **{state['protected']}**\n"
+        f"Manually approved: **{state['manual_approved']}**"
+    )
+
+
+def _repair_issue_lines(items: list[dict[str, Any]], classification: str) -> list[str]:
+    rows: list[str] = []
+    for item in items:
+        if _repair_item_classification(item) != classification:
+            continue
+        if _safe_str(item.get("status")) != "failed":
+            continue
+        before = _safe_str(item.get("before"), "unknown")
+        after = _safe_str(item.get("after"), before)
+        reason = _safe_str(
+            item.get("repair_confidence_reason"),
+            "Review this proposed rename before applying it.",
+        )
+        rows.append(f"• {before} -> {after} — {reason}"[:260])
+    return rows
+
+
 def _repair_preview_embed(
     guild: discord.Guild,
     items: list[dict[str, Any]],
     options: Mapping[str, Any],
     analysis: Mapping[str, Any],
 ) -> discord.Embed:
-    counts = legacy._consistency_summary(items)  # type: ignore[attr-defined]
+    state = _repair_plan_state(items)
     confidence = options.get("__repair_confidence_result") if isinstance(options.get("__repair_confidence_result"), Mapping) else {}
     embed = discord.Embed(
         title="🧭 Smart Repair Preview",
@@ -941,29 +1116,42 @@ def _repair_preview_embed(
             "**Nothing has been renamed.** Smart Repair analyzed each category independently instead of flattening the whole server to one guessed style. "
             "Saved exact/channel/category/global rules still win. If some rows are unsafe, **Ready repairs can still be applied** while blocked/review rows stay untouched."
         ),
-        color=discord.Color.green() if int(confidence.get("safe_count", 0) or 0) > 0 else discord.Color.orange(),
+        color=(
+            discord.Color.green()
+            if state["ready"] > 0 and state["review"] == 0 and state["blocked"] == 0
+            else discord.Color.orange()
+        ),
     )
     embed.add_field(
         name="Repair plan",
         value=(
-            f"Already matching: **{counts.get('matches', 0)}**\n"
-            f"Ready repairs: **{counts.get('needs_fix', 0)}**\n"
-            f"Protected/skipped: **{counts.get('protected', 0)}**\n"
-            f"Blocked: **{counts.get('failed', 0)}**"
+            f"Already matching: **{state['matching']}**\n"
+            f"Ready repairs: **{state['ready']}**\n"
+            f"Needs review: **{state['review']}**\n"
+            f"Protected/skipped: **{state['protected']}**\n"
+            f"Blocked: **{state['blocked']}**"
         ),
         inline=True,
     )
     embed.add_field(
         name="Repair confidence",
-        value=repair_confidence.confidence_summary_text(confidence) if confidence else "No confidence result was produced. Apply is blocked.",
+        value=_repair_confidence_text(items, confidence) if confidence else "No confidence result was produced. Apply is blocked.",
         inline=True,
     )
     changed = [item for item in items if item.get("status") == "changed"]
     if changed:
         lines = [f"• `{_safe_str(item.get('before'))}` → `{_safe_str(item.get('after'))}`"[:220] for item in changed[:8]]
         embed.add_field(name="Will repair", value="\n".join(lines)[:1024], inline=False)
-    blocked_lines = list(confidence.get("blocked_lines") or []) if isinstance(confidence, Mapping) else []
-    review_lines = list(confidence.get("review_lines") or []) if isinstance(confidence, Mapping) else []
+    blocked_lines = [
+        (
+            f"• {_safe_str(item.get('before'), 'unknown')} -> {_safe_str(item.get('after'), '')} — "
+            f"{_safe_str(item.get('repair_confidence_reason'), 'Automatic apply is blocked for this row.')}"
+        )[:260]
+        for item in items
+        if _safe_str(item.get("status")) == "failed"
+        and _repair_item_classification(item) != repair_confidence.REVIEW_ONLY
+    ]
+    review_lines = _repair_issue_lines(items, repair_confidence.REVIEW_ONLY)
     if blocked_lines:
         embed.add_field(name="Apply blocked for safety", value="\n".join(str(line) for line in blocked_lines[:6])[:1024], inline=False)
     if review_lines:
@@ -1002,12 +1190,21 @@ class ReviewRepairView(DesignView):
         created_at = legacy._store_pending(  # type: ignore[attr-defined]
             int(guild.id),
             int(interaction.user.id),
-            {"items": items, "options": dict(plan_options), "mode": "consistency_check_v2"},
+            {
+                "items": items,
+                "options": dict(plan_options),
+                "analysis": dict(analysis),
+                "mode": "consistency_check_v2",
+            },
         )
         has_changes = any(item.get("status") == "changed" for item in items)
         await interaction.edit_original_response(
             embed=_repair_preview_embed(guild, items, plan_options, analysis),
-            view=ReviewedPreviewView(can_apply=has_changes, pending_created_at=created_at),
+            view=ReviewedPreviewView(
+                can_apply=has_changes,
+                pending_created_at=created_at,
+                issue_count=_repair_issue_count(items),
+            ),
         )
 
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:review_back", row=4)
@@ -1420,33 +1617,52 @@ async def _return_from_reviewed_preview(
 
     if mode == "category_editor":
         category_id = _safe_int(payload.get("category_id"), 0)
+        editor_page = max(0, _safe_int(payload.get("editor_page"), 0))
         category = guild.get_channel(category_id) if category_id > 0 else None
         if isinstance(category, discord.CategoryChannel):
             await interaction.response.edit_message(
                 embed=legacy._category_action_embed(category),  # type: ignore[attr-defined]
-                view=legacy.CategoryEditorActionView(category_id),  # type: ignore[attr-defined]
+                view=legacy.CategoryEditorActionView(  # type: ignore[attr-defined]
+                    category_id,
+                    editor_page=editor_page,
+                ),
             )
         else:
             await interaction.response.edit_message(
-                embed=legacy._category_editor_embed(guild, page=0),  # type: ignore[attr-defined]
-                view=legacy.CategoryEditorPickerView(guild, page=0),  # type: ignore[attr-defined]
+                embed=legacy._category_editor_embed(guild, page=editor_page),  # type: ignore[attr-defined]
+                view=legacy.CategoryEditorPickerView(guild, page=editor_page),  # type: ignore[attr-defined]
             )
         return
 
     if mode == "channel_editor":
         channel_id = _safe_int(payload.get("channel_id"), 0)
+        editor_page = max(0, _safe_int(payload.get("editor_page"), 0))
+        editor_category_filter_id = _safe_int(payload.get("editor_category_filter_id"), 0) or None
         channel = guild.get_channel(channel_id) if channel_id > 0 else None
         if channel is not None:
             parent = getattr(channel, "category", None)
             category_id = _safe_int(getattr(parent, "id", 0), 0) or None
             await interaction.response.edit_message(
                 embed=legacy._channel_action_embed(channel),  # type: ignore[attr-defined]
-                view=legacy.ChannelEditorActionView(channel_id, category_id=category_id),  # type: ignore[attr-defined]
+                view=legacy.ChannelEditorActionView(  # type: ignore[attr-defined]
+                    channel_id,
+                    category_id=category_id,
+                    editor_page=editor_page,
+                    editor_category_filter_id=editor_category_filter_id,
+                ),
             )
         else:
             await interaction.response.edit_message(
-                embed=legacy._channel_editor_embed(guild, page=0),  # type: ignore[attr-defined]
-                view=legacy.ChannelEditorPickerView(guild, page=0),  # type: ignore[attr-defined]
+                embed=legacy._channel_editor_embed(  # type: ignore[attr-defined]
+                    guild,
+                    page=editor_page,
+                    category_id=editor_category_filter_id,
+                ),
+                view=legacy.ChannelEditorPickerView(  # type: ignore[attr-defined]
+                    guild,
+                    page=editor_page,
+                    category_id=editor_category_filter_id,
+                ),
             )
         return
 
@@ -1454,23 +1670,616 @@ async def _return_from_reviewed_preview(
         target_id = _safe_int(payload.get("target_id"), 0)
         if target_id > 0:
             scope = "category" if mode.startswith("category_") else "channel"
+            editor_page = max(0, _safe_int(payload.get("editor_page"), 0))
+            editor_category_filter_id = _safe_int(payload.get("editor_category_filter_id"), 0) or None
             await legacy._open_exact_format_editor(  # type: ignore[attr-defined]
                 interaction,
                 scope=scope,
                 target_id=target_id,
+                editor_page=editor_page,
+                editor_category_filter_id=editor_category_filter_id,
             )
             return
 
     await _go_home(interaction)
 
 
+def _repair_issue_embed(items: list[dict[str, Any]], *, page: int = 0) -> discord.Embed:
+    state = _repair_plan_state(items)
+    embed = discord.Embed(
+        title="🔎 Review Design Issues",
+        description=(
+            "This screen only appears when the current preview has something that cannot be silently auto-applied. "
+            "**Needs review** rows can be explicitly approved here. Protected and blocked rows stay unchanged until their rule or design is edited."
+        ),
+        color=discord.Color.orange(),
+    )
+
+    review_lines = _repair_issue_lines(items, repair_confidence.REVIEW_ONLY)
+    if review_lines:
+        total_pages = max(1, (len(review_lines) + 5) // 6)
+        page = max(0, min(int(page), total_pages - 1))
+        page_lines = review_lines[page * 6:(page + 1) * 6]
+        embed.add_field(
+            name=f"Needs manual review ({state['review']}) · page {page + 1}/{total_pages}",
+            value="\n".join(page_lines)[:1024],
+            inline=False,
+        )
+
+    protected = [
+        item for item in items if _safe_str(item.get("status")) == "protected"
+    ]
+    if protected:
+        lines = [
+            f"• {_safe_str(item.get('before'), 'unknown')} — protected/skipped by the current exact or name rule"
+            for item in protected[:6]
+        ]
+        embed.add_field(
+            name=f"Protected / skipped ({state['protected']})",
+            value="\n".join(lines)[:1024],
+            inline=False,
+        )
+
+    blocked = [
+        item
+        for item in items
+        if _safe_str(item.get("status")) == "failed"
+        and _repair_item_classification(item) != repair_confidence.REVIEW_ONLY
+    ]
+    if blocked:
+        lines = [
+            (
+                f"• {_safe_str(item.get('before'), 'unknown')} -> "
+                f"{_safe_str(item.get('after'), '')} — "
+                f"{_safe_str(item.get('repair_confidence_reason'), 'Blocked for safety.')}"
+            )[:260]
+            for item in blocked[:6]
+        ]
+        embed.add_field(
+            name=f"Blocked ({state['blocked']})",
+            value="\n".join(lines)[:1024],
+            inline=False,
+        )
+
+    embed.add_field(
+        name="What approval means",
+        value=(
+            "Approving a **Needs review** row only approves that exact before -> after rename in this preview. "
+            "It does not weaken future safety checks or change protection rules."
+        ),
+        inline=False,
+    )
+    return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
+
+
+def _remove_review_blocker(item: dict[str, Any]) -> None:
+    item["blockers"] = [
+        blocker
+        for blocker in list(item.get("blockers") or [])
+        if not _safe_str(blocker).startswith("Smart Auto-Detect confidence is too low for this row:")
+    ]
+
+
+class RepairReviewApproveButton(discord.ui.Button):
+    def __init__(
+        self,
+        *,
+        item_index: int,
+        label: str,
+        pending_created_at: float,
+        row: int,
+    ) -> None:
+        super().__init__(
+            label=f"Approve {_safe_str(label, 'item')}"[:80],
+            emoji="✅",
+            style=discord.ButtonStyle.success,
+            custom_id=f"dank_design_v2:approve_review:{item_index}",
+            row=row,
+        )
+        self.item_index = int(item_index)
+        self.pending_created_at = float(pending_created_at)
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        key = legacy._key(int(guild.id), int(interaction.user.id))  # type: ignore[attr-defined]
+        payload = legacy._PENDING.get(key) or {}  # type: ignore[attr-defined]
+        if not legacy._pending_matches(payload, self.pending_created_at):  # type: ignore[attr-defined]
+            await interaction.response.send_message(
+                "❌ This preview is obsolete. Build a fresh preview first.",
+                ephemeral=True,
+            )
+            return
+
+        items = [dict(item) for item in list(payload.get("items") or [])]
+        if self.item_index < 0 or self.item_index >= len(items):
+            await interaction.response.send_message("That review row is no longer available.", ephemeral=True)
+            return
+        item = items[self.item_index]
+        if (
+            _safe_str(item.get("status")) != "failed"
+            or _repair_item_classification(item) != repair_confidence.REVIEW_ONLY
+        ):
+            await interaction.response.send_message(
+                "That row is no longer waiting for manual review.",
+                ephemeral=True,
+            )
+            return
+
+        item["repair_original_confidence_classification"] = repair_confidence.REVIEW_ONLY
+        item["repair_confidence_classification"] = repair_confidence.SAFE_AUTO_FIX
+        item["repair_confidence_score"] = 100
+        item["repair_confidence_reason"] = "Explicitly approved by the server administrator for this preview."
+        item["repair_manual_approved"] = True
+        item["status"] = "changed"
+        _remove_review_blocker(item)
+        items[self.item_index] = item
+        payload["items"] = items
+        legacy._PENDING[key] = payload  # type: ignore[attr-defined]
+
+        await _show_pending_preview(interaction, payload, self.pending_created_at)
+
+
+def _protected_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        dict(item)
+        for item in items
+        if _safe_str(item.get("status")) == "protected"
+    ]
+
+
+def _protected_items_embed(items: list[dict[str, Any]], *, page: int = 0) -> discord.Embed:
+    total_pages = max(1, (len(items) + 5) // 6)
+    page = max(0, min(int(page), total_pages - 1))
+    start = page * 6
+    lines: list[str] = []
+    for index, item in enumerate(items[start:start + 6], start=start + 1):
+        before = _safe_str(item.get("before") or item.get("name"), f"Item {index}")
+        reason = _safe_str(
+            item.get("reason") or item.get("note") or item.get("warnings"),
+            "Protected by the current design safety rule.",
+        )
+        lines.append(f"**{index}.** `{before}`\n{reason[:180]}")
+    embed = discord.Embed(
+        title="🛡️ Protected / Skipped Design Items",
+        description=(
+            "These items were skipped intentionally. Choose one item to edit its exact protection rule, "
+            "or explicitly allow full styling for the listed items. No name changes happen on this screen."
+        ),
+        color=discord.Color.orange(),
+    )
+    embed.add_field(
+        name=f"Protected items ({len(items)}) · page {page + 1}/{total_pages}",
+        value="\n\n".join(lines)[:1024] or "None.",
+        inline=False,
+    )
+    embed.set_footer(text="After changing protection, rebuild the preview and review the exact rename before Apply")
+    return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
+
+
+class ProtectedItemButton(discord.ui.Button):
+    def __init__(
+        self,
+        item: Mapping[str, Any],
+        *,
+        display_index: int,
+        row: int,
+    ) -> None:
+        channel_id = _safe_int(item.get("channel_id"), 0)
+        label = _safe_str(item.get("before") or item.get("name"), f"Item {display_index}")
+        super().__init__(
+            label=f"{display_index}. {label}"[:80],
+            emoji="🛡️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"dank_design_v2:protected_item:{channel_id}",
+            row=row,
+            disabled=channel_id <= 0,
+        )
+        self.channel_id = channel_id
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        target = guild.get_channel(self.channel_id)
+        if target is None:
+            await interaction.response.send_message("That protected item no longer exists.", ephemeral=True)
+            return
+        if isinstance(target, discord.CategoryChannel):
+            embed = legacy._category_action_embed(target)  # type: ignore[attr-defined]
+            embed.title = "🛡️ Protected Category"
+            view = legacy.CategoryEditorActionView(self.channel_id)  # type: ignore[attr-defined]
+        else:
+            embed = legacy._channel_action_embed(target)  # type: ignore[attr-defined]
+            embed.title = "🛡️ Protected Channel"
+            parent = getattr(target, "category", None)
+            view = legacy.ChannelEditorActionView(  # type: ignore[attr-defined]
+                self.channel_id,
+                category_id=_safe_int(getattr(parent, "id", 0), 0) or None,
+            )
+        embed.add_field(
+            name="How to allow this item",
+            value="Choose **Protection / Skip Rule**, then select **Full styling**. Rebuild the preview afterward.",
+            inline=False,
+        )
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class ProtectedItemsView(DesignView):
+    def __init__(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        pending_created_at: float,
+        page: int = 0,
+    ) -> None:
+        super().__init__(timeout=900)
+        self.items = list(items)
+        self.pending_created_at = float(pending_created_at)
+        self.total_pages = max(1, (len(self.items) + 5) // 6)
+        self.page = max(0, min(int(page), self.total_pages - 1))
+        start = self.page * 6
+
+        for display_index, item in enumerate(
+            self.items[start:start + 6],
+            start=start + 1,
+        ):
+            self.add_item(
+                ProtectedItemButton(
+                    item,
+                    display_index=display_index,
+                    row=(display_index - start - 1) // 2,
+                )
+            )
+
+        if self.page > 0:
+            previous = discord.ui.Button(
+                label="Prev",
+                emoji="⬅️",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"dank_design_v2:protected_page:{self.page - 1}",
+                row=3,
+            )
+            previous.callback = self._previous
+            self.add_item(previous)
+        if self.page < self.total_pages - 1:
+            next_button = discord.ui.Button(
+                label="Next",
+                emoji="➡️",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"dank_design_v2:protected_page:{self.page + 1}",
+                row=3,
+            )
+            next_button.callback = self._next
+            self.add_item(next_button)
+
+        allow_all = discord.ui.Button(
+            label="Allow Full Styling for Listed",
+            emoji="🔓",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank_design_v2:allow_listed_protected",
+            row=3,
+        )
+        allow_all.callback = self._allow_all
+        self.add_item(allow_all)
+
+        back = discord.ui.Button(
+            label="Back to Issues",
+            emoji="⬅️",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_design_v2:protected_back",
+            row=4,
+        )
+        back.callback = self._back
+        self.add_item(back)
+
+    async def _show_page(self, interaction: discord.Interaction, page: int) -> None:
+        await interaction.response.edit_message(
+            embed=_protected_items_embed(self.items, page=page),
+            view=ProtectedItemsView(
+                self.items,
+                pending_created_at=self.pending_created_at,
+                page=page,
+            ),
+        )
+
+    async def _previous(self, interaction: discord.Interaction) -> None:
+        await self._show_page(interaction, self.page - 1)
+
+    async def _next(self, interaction: discord.Interaction) -> None:
+        await self._show_page(interaction, self.page + 1)
+
+    async def _allow_all(self, interaction: discord.Interaction) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        options = await _load_design_options(int(guild.id))
+        raw_rules = options.get("protection_item_rules")
+        rules = dict(raw_rules) if isinstance(raw_rules, Mapping) else {}
+        changed = 0
+        for item in self.items:
+            channel_id = _safe_int(item.get("channel_id"), 0)
+            if channel_id <= 0:
+                continue
+            key = str(channel_id)
+            if rules.get(key) != "full":
+                rules[key] = "full"
+                changed += 1
+        options["protection_item_rules"] = rules
+        try:
+            await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
+        except Exception as exc:
+            await interaction.edit_original_response(
+                content=f"❌ Protection changes could not be saved. Nothing was renamed. `{type(exc).__name__}`",
+                embed=None,
+                view=None,
+            )
+            return
+        embed = discord.Embed(
+            title="🔓 Protected Items Can Now Be Styled",
+            description=(
+                f"Saved **{changed}** exact-item override(s) as **Full styling**. "
+                "No channel names were changed. Build a fresh preview so the exact results are reviewed before Apply."
+            ),
+            color=discord.Color.green(),
+        )
+        await interaction.edit_original_response(embed=embed, view=DesignHomeView(options))
+
+    async def _back(self, interaction: discord.Interaction) -> None:
+        await _open_repair_issues(interaction, self.pending_created_at)
+
+
+async def _open_protected_items(
+    interaction: discord.Interaction,
+    pending_created_at: float,
+) -> None:
+    guild = interaction.guild
+    if guild is None:
+        return
+    key = legacy._key(int(guild.id), int(interaction.user.id))  # type: ignore[attr-defined]
+    payload = legacy._PENDING.get(key) or {}  # type: ignore[attr-defined]
+    if not legacy._pending_matches(payload, pending_created_at):  # type: ignore[attr-defined]
+        await interaction.response.send_message(
+            "❌ This preview is obsolete. Build a fresh preview first.",
+            ephemeral=True,
+        )
+        return
+    items = _protected_items([dict(item) for item in list(payload.get("items") or [])])
+    if not items:
+        await interaction.response.send_message(
+            "This preview has no protected/skipped items.",
+            ephemeral=True,
+        )
+        return
+    await interaction.response.edit_message(
+        embed=_protected_items_embed(items, page=0),
+        view=ProtectedItemsView(items, pending_created_at=pending_created_at, page=0),
+    )
+
+
+class RepairIssuesView(DesignView):
+    def __init__(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        pending_created_at: float,
+        page: int = 0,
+    ) -> None:
+        super().__init__(timeout=900)
+        self.items = [dict(item) for item in items]
+        self.pending_created_at = float(pending_created_at)
+        review_indexes = [
+            index
+            for index, item in enumerate(self.items)
+            if _safe_str(item.get("status")) == "failed"
+            and _repair_item_classification(item) == repair_confidence.REVIEW_ONLY
+        ]
+        self.total_pages = max(1, (len(review_indexes) + 5) // 6)
+        self.page = max(0, min(int(page), self.total_pages - 1))
+        page_indexes = review_indexes[self.page * 6:(self.page + 1) * 6]
+
+        for slot, item_index in enumerate(page_indexes):
+            item = self.items[item_index]
+            self.add_item(
+                RepairReviewApproveButton(
+                    item_index=item_index,
+                    label=_safe_str(item.get("before"), f"item {item_index + 1}"),
+                    pending_created_at=pending_created_at,
+                    row=slot // 2,
+                )
+            )
+
+        protected_count = sum(
+            1 for item in self.items if _safe_str(item.get("status")) == "protected"
+        )
+        if self.page > 0:
+            previous = discord.ui.Button(
+                label="Prev",
+                emoji="⬅️",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"dank_design_v2:issues_page:{self.page - 1}",
+                row=3,
+            )
+            previous.callback = self._previous
+            self.add_item(previous)
+        if self.page < self.total_pages - 1:
+            next_button = discord.ui.Button(
+                label="Next",
+                emoji="➡️",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"dank_design_v2:issues_page:{self.page + 1}",
+                row=3,
+            )
+            next_button.callback = self._next
+            self.add_item(next_button)
+        if protected_count:
+            protection = discord.ui.Button(
+                label=f"Review Protected Items ({protected_count})",
+                emoji="🛡️",
+                style=discord.ButtonStyle.secondary,
+                custom_id="dank_design_v2:issues_protection",
+                row=3,
+            )
+            protection.callback = self._open_protection
+            self.add_item(protection)
+
+        back = discord.ui.Button(
+            label="Back to Preview",
+            emoji="⬅️",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank_design_v2:issues_back",
+            row=4,
+        )
+        back.callback = self._back
+        self.add_item(back)
+
+    async def _show_page(self, interaction: discord.Interaction, page: int) -> None:
+        await interaction.response.edit_message(
+            embed=_repair_issue_embed(self.items, page=page),
+            view=RepairIssuesView(
+                self.items,
+                pending_created_at=self.pending_created_at,
+                page=page,
+            ),
+        )
+
+    async def _previous(self, interaction: discord.Interaction) -> None:
+        await self._show_page(interaction, self.page - 1)
+
+    async def _next(self, interaction: discord.Interaction) -> None:
+        await self._show_page(interaction, self.page + 1)
+
+    async def _open_protection(self, interaction: discord.Interaction) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        await _open_protected_items(interaction, self.pending_created_at)
+
+    async def _back(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return
+        key = legacy._key(int(guild.id), int(interaction.user.id))  # type: ignore[attr-defined]
+        payload = legacy._PENDING.get(key) or {}  # type: ignore[attr-defined]
+        if not legacy._pending_matches(payload, self.pending_created_at):  # type: ignore[attr-defined]
+            await interaction.response.send_message(
+                "❌ This preview is obsolete. Build a fresh preview first.",
+                ephemeral=True,
+            )
+            return
+        await _show_pending_preview(interaction, payload, self.pending_created_at)
+
+
+async def _show_pending_preview(
+    interaction: discord.Interaction,
+    payload: Mapping[str, Any],
+    pending_created_at: float,
+) -> None:
+    guild = interaction.guild
+    assert guild is not None
+    items = [dict(item) for item in list(payload.get("items") or [])]
+    options = dict(payload.get("options") or {})
+    mode = _safe_str(payload.get("mode"), "preview")
+    analysis = dict(payload.get("analysis") or {})
+    has_changes = any(_safe_str(item.get("status")) == "changed" for item in items)
+    has_blockers = any(_safe_str(item.get("status")) == "failed" for item in items)
+
+    if mode == "consistency_check_v2":
+        embed = _repair_preview_embed(guild, items, options, analysis)
+        view: discord.ui.View = ReviewedPreviewView(
+            can_apply=has_changes,
+            pending_created_at=pending_created_at,
+            issue_count=_repair_issue_count(items),
+        )
+    elif mode == "style_change_separator":
+        separator_id = _safe_str(payload.get("separator_id"), "none")
+        embed = legacy._style_change_preview_embed(guild, items, separator_id=separator_id)  # type: ignore[attr-defined]
+        view = LegacyStyleChangePreviewView(
+            can_apply=has_changes and not has_blockers,
+            has_blockers=has_blockers,
+            pending_created_at=pending_created_at,
+            issue_count=_repair_issue_count(items),
+        )
+    else:
+        embed = legacy._preview_embed(  # type: ignore[attr-defined]
+            guild,
+            items,
+            title=_safe_str(payload.get("scope_title"), "👁 Server Design Preview"),
+        )
+        if mode == "preview_server_v2":
+            _decorate_server_preview(embed, options)
+        view = ReviewedPreviewView(
+            can_apply=has_changes and not has_blockers,
+            pending_created_at=pending_created_at,
+            issue_count=_repair_issue_count(items),
+        )
+
+    await interaction.response.edit_message(embed=embed, view=view)
+
+
+async def _open_repair_issues(
+    interaction: discord.Interaction,
+    pending_created_at: float | None,
+) -> None:
+    if not await _require_design_permission(interaction):
+        return
+    guild = interaction.guild
+    assert guild is not None
+    key = legacy._key(int(guild.id), int(interaction.user.id))  # type: ignore[attr-defined]
+    payload = legacy._PENDING.get(key) or {}  # type: ignore[attr-defined]
+    if not legacy._pending_matches(payload, pending_created_at):  # type: ignore[attr-defined]
+        await interaction.response.send_message(
+            "❌ This preview is obsolete. Build a fresh preview first.",
+            ephemeral=True,
+        )
+        return
+    items = [dict(item) for item in list(payload.get("items") or [])]
+    if _repair_issue_count(items) <= 0:
+        await interaction.response.send_message(
+            "This preview has no review, protected, or blocked items.",
+            ephemeral=True,
+        )
+        return
+    await interaction.response.edit_message(
+        embed=_repair_issue_embed(items, page=0),
+        view=RepairIssuesView(
+            items,
+            pending_created_at=float(pending_created_at or 0.0),
+            page=0,
+        ),
+    )
+
+
 class ReviewedPreviewView(DesignView):
     """One transactional preview/apply owner for every active Studio batch flow."""
 
-    def __init__(self, *, can_apply: bool, pending_created_at: float | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        can_apply: bool,
+        pending_created_at: float | None = None,
+        issue_count: int = 0,
+    ) -> None:
         super().__init__(timeout=900)
         self.pending_created_at = pending_created_at
         self.apply.disabled = not can_apply
+        if int(issue_count) > 0:
+            review = discord.ui.Button(
+                label=f"Review Issues ({int(issue_count)})",
+                emoji="🔎",
+                style=discord.ButtonStyle.secondary,
+                custom_id="dank_design_v2:preview_issues",
+                row=1,
+            )
+            review.callback = self._review_issues
+            self.add_item(review)
+
+    async def _review_issues(self, interaction: discord.Interaction) -> None:
+        await _open_repair_issues(interaction, self.pending_created_at)
 
     @discord.ui.button(label="Apply Reviewed Changes", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank_design_v2:apply", row=0)
     async def apply(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1678,8 +2487,19 @@ class ReviewedPreviewView(DesignView):
 class LegacyStyleChangePreviewView(ReviewedPreviewView):
     """Keep separator issue-review buttons while sharing the one Apply owner."""
 
-    def __init__(self, *, can_apply: bool, has_blockers: bool = False, pending_created_at: float) -> None:
-        super().__init__(can_apply=can_apply, pending_created_at=pending_created_at)
+    def __init__(
+        self,
+        *,
+        can_apply: bool,
+        has_blockers: bool = False,
+        pending_created_at: float,
+        issue_count: int = 0,
+    ) -> None:
+        super().__init__(
+            can_apply=can_apply,
+            pending_created_at=pending_created_at,
+            issue_count=issue_count,
+        )
         if has_blockers:
             self.add_item(legacy.StyleChangeFixMissingEmojiButton(row=2, pending_created_at=pending_created_at))  # type: ignore[attr-defined]
             self.add_item(legacy.StyleChangeApplySafeOnlyButton(row=2, pending_created_at=pending_created_at))  # type: ignore[attr-defined]

@@ -74,6 +74,8 @@ def test_server_designer_acknowledges_selects_before_config_io() -> None:
         ("class DesignServerFontSelect", "class DesignServerStrengthSelect"),
         ("class DesignServerStrengthSelect", "class DesignServerSeparatorSelect"),
         ("class DesignServerSeparatorSelect", "def _design_server_separator"),
+        ("class DesignServerIconModeSelect", "class DesignServerCategoryFrameSelect"),
+        ("class DesignServerCategoryFrameSelect", "def _design_server_embed"),
     ):
         start = V2.index(class_name)
         end = V2.index(next_marker, start)
@@ -93,9 +95,15 @@ def test_server_preview_repeats_the_selected_style_before_apply() -> None:
     end = V2.index("def _design_server_font", start)
     block = V2[start:end]
     assert 'mode == "preview_server_v2"' in block
-    assert 'name="Selected server style"' in block
-    assert "studio.font_preview(font)" in block
-    assert "Saved category/channel/exact rules still win" in block
+    assert "_decorate_server_preview(preview_embed, options)" in block
+
+    decorator_start = V2.index("def _decorate_server_preview")
+    decorator_end = V2.index("class DesignServerThemeSelect", decorator_start)
+    decorator = V2[decorator_start:decorator_end]
+    assert 'name="Selected server style"' in decorator
+    assert "studio.font_preview(font)" in decorator
+    assert "Icon behavior:" in decorator
+    assert "Saved category/channel/exact rules still win" in decorator
 
 
 def test_server_font_picker_is_native_and_theme_reset_is_predictable() -> None:

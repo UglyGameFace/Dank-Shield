@@ -239,7 +239,52 @@ def score_repair_item(item: Mapping[str, Any], *, context: str = "generic") -> d
             "after": after,
         }
 
-    if _looks_system_surface(before) or zone in _REVIEW_ZONES:
+    # A broad zone label (for example "mod" in mod-chat) is context, not
+    # proof that the channel is functional infrastructure. If Smart Repair only
+    # changes decoration while preserving the normalized semantic name, that is
+    # the exact low-risk drift this feature is meant to repair automatically.
+    semantic_before = _ascii_core(before)
+    semantic_after = _ascii_core(after)
+    before_system_surface = _looks_system_surface(before)
+    after_system_surface = _looks_system_surface(after)
+    system_surface = before_system_surface or after_system_surface
+    ratio = _similarity(before, after)
+
+    if (
+        context in _AUTO_DETECT_CONTEXTS
+        and semantic_before
+        and semantic_before == semantic_after
+        and not system_surface
+    ):
+        return {
+            "classification": SAFE_AUTO_FIX,
+            "confidence": 96,
+            "reason": "Formatting-only drift; semantic channel name is unchanged.",
+            "before": before,
+            "after": after,
+            "zone": zone,
+        }
+
+    # Preserve the long-standing typo-fix contract. A current ordinary channel
+    # may be one character away from a canonical system word (for example
+    # verifcation -> verification). That is still low-risk naming drift. This
+    # does NOT auto-approve an already-system surface such as mod-log.
+    if (
+        context in _AUTO_DETECT_CONTEXTS
+        and ratio >= 0.88
+        and semantic_before != semantic_after
+        and not before_system_surface
+    ):
+        return {
+            "classification": SAFE_AUTO_FIX,
+            "confidence": 92,
+            "reason": "Small naming drift only.",
+            "before": before,
+            "after": after,
+            "zone": zone,
+        }
+
+    if system_surface or zone in _REVIEW_ZONES:
         return {
             "classification": REVIEW_ONLY,
             "confidence": 55,
@@ -248,8 +293,6 @@ def score_repair_item(item: Mapping[str, Any], *, context: str = "generic") -> d
             "after": after,
             "zone": zone,
         }
-
-    ratio = _similarity(before, after)
 
     if ratio >= 0.88:
         return {
