@@ -191,4 +191,3 @@ def test_drift_plan_excludes_live_stats_before_detection_and_preview(monkeypatch
     assert [row["id"] for row in seen_records] == ["902"]
     assert [item["channel_id"] for item in items] == ["902"]
     assert items[0]["status"] == "changed"
-
