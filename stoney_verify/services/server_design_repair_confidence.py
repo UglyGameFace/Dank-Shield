@@ -294,7 +294,13 @@ def evaluate_repair_plan(items: Iterable[Mapping[str, Any]], *, context: str = "
     review = [row for row in changed_scores if row.get("classification") == REVIEW_ONLY]
     safe = [row for row in changed_scores if row.get("classification") == SAFE_AUTO_FIX]
 
-    if blocked:
+    if blocked and safe:
+        label = "Partial"
+        apply_allowed = False
+    elif review and safe:
+        label = "Partial review"
+        apply_allowed = False
+    elif blocked:
         label = "Blocked"
         apply_allowed = False
     elif review:
@@ -307,9 +313,20 @@ def evaluate_repair_plan(items: Iterable[Mapping[str, Any]], *, context: str = "
         label = "No changes"
         apply_allowed = False
 
-    total_confidence = 100
-    total_confidence -= len(blocked) * 25
-    total_confidence -= len(review) * 8
+    # apply_allowed deliberately retains its historical all-rows-safe meaning.
+    # Smart Repair may still offer a safe subset when some rows are individually
+    # blocked, so expose that separately instead of collapsing a mixed plan into
+    # a useless all-or-nothing result.
+    safe_apply_allowed = bool(safe)
+    if changed_scores:
+        total_confidence = int(
+            round(
+                sum(int(row.get("confidence", 0) or 0) for row in changed_scores)
+                / len(changed_scores)
+            )
+        )
+    else:
+        total_confidence = 100
     total_confidence = max(0, min(100, total_confidence))
 
     blocked_lines = [
@@ -325,6 +342,7 @@ def evaluate_repair_plan(items: Iterable[Mapping[str, Any]], *, context: str = "
         "label": label,
         "score": total_confidence,
         "apply_allowed": apply_allowed,
+        "safe_apply_allowed": safe_apply_allowed,
         "counts": dict(counts),
         "safe_count": len(safe),
         "review_count": len(review),
@@ -340,6 +358,7 @@ def confidence_summary_text(result: Mapping[str, Any]) -> str:
         f"Apply confidence: **{_text(result.get('label'), 'Unknown')}**\n"
         f"Score: **{int(result.get('score', 0) or 0)}/100**\n"
         f"Safe: **{int(result.get('safe_count', 0) or 0)}**\n"
+        f"Safe subset: **{'Available' if bool(result.get('safe_apply_allowed')) else 'None'}**\n"
         f"Needs review: **{int(result.get('review_count', 0) or 0)}**\n"
         f"Blocked: **{int(result.get('blocked_count', 0) or 0)}**\n"
         f"Aesthetic blocks: **{int(counts.get(BLOCKED_AESTHETIC_DOWNGRADE, 0) or 0)}**"
