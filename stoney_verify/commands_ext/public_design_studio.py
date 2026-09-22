@@ -2890,6 +2890,8 @@ async def _preview_scope(
     mode: str,
     category_id: int | None = None,
     channel_id: int | None = None,
+    editor_page: int = 0,
+    editor_category_filter_id: int | None = None,
 ) -> None:
     if not await _require_design_permission(interaction):
         return
@@ -2927,6 +2929,12 @@ async def _preview_scope(
             "scope_title": scope_title,
             "category_id": str(int(category_id)) if category_id is not None else "",
             "channel_id": str(int(channel_id)) if channel_id is not None else "",
+            "editor_page": max(0, int(editor_page)),
+            "editor_category_filter_id": (
+                str(int(editor_category_filter_id))
+                if editor_category_filter_id is not None
+                else ""
+            ),
         },
     )
     has_blockers = any(item.get("status") == "failed" for item in items)
@@ -3632,6 +3640,7 @@ class CategoryEditorActionView(LegacyDesignView):
             scope_title="👁️ Category Repair Preview",
             mode="category_editor",
             category_id=self.category_id,
+            editor_page=self.editor_page,
         )
 
     @discord.ui.button(label="Rename", emoji="✏️", style=discord.ButtonStyle.primary, custom_id="dank_design:category_rename", row=0)
@@ -3792,6 +3801,8 @@ class ChannelEditorActionView(LegacyDesignView):
             scope_title="👁️ Channel Repair Preview",
             mode="channel_editor",
             channel_id=self.channel_id,
+            editor_page=self.editor_page,
+            editor_category_filter_id=self.editor_category_filter_id,
         )
 
     @discord.ui.button(label="Rename", emoji="✏️", style=discord.ButtonStyle.primary, custom_id="dank_design:channel_rename", row=0)
