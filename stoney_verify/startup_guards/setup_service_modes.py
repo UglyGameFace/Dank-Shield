@@ -403,12 +403,11 @@ async def _save_spam_actual_settings(
         return state, note
 
     try:
-        saved, persisted = await saver(
+        _saved, persisted = await saver(
             gid,
             dict(patch or {}),
             updated_by=updated_by if isinstance(updated_by, discord.Member) else None,
         )
-        _normalize_spam_settings(gid, saved if isinstance(saved, Mapping) else {})
         label = "DB-backed" if persisted else "Runtime only (resets on restart)"
         note = f"SpamGuard settings saved through canonical service: {label}."
         state = await _load_spam_actual_state(gid, service_state, save_note=note)
