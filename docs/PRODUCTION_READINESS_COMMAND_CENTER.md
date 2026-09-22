@@ -129,34 +129,35 @@ Remaining score blockers:
 - large startup guard chain still controls too much behavior
 - many setup/design/ticket/verify callbacks still do raw `interaction.response.*` work
 - command registry still contains runtime pruning/mutation logic
-- settings registry migration is only complete for the first Protection/Automod/Invite slice
+- settings registry migration now covers Protection/Automod/Invite and Spam Guard core settings, but other families remain
 - Dank Design still contains too much state/UI/service logic in one command module
 
 ---
 
 ## Current active task
 
-### `P0-SETTINGS-001A` — Protection / Automod / Invite settings registry
+### `P0-SETTINGS-001B` — Spam Guard core settings + canonical setup persistence
 
 Status: `IMPLEMENTED — exact-head validation pending`
 
 Goal:
 
-Create the first canonical settings-registry slice without moving persistence or changing policy.
+Make the settings registry own Spam Guard setting meaning while keeping `spam_guard.py` as the sole `guild_security_settings` persistence/cache/diagnostics owner.
 
 Current branch work:
 
-- adds `settings_registry.py` with typed specs, defaults, aliases, precedence, ownership, and persistence metadata;
-- preserves Spam Guard persisted `spam_*` precedence where current behavior requires it;
-- routes Invite Scope alias/default normalization through the registry;
-- routes Protection Center effective Invite/Link Shield state through the registry;
-- routes Invite Policy Engine target aliases/effective shield state through the registry;
-- routes invite recovery preflight through the same effective-state helpers;
-- routes Spam Guard invite compatibility booleans through registered semantics;
-- adds focused compatibility and ownership tests;
-- documents storage-vs-schema ownership.
+- registers core Spam Guard settings with defaults, aliases, precedence, types, and exact numeric bounds;
+- adds shared Spam Guard Safe/Strict/Off presets;
+- routes `spam_guard._default_settings` and `_normalize_settings` through the registry;
+- routes Protection Center Spam Guard presets through the registry;
+- preserves stored allowed-invite-code compatibility;
+- converts setup's Spam Guard read path from private runtime-cache access to `get_spam_settings`;
+- converts setup's Spam Guard save path from raw Supabase writes/private cache mutation to `save_spam_settings`;
+- removes setup's duplicate `guild_security_settings` payload/upsert/cache helpers;
+- corrects setup's drifted 60-minute default to the canonical 30-minute runtime default;
+- updates static/behavior regressions and ownership documentation.
 
-Persistence remains owned by `guild_config.py` and `spam_guard.py`.
+No database schema change is required.
 
 
 ---
@@ -215,9 +216,11 @@ The command registry is partially centralized, but it still includes runtime pru
 
 Status: `IN PROGRESS / PARTIAL`
 
-The first registry slice introduces `stoney_verify/settings_registry.py` as the schema/compatibility owner without creating a second persistence layer. Protection/Automod/Invite canonical keys, defaults, aliases, alias precedence, feature owners, and persistence owners are registered. Invite Shield effective state and target-scope semantics are being routed through this registry across Protection Center, Invite Policy Engine, recovery preflight, Invite Scope, and Spam Guard compatibility reads.
+Merged PR #296 established `stoney_verify/settings_registry.py` as the schema/compatibility owner for Protection/Automod/Invite settings without creating a second persistence layer.
 
-Remaining work: inventory and migrate additional setting families one at a time, especially setup, design, tickets, verification, AntiNuke, and remaining Spam Guard settings.
+The current Spam Guard slice extends that ownership to the core Spam Guard runtime schema: defaults, persisted-column aliases, precedence, numeric bounds, allow/exempt lists, allowed invite codes, and shared Protection Center presets. It also removes the duplicate Spam Guard persistence/cache engine from `startup_guards/setup_service_modes.py`; that setup UI now delegates to `spam_guard.get_spam_settings` / `save_spam_settings`.
+
+Remaining work: inventory and migrate additional setting families one at a time, especially setup service flags, design, tickets, verification, and AntiNuke.
 
 ---
 
