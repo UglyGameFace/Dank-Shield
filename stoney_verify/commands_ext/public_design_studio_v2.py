@@ -1580,7 +1580,7 @@ async def _return_from_reviewed_preview(
     await _go_home(interaction)
 
 
-def _repair_issue_embed(items: list[dict[str, Any]]) -> discord.Embed:
+def _repair_issue_embed(items: list[dict[str, Any]], *, page: int = 0) -> discord.Embed:
     state = _repair_plan_state(items)
     embed = discord.Embed(
         title="🔎 Review Design Issues",
@@ -1593,9 +1593,12 @@ def _repair_issue_embed(items: list[dict[str, Any]]) -> discord.Embed:
 
     review_lines = _repair_issue_lines(items, repair_confidence.REVIEW_ONLY)
     if review_lines:
+        total_pages = max(1, (len(review_lines) + 5) // 6)
+        page = max(0, min(int(page), total_pages - 1))
+        page_lines = review_lines[page * 6:(page + 1) * 6]
         embed.add_field(
-            name=f"Needs manual review ({state['review']})",
-            value="\n".join(review_lines[:6])[:1024],
+            name=f"Needs manual review ({state['review']}) · page {page + 1}/{total_pages}",
+            value="\n".join(page_lines)[:1024],
             inline=False,
         )
 
@@ -1723,9 +1726,12 @@ def _protected_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-def _protected_items_embed(items: list[dict[str, Any]]) -> discord.Embed:
+def _protected_items_embed(items: list[dict[str, Any]], *, page: int = 0) -> discord.Embed:
+    total_pages = max(1, (len(items) + 5) // 6)
+    page = max(0, min(int(page), total_pages - 1))
+    start = page * 6
     lines: list[str] = []
-    for index, item in enumerate(items[:6], start=1):
+    for index, item in enumerate(items[start:start + 6], start=start + 1):
         before = _safe_str(item.get("before") or item.get("name"), f"Item {index}")
         reason = _safe_str(
             item.get("reason") or item.get("note") or item.get("warnings"),
@@ -1741,7 +1747,7 @@ def _protected_items_embed(items: list[dict[str, Any]]) -> discord.Embed:
         color=discord.Color.orange(),
     )
     embed.add_field(
-        name=f"Protected items ({len(items)})",
+        name=f"Protected items ({len(items)}) · page {page + 1}/{total_pages}",
         value="\n\n".join(lines)[:1024] or "None.",
         inline=False,
     )
@@ -1799,18 +1805,52 @@ class ProtectedItemButton(discord.ui.Button):
 
 
 class ProtectedItemsView(DesignView):
-    def __init__(self, items: list[dict[str, Any]], *, pending_created_at: float) -> None:
+    def __init__(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        pending_created_at: float,
+        page: int = 0,
+    ) -> None:
         super().__init__(timeout=900)
         self.items = list(items)
         self.pending_created_at = float(pending_created_at)
-        for offset, item in enumerate(self.items[:6]):
+        self.total_pages = max(1, (len(self.items) + 5) // 6)
+        self.page = max(0, min(int(page), self.total_pages - 1))
+        start = self.page * 6
+
+        for display_index, item in enumerate(
+            self.items[start:start + 6],
+            start=start + 1,
+        ):
             self.add_item(
                 ProtectedItemButton(
                     item,
-                    display_index=offset + 1,
-                    row=offset // 2,
+                    display_index=display_index,
+                    row=(display_index - start - 1) // 2,
                 )
             )
+
+        if self.page > 0:
+            previous = discord.ui.Button(
+                label="Prev",
+                emoji="⬅️",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"dank_design_v2:protected_page:{self.page - 1}",
+                row=3,
+            )
+            previous.callback = self._previous
+            self.add_item(previous)
+        if self.page < self.total_pages - 1:
+            next_button = discord.ui.Button(
+                label="Next",
+                emoji="➡️",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"dank_design_v2:protected_page:{self.page + 1}",
+                row=3,
+            )
+            next_button.callback = self._next
+            self.add_item(next_button)
 
         allow_all = discord.ui.Button(
             label="Allow Full Styling for Listed",
@@ -1832,6 +1872,22 @@ class ProtectedItemsView(DesignView):
         back.callback = self._back
         self.add_item(back)
 
+    async def _show_page(self, interaction: discord.Interaction, page: int) -> None:
+        await interaction.response.edit_message(
+            embed=_protected_items_embed(self.items, page=page),
+            view=ProtectedItemsView(
+                self.items,
+                pending_created_at=self.pending_created_at,
+                page=page,
+            ),
+        )
+
+    async def _previous(self, interaction: discord.Interaction) -> None:
+        await self._show_page(interaction, self.page - 1)
+
+    async def _next(self, interaction: discord.Interaction) -> None:
+        await self._show_page(interaction, self.page + 1)
+
     async def _allow_all(self, interaction: discord.Interaction) -> None:
         if not await _require_design_permission(interaction):
             return
@@ -1851,10 +1907,11 @@ class ProtectedItemsView(DesignView):
                 rules[key] = "full"
                 changed += 1
         options["protection_item_rules"] = rules
-        saved = await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
-        if not saved:
+        try:
+            await legacy._save_options(interaction, options)  # type: ignore[attr-defined]
+        except Exception as exc:
             await interaction.edit_original_response(
-                content="❌ Protection changes could not be saved. Nothing was renamed.",
+                content=f"❌ Protection changes could not be saved. Nothing was renamed. `{type(exc).__name__}`",
                 embed=None,
                 view=None,
             )
@@ -1896,32 +1953,66 @@ async def _open_protected_items(
         )
         return
     await interaction.response.edit_message(
-        embed=_protected_items_embed(items),
-        view=ProtectedItemsView(items, pending_created_at=pending_created_at),
+        embed=_protected_items_embed(items, page=0),
+        view=ProtectedItemsView(items, pending_created_at=pending_created_at, page=0),
     )
 
 
 class RepairIssuesView(DesignView):
-    def __init__(self, items: list[dict[str, Any]], *, pending_created_at: float) -> None:
+    def __init__(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        pending_created_at: float,
+        page: int = 0,
+    ) -> None:
         super().__init__(timeout=900)
+        self.items = [dict(item) for item in items]
+        self.pending_created_at = float(pending_created_at)
         review_indexes = [
             index
-            for index, item in enumerate(items)
+            for index, item in enumerate(self.items)
             if _safe_str(item.get("status")) == "failed"
             and _repair_item_classification(item) == repair_confidence.REVIEW_ONLY
         ]
-        for display_index, item_index in enumerate(review_indexes[:6]):
-            item = items[item_index]
+        self.total_pages = max(1, (len(review_indexes) + 5) // 6)
+        self.page = max(0, min(int(page), self.total_pages - 1))
+        page_indexes = review_indexes[self.page * 6:(self.page + 1) * 6]
+
+        for slot, item_index in enumerate(page_indexes):
+            item = self.items[item_index]
             self.add_item(
                 RepairReviewApproveButton(
                     item_index=item_index,
-                    label=_safe_str(item.get("before"), f"item {display_index + 1}"),
+                    label=_safe_str(item.get("before"), f"item {item_index + 1}"),
                     pending_created_at=pending_created_at,
-                    row=min(2, display_index // 2),
+                    row=slot // 2,
                 )
             )
 
-        protected_count = sum(1 for item in items if _safe_str(item.get("status")) == "protected")
+        protected_count = sum(
+            1 for item in self.items if _safe_str(item.get("status")) == "protected"
+        )
+        if self.page > 0:
+            previous = discord.ui.Button(
+                label="Prev",
+                emoji="⬅️",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"dank_design_v2:issues_page:{self.page - 1}",
+                row=3,
+            )
+            previous.callback = self._previous
+            self.add_item(previous)
+        if self.page < self.total_pages - 1:
+            next_button = discord.ui.Button(
+                label="Next",
+                emoji="➡️",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"dank_design_v2:issues_page:{self.page + 1}",
+                row=3,
+            )
+            next_button.callback = self._next
+            self.add_item(next_button)
         if protected_count:
             protection = discord.ui.Button(
                 label=f"Review Protected Items ({protected_count})",
@@ -1942,7 +2033,22 @@ class RepairIssuesView(DesignView):
         )
         back.callback = self._back
         self.add_item(back)
-        self.pending_created_at = float(pending_created_at)
+
+    async def _show_page(self, interaction: discord.Interaction, page: int) -> None:
+        await interaction.response.edit_message(
+            embed=_repair_issue_embed(self.items, page=page),
+            view=RepairIssuesView(
+                self.items,
+                pending_created_at=self.pending_created_at,
+                page=page,
+            ),
+        )
+
+    async def _previous(self, interaction: discord.Interaction) -> None:
+        await self._show_page(interaction, self.page - 1)
+
+    async def _next(self, interaction: discord.Interaction) -> None:
+        await self._show_page(interaction, self.page + 1)
 
     async def _open_protection(self, interaction: discord.Interaction) -> None:
         if not await _require_design_permission(interaction):
@@ -2035,8 +2141,12 @@ async def _open_repair_issues(
         )
         return
     await interaction.response.edit_message(
-        embed=_repair_issue_embed(items),
-        view=RepairIssuesView(items, pending_created_at=float(pending_created_at or 0.0)),
+        embed=_repair_issue_embed(items, page=0),
+        view=RepairIssuesView(
+            items,
+            pending_created_at=float(pending_created_at or 0.0),
+            page=0,
+        ),
     )
 
 
