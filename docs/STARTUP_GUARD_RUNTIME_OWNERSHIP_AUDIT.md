@@ -57,7 +57,7 @@ These modules are not evidence that a bulk startup-loader is needed. Their canon
 | `ticket_category_setup_guard` | `commands_ext/public_setup_compact.py` | managed ticket-category selection/runtime loader ownership | **keep live through feature owner** |
 | `ticket_forms_foundation_guard` | `commands_ext/public_ticket_panel_clean.py` | ticket intake form parsing/behavior integrated with the canonical clean panel | **keep live through feature owner**; separate migration away from patching may be worthwhile later |
 | `verification_idle_kick_feature` | `commands_ext/public_setup_solid.py` | verification idle-kick setup/status behavior | **keep feature-owned** |
-| `setup_service_modes` | `commands_ext/public_spam_group.py` | compatibility helpers for the native Spam Guard setup UI | **keep compatibility helper**; tests confirm it does not replace canonical setup builders |
+| `setup_service_modes` | `commands_ext/public_spam_group.py` | compatibility UI/navigation helpers for native Spam Guard setup; settings now read/save through canonical `spam_guard` service and registry semantics | **keep compatibility UI helper for now**; no direct `guild_security_settings` persistence or private Spam Guard cache ownership |
 | `fresh_join_role_recovery` | `members_new/join_removal_safety.py` | fail-closed fresh-join role recovery on removal safety path | **keep feature-owned** |
 | `setup_permission_repair_guard` | `setup_permission_repair_services.py` | compatibility helper functions consumed by the canonical repair service | **keep feature-owned until dedicated migration** |
 | `invite_shield_sanitize_shared` | `services/invite_cleanup_service.py`, `invite_policy_engine.py` | shared invite-code/guild sanitization helpers | **keep feature-owned** |
