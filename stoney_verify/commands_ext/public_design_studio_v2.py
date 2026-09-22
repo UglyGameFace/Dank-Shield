@@ -939,9 +939,9 @@ def _repair_preview_embed(
         title="🧭 Smart Repair Preview",
         description=(
             "**Nothing has been renamed.** Smart Repair analyzed each category independently instead of flattening the whole server to one guessed style. "
-            "Saved exact/channel/category/global rules still win."
+            "Saved exact/channel/category/global rules still win. If some rows are unsafe, **Ready repairs can still be applied** while blocked/review rows stay untouched."
         ),
-        color=discord.Color.green() if bool(confidence.get("apply_allowed")) else discord.Color.orange(),
+        color=discord.Color.green() if int(confidence.get("safe_count", 0) or 0) > 0 else discord.Color.orange(),
     )
     embed.add_field(
         name="Repair plan",
@@ -971,7 +971,7 @@ def _repair_preview_embed(
     profiles = analysis.get("profiles") if isinstance(analysis.get("profiles"), Mapping) else {}
     if profiles:
         embed.add_field(name="Detection", value=f"Category-aware profiles analyzed: **{len(profiles)}**", inline=False)
-    embed.set_footer(text="Apply is enabled only when the plan is fully reviewable and confidence is high")
+    embed.set_footer(text="Only Ready repairs are applied • blocked/review rows are left unchanged")
     return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
 
 
@@ -1004,11 +1004,10 @@ class ReviewRepairView(DesignView):
             int(interaction.user.id),
             {"items": items, "options": dict(plan_options), "mode": "consistency_check_v2"},
         )
-        has_blockers = any(item.get("status") == "failed" for item in items)
         has_changes = any(item.get("status") == "changed" for item in items)
         await interaction.edit_original_response(
             embed=_repair_preview_embed(guild, items, plan_options, analysis),
-            view=ReviewedPreviewView(can_apply=not has_blockers and has_changes, pending_created_at=created_at),
+            view=ReviewedPreviewView(can_apply=has_changes, pending_created_at=created_at),
         )
 
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:review_back", row=4)
@@ -1505,12 +1504,25 @@ class ReviewedPreviewView(DesignView):
                 action_name="design.v2.apply_reviewed.no_preview",
             )
             return
-        if any(item.get("status") == "failed" for item in items):
+        mode = _safe_str(payload.get("mode"), "preview")
+        failed_items = [item for item in items if item.get("status") == "failed"]
+        allow_safe_subset = mode == "consistency_check_v2"
+
+        if failed_items and not allow_safe_subset:
             await safe_send_interaction(
                 interaction,
                 content="❌ This preview has blockers. Fix them and preview again.",
                 ephemeral=True,
                 action_name="design.v2.apply_reviewed.blocked",
+            )
+            return
+
+        if allow_safe_subset and not any(item.get("status") == "changed" for item in items):
+            await safe_send_interaction(
+                interaction,
+                content="❌ No Ready repairs remain in this preview. Blocked/review rows will not be renamed.",
+                ephemeral=True,
+                action_name="design.v2.apply_reviewed.no_safe_subset",
             )
             return
 
@@ -1525,7 +1537,6 @@ class ReviewedPreviewView(DesignView):
             return
 
         await interaction.response.defer(ephemeral=True, thinking=False)
-        mode = _safe_str(payload.get("mode"), "preview")
         async with lock:
             ready, skipped, preflight_errors = await apply_service.preflight_plan(
                 guild,
@@ -1629,7 +1640,11 @@ class ReviewedPreviewView(DesignView):
             description = f"Changed **{len(result.applied)}** live channel name(s), left **{skipped}** reviewed skip(s) untouched, and saved **{legacy._separator_choice_label(payload.get('separator_id'))}** as the authoritative separator. Failed **0**."  # type: ignore[attr-defined]
         elif "consistency" in mode:
             title = "✅ Inconsistent Names Repaired"
-            description = f"Changed **{len(result.applied)}** item(s). Left **{skipped}** reviewed skip(s) untouched. Failed **0**."
+            description = (
+                f"Changed **{len(result.applied)}** Ready repair(s). "
+                f"Left **{skipped}** blocked/review/unchanged item(s) untouched. "
+                "Failed **0** during Apply."
+            )
         else:
             title = "✅ Reviewed Design Applied"
             description = f"Changed **{len(result.applied)}** item(s). Left **{skipped}** reviewed skip(s) untouched. Failed **0**."
