@@ -131,9 +131,13 @@ Importing them does not:
 
 Production `main.py` no longer imports `command_safety` or `command_scope_dedupe`.
 
-## Dormant cleanup guard
+## Retired cleanup guards
 
-`startup_guards/slash_command_cleanup.py` remains dormant and is not reactivated. Useful surface-hash / unchanged-sync behavior advertised by production configuration was reimplemented in the canonical command runtime without its global monkey patches.
+The dormant `startup_guards/slash_command_cleanup.py` global CommandTree patcher is retired. Its useful surface-hash, unchanged-sync, command-budget, public-surface, and configured stale-guild-copy behavior is owned by `stoney_verify.command_runtime.DankCommandTree` and its native helpers.
+
+The obsolete `startup_guards/ticket_panel_command_epoch_guard.py` shim is retired with it. That shim only changed the dormant cleanup guard's epoch to force a one-time legacy ticket-panel sync; it has no role once sync state belongs to the native command tree.
+
+Regression coverage requires both retired files to remain absent while the native command runtime tests continue proving unchanged-sync state and fail-closed public surface validation.
 
 ## Regression contract
 

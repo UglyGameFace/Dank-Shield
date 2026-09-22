@@ -12,7 +12,6 @@ FILES = [
     "stoney_verify/startup_guards/ticket_panel_doctor_production_wording.py",
     "stoney_verify/startup_guards/ticket_panel_doctor_stability_guard.py",
     "stoney_verify/startup_guards/ticket_panel_repair_records_command.py",
-    "stoney_verify/startup_guards/ticket_panel_command_epoch_guard.py",
     "stoney_verify/startup_guards/ticket_staff_identity_guard.py",
     "stoney_verify/startup_guards/voice_ticket_claim_notice_guard.py",
     "stoney_verify/startup_guards/ticket_open_controls_status_guard.py",
@@ -25,7 +24,6 @@ CHECKS = {
     "stoney_verify/startup_guards/ticket_panel_doctor_command.py": ["_doctor_command", "group.get_command"],
     "stoney_verify/startup_guards/ticket_panel_doctor_production_wording.py": [
         "Create Ticket menu/confirm ownership now lives directly",
-        "ticket_panel_command_epoch_guard",
         "ticket_staff_identity_guard",
         "voice_ticket_claim_notice_guard",
         "ticket_open_controls_status_guard",
@@ -83,11 +81,6 @@ CHECKS = {
         "Changed records were marked closed",
         "_TICKET_PANEL_REPAIR_RECORDS_COMMAND_APPLIED",
     ],
-    "stoney_verify/startup_guards/ticket_panel_command_epoch_guard.py": [
-        "ticket-panel-health-doctor-repair-v1",
-        "COMMAND_CLEANUP_EPOCH",
-        "command outdated",
-    ],
     "stoney_verify/startup_guards/setup_feature_health_scoreboard.py": ["_ticket_score", "build_feature_scoreboard"],
     "stoney_verify/commands_ext/public_ticket_panel_clean.py": [
         "_health_lines",
@@ -105,6 +98,8 @@ CHECKS = {
 REMOVED_FILES = (
     "stoney_verify/startup_guards/public_ticket_confirm_hardening_guard.py",
     "stoney_verify/startup_guards/public_ticket_panel_clean_hardening.py",
+    "stoney_verify/startup_guards/ticket_panel_command_epoch_guard.py",
+    "stoney_verify/startup_guards/slash_command_cleanup.py",
 )
 
 
