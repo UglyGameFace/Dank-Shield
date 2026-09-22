@@ -237,6 +237,45 @@ def test_protected_issue_review_is_conditional_and_actionable() -> None:
     assert "Back to Issues" in _labels(protected_view)
 
 
+def test_review_and_protected_issue_lists_paginate_past_six_rows() -> None:
+    review_items = [
+        {
+            "status": "failed",
+            "channel_id": str(index + 1),
+            "before": f"mod-log-{index + 1}",
+            "after": f"styled-mod-log-{index + 1}",
+            "repair_confidence_classification": confidence.REVIEW_ONLY,
+            "repair_confidence_reason": "Needs explicit review.",
+        }
+        for index in range(8)
+    ]
+    review_page = design_v2.RepairIssuesView(
+        review_items,
+        pending_created_at=1.0,
+        page=0,
+    )
+    assert "Next" in _labels(review_page)
+    assert review_page.total_pages == 2
+
+    protected_items = [
+        {
+            "status": "protected",
+            "channel_id": str(index + 1),
+            "before": f"protected-{index + 1}",
+            "after": f"protected-{index + 1}",
+        }
+        for index in range(8)
+    ]
+    protected_page = design_v2.ProtectedItemsView(
+        protected_items,
+        pending_created_at=1.0,
+        page=1,
+    )
+    assert "Prev" in _labels(protected_page)
+    assert "Allow Full Styling for Listed" in _labels(protected_page)
+    assert protected_page.total_pages == 2
+
+
 def test_separator_preview_keeps_native_issue_review() -> None:
     clean = design_v2.LegacyStyleChangePreviewView(
         can_apply=True,
