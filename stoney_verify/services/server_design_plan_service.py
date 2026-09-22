@@ -12,6 +12,13 @@ are explicit here.
 from collections.abc import Mapping
 from typing import Any
 
+from stoney_verify.guild_config import get_guild_config
+from stoney_verify.security_stats import (
+    SECURITY_STATS_CATEGORY_ID_KEY,
+    SECURITY_STATS_CATEGORY_NAME,
+    SECURITY_STATS_CHANNEL_IDS_KEY,
+    SECURITY_STATS_ENABLED_KEY,
+)
 from stoney_verify.services import server_design_majority_layout as majority
 from stoney_verify.services import server_design_repair_confidence as repair_confidence
 from stoney_verify.services import server_design_studio as studio
@@ -117,6 +124,102 @@ def normalize_plan_options(options: Mapping[str, Any], *, strict: bool = True) -
     return out
 
 
+def _positive_id(value: Any) -> int:
+    try:
+        if value is None or isinstance(value, bool):
+            return 0
+        parsed = int(str(value).strip())
+        return parsed if parsed > 0 else 0
+    except Exception:
+        return 0
+
+
+async def _functional_design_resource_ids(guild: Any) -> set[int]:
+    """Return bot-owned live resources that Dank Design must not rename.
+
+    Live Server Stats owns both its category and counter channels. Including
+    those dynamic names in style detection makes ordinary drift look noisy and
+    creates an ownership fight because the stats refresher will rename them
+    back. Resolve identity from canonical saved IDs first, with the current
+    canonical category name only as recovery when the display is enabled.
+    """
+
+    guild_id = _positive_id(getattr(guild, "id", 0))
+    if guild_id <= 0:
+        return set()
+
+    try:
+        cfg = await get_guild_config(guild_id, refresh=False)
+    except Exception:
+        return set()
+    if not isinstance(cfg, Mapping):
+        return set()
+
+    owned: set[int] = set()
+    category_id = _positive_id(cfg.get(SECURITY_STATS_CATEGORY_ID_KEY))
+    raw_channel_ids = cfg.get(SECURITY_STATS_CHANNEL_IDS_KEY)
+
+    if isinstance(raw_channel_ids, Mapping):
+        candidates = raw_channel_ids.values()
+    elif isinstance(raw_channel_ids, (list, tuple, set)):
+        candidates = raw_channel_ids
+    else:
+        candidates = ()
+    for value in candidates:
+        channel_id = _positive_id(value)
+        if channel_id > 0:
+            owned.add(channel_id)
+
+    category = None
+    if category_id > 0:
+        try:
+            category = guild.get_channel(category_id)
+        except Exception:
+            category = None
+
+    if category is None and bool(cfg.get(SECURITY_STATS_ENABLED_KEY)):
+        for candidate in list(getattr(guild, "categories", []) or []):
+            if str(getattr(candidate, "name", "") or "") == SECURITY_STATS_CATEGORY_NAME:
+                category = candidate
+                category_id = _positive_id(getattr(candidate, "id", 0))
+                break
+
+    if category_id > 0 and category is not None:
+        owned.add(category_id)
+        for channel in list(getattr(guild, "channels", []) or []):
+            parent_id = _positive_id(getattr(channel, "category_id", 0))
+            if parent_id <= 0:
+                parent_id = _positive_id(getattr(getattr(channel, "category", None), "id", 0))
+            if parent_id == category_id:
+                channel_id = _positive_id(getattr(channel, "id", 0))
+                if channel_id > 0:
+                    owned.add(channel_id)
+
+    # Saved channel IDs remain authoritative even if the category is temporarily
+    # missing. Discord snowflake IDs are not reused for unrelated channels.
+    return owned
+
+
+def _exclude_functional_items(items: list[dict[str, Any]], excluded_ids: set[int]) -> list[dict[str, Any]]:
+    if not excluded_ids:
+        return [dict(item) for item in items]
+    return [
+        dict(item)
+        for item in items
+        if _positive_id(item.get("channel_id")) not in excluded_ids
+    ]
+
+
+def _exclude_functional_records(records: list[dict[str, Any]], excluded_ids: set[int]) -> list[dict[str, Any]]:
+    if not excluded_ids:
+        return [dict(record) for record in records]
+    return [
+        dict(record)
+        for record in records
+        if _positive_id(record.get("id")) not in excluded_ids
+    ]
+
+
 def live_records(guild: Any) -> list[dict[str, Any]]:
     """Use the same editable channel set as the historical Studio backend."""
 
@@ -126,21 +229,51 @@ def live_records(guild: Any) -> list[dict[str, Any]]:
 
 
 def _fail_closed_on_low_confidence(items: list[dict[str, Any]], confidence: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Turn an unsafe Smart Auto-Detect preview into a non-applicable plan."""
+    """Fail only unsafe Smart Auto-Detect rows while preserving safe repairs.
+
+    The aggregate confidence flag still answers whether the whole plan is safe.
+    Mixed plans use the evaluator's aligned per-row results so one blocked row
+    cannot erase unrelated high-confidence repairs.
+    """
 
     if bool(confidence.get("apply_allowed")):
-        return items
+        return [dict(item) for item in items]
 
-    reason = "Smart Auto-Detect confidence is too low to apply this repair safely. Review the layout or use Saved Design / Edit One Item."
+    raw_results = confidence.get("row_results")
+    row_results = list(raw_results) if isinstance(raw_results, list) else []
+
     guarded: list[dict[str, Any]] = []
-    for raw in items:
+    for index, raw in enumerate(items):
         item = dict(raw)
-        if item.get("status") == "changed":
+        if item.get("status") != "changed":
+            guarded.append(item)
+            continue
+
+        if index < len(row_results) and isinstance(row_results[index], Mapping):
+            score = dict(row_results[index])
+        else:
+            # Compatibility fallback for callers/tests that provide only the
+            # historical aggregate confidence shape.
+            score = repair_confidence.score_repair_item(
+                item,
+                context="smart_category_auto_detect",
+            )
+
+        classification = str(score.get("classification") or "")
+        reason = str(score.get("reason") or "Smart Repair could not safely apply this row.")
+
+        item["repair_confidence_classification"] = classification
+        item["repair_confidence_score"] = int(score.get("confidence", 0) or 0)
+        item["repair_confidence_reason"] = reason
+
+        if classification != repair_confidence.SAFE_AUTO_FIX:
             blockers = list(item.get("blockers") or [])
-            if reason not in blockers:
-                blockers.append(reason)
+            message = f"Smart Auto-Detect confidence is too low for this row: {reason}"
+            if message not in blockers:
+                blockers.append(message)
             item["blockers"] = blockers
             item["status"] = "failed"
+
         guarded.append(item)
     return guarded
 
@@ -230,9 +363,10 @@ async def build_plan(
 
     plan_options = normalize_plan_options(options, strict=strict)
     analysis: dict[str, Any] = {}
+    excluded_ids = await _functional_design_resource_ids(guild)
 
     if use_live_majority:
-        records = live_records(guild)
+        records = _exclude_functional_records(live_records(guild), excluded_ids)
         inferred, profiles = majority.build_category_aware_options(studio, plan_options, records)
         plan_options = normalize_plan_options(inferred, strict=strict)
         plan_options["__respect_saved_rules"] = bool(respect_saved_rules)
@@ -242,6 +376,7 @@ async def build_plan(
         }
 
     items = list(await legacy.build_design_plan(guild, plan_options))
+    items = _exclude_functional_items(items, excluded_ids)
     if use_live_majority:
         items = list(majority.annotate_category_aware_plan_items(studio, items, plan_options))
         confidence = repair_confidence.evaluate_repair_plan(items, context="smart_category_auto_detect")
@@ -285,13 +420,15 @@ async def build_scoped_repair_plan(
     from stoney_verify.commands_ext import public_design_studio as legacy
 
     plan_options = normalize_plan_options(options, strict=True)
-    records = live_records(guild)
+    excluded_ids = await _functional_design_resource_ids(guild)
+    records = _exclude_functional_records(live_records(guild), excluded_ids)
     inferred, profiles = majority.build_category_aware_options(studio, plan_options, records)
     plan_options = normalize_plan_options(inferred, strict=True)
     plan_options["__respect_saved_rules"] = True
     plan_options["__scoped_editor_repair"] = True
 
     all_items = list(await legacy.build_design_plan(guild, plan_options))
+    all_items = _exclude_functional_items(all_items, excluded_ids)
     items = _scope_items(all_items, category_id=category_id, channel_id=channel_id)
     items = list(majority.annotate_category_aware_plan_items(studio, items, plan_options))
 
@@ -299,6 +436,7 @@ async def build_scoped_repair_plan(
     if category_id is not None:
         saved_options = normalize_plan_options(options, strict=True)
         saved_items = list(await legacy.build_design_plan(guild, saved_options))
+        saved_items = _exclude_functional_items(saved_items, excluded_ids)
         saved_header = _selected_category_header(saved_items, int(category_id))
         items = _replace_category_header(items, int(category_id), saved_header)
         if saved_header is not None:
