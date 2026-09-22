@@ -181,14 +181,30 @@ if "policy.extract_invite_codes_from_message(message)" not in psc:
 if "policy.delete_message_if_allowed(message, decision)" not in psc:
     failures.append("public_spam_cleanup_hardening does not delegate invite deletes to central policy")
 
-# Live invite paths should use central decision/delete helpers.
-live = text("stoney_verify/startup_guards/invite_live_enforcer_guard.py")
-if "decide_invite_message" not in live or "delete_message_if_allowed" not in live:
-    failures.append("invite_live_enforcer_guard is not using central decision/delete helpers")
+# Live invite ownership is canonical: globals -> invite_policy_engine.
+globals_source = text("stoney_verify/globals.py")
+if "enforce_live_invite_message" not in globals_source:
+    failures.append("globals live invite listener does not call enforce_live_invite_message")
+if 'source="globals_live_enforcer"' not in globals_source:
+    failures.append("globals live invite listener source marker is missing")
 
-runtime = text("stoney_verify/startup_guards/discord_invite_blocker_runtime_guard.py")
-if "policy.decide_invite_message" not in runtime or "policy.delete_message_if_allowed" not in runtime:
-    failures.append("discord_invite_blocker_runtime_guard is not using central decision/delete helpers")
+policy_source = text("stoney_verify/invite_policy_engine.py")
+if "async def enforce_live_invite_message(" not in policy_source:
+    failures.append("invite_policy_engine is missing canonical live enforcement boundary")
+
+recovery_source = text("stoney_verify/invite_reconciliation_runtime.py")
+if "policy.scan_channel_invites(" not in recovery_source:
+    failures.append("invite reconciliation runtime is not using the central scanner")
+
+for filename in (
+    "invite_live_enforcer_guard.py",
+    "discord_invite_blocker_runtime_guard.py",
+    "spam_guard_invite_hard_block.py",
+    "spam_guard_invite_override_options.py",
+    "protection_invite_target_precedence_guard.py",
+):
+    if (ROOT / "startup_guards" / filename).exists():
+        failures.append(f"retired legacy invite runtime guard still exists: {filename}")
 
 print("=== Invite Link Safety Audit ===")
 if failures:
