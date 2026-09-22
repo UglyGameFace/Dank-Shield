@@ -128,25 +128,34 @@ def live_records(guild: Any) -> list[dict[str, Any]]:
 def _fail_closed_on_low_confidence(items: list[dict[str, Any]], confidence: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Fail only unsafe Smart Auto-Detect rows while preserving safe repairs.
 
-    evaluate_repair_plan intentionally reports whether the entire plan is safe.
-    A single aesthetic/system/review row must never make unrelated
-    high-confidence rows non-applicable. Each changed row is therefore scored
-    again with the same deterministic classifier and only non-safe rows are
-    converted to failed/skipped rows.
+    The aggregate confidence flag still answers whether the whole plan is safe.
+    Mixed plans use the evaluator's aligned per-row results so one blocked row
+    cannot erase unrelated high-confidence repairs.
     """
 
-    _ = confidence
+    if bool(confidence.get("apply_allowed")):
+        return [dict(item) for item in items]
+
+    raw_results = confidence.get("row_results")
+    row_results = list(raw_results) if isinstance(raw_results, list) else []
+
     guarded: list[dict[str, Any]] = []
-    for raw in items:
+    for index, raw in enumerate(items):
         item = dict(raw)
         if item.get("status") != "changed":
             guarded.append(item)
             continue
 
-        score = repair_confidence.score_repair_item(
-            item,
-            context="smart_category_auto_detect",
-        )
+        if index < len(row_results) and isinstance(row_results[index], Mapping):
+            score = dict(row_results[index])
+        else:
+            # Compatibility fallback for callers/tests that provide only the
+            # historical aggregate confidence shape.
+            score = repair_confidence.score_repair_item(
+                item,
+                context="smart_category_auto_detect",
+            )
+
         classification = str(score.get("classification") or "")
         reason = str(score.get("reason") or "Smart Repair could not safely apply this row.")
 
