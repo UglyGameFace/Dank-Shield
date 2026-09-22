@@ -11,6 +11,7 @@ PLAN = (ROOT / "stoney_verify/services/server_design_plan_service.py").read_text
 BRIDGE = (ROOT / "stoney_verify/commands_ext/public_design_bridge.py").read_text(encoding="utf-8")
 STARTUP = (ROOT / "stoney_verify/startup_guards/__init__.py").read_text(encoding="utf-8")
 REGISTRY = (ROOT / "stoney_verify/commands_ext/__init__.py").read_text(encoding="utf-8")
+RUNTIME_UX = (ROOT / "stoney_verify/commands_ext/public_runtime_ux_repairs.py").read_text(encoding="utf-8")
 
 RETIRED_RUNTIME = (
     ROOT / "stoney_verify/commands_ext/public_design_enhancements.py",
@@ -134,6 +135,19 @@ def main() -> int:
     for marker in forbidden_bridge_assignments:
         if marker in V2:
             failures.append(f"compatibility bridge owns forbidden runtime behavior: {marker}")
+
+    for marker in (
+        "public_design_studio as legacy",
+        "public_design_studio_v2 as design_v2",
+        "ChannelEditorPickerView =",
+        "ChannelEditorActionView =",
+        "ReviewedPreviewView =",
+        "DesignPreviewView =",
+        "_preview_embed =",
+        "_channel_action_embed =",
+    ):
+        if marker in RUNTIME_UX:
+            failures.append(f"late runtime UX layer still mutates Dank Design ownership: {marker}")
 
     if "public_design_studio_v2 as design" not in BRIDGE:
         failures.append("Setup bridge does not converge on the consolidated V2 Studio")
