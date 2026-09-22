@@ -126,21 +126,42 @@ def live_records(guild: Any) -> list[dict[str, Any]]:
 
 
 def _fail_closed_on_low_confidence(items: list[dict[str, Any]], confidence: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Turn an unsafe Smart Auto-Detect preview into a non-applicable plan."""
+    """Fail only unsafe Smart Auto-Detect rows while preserving safe repairs.
 
-    if bool(confidence.get("apply_allowed")):
-        return items
+    evaluate_repair_plan intentionally reports whether the entire plan is safe.
+    A single aesthetic/system/review row must never make unrelated
+    high-confidence rows non-applicable. Each changed row is therefore scored
+    again with the same deterministic classifier and only non-safe rows are
+    converted to failed/skipped rows.
+    """
 
-    reason = "Smart Auto-Detect confidence is too low to apply this repair safely. Review the layout or use Saved Design / Edit One Item."
+    _ = confidence
     guarded: list[dict[str, Any]] = []
     for raw in items:
         item = dict(raw)
-        if item.get("status") == "changed":
+        if item.get("status") != "changed":
+            guarded.append(item)
+            continue
+
+        score = repair_confidence.score_repair_item(
+            item,
+            context="smart_category_auto_detect",
+        )
+        classification = str(score.get("classification") or "")
+        reason = str(score.get("reason") or "Smart Repair could not safely apply this row.")
+
+        item["repair_confidence_classification"] = classification
+        item["repair_confidence_score"] = int(score.get("confidence", 0) or 0)
+        item["repair_confidence_reason"] = reason
+
+        if classification != repair_confidence.SAFE_AUTO_FIX:
             blockers = list(item.get("blockers") or [])
-            if reason not in blockers:
-                blockers.append(reason)
+            message = f"Smart Repair skipped this row: {reason}"
+            if message not in blockers:
+                blockers.append(message)
             item["blockers"] = blockers
             item["status"] = "failed"
+
         guarded.append(item)
     return guarded
 
