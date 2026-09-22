@@ -16,6 +16,12 @@ from typing import Any
 import discord
 
 from stoney_verify import invite_policy_engine as policy
+from stoney_verify.settings_registry import (
+    INVITE_PROTECTED_POSTER_RULE_KEY,
+    invite_shield_enabled as _registry_invite_shield_enabled,
+    link_shield_enabled as _registry_link_shield_enabled,
+    setting_bool as _registry_setting_bool,
+)
 from stoney_verify.startup_recovery_coordinator import startup_recovery_slot
 from stoney_verify.startup_guards.discord_api_safety import (
     recovery_request_weight,
@@ -47,31 +53,6 @@ def _log(message: str) -> None:
         print(f"🧹 invite_reconcile {message}")
     except Exception:
         pass
-
-
-def _setting_enabled(settings: dict[str, Any], key: str, default: bool = False) -> bool:
-    try:
-        return bool(policy._setting_bool(settings, key, default))  # type: ignore[attr-defined]
-    except Exception:
-        value = settings.get(key, default)
-        if isinstance(value, bool):
-            return value
-        return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
-
-
-def _cfg_enabled(cfg: Any, key: str, default: bool = False) -> bool:
-    try:
-        return bool(policy._cfg_bool(cfg, key, default))  # type: ignore[attr-defined]
-    except Exception:
-        value = getattr(cfg, key, default)
-        if hasattr(cfg, "get"):
-            try:
-                value = cfg.get(key, value)
-            except Exception:
-                pass
-        if isinstance(value, bool):
-            return value
-        return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
 def _config_source(cfg: Any) -> str:
@@ -121,29 +102,13 @@ async def _guild_reconciliation_enabled(guild: Any) -> bool | None:
         )
         return None
 
-    invite_shield = (
-        _cfg_enabled(cfg, "automod_block_invites")
-        or _setting_enabled(settings, "invite_shield_enabled")
-        or _setting_enabled(settings, "invite_hard_block_enabled")
-        or _setting_enabled(settings, "automod_block_invites")
-        or _setting_enabled(settings, "block_invites")
+    invite_shield = _registry_invite_shield_enabled(cfg, settings)
+    link_shield = _registry_link_shield_enabled(cfg, settings)
+    protected_rule = _registry_setting_bool(
+        settings,
+        INVITE_PROTECTED_POSTER_RULE_KEY,
+        False,
     )
-    link_shield = (
-        _cfg_enabled(cfg, "automod_block_links")
-        or _setting_enabled(settings, "automod_block_links")
-    )
-
-    try:
-        protected_rule = bool(policy._protected_poster_rule_enabled(settings))  # type: ignore[attr-defined]
-    except Exception:
-        protected_rule = any(
-            _setting_enabled(settings, key)
-            for key in (
-                "invite_protected_poster_rule_enabled",
-                "protected_poster_invite_rule_enabled",
-                "invite_hard_block_protected_posters_enabled",
-            )
-        )
 
     return bool(invite_shield or link_shield or protected_rule)
 
