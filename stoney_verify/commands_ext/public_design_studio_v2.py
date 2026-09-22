@@ -185,7 +185,12 @@ async def _store_preview(
     created_at = legacy._store_pending(  # type: ignore[attr-defined]
         int(guild.id),
         int(interaction.user.id),
-        {"items": list(items), "options": dict(options), "mode": mode},
+        {
+            "items": list(items),
+            "options": dict(options),
+            "mode": mode,
+            "scope_title": title,
+        },
     )
     has_blockers = any(item.get("status") == "failed" for item in items)
     has_changes = any(item.get("status") == "changed" for item in items)
@@ -1024,7 +1029,11 @@ def _repair_preview_embed(
             "**Nothing has been renamed.** Smart Repair analyzed each category independently instead of flattening the whole server to one guessed style. "
             "Saved exact/channel/category/global rules still win. If some rows are unsafe, **Ready repairs can still be applied** while blocked/review rows stay untouched."
         ),
-        color=discord.Color.green() if int(confidence.get("safe_count", 0) or 0) > 0 else discord.Color.orange(),
+        color=(
+            discord.Color.green()
+            if state["ready"] > 0 and state["review"] == 0 and state["blocked"] == 0
+            else discord.Color.orange()
+        ),
     )
     embed.add_field(
         name="Repair plan",
@@ -1053,7 +1062,7 @@ def _repair_preview_embed(
         )[:260]
         for item in items
         if _safe_str(item.get("status")) == "failed"
-        and _repair_item_classification(item) not in {"", repair_confidence.REVIEW_ONLY}
+        and _repair_item_classification(item) != repair_confidence.REVIEW_ONLY
     ]
     review_lines = _repair_issue_lines(items, repair_confidence.REVIEW_ONLY)
     if blocked_lines:
@@ -1602,7 +1611,7 @@ def _repair_issue_embed(items: list[dict[str, Any]]) -> discord.Embed:
         item
         for item in items
         if _safe_str(item.get("status")) == "failed"
-        and _repair_item_classification(item) not in {"", repair_confidence.REVIEW_ONLY}
+        and _repair_item_classification(item) != repair_confidence.REVIEW_ONLY
     ]
     if blocked:
         lines = [
