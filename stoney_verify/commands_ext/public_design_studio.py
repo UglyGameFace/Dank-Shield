@@ -2989,7 +2989,7 @@ class EditCategoryFromChannelEditorButton(discord.ui.Button):
             return
         await interaction.response.edit_message(
             embed=_category_action_embed(category),
-            view=CategoryEditorActionView(self.category_id, editor_page=self.editor_page),
+            view=CategoryEditorActionView(self.category_id),
         )
 
 
@@ -3535,16 +3535,8 @@ class CategoryEditorActionView(LegacyDesignView):
         guild = interaction.guild
         assert guild is not None
         await interaction.response.edit_message(
-            embed=_channel_editor_embed(
-                guild,
-                page=self.editor_page,
-                category_id=self.editor_category_filter_id,
-            ),
-            view=ChannelEditorPickerView(
-                guild,
-                page=self.editor_page,
-                category_id=self.editor_category_filter_id,
-            ),
+            embed=_channel_editor_embed(guild, page=0, category_id=self.category_id),
+            view=ChannelEditorPickerView(guild, page=0, category_id=self.category_id),
         )
 
     @discord.ui.button(label="Custom Format", emoji="🎛️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_exact_format", row=2)
@@ -3632,7 +3624,10 @@ class CategoryEditorActionView(LegacyDesignView):
             return
         guild = interaction.guild
         assert guild is not None
-        await interaction.response.edit_message(embed=_category_editor_embed(guild, page=0), view=CategoryEditorPickerView(guild, page=0))
+        await interaction.response.edit_message(
+            embed=_category_editor_embed(guild, page=self.editor_page),
+            view=CategoryEditorPickerView(guild, page=self.editor_page),
+        )
 
 class ChannelEditorActionView(LegacyDesignView):
     def __init__(
@@ -3778,8 +3773,16 @@ class ChannelEditorActionView(LegacyDesignView):
         guild = interaction.guild
         assert guild is not None
         await interaction.response.edit_message(
-            embed=_channel_editor_embed(guild, page=0, category_id=self.category_id),
-            view=ChannelEditorPickerView(guild, page=0, category_id=self.category_id),
+            embed=_channel_editor_embed(
+                guild,
+                page=self.editor_page,
+                category_id=self.editor_category_filter_id,
+            ),
+            view=ChannelEditorPickerView(
+                guild,
+                page=self.editor_page,
+                category_id=self.editor_category_filter_id,
+            ),
         )
 
 class BackToDesignButton(discord.ui.Button):
@@ -3808,7 +3811,7 @@ class BackToCategoryButton(discord.ui.Button):
         category = guild.get_channel(self.category_id)
         if not isinstance(category, discord.CategoryChannel):
             return await interaction.response.edit_message(embed=_category_editor_embed(guild, page=0), view=CategoryEditorPickerView(guild, page=0))
-        await interaction.response.edit_message(embed=_category_action_embed(category), view=CategoryEditorActionView(self.category_id, editor_page=self.editor_page))
+        await interaction.response.edit_message(embed=_category_action_embed(category), view=CategoryEditorActionView(self.category_id))
 
 
 
