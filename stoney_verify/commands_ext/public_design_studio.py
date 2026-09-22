@@ -2575,7 +2575,10 @@ class ExactFormatEditorView(LegacyDesignView):
                 if isinstance(category, discord.CategoryChannel):
                     await interaction.response.edit_message(embed=_category_action_embed(category), view=CategoryEditorActionView(self.target_id))
                 else:
-                    await interaction.response.edit_message(embed=_category_editor_embed(guild, page=0), view=CategoryEditorPickerView(guild, page=0))
+                    await interaction.response.edit_message(
+            embed=_category_editor_embed(guild, page=self.editor_page),
+            view=CategoryEditorPickerView(guild, page=self.editor_page),
+        )
             else:
                 channel = guild.get_channel(self.target_id)
                 if channel is not None:
@@ -2921,7 +2924,14 @@ def _channel_editor_embed(guild: discord.Guild, *, page: int, category_id: int |
 
 
 class CategoryPickButton(discord.ui.Button):
-    def __init__(self, category: discord.CategoryChannel, *, display_index: int, row: int) -> None:
+    def __init__(
+        self,
+        category: discord.CategoryChannel,
+        *,
+        display_index: int,
+        row: int,
+        editor_page: int = 0,
+    ) -> None:
         super().__init__(
             label=f"{display_index}. {_short_label(getattr(category, 'name', 'Category'), 54)}",
             emoji="🗂️",
@@ -2930,6 +2940,7 @@ class CategoryPickButton(discord.ui.Button):
             row=row,
         )
         self.category_id = int(category.id)
+        self.editor_page = max(0, int(editor_page))
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         if not await _require_design_permission(interaction):
@@ -2947,7 +2958,7 @@ class CategoryPickButton(discord.ui.Button):
             return
         await interaction.response.edit_message(
             embed=_category_action_embed(category),
-            view=CategoryEditorActionView(self.category_id),
+            view=CategoryEditorActionView(self.category_id, editor_page=self.editor_page),
         )
 
 
@@ -2978,7 +2989,7 @@ class EditCategoryFromChannelEditorButton(discord.ui.Button):
             return
         await interaction.response.edit_message(
             embed=_category_action_embed(category),
-            view=CategoryEditorActionView(self.category_id),
+            view=CategoryEditorActionView(self.category_id, editor_page=self.editor_page),
         )
 
 
@@ -3042,7 +3053,14 @@ class CategoryEditorPickerView(LegacyDesignView):
         chunk = categories[start:start + EDITOR_PAGE_SIZE]
 
         for offset, category in enumerate(chunk):
-            self.add_item(CategoryPickButton(category, display_index=offset + 1, row=offset // 2))
+            self.add_item(
+                CategoryPickButton(
+                    category,
+                    display_index=offset + 1,
+                    row=offset // 2,
+                    editor_page=page,
+                )
+            )
 
         nav_row = 4
         if page > 0:
@@ -3430,8 +3448,9 @@ def _category_action_embed(category: discord.CategoryChannel) -> discord.Embed:
         name="Advanced options",
         value=(
             "**Custom Format** = choose font/separator/frame manually.\n"
+            "**Change Icon / Emoji** = replace or clear this category's saved design icon.\n"
             "**Lock Category Rule** = remember a special rule for this category.\n"
-            "**Protection Mode** = control whether this exact category is styled, partially styled, or skipped."
+            "**Protection / Skip Rule** = control whether this exact category is styled, partially styled, or skipped."
         ),
         inline=False,
     )
@@ -3478,9 +3497,10 @@ def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
     return _clean_design_embed(embed)
 
 class CategoryEditorActionView(LegacyDesignView):
-    def __init__(self, category_id: int) -> None:
+    def __init__(self, category_id: int, *, editor_page: int = 0) -> None:
         super().__init__(timeout=900)
         self.category_id = int(category_id)
+        self.editor_page = max(0, int(editor_page))
 
     @discord.ui.button(label="Preview Fixes", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design:category_preview_scope", row=0)
     async def preview_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3550,16 +3570,23 @@ class CategoryEditorActionView(LegacyDesignView):
                 value=f"Global: {counts['global']} • Categories: {counts['categories']} • Channels: {counts['channels']}",
                 inline=False,
             )
-            await interaction.response.edit_message(embed=embed, view=CategoryEditorActionView(self.category_id))
+            await interaction.response.edit_message(embed=embed, view=CategoryEditorActionView(self.category_id, editor_page=self.editor_page))
         except Exception as exc:
             if interaction.response.is_done():
                 await interaction.followup.send(f"❌ Could not save category rule: `{type(exc).__name__}: {_safe_str(exc)[:120]}`", ephemeral=True)
             else:
                 await interaction.response.send_message(f"❌ Could not save category rule: `{type(exc).__name__}: {_safe_str(exc)[:120]}`", ephemeral=True)
 
-    @discord.ui.button(label="Protection Mode", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_protection_mode", row=3)
+    @discord.ui.button(label="Protection / Skip Rule", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_protection_mode", row=3)
     async def protection_mode(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_protection_mode_editor(interaction, channel_id=self.category_id)
+
+
+    @discord.ui.button(label="Change Icon / Emoji", emoji="😀", style=discord.ButtonStyle.primary, custom_id="dank_design:category_change_icon", row=1)
+    async def change_icon(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        await interaction.response.send_modal(CustomEmojiModal(scope="category", target_id=self.category_id))
 
 
     @discord.ui.button(label="Reset This Category", emoji="🧹", style=discord.ButtonStyle.danger, custom_id="dank_design:category_reset_item", row=3)
@@ -3583,7 +3610,7 @@ class CategoryEditorActionView(LegacyDesignView):
             ),
             inline=False,
         )
-        await interaction.response.edit_message(embed=embed, view=CategoryEditorActionView(self.category_id))
+        await interaction.response.edit_message(embed=embed, view=CategoryEditorActionView(self.category_id, editor_page=self.editor_page))
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_action_refresh", row=4)
     async def refresh_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3596,7 +3623,7 @@ class CategoryEditorActionView(LegacyDesignView):
             return await interaction.response.send_message("That category no longer exists.", ephemeral=True)
         await interaction.response.edit_message(
             embed=_category_action_embed(category),
-            view=CategoryEditorActionView(self.category_id),
+            view=CategoryEditorActionView(self.category_id, editor_page=self.editor_page),
         )
 
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_action_back", row=4)
@@ -3674,7 +3701,12 @@ class ChannelEditorActionView(LegacyDesignView):
                 value=f"Global: {counts['global']} • Categories: {counts['categories']} • Channels: {counts['channels']}",
                 inline=False,
             )
-            await interaction.response.edit_message(embed=embed, view=ChannelEditorActionView(self.channel_id, category_id=self.category_id))
+            await interaction.response.edit_message(embed=embed, view=ChannelEditorActionView(
+                self.channel_id,
+                category_id=self.category_id,
+                editor_page=self.editor_page,
+                editor_category_filter_id=self.editor_category_filter_id,
+            ))
         except Exception as exc:
             if interaction.response.is_done():
                 await interaction.followup.send(f"❌ Could not save channel rule: `{type(exc).__name__}: {_safe_str(exc)[:120]}`", ephemeral=True)
@@ -3713,7 +3745,12 @@ class ChannelEditorActionView(LegacyDesignView):
             ),
             inline=False,
         )
-        await interaction.response.edit_message(embed=embed, view=ChannelEditorActionView(self.channel_id, category_id=self.category_id))
+        await interaction.response.edit_message(embed=embed, view=ChannelEditorActionView(
+                self.channel_id,
+                category_id=self.category_id,
+                editor_page=self.editor_page,
+                editor_category_filter_id=self.editor_category_filter_id,
+            ))
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_action_refresh", row=4)
     async def refresh_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3726,7 +3763,12 @@ class ChannelEditorActionView(LegacyDesignView):
             return await interaction.response.send_message("That channel no longer exists.", ephemeral=True)
         await interaction.response.edit_message(
             embed=_channel_action_embed(channel),
-            view=ChannelEditorActionView(self.channel_id, category_id=self.category_id),
+            view=ChannelEditorActionView(
+                self.channel_id,
+                category_id=self.category_id,
+                editor_page=self.editor_page,
+                editor_category_filter_id=self.editor_category_filter_id,
+            ),
         )
 
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_action_back", row=4)
@@ -3766,7 +3808,7 @@ class BackToCategoryButton(discord.ui.Button):
         category = guild.get_channel(self.category_id)
         if not isinstance(category, discord.CategoryChannel):
             return await interaction.response.edit_message(embed=_category_editor_embed(guild, page=0), view=CategoryEditorPickerView(guild, page=0))
-        await interaction.response.edit_message(embed=_category_action_embed(category), view=CategoryEditorActionView(self.category_id))
+        await interaction.response.edit_message(embed=_category_action_embed(category), view=CategoryEditorActionView(self.category_id, editor_page=self.editor_page))
 
 
 
