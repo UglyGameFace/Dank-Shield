@@ -23,6 +23,17 @@ from typing import Any, Iterable, Mapping
 import discord
 
 from . import durable_invite_stats
+from .settings_registry import (
+    ALLOW_SERVER_INVITES_KEY,
+    INVITE_PROTECTED_POSTER_RULE_KEY,
+    INVITE_TARGET_ALL_BOTS_KEY,
+    INVITE_TARGET_BOT_IDS_KEY,
+    INVITE_TARGET_CHANNEL_IDS_KEY,
+    invite_shield_enabled as _registry_invite_shield_enabled,
+    link_shield_enabled as _registry_link_shield_enabled,
+    setting_bool as _registry_setting_bool,
+    setting_ids as _registry_setting_ids,
+)
 
 INVITE_RE = re.compile(
     # Do not match discord.gg inside another URL path/query like:
@@ -351,25 +362,18 @@ def _member_has_any_role(member: Any, role_ids: set[str]) -> bool:
 def _protected_target_match(message: discord.Message, settings: Mapping[str, Any]) -> bool:
     author_id = str(getattr(getattr(message, "author", None), "id", "") or "")
     author_is_bot = bool(getattr(getattr(message, "author", None), "bot", False))
-    all_bots = _setting_bool(settings, "invite_hard_block_target_all_bots", False) or _setting_bool(settings, "invite_target_all_bots", False)
-    bot_ids = _ids(_setting(settings, "invite_hard_block_target_bot_ids", _setting(settings, "invite_target_bot_ids")))
-    wanted_channels = _ids(_setting(settings, "invite_hard_block_target_channel_ids", _setting(settings, "invite_target_channel_ids")))
+    all_bots = _registry_setting_bool(settings, INVITE_TARGET_ALL_BOTS_KEY, False)
+    bot_ids = set(_registry_setting_ids(settings, INVITE_TARGET_BOT_IDS_KEY))
+    wanted_channels = set(_registry_setting_ids(settings, INVITE_TARGET_CHANNEL_IDS_KEY))
     author_match = author_id in bot_ids or (author_is_bot and all_bots)
     channel_match = bool(wanted_channels and (_channel_ids(message) & wanted_channels))
     return bool(author_match or channel_match)
 
 
 def _protected_poster_rule_enabled(settings: Mapping[str, Any]) -> bool:
-    # New explicit gate.  Old target IDs still work when Invite Shield itself is
-    # enabled, but they do not override Invite Shield OFF unless this is true.
-    return any(
-        _setting_bool(settings, key, False)
-        for key in (
-            "invite_protected_poster_rule_enabled",
-            "protected_poster_invite_rule_enabled",
-            "invite_hard_block_protected_posters_enabled",
-        )
-    )
+    # Explicit gate: target IDs do not override Invite Shield OFF unless this
+    # registered setting resolves true through its canonical/legacy aliases.
+    return _registry_setting_bool(settings, INVITE_PROTECTED_POSTER_RULE_KEY, False)
 
 
 def _spam_invite_burst_action(settings: Mapping[str, Any]) -> str:
@@ -601,14 +605,8 @@ async def decide_invite_message(
     cfg, settings = await load_invite_policy(guild, refresh=refresh_policy)
     decision.config_guild_id = guild_id
 
-    invite_shield = (
-        _cfg_bool(cfg, "automod_block_invites", False)
-        or _setting_bool(settings, "invite_shield_enabled", False)
-        or _setting_bool(settings, "invite_hard_block_enabled", False)
-        or _setting_bool(settings, "automod_block_invites", False)
-        or _setting_bool(settings, "block_invites", False)
-    )
-    link_shield = _cfg_bool(cfg, "automod_block_links", False) or _setting_bool(settings, "automod_block_links", False)
+    invite_shield = _registry_invite_shield_enabled(cfg, settings)
+    link_shield = _registry_link_shield_enabled(cfg, settings)
     spam_enabled = _safe_bool(settings.get("enabled", settings.get("spam_blocker_enabled")), False)
     protected_rule_enabled = _protected_poster_rule_enabled(settings)
     protected_match = _protected_target_match(message, settings)
@@ -634,7 +632,7 @@ async def decide_invite_message(
         or _setting_bool(settings, "invite_block_internal_invites", False)
     )
 
-    allow_server_invites = _setting_bool(settings, "allow_server_invites", True)
+    allow_server_invites = _registry_setting_bool(settings, ALLOW_SERVER_INVITES_KEY, True)
     allowed_code_set = _codes(_setting(settings, "allowed_invite_codes", []))
     exempt_users = _ids(_setting(settings, "exempt_user_ids", []))
     exempt_roles = _ids(_setting(settings, "exempt_role_ids", []))

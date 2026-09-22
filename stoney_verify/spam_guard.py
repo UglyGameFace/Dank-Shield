@@ -14,6 +14,11 @@ from discord.ext import tasks
 
 from .globals import *  # noqa: F401,F403
 from .spam_guard_defaults import SPAM_GUARD_DEFAULT_ENABLED
+from .settings_registry import (
+    ALLOW_SERVER_INVITES_KEY,
+    BLOCK_EXTERNAL_INVITES_ONLY_KEY,
+    setting_bool as _registry_setting_bool,
+)
 
 # ============================================================
 # Spam / hacked-account guard with compact multi-page control UI
@@ -922,12 +927,14 @@ def _normalize_settings(guild_id: int, row: Optional[Dict[str, Any]]) -> Dict[st
         row.get("spam_apply_to_verified_users", row.get("apply_to_verified_users")),
         base["apply_to_verified_users"],
     )
-    base["block_external_invites_only"] = _safe_bool(
-        row.get("spam_block_external_invites_only", row.get("block_external_invites_only")),
+    base["block_external_invites_only"] = _registry_setting_bool(
+        row,
+        BLOCK_EXTERNAL_INVITES_ONLY_KEY,
         base["block_external_invites_only"],
     )
-    base["allow_server_invites"] = _safe_bool(
-        row.get("spam_allow_server_invites", row.get("allow_server_invites")),
+    base["allow_server_invites"] = _registry_setting_bool(
+        row,
+        ALLOW_SERVER_INVITES_KEY,
         base["allow_server_invites"],
     )
     base["window_seconds"] = max(
