@@ -538,26 +538,30 @@ def coerce_int(
 
 
 def coerce_codes(value: Any, *, limit: int = 100) -> list[str]:
-    if isinstance(value, (list, tuple, set)):
+    stored_collection = isinstance(value, (list, tuple, set))
+    if stored_collection:
         items: Iterable[Any] = value
     else:
         items = re.split(r"[\s,;]+", str(value or ""))
 
     out: list[str] = []
     for raw in items:
-        code = str(raw or "").strip().strip("/").lower()
-        for prefix in (
-            "https://discord.gg/",
-            "http://discord.gg/",
-            "https://discord.com/invite/",
-            "http://discord.com/invite/",
-            "https://discordapp.com/invite/",
-            "http://discordapp.com/invite/",
-        ):
-            if code.startswith(prefix):
-                code = code[len(prefix):]
-                break
-        code = code.strip().strip("/")
+        code = str(raw or "").strip().lower()
+        if not stored_collection:
+            code = code.strip("/")
+            for prefix in (
+                "https://discord.gg/",
+                "http://discord.gg/",
+                "https://discord.com/invite/",
+                "http://discord.com/invite/",
+                "https://discordapp.com/invite/",
+                "http://discordapp.com/invite/",
+            ):
+                if code.startswith(prefix):
+                    code = code[len(prefix):]
+                    break
+            code = code.strip().strip("/")
+
         if code and code not in out:
             out.append(code)
         if len(out) >= max(1, int(limit)):
