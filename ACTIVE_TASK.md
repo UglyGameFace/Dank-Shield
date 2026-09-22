@@ -2,128 +2,148 @@
 
 ## Active task / desired outcome
 
-**P0-CMD-CLEANUP-001 — Retire dormant global command cleanup patcher**
+**P0-PROTECTION-IMPORT-001 — Native Protection Center Import Pack + retire dormant Protection patch guards**
 
-Remove the obsolete `startup_guards/slash_command_cleanup.py` CommandTree monkey patch and its ticket-panel command epoch shim now that canonical command ownership lives in `stoney_verify.command_runtime.DankCommandTree`.
+Preserve the Protection Center starter filter-pack feature while moving its UI, normalization, persistence, and interaction behavior into the real `public_protection_center.py` owner. Retire the dormant startup-guard files that could mutate command/UI behavior if accidentally imported.
 
 ## Status
 
 **IMPLEMENTED — exact-head validation pending**
 
-Branch: `audit/retire-dormant-command-cleanup-20260921`
+Branch: `audit/native-protection-import-pack-20260921`
 
-Base: current `main` after PR #290.
+Base: current `main` after PR #291.
 
 ## Previous task closed
 
-**P0-GUARD-EMBED-001** is complete.
+**P0-CMD-CLEANUP-001** is complete.
 
-PR #290 merged as `efef78fa9ed3f5be744d2585b1e9ed93f4209566`.
+PR #291 merged as:
 
-Exact implementation head `ee5020269ded0a40b541697eb7f4cb421969b347` passed:
+`b5962860f2411b9398d3203756201af26447e59d`
+
+Exact implementation head:
+
+`30f93f1f3b95e265f89a159e02dd5d370b51950a`
+
+Termux validation passed:
 
 - diff integrity;
 - Python compile;
-- startup guard retirement regression;
-- native newline owner regression;
-- startup/ownership focused tests;
-- full suite: **1794 passed, 79 warnings, 0 failures**.
+- command cleanup retirement/native owner tests;
+- ticket doctor audit;
+- startup/ownership tests;
+- full suite: **1796 passed, 79 warnings, 0 failures**.
 
 Post-merge verification confirmed:
 
-- `embed_literal_newline_guard.py` absent;
-- obsolete guard test absent;
-- historical metadata entry absent;
-- native `clean_design_text` owner present;
-- native newline regression present.
+- `slash_command_cleanup.py` absent;
+- `ticket_panel_command_epoch_guard.py` absent;
+- historical startup metadata clean;
+- ticket doctor detached from the epoch shim;
+- native `DankCommandTree` owner and unchanged-sync regression present.
 
 ## Root cause / ownership finding
 
-`startup_guards/slash_command_cleanup.py` is a dormant global CommandTree patcher:
+Three Protection Center startup-guard files had no production importer but still contained import-time mutation behavior:
 
-- no production installer imports or applies it;
-- normal startup does not iterate the historical startup-guard inventory;
-- importing the module immediately calls `install_slash_command_cleanup_guard()`;
-- that function replaces `discord.app_commands.CommandTree.sync` and `clear_commands` process-wide;
-- useful sync behavior has already moved to `stoney_verify.command_runtime.DankCommandTree`.
+### `protection_center_command_guard.py`
 
-The only remaining code importer is `ticket_panel_command_epoch_guard.py`, which merely mutates the dormant cleanup guard's `COMMAND_CLEANUP_EPOCH` to force a one-time legacy ticket-panel sync.
+- changed `commands_ext._ALLOWED_DANK_CHILDREN`;
+- changed `commands_ext._CONFUSING_DANK_CHILDREN`;
+- removed `automod` / `spam` children from `dank_group` at import time.
 
-That epoch shim is itself not production-owned. It is referenced only by the dormant `ticket_panel_doctor_production_wording.py`, audit tooling, and workflow path metadata.
+The canonical command registrar already owns this shape:
+- `/dank protection` is registered natively;
+- `automod` and `spam` are already in the confusing/legacy child metadata;
+- production runtime pruning is disabled by default.
 
-## Native owner
+### `protection_import_button_patch.py`
 
-`stoney_verify.command_runtime` owns:
+- replaced `ProtectionCenterView.__init__` to inject an Import Pack button;
+- duplicated a fallback path to the manual-import guard.
 
-- `DankCommandTree`;
-- public command-surface validation;
-- unchanged global sync hashing/state;
-- `DANK_SKIP_UNCHANGED_GLOBAL_SYNC`;
-- `DANK_FORCE_COMMAND_SYNC_ON_BOOT`;
-- `DANK_COMMAND_SYNC_STATE_FILE`;
-- global command budget enforcement;
-- configured stale guild-command copy cleanup.
+### `protection_pack_manual_import_guard.py`
 
-`tests/test_command_runtime_native_ownership.py` already exercises fail-closed surface validation and unchanged-sync behavior.
+- dynamically attached the Import Pack button;
+- duplicated filter normalization;
+- duplicated guild-config persistence;
+- owned a modal outside the canonical Protection Center module.
+
+The Import Pack feature itself is useful and must be preserved, so deletion without migration would be incorrect.
+
+## Native owner after migration
+
+`stoney_verify/commands_ext/public_protection_center.py` now owns:
+
+- native `Import Pack` button on `ProtectionCenterView`;
+- native `StarterPackImportModal`;
+- canonical filter normalization through existing `_clean_filter_item` / `_csv_items`;
+- bounded merge behavior through `_merge_imported_filter_terms`;
+- existing 700 imported-term limit;
+- existing 22,000-character Automod filter budget;
+- canonical guild-config persistence through `_save_automod`;
+- native permission checking;
+- native `run_guarded_interaction` protection for button and modal actions.
 
 ## Scope
 
 In scope:
 
-- delete `startup_guards/slash_command_cleanup.py`;
-- delete `startup_guards/ticket_panel_command_epoch_guard.py`;
-- remove `slash_command_cleanup` from inert historical startup metadata;
-- detach the dormant ticket-doctor compatibility loader from the retired epoch shim;
-- update ticket-panel doctor audit/workflow references;
-- replace the old guard-preservation regression with native command-owner/absence assertions;
-- update command/startup/production-readiness ownership ledgers.
+- migrate Import Pack into `public_protection_center.py`;
+- preserve old limits and saved metadata fields;
+- add focused behavior/ownership regressions;
+- delete:
+  - `startup_guards/protection_center_command_guard.py`;
+  - `startup_guards/protection_import_button_patch.py`;
+  - `startup_guards/protection_pack_manual_import_guard.py`;
+- remove their inert startup inventory entries;
+- update startup/protection ownership ledgers.
 
 Out of scope:
 
-- redesigning the public command UX;
-- changing `DankCommandTree` behavior;
-- changing normal command registration;
-- removing the remaining ticket-doctor compatibility loader;
-- migrating live interaction locks;
-- central settings registry work;
-- invite/protection/setup/design compatibility families.
+- redesigning Automod;
+- redesigning Spam Guard;
+- changing Invite Shield policy;
+- changing AntiNuke;
+- changing the public Protection Center command path;
+- invite enforcement compatibility cleanup;
+- setup/design/ticket/VC guard families.
 
 ## Changes
 
-- removed global `CommandTree.sync` / `clear_commands` patcher;
-- removed obsolete ticket-panel command epoch shim;
-- historical startup metadata no longer advertises the cleanup guard;
-- ticket-doctor compatibility loader no longer imports the epoch shim;
-- ticket doctor audit requires both retired files to remain absent;
-- ticket doctor workflow no longer tracks the deleted epoch file;
-- `test_public_command_cleanup_contract_static.py` now verifies:
-  - both retired files stay absent;
-  - `DankCommandTree` owns sync policy;
-  - canonical `PUBLIC_DANK_CHILDREN` remains `home/purge/setup/upload`;
-  - runtime pruning remains disabled by default in the canonical command registrar;
-- ownership ledgers now point to `command_runtime.DankCommandTree`.
+- added native Import Pack button to Protection Center row 2;
+- added native starter-pack modal;
+- added pure bounded filter-merge helper;
+- preserved normalization, dedupe, invalid-term skipping, filter-size limit, and import-count metadata;
+- used existing `_save_automod` persistence owner;
+- used native interaction guards for open/submit actions;
+- updated Protection Center help text;
+- added focused native Import Pack regressions;
+- deleted all three dormant Protection patch files;
+- removed their startup metadata;
+- updated ownership ledgers.
 
 ## Expected production behavior
 
-**No behavior change.**
+The previously intended Import Pack feature becomes reliably available through the real Protection Center owner instead of depending on dormant patch files.
 
-Neither retired file has a production importer. The native command runtime already owns the required sync and surface policy.
-
-The intended change is risk reduction: accidental imports can no longer reactivate process-wide Discord CommandTree mutation or revive a stale ticket-panel sync epoch.
+No other Protection Center behavior should change.
 
 ## Validation required
 
 - exact-head `git diff --check`;
 - Python compile;
-- `tests/test_public_command_cleanup_contract_static.py`;
-- `tests/test_command_runtime_native_ownership.py`;
-- `tools/audit_ticket_panel_doctor.py`;
-- command/startup ownership tests;
+- `tests/test_protection_import_pack_native.py`;
+- `tests/test_public_protection_center_native_interaction_static.py`;
+- `tests/test_protection_invite_native_ui.py`;
+- Protection Center/import-related regressions;
+- startup ownership tests;
 - full Python suite;
 - final changed-file/review-thread inspection;
 - merge with expected-head guard;
-- post-merge absence verification on `main`.
+- post-merge verification that all three patch files remain absent and native Import Pack remains present.
 
 ## Next step
 
-Inspect the exact branch diff, open a focused draft PR, use Termux exact-head validation if GitHub runners remain unavailable, then merge and verify both retired command-cleanup files stay absent on `main`.
+Inspect exact branch diff, open a focused draft PR, validate exact head in GitHub CI or Termux, then merge and verify on `main`.
