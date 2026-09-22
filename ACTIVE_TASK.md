@@ -2,148 +2,167 @@
 
 ## Active task / desired outcome
 
-**P0-PROTECTION-IMPORT-001 — Native Protection Center Import Pack + retire dormant Protection patch guards**
+**P0-INVITE-RUNTIME-001 — Retire legacy invite runtime/override compatibility chain**
 
-Preserve the Protection Center starter filter-pack feature while moving its UI, normalization, persistence, and interaction behavior into the real `public_protection_center.py` owner. Retire the dormant startup-guard files that could mutate command/UI behavior if accidentally imported.
+Keep Invite Shield enforcement under one live owner and one recovery owner. Remove obsolete startup-guard listener/bridge/override modules that no longer own production behavior but could recreate duplicate invite enforcement or policy drift if imported.
 
 ## Status
 
 **IMPLEMENTED — exact-head validation pending**
 
-Branch: `audit/native-protection-import-pack-20260921`
+Branch: `audit/retire-legacy-invite-runtime-20260921`
 
-Base: current `main` after PR #291.
+Base: current `main` after PR #294.
 
 ## Previous task closed
 
-**P0-CMD-CLEANUP-001** is complete.
+**P0-PROTECTION-IMPORT-001** is complete.
 
-PR #291 merged as:
+PR #294 merged as:
 
-`b5962860f2411b9398d3203756201af26447e59d`
+`4799b7199586ca6c7754c4fd40cf35b13683ea8a`
 
 Exact implementation head:
 
-`30f93f1f3b95e265f89a159e02dd5d370b51950a`
+`edff3139d8c232fff68075ed78ca8bb6aa60dcf5`
 
 Termux validation passed:
 
 - diff integrity;
 - Python compile;
-- command cleanup retirement/native owner tests;
-- ticket doctor audit;
-- startup/ownership tests;
-- full suite: **1796 passed, 79 warnings, 0 failures**.
+- native Protection Import Pack regressions;
+- Protection Center native interaction tests;
+- protection/invite regressions;
+- startup ownership tests;
+- full suite: **1803 passed, 79 warnings, 0 failures**.
 
 Post-merge verification confirmed:
 
-- `slash_command_cleanup.py` absent;
-- `ticket_panel_command_epoch_guard.py` absent;
-- historical startup metadata clean;
-- ticket doctor detached from the epoch shim;
-- native `DankCommandTree` owner and unchanged-sync regression present.
+- `protection_center_command_guard.py` absent;
+- `protection_import_button_patch.py` absent;
+- `protection_pack_manual_import_guard.py` absent;
+- their startup metadata absent;
+- native Import Pack button, modal, merge helper, and retirement regression present on `main`.
 
 ## Root cause / ownership finding
 
-Three Protection Center startup-guard files had no production importer but still contained import-time mutation behavior:
+Five invite-era compatibility modules no longer own production behavior:
 
-### `protection_center_command_guard.py`
+### `invite_live_enforcer_guard.py`
 
-- changed `commands_ext._ALLOWED_DANK_CHILDREN`;
-- changed `commands_ext._CONFUSING_DANK_CHILDREN`;
-- removed `automod` / `spam` children from `dank_group` at import time.
+Contains a second `on_message` listener implementation, but has no production importer.
 
-The canonical command registrar already owns this shape:
-- `/dank protection` is registered natively;
-- `automod` and `spam` are already in the confusing/legacy child metadata;
-- production runtime pruning is disabled by default.
+Canonical live ownership already exists in:
 
-### `protection_import_button_patch.py`
+`stoney_verify.globals._dank_globals_live_invite_enforcer`
 
-- replaced `ProtectionCenterView.__init__` to inject an Import Pack button;
-- duplicated a fallback path to the manual-import guard.
+which calls:
 
-### `protection_pack_manual_import_guard.py`
+`invite_policy_engine.enforce_live_invite_message(..., refresh_policy=True)`
 
-- dynamically attached the Import Pack button;
-- duplicated filter normalization;
-- duplicated guild-config persistence;
-- owned a modal outside the canonical Protection Center module.
+### `discord_invite_blocker_runtime_guard.py`
 
-The Import Pack feature itself is useful and must be preserved, so deletion without migration would be incorrect.
+Compatibility bridge only. It no longer installs a live listener and merely delegates to the central engine/reconciliation runtime.
 
-## Native owner after migration
+Its only code caller is the legacy Spam Guard hard-block shim.
 
-`stoney_verify/commands_ext/public_protection_center.py` now owns:
+### `spam_guard_invite_hard_block.py`
 
-- native `Import Pack` button on `ProtectionCenterView`;
-- native `StarterPackImportModal`;
-- canonical filter normalization through existing `_clean_filter_item` / `_csv_items`;
-- bounded merge behavior through `_merge_imported_filter_terms`;
-- existing 700 imported-term limit;
-- existing 22,000-character Automod filter budget;
-- canonical guild-config persistence through `_save_automod`;
-- native permission checking;
-- native `run_guarded_interaction` protection for button and modal actions.
+Legacy compatibility facade. It has no independent production owner and forwards its delete entrypoint to `discord_invite_blocker_runtime_guard`.
+
+### `spam_guard_invite_override_options.py`
+
+Historical monkey-patch layer over Spam Guard settings/UI. It patches Spam Guard functions at import time.
+
+Native bot/channel targeting now belongs to:
+
+- `invite_scope_settings.py`;
+- `commands_ext/public_protection_invite_ui.py`;
+- `invite_policy_engine.py`.
+
+The canonical invite policy engine does not use the obsolete `invite_override_*` patch keys.
+
+### `protection_invite_target_precedence_guard.py`
+
+Historical patch layered on the legacy hard-block/override modules. It has no production importer and attempts to patch helper ownership that no longer exists in the current hard-block facade.
+
+## Canonical owners after retirement
+
+### Live enforcement
+
+`globals.py`
+→ `invite_policy_engine.enforce_live_invite_message`
+→ central decision/delete/modlog/stat handling.
+
+### Missed-message / restart recovery
+
+`main.py`
+→ `invite_reconciliation_runtime.install_invite_reconciliation`
+→ `invite_policy_engine.scan_channel_invites`.
+
+### Invite targeting UI/state
+
+`public_protection_invite_ui.py`
++ `invite_scope_settings.py`
+→ canonical guild-scoped scope metadata consumed by `invite_policy_engine`.
 
 ## Scope
 
 In scope:
 
-- migrate Import Pack into `public_protection_center.py`;
-- preserve old limits and saved metadata fields;
-- add focused behavior/ownership regressions;
 - delete:
-  - `startup_guards/protection_center_command_guard.py`;
-  - `startup_guards/protection_import_button_patch.py`;
-  - `startup_guards/protection_pack_manual_import_guard.py`;
+  - `startup_guards/invite_live_enforcer_guard.py`;
+  - `startup_guards/discord_invite_blocker_runtime_guard.py`;
+  - `startup_guards/spam_guard_invite_hard_block.py`;
+  - `startup_guards/spam_guard_invite_override_options.py`;
+  - `startup_guards/protection_invite_target_precedence_guard.py`;
 - remove their inert startup inventory entries;
-- update startup/protection ownership ledgers.
+- update invite safety audit to assert canonical owners and retired-file absence;
+- extend Invite Shield guard-retirement regression;
+- update recovery regression so it no longer preserves the compatibility bridge;
+- update invite/startup/readiness ownership documentation.
 
 Out of scope:
 
-- redesigning Automod;
-- redesigning Spam Guard;
-- changing Invite Shield policy;
-- changing AntiNuke;
-- changing the public Protection Center command path;
-- invite enforcement compatibility cleanup;
-- setup/design/ticket/VC guard families.
-
-## Changes
-
-- added native Import Pack button to Protection Center row 2;
-- added native starter-pack modal;
-- added pure bounded filter-merge helper;
-- preserved normalization, dedupe, invalid-term skipping, filter-size limit, and import-count metadata;
-- used existing `_save_automod` persistence owner;
-- used native interaction guards for open/submit actions;
-- updated Protection Center help text;
-- added focused native Import Pack regressions;
-- deleted all three dormant Protection patch files;
-- removed their startup metadata;
-- updated ownership ledgers.
+- changing `invite_policy_engine` decisions;
+- changing Invite Shield enable/disable semantics;
+- changing same-server invite allowance;
+- changing message-surface extraction;
+- changing history scan limits/budgets;
+- changing Protection Center Invite Settings UX;
+- retiring unrelated `protection_center_clear_categories_guard`;
+- changing Spam Guard behavior for non-invite spam.
 
 ## Expected production behavior
 
-The previously intended Import Pack feature becomes reliably available through the real Protection Center owner instead of depending on dormant patch files.
+**No intended policy change.**
 
-No other Protection Center behavior should change.
+External invite deletion decisions remain centralized in `invite_policy_engine`.
+
+The intended risk reduction is:
+
+- one live invite listener instead of a dormant duplicate implementation;
+- one recovery runtime;
+- no legacy hard-block bridge stack;
+- no obsolete Spam Guard invite override monkey patches;
+- no dead precedence patch that can be resurrected accidentally.
 
 ## Validation required
 
 - exact-head `git diff --check`;
 - Python compile;
-- `tests/test_protection_import_pack_native.py`;
-- `tests/test_public_protection_center_native_interaction_static.py`;
+- `tools/audit_invite_link_safety.py`;
+- `tests/test_invite_live_enforcement.py`;
+- `tests/test_invite_runtime_reconcile_194.py`;
+- `tests/test_protection_invite_guard_retirement.py`;
 - `tests/test_protection_invite_native_ui.py`;
-- Protection Center/import-related regressions;
+- invite-policy/message-surface tests;
 - startup ownership tests;
 - full Python suite;
 - final changed-file/review-thread inspection;
 - merge with expected-head guard;
-- post-merge verification that all three patch files remain absent and native Import Pack remains present.
+- post-merge absence verification on `main`.
 
 ## Next step
 
-Inspect exact branch diff, open a focused draft PR, validate exact head in GitHub CI or Termux, then merge and verify on `main`.
+Inspect the exact branch diff, open a focused draft PR, validate the exact head in GitHub CI or Termux, then merge and verify the five compatibility files remain absent while live and recovery invite enforcement remain native.
