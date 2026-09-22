@@ -875,7 +875,7 @@ def _review_embed() -> discord.Embed:
         description=(
             "**Scan Saved Design** is read-only and tells you what disagrees with your saved rules.\n"
             "**Build Smart Repair Preview** learns the established style inside each category, keeps saved narrow rules authoritative, "
-            "and blocks Apply when confidence is not high enough."
+            "and keeps unsafe rows out of Apply while high-confidence Ready repairs can proceed."
         ),
         color=discord.Color.blurple(),
     )
