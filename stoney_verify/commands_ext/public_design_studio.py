@@ -4945,9 +4945,10 @@ class StyleChangeView(LegacyDesignView):
         await interaction.edit_original_response(
             embed=_style_change_preview_embed(guild, items, separator_id=self.separator_id),
             view=StyleChangePreviewView(
-                can_apply=not has_blockers and bool(items),
+                can_apply=not has_blockers and has_changes,
                 has_blockers=has_blockers,
                 pending_created_at=created_at,
+                issue_count=sum(1 for item in items if item.get("status") in {"failed", "protected"}),
             ),
         )
 
@@ -5108,6 +5109,7 @@ def _style_change_rebuild_preview_response(
         can_apply=not has_blockers and has_changes,
         has_blockers=has_blockers,
         pending_created_at=created_at,
+        issue_count=sum(1 for item in items if item.get("status") in {"failed", "protected"}),
     )
 
 
@@ -5182,7 +5184,15 @@ class StyleChangeApplySafeOnlyButton(discord.ui.Button):
             separator_id = _safe_str(pending.get("separator_id"), "none")
             embed = _style_change_preview_embed(guild, safe_items, separator_id=separator_id); embed.title = "👁️ Style Change Preview · Safe Changes Only"
             embed.add_field(name="Skipped issues", value="Needs-review rows were left untouched. Apply will only rename safe rows.", inline=False)
-            await interaction.response.edit_message(embed=embed, view=StyleChangePreviewView(can_apply=True, has_blockers=False, pending_created_at=self.pending_created_at))
+            await interaction.response.edit_message(
+                embed=embed,
+                view=StyleChangePreviewView(
+                    can_apply=any(item.get("status") == "changed" for item in safe_items),
+                    has_blockers=False,
+                    pending_created_at=self.pending_created_at,
+                    issue_count=sum(1 for item in safe_items if item.get("status") == "protected"),
+                ),
+            )
         await _guard_design_action(interaction, "design.style_change.apply_safe_only", action, defer=False)
 
 
@@ -5214,8 +5224,19 @@ class StyleChangeFixMissingEmojiButton(discord.ui.Button):
 
 
 class StyleChangePreviewView(DesignPreviewView):
-    def __init__(self, *, can_apply: bool, has_blockers: bool = False, pending_created_at: float) -> None:
-        super().__init__(can_apply=can_apply, pending_created_at=pending_created_at)
+    def __init__(
+        self,
+        *,
+        can_apply: bool,
+        has_blockers: bool = False,
+        pending_created_at: float,
+        issue_count: int = 0,
+    ) -> None:
+        super().__init__(
+            can_apply=can_apply,
+            pending_created_at=pending_created_at,
+            issue_count=issue_count,
+        )
         if has_blockers:
             self.add_item(StyleChangeFixMissingEmojiButton(row=2, pending_created_at=pending_created_at))
             self.add_item(StyleChangeApplySafeOnlyButton(row=2, pending_created_at=pending_created_at))
