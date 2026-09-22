@@ -210,7 +210,11 @@ async def _store_preview(
         )
     await interaction.edit_original_response(
         embed=preview_embed,
-        view=ReviewedPreviewView(can_apply=not has_blockers and has_changes, pending_created_at=created_at),
+        view=ReviewedPreviewView(
+            can_apply=not has_blockers and has_changes,
+            pending_created_at=created_at,
+            issue_count=_repair_issue_count(items),
+        ),
     )
 
 
@@ -927,13 +931,92 @@ def _scan_embed(guild: discord.Guild, options: Mapping[str, Any], items: list[di
     return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
 
 
+def _repair_item_classification(item: Mapping[str, Any]) -> str:
+    return _safe_str(item.get("repair_confidence_classification"), "")
+
+
+def _repair_plan_state(items: list[dict[str, Any]]) -> dict[str, int]:
+    state = {
+        "matching": 0,
+        "ready": 0,
+        "review": 0,
+        "protected": 0,
+        "blocked": 0,
+        "manual_approved": 0,
+    }
+    for item in items:
+        status = _safe_str(item.get("status"), "unchanged")
+        classification = _repair_item_classification(item)
+        if bool(item.get("repair_manual_approved")):
+            state["manual_approved"] += 1
+        if status == "changed":
+            state["ready"] += 1
+        elif status == "protected":
+            state["protected"] += 1
+        elif status == "failed" and classification == repair_confidence.REVIEW_ONLY:
+            state["review"] += 1
+        elif status == "failed":
+            state["blocked"] += 1
+        else:
+            state["matching"] += 1
+    return state
+
+
+def _repair_issue_count(items: list[dict[str, Any]]) -> int:
+    state = _repair_plan_state(items)
+    return int(state["review"] + state["protected"] + state["blocked"])
+
+
+def _repair_confidence_text(items: list[dict[str, Any]], confidence: Mapping[str, Any]) -> str:
+    state = _repair_plan_state(items)
+    score = int(confidence.get("score", 0) or 0)
+    if state["blocked"] and state["ready"]:
+        label = "Partial"
+    elif state["blocked"]:
+        label = "Blocked"
+    elif state["review"] and state["ready"]:
+        label = "Partial review"
+    elif state["review"]:
+        label = "Review"
+    elif state["ready"]:
+        label = "Reviewed" if state["manual_approved"] else "High"
+    else:
+        label = "No changes"
+    return (
+        f"Apply confidence: **{label}**\n"
+        f"Detection score: **{score}/100**\n"
+        f"Ready: **{state['ready']}**\n"
+        f"Needs review: **{state['review']}**\n"
+        f"Blocked: **{state['blocked']}**\n"
+        f"Protected: **{state['protected']}**\n"
+        f"Manually approved: **{state['manual_approved']}**"
+    )
+
+
+def _repair_issue_lines(items: list[dict[str, Any]], classification: str) -> list[str]:
+    rows: list[str] = []
+    for item in items:
+        if _repair_item_classification(item) != classification:
+            continue
+        if _safe_str(item.get("status")) != "failed":
+            continue
+        before = _safe_str(item.get("before"), "unknown")
+        after = _safe_str(item.get("after"), before)
+        reason = _safe_str(
+            item.get("repair_confidence_reason"),
+            "Review this proposed rename before applying it.",
+        )
+        rows.append(f"• {before} -> {after} — {reason}"[:260])
+    return rows
+
+
 def _repair_preview_embed(
     guild: discord.Guild,
     items: list[dict[str, Any]],
     options: Mapping[str, Any],
     analysis: Mapping[str, Any],
 ) -> discord.Embed:
-    counts = legacy._consistency_summary(items)  # type: ignore[attr-defined]
+    state = _repair_plan_state(items)
     confidence = options.get("__repair_confidence_result") if isinstance(options.get("__repair_confidence_result"), Mapping) else {}
     embed = discord.Embed(
         title="🧭 Smart Repair Preview",
@@ -946,24 +1029,33 @@ def _repair_preview_embed(
     embed.add_field(
         name="Repair plan",
         value=(
-            f"Already matching: **{counts.get('matches', 0)}**\n"
-            f"Ready repairs: **{counts.get('needs_fix', 0)}**\n"
-            f"Protected/skipped: **{counts.get('protected', 0)}**\n"
-            f"Blocked: **{counts.get('failed', 0)}**"
+            f"Already matching: **{state['matching']}**\n"
+            f"Ready repairs: **{state['ready']}**\n"
+            f"Needs review: **{state['review']}**\n"
+            f"Protected/skipped: **{state['protected']}**\n"
+            f"Blocked: **{state['blocked']}**"
         ),
         inline=True,
     )
     embed.add_field(
         name="Repair confidence",
-        value=repair_confidence.confidence_summary_text(confidence) if confidence else "No confidence result was produced. Apply is blocked.",
+        value=_repair_confidence_text(items, confidence) if confidence else "No confidence result was produced. Apply is blocked.",
         inline=True,
     )
     changed = [item for item in items if item.get("status") == "changed"]
     if changed:
         lines = [f"• `{_safe_str(item.get('before'))}` → `{_safe_str(item.get('after'))}`"[:220] for item in changed[:8]]
         embed.add_field(name="Will repair", value="\n".join(lines)[:1024], inline=False)
-    blocked_lines = list(confidence.get("blocked_lines") or []) if isinstance(confidence, Mapping) else []
-    review_lines = list(confidence.get("review_lines") or []) if isinstance(confidence, Mapping) else []
+    blocked_lines = [
+        (
+            f"• {_safe_str(item.get('before'), 'unknown')} -> {_safe_str(item.get('after'), '')} — "
+            f"{_safe_str(item.get('repair_confidence_reason'), 'Automatic apply is blocked for this row.')}"
+        )[:260]
+        for item in items
+        if _safe_str(item.get("status")) == "failed"
+        and _repair_item_classification(item) not in {"", repair_confidence.REVIEW_ONLY}
+    ]
+    review_lines = _repair_issue_lines(items, repair_confidence.REVIEW_ONLY)
     if blocked_lines:
         embed.add_field(name="Apply blocked for safety", value="\n".join(str(line) for line in blocked_lines[:6])[:1024], inline=False)
     if review_lines:
@@ -1002,12 +1094,21 @@ class ReviewRepairView(DesignView):
         created_at = legacy._store_pending(  # type: ignore[attr-defined]
             int(guild.id),
             int(interaction.user.id),
-            {"items": items, "options": dict(plan_options), "mode": "consistency_check_v2"},
+            {
+                "items": items,
+                "options": dict(plan_options),
+                "analysis": dict(analysis),
+                "mode": "consistency_check_v2",
+            },
         )
         has_changes = any(item.get("status") == "changed" for item in items)
         await interaction.edit_original_response(
             embed=_repair_preview_embed(guild, items, plan_options, analysis),
-            view=ReviewedPreviewView(can_apply=has_changes, pending_created_at=created_at),
+            view=ReviewedPreviewView(
+                can_apply=has_changes,
+                pending_created_at=created_at,
+                issue_count=_repair_issue_count(items),
+            ),
         )
 
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:review_back", row=4)
