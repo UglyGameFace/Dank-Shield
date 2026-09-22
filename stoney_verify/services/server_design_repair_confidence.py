@@ -343,6 +343,14 @@ def evaluate_repair_plan(items: Iterable[Mapping[str, Any]], *, context: str = "
         "score": total_confidence,
         "apply_allowed": apply_allowed,
         "safe_apply_allowed": safe_apply_allowed,
+        "row_results": [
+            {
+                "classification": _text(row.get("classification")),
+                "confidence": int(row.get("confidence", 0) or 0),
+                "reason": _text(row.get("reason")),
+            }
+            for row in scored
+        ],
         "counts": dict(counts),
         "safe_count": len(safe),
         "review_count": len(review),
