@@ -157,6 +157,24 @@ def test_manual_review_approval_changes_only_that_pending_row(
     legacy._PENDING.pop(key, None)
 
 
+def test_category_editor_customizations_are_owned_natively() -> None:
+    view = legacy.CategoryEditorActionView(123, editor_page=4)
+    labels = _labels(view)
+
+    assert "Change Icon / Emoji" in labels
+    assert "Protection / Skip Rule" in labels
+    assert "Edit Channels Here" in labels
+    assert "Protection Mode" not in labels
+    assert view.editor_page == 4
+
+    start = LEGACY_SOURCE.index("class CategoryEditorActionView")
+    end = LEGACY_SOURCE.index("class ChannelEditorActionView", start)
+    block = LEGACY_SOURCE[start:end]
+    assert "page=0, category_id=self.category_id" in block
+    assert "editor_category_filter_id" not in block
+    assert "page=self.editor_page" in block
+
+
 def test_channel_editor_customizations_are_owned_natively() -> None:
     view = legacy.ChannelEditorActionView(
         123,
@@ -200,6 +218,57 @@ def test_channel_page_jump_is_native_and_exposes_current_pages(
     assert "5/7" in str(select.placeholder)
 
 
+def test_protected_issue_review_is_conditional_and_actionable() -> None:
+    protected_item = {
+        "status": "protected",
+        "channel_id": "42",
+        "before": "rules",
+        "after": "rules",
+        "warnings": ["Protected by exact-item rule."],
+    }
+    clean = design_v2.RepairIssuesView([], pending_created_at=1.0)
+    protected = design_v2.RepairIssuesView([protected_item], pending_created_at=1.0)
+
+    assert not any(label.startswith("Review Protected Items") for label in _labels(clean))
+    assert "Review Protected Items (1)" in _labels(protected)
+
+    protected_view = design_v2.ProtectedItemsView([protected_item], pending_created_at=1.0)
+    assert "Allow Full Styling for Listed" in _labels(protected_view)
+    assert "Back to Issues" in _labels(protected_view)
+
+
+def test_separator_preview_keeps_native_issue_review() -> None:
+    clean = design_v2.LegacyStyleChangePreviewView(
+        can_apply=True,
+        has_blockers=False,
+        pending_created_at=1.0,
+        issue_count=0,
+    )
+    issues = design_v2.LegacyStyleChangePreviewView(
+        can_apply=False,
+        has_blockers=True,
+        pending_created_at=1.0,
+        issue_count=1,
+    )
+
+    assert not any(label.startswith("Review Issues") for label in _labels(clean))
+    assert "Review Issues (1)" in _labels(issues)
+    assert "Choose Missing Icons" in _labels(issues)
+    assert "Apply Safe Ones Only" in _labels(issues)
+
+
+def test_channel_navigation_context_is_native_not_runtime_memory() -> None:
+    start = LEGACY_SOURCE.index("class ChannelEditorActionView")
+    end = LEGACY_SOURCE.index("class BackToDesignButton", start)
+    block = LEGACY_SOURCE[start:end]
+
+    assert "editor_page=self.editor_page" in block
+    assert "editor_category_filter_id=self.editor_category_filter_id" in block
+    assert "page=self.editor_page" in block
+    assert "category_id=self.editor_category_filter_id" in block
+    assert "_EDITOR_CONTEXT" not in RUNTIME_SOURCE
+
+
 def test_all_primary_server_design_customizations_remain_canonical() -> None:
     for marker in (
         "class DesignServerThemeSelect",
@@ -221,8 +290,12 @@ def test_all_primary_server_design_customizations_remain_canonical() -> None:
         "Reset This Channel",
         "ChannelPageJumpSelect",
         "DirectRenameModal",
+        "CategoryPageButton",
+        "ChannelPageJumpSelect",
     ):
         assert marker in LEGACY_SOURCE
 
     assert "public_design_studio" not in RUNTIME_SOURCE
     assert "public_design_studio_v2" not in RUNTIME_SOURCE
+    assert "ReviewedPreviewView =" not in RUNTIME_SOURCE
+    assert "ChannelEditorActionView =" not in RUNTIME_SOURCE
