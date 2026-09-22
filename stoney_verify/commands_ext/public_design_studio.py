@@ -2475,6 +2475,11 @@ async def _save_exact_and_preview(interaction: discord.Interaction, *, scope: st
         view=DesignPreviewView(
             can_apply=not has_blockers and has_changes,
             pending_created_at=created_at,
+            issue_count=sum(
+                1
+                for item in items
+                if item.get("status") in {"failed", "protected"}
+            ),
         ),
     )
 
@@ -4927,9 +4932,16 @@ class DesignHomeView(LegacyDesignView):
 class DesignPreviewView(LegacyDesignView):
     """Import-time base only; V2 owns every active reviewed Apply surface."""
 
-    def __init__(self, *, can_apply: bool, pending_created_at: float | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        can_apply: bool,
+        pending_created_at: float | None = None,
+        issue_count: int = 0,
+    ) -> None:
         super().__init__(timeout=900)
         self.pending_created_at = pending_created_at
+        _ = can_apply, issue_count
 
 
 def _style_change_missing_emoji_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
