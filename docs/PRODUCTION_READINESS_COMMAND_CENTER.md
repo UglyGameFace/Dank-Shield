@@ -267,8 +267,8 @@ Ticket numbers and channel creation must stay consistent under retries, restarts
 | `interaction_action_lock_guard` | likely valid product rule | migrate to central interaction lock/idempotency service |
 | `command_safety` | likely valid validation | keep only as validation, no runtime mutation |
 | `slash_command_cleanup` | dormant global CommandTree patcher; useful sync behavior now native | **retire/delete with obsolete ticket command epoch shim; native owner is `command_runtime.DankCommandTree`** |
-| `protection_center_command_guard` | mutates command surface to hide aliases | migrate into deterministic command registry |
-| `protection_import_button_patch` | patch file by name | inspect, migrate valid behavior, delete patch |
+| `protection_center_command_guard` | retired; had no production importer | native `commands_ext` registration owns `/dank protection` and legacy alias metadata |
+| `protection_import_button_patch` / `protection_pack_manual_import_guard` | retired dormant UI/config patchers | Import Pack button, modal, normalization, persistence, and interaction safety are native in `public_protection_center.py` |
 | `spam_guard_invite_hard_block` | overlap risk with invite policy engine | migrate/delete after invite policy verification |
 | `discord_invite_blocker_runtime_guard` | overlap risk with invite policy engine | inspect for direct deletes |
 | `invite_live_enforcer_guard` | loader explicitly calls `apply()` | high-risk inspection required |

@@ -33,6 +33,8 @@ _ATTACHED = False
 
 ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
 SPACE_RE = re.compile(r"\s+")
+MAX_FILTER_PACK_IMPORT_TERMS = 700
+MAX_FILTER_PACK_CHARS = 22000
 
 LEET_MAP = str.maketrans(
     {
@@ -162,6 +164,32 @@ def _csv_items(value: Any) -> list[str]:
         if item and item not in out:
             out.append(item)
     return out
+
+
+def _merge_imported_filter_terms(existing_value: Any, raw_terms: Any) -> tuple[list[str], int, int]:
+    """Merge vetted line-delimited terms into the canonical Automod filter list."""
+
+    existing = _csv_items(existing_value)
+    seen = set(existing)
+    imported: list[str] = []
+    skipped = 0
+
+    for raw in str(raw_terms or "").splitlines():
+        item = _clean_filter_item(raw)
+        if not item or len(item) < 2 or len(item) > 80 or item in seen:
+            skipped += 1
+            continue
+
+        trial = existing + imported + [item]
+        if len(",".join(trial)) > MAX_FILTER_PACK_CHARS:
+            break
+
+        imported.append(item)
+        seen.add(item)
+        if len(imported) >= MAX_FILTER_PACK_IMPORT_TERMS:
+            break
+
+    return existing + imported, len(imported), skipped
 
 
 def _parse_csvish_codes(value: Any) -> list[str]:
@@ -491,7 +519,7 @@ def _protection_embed(guild: discord.Guild, cfg: Any, spam: dict[str, Any], spam
             "**Invite Blocker** = live ON/OFF for Discord invite links.\n"
             "**Block All Links** = stop every URL.\n"
             "**Live Stats** = create locked voice-channel counters using real Spam Guard actions.\n"
-            "**Add Filter/Test** = banned words and bypass tests."
+            "**Add Filter / Import Pack / Test** = add one filter, paste a vetted line-delimited pack, or test bypass behavior."
         ),
         inline=False,
     )
@@ -1384,6 +1412,59 @@ class TestFilterModal(discord.ui.Modal, title="Test Protection Filter"):
         await _guard_protection_action(interaction, "protection.test_filter_modal", action, defer=True)
 
 
+class StarterPackImportModal(discord.ui.Modal, title="Import Starter Filter Pack"):
+    terms = discord.ui.TextInput(
+        label="Paste vetted line-delimited filter terms",
+        style=discord.TextStyle.paragraph,
+        max_length=3500,
+        required=True,
+        placeholder="Paste one term or phrase per line. Review source quality first.",
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        async def action() -> None:
+            if not await _require_setup_permission(interaction):
+                return
+            guild = interaction.guild
+            if guild is None:
+                await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+                return
+
+            cfg = await get_guild_config(int(guild.id), refresh=True)
+            merged, imported_count, skipped = _merge_imported_filter_terms(
+                _cfg_value(cfg, "automod_bad_words", ""),
+                self.terms.value,
+            )
+            if imported_count <= 0:
+                await _send_ephemeral(
+                    interaction,
+                    "⚪ No new valid terms were imported. They may already exist, be invalid, or exceed the filter-pack limits.",
+                )
+                return
+
+            await _save_automod(
+                int(guild.id),
+                {
+                    "automod_enabled": True,
+                    "automod_bad_words": ",".join(merged),
+                    "automod_filter_pack_imported_count": imported_count,
+                    "automod_filter_pack_skipped_count": skipped,
+                    "automod_filter_pack_updated_by_id": str(int(interaction.user.id)),
+                    "automod_updated_by_id": str(int(interaction.user.id)),
+                },
+            )
+            await _send_ephemeral(
+                interaction,
+                (
+                    f"✅ Imported **{imported_count}** starter-pack filters. "
+                    f"Skipped `{skipped}` duplicates/invalid entries. "
+                    "Use **Test** in Protection Center to verify bypass behavior."
+                ),
+            )
+
+        await _guard_protection_action(interaction, "protection.import_filter_pack_modal", action, defer=True)
+
+
 class ProtectionCenterView(discord.ui.View):
     def __init__(self, *, author_id: int, cfg: Any | None = None, spam: dict[str, Any] | None = None) -> None:
         super().__init__(timeout=900)
@@ -1478,6 +1559,17 @@ class ProtectionCenterView(discord.ui.View):
             await interaction.response.send_modal(AddFilterModal())
 
         await _guard_protection_action(interaction, "protection.open_add_filter_modal", action, defer=False)
+
+    @discord.ui.button(label="Import Pack", emoji="🌐", style=discord.ButtonStyle.secondary, custom_id="dank_protection:import_pack", row=2)
+    async def import_pack_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+
+        async def action() -> None:
+            if not await _require_setup_permission(interaction):
+                return
+            await interaction.response.send_modal(StarterPackImportModal())
+
+        await _guard_protection_action(interaction, "protection.open_import_filter_pack_modal", action, defer=False)
 
     @discord.ui.button(label="Test", emoji="🧪", style=discord.ButtonStyle.secondary, custom_id="dank_protection:test", row=2)
     async def test_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
