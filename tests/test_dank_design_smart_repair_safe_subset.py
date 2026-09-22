@@ -37,7 +37,7 @@ def test_mixed_smart_repair_keeps_safe_half_actionable() -> None:
     items = [
         _safe("gaming-lounge-global", "gaming-lounge-globals"),
         _safe("member-count-110", "member-count-111"),
-        _safe("spam-blocked-0", "spam-blocked-1"),
+        _safe("online-count-5", "online-count-6"),
         _safe("quarantined-0", "quarantined-1"),
         _safe("voice-count-10", "voice-count-11"),
         _safe("invite-count-5570", "invite-count-5571"),
