@@ -16,6 +16,10 @@ import discord
 
 from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
 from ..interaction_guard import log_interaction_failure, run_guarded_interaction, safe_send_interaction
+from ..settings_registry import (
+    invite_shield_enabled as _registry_invite_shield_enabled,
+    link_shield_enabled as _registry_link_shield_enabled,
+)
 from ..security_stats import (
     SECURITY_STATS_ENABLED_KEY,
     ensure_security_stats_display,
@@ -359,19 +363,11 @@ def _invalidate_invite_policy_cache(guild_id: int) -> None:
 
 
 def _invite_shield_enabled_for_ui(cfg: Any, spam: dict[str, Any] | None = None) -> bool:
-    spam = dict(spam or {})
-    return bool(
-        _cfg_bool(cfg, "automod_block_invites", False)
-        or spam.get("invite_shield_enabled")
-        or spam.get("invite_hard_block_enabled")
-        or spam.get("automod_block_invites")
-        or spam.get("block_invites")
-    )
+    return _registry_invite_shield_enabled(cfg, spam)
 
 
 def _link_shield_enabled_for_ui(cfg: Any, spam: dict[str, Any] | None = None) -> bool:
-    spam = dict(spam or {})
-    return bool(_cfg_bool(cfg, "automod_block_links", False) or spam.get("automod_block_links"))
+    return _registry_link_shield_enabled(cfg, spam)
 
 
 async def _save_automod(guild_id: int, updates: dict[str, Any]) -> Any:
