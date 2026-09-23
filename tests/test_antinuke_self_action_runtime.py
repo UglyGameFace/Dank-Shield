@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-import discord
-
 from stoney_verify import anti_nuke
 from stoney_verify import anti_nuke_self_action_runtime as runtime
 from stoney_verify import anti_nuke_zero_damage_runtime as hardening
@@ -282,99 +280,102 @@ def test_expected_bot_removal_side_effect_expires() -> None:
     assert token not in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
 
 
-def test_bot_kick_wrapper_arms_and_failed_kick_cancels_side_effect() -> None:
+def test_http_bot_kick_arms_expected_integration_cleanup(monkeypatch) -> None:
     _reset()
-    original_kick = discord.Guild.kick
-    original_ban = discord.Guild.ban
-    had_flag = hasattr(discord.Guild, runtime._GUILD_REMOVAL_PATCH_FLAG)  # noqa: SLF001
-    old_flag = getattr(discord.Guild, runtime._GUILD_REMOVAL_PATCH_FLAG, None)  # noqa: SLF001
-    if had_flag:
-        delattr(discord.Guild, runtime._GUILD_REMOVAL_PATCH_FLAG)  # noqa: SLF001
+    bot = FakeBot()
+    bot.get_user = lambda user_id: (
+        SimpleNamespace(id=444, bot=True) if int(user_id) == 444 else None
+    )
+    route = FakeRoute("DELETE", "/guilds/7/members/444")
 
-    kick_calls: list[int] = []
-    ban_calls: list[int] = []
+    assert runtime._patch_http(bot) is True  # noqa: SLF001
+    asyncio.run(
+        bot.http.request(
+            route,
+            reason="Dank Shield AntiNuke rollback: unauthorized bot addition",
+        )
+    )
 
-    async def fake_kick(self, user, *args, **kwargs):
-        _ = args, kwargs
-        kick_calls.append(int(user.id))
-        if int(user.id) == 445:
-            raise RuntimeError("kick failed")
-        return None
+    assert len(runtime._EXPECTED_SIDE_EFFECTS) == 1  # noqa: SLF001
+    expected = next(iter(runtime._EXPECTED_SIDE_EFFECTS.values()))  # noqa: SLF001
+    assert expected.guild_id == 7
+    assert expected.action == "integration_delete"
+    assert expected.related_bot_id == 444
+    assert expected.source_action == "bot_kick"
 
-    async def fake_ban(self, user, *args, **kwargs):
-        _ = args, kwargs
-        ban_calls.append(int(user.id))
-        return None
+    async def should_not_read_settings(_guild_id: int):
+        raise AssertionError(
+            "derived integration cleanup must be consumed before compromise checks"
+        )
 
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", should_not_read_settings)
+    event = _entry(
+        FakeGuild(7),
+        action="integration_delete",
+        target_id=9001,
+        related_bot_id=444,
+    )
+    asyncio.run(runtime._audit_guard(bot, event))  # noqa: SLF001
+
+    assert runtime._EXPECTED_SIDE_EFFECTS == {}  # noqa: SLF001
+
+
+def test_http_bot_ban_uses_cache_or_antinuke_reason_fallback() -> None:
+    _reset()
+    bot = FakeBot()
+    route = FakeRoute("PUT", "/guilds/7/bans/447")
+
+    assert runtime._patch_http(bot) is True  # noqa: SLF001
+    asyncio.run(
+        bot.http.request(
+            route,
+            reason="Dank Shield AntiNuke: fast known-hostile bot re-add block",
+        )
+    )
+
+    expected = list(runtime._EXPECTED_SIDE_EFFECTS.values())  # noqa: SLF001
+    assert len(expected) == 1
+    assert expected[0].related_bot_id == 447
+    assert expected[0].source_action == "bot_ban"
+
+
+def test_http_human_removal_does_not_arm_integration_cleanup() -> None:
+    _reset()
+    bot = FakeBot()
+    bot.get_user = lambda user_id: SimpleNamespace(id=int(user_id), bot=False)
+    route = FakeRoute("DELETE", "/guilds/7/members/446")
+
+    assert runtime._patch_http(bot) is True  # noqa: SLF001
+    asyncio.run(bot.http.request(route, reason="ordinary moderation"))
+
+    assert runtime._EXPECTED_SIDE_EFFECTS == {}  # noqa: SLF001
+
+
+def test_failed_http_bot_removal_cancels_side_effect_and_nonce() -> None:
+    _reset()
+
+    class FailingHTTP:
+        async def request(self, route, *args, **kwargs):
+            _ = route, args, kwargs
+            raise RuntimeError("request failed")
+
+    bot = FakeBot()
+    bot.http = FailingHTTP()
+    bot.get_user = lambda user_id: (
+        SimpleNamespace(id=444, bot=True) if int(user_id) == 444 else None
+    )
+    route = FakeRoute("DELETE", "/guilds/7/members/444")
+
+    assert runtime._patch_http(bot) is True  # noqa: SLF001
     try:
-        discord.Guild.kick = fake_kick
-        discord.Guild.ban = fake_ban
-        assert runtime._patch_guild_member_removal_methods() is True  # noqa: SLF001
+        asyncio.run(bot.http.request(route, reason="ordinary bot moderation"))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("failed bot removal must propagate the original error")
 
-        guild = SimpleNamespace(id=7)
-        asyncio.run(
-            discord.Guild.kick(
-                guild,
-                SimpleNamespace(id=444, bot=True),
-                reason="test bot removal",
-            )
-        )
-        assert kick_calls == [444]
-        expected = list(runtime._EXPECTED_SIDE_EFFECTS.values())  # noqa: SLF001
-        assert len(expected) == 1
-        assert expected[0].action == "integration_delete"
-        assert expected[0].guild_id == 7
-        assert expected[0].related_bot_id == 444
-        assert expected[0].source_action == "bot_kick"
-
-        try:
-            asyncio.run(
-                discord.Guild.kick(
-                    guild,
-                    SimpleNamespace(id=445, bot=True),
-                    reason="failed bot removal",
-                )
-            )
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("failed bot kick must propagate the original error")
-
-        expected = list(runtime._EXPECTED_SIDE_EFFECTS.values())  # noqa: SLF001
-        assert len(expected) == 1
-        assert expected[0].related_bot_id == 444
-
-        asyncio.run(
-            discord.Guild.kick(
-                guild,
-                SimpleNamespace(id=446, bot=False),
-                reason="human removal",
-            )
-        )
-        assert len(runtime._EXPECTED_SIDE_EFFECTS) == 1  # noqa: SLF001
-
-        asyncio.run(
-            discord.Guild.ban(
-                guild,
-                SimpleNamespace(id=447, bot=True),
-                reason="hostile bot removal",
-            )
-        )
-        assert ban_calls == [447]
-        expected = list(runtime._EXPECTED_SIDE_EFFECTS.values())  # noqa: SLF001
-        assert len(expected) == 2
-        assert any(
-            item.related_bot_id == 447 and item.source_action == "bot_ban"
-            for item in expected
-        )
-    finally:
-        discord.Guild.kick = original_kick
-        discord.Guild.ban = original_ban
-        if had_flag:
-            setattr(discord.Guild, runtime._GUILD_REMOVAL_PATCH_FLAG, old_flag)  # noqa: SLF001
-        elif hasattr(discord.Guild, runtime._GUILD_REMOVAL_PATCH_FLAG):  # noqa: SLF001
-            delattr(discord.Guild, runtime._GUILD_REMOVAL_PATCH_FLAG)  # noqa: SLF001
-        _reset()
+    assert runtime._PENDING == {}  # noqa: SLF001
+    assert runtime._EXPECTED_SIDE_EFFECTS == {}  # noqa: SLF001
 
 
 def test_unmatched_bot_attributed_action_self_ejects_in_contain_mode(monkeypatch) -> None:
