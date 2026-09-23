@@ -100,3 +100,50 @@ def test_exit_card_renderer_covers_known_live_unicode_names_across_font_styles()
                     if max(pixel) >= 150
                 )
                 assert bright_pixels > 250, (style_key, sample, bright_pixels)
+
+
+def test_exit_card_renderer_uses_bundled_long_tail_fallback_without_host_fonts(
+    monkeypatch,
+) -> None:
+    fallback._registered_fallback_paths.cache_clear()
+    monkeypatch.setattr(
+        fallback,
+        "_registered_fallback_paths",
+        lambda _bold: (),
+    )
+
+    style = engine._render_style("neon", None)
+    runs = fallback.resolve_font_runs(
+        "ᗩ ᗰ ᒪ",
+        primary_paths=engine._family_candidates(style.family, bold=True),
+        bold=True,
+        tracking=style.tracking,
+    )
+
+    assert runs
+    assert "".join(run.text for run in runs) == "ᗩ ᗰ ᒪ"
+    assert all(fallback.source_supports(run.source, run.text) for run in runs)
+    assert any(
+        str(run.source.path or "").endswith("NotoSansCanadianAboriginal-VF.ttf")
+        for run in runs
+    )
+
+    rendered = render_exit_card(
+        avatar_bytes=_avatar_png(),
+        display_name="ᗩ ᗰ ᒪ",
+        server_name="Cross Guild Unicode Test",
+        member_count=124,
+        theme_key="cyber_neon",
+        font_style_key="neon",
+        color_mode="theme",
+    )
+
+    with Image.open(BytesIO(rendered)) as image:
+        assert image.size == (CARD_WIDTH, CARD_HEIGHT)
+        name_area = image.convert("RGB").crop((410, 125, 1145, 255))
+        bright_pixels = sum(
+            1
+            for pixel in name_area.getdata()
+            if max(pixel) >= 150
+        )
+        assert bright_pixels > 250
