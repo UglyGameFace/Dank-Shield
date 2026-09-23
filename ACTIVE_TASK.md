@@ -76,8 +76,11 @@ Out of scope:
 `stoney_verify/anti_nuke_self_action_runtime.py` now:
 
 - maintains an in-memory expected-side-effect ledger separate from direct DSA nonces;
-- arms an `integration_delete` expectation only when Dank Shield invokes
-  `discord.Guild.kick` or `discord.Guild.ban` on an object explicitly marked as a bot;
+- extends the existing authoritative HTTP self-action interceptor rather than adding
+  another Discord moderation-method monkey patch;
+- arms an `integration_delete` expectation when a protected local kick/ban targets
+  a cached bot, or when an AntiNuke bot-removal reason confirms the freshly-added-bot
+  path during a temporary cache miss;
 - scopes each expectation to one guild, one action, one related bot ID, and a 15-second TTL;
 - consumes each expectation at most once;
 - matches integration `user`, `application`, `application.bot`,
@@ -92,13 +95,12 @@ Existing direct integration deletions still use the normal DSA nonce route.
 
 ## Compatibility / patch ordering
 
-AntiNuke pre-app installation patches `discord.Guild.kick/ban` before
-`stoney_verify.app` is imported.
+No new `discord.Guild.kick/ban` monkey patch is introduced.
 
-The later member-join removal safety guard captures the then-current Guild methods and
-wraps them rather than replacing them with raw discord.py methods, so the AntiNuke
-side-effect wrapper remains in the call chain. The old staff moderation global native
-method patch is retired and does not overwrite this chain.
+The correlation runs inside the existing self-action HTTP interceptor that already owns
+DSA nonce creation for protected local REST mutations. That makes the correlation
+independent of higher-level `Guild` / `Member` moderation wrappers and preserves the
+existing member-removal safety guard's ownership.
 
 ## Tests added / extended
 
@@ -110,9 +112,11 @@ method patch is retired and does not overwrite this chain.
 - a second matching deletion is not hidden;
 - sparse integration audit targets consume only the one pending guild/action receipt;
 - receipts expire;
-- successful bot kicks arm the receipt;
-- failed bot kicks cancel their receipt;
-- human kicks do not arm a receipt;
+- a protected HTTP bot kick arms the receipt and the derived cleanup consumes it;
+- cached bot identity can establish the correlation;
+- the stable AntiNuke removal reason covers the freshly-added-bot cache race;
+- failed bot-removal HTTP requests cancel both the direct DSA nonce and side-effect receipt;
+- human removals do not arm a receipt;
 - bot bans arm the same derived cleanup receipt.
 
 Existing tests continue to require an unmatched protected self-action to self-eject in
@@ -163,9 +167,14 @@ Separate from this P0:
 ## Blockers / risks
 
 The sparse Discord audit target case cannot prove the related bot ID, so it uses the
-narrowest available fallback: one guild, one `integration_delete`, one successful
-bot-removal attempt, 15 seconds, one-time consumption. If Discord exposes application
-or bot identity, a mismatch is rejected and the fail-closed path remains active.
+narrowest available fallback: one guild, one `integration_delete`, one locally
+authorized bot-removal request, 15 seconds, one-time consumption. If Discord exposes
+application or bot identity, a mismatch is rejected and the fail-closed path remains
+active.
+
+The side-effect receipt is armed before the protected HTTP request so the audit event
+cannot win a race against the request return. If that request fails, both its normal
+DSA nonce and the side-effect receipt are canceled.
 
 ## Next step
 
