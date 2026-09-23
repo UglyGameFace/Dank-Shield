@@ -155,6 +155,15 @@ Post-sync verification:
 - review threads remain empty;
 - GitHub-hosted workflows still fail before runner execution (`steps=null`), so they provide no code-test signal.
 
+
+## Validation failure found after sync
+
+Exact-head Termux focused regressions exposed one stale ownership assertion in `tests/test_settings_registry_protection.py`. The test still required `_registry_setting_bool` inside `spam_guard.py`, but this active slice intentionally replaced per-setting Spam Guard reads with whole-object delegation through `_registry_spam_guard_defaults` and `_registry_normalize_spam_guard_settings`.
+
+Root cause: the older Protection-registry wiring test encoded the previous implementation detail rather than the new canonical ownership contract.
+
+Fix: updated that regression to require the two canonical Spam Guard registry delegates and explicitly reject the obsolete `_registry_setting_bool` path in `spam_guard.py`. No runtime code was changed.
+
 ## Validation required
 
 - exact-head `git diff --check`;
@@ -175,4 +184,4 @@ Post-sync verification:
 
 ## Next step
 
-Validate the synchronized exact head through Termux because GitHub-hosted jobs are failing before runner execution. Then perform final diff/review-thread inspection, mark the PR ready, merge with an expected-head guard, and verify ownership on `main` before moving to the next settings family.
+Re-run exact-head Termux validation after the stale Protection-registry assertion repair because GitHub-hosted jobs are failing before runner execution. Then perform final diff/review-thread inspection, mark the PR ready, merge with an expected-head guard, and verify ownership on `main` before moving to the next settings family.
