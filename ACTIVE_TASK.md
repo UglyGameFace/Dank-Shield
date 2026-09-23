@@ -10,11 +10,11 @@ Remove the duplicate Spam Guard storage/cache path from the setup compatibility 
 
 ## Status
 
-**IMPLEMENTED — exact-head validation pending**
+**IMPLEMENTED — synced to current main; exact-head validation pending**
 
 Branch: `audit/settings-registry-spamguard-20260922`
 
-Base: current `main` after PR #296.
+Base: current `main` at `80f96f54fe99abce7a2663dde817e91ce3711178` after PR #301.
 
 ## Previous task closed
 
@@ -140,6 +140,21 @@ Setup now displays and saves the same normalized Spam Guard state that the runti
 
 A setup save receives the same persistence/readback/cache handling as every other Spam Guard save.
 
+## Branch sync / integration state
+
+PR #297 was 50 commits behind current `main`. The task-owned file set was checked against those 50 commits and had **no overlapping changed paths**. The branch was then synchronized with current `main` using merge commit:
+
+`9c868b56c4eae83ff13a8af90c1f497d2cb46e9c`
+
+Post-sync verification:
+
+- PR is mergeable;
+- branch is 15 commits ahead / 0 behind current `main`;
+- merge base exactly matches `80f96f54fe99abce7a2663dde817e91ce3711178`;
+- changed-file scope remains exactly the same 10 task-owned files;
+- review threads remain empty;
+- GitHub-hosted workflows still fail before runner execution (`steps=null`), so they provide no code-test signal.
+
 ## Validation required
 
 - exact-head `git diff --check`;
@@ -160,4 +175,4 @@ A setup save receives the same persistence/readback/cache handling as every othe
 
 ## Next step
 
-Inspect the exact branch diff, open a focused draft PR, validate the exact head through GitHub CI or Termux, then merge and verify before moving to the next settings family.
+Validate the synchronized exact head through Termux because GitHub-hosted jobs are failing before runner execution. Then perform final diff/review-thread inspection, mark the PR ready, merge with an expected-head guard, and verify ownership on `main` before moving to the next settings family.
