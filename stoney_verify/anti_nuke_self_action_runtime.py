@@ -23,7 +23,6 @@ from . import anti_nuke
 _INSTALL_FLAG = "_dank_antinuke_self_action_runtime_installed"
 _HTTP_PATCH_FLAG = "_dank_antinuke_self_action_http_patched"
 _WEBHOOK_PATCH_FLAG = "_dank_antinuke_self_action_webhook_patched"
-_GUILD_REMOVAL_PATCH_FLAG = "_dank_antinuke_self_action_guild_removal_patched"
 _AUTH_TTL_SECONDS = 120.0
 _SIDE_EFFECT_TTL_SECONDS = 15.0
 _MAX_PENDING = 4096
@@ -360,6 +359,61 @@ def _cancel_expected_side_effect(token: str) -> None:
     _EXPECTED_SIDE_EFFECTS.pop(str(token or "").lower(), None)
 
 
+def _target_id_from_key(target_key: str) -> int:
+    text = str(target_key or "").strip().lower()
+    if not text.startswith("id:"):
+        return 0
+    return _safe_int(text[3:], 0)
+
+
+def _local_removal_targets_bot(
+    bot: discord.Client,
+    spec: _RequestSpec,
+    reason: Any,
+) -> bool:
+    if not ({"kick", "ban"} & set(spec.actions)):
+        return False
+
+    target_id = _target_id_from_key(spec.target_key)
+    if target_id <= 0:
+        return False
+
+    if spec.guild_id > 0:
+        get_guild = getattr(bot, "get_guild", None)
+        guild = None
+        if callable(get_guild):
+            try:
+                guild = get_guild(spec.guild_id)
+            except Exception:
+                guild = None
+        if guild is None:
+            for candidate in list(getattr(bot, "guilds", []) or []):
+                if _safe_int(getattr(candidate, "id", 0), 0) == spec.guild_id:
+                    guild = candidate
+                    break
+        get_member = getattr(guild, "get_member", None)
+        if callable(get_member):
+            try:
+                member = get_member(target_id)
+            except Exception:
+                member = None
+            if member is not None and bool(getattr(member, "bot", False)):
+                return True
+
+    get_user = getattr(bot, "get_user", None)
+    if callable(get_user):
+        try:
+            user = get_user(target_id)
+        except Exception:
+            user = None
+        if user is not None and bool(getattr(user, "bot", False)):
+            return True
+
+    # AntiNuke's own bot-removal paths use this stable prefix. This covers the
+    # freshly-added-bot race even if Discord's member/user cache is temporarily sparse.
+    return str(reason or "").strip().casefold().startswith("dank shield antinuke")
+
+
 def _integration_identity_ids(entry: Any) -> set[int]:
     target = getattr(entry, "target", None)
     application = getattr(target, "application", None)
@@ -587,62 +641,31 @@ def _patch_http(bot: discord.Client) -> bool:
         spec = _request_spec(bot, route, kwargs)
         if spec is None:
             return await original(route, *args, **kwargs)
-        nonce, reason = _authorize(spec, kwargs.get("reason"))
+
+        original_reason = kwargs.get("reason")
+        nonce, reason = _authorize(spec, original_reason)
         kwargs["reason"] = reason
+
+        side_effect = ""
+        if _local_removal_targets_bot(bot, spec, original_reason):
+            source_action = "bot_ban" if "ban" in spec.actions else "bot_kick"
+            side_effect = _expect_side_effect(
+                spec.guild_id,
+                "integration_delete",
+                related_bot_id=_target_id_from_key(spec.target_key),
+                source_action=source_action,
+            )
+
         try:
             return await original(route, *args, **kwargs)
         except Exception:
             _cancel(nonce)
+            if side_effect:
+                _cancel_expected_side_effect(side_effect)
             raise
 
     setattr(http, "request", guarded_request)
     setattr(http, _HTTP_PATCH_FLAG, True)
-    return True
-
-
-def _patch_guild_member_removal_methods() -> bool:
-    cls = discord.Guild
-    if bool(getattr(cls, _GUILD_REMOVAL_PATCH_FLAG, False)):
-        return False
-
-    original_kick = cls.kick
-    original_ban = cls.ban
-
-    async def guarded_kick(self: Any, user: Any, *args: Any, **kwargs: Any) -> Any:
-        side_effect = ""
-        if bool(getattr(user, "bot", False)):
-            side_effect = _expect_side_effect(
-                _safe_int(getattr(self, "id", 0), 0),
-                "integration_delete",
-                related_bot_id=_safe_int(getattr(user, "id", 0), 0),
-                source_action="bot_kick",
-            )
-        try:
-            return await original_kick(self, user, *args, **kwargs)
-        except Exception:
-            if side_effect:
-                _cancel_expected_side_effect(side_effect)
-            raise
-
-    async def guarded_ban(self: Any, user: Any, *args: Any, **kwargs: Any) -> Any:
-        side_effect = ""
-        if bool(getattr(user, "bot", False)):
-            side_effect = _expect_side_effect(
-                _safe_int(getattr(self, "id", 0), 0),
-                "integration_delete",
-                related_bot_id=_safe_int(getattr(user, "id", 0), 0),
-                source_action="bot_ban",
-            )
-        try:
-            return await original_ban(self, user, *args, **kwargs)
-        except Exception:
-            if side_effect:
-                _cancel_expected_side_effect(side_effect)
-            raise
-
-    cls.kick = guarded_kick
-    cls.ban = guarded_ban
-    setattr(cls, _GUILD_REMOVAL_PATCH_FLAG, True)
     return True
 
 
@@ -685,7 +708,6 @@ def install_anti_nuke_self_action_runtime(bot: discord.Client) -> bool:
     if bool(getattr(bot, _INSTALL_FLAG, False)):
         return False
     http_patched = _patch_http(bot)
-    guild_removal_patched = _patch_guild_member_removal_methods()
     webhook_patched = _patch_webhook_methods(bot)
 
     async def audit_listener(entry: Any) -> None:
@@ -696,7 +718,7 @@ def install_anti_nuke_self_action_runtime(bot: discord.Client) -> bool:
     print(
         "🧾 AntiNuke self-action proof active: protected bot-attributed audit actions require "
         f"one-time local authorization; http={'patched' if http_patched else 'unavailable'}; "
-        f"bot-removal-side-effects={'patched' if guild_removal_patched else 'already active'}; "
+        "bot-removal integration side effects correlated; "
         f"webhook={'patched' if webhook_patched else 'already active'}"
     )
     return True
