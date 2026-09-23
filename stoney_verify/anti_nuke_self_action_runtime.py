@@ -23,7 +23,9 @@ from . import anti_nuke
 _INSTALL_FLAG = "_dank_antinuke_self_action_runtime_installed"
 _HTTP_PATCH_FLAG = "_dank_antinuke_self_action_http_patched"
 _WEBHOOK_PATCH_FLAG = "_dank_antinuke_self_action_webhook_patched"
+_GUILD_REMOVAL_PATCH_FLAG = "_dank_antinuke_self_action_guild_removal_patched"
 _AUTH_TTL_SECONDS = 120.0
+_SIDE_EFFECT_TTL_SECONDS = 15.0
 _MAX_PENDING = 4096
 _REASON_BASE_LIMIT = 380
 _MARKER_RE = re.compile(r"\[DSA:([0-9a-f]{24})\]", re.IGNORECASE)
@@ -69,7 +71,18 @@ class _Authorization:
     created_at: float
 
 
+@dataclass
+class _ExpectedSideEffect:
+    token: str
+    action: str
+    guild_id: int
+    related_bot_id: int
+    source_action: str
+    created_at: float
+
+
 _PENDING: dict[str, _Authorization] = {}
+_EXPECTED_SIDE_EFFECTS: dict[str, _ExpectedSideEffect] = {}
 _COMPROMISE_GUILDS: set[int] = set()
 
 
@@ -305,6 +318,102 @@ def _prune_pending(now: Optional[float] = None) -> None:
             _PENDING.pop(auth.nonce, None)
 
 
+def _prune_expected_side_effects(now: Optional[float] = None) -> None:
+    current = time.monotonic() if now is None else float(now)
+    for token, expected in list(_EXPECTED_SIDE_EFFECTS.items()):
+        if current - float(expected.created_at) > _SIDE_EFFECT_TTL_SECONDS:
+            _EXPECTED_SIDE_EFFECTS.pop(token, None)
+    if len(_EXPECTED_SIDE_EFFECTS) > _MAX_PENDING:
+        ordered = sorted(
+            _EXPECTED_SIDE_EFFECTS.values(),
+            key=lambda item: item.created_at,
+        )
+        for expected in ordered[: len(_EXPECTED_SIDE_EFFECTS) - _MAX_PENDING]:
+            _EXPECTED_SIDE_EFFECTS.pop(expected.token, None)
+
+
+def _expect_side_effect(
+    guild_id: int,
+    action_name: str,
+    *,
+    related_bot_id: int = 0,
+    source_action: str = "",
+) -> str:
+    _prune_expected_side_effects()
+    gid = _safe_int(guild_id, 0)
+    action = str(action_name or "").strip().lower()
+    if gid <= 0 or not action:
+        return ""
+    token = secrets.token_hex(12)
+    _EXPECTED_SIDE_EFFECTS[token] = _ExpectedSideEffect(
+        token=token,
+        action=action,
+        guild_id=gid,
+        related_bot_id=max(0, _safe_int(related_bot_id, 0)),
+        source_action=str(source_action or "")[:80],
+        created_at=time.monotonic(),
+    )
+    return token
+
+
+def _cancel_expected_side_effect(token: str) -> None:
+    _EXPECTED_SIDE_EFFECTS.pop(str(token or "").lower(), None)
+
+
+def _integration_identity_ids(entry: Any) -> set[int]:
+    target = getattr(entry, "target", None)
+    application = getattr(target, "application", None)
+    candidates = (
+        getattr(target, "user", None),
+        application,
+        getattr(application, "bot", None),
+    )
+    found: set[int] = set()
+    for candidate in candidates:
+        value = _safe_int(getattr(candidate, "id", 0), 0)
+        if value > 0:
+            found.add(value)
+    return found
+
+
+def _consume_expected_side_effect(
+    guild: Any,
+    entry: Any,
+    action_name: str,
+) -> bool:
+    _prune_expected_side_effects()
+    gid = _safe_int(getattr(guild, "id", 0), 0)
+    action = str(action_name or "").strip().lower()
+    if gid <= 0 or not action:
+        return False
+
+    related_ids = (
+        _integration_identity_ids(entry)
+        if action == "integration_delete"
+        else set()
+    )
+    ordered = sorted(
+        _EXPECTED_SIDE_EFFECTS.items(),
+        key=lambda item: item[1].created_at,
+    )
+    for token, expected in ordered:
+        if expected.guild_id != gid or expected.action != action:
+            continue
+        if (
+            expected.related_bot_id > 0
+            and related_ids
+            and expected.related_bot_id not in related_ids
+        ):
+            continue
+        _EXPECTED_SIDE_EFFECTS.pop(token, None)
+        print(
+            "🧾 AntiNuke consumed expected self-action side effect "
+            f"guild={gid} action={action} source={expected.source_action or 'unknown'}"
+        )
+        return True
+    return False
+
+
 def _authorize(spec: _RequestSpec, reason: Any) -> tuple[str, str]:
     _prune_pending()
     nonce = secrets.token_hex(12)
@@ -454,6 +563,8 @@ async def _audit_guard(bot: discord.Client, entry: Any) -> None:
         return
     if _consume(guild, entry, action_name):
         return
+    if _consume_expected_side_effect(guild, entry, action_name):
+        return
     await _unmatched_self_action(bot, guild, entry, action_name)
 
 
@@ -479,6 +590,52 @@ def _patch_http(bot: discord.Client) -> bool:
 
     setattr(http, "request", guarded_request)
     setattr(http, _HTTP_PATCH_FLAG, True)
+    return True
+
+
+def _patch_guild_member_removal_methods() -> bool:
+    cls = discord.Guild
+    if bool(getattr(cls, _GUILD_REMOVAL_PATCH_FLAG, False)):
+        return False
+
+    original_kick = cls.kick
+    original_ban = cls.ban
+
+    async def guarded_kick(self: Any, user: Any, *args: Any, **kwargs: Any) -> Any:
+        side_effect = ""
+        if bool(getattr(user, "bot", False)):
+            side_effect = _expect_side_effect(
+                _safe_int(getattr(self, "id", 0), 0),
+                "integration_delete",
+                related_bot_id=_safe_int(getattr(user, "id", 0), 0),
+                source_action="bot_kick",
+            )
+        try:
+            return await original_kick(self, user, *args, **kwargs)
+        except Exception:
+            if side_effect:
+                _cancel_expected_side_effect(side_effect)
+            raise
+
+    async def guarded_ban(self: Any, user: Any, *args: Any, **kwargs: Any) -> Any:
+        side_effect = ""
+        if bool(getattr(user, "bot", False)):
+            side_effect = _expect_side_effect(
+                _safe_int(getattr(self, "id", 0), 0),
+                "integration_delete",
+                related_bot_id=_safe_int(getattr(user, "id", 0), 0),
+                source_action="bot_ban",
+            )
+        try:
+            return await original_ban(self, user, *args, **kwargs)
+        except Exception:
+            if side_effect:
+                _cancel_expected_side_effect(side_effect)
+            raise
+
+    cls.kick = guarded_kick
+    cls.ban = guarded_ban
+    setattr(cls, _GUILD_REMOVAL_PATCH_FLAG, True)
     return True
 
 
@@ -521,6 +678,7 @@ def install_anti_nuke_self_action_runtime(bot: discord.Client) -> bool:
     if bool(getattr(bot, _INSTALL_FLAG, False)):
         return False
     http_patched = _patch_http(bot)
+    guild_removal_patched = _patch_guild_member_removal_methods()
     webhook_patched = _patch_webhook_methods(bot)
 
     async def audit_listener(entry: Any) -> None:
@@ -531,6 +689,7 @@ def install_anti_nuke_self_action_runtime(bot: discord.Client) -> bool:
     print(
         "🧾 AntiNuke self-action proof active: protected bot-attributed audit actions require "
         f"one-time local authorization; http={'patched' if http_patched else 'unavailable'}; "
+        f"bot-removal-side-effects={'patched' if guild_removal_patched else 'already active'}; "
         f"webhook={'patched' if webhook_patched else 'already active'}"
     )
     return True
