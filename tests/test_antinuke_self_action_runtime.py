@@ -234,6 +234,37 @@ def test_expected_bot_removal_side_effect_does_not_hide_unrelated_or_second_dele
     assert guild.leave_calls == 2
 
 
+def test_expected_bot_removal_accepts_sparse_integration_target_once(
+    monkeypatch,
+) -> None:
+    _reset()
+    bot = FakeBot()
+    guild = FakeGuild()
+
+    async def should_not_read_settings(_guild_id: int):
+        raise AssertionError(
+            "sparse expected Discord cleanup must be consumed before compromise checks"
+        )
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", should_not_read_settings)
+
+    runtime._expect_side_effect(  # noqa: SLF001
+        guild.id,
+        "integration_delete",
+        related_bot_id=444,
+        source_action="bot_kick",
+    )
+    sparse = _entry(
+        guild,
+        action="integration_delete",
+        target_id=9001,
+    )
+    asyncio.run(runtime._audit_guard(bot, sparse))  # noqa: SLF001
+
+    assert guild.leave_calls == 0
+    assert runtime._EXPECTED_SIDE_EFFECTS == {}  # noqa: SLF001
+
+
 def test_expected_bot_removal_side_effect_expires() -> None:
     _reset()
     token = runtime._expect_side_effect(  # noqa: SLF001
@@ -260,17 +291,24 @@ def test_bot_kick_wrapper_arms_and_failed_kick_cancels_side_effect() -> None:
     if had_flag:
         delattr(discord.Guild, runtime._GUILD_REMOVAL_PATCH_FLAG)  # noqa: SLF001
 
-    calls: list[int] = []
+    kick_calls: list[int] = []
+    ban_calls: list[int] = []
 
     async def fake_kick(self, user, *args, **kwargs):
         _ = args, kwargs
-        calls.append(int(user.id))
+        kick_calls.append(int(user.id))
         if int(user.id) == 445:
             raise RuntimeError("kick failed")
         return None
 
+    async def fake_ban(self, user, *args, **kwargs):
+        _ = args, kwargs
+        ban_calls.append(int(user.id))
+        return None
+
     try:
         discord.Guild.kick = fake_kick
+        discord.Guild.ban = fake_ban
         assert runtime._patch_guild_member_removal_methods() is True  # noqa: SLF001
 
         guild = SimpleNamespace(id=7)
@@ -281,7 +319,7 @@ def test_bot_kick_wrapper_arms_and_failed_kick_cancels_side_effect() -> None:
                 reason="test bot removal",
             )
         )
-        assert calls == [444]
+        assert kick_calls == [444]
         expected = list(runtime._EXPECTED_SIDE_EFFECTS.values())  # noqa: SLF001
         assert len(expected) == 1
         assert expected[0].action == "integration_delete"
@@ -314,6 +352,21 @@ def test_bot_kick_wrapper_arms_and_failed_kick_cancels_side_effect() -> None:
             )
         )
         assert len(runtime._EXPECTED_SIDE_EFFECTS) == 1  # noqa: SLF001
+
+        asyncio.run(
+            discord.Guild.ban(
+                guild,
+                SimpleNamespace(id=447, bot=True),
+                reason="hostile bot removal",
+            )
+        )
+        assert ban_calls == [447]
+        expected = list(runtime._EXPECTED_SIDE_EFFECTS.values())  # noqa: SLF001
+        assert len(expected) == 2
+        assert any(
+            item.related_bot_id == 447 and item.source_action == "bot_ban"
+            for item in expected
+        )
     finally:
         discord.Guild.kick = original_kick
         discord.Guild.ban = original_ban
