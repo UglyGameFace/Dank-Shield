@@ -368,7 +368,14 @@ def _integration_identity_ids(entry: Any) -> set[int]:
         application,
         getattr(application, "bot", None),
     )
-    found: set[int] = set()
+    found: set[int] = {
+        value
+        for value in (
+            _safe_int(getattr(target, "application_id", 0), 0),
+            _safe_int(getattr(target, "user_id", 0), 0),
+        )
+        if value > 0
+    }
     for candidate in candidates:
         value = _safe_int(getattr(candidate, "id", 0), 0)
         if value > 0:
