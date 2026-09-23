@@ -17,6 +17,7 @@ import discord
 from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
 from ..interaction_guard import log_interaction_failure, run_guarded_interaction, safe_send_interaction
 from ..settings_registry import (
+    SPAM_GUARD_PRESETS,
     invite_shield_enabled as _registry_invite_shield_enabled,
     link_shield_enabled as _registry_link_shield_enabled,
 )
@@ -103,39 +104,8 @@ AUTOMOD_PRESETS: dict[str, dict[str, Any]] = {
     },
 }
 
-SPAM_PRESETS: dict[str, dict[str, Any]] = {
-    "off": {"enabled": False},
-    "safe": {
-        "enabled": True,
-        "mode": "timeout",
-        "apply_to_verified_users": True,
-        "block_external_invites_only": True,
-        "allow_server_invites": True,
-        "window_seconds": 12,
-        "message_threshold": 5,
-        "duplicate_threshold": 3,
-        "invite_threshold": 2,
-        "multi_invite_immediate": 2,
-        "delete_history": 8,
-        "timeout_minutes": 30,
-        "cooldown_seconds": 20,
-    },
-    "strict": {
-        "enabled": True,
-        "mode": "timeout",
-        "apply_to_verified_users": True,
-        "block_external_invites_only": True,
-        "allow_server_invites": True,
-        "window_seconds": 10,
-        "message_threshold": 4,
-        "duplicate_threshold": 2,
-        "invite_threshold": 1,
-        "multi_invite_immediate": 2,
-        "delete_history": 12,
-        "timeout_minutes": 60,
-        "cooldown_seconds": 30,
-    },
-}
+SPAM_PRESETS: dict[str, dict[str, Any]] = SPAM_GUARD_PRESETS
+
 
 SPAM_MODE_LABELS = {
     "log_only": "Alert Only",

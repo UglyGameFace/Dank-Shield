@@ -2,191 +2,186 @@
 
 ## Active task / desired outcome
 
-**P0-SETTINGS-001A — Protection / Automod / Invite settings registry**
+**P0-SETTINGS-001B — Spam Guard core settings + canonical setup persistence**
 
-Create the first canonical settings-registry slice for Protection, Automod, and Invite Shield without moving persistence, changing policy, or creating a second cache/database layer.
+Make the settings registry the semantic owner for Spam Guard core settings while keeping `spam_guard.py` as the single persistence/cache/diagnostics owner for `guild_security_settings`.
+
+Remove the duplicate Spam Guard storage/cache path from the setup compatibility UI.
 
 ## Status
 
-**IMPLEMENTED — exact-head validation pending**
+**IMPLEMENTED — synced to current main; exact-head validation pending**
 
-Branch: `audit/settings-registry-protection-20260922`
+Branch: `audit/settings-registry-spamguard-20260922`
 
-Base: current `main` after PR #295.
+Base: current `main` at `80f96f54fe99abce7a2663dde817e91ce3711178` after PR #301.
 
 ## Previous task closed
 
-**P0-INVITE-RUNTIME-001** is complete.
+**P0-SETTINGS-001A** is complete.
 
-PR #295 merged as:
+PR #296 merged as:
 
-`c13712e0131484b0c9d47d639887617490dbe595`
+`e949f9651f58e3fce3fccbaff3aca9789da813b2`
 
 Exact implementation head:
 
-`678ab19e8d8f7b0806e950720538639be2410f47`
+`91b54aac57d1a75574fd687f457fcef6385787d8`
 
 Termux validation passed:
 
-- invite safety audit;
-- live/recovery ownership tests;
-- Invite Shield UI/retirement tests;
-- invite-policy/message-surface tests;
-- startup ownership tests;
-- full suite: **1804 passed, 79 warnings, 0 failures**.
+- diff integrity;
+- Python compile;
+- settings-registry focused tests;
+- Protection/Invite compatibility;
+- Spam Guard settings regressions;
+- Protection Center regressions;
+- full suite: **1814 passed, 79 warnings, 0 failures**.
 
 Post-merge verification confirmed:
 
-- five legacy invite runtime/override guards absent;
-- startup metadata clean;
-- canonical live owner present in `globals.py`;
-- canonical recovery owner present in `invite_reconciliation_runtime.py`;
-- retirement regression and native safety audit present.
-
-Final invite-delete sweep confirmed remaining Automod/Spam cleanup paths delegate invite-containing messages to `invite_policy_engine`.
-
-**P0-INVITE-001 is complete.**
+- registry present on `main`;
+- registry remains schema-only;
+- Invite Scope wired to registry;
+- Protection Center effective shield state wired;
+- Invite Policy Engine wired;
+- recovery preflight wired;
+- Spam Guard compatibility reads wired;
+- registry regression coverage present.
 
 ## Root cause / ownership finding
 
-Dank Shield already has strong persistence owners, but setting meaning is still fragmented.
+Spam Guard still had split semantic and persistence ownership after the first registry slice.
 
-### Existing persistence ownership
+### Canonical Spam Guard runtime owner
 
-`guild_config.py` owns:
+`spam_guard.py` already owns:
 
-- guild-config reads/writes;
-- cache/invalidation;
-- public-server isolation;
-- DB compatibility/fallback behavior.
+- `guild_security_settings` database writes;
+- DB readback verification;
+- runtime fallback/cache;
+- persistence diagnostics;
+- bootstrap rows for new guilds;
+- enforcement behavior.
 
-`spam_guard.py` owns:
+### Duplicate setup owner
 
-- the Spam Guard security-settings table;
-- Spam Guard normalization/cache;
-- runtime fallback behavior.
+`startup_guards/setup_service_modes.py` remained production-reachable through the public Spam Guard setup UI and health tooling. It independently owned:
 
-Those systems should remain storage owners.
+- a second Spam Guard default dictionary;
+- broader/different numeric bounds;
+- a setup-only 60-minute timeout default while runtime default was 30;
+- a private runtime-cache read;
+- direct raw Supabase writes to `guild_security_settings`;
+- a fallback minimal DB payload;
+- direct mutation of Spam Guard's private runtime cache.
 
-### Missing ownership
+That allowed setup and runtime to disagree about saved values and persistence state.
 
-Feature modules independently defined:
+## Canonical ownership after this slice
 
-- defaults;
-- bool coercion;
-- canonical vs legacy key names;
-- alias precedence;
-- effective Invite Shield state;
-- effective Link Shield state;
-- Invite Shield target aliases.
+### Setting meaning
 
-This duplicated meaning across:
+`settings_registry.py` owns:
 
-- Protection Center;
-- Invite Policy Engine;
-- invite reconciliation;
-- Invite Scope settings;
-- Spam Guard compatibility reads.
+- Spam Guard semantic keys;
+- persisted `spam_*` aliases and precedence;
+- exact defaults;
+- exact numeric bounds;
+- allowed/exempt ID normalization;
+- allowed invite code compatibility;
+- Safe/Strict/Off presets.
 
-That fragmentation allows two screens/subsystems to interpret the same stored state differently even when persistence itself works.
+### Persistence/cache/diagnostics
 
-## Native owner introduced
+`spam_guard.py` remains the sole owner via:
 
-`stoney_verify/settings_registry.py` owns setting **meaning**, not storage.
+- `get_spam_settings`;
+- `save_spam_settings`;
+- canonical DB payload/readback;
+- runtime cache;
+- persistence diagnostics.
 
-Each registered setting declares:
+### Setup compatibility UI
 
-- canonical key;
-- type;
-- default;
-- feature owner;
-- persistence owner;
-- legacy aliases;
-- alias precedence;
-- allowed choice values when applicable.
+`setup_service_modes.py` remains a UI/navigation compatibility helper only.
 
-The first family registers Protection / Automod / Invite Shield keys.
-
-## Compatibility preserved
-
-No persistence location changes.
-
-Important historical precedence is explicit:
-
-- Spam Guard persisted `spam_block_external_invites_only` and `spam_allow_server_invites` still win over unprefixed compatibility values when both exist.
-- Invite target scope still prefers canonical guild-config keys, then current `spam_*` aliases, then old short aliases.
-- effective Invite Shield state still honors:
-  - `automod_block_invites`;
-  - `invite_shield_enabled`;
-  - `invite_hard_block_enabled`;
-  - Spam Guard `automod_block_invites`;
-  - `block_invites`.
-- effective Link Shield still honors guild config and Spam Guard compatibility state.
+It now reads and saves through the canonical Spam Guard service.
 
 ## Scope
 
 In scope:
 
-- add `settings_registry.py`;
-- register first Protection/Automod/Invite family;
-- route Invite Scope normalization through registry aliases/defaults;
-- route Protection Center effective shield state through registry helpers;
-- route Invite Policy Engine effective shield state and target aliases through registry helpers;
-- route invite-recovery preflight through the same helpers;
-- route Spam Guard invite compatibility booleans through registry semantics;
-- add focused registry compatibility/ownership tests;
-- document schema-vs-storage ownership;
-- update master production-readiness ledger.
+- register Spam Guard core schema in settings registry;
+- preserve persisted-column precedence;
+- preserve exact runtime defaults/bounds;
+- share presets with Protection Center;
+- route Spam Guard normalizer/defaults through registry;
+- route setup Spam Guard reads through `get_spam_settings`;
+- route setup Spam Guard writes through `save_spam_settings`;
+- remove duplicate setup DB/cache helpers;
+- fix setup-only default drift from 60m to canonical 30m;
+- update focused regressions and ownership docs.
 
 Out of scope:
 
-- changing DB schema;
-- moving guild-config persistence;
-- moving Spam Guard persistence;
-- removing legacy stored keys;
-- bulk-migrating every setting in the bot;
-- changing Invite Shield policy;
-- changing Automod presets;
-- changing AntiNuke settings;
-- changing setup/design/ticket/verification settings.
-
-## Changes
-
-- added typed `SettingSpec` registry;
-- added canonical Protection/Automod/Invite specs;
-- added explicit alias precedence support;
-- added shared bool/ID coercion and nested config reads;
-- added shared effective Invite Shield / Link Shield helpers;
-- added shared Invite Scope normalization;
-- migrated five readers to the registry while keeping their public APIs stable;
-- added focused tests for defaults, aliases, precedence, nested storage, effective state, storage separation, and wiring;
-- documented future one-family-at-a-time migration rules.
+- changing Spam Guard enforcement rules;
+- changing table schema;
+- removing `setup_service_modes.py` UI exports;
+- changing setup service-selection flags;
+- migrating AntiNuke/design/ticket/verification settings;
+- changing Invite Shield policy.
 
 ## Expected production behavior
 
-**No intended behavior change.**
+Spam Guard policy/enforcement behavior is unchanged.
 
-The registry centralizes interpretation only.
+Setup now displays and saves the same normalized Spam Guard state that the runtime actually uses.
 
-Existing DB/cache owners remain authoritative and existing compatibility aliases remain readable.
+A setup save receives the same persistence/readback/cache handling as every other Spam Guard save.
+
+## Branch sync / integration state
+
+PR #297 was 50 commits behind current `main`. The task-owned file set was checked against those 50 commits and had **no overlapping changed paths**. The branch was then synchronized with current `main` using merge commit:
+
+`9c868b56c4eae83ff13a8af90c1f497d2cb46e9c`
+
+Post-sync verification:
+
+- PR is mergeable;
+- branch is 15 commits ahead / 0 behind current `main`;
+- merge base exactly matches `80f96f54fe99abce7a2663dde817e91ce3711178`;
+- changed-file scope remains exactly the same 10 task-owned files;
+- review threads remain empty;
+- GitHub-hosted workflows still fail before runner execution (`steps=null`), so they provide no code-test signal.
+
+
+## Validation failure found after sync
+
+Exact-head Termux focused regressions exposed one stale ownership assertion in `tests/test_settings_registry_protection.py`. The test still required `_registry_setting_bool` inside `spam_guard.py`, but this active slice intentionally replaced per-setting Spam Guard reads with whole-object delegation through `_registry_spam_guard_defaults` and `_registry_normalize_spam_guard_settings`.
+
+Root cause: the older Protection-registry wiring test encoded the previous implementation detail rather than the new canonical ownership contract.
+
+Fix: updated that regression to require the two canonical Spam Guard registry delegates and explicitly reject the obsolete `_registry_setting_bool` path in `spam_guard.py`. No runtime code was changed.
 
 ## Validation required
 
 - exact-head `git diff --check`;
 - Python compile;
+- `tests/test_settings_registry_spamguard.py`;
 - `tests/test_settings_registry_protection.py`;
-- `tests/test_protection_invite_native_ui.py`;
-- `tests/test_invite_live_enforcement.py`;
-- `tests/test_invite_runtime_reconcile_194.py`;
-- `tests/test_invite_policy_message_surface_runtime.py`;
-- `tests/test_invite_policy_lookup_efficiency_195.py`;
-- Spam Guard settings/default regressions;
+- `tests/test_spam_guard_default_on_behavior.py`;
+- `tests/test_spam_guard_default_on_bootstrap_behavior.py`;
+- `tests/test_external_healthchecks_watchdog_static.py`;
+- `tests/test_setup_service_navigation_native.py`;
+- `tests/test_setup_service_modes_native_no_patch.py`;
 - Protection Center regressions;
+- invite-policy regressions;
 - full Python suite;
-- final changed-file/review-thread inspection;
+- exact-head review-thread/diff inspection;
 - merge with expected-head guard;
-- post-merge registry/native-owner verification on `main`.
+- post-merge ownership verification on `main`.
 
 ## Next step
 
-Inspect exact branch diff, open focused draft PR, validate exact head through GitHub CI or Termux, then merge and verify before registering the next settings family.
+Re-run exact-head Termux validation after the stale Protection-registry assertion repair because GitHub-hosted jobs are failing before runner execution. Then perform final diff/review-thread inspection, mark the PR ready, merge with an expected-head guard, and verify ownership on `main` before moving to the next settings family.
