@@ -117,9 +117,21 @@ Out of scope:
 - moving unrelated guild settings;
 - broad lifecycle-event refactors.
 
+## Validation checkpoint
+
+Exact-head Ubuntu/Termux reproduction on `c9d8b2a636ccae8ddaf3f1b94b1bd7b07936e7e2` passed:
+
+- `tests/test_exit_card_renderer.py`
+- `tests/test_welcome_card_unicode_fallback.py`
+- **11 passed, 0 failures**
+
+That run exercised the real Exit Card renderer for `ᗩ ᗰ ᒪ`, `PΛMELA`, and `𝓔𝔂𝓮𝔃 𝓞𝓯 𝓑𝓸𝓫` across multiple built-in font styles. The canonical renderer therefore does not reproduce the reported cross-guild failure in the validated Ubuntu environment.
+
+A new regression on head `0e7ea2a6c5105913bb33c00b450df61bf22fef45` now disables registered/system fallback discovery entirely and requires the bundled `NotoSansCanadianAboriginal-VF.ttf` asset to render the known live failing name `ᗩ ᗰ ᒪ` through the real Exit Card renderer. This distinguishes deterministic repo-bundled coverage from host-specific fonts.
+
 ## Current findings / root-cause status
 
-**Not yet claiming a runtime root cause.**
+**Root cause narrowed, but not yet claiming the production trigger.**
 
 What is ruled out:
 
@@ -129,9 +141,9 @@ What is ruled out:
 
 What remains to prove:
 
-1. whether production fallback discovery covers the exact decorative glyphs that failed;
-2. whether the affected guild has an explicit per-guild Exit Card/custom-font selection that changes the observed appearance;
-3. whether a real renderer-level Unicode case fails despite transport tests passing.
+1. whether the bundled long-tail fallback alone succeeds with registered/system fonts disabled;
+2. whether the affected production card was generated before the Unicode fallback deployment and is therefore an immutable old PNG;
+3. whether the affected guild has an explicit per-guild Exit Card/custom-font selection or a different unsupported Unicode sequence.
 
 ## Backlog
 
@@ -140,4 +152,4 @@ What remains to prove:
 
 ## Next step
 
-Add a focused real-render regression for representative decorative Unicode through `exit_card_renderer.render_exit_card` and inspect the resolved fallback source coverage before changing runtime behavior.
+Validate head `0e7ea2a6c5105913bb33c00b450df61bf22fef45` with the focused Exit Card renderer test. If the bundled-font-only case passes, do not alter the canonical renderer; move to production/per-guild evidence because the global code path is proven deterministic.
