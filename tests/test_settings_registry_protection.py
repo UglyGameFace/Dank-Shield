@@ -141,7 +141,9 @@ def test_registry_wiring_replaces_duplicate_protection_setting_semantics() -> No
     assert "_registry_invite_shield_enabled" in recovery_source
     assert "_registry_invite_shield_enabled" in protection_source
     assert "_registry_link_shield_enabled" in protection_source
-    assert "_registry_setting_bool" in spam_source
+    assert "_registry_spam_guard_defaults" in spam_source
+    assert "_registry_normalize_spam_guard_settings" in spam_source
+    assert "_registry_setting_bool" not in spam_source
 
 
 def test_choice_setting_rejects_unknown_value_to_registered_default() -> None:
