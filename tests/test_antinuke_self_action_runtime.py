@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import discord
+
 from stoney_verify import anti_nuke
 from stoney_verify import anti_nuke_self_action_runtime as runtime
 from stoney_verify import anti_nuke_zero_damage_runtime as hardening
@@ -58,9 +60,12 @@ def _entry(
     action: str,
     actor_id: int = 55,
     target_id: int | None = None,
+    related_bot_id: int | None = None,
     reason: str = "",
 ):
     target = SimpleNamespace(id=target_id) if target_id is not None else None
+    if target is not None and related_bot_id is not None:
+        target.application = SimpleNamespace(id=related_bot_id)
     return SimpleNamespace(
         id=1234,
         guild=guild,
@@ -74,6 +79,7 @@ def _entry(
 
 def _reset() -> None:
     runtime._PENDING.clear()  # noqa: SLF001
+    runtime._EXPECTED_SIDE_EFFECTS.clear()  # noqa: SLF001
     runtime._COMPROMISE_GUILDS.clear()  # noqa: SLF001
 
 
@@ -137,6 +143,185 @@ def test_stale_authorization_expires() -> None:
     runtime._prune_pending(created + runtime._AUTH_TTL_SECONDS + 1.0)  # noqa: SLF001
 
     assert nonce not in runtime._PENDING  # noqa: SLF001
+
+
+def test_expected_bot_removal_integration_delete_is_one_time(monkeypatch) -> None:
+    _reset()
+    bot = FakeBot()
+    guild = FakeGuild()
+
+    async def should_not_read_settings(_guild_id: int):
+        raise AssertionError("expected Discord cleanup must be consumed before compromise checks")
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", should_not_read_settings)
+
+    token = runtime._expect_side_effect(  # noqa: SLF001
+        guild.id,
+        "integration_delete",
+        related_bot_id=444,
+        source_action="bot_kick",
+    )
+    assert token in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
+
+    expected = _entry(
+        guild,
+        action="integration_delete",
+        target_id=9001,
+        related_bot_id=444,
+    )
+    asyncio.run(runtime._audit_guard(bot, expected))  # noqa: SLF001
+
+    assert guild.leave_calls == 0
+    assert runtime._EXPECTED_SIDE_EFFECTS == {}  # noqa: SLF001
+
+
+def test_expected_bot_removal_side_effect_does_not_hide_unrelated_or_second_delete(
+    monkeypatch,
+) -> None:
+    _reset()
+    bot = FakeBot()
+    guild = FakeGuild()
+
+    async def settings(_guild_id: int):
+        return {"antinuke_enabled": True, "antinuke_mode": "contain"}
+
+    async def no_warning(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
+    monkeypatch.setattr(runtime, "_warn_owner", no_warning)
+
+    runtime._expect_side_effect(  # noqa: SLF001
+        guild.id,
+        "integration_delete",
+        related_bot_id=444,
+        source_action="bot_kick",
+    )
+
+    unrelated = _entry(
+        guild,
+        action="integration_delete",
+        target_id=9002,
+        related_bot_id=777,
+    )
+    asyncio.run(runtime._audit_guard(bot, unrelated))  # noqa: SLF001
+    assert guild.leave_calls == 1
+    assert len(runtime._EXPECTED_SIDE_EFFECTS) == 1  # noqa: SLF001
+
+    _reset()
+    runtime._expect_side_effect(  # noqa: SLF001
+        guild.id,
+        "integration_delete",
+        related_bot_id=444,
+        source_action="bot_kick",
+    )
+    first = _entry(
+        guild,
+        action="integration_delete",
+        target_id=9001,
+        related_bot_id=444,
+    )
+    asyncio.run(runtime._audit_guard(bot, first))  # noqa: SLF001
+    assert guild.leave_calls == 1
+
+    second = _entry(
+        guild,
+        action="integration_delete",
+        target_id=9003,
+        related_bot_id=444,
+    )
+    asyncio.run(runtime._audit_guard(bot, second))  # noqa: SLF001
+    assert guild.leave_calls == 2
+
+
+def test_expected_bot_removal_side_effect_expires() -> None:
+    _reset()
+    token = runtime._expect_side_effect(  # noqa: SLF001
+        7,
+        "integration_delete",
+        related_bot_id=444,
+        source_action="bot_kick",
+    )
+    created = runtime._EXPECTED_SIDE_EFFECTS[token].created_at  # noqa: SLF001
+
+    runtime._prune_expected_side_effects(  # noqa: SLF001
+        created + runtime._SIDE_EFFECT_TTL_SECONDS + 1.0
+    )
+
+    assert token not in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
+
+
+def test_bot_kick_wrapper_arms_and_failed_kick_cancels_side_effect() -> None:
+    _reset()
+    original_kick = discord.Guild.kick
+    original_ban = discord.Guild.ban
+    had_flag = hasattr(discord.Guild, runtime._GUILD_REMOVAL_PATCH_FLAG)  # noqa: SLF001
+    old_flag = getattr(discord.Guild, runtime._GUILD_REMOVAL_PATCH_FLAG, None)  # noqa: SLF001
+    if had_flag:
+        delattr(discord.Guild, runtime._GUILD_REMOVAL_PATCH_FLAG)  # noqa: SLF001
+
+    calls: list[int] = []
+
+    async def fake_kick(self, user, *args, **kwargs):
+        _ = args, kwargs
+        calls.append(int(user.id))
+        if int(user.id) == 445:
+            raise RuntimeError("kick failed")
+        return None
+
+    try:
+        discord.Guild.kick = fake_kick
+        assert runtime._patch_guild_member_removal_methods() is True  # noqa: SLF001
+
+        guild = SimpleNamespace(id=7)
+        asyncio.run(
+            discord.Guild.kick(
+                guild,
+                SimpleNamespace(id=444, bot=True),
+                reason="test bot removal",
+            )
+        )
+        assert calls == [444]
+        expected = list(runtime._EXPECTED_SIDE_EFFECTS.values())  # noqa: SLF001
+        assert len(expected) == 1
+        assert expected[0].action == "integration_delete"
+        assert expected[0].guild_id == 7
+        assert expected[0].related_bot_id == 444
+        assert expected[0].source_action == "bot_kick"
+
+        try:
+            asyncio.run(
+                discord.Guild.kick(
+                    guild,
+                    SimpleNamespace(id=445, bot=True),
+                    reason="failed bot removal",
+                )
+            )
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("failed bot kick must propagate the original error")
+
+        expected = list(runtime._EXPECTED_SIDE_EFFECTS.values())  # noqa: SLF001
+        assert len(expected) == 1
+        assert expected[0].related_bot_id == 444
+
+        asyncio.run(
+            discord.Guild.kick(
+                guild,
+                SimpleNamespace(id=446, bot=False),
+                reason="human removal",
+            )
+        )
+        assert len(runtime._EXPECTED_SIDE_EFFECTS) == 1  # noqa: SLF001
+    finally:
+        discord.Guild.kick = original_kick
+        discord.Guild.ban = original_ban
+        if had_flag:
+            setattr(discord.Guild, runtime._GUILD_REMOVAL_PATCH_FLAG, old_flag)  # noqa: SLF001
+        elif hasattr(discord.Guild, runtime._GUILD_REMOVAL_PATCH_FLAG):  # noqa: SLF001
+            delattr(discord.Guild, runtime._GUILD_REMOVAL_PATCH_FLAG)  # noqa: SLF001
+        _reset()
 
 
 def test_unmatched_bot_attributed_action_self_ejects_in_contain_mode(monkeypatch) -> None:
