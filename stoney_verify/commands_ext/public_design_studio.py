@@ -1249,6 +1249,27 @@ def _format_editor_key(guild_id: int, user_id: int, scope: str, target_id: int) 
     return f"{int(guild_id)}:{int(user_id)}:{scope}:{int(target_id)}"
 
 
+def _with_editor_return_context(
+    lock: Mapping[str, Any],
+    *,
+    editor_page: int = 0,
+    editor_category_filter_id: int | None = None,
+) -> dict[str, Any]:
+    out = dict(lock)
+    out["__return_editor_page"] = max(0, int(editor_page))
+    out["__return_editor_category_filter_id"] = (
+        int(editor_category_filter_id) if editor_category_filter_id is not None else None
+    )
+    return out
+
+
+def _editor_return_context(lock: Mapping[str, Any]) -> tuple[int, int | None]:
+    page = max(0, _safe_int(lock.get("__return_editor_page"), 0))
+    raw_filter = lock.get("__return_editor_category_filter_id")
+    category_filter_id = _safe_int(raw_filter, 0) or None
+    return page, category_filter_id
+
+
 def _target_label(guild: discord.Guild, scope: str, target_id: int) -> str:
     ch = guild.get_channel(int(target_id))
     if ch is None:
@@ -1541,7 +1562,14 @@ def _initial_editor_lock(
     return lock
 
 
-async def _open_exact_format_editor(interaction: discord.Interaction, *, scope: str, target_id: int) -> None:
+async def _open_exact_format_editor(
+    interaction: discord.Interaction,
+    *,
+    scope: str,
+    target_id: int,
+    editor_page: int = 0,
+    editor_category_filter_id: int | None = None,
+) -> None:
     async def action() -> None:
         if not await _require_design_permission(interaction):
             return
@@ -1558,7 +1586,11 @@ async def _open_exact_format_editor(interaction: discord.Interaction, *, scope: 
 
         await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
-        lock = _initial_editor_lock(options, scope=scope, target_id=int(target_id), guild=guild)
+        lock = _with_editor_return_context(
+            _initial_editor_lock(options, scope=scope, target_id=int(target_id), guild=guild),
+            editor_page=editor_page,
+            editor_category_filter_id=editor_category_filter_id,
+        )
         key = _format_editor_key(int(guild.id), int(interaction.user.id), scope, int(target_id))
         _FORMAT_EDITOR_DRAFTS[key] = lock
 
@@ -2232,14 +2264,34 @@ class CustomEmojiModal(discord.ui.Modal, title="Set Custom Emoji"):
         max_length=16,
     )
 
-    def __init__(self, *, scope: str, target_id: int) -> None:
+    def __init__(
+        self,
+        *,
+        scope: str,
+        target_id: int,
+        editor_page: int = 0,
+        editor_category_filter_id: int | None = None,
+    ) -> None:
         super().__init__()
         self.scope = scope
         self.target_id = int(target_id)
+        self.editor_page = max(0, int(editor_page))
+        self.editor_category_filter_id = (
+            int(editor_category_filter_id) if editor_category_filter_id is not None else None
+        )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         raw = _safe_str(self.emoji.value, "")
-        await _update_exact_draft(interaction, scope=self.scope, target_id=self.target_id, patch={"emoji_override": raw})
+        await _update_exact_draft(
+            interaction,
+            scope=self.scope,
+            target_id=self.target_id,
+            patch={
+                "emoji_override": raw,
+                "__return_editor_page": self.editor_page,
+                "__return_editor_category_filter_id": self.editor_category_filter_id,
+            },
+        )
 
 
 async def _update_exact_draft(
@@ -2456,14 +2508,21 @@ async def _save_exact_and_preview(interaction: discord.Interaction, *, scope: st
         items = _filter_plan_for_channel(all_items, int(target_id))
         title = "👁️ Channel Format Preview"
 
+    draft_key = _format_editor_key(int(guild.id), int(interaction.user.id), scope, int(target_id))
+    draft = dict(_FORMAT_EDITOR_DRAFTS.get(draft_key) or {})
+    return_page, return_category_filter_id = _editor_return_context(draft)
     created_at = _store_pending(
         int(guild.id),
         int(interaction.user.id),
         {
-  "items": items,
-  "options": dict(repair_options),
-  "mode": f"{scope}_exact_format",
-  "target_id": str(int(target_id)),
+            "items": items,
+            "options": dict(repair_options),
+            "mode": f"{scope}_exact_format",
+            "target_id": str(int(target_id)),
+            "editor_page": return_page,
+            "editor_category_filter_id": (
+                str(return_category_filter_id) if return_category_filter_id is not None else ""
+            ),
         },
     )
 
@@ -2475,16 +2534,32 @@ async def _save_exact_and_preview(interaction: discord.Interaction, *, scope: st
         view=DesignPreviewView(
             can_apply=not has_blockers and has_changes,
             pending_created_at=created_at,
+            issue_count=sum(
+                1
+                for item in items
+                if item.get("status") in {"failed", "protected"}
+            ),
         ),
     )
 
 
 
 class ExactFormatEditorView(LegacyDesignView):
-    def __init__(self, *, scope: str, target_id: int) -> None:
+    def __init__(
+        self,
+        *,
+        scope: str,
+        target_id: int,
+        editor_page: int = 0,
+        editor_category_filter_id: int | None = None,
+    ) -> None:
         super().__init__(timeout=900)
         self.scope = scope
         self.target_id = int(target_id)
+        self.editor_page = max(0, int(editor_page))
+        self.editor_category_filter_id = (
+            int(editor_category_filter_id) if editor_category_filter_id is not None else None
+        )
 
     async def _ensure_selects(self, interaction: discord.Interaction) -> None:
         # Not used directly. Selects are built in factory below.
@@ -2539,6 +2614,11 @@ class ExactFormatEditorView(LegacyDesignView):
                 )
                 return
 
+            current = _with_editor_return_context(
+                current,
+                editor_page=self.editor_page,
+                editor_category_filter_id=self.editor_category_filter_id,
+            )
             key = _format_editor_key(int(guild.id), int(interaction.user.id), self.scope, self.target_id)
             _FORMAT_EDITOR_DRAFTS[key] = current
 
@@ -2554,7 +2634,14 @@ class ExactFormatEditorView(LegacyDesignView):
         async def action() -> None:
             if not await _require_design_permission(interaction):
                 return
-            await interaction.response.send_modal(CustomEmojiModal(scope=self.scope, target_id=self.target_id))
+            await interaction.response.send_modal(
+                CustomEmojiModal(
+                    scope=self.scope,
+                    target_id=self.target_id,
+                    editor_page=self.editor_page,
+                    editor_category_filter_id=self.editor_category_filter_id,
+                )
+            )
 
         await _guard_design_action(interaction, "design.exact.emoji_modal", action, defer=False)
 
@@ -2568,15 +2655,32 @@ class ExactFormatEditorView(LegacyDesignView):
             if self.scope == "category":
                 category = guild.get_channel(self.target_id)
                 if isinstance(category, discord.CategoryChannel):
-                    await interaction.response.edit_message(embed=_category_action_embed(category), view=CategoryEditorActionView(self.target_id))
+                    await interaction.response.edit_message(
+                        embed=_category_action_embed(category),
+                        view=CategoryEditorActionView(
+                            self.target_id,
+                            editor_page=self.editor_page,
+                        ),
+                    )
                 else:
-                    await interaction.response.edit_message(embed=_category_editor_embed(guild, page=0), view=CategoryEditorPickerView(guild, page=0))
+                    await interaction.response.edit_message(
+                        embed=_category_editor_embed(guild, page=0),
+                        view=CategoryEditorPickerView(guild, page=0),
+                    )
             else:
                 channel = guild.get_channel(self.target_id)
                 if channel is not None:
                     parent = getattr(channel, "category", None)
                     category_id = _safe_int(getattr(parent, "id", 0), 0) or None
-                    await interaction.response.edit_message(embed=_channel_action_embed(channel), view=ChannelEditorActionView(self.target_id, category_id=category_id))
+                    await interaction.response.edit_message(
+                        embed=_channel_action_embed(channel),
+                        view=ChannelEditorActionView(
+                            self.target_id,
+                            category_id=category_id,
+                            editor_page=self.editor_page,
+                            editor_category_filter_id=self.editor_category_filter_id,
+                        ),
+                    )
                 else:
                     await interaction.response.edit_message(embed=_channel_editor_embed(guild, page=0), view=ChannelEditorPickerView(guild, page=0))
 
@@ -2584,7 +2688,13 @@ class ExactFormatEditorView(LegacyDesignView):
 
 
 def ExactFormatEditorViewFactory(guild: discord.Guild, scope: str, target_id: int, lock: Mapping[str, Any]) -> ExactFormatEditorView:
-    view = ExactFormatEditorView(scope=scope, target_id=target_id)
+    editor_page, editor_category_filter_id = _editor_return_context(lock)
+    view = ExactFormatEditorView(
+        scope=scope,
+        target_id=target_id,
+        editor_page=editor_page,
+        editor_category_filter_id=editor_category_filter_id,
+    )
 
     # Discord allows max 5 rows. Row 4 is reserved for buttons.
     view.add_item(ExactFontSelect(scope, target_id, _safe_str(lock.get("font"), "normal")))
@@ -2608,7 +2718,7 @@ def ExactFormatEditorViewFactory(guild: discord.Guild, scope: str, target_id: in
 # can be hard to search/select from mobile share/picker UI.
 # ---------------------------------------------------------------------------
 
-EDITOR_PAGE_SIZE = 8
+EDITOR_PAGE_SIZE = 6
 
 
 def _short_label(value: Any, limit: int = 64) -> str:
@@ -2780,6 +2890,8 @@ async def _preview_scope(
     mode: str,
     category_id: int | None = None,
     channel_id: int | None = None,
+    editor_page: int = 0,
+    editor_category_filter_id: int | None = None,
 ) -> None:
     if not await _require_design_permission(interaction):
         return
@@ -2817,6 +2929,12 @@ async def _preview_scope(
             "scope_title": scope_title,
             "category_id": str(int(category_id)) if category_id is not None else "",
             "channel_id": str(int(channel_id)) if channel_id is not None else "",
+            "editor_page": max(0, int(editor_page)),
+            "editor_category_filter_id": (
+                str(int(editor_category_filter_id))
+                if editor_category_filter_id is not None
+                else ""
+            ),
         },
     )
     has_blockers = any(item.get("status") == "failed" for item in items)
@@ -2916,7 +3034,14 @@ def _channel_editor_embed(guild: discord.Guild, *, page: int, category_id: int |
 
 
 class CategoryPickButton(discord.ui.Button):
-    def __init__(self, category: discord.CategoryChannel, *, display_index: int, row: int) -> None:
+    def __init__(
+        self,
+        category: discord.CategoryChannel,
+        *,
+        display_index: int,
+        row: int,
+        editor_page: int = 0,
+    ) -> None:
         super().__init__(
             label=f"{display_index}. {_short_label(getattr(category, 'name', 'Category'), 54)}",
             emoji="🗂️",
@@ -2925,6 +3050,7 @@ class CategoryPickButton(discord.ui.Button):
             row=row,
         )
         self.category_id = int(category.id)
+        self.editor_page = max(0, int(editor_page))
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         if not await _require_design_permission(interaction):
@@ -2942,7 +3068,7 @@ class CategoryPickButton(discord.ui.Button):
             return
         await interaction.response.edit_message(
             embed=_category_action_embed(category),
-            view=CategoryEditorActionView(self.category_id),
+            view=CategoryEditorActionView(self.category_id, editor_page=self.editor_page),
         )
 
 
@@ -2978,7 +3104,16 @@ class EditCategoryFromChannelEditorButton(discord.ui.Button):
 
 
 class ChannelPickButton(discord.ui.Button):
-    def __init__(self, channel: discord.abc.GuildChannel, *, display_index: int, row: int, category_id: int | None = None) -> None:
+    def __init__(
+        self,
+        channel: discord.abc.GuildChannel,
+        *,
+        display_index: int,
+        row: int,
+        category_id: int | None = None,
+        editor_page: int = 0,
+        editor_category_filter_id: int | None = None,
+    ) -> None:
         super().__init__(
             label=f"{display_index}. {_short_label(getattr(channel, 'name', 'Channel'), 54)}",
             emoji={"category": "🗂️", "voice": "🔊", "text": "#️⃣", "forum": "💬", "stage": "🎙️"}.get(_kind(channel), "#️⃣"),
@@ -2988,6 +3123,10 @@ class ChannelPickButton(discord.ui.Button):
         )
         self.channel_id = int(channel.id)
         self.category_id = int(category_id) if category_id is not None else None
+        self.editor_page = max(0, int(editor_page))
+        self.editor_category_filter_id = (
+            int(editor_category_filter_id) if editor_category_filter_id is not None else None
+        )
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         if not await _require_design_permission(interaction):
@@ -3005,7 +3144,12 @@ class ChannelPickButton(discord.ui.Button):
             return
         await interaction.response.edit_message(
             embed=_channel_action_embed(channel),
-            view=ChannelEditorActionView(self.channel_id, category_id=self.category_id),
+            view=ChannelEditorActionView(
+                self.channel_id,
+                category_id=self.category_id,
+                editor_page=self.editor_page,
+                editor_category_filter_id=self.editor_category_filter_id,
+            ),
         )
 
 
@@ -3019,7 +3163,14 @@ class CategoryEditorPickerView(LegacyDesignView):
         chunk = categories[start:start + EDITOR_PAGE_SIZE]
 
         for offset, category in enumerate(chunk):
-            self.add_item(CategoryPickButton(category, display_index=offset + 1, row=offset // 2))
+            self.add_item(
+                CategoryPickButton(
+                    category,
+                    display_index=offset + 1,
+                    row=offset // 2,
+                    editor_page=page,
+                )
+            )
 
         nav_row = 4
         if page > 0:
@@ -3042,30 +3193,102 @@ class CategoryPageButton(discord.ui.Button):
         await interaction.response.edit_message(embed=_category_editor_embed(guild, page=self.page), view=CategoryEditorPickerView(guild, page=self.page))
 
 
+def _channel_page_data(
+    guild: discord.Guild,
+    *,
+    page: int,
+    category_id: int | None,
+) -> tuple[int, int, list[discord.abc.GuildChannel], int | None]:
+    if category_id is not None:
+        source = _category_channels(guild, int(category_id))
+        total_pages = max(1, (len(source) + EDITOR_PAGE_SIZE - 1) // EDITOR_PAGE_SIZE)
+        page = max(0, min(int(page), total_pages - 1))
+        start = page * EDITOR_PAGE_SIZE
+        return page, total_pages, source[start:start + EDITOR_PAGE_SIZE], int(category_id)
+
+    groups = _channel_editor_groups(guild)
+    total_pages = max(1, len(groups))
+    page = max(0, min(int(page), total_pages - 1))
+    group = groups[page]
+    active_category_id = _safe_int(group.get("category_id"), 0) or None
+    return page, total_pages, list(group.get("channels") or []), active_category_id
+
+
+class ChannelPageJumpSelect(discord.ui.Select):
+    def __init__(self, guild: discord.Guild, *, page: int, category_id: int | None) -> None:
+        current_page, total_pages, _chunk, _active_category_id = _channel_page_data(
+            guild,
+            page=page,
+            category_id=category_id,
+        )
+        window_start = max(0, min(current_page - 12, max(0, total_pages - 25)))
+        window_end = min(total_pages, window_start + 25)
+        groups = _channel_editor_groups(guild) if category_id is None else []
+        options: list[discord.SelectOption] = []
+        for index in range(window_start, window_end):
+            if category_id is None and index < len(groups):
+                group = groups[index]
+                label = _safe_str(group.get("label"), "No Category")
+                part = _safe_int(group.get("part"), 1)
+                parts = _safe_int(group.get("parts"), 1)
+                suffix = f" · part {part}/{parts}" if parts > 1 else ""
+                description = f"{label}{suffix}"[:100]
+            else:
+                description = f"Channels page {index + 1} of {total_pages}"
+            options.append(
+                discord.SelectOption(
+                    label=f"Page {index + 1} of {total_pages}",
+                    value=str(index),
+                    description=description,
+                    default=index == current_page,
+                )
+            )
+        super().__init__(
+            placeholder=f"Jump to channel page… ({current_page + 1}/{total_pages})",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="dank_design:channel_page_jump",
+            row=3,
+        )
+        self.category_id = int(category_id) if category_id is not None else None
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        if not await _require_design_permission(interaction):
+            return
+        guild = interaction.guild
+        assert guild is not None
+        page = max(0, _safe_int(self.values[0], 0))
+        await interaction.response.edit_message(
+            embed=_channel_editor_embed(guild, page=page, category_id=self.category_id),
+            view=ChannelEditorPickerView(guild, page=page, category_id=self.category_id),
+        )
+
+
 class ChannelEditorPickerView(LegacyDesignView):
     def __init__(self, guild: discord.Guild, *, page: int = 0, category_id: int | None = None) -> None:
         super().__init__(timeout=900)
 
-        active_category_id: int | None = int(category_id) if category_id is not None else None
-
-        if category_id is not None:
-            source = _category_channels(guild, int(category_id))
-            total_pages = max(1, (len(source) + EDITOR_PAGE_SIZE - 1) // EDITOR_PAGE_SIZE)
-            page = max(0, min(page, total_pages - 1))
-            start = page * EDITOR_PAGE_SIZE
-            chunk = source[start:start + EDITOR_PAGE_SIZE]
-            active_category_id = int(category_id)
-        else:
-            groups = _channel_editor_groups(guild)
-            total_pages = max(1, len(groups))
-            page = max(0, min(page, total_pages - 1))
-            group = groups[page]
-            chunk = list(group.get("channels") or [])
-            group_category_id = _safe_int(group.get("category_id"), 0)
-            active_category_id = group_category_id if group_category_id > 0 else None
+        page, total_pages, chunk, active_category_id = _channel_page_data(
+            guild,
+            page=page,
+            category_id=category_id,
+        )
 
         for offset, channel in enumerate(chunk):
-            self.add_item(ChannelPickButton(channel, display_index=offset + 1, row=offset // 2, category_id=active_category_id))
+            self.add_item(
+                ChannelPickButton(
+                    channel,
+                    display_index=offset + 1,
+                    row=offset // 2,
+                    category_id=active_category_id,
+                    editor_page=page,
+                    editor_category_filter_id=category_id,
+                )
+            )
+
+        if total_pages > 1:
+            self.add_item(ChannelPageJumpSelect(guild, page=page, category_id=category_id))
 
         nav_row = 4
 
@@ -3146,11 +3369,24 @@ def _direct_rename_result_value(old_name: str, requested_name: str, actual_name:
 
 
 class DirectRenameModal(discord.ui.Modal):
-    def __init__(self, *, target_id: int, scope: str, current_name: str, category_id: int | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        target_id: int,
+        scope: str,
+        current_name: str,
+        category_id: int | None = None,
+        editor_page: int = 0,
+        editor_category_filter_id: int | None = None,
+    ) -> None:
         super().__init__(title=f"Rename {scope.title()} Now")
         self.target_id = int(target_id)
         self.scope = str(scope)
         self.category_id = int(category_id) if category_id is not None else None
+        self.editor_page = max(0, int(editor_page))
+        self.editor_category_filter_id = (
+            int(editor_category_filter_id) if editor_category_filter_id is not None else None
+        )
         self.new_name = discord.ui.TextInput(
             label="New Discord name",
             placeholder="This applies immediately and becomes the saved exact name",
@@ -3275,11 +3511,19 @@ class DirectRenameModal(discord.ui.Modal):
             actual_name = _safe_str(getattr(refreshed, "name", actual_name), actual_name)
             if self.scope == "category" and isinstance(refreshed, discord.CategoryChannel):
                 embed = _category_action_embed(refreshed)
-                view = CategoryEditorActionView(self.target_id)
+                view = CategoryEditorActionView(
+                    self.target_id,
+                    editor_page=self.editor_page,
+                )
                 embed.title = "✅ Category Renamed & Saved"
             else:
                 embed = _channel_action_embed(refreshed)
-                view = ChannelEditorActionView(self.target_id, category_id=self.category_id)
+                view = ChannelEditorActionView(
+                    self.target_id,
+                    category_id=self.category_id,
+                    editor_page=self.editor_page,
+                    editor_category_filter_id=self.editor_category_filter_id,
+                )
                 embed.title = "✅ Channel Renamed & Saved"
             embed.add_field(
                 name="Applied immediately",
@@ -3335,8 +3579,9 @@ def _category_action_embed(category: discord.CategoryChannel) -> discord.Embed:
         name="Advanced options",
         value=(
             "**Custom Format** = choose font/separator/frame manually.\n"
+            "**Change Icon / Emoji** = set the category icon draft; use **Save Rule & Preview** before Apply.\n"
             "**Lock Category Rule** = remember a special rule for this category.\n"
-            "**Protection Mode** = control whether this exact category is styled, partially styled, or skipped."
+            "**Protection / Skip Rule** = control whether this exact category is styled, partially styled, or skipped."
         ),
         inline=False,
     )
@@ -3372,9 +3617,10 @@ def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
     embed.add_field(
         name="Advanced options",
         value=(
-            "**Custom Format** = choose this item's exact look.\n"
+            "**Custom Format** = choose this item's exact font/separator settings.\n"
+            "**Change Icon / Emoji** = set the item icon draft; use **Save Rule & Preview** before Apply.\n"
             "**Lock Channel Rule** = remember a special rule for this item.\n"
-            "**Protection Mode** = control whether this exact item is styled, partially styled, or skipped."
+            "**Protection / Skip Rule** = control whether this exact item is styled, partially styled, or skipped."
         ),
         inline=False,
     )
@@ -3382,9 +3628,10 @@ def _channel_action_embed(channel: discord.abc.GuildChannel) -> discord.Embed:
     return _clean_design_embed(embed)
 
 class CategoryEditorActionView(LegacyDesignView):
-    def __init__(self, category_id: int) -> None:
+    def __init__(self, category_id: int, *, editor_page: int = 0) -> None:
         super().__init__(timeout=900)
         self.category_id = int(category_id)
+        self.editor_page = max(0, int(editor_page))
 
     @discord.ui.button(label="Preview Fixes", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design:category_preview_scope", row=0)
     async def preview_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3393,6 +3640,7 @@ class CategoryEditorActionView(LegacyDesignView):
             scope_title="👁️ Category Repair Preview",
             mode="category_editor",
             category_id=self.category_id,
+            editor_page=self.editor_page,
         )
 
     @discord.ui.button(label="Rename", emoji="✏️", style=discord.ButtonStyle.primary, custom_id="dank_design:category_rename", row=0)
@@ -3409,6 +3657,7 @@ class CategoryEditorActionView(LegacyDesignView):
                 target_id=self.category_id,
                 scope="category",
                 current_name=getattr(category, "name", ""),
+                editor_page=self.editor_page,
             )
         )
 
@@ -3425,7 +3674,12 @@ class CategoryEditorActionView(LegacyDesignView):
 
     @discord.ui.button(label="Custom Format", emoji="🎛️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_exact_format", row=2)
     async def edit_exact_format(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_exact_format_editor(interaction, scope="category", target_id=self.category_id)
+        await _open_exact_format_editor(
+            interaction,
+            scope="category",
+            target_id=self.category_id,
+            editor_page=self.editor_page,
+        )
 
     @discord.ui.button(label="Lock Category Rule", emoji="🔒", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_lock_here", row=2)
     async def lock_here(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3446,16 +3700,33 @@ class CategoryEditorActionView(LegacyDesignView):
                 value=f"Global: {counts['global']} • Categories: {counts['categories']} • Channels: {counts['channels']}",
                 inline=False,
             )
-            await interaction.response.edit_message(embed=embed, view=CategoryEditorActionView(self.category_id))
+            await interaction.response.edit_message(embed=embed, view=CategoryEditorActionView(self.category_id, editor_page=self.editor_page))
         except Exception as exc:
             if interaction.response.is_done():
                 await interaction.followup.send(f"❌ Could not save category rule: `{type(exc).__name__}: {_safe_str(exc)[:120]}`", ephemeral=True)
             else:
                 await interaction.response.send_message(f"❌ Could not save category rule: `{type(exc).__name__}: {_safe_str(exc)[:120]}`", ephemeral=True)
 
-    @discord.ui.button(label="Protection Mode", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_protection_mode", row=3)
+    @discord.ui.button(label="Protection / Skip Rule", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_protection_mode", row=3)
     async def protection_mode(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_protection_mode_editor(interaction, channel_id=self.category_id)
+        await _open_protection_mode_editor(
+            interaction,
+            channel_id=self.category_id,
+            editor_page=self.editor_page,
+        )
+
+
+    @discord.ui.button(label="Change Icon / Emoji", emoji="😀", style=discord.ButtonStyle.primary, custom_id="dank_design:category_change_icon", row=1)
+    async def change_icon(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        await interaction.response.send_modal(
+            CustomEmojiModal(
+                scope="category",
+                target_id=self.category_id,
+                editor_page=self.editor_page,
+            )
+        )
 
 
     @discord.ui.button(label="Reset This Category", emoji="🧹", style=discord.ButtonStyle.danger, custom_id="dank_design:category_reset_item", row=3)
@@ -3479,7 +3750,7 @@ class CategoryEditorActionView(LegacyDesignView):
             ),
             inline=False,
         )
-        await interaction.response.edit_message(embed=embed, view=CategoryEditorActionView(self.category_id))
+        await interaction.response.edit_message(embed=embed, view=CategoryEditorActionView(self.category_id, editor_page=self.editor_page))
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_action_refresh", row=4)
     async def refresh_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3492,7 +3763,7 @@ class CategoryEditorActionView(LegacyDesignView):
             return await interaction.response.send_message("That category no longer exists.", ephemeral=True)
         await interaction.response.edit_message(
             embed=_category_action_embed(category),
-            view=CategoryEditorActionView(self.category_id),
+            view=CategoryEditorActionView(self.category_id, editor_page=self.editor_page),
         )
 
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:category_action_back", row=4)
@@ -3501,13 +3772,27 @@ class CategoryEditorActionView(LegacyDesignView):
             return
         guild = interaction.guild
         assert guild is not None
-        await interaction.response.edit_message(embed=_category_editor_embed(guild, page=0), view=CategoryEditorPickerView(guild, page=0))
+        await interaction.response.edit_message(
+            embed=_category_editor_embed(guild, page=self.editor_page),
+            view=CategoryEditorPickerView(guild, page=self.editor_page),
+        )
 
 class ChannelEditorActionView(LegacyDesignView):
-    def __init__(self, channel_id: int, *, category_id: int | None = None) -> None:
+    def __init__(
+        self,
+        channel_id: int,
+        *,
+        category_id: int | None = None,
+        editor_page: int = 0,
+        editor_category_filter_id: int | None = None,
+    ) -> None:
         super().__init__(timeout=900)
         self.channel_id = int(channel_id)
         self.category_id = int(category_id) if category_id is not None else None
+        self.editor_page = max(0, int(editor_page))
+        self.editor_category_filter_id = (
+            int(editor_category_filter_id) if editor_category_filter_id is not None else None
+        )
 
     @discord.ui.button(label="Preview Fixes", emoji="👁️", style=discord.ButtonStyle.success, custom_id="dank_design:channel_preview_scope", row=0)
     async def preview_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3516,6 +3801,8 @@ class ChannelEditorActionView(LegacyDesignView):
             scope_title="👁️ Channel Repair Preview",
             mode="channel_editor",
             channel_id=self.channel_id,
+            editor_page=self.editor_page,
+            editor_category_filter_id=self.editor_category_filter_id,
         )
 
     @discord.ui.button(label="Rename", emoji="✏️", style=discord.ButtonStyle.primary, custom_id="dank_design:channel_rename", row=0)
@@ -3533,12 +3820,20 @@ class ChannelEditorActionView(LegacyDesignView):
                 scope="channel",
                 current_name=getattr(channel, "name", ""),
                 category_id=self.category_id,
+                editor_page=self.editor_page,
+                editor_category_filter_id=self.editor_category_filter_id,
             )
         )
 
     @discord.ui.button(label="Custom Format", emoji="🎛️", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_exact_format", row=1)
     async def edit_exact_format(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_exact_format_editor(interaction, scope="channel", target_id=self.channel_id)
+        await _open_exact_format_editor(
+            interaction,
+            scope="channel",
+            target_id=self.channel_id,
+            editor_page=self.editor_page,
+            editor_category_filter_id=self.editor_category_filter_id,
+        )
 
     @discord.ui.button(label="Lock Channel Rule", emoji="🔒", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_lock_here", row=1)
     async def lock_here(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3559,16 +3854,39 @@ class ChannelEditorActionView(LegacyDesignView):
                 value=f"Global: {counts['global']} • Categories: {counts['categories']} • Channels: {counts['channels']}",
                 inline=False,
             )
-            await interaction.response.edit_message(embed=embed, view=ChannelEditorActionView(self.channel_id, category_id=self.category_id))
+            await interaction.response.edit_message(embed=embed, view=ChannelEditorActionView(
+                self.channel_id,
+                category_id=self.category_id,
+                editor_page=self.editor_page,
+                editor_category_filter_id=self.editor_category_filter_id,
+            ))
         except Exception as exc:
             if interaction.response.is_done():
                 await interaction.followup.send(f"❌ Could not save channel rule: `{type(exc).__name__}: {_safe_str(exc)[:120]}`", ephemeral=True)
             else:
                 await interaction.response.send_message(f"❌ Could not save channel rule: `{type(exc).__name__}: {_safe_str(exc)[:120]}`", ephemeral=True)
 
-    @discord.ui.button(label="Protection Mode", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_protection_mode", row=2)
+    @discord.ui.button(label="Protection / Skip Rule", emoji="🛡️", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_protection_mode", row=2)
     async def protection_mode(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _open_protection_mode_editor(interaction, channel_id=self.channel_id)
+        await _open_protection_mode_editor(
+            interaction,
+            channel_id=self.channel_id,
+            editor_page=self.editor_page,
+            editor_category_filter_id=self.editor_category_filter_id,
+        )
+
+    @discord.ui.button(label="Change Icon / Emoji", emoji="😀", style=discord.ButtonStyle.primary, custom_id="dank_design:channel_change_icon", row=2)
+    async def change_icon(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_design_permission(interaction):
+            return
+        await interaction.response.send_modal(
+            CustomEmojiModal(
+                scope="channel",
+                target_id=self.channel_id,
+                editor_page=self.editor_page,
+                editor_category_filter_id=self.editor_category_filter_id,
+            )
+        )
 
 
     @discord.ui.button(label="Reset This Channel", emoji="🧹", style=discord.ButtonStyle.danger, custom_id="dank_design:channel_reset_item", row=3)
@@ -3592,7 +3910,12 @@ class ChannelEditorActionView(LegacyDesignView):
             ),
             inline=False,
         )
-        await interaction.response.edit_message(embed=embed, view=ChannelEditorActionView(self.channel_id, category_id=self.category_id))
+        await interaction.response.edit_message(embed=embed, view=ChannelEditorActionView(
+                self.channel_id,
+                category_id=self.category_id,
+                editor_page=self.editor_page,
+                editor_category_filter_id=self.editor_category_filter_id,
+            ))
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_action_refresh", row=4)
     async def refresh_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3605,7 +3928,12 @@ class ChannelEditorActionView(LegacyDesignView):
             return await interaction.response.send_message("That channel no longer exists.", ephemeral=True)
         await interaction.response.edit_message(
             embed=_channel_action_embed(channel),
-            view=ChannelEditorActionView(self.channel_id, category_id=self.category_id),
+            view=ChannelEditorActionView(
+                self.channel_id,
+                category_id=self.category_id,
+                editor_page=self.editor_page,
+                editor_category_filter_id=self.editor_category_filter_id,
+            ),
         )
 
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:channel_action_back", row=4)
@@ -3615,8 +3943,16 @@ class ChannelEditorActionView(LegacyDesignView):
         guild = interaction.guild
         assert guild is not None
         await interaction.response.edit_message(
-            embed=_channel_editor_embed(guild, page=0, category_id=self.category_id),
-            view=ChannelEditorPickerView(guild, page=0, category_id=self.category_id),
+            embed=_channel_editor_embed(
+                guild,
+                page=self.editor_page,
+                category_id=self.editor_category_filter_id,
+            ),
+            view=ChannelEditorPickerView(
+                guild,
+                page=self.editor_page,
+                category_id=self.editor_category_filter_id,
+            ),
         )
 
 class BackToDesignButton(discord.ui.Button):
@@ -4136,12 +4472,23 @@ class ProtectionManagerView(LegacyDesignView):
 
 
 class ProtectionModeSelect(discord.ui.Select):
-    def __init__(self, *, channel_id: int, current: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        channel_id: int,
+        current: str | None = None,
+        editor_page: int = 0,
+        editor_category_filter_id: int | None = None,
+    ) -> None:
         current = _normalize_protection_mode(current, "") if current else ""
         options = [discord.SelectOption(label=label, value=mode, default=mode == current, description=description[:100]) for mode, (label, description) in PROTECTION_LABELS.items()]
         options.append(discord.SelectOption(label="Clear exact override", value="__clear__", description="Return this exact item to inherited/default protection behavior."))
         super().__init__(placeholder="Choose protection mode for this exact item", min_values=1, max_values=1, options=options[:25], row=0)
         self.channel_id = int(channel_id)
+        self.editor_page = max(0, int(editor_page))
+        self.editor_category_filter_id = (
+            int(editor_category_filter_id) if editor_category_filter_id is not None else None
+        )
 
     async def callback(self, interaction: discord.Interaction) -> None:
         if not await _require_design_permission(interaction):
@@ -4168,18 +4515,44 @@ class ProtectionModeSelect(discord.ui.Select):
         embed.title = "✅ Exact Protection Rule Updated"
         embed.description = f"`{getattr(channel, 'name', self.channel_id)}` now uses **{_protection_mode_label(actual)}**. This rule is keyed to Discord ID `{self.channel_id}` and cannot affect another item with the same name."
         if isinstance(channel, discord.CategoryChannel):
-            view = CategoryEditorActionView(self.channel_id)
+            view = CategoryEditorActionView(
+                self.channel_id,
+                editor_page=self.editor_page,
+            )
         else:
             parent = getattr(channel, "category", None)
-            view = ChannelEditorActionView(self.channel_id, category_id=_safe_int(getattr(parent, "id", 0), 0) or None)
+            view = ChannelEditorActionView(
+                self.channel_id,
+                category_id=_safe_int(getattr(parent, "id", 0), 0) or None,
+                editor_page=self.editor_page,
+                editor_category_filter_id=self.editor_category_filter_id,
+            )
         await interaction.edit_original_response(embed=embed, view=view)
 
 
 class ProtectionModeView(LegacyDesignView):
-    def __init__(self, *, channel_id: int, current: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        channel_id: int,
+        current: str | None = None,
+        editor_page: int = 0,
+        editor_category_filter_id: int | None = None,
+    ) -> None:
         super().__init__(timeout=900)
         self.channel_id = int(channel_id)
-        self.add_item(ProtectionModeSelect(channel_id=self.channel_id, current=current))
+        self.editor_page = max(0, int(editor_page))
+        self.editor_category_filter_id = (
+            int(editor_category_filter_id) if editor_category_filter_id is not None else None
+        )
+        self.add_item(
+            ProtectionModeSelect(
+                channel_id=self.channel_id,
+                current=current,
+                editor_page=self.editor_page,
+                editor_category_filter_id=self.editor_category_filter_id,
+            )
+        )
 
     @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank_design:protection_mode_back", row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -4193,13 +4566,33 @@ class ProtectionModeView(LegacyDesignView):
             options = await _load_design_options(int(guild.id))
             return await interaction.edit_original_response(embed=_protection_manager_embed(guild, options), view=ProtectionManagerView())
         if isinstance(channel, discord.CategoryChannel):
-            await interaction.response.edit_message(embed=_category_action_embed(channel), view=CategoryEditorActionView(self.channel_id))
+            await interaction.response.edit_message(
+                embed=_category_action_embed(channel),
+                view=CategoryEditorActionView(
+                    self.channel_id,
+                    editor_page=self.editor_page,
+                ),
+            )
         else:
             parent = getattr(channel, "category", None)
-            await interaction.response.edit_message(embed=_channel_action_embed(channel), view=ChannelEditorActionView(self.channel_id, category_id=_safe_int(getattr(parent, "id", 0), 0) or None))
+            await interaction.response.edit_message(
+                embed=_channel_action_embed(channel),
+                view=ChannelEditorActionView(
+                    self.channel_id,
+                    category_id=_safe_int(getattr(parent, "id", 0), 0) or None,
+                    editor_page=self.editor_page,
+                    editor_category_filter_id=self.editor_category_filter_id,
+                ),
+            )
 
 
-async def _open_protection_mode_editor(interaction: discord.Interaction, *, channel_id: int) -> None:
+async def _open_protection_mode_editor(
+    interaction: discord.Interaction,
+    *,
+    channel_id: int,
+    editor_page: int = 0,
+    editor_category_filter_id: int | None = None,
+) -> None:
     if not await _require_design_permission(interaction):
         return
     guild = interaction.guild
@@ -4222,7 +4615,15 @@ async def _open_protection_mode_editor(interaction: discord.Interaction, *, chan
     )
     embed.add_field(name="Exact override", value=f"**{_protection_mode_label(exact)}**" if exact else "None", inline=True)
     embed.add_field(name="Inherited behavior", value=f"**{_protection_mode_label(inherited)}**", inline=True)
-    await interaction.edit_original_response(embed=embed, view=ProtectionModeView(channel_id=int(channel.id), current=exact))
+    await interaction.edit_original_response(
+        embed=embed,
+        view=ProtectionModeView(
+            channel_id=int(channel.id),
+            current=exact,
+            editor_page=editor_page,
+            editor_category_filter_id=editor_category_filter_id,
+        ),
+    )
 
 
 STYLE_CHANGE_SEPARATOR_IDS: tuple[str, ...] = studio.SERVER_DESIGN_SEPARATOR_IDS
@@ -4779,9 +5180,10 @@ class StyleChangeView(LegacyDesignView):
         await interaction.edit_original_response(
             embed=_style_change_preview_embed(guild, items, separator_id=self.separator_id),
             view=StyleChangePreviewView(
-                can_apply=not has_blockers and bool(items),
+                can_apply=not has_blockers and has_changes,
                 has_blockers=has_blockers,
                 pending_created_at=created_at,
+                issue_count=sum(1 for item in items if item.get("status") in {"failed", "protected"}),
             ),
         )
 
@@ -4811,9 +5213,16 @@ class DesignHomeView(LegacyDesignView):
 class DesignPreviewView(LegacyDesignView):
     """Import-time base only; V2 owns every active reviewed Apply surface."""
 
-    def __init__(self, *, can_apply: bool, pending_created_at: float | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        can_apply: bool,
+        pending_created_at: float | None = None,
+        issue_count: int = 0,
+    ) -> None:
         super().__init__(timeout=900)
         self.pending_created_at = pending_created_at
+        _ = can_apply, issue_count
 
 
 def _style_change_missing_emoji_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -4935,6 +5344,7 @@ def _style_change_rebuild_preview_response(
         can_apply=not has_blockers and has_changes,
         has_blockers=has_blockers,
         pending_created_at=created_at,
+        issue_count=sum(1 for item in items if item.get("status") in {"failed", "protected"}),
     )
 
 
@@ -5009,7 +5419,15 @@ class StyleChangeApplySafeOnlyButton(discord.ui.Button):
             separator_id = _safe_str(pending.get("separator_id"), "none")
             embed = _style_change_preview_embed(guild, safe_items, separator_id=separator_id); embed.title = "👁️ Style Change Preview · Safe Changes Only"
             embed.add_field(name="Skipped issues", value="Needs-review rows were left untouched. Apply will only rename safe rows.", inline=False)
-            await interaction.response.edit_message(embed=embed, view=StyleChangePreviewView(can_apply=True, has_blockers=False, pending_created_at=self.pending_created_at))
+            await interaction.response.edit_message(
+                embed=embed,
+                view=StyleChangePreviewView(
+                    can_apply=any(item.get("status") == "changed" for item in safe_items),
+                    has_blockers=False,
+                    pending_created_at=self.pending_created_at,
+                    issue_count=sum(1 for item in safe_items if item.get("status") == "protected"),
+                ),
+            )
         await _guard_design_action(interaction, "design.style_change.apply_safe_only", action, defer=False)
 
 
@@ -5041,8 +5459,19 @@ class StyleChangeFixMissingEmojiButton(discord.ui.Button):
 
 
 class StyleChangePreviewView(DesignPreviewView):
-    def __init__(self, *, can_apply: bool, has_blockers: bool = False, pending_created_at: float) -> None:
-        super().__init__(can_apply=can_apply, pending_created_at=pending_created_at)
+    def __init__(
+        self,
+        *,
+        can_apply: bool,
+        has_blockers: bool = False,
+        pending_created_at: float,
+        issue_count: int = 0,
+    ) -> None:
+        super().__init__(
+            can_apply=can_apply,
+            pending_created_at=pending_created_at,
+            issue_count=issue_count,
+        )
         if has_blockers:
             self.add_item(StyleChangeFixMissingEmojiButton(row=2, pending_created_at=pending_created_at))
             self.add_item(StyleChangeApplySafeOnlyButton(row=2, pending_created_at=pending_created_at))

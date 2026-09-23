@@ -239,7 +239,52 @@ def score_repair_item(item: Mapping[str, Any], *, context: str = "generic") -> d
             "after": after,
         }
 
-    if _looks_system_surface(before) or zone in _REVIEW_ZONES:
+    # A broad zone label (for example "mod" in mod-chat) is context, not
+    # proof that the channel is functional infrastructure. If Smart Repair only
+    # changes decoration while preserving the normalized semantic name, that is
+    # the exact low-risk drift this feature is meant to repair automatically.
+    semantic_before = _ascii_core(before)
+    semantic_after = _ascii_core(after)
+    before_system_surface = _looks_system_surface(before)
+    after_system_surface = _looks_system_surface(after)
+    system_surface = before_system_surface or after_system_surface
+    ratio = _similarity(before, after)
+
+    if (
+        context in _AUTO_DETECT_CONTEXTS
+        and semantic_before
+        and semantic_before == semantic_after
+        and not system_surface
+    ):
+        return {
+            "classification": SAFE_AUTO_FIX,
+            "confidence": 96,
+            "reason": "Formatting-only drift; semantic channel name is unchanged.",
+            "before": before,
+            "after": after,
+            "zone": zone,
+        }
+
+    # Preserve the long-standing typo-fix contract. A current ordinary channel
+    # may be one character away from a canonical system word (for example
+    # verifcation -> verification). That is still low-risk naming drift. This
+    # does NOT auto-approve an already-system surface such as mod-log.
+    if (
+        context in _AUTO_DETECT_CONTEXTS
+        and ratio >= 0.88
+        and semantic_before != semantic_after
+        and not before_system_surface
+    ):
+        return {
+            "classification": SAFE_AUTO_FIX,
+            "confidence": 92,
+            "reason": "Small naming drift only.",
+            "before": before,
+            "after": after,
+            "zone": zone,
+        }
+
+    if system_surface or zone in _REVIEW_ZONES:
         return {
             "classification": REVIEW_ONLY,
             "confidence": 55,
@@ -248,8 +293,6 @@ def score_repair_item(item: Mapping[str, Any], *, context: str = "generic") -> d
             "after": after,
             "zone": zone,
         }
-
-    ratio = _similarity(before, after)
 
     if ratio >= 0.88:
         return {
@@ -294,7 +337,13 @@ def evaluate_repair_plan(items: Iterable[Mapping[str, Any]], *, context: str = "
     review = [row for row in changed_scores if row.get("classification") == REVIEW_ONLY]
     safe = [row for row in changed_scores if row.get("classification") == SAFE_AUTO_FIX]
 
-    if blocked:
+    if blocked and safe:
+        label = "Partial"
+        apply_allowed = False
+    elif review and safe:
+        label = "Partial review"
+        apply_allowed = False
+    elif blocked:
         label = "Blocked"
         apply_allowed = False
     elif review:
@@ -307,9 +356,20 @@ def evaluate_repair_plan(items: Iterable[Mapping[str, Any]], *, context: str = "
         label = "No changes"
         apply_allowed = False
 
-    total_confidence = 100
-    total_confidence -= len(blocked) * 25
-    total_confidence -= len(review) * 8
+    # apply_allowed deliberately retains its historical all-rows-safe meaning.
+    # Smart Repair may still offer a safe subset when some rows are individually
+    # blocked, so expose that separately instead of collapsing a mixed plan into
+    # a useless all-or-nothing result.
+    safe_apply_allowed = bool(safe)
+    if changed_scores:
+        total_confidence = int(
+            round(
+                sum(int(row.get("confidence", 0) or 0) for row in changed_scores)
+                / len(changed_scores)
+            )
+        )
+    else:
+        total_confidence = 100
     total_confidence = max(0, min(100, total_confidence))
 
     blocked_lines = [
@@ -325,6 +385,15 @@ def evaluate_repair_plan(items: Iterable[Mapping[str, Any]], *, context: str = "
         "label": label,
         "score": total_confidence,
         "apply_allowed": apply_allowed,
+        "safe_apply_allowed": safe_apply_allowed,
+        "row_results": [
+            {
+                "classification": _text(row.get("classification")),
+                "confidence": int(row.get("confidence", 0) or 0),
+                "reason": _text(row.get("reason")),
+            }
+            for row in scored
+        ],
         "counts": dict(counts),
         "safe_count": len(safe),
         "review_count": len(review),
@@ -340,6 +409,7 @@ def confidence_summary_text(result: Mapping[str, Any]) -> str:
         f"Apply confidence: **{_text(result.get('label'), 'Unknown')}**\n"
         f"Score: **{int(result.get('score', 0) or 0)}/100**\n"
         f"Safe: **{int(result.get('safe_count', 0) or 0)}**\n"
+        f"Safe subset: **{'Available' if bool(result.get('safe_apply_allowed')) else 'None'}**\n"
         f"Needs review: **{int(result.get('review_count', 0) or 0)}**\n"
         f"Blocked: **{int(result.get('blocked_count', 0) or 0)}**\n"
         f"Aesthetic blocks: **{int(counts.get(BLOCKED_AESTHETIC_DOWNGRADE, 0) or 0)}**"

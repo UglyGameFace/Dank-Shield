@@ -40,14 +40,16 @@ def test_consolidated_server_selectors_fail_closed_and_sync_active_global_lock()
     frame_start = V2.index("class DesignServerCategoryFrameSelect", separator_start)
     end = V2.index("def _design_server_embed", frame_start)
     block = V2[theme_start:end]
-    assert block.count("await legacy._save_options(interaction, options)") == 5
-    assert block.count("legacy._sync_enabled_global_lock(options)") == 5
+    assert block.count("await legacy._save_options(interaction, options)") == 6
+    assert block.count("legacy._sync_enabled_global_lock(options)") == 6
     assert 'options["font"] = selected' in block
     assert 'options.pop("font", None)' in block
     assert 'options["separator_id"] = selected' in block
     assert 'options.pop("separator_id", None)' in block
     assert 'options["category_frame_id"] = selected' in block
     assert 'options.pop("category_frame_id", None)' in block
+    assert 'options["icon_mode"] = selected' in block
+    assert "class DesignServerIconModeSelect" in block
     assert "picked_font" not in block
     assert 'options["strength"] = 4' not in block
     assert "class ThemeSelect" not in PUBLIC
