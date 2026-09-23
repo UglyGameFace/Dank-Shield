@@ -2,186 +2,142 @@
 
 ## Active task / desired outcome
 
-**P0-SETTINGS-001B — Spam Guard core settings + canonical setup persistence**
+**P0-EXIT-FONT-001 — Cross-guild Exit Card font/Unicode consistency**
 
-Make the settings registry the semantic owner for Spam Guard core settings while keeping `spam_guard.py` as the single persistence/cache/diagnostics owner for `guild_security_settings`.
-
-Remove the duplicate Spam Guard storage/cache path from the setup compatibility UI.
+Ensure the canonical live Exit Card renders the same supported Unicode correctly in every guild using the same deployed Dank Shield runtime, while preserving intentional per-guild design choices such as selected style and uploaded custom font assets.
 
 ## Status
 
-**IMPLEMENTED — synced to current main; exact-head validation pending**
+**INVESTIGATING — execution path and root cause narrowed**
 
-Branch: `audit/settings-registry-spamguard-20260922`
+Branch: `fix/exit-card-font-cross-guild-20260923`
 
-Base: current `main` at `80f96f54fe99abce7a2663dde817e91ce3711178` after PR #301.
+Base: current `main` at `0935f80071723b878ba1fb85a3402608512d1aec`.
 
 ## Previous task closed
 
-**P0-SETTINGS-001A** is complete.
+**P0-SETTINGS-001B — Spam Guard core settings + canonical setup persistence** is complete.
 
-PR #296 merged as:
+PR #297 merged as:
 
-`e949f9651f58e3fce3fccbaff3aca9789da813b2`
+`0935f80071723b878ba1fb85a3402608512d1aec`
 
 Exact implementation head:
 
-`91b54aac57d1a75574fd687f457fcef6385787d8`
+`c3145d7aee34570fd99a26acc87bd10a0b597e9b`
 
-Termux validation passed:
+Exact-head Ubuntu/Termux validation passed:
 
 - diff integrity;
 - Python compile;
-- settings-registry focused tests;
-- Protection/Invite compatibility;
-- Spam Guard settings regressions;
-- Protection Center regressions;
-- full suite: **1814 passed, 79 warnings, 0 failures**.
+- focused settings regressions: **47 passed, 1 warning, 0 failures**;
+- Protection + Invite regressions;
+- full Python test suite;
+- standalone tool checks;
+- public setup / command-surface / friction / invite-permission / setup-safety audits;
+- Dank Design Smart Auto-Detect audit;
+- role-truth audit;
+- event-boundary audit;
+- final exact-head/diff check.
 
-Post-merge verification confirmed:
+Post-merge verification confirmed the Spam Guard registry/persistence ownership split on `main`.
 
-- registry present on `main`;
-- registry remains schema-only;
-- Invite Scope wired to registry;
-- Protection Center effective shield state wired;
-- Invite Policy Engine wired;
-- recovery preflight wired;
-- Spam Guard compatibility reads wired;
-- registry regression coverage present.
+## Reported production symptom
 
-## Root cause / ownership finding
+A prior lifecycle-card Unicode/font repair appears correct in one guild but an Exit Card in another guild using the same bot did not show the expected font/characters.
 
-Spam Guard still had split semantic and persistence ownership after the first registry slice.
+The previous repair landed on September 18 through these code-level changes:
 
-### Canonical Spam Guard runtime owner
+- Unicode-preserving card fallback engine;
+- comprehensive font-pack requirements;
+- lifecycle-card rendering through that fallback engine;
+- JustMyType 0.3 compatibility alignment.
 
-`spam_guard.py` already owns:
+Those changes are global code, so a guild-specific mismatch must be explained by runtime/config/input differences rather than separate guild code versions when both guilds are served by the same process.
 
-- `guild_security_settings` database writes;
-- DB readback verification;
-- runtime fallback/cache;
-- persistence diagnostics;
-- bootstrap rows for new guilds;
-- enforcement behavior.
+## Execution path confirmed
 
-### Duplicate setup owner
+Canonical live leave flow:
 
-`startup_guards/setup_service_modes.py` remained production-reachable through the public Spam Guard setup UI and health tooling. It independently owned:
+`member_lifecycle_router_guard.py`
+→ `exit_card_runtime.send_live_exit_card`
+→ `exit_card_service.exit_card_file`
+→ `exit_card_renderer.render_exit_card`
+→ `welcome_card_typography_engine._fitted_tile`
+→ `unicode_font_fallback.render_text_mask`
 
-- a second Spam Guard default dictionary;
-- broader/different numeric bounds;
-- a setup-only 60-minute timeout default while runtime default was 30;
-- a private runtime-cache read;
-- direct raw Supabase writes to `guild_security_settings`;
-- a fallback minimal DB payload;
-- direct mutation of Spam Guard's private runtime cache.
+Ownership findings:
 
-That allowed setup and runtime to disagree about saved values and persistence state.
+- one canonical live Exit Card sender is reachable;
+- the old lifecycle sender is not registered through the public command profile;
+- Exit Card rendering uses the shared Unicode-aware typography engine;
+- dynamic member names are preserved as exact Unicode rather than NFKC-normalized or case-rewritten;
+- per-grapheme fallback is available through bundled/JustMyType fonts.
 
-## Canonical ownership after this slice
+## Important per-guild behavior
 
-### Setting meaning
+These values are intentionally stored per guild:
 
-`settings_registry.py` owns:
+- `exit_card_font_style`;
+- `welcome_card_font_style`;
+- `welcome_card_custom_font_b64` and related custom-font metadata;
+- Exit Card theme/colors/background/shuffle settings.
 
-- Spam Guard semantic keys;
-- persisted `spam_*` aliases and precedence;
-- exact defaults;
-- exact numeric bounds;
-- allowed/exempt ID normalization;
-- allowed invite code compatibility;
-- Safe/Strict/Off presets.
+Exit Card style resolution prefers an explicit guild `exit_card_font_style`; only when that value is absent does it inherit the guild's Welcome Card font style.
 
-### Persistence/cache/diagnostics
+Uploaded custom fonts are shared between Welcome and Exit cards **inside the same guild**, not across every guild using Dank Shield.
 
-`spam_guard.py` remains the sole owner via:
+This explains why visual font selection can legitimately differ between guilds, but it does **not** by itself explain a failure of the global Unicode fallback engine.
 
-- `get_spam_settings`;
-- `save_spam_settings`;
-- canonical DB payload/readback;
-- runtime cache;
-- persistence diagnostics.
+## Test-gap finding
 
-### Setup compatibility UI
+Current runtime Unicode coverage proves the decorative Unicode display name reaches the Exit Card renderer unchanged, but it monkeypatches `exit_card_file`.
 
-`setup_service_modes.py` remains a UI/navigation compatibility helper only.
+Current Exit Card renderer tests cover normal Latin names and long-name fitting, but they do not render representative decorative Unicode through the real font fallback stack.
 
-It now reads and saves through the canonical Spam Guard service.
+Therefore the previous suite could pass while a real glyph-coverage/rendering regression remained.
 
 ## Scope
 
 In scope:
 
-- register Spam Guard core schema in settings registry;
-- preserve persisted-column precedence;
-- preserve exact runtime defaults/bounds;
-- share presets with Protection Center;
-- route Spam Guard normalizer/defaults through registry;
-- route setup Spam Guard reads through `get_spam_settings`;
-- route setup Spam Guard writes through `save_spam_settings`;
-- remove duplicate setup DB/cache helpers;
-- fix setup-only default drift from 60m to canonical 30m;
-- update focused regressions and ownership docs.
+- reproduce the real Exit Card renderer path with decorative/mathematical Unicode;
+- verify installed/bundled fallback discovery used by production;
+- distinguish intentional per-guild style/custom-font state from renderer failure;
+- add renderer-level regression coverage that validates actual rendered output rather than only transport;
+- repair the smallest canonical font/fallback/config issue proven by that reproduction;
+- verify two distinct guild-style configurations use the same Unicode-capable renderer contract;
+- preserve existing Welcome Card behavior and per-guild customization.
 
 Out of scope:
 
-- changing Spam Guard enforcement rules;
-- changing table schema;
-- removing `setup_service_modes.py` UI exports;
-- changing setup service-selection flags;
-- migrating AntiNuke/design/ticket/verification settings;
-- changing Invite Shield policy.
+- quiet-server partner live activity;
+- Presence Intent feature work;
+- redesigning Welcome/Exit Card Studio;
+- moving unrelated guild settings;
+- broad lifecycle-event refactors.
 
-## Expected production behavior
+## Current findings / root-cause status
 
-Spam Guard policy/enforcement behavior is unchanged.
+**Not yet claiming a runtime root cause.**
 
-Setup now displays and saves the same normalized Spam Guard state that the runtime actually uses.
+What is ruled out:
 
-A setup save receives the same persistence/readback/cache handling as every other Spam Guard save.
+- separate Exit Card implementations controlling different guilds;
+- intentional NFKC rewriting of live card names;
+- an obvious old lifecycle sender still registered alongside the canonical sender.
 
-## Branch sync / integration state
+What remains to prove:
 
-PR #297 was 50 commits behind current `main`. The task-owned file set was checked against those 50 commits and had **no overlapping changed paths**. The branch was then synchronized with current `main` using merge commit:
+1. whether production fallback discovery covers the exact decorative glyphs that failed;
+2. whether the affected guild has an explicit per-guild Exit Card/custom-font selection that changes the observed appearance;
+3. whether a real renderer-level Unicode case fails despite transport tests passing.
 
-`9c868b56c4eae83ff13a8af90c1f497d2cb46e9c`
+## Backlog
 
-Post-sync verification:
-
-- PR is mergeable;
-- branch is 15 commits ahead / 0 behind current `main`;
-- merge base exactly matches `80f96f54fe99abce7a2663dde817e91ce3711178`;
-- changed-file scope remains exactly the same 10 task-owned files;
-- review threads remain empty;
-- GitHub-hosted workflows still fail before runner execution (`steps=null`), so they provide no code-test signal.
-
-
-## Validation failure found after sync
-
-Exact-head Termux focused regressions exposed one stale ownership assertion in `tests/test_settings_registry_protection.py`. The test still required `_registry_setting_bool` inside `spam_guard.py`, but this active slice intentionally replaced per-setting Spam Guard reads with whole-object delegation through `_registry_spam_guard_defaults` and `_registry_normalize_spam_guard_settings`.
-
-Root cause: the older Protection-registry wiring test encoded the previous implementation detail rather than the new canonical ownership contract.
-
-Fix: updated that regression to require the two canonical Spam Guard registry delegates and explicitly reject the obsolete `_registry_setting_bool` path in `spam_guard.py`. No runtime code was changed.
-
-## Validation required
-
-- exact-head `git diff --check`;
-- Python compile;
-- `tests/test_settings_registry_spamguard.py`;
-- `tests/test_settings_registry_protection.py`;
-- `tests/test_spam_guard_default_on_behavior.py`;
-- `tests/test_spam_guard_default_on_bootstrap_behavior.py`;
-- `tests/test_external_healthchecks_watchdog_static.py`;
-- `tests/test_setup_service_navigation_native.py`;
-- `tests/test_setup_service_modes_native_no_patch.py`;
-- Protection Center regressions;
-- invite-policy regressions;
-- full Python suite;
-- exact-head review-thread/diff inspection;
-- merge with expected-head guard;
-- post-merge ownership verification on `main`.
+- Quiet-server partnered-guild live activity panel using authorized cross-guild relationships, Presence/Member/Voice/message activity where appropriate, privacy controls, and rate-limit-safe refreshes.
+- Verify the bot startup code explicitly requests the already-enabled Presence, Server Members, and Message Content gateway intents as part of that later partner-activity task.
 
 ## Next step
 
-Re-run exact-head Termux validation after the stale Protection-registry assertion repair because GitHub-hosted jobs are failing before runner execution. Then perform final diff/review-thread inspection, mark the PR ready, merge with an expected-head guard, and verify ownership on `main` before moving to the next settings family.
+Add a focused real-render regression for representative decorative Unicode through `exit_card_renderer.render_exit_card` and inspect the resolved fallback source coverage before changing runtime behavior.
