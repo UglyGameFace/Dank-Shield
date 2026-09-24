@@ -348,7 +348,15 @@ def test_http_human_removal_does_not_arm_integration_cleanup() -> None:
     route = FakeRoute("DELETE", "/guilds/7/members/446")
 
     assert runtime._patch_http(bot) is True  # noqa: SLF001
-    asyncio.run(bot.http.request(route, reason="ordinary moderation"))
+    asyncio.run(
+        bot.http.request(
+            route,
+            reason=(
+                "Dank Shield AntiNuke containment: unauthorized bot addition "
+                "• definitive AntiNuke containment"
+            ),
+        )
+    )
 
     assert runtime._EXPECTED_SIDE_EFFECTS == {}  # noqa: SLF001
 
