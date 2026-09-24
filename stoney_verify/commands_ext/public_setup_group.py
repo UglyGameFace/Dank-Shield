@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 import discord
 from discord import app_commands
 
+from .public_owner_authority import interaction_has_manage_guild_authority
+
 from .common import reply_once, safe_defer
 from ..guild_config import get_guild_config, invalidate_guild_config, guild_config_cache_snapshot
 from ..globals import get_supabase, now_utc
@@ -230,14 +232,7 @@ async def _upsert_config(guild_id: int, updates: Mapping[str, Any]) -> dict[str,
 
 
 def _admin_or_manage_guild(interaction: discord.Interaction) -> bool:
-    try:
-        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-            return False
-        perms = interaction.user.guild_permissions
-        return bool(perms.administrator or perms.manage_guild)
-    except Exception:
-        return False
-
+    return interaction_has_manage_guild_authority(interaction)
 
 async def _require_setup_permission(interaction: discord.Interaction) -> bool:
     if interaction.guild is None:
