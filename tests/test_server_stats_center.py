@@ -8,6 +8,7 @@ import discord
 from stoney_verify import security_stats
 from stoney_verify.commands_ext import public_protection_center as protection
 from stoney_verify.commands_ext import public_server_stats as stats_ui
+from stoney_verify.commands_ext import public_command_surface_v2 as home_surface
 from stoney_verify.commands_ext.public_command_surface_v2 import CompactDankHomeView
 from stoney_verify.commands_ext.public_setup_group import dank_group
 
@@ -110,6 +111,30 @@ def test_protection_legacy_stats_button_routes_to_canonical_stats_center(
 
         assert calls == [interaction]
         assert guard_calls == [("protection.server_stats", False)]
+
+    asyncio.run(scenario())
+
+
+def test_dank_home_server_stats_button_opens_canonical_center(monkeypatch) -> None:
+    async def scenario() -> None:
+        calls: list[object] = []
+
+        async def fake_open(interaction) -> None:
+            calls.append(interaction)
+
+        monkeypatch.setattr(stats_ui, "open_server_stats_center", fake_open)
+
+        view = home_surface.CompactDankHomeView(1)
+        button = next(
+            item
+            for item in view.children
+            if str(getattr(item, "label", "") or "") == "Server Stats"
+        )
+        interaction = SimpleNamespace(user=SimpleNamespace(id=1))
+
+        await button.callback(interaction)
+
+        assert calls == [interaction]
 
     asyncio.run(scenario())
 
