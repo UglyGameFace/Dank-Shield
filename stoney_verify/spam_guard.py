@@ -1766,21 +1766,30 @@ async def _delete_recent_messages(
             partials = [channel.get_partial_message(mid) for mid in unique_ids]
 
             if len(partials) == 1:
-                await partials[0].delete(reason=reason)
+                await partials[0].delete()
                 deleted += 1
                 continue
 
             await channel.delete_messages(partials, reason=reason)
             deleted += len(partials)
             continue
-        except Exception:
-            pass
+        except Exception as exc:
+            _debug(
+                "cleanup channel delete failed "
+                f"guild={guild.id} channel={channel_id} messages={len(message_ids)} "
+                f"error={type(exc).__name__}: {exc}"
+            )
 
         for mid in list(dict.fromkeys(message_ids)):
             try:
-                await channel.get_partial_message(mid).delete(reason=reason)
+                await channel.get_partial_message(mid).delete()
                 deleted += 1
-            except Exception:
+            except Exception as exc:
+                _debug(
+                    "cleanup fallback delete failed "
+                    f"guild={guild.id} channel={channel_id} message={mid} "
+                    f"error={type(exc).__name__}: {exc}"
+                )
                 continue
 
     return deleted

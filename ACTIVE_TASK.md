@@ -2,286 +2,158 @@
 
 ## Active task / desired outcome
 
-**P0-ANTINUKE-SELF-001 — Prevent false self-ejection from self-caused `integration_delete` after bot removal**
+**P0-ANTINUKE-MOD-001 — stop legitimate moderation from becoming durable hostile identity and restore Spam Guard cleanup**
 
-When Dank Shield removes an unauthorized or known-hostile bot, Discord may automatically
-remove that bot's integration and emit an `integration_delete` audit event attributed
-to Dank Shield. Treat that exact short-lived derived cleanup as an expected self-action
-side effect without weakening fail-closed detection for genuinely unexplained
-`integration_delete` events.
+Production incident:
+
+- Spam Guard correctly detected and removed a malicious member.
+- Its selected spam messages were left behind.
+- A moderator manually deleted one of those messages.
+- AntiNuke treated that ordinary moderator deletion as destructive, contained the moderator,
+  persisted the moderator as a confirmed hostile actor, and fast re-entry kept removing them.
+
+The fix must correct the policy and cleanup defects without weakening genuinely destructive
+AntiNuke behavior.
 
 ## Status
 
-**IMPLEMENTATION COMPLETE ON ISOLATED BRANCH — repository validation blocked by runner allocation**
+**IN PROGRESS — isolated branch**
 
-Branch: `fix/antinuke-self-integration-delete-20260923`
+Branch: `fix/antinuke-moderator-spam-cleanup-20260923`
 
-Base: current `main` at `0935f80071723b878ba1fb85a3402608512d1aec`
-(PR #297 merge).
+Base: merged `main` commit `67e5c50d00f45c9164e2d09fa7aff352f2a84a66`
+(PR #303).
 
-## Root cause
+## Confirmed root causes
 
-The self-action proof in `anti_nuke_self_action_runtime.py` authorizes direct protected
-REST mutations by adding a one-time `[DSA:<nonce>]` marker to the Discord audit reason.
+### 1. Ordinary moderator message deletion is first-strike in normal Contain
 
-The bot-add containment path removes an unauthorized bot with `guild.kick(...)`.
-Discord can then delete that bot's integration as a secondary consequence. That
-`integration_delete` is not a direct integration DELETE request from Dank Shield, so
-it has no DSA marker.
+`anti_nuke_zero_damage_runtime.py` registers `message_delete` as a strict/destructive
+Guardian action.
 
-Because `integration_delete` is intentionally protected, the self-action guard saw
-the markerless event attributed to Dank Shield as an unexplained self-action.
-`anti_nuke_zero_damage_runtime.py` then persisted the compromise quarantine and
-self-ejected from the guild.
+`anti_nuke_product_policy_runtime.py` removes the historical hardcoded override in
+normal Contain, but the canonical AntiNuke engine still assigns an untrusted human a
+threshold of 1 and aggregate threshold of 1.
 
-The failure was therefore a missing causal correlation between a locally initiated bot
-removal and Discord's derived integration cleanup, not evidence of a stolen token.
+Therefore a moderator who is not manually listed in the AntiNuke trust lists can be
+contained after one ordinary audit-log `message_delete`.
 
-## Execution path
+Discord's audit-log contract defines `message_delete` specifically as a message deleted
+by a moderator, with the message author as target and count/channel metadata in
+`entry.extra`. It is not sufficient by itself to prove server takeover.
 
-1. `anti_nuke_guardian_runtime._handle_bot_add` or the native
-   `anti_nuke._handle_bot_add` rejects an unauthorized bot.
-2. Contain mode calls `guild.kick(bot, reason=...)`.
-3. Discord may remove the OAuth/integration object and emit `integration_delete`.
-4. `anti_nuke_self_action_runtime._audit_guard` sees the actor as Dank Shield.
-5. There is no direct REST DSA nonce for the Discord-generated integration cleanup.
-6. Before this fix, the event fell into `_unmatched_self_action`.
-7. Zero-damage hardening persisted a 30-minute compromise quarantine, then retried
-   `guild.leave()`.
+### 2. The false containment becomes durable and causes a rejoin loop
+
+The hostile-actor containment wrapper records the actor as
+`confirmed_destructive_actor` before containment.
+
+`anti_nuke_reentry_race_runtime._fast_member_join` reads hot/local hostile reputation
+and immediately removes an active hostile identity when AntiNuke is enabled in Contain.
+
+Existing legacy false-positive cleanup covers several ordinary Discord actions but not
+the exact historical reason:
+
+`Dank Shield AntiNuke containment: Message deletion`
+
+As a result, adding the moderator to a trust list does not clear the already-poisoned
+hostile row.
+
+### 3. Spam Guard single-message cleanup uses an incompatible delete call
+
+`spam_guard._delete_recent_messages` calls
+`PartialMessage.delete(reason=reason)` for the one-message path and repeats the same
+call in fallback cleanup.
+
+The deployed discord.py Message/PartialMessage delete path does not accept that
+`reason=` keyword. The exception is swallowed, so `deleted_count` can remain zero
+while Spam Guard still proceeds to timeout/kick/ban the detected spammer.
+
+`commands_ext/public_spam_cleanup_hardening.py` repeats the same incompatible
+`message.delete(reason=...)` pattern.
 
 ## Scope
 
 In scope:
 
-- correlate bot kick/ban operations initiated through `discord.Guild` with the
-  possible derived `integration_delete`;
-- keep the correlation guild-scoped, one-time, short-lived, and bot-specific when
-  audit metadata exposes the application/bot identity;
-- support sparse Discord integration audit targets without disabling
-  `integration_delete` protection;
-- cancel the correlation when the initiating kick/ban fails;
-- regression-test matching, mismatching, sparse, repeated, expired, kick, ban,
-  event-ordering, and concurrent-removal paths;
-- preserve the existing fail-closed compromise path for unexplained self-actions.
+- make normal Contain treat ordinary `message_delete` as non-punitive;
+- preserve first-strike `message_delete` enforcement in Strict Lockdown;
+- keep `message_bulk_delete` as a distinct high-risk action;
+- automatically mask and durably clear only legacy hostile records produced by the exact
+  ordinary-message-deletion false-positive reason;
+- preserve real destructive hostile records such as channel deletion;
+- repair Spam Guard single-message/fallback message deletion using the supported delete API;
+- repair the public Spam Guard cleanup sweep's direct Message.delete call;
+- make unexpected cleanup failures visible instead of silently disappearing;
+- add a native Discord role selector for AntiNuke trusted roles using the existing
+  `antinuke_trusted_role_ids` persistence;
+- retain existing trusted user and pre-approved bot ID support;
+- add focused regression coverage for every behavior above.
 
 Out of scope:
 
-- changing bot-add authorization/preapproval policy;
-- automatically trusting Top.gg or any other newly invited bot;
-- changing AntiNuke thresholds or containment policy;
-- Exit Card Unicode/font work;
-- unrelated moderation/removal redesigns.
+- weakening channel/role/webhook/integration destructive protections;
+- changing bot-add authorization policy;
+- removing Strict Lockdown;
+- changing Spam Guard detection thresholds or kick/ban policy;
+- Exit Card Unicode work.
 
-## Implementation
+## Intended product behavior
 
-`stoney_verify/anti_nuke_self_action_runtime.py` now:
+Normal Contain:
 
-- maintains an in-memory expected-side-effect ledger separate from direct DSA nonces;
-- extends the existing authoritative HTTP self-action interceptor rather than adding
-  another Discord moderation-method monkey patch;
-- arms an `integration_delete` expectation when a protected local kick/ban targets
-  a cached bot, or when an AntiNuke bot-removal reason confirms the freshly-added-bot
-  path during a temporary cache miss;
-- scopes each expectation to one guild, one action, one related bot ID, and a 15-second TTL;
-- consumes each expectation at most once;
-- matches integration `user`, `application`, `application.bot`,
-  `application_id`, or `user_id` when Discord supplies those fields;
-- falls back to the one-time guild/action correlation only when Discord supplies a
-  sparse integration target with no semantic bot/application identity;
-- cancels the expected side effect if the initiating bot kick/ban raises;
-- checks expected derived side effects only after ordinary DSA nonce matching and
-  before the fail-closed unmatched-self-action path.
+- ordinary moderator deletion of a message is not a destructive AntiNuke incident;
+- bulk message deletion remains independently protected;
+- destructive structural/moderation actions remain protected;
+- moderators do not need manual trust merely to perform routine message cleanup.
 
-Existing direct integration deletions still use the normal DSA nonce route.
+Strict Lockdown:
 
-## Compatibility / patch ordering
+- `message_delete` remains a protected first-strike action.
 
-No new `discord.Guild.kick/ban` monkey patch is introduced.
+Trust lists:
 
-The correlation runs inside the existing self-action HTTP interceptor that already owns
-DSA nonce creation for protected local REST mutations. That makes the correlation
-independent of higher-level `Guild` / `Member` moderation wrappers and preserves the
-existing member-removal safety guard's ownership.
+- user IDs and pre-approved bot IDs remain available;
+- trusted roles are selectable through a native Discord role picker;
+- role trust is an optional delegation feature, not a workaround for the moderator
+  false-positive.
 
-## Tests added / extended
+Spam Guard:
 
-`tests/test_antinuke_self_action_runtime.py` covers:
+- selected malicious messages are actually deleted using supported discord.py methods;
+- the punitive user action can still proceed independently;
+- cleanup failures are observable in diagnostics instead of being silently swallowed.
 
-- expected bot-removal `integration_delete` is consumed before compromise handling;
-- correlation is one-time;
-- a different integration identity is not hidden;
-- a second matching deletion is not hidden;
-- sparse integration audit targets consume only the one pending guild/action receipt;
-- receipts expire;
-- a protected HTTP bot kick arms the receipt and the derived cleanup consumes it;
-- cached bot identity can establish the correlation;
-- a narrow allowlist of actual AntiNuke bot-removal reasons covers the freshly-added-bot
-  cache race without treating human AntiNuke containment as bot removal;
-- failed bot-removal HTTP requests cancel both the direct DSA nonce and side-effect receipt;
-- human removals do not arm a receipt;
-- bot bans arm the same derived cleanup receipt.
+## Validation required
 
-Existing tests continue to require an unmatched protected self-action to self-eject in
-Contain mode.
+Before merge readiness:
 
-## Validation / results
+- focused AntiNuke benign-action / product-policy / hostile-reentry tests;
+- focused Protection Center trust UI tests;
+- focused Spam Guard cleanup tests for one message, fallback, bulk, and sweep paths;
+- exact legacy false-positive cleanup test for Message deletion;
+- explicit regression proving Channel deletion hostile reputation is never cleared;
+- explicit Strict Lockdown regression proving message deletion is still enforced;
+- Python 3.11 compile;
+- full repository `tests/` suite;
+- standalone `tools/test_*.py` checks and repository audits;
+- exact-head workflow/review/conflict inspection.
 
-Completed at exact implementation head before this task-record update:
+## Completed prerequisite
 
-- branch comparison: 10 commits ahead / 0 behind the production base at that checkpoint;
-- changed-file scope: exactly `ACTIVE_TASK.md`,
-  `stoney_verify/anti_nuke_self_action_runtime.py`, and
-  `tests/test_antinuke_self_action_runtime.py`;
-- PR #303 was mergeable and remained draft;
-- review threads: none;
-- cleanup inspection found no leftover temporary Guild kick/ban patch, no broad
-  `startswith("dank shield antinuke")` fallback, no debug/TODO/HACK additions, and
-  no newly added line over 120 characters;
-- isolated correlation logic harness passed matching identity, mismatching identity,
-  sparse audit target, guild scoping, one-time use, expiry, cached-bot recognition,
-  exact bot-removal reason fallback, human-containment rejection, and concurrent
-  same-guild bot removals whose rich integration identities arrive out of order;
-- isolated guarded-request sequencing harness passed: the DSA nonce and derived
-  integration receipt are both armed before the protected HTTP request can execute,
-  and a failed request cancels both;
-- focused regression coverage now also exercises both audit order concerns directly:
-  the normal direct kick audit can consume its DSA nonce while the independent
-  integration-cleanup receipt remains available for the derived cleanup.
+PR #303 — Prevent AntiNuke self-ejection on bot-removal integration cleanup
 
-GitHub-hosted validation is currently non-executing, not code-failing:
-
-- historical control: Dank Shield CI run `35483010115` on `main` started
-  2026-09-20 02:04:06 UTC and completed successfully at 02:12:42 UTC; its checkout,
-  Python setup, dependency install, diff check, compile, full unit suite, standalone
-  tools, and repository audits all actually executed and passed;
-- failure boundary: by Dank Shield CI run `35488999182`, created
-  2026-09-20 04:22:58 UTC, the jobs were already failing with no steps/runner;
-- that boundary predates this P0 branch and therefore rules out this branch as the
-  cause of the repository's hosted-runner outage;
-- account-level control: the public `UglyGameFace/Idle-Grow-Op` repository still had
-  successful GitHub-hosted CI runs on 2026-09-23, so hosted Actions were not globally
-  unavailable for the account; private-repository quota/entitlement/provisioning
-  remains a plausible class of cause, but the available connector cannot read private
-  Actions billing/entitlement state and no narrower cause is claimed;
-- the failed workflows were explicitly retried and GitHub accepted all five reruns;
-- rerun attempt 2 again failed before any step ran;
-- the Dank Shield CI job metadata reports `runner_id=0`, an empty runner name,
-  an empty steps array, and 0 ms billable Ubuntu execution;
-- a fresh workflow set triggered by the later regression-test commit failed in the
-  same pre-runner state;
-- `Python compile check` therefore still never reached checkout or Python;
-- job-log download returned no executable log on the earlier identical failure mode;
-- therefore GitHub Actions has not run `git diff --check`,
-  `python -m compileall -q stoney_verify main.py tools`, or the pytest suite.
-
-The current environment cannot clone the private repository directly, so the repository
-Python 3.11 compile/test suite cannot be truthfully claimed as run here.
-
-Still required before merge readiness:
-
-- repository-native `git diff --check`;
-- Python 3.11 compileall;
-- focused self-action and zero-damage AntiNuke tests;
-- bot authorization, guardian, race/re-entry, lockdown, and runtime-coordinator regressions;
-- broader AntiNuke regression suite;
-- full `tests/` suite per the repository CI convention;
-- final exact-head PR/CI/review inspection after those commands run.
-
-No fixed/complete/merge-ready claim is made while repository execution remains blocked.
-
-## Cleanup / conflicts
-
-- Branch was created directly from current `main`.
-- No Exit Card runtime/test changes were brought into this branch.
-- The only intended runtime ownership change is the self-action causal-correlation layer.
-- No direct `integration_delete` protection, quarantine behavior, or self-ejection code
-  has been removed.
+- merged to `main` as `67e5c50d00f45c9164e2d09fa7aff352f2a84a66`;
+- exact tested PR head passed 1850 tests plus all repository workflows/audits.
 
 ## Suspended task
 
-PR #302 — **Diagnose cross-guild Exit Card Unicode rendering**
+PR #302 — Diagnose cross-guild Exit Card Unicode rendering
 
-- state: open draft;
-- branch: `fix/exit-card-font-cross-guild-20260923`;
-- head when suspended: `c9d8b2a636ccae8ddaf3f1b94b1bd7b07936e7e2`;
-- changed files: `ACTIVE_TASK.md`, `tests/test_exit_card_renderer.py`;
-- stage: renderer-level reproduction/validation only, no production runtime change;
-- next step when resumed: run the focused renderer/fallback regression in the Ubuntu
-  validation environment before choosing a runtime fix.
-
-## Backlog
-
-Separate from this P0:
-
-- **P0 follow-up — legitimate moderator message deletion becomes durable hostile identity.**
-  Production report: a moderator deleted a spammer's message after Spam Guard removed
-  the spammer; AntiNuke removed the moderator and continues removing them on rejoin.
-
-  Confirmed execution path:
-  1. zero-damage audit expansion registers `message_delete` as an AntiNuke action;
-  2. normal Contain still treats an actor who is not explicitly in
-     `antinuke_trusted_user_ids` / `antinuke_trusted_role_ids` as first-strike;
-  3. the moderator's ordinary single-message deletion therefore reaches
-     `_contain_actor`;
-  4. hostile-actor wrapping persists the actor as
-     `confirmed_destructive_actor` before containment;
-  5. fast re-entry reads that durable/local hostile record and bans/removes the member
-     again whenever they join while AntiNuke is enabled in Contain mode.
-
-  Existing false-positive sanitization already masks a list of formerly over-punitive
-  ordinary actions (invite, emoji, sticker, scheduled-event, thread, and soundboard
-  actions), but `message_delete` / reason `Dank Shield AntiNuke containment: Message
-  deletion` is not in that contract. Requiring every legitimate moderator to be
-  manually trusted is not an acceptable product-level resolution for ordinary
-  moderation.
-
-- **UI follow-up — trusted AntiNuke roles should use native role selection.**
-  The persistence model already supports `antinuke_trusted_role_ids`, but the public
-  Trust Lists surface still requires manual ID-style entry. Replace that friction with
-  a native Discord role selector that shows the currently trusted roles and supports
-  add/remove without requiring owners to paste individual moderator user IDs.
-  This is a product/UI improvement, not the fix for the moderator false-positive:
-  ordinary moderation still must not require blanket trust to avoid punishment.
-
-- **P0 follow-up — Spam Guard single-message cleanup silently fails before kick.**
-  `spam_guard._delete_recent_messages` calls
-  `PartialMessage.delete(reason=reason)` when one cleanup message is selected, catches
-  the resulting exception, then retries the same incompatible `reason=` call.
-  This repository already documents that the deployed discord.py
-  `Message.delete/PartialMessage.delete` path does not accept that keyword. The result
-  can be `deleted_count=0` while Spam Guard still proceeds to timeout/kick/ban the
-  detected spammer. Multi-message bulk deletion uses a different API path and is not
-  sufficient to cover the single-message case.
-
-  Required follow-up validation should cover single-message cleanup, multi-message
-  cleanup, deletion failure visibility, action ordering, and the guarantee that a
-  legitimate moderator cleaning up the detected spam afterward is not converted into a
-  durable hostile identity.
-
-
-- decide whether bot-install preapproval/authorization UX should change for owner-added
-  bots such as Top.gg. That is a product-policy decision and is not required to stop
-  Dank Shield from falsely diagnosing its own integration cleanup as credential compromise.
-
-## Blockers / risks
-
-The sparse Discord audit target case cannot prove the related bot ID, so it uses the
-narrowest available fallback: one guild, one `integration_delete`, one locally
-authorized bot-removal request, 15 seconds, one-time consumption. If Discord exposes
-application or bot identity, a mismatch is rejected and the fail-closed path remains
-active.
-
-The cache-miss reason fallback is restricted to the exact known bot-removal reason family.
-Generic human containment such as
-`Dank Shield AntiNuke containment: unauthorized bot addition ...` explicitly does not
-qualify.
-
-The side-effect receipt is armed before the protected HTTP request so the audit event
-cannot win a race against the request return. If that request fails, both its normal
-DSA nonce and the side-effect receipt are canceled.
+- remains suspended;
+- do not mix its runtime/test changes into this P0.
 
 ## Next step
 
-Run the repository-native compile and pytest validation as soon as an executable runner is
-available. Keep PR #303 draft until that evidence is green, then perform one final
-exact-head diff/CI/review inspection before any merge decision.
+Implement the normal-Contain message-delete policy boundary, exact legacy reputation
+cleanup, Spam Guard delete compatibility fixes, and native trusted-role selector with
+focused regression tests before opening the implementation PR for full CI.

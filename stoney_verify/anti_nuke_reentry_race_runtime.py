@@ -72,6 +72,7 @@ _LEGACY_FALSE_POSITIVE_REASONS = frozenset(
         "dank shield antinuke containment: thread/forum-post mutation",
         "dank shield antinuke containment: soundboard creation",
         "dank shield antinuke containment: soundboard mutation",
+        "dank shield antinuke containment: message deletion",
     }
 )
 _LEGACY_REPUTATION_CLEARING: set[tuple[int, int]] = set()

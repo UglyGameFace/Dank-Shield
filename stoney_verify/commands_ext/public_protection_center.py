@@ -940,21 +940,12 @@ async def _save_antinuke_trust_lists(
 
 class AntiNukeTrustedIdsModal(discord.ui.Modal):
     def __init__(self, settings: dict[str, Any]) -> None:
-        super().__init__(title="AntiNuke Trust Lists", timeout=300)
+        super().__init__(title="AntiNuke User + Bot Trust", timeout=300)
 
         self.trusted_users = discord.ui.TextInput(
             label="Trusted inviter user IDs",
             placeholder="123456789012345678, 987654321098765432",
             default=", ".join(str(x) for x in settings["antinuke_trusted_user_ids"]),
-            required=False,
-            style=discord.TextStyle.paragraph,
-            max_length=1500,
-        )
-
-        self.trusted_roles = discord.ui.TextInput(
-            label="Trusted inviter role IDs",
-            placeholder="123456789012345678, 987654321098765432",
-            default=", ".join(str(x) for x in settings["antinuke_trusted_role_ids"]),
             required=False,
             style=discord.TextStyle.paragraph,
             max_length=1500,
@@ -970,7 +961,6 @@ class AntiNukeTrustedIdsModal(discord.ui.Modal):
         )
 
         self.add_item(self.trusted_users)
-        self.add_item(self.trusted_roles)
         self.add_item(self.trusted_bots)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -983,10 +973,11 @@ class AntiNukeTrustedIdsModal(discord.ui.Modal):
                 await _send_ephemeral(interaction, "❌ This must be used inside a server.")
                 return
 
+            current = await get_antinuke_settings(int(guild.id))
             users, roles, bots = await _save_antinuke_trust_lists(
                 int(guild.id),
                 trusted_users=self.trusted_users.value,
-                trusted_roles=self.trusted_roles.value,
+                trusted_roles=current["antinuke_trusted_role_ids"],
                 trusted_bots=self.trusted_bots.value,
             )
 
@@ -1002,6 +993,205 @@ class AntiNukeTrustedIdsModal(discord.ui.Modal):
             "protection.antinuke.trusted_ids",
             action,
             defer=True,
+        )
+
+
+async def _update_antinuke_trusted_roles(
+    guild_id: int,
+    selected_role_ids: Any,
+    *,
+    remove: bool = False,
+    blocked_role_ids: set[int] | None = None,
+) -> list[int]:
+    settings = await get_antinuke_settings(int(guild_id))
+    current = set(
+        _parse_antinuke_id_list(settings.get("antinuke_trusted_role_ids"))
+    )
+    selected = set(_parse_antinuke_id_list(selected_role_ids))
+    blocked = {
+        int(role_id)
+        for role_id in (blocked_role_ids or set())
+        if int(role_id) > 0
+    }
+
+    current.difference_update(blocked)
+    if remove:
+        current.difference_update(selected)
+    else:
+        current.update(selected - blocked)
+
+    role_ids = sorted(current)
+    saved = await save_antinuke_settings(
+        int(guild_id),
+        {"antinuke_trusted_role_ids": role_ids},
+    )
+    if hasattr(saved, "get"):
+        return _parse_antinuke_id_list(
+            saved.get("antinuke_trusted_role_ids", role_ids)
+        )
+    return role_ids
+
+
+def _antinuke_trust_manager_text(
+    guild: discord.Guild,
+    settings: dict[str, Any],
+    *,
+    notice: str = "",
+) -> str:
+    role_ids = _parse_antinuke_id_list(
+        settings.get("antinuke_trusted_role_ids")
+    )
+    labels: list[str] = []
+    for role_id in role_ids[:15]:
+        role = guild.get_role(int(role_id))
+        if role is None:
+            labels.append(f"`missing role {role_id}`")
+            continue
+        name = str(
+            getattr(role, "name", "role") or "role"
+        ).replace("`", "'")
+        labels.append(f"`@{name}`")
+
+    role_text = ", ".join(labels) if labels else "None"
+    extra = f"\n\n{notice}" if notice else ""
+    return (
+        "**AntiNuke Trust Manager**\n"
+        f"**Trusted roles ({len(role_ids)}):** {role_text}\n"
+        f"**Trusted users:** "
+        f"{len(settings['antinuke_trusted_user_ids'])} • "
+        f"**Pre-approved bots:** "
+        f"{len(settings['antinuke_trusted_bot_ids'])}\n\n"
+        "Use the role selectors below to add or remove roles. "
+        "Use **Edit User/Bot IDs** only for individual users or "
+        "pre-approved bots. `@everyone` is never accepted as a trusted role."
+        + extra
+    )
+
+
+async def _edit_antinuke_trust_manager(
+    interaction: discord.Interaction,
+    *,
+    selected_role_ids: Any,
+    remove: bool,
+) -> None:
+    if not await _require_antinuke_owner(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        await _send_ephemeral(
+            interaction,
+            "❌ This must be used inside a server.",
+        )
+        return
+
+    default_role_id = int(
+        getattr(getattr(guild, "default_role", None), "id", 0) or 0
+    )
+    role_ids = await _update_antinuke_trusted_roles(
+        int(guild.id),
+        selected_role_ids,
+        remove=remove,
+        blocked_role_ids={default_role_id} if default_role_id > 0 else set(),
+    )
+    settings = await get_antinuke_settings(int(guild.id))
+    notice = (
+        f"✅ {'Removed from' if remove else 'Added to'} trusted roles. "
+        f"Current trusted-role count: **{len(role_ids)}**."
+    )
+    await interaction.response.edit_message(
+        content=_antinuke_trust_manager_text(
+            guild,
+            settings,
+            notice=notice,
+        ),
+        view=AntiNukeTrustManagerView(),
+    )
+
+
+class AntiNukeTrustedRoleAddSelect(discord.ui.RoleSelect):
+    def __init__(self) -> None:
+        super().__init__(
+            placeholder="Add trusted moderator roles…",
+            min_values=1,
+            max_values=10,
+            custom_id="dank_protection:antinuke_trusted_roles_add",
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        async def action() -> None:
+            await _edit_antinuke_trust_manager(
+                interaction,
+                selected_role_ids=[
+                    int(role.id) for role in self.values
+                ],
+                remove=False,
+            )
+
+        await _guard_protection_action(
+            interaction,
+            "protection.antinuke.trusted_roles.add",
+            action,
+            defer=False,
+        )
+
+
+class AntiNukeTrustedRoleRemoveSelect(discord.ui.RoleSelect):
+    def __init__(self) -> None:
+        super().__init__(
+            placeholder="Remove trusted roles…",
+            min_values=1,
+            max_values=10,
+            custom_id="dank_protection:antinuke_trusted_roles_remove",
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        async def action() -> None:
+            await _edit_antinuke_trust_manager(
+                interaction,
+                selected_role_ids=[
+                    int(role.id) for role in self.values
+                ],
+                remove=True,
+            )
+
+        await _guard_protection_action(
+            interaction,
+            "protection.antinuke.trusted_roles.remove",
+            action,
+            defer=False,
+        )
+
+
+class AntiNukeTrustManagerView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=300)
+        self.add_item(AntiNukeTrustedRoleAddSelect())
+        self.add_item(AntiNukeTrustedRoleRemoveSelect())
+
+    @discord.ui.button(
+        label="Edit User/Bot IDs",
+        emoji="✏️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_protection:antinuke_trusted_ids_edit",
+        row=2,
+    )
+    async def edit_ids_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+
+        async def action() -> None:
+            await _open_antinuke_trusted_modal(interaction)
+
+        await _guard_protection_action(
+            interaction,
+            "protection.antinuke.trusted_ids.open",
+            action,
+            defer=False,
         )
 
 
@@ -1136,6 +1326,28 @@ async def _open_antinuke_trusted_modal(interaction: discord.Interaction) -> None
 
     settings = await get_antinuke_settings(int(guild.id))
     await interaction.response.send_modal(AntiNukeTrustedIdsModal(settings))
+
+
+async def _open_antinuke_trust_manager(
+    interaction: discord.Interaction,
+) -> None:
+    if not await _require_antinuke_owner(interaction):
+        return
+
+    guild = interaction.guild
+    if guild is None:
+        await _send_ephemeral(
+            interaction,
+            "❌ This must be used inside a server.",
+        )
+        return
+
+    settings = await get_antinuke_settings(int(guild.id))
+    await interaction.response.send_message(
+        _antinuke_trust_manager_text(guild, settings),
+        view=AntiNukeTrustManagerView(),
+        ephemeral=True,
+    )
 
 
 async def _open_antinuke_thresholds_modal(interaction: discord.Interaction) -> None:
@@ -1614,7 +1826,7 @@ class ProtectionCenterView(discord.ui.View):
         _ = button
 
         async def action() -> None:
-            await _open_antinuke_trusted_modal(interaction)
+            await _open_antinuke_trust_manager(interaction)
 
         await _guard_protection_action(
             interaction,
