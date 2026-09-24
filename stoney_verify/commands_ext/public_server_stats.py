@@ -11,6 +11,8 @@ from typing import Any, Mapping, Optional
 
 import discord
 
+from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+
 from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
 from ..security_stats import (
     DEFAULT_SECURITY_STATS_LABELS,
@@ -355,7 +357,7 @@ class StatLabelSelect(discord.ui.Select):
 
 class ServerStatsView(discord.ui.View):
     def __init__(self, *, owner_id: int, cfg: Any) -> None:
-        super().__init__(timeout=900)
+        super().__init__(timeout=PRIVATE_MENU_TTL_SECONDS)
         self.owner_id = int(owner_id)
         self.cfg = cfg
         self.prefs = security_stats_preferences(cfg)
