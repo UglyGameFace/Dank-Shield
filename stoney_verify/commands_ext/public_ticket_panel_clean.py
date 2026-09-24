@@ -35,7 +35,15 @@ _MENU_TTL_SECONDS = 900.0
 _INTERACTION_TTL_SECONDS = 90.0
 
 PANEL_BUTTON_CUSTOM_ID = "sv:ticket:panel:create:clean:v1"
-PANEL_BUTTON_CUSTOM_IDS = {PANEL_BUTTON_CUSTOM_ID}
+LEGACY_PANEL_BUTTON_CUSTOM_IDS = frozenset(
+    {
+        "sv:ticket:panel:create:v6",
+        "ticket_create",
+    }
+)
+PANEL_BUTTON_CUSTOM_IDS = frozenset(
+    {PANEL_BUTTON_CUSTOM_ID, *LEGACY_PANEL_BUTTON_CUSTOM_IDS}
+)
 
 # Keep compatibility for callers/tests that still reference DEFAULT_ROWS, but
 # derive it from the one managed category catalog instead of maintaining a
