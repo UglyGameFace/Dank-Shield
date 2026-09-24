@@ -150,6 +150,19 @@ Completed at exact implementation head before this task-record update:
 
 GitHub-hosted validation is currently non-executing, not code-failing:
 
+- historical control: Dank Shield CI run `35483010115` on `main` started
+  2026-09-20 02:04:06 UTC and completed successfully at 02:12:42 UTC; its checkout,
+  Python setup, dependency install, diff check, compile, full unit suite, standalone
+  tools, and repository audits all actually executed and passed;
+- failure boundary: by Dank Shield CI run `35488999182`, created
+  2026-09-20 04:22:58 UTC, the jobs were already failing with no steps/runner;
+- that boundary predates this P0 branch and therefore rules out this branch as the
+  cause of the repository's hosted-runner outage;
+- account-level control: the public `UglyGameFace/Idle-Grow-Op` repository still had
+  successful GitHub-hosted CI runs on 2026-09-23, so hosted Actions were not globally
+  unavailable for the account; private-repository quota/entitlement/provisioning
+  remains a plausible class of cause, but the available connector cannot read private
+  Actions billing/entitlement state and no narrower cause is claimed;
 - the failed workflows were explicitly retried and GitHub accepted all five reruns;
 - rerun attempt 2 again failed before any step ran;
 - the Dank Shield CI job metadata reports `runner_id=0`, an empty runner name,
