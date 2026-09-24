@@ -15,6 +15,7 @@ import discord
 from discord import app_commands
 
 from .public_setup_group import dank_group
+from .public_owner_authority import interaction_has_manage_guild_authority
 
 MAX_DANK_PAYLOAD = 8000
 DANK_PAYLOAD_SAFETY_LIMIT = 7600
@@ -23,14 +24,7 @@ _ORIGINAL_COMMANDS: dict[str, Any] = {}
 
 
 def _admin_or_manage(interaction: discord.Interaction) -> bool:
-    try:
-        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-            return False
-        permissions = interaction.user.guild_permissions
-        return bool(permissions.administrator or permissions.manage_guild)
-    except Exception:
-        return False
-
+    return interaction_has_manage_guild_authority(interaction)
 
 async def _private(
     interaction: discord.Interaction,
