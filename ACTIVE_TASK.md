@@ -2,192 +2,214 @@
 
 ## Active task / desired outcome
 
-**P0-OWNER-AUTHORITY-002 — make actual guild ownership authoritative across public management gates**
+**P0-TICKET-PANEL-001 — restore Create Ticket interaction reliability across deploy/restart**
 
-Eliminate the class of false permission denials where the real Discord server
-owner is rejected because an interaction arrives without fully resolved
-`discord.Member` state or a populated permission/role cache.
+Fix the live public **Create Ticket** panel so an already-posted panel cannot
+silently lose its interaction route after bot restarts, application identity
+changes, or command-registration refactors.
 
-## Production evidence
+## Production symptom
 
-The actual server owner opened **Setup & Settings** from `/dank home` and Dank
-Shield replied:
+Members press **Create Ticket** and Discord returns:
 
-`❌ Server setup requires the configured server-control role or Administrator.`
+`This interaction failed`
 
-The same owner had already hit a separate **Staff only** false denial in the
-Verification Center.
-
-PR #307 fixed the staff/Verification Center path. The Setup failure proved that
-owner truth was still duplicated in a second permission implementation.
+The failure appears alongside the recent Basic Verify/persistent-panel incidents,
+but ticket creation has its own runtime and must be repaired independently.
 
 ## Status
 
-**IMPLEMENTED — final exact-head validation pending after top-level Design audit**
+**ROOT-CAUSE GAPS CONFIRMED — restart reconciliation implemented; exact-head validation pending**
 
-Branch: `fix/owner-authority-consolidation-20260924`
+Branch: `fix/ticket-panel-restart-reconciliation-20260924`
 
-Base: `main@43e8d8a20d8e6455090bd60eedd92eb6f1851d28`
+Base: `main@353a43ddbf45e15fc93c9eb3e2cd19a3935dfd1f`
 
-## Root cause
+## Previous task closed
 
-Public management authorization had multiple independent implementations.
+PR #309 — canonical guild-owner authority consolidation — merged to `main` as
+`353a43ddbf45e15fc93c9eb3e2cd19a3935dfd1f`.
 
-The server-control path in
-`commands_ext/public_access_control.py` performed this ordering:
+Its final exact head passed all repository CI/workflow gates before merge.
 
-1. require `isinstance(user, discord.Member)`;
-2. only then check whether the user is the guild owner;
-3. then check Administrator/configured server-control role.
+## Execution path
 
-An application-command interaction with partial member state could therefore
-return False before the authoritative owner-ID comparison ever ran.
+Production command bootstrap:
 
-Several neighboring public UI helpers independently repeated
-`Administrator or Manage Server` checks with the same Member-first assumption,
-including the command hub used by `/dank home`.
+`commands.py`
+→ `install_public_ticket_panel_runtime(bot, strict=True)`
+→ persistent `PublicCreateTicketPanelView`
+→ delayed `on_interaction` fallback
+→ `public_ticket_panel_clean.handle_public_ticket_panel_click()`
+→ one canonical panel-button handler
+→ category picker
+→ ticket creation path
 
-PR #307 made staff authority owner-safe, but it did not consolidate these
-server-control/manager helpers.
+The native runtime is installed before the general command registrar, so its
+existing delayed fallback is normally real in production.
 
-## Canonical authority contract
+## Root-cause findings
 
-New module:
+Two concrete lifecycle defects remained.
 
-`stoney_verify/commands_ext/public_owner_authority.py`
+### 1. Saved panel identity was never used by the runtime
 
-owns the shared identity rule:
+`public_ticket_panel_clean._post_panel()` already persisted:
 
-- `guild.owner_id == user.id` is authoritative first;
-- owner truth does not depend on role cache, configured role IDs, or resolved
-  `guild_permissions`;
-- non-owner users still require real Discord Member state before
-  Administrator/Manage Server permission checks;
-- partial non-owner interactions fail closed.
+- `ticket_panel_channel_id`
+- `ticket_panel_message_id`
 
-## Changes
+But `ticket_panel_runtime.py` never read those values after restart and never
+bound the persistent view to the exact saved Discord message.
 
-### `public_access_control.py`
+The runtime therefore knew the custom ID globally but did not reconcile the
+actual production panel message.
 
-- `scoped_is_server_control()` now checks actual guild ownership before the
-  `discord.Member` type gate;
-- `scoped_is_ticket_staff()` follows the same owner-first rule;
-- added `scoped_interaction_is_server_control()` so interaction guild context
-  remains available even when `interaction.user` is partial;
-- `require_server_control()` now rejects only DMs before evaluating canonical
-  owner/server-control authority.
+### 2. Application identity drift was not detectable
 
-This directly fixes the **Setup & Settings** false denial shown in production.
+A Discord component is routed to the application that authored it. A visually
+identical old Dank Shield panel can therefore remain clickable while no current
+runtime handler can ever receive that click if the panel belongs to an older
+application identity.
 
-### Shared public management surfaces
+The saved config did not record which bot/application authored the panel, and
+startup never fetched/reconciled legacy panel identity.
 
-The following manager gates now delegate to the same canonical
-`interaction_has_manage_guild_authority()` helper:
+### 3. The clean registrar had false fallback bookkeeping
 
-- `public_command_hub._admin_or_manage`;
-- `public_setup_group._admin_or_manage_guild`;
-- `public_setup_overview._admin_or_manage_guild`;
-- `public_diagnostics_group._admin_or_manage_guild`;
-- `public_embed_group._admin_or_manage_guild`.
+`register_public_ticket_panel_clean()` contained an independent registration
+path. When its persistent view registered successfully it could set
+`_PANEL_FALLBACK_LISTENER_REGISTERED = True` without calling
+`bot.add_listener()`.
 
-This covers the compact `/dank home` manager doorways such as Protection,
-Logs, setup overview, diagnostics repair actions, and embed/setup tools without
-duplicating owner logic again.
+Normal production bootstrap installs `ticket_panel_runtime` first, so this was
+not sufficient by itself to explain every live failure. It was still an invalid
+secondary ownership path and could lie in alternate/test registration orders.
 
-### Staff scope
+## Repair
 
-`public_staff_scope.py` now reuses the canonical guild-owner identity helper
-instead of maintaining a separate owner implementation.
+### Canonical runtime ownership only
 
-`common._staff_check` also uses the canonical owner helper as its baseline
-fast path.
+`public_ticket_panel_clean.register_public_ticket_panel_clean()` now delegates
+runtime registration to `ticket_panel_runtime.install_public_ticket_panel_runtime()`.
 
-### Server Design doorway
+It no longer:
 
-The top-level **Server Design** route deliberately uses **Manage Channels**
-instead of Administrator/Manage Server. Its backend still checked
-`isinstance(interaction.user, discord.Member)` before permission resolution,
-which could reproduce the same false owner denial under partial interaction
-state.
+- independently calls `bot.add_view()`;
+- independently installs a component fallback;
+- sets the fallback-registered flag merely because the persistent view exists.
 
-`public_design_studio._can_user_design()` now grants the actual guild owner
-first through the canonical owner helper, while non-owner users still require
-the existing **Manage Channels** permission. The Design permission model was not
-broadened for anyone else.
+The duplicate clean-module fallback implementation was removed.
 
-## Security properties preserved
+### Persist exact panel + application identity
 
-- no hardcoded user/guild IDs;
-- configured server-control roles remain guild-scoped;
-- configured ticket staff roles remain guild-scoped;
-- Administrator remains valid;
-- Manage Server remains only the bootstrap fallback when no control role is
-  configured;
-- partial non-owner interactions fail closed;
-- ticket claim/security ownership is unchanged;
-- no permission is granted merely because a username/role label resembles an
-  owner/admin role.
+Panel posting now persists through canonical guild-config ownership:
 
-## Tests
+- `ticket_panel_channel_id`;
+- `ticket_panel_message_id`;
+- `ticket_panel_application_id`.
 
-Added `tests/test_owner_authority_consolidation.py` covering:
+The write uses `explicit_override` with source `ticket_panel.identity` and no
+longer routes panel identity updates through the setup-builder writer, so posting
+or reconciling a panel does not invalidate completed setup state.
 
-- owner identity with no Member/permission/role state;
-- non-owner partial state failing closed;
-- server-control owner fast path before Member type checks;
-- `require_server_control()` never denying the actual owner;
-- shared public management gates all accepting the actual owner;
-- the same gates rejecting partial non-owner state.
+A newly posted panel is also immediately bound to its exact message ID through
+the canonical ticket runtime.
 
-Existing PR #307 staff-scope regressions remain in place.
+### Restart reconciliation
 
-## Validation results
+The ticket runtime now registers one background `on_ready` reconciler.
 
-Exact implementation head `f35b78af68c09b4e90b8e746b7d9ac6e5307c707` passed:
+It:
 
-- PR mergeable and 0 commits behind `main`;
-- committed-diff whitespace check;
+- discovers configured ticket-panel rows in Supabase batches of 100;
+- binds panels with a saved current application ID without Discord REST;
+- performs bounded legacy identity checks only when application identity is
+  missing or mismatched;
+- fetches the exact saved panel message when a message ID exists;
+- can scan only the configured panel channel for a legacy row without a saved
+  message ID;
+- persists the current application identity once a current-bot legacy panel is
+  confirmed;
+- upgrades a current-bot legacy panel to the canonical Create Ticket view when
+  its custom ID is stale;
+- detects a configured ticket panel authored by another Discord application,
+  posts a fresh current-application panel, rebinds it, and deletes the stale
+  foreign panel only when the message is clearly a Dank Shield ticket panel and
+  the current bot has Manage Messages;
+- does not blindly recreate a panel when a saved message was deleted or a fetch
+  fails.
+
+Legacy Discord REST work is capped per process start by
+`DANK_TICKET_PANEL_LEGACY_RECONCILE_PER_START` (default 50) and uses the shared
+startup recovery REST budget.
+
+## Single mutation owner preserved
+
+The reconciliation/runtime layer does not create tickets.
+
+Ticket business logic remains:
+
+`handle_public_ticket_panel_click`
+→ `_handle_panel_button`
+→ `_handle_panel_button_core`
+→ existing canonical category/confirm/create flow
+
+The existing interaction-ID duplicate suppression, menu session ownership,
+persistent ticket number allocation, permission preflight, and claim-first
+security are unchanged.
+
+## Tests updated/added
+
+Focused coverage now verifies:
+
+- persistent view + real delayed fallback + ready reconciler registration;
+- idempotent registration;
+- fallback-only degraded operation;
+- strict failure when no interaction route can register;
+- current-application saved panels bind exact message IDs without REST;
+- legacy current-bot panels persist application identity and exact binding;
+- foreign-application saved panels are replaced and rebound;
+- category-select fallback behavior remains intact;
+- clean registrar delegates to the canonical runtime instead of maintaining a
+  second fallback owner;
+- panel-lifetime/static audits track the canonical view after fallback cleanup;
+- DS-BACKLOG-027 static acceptance follows the new single-owner runtime contract.
+
+## Scale / safety
+
+- no schema migration;
+- no all-channel scan;
+- no all-message scan;
+- already-migrated panel identities require zero Discord REST at restart;
+- legacy reconciliation is bounded and recovery-budget paced;
+- replacement occurs only for a configured message that is clearly a Dank Shield
+  ticket panel;
+- transient fetch failure does not create duplicate panels.
+
+## Validation required
+
+- exact diff/currentness inspection;
 - Python compile;
-- complete unit test suite;
-- standalone tool checks;
-- public setup/isolation audit;
-- canonical public command-surface audit;
-- startup-friction audit;
-- public invite-permission audit;
-- setup-safety audit;
-- Dank Design Smart Auto-Detect audit;
-- role-truth ownership audit;
-- event-boundary ownership audit;
-- focused claim-first ticket security suite;
-- managed-category SQL smoke test;
-- Ticket Owner Emergency Override workflow;
-- Application Command Size Diagnostics;
-- DS Backlog 027 Validation;
-- Dank Design Regression CI;
-- Profile Runtime Diagnostics.
-
-Final diff inspection found no conflict markers, trailing whitespace, or debug
-artifacts. PR review-thread inspection found no open review threads.
-
-A follow-up audit of every top-level `/dank home` management doorway found one
-remaining Member-first permission check in Server Design. That implementation
-was corrected after the validation above, so those results are historical
-evidence only; the new exact head must pass the complete gates again.
+- focused ticket-panel restart tests;
+- single-owner/static audits;
+- ticket category/select behavior tests;
+- claim-first ticket security workflow;
+- full `pytest tests/`;
+- standalone repository audits;
+- all GitHub workflow gates;
+- final review-thread/mergeability inspection.
 
 ## Backlog
 
-**Next P0 after this task:** Create Ticket interaction failure. Current code has
-already exposed a concrete bookkeeping defect: when the persistent Create Ticket
-view registers successfully, `public_ticket_panel_clean.py` sets
-`_PANEL_FALLBACK_LISTENER_REGISTERED = True` without actually registering the
-fallback listener. That task remains isolated until owner authority closes.
+After ticket interaction reliability closes:
 
-Startup activity-history reconciliation cost/noise remains a later performance
-task.
+- reduce startup activity-history recovery cost/noise and its multi-minute REST
+  reconciliation footprint;
+- re-check live Basic Verify and Create Ticket acceptance after Discloud deploy.
 
 ## Next step
 
-Run the complete exact-head CI after the Server Design audit repair. If all
-workflows remain green, perform final currentness/diff/review inspection and
-mark PR #309 ready for merge. After merge, activate the isolated Create Ticket
-persistent-interaction repair.
+Open the isolated draft PR, run exact-head CI, fix only regressions caused by
+this ticket runtime repair, and make it merge-ready only after the complete
+repository gates pass.
