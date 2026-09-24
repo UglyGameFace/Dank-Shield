@@ -21,7 +21,7 @@ component interaction that Discord routes to a different application identity.
 
 ## Status
 
-**IMPLEMENTED — shared application-identity repair added to #311; exact-head validation pending**
+**IMPLEMENTED — shared application-identity + acknowledgement-boundary repair added to #311; exact-head validation pending**
 
 Branch: `fix/ticket-panel-restart-reconciliation-20260924`
 
@@ -122,6 +122,19 @@ compatibility work from #310 is now folded into this branch so old panels and
 the newer reconciliation logic are one coherent runtime instead of two
 diverging PRs.
 
+### 5. Ticket acknowledgement failure was not a hard stop
+
+The canonical Create Ticket path called `_defer()` before expensive lookup and
+creation work, but `_defer()` swallowed exceptions and returned no claim state.
+An otherwise-unanswered interaction could therefore fail its acknowledgement and
+still continue into DB/category/channel work.
+
+The direct Confirm path is intentionally different: it edits the menu first, so
+its interaction is already acknowledged before `_create_ticket()` runs. The
+repair therefore treats an already-completed response as a valid claim, while a
+real defer failure on an unanswered interaction returns false and stops before
+mutation.
+
 ## Repair
 
 ### Canonical runtime ownership only
@@ -170,6 +183,14 @@ or reconciling a panel does not invalidate completed setup state.
 A newly posted panel is also immediately bound to its exact message ID through
 the canonical ticket runtime.
 
+### Ticket acknowledgement claim boundary
+
+`public_ticket_panel_clean._defer()` now returns a real acknowledgement result.
+Both the initial Create Ticket button handler and ticket-creation path stop before
+expensive lookup or mutation when an unanswered interaction cannot be deferred.
+An interaction already acknowledged by the canonical Confirm edit remains valid,
+so the existing direct-confirm flow is preserved.
+
 ### Restart reconciliation
 
 The ticket runtime now registers one background `on_ready` reconciler.
@@ -216,6 +237,11 @@ security are unchanged.
 ## Tests updated/added
 
 Focused coverage now verifies:
+
+- failed ticket acknowledgement stops before lookup/mutation;
+- already-acknowledged direct Confirm remains valid;
+- foreign Basic Verify replacement posts successfully before stale-panel deletion;
+- failed foreign Basic Verify replacement preserves the stale panel;
 
 - Basic Verify saved current-application panels bind with zero REST;
 - Basic Verify legacy saved IDs fetch the exact message and persist application identity;
@@ -277,7 +303,7 @@ After persistent-panel interaction reliability closes:
 
 ## Next step
 
-Run exact-head CI after the shared Basic Verify application-identity repair. If
-all workflows are green, perform final currentness/diff/review inspection and
-make PR #311 ready for merge. PR #310 is already superseded/closed; do not revive
-it.
+Run exact-head CI after the shared Basic Verify application-identity and ticket
+acknowledgement-boundary repair. If all workflows are green, record exact-head
+validation here, perform final currentness/diff/review inspection, and make PR
+#311 ready for merge. PR #310 is already superseded/closed; do not revive it.
