@@ -642,6 +642,24 @@ async def _send_status_report(bot: Any, guild: discord.Guild, *, event: str, for
         pass
 
     embed.add_field(name="Service Availability", value="\n".join(lines)[:1024], inline=False)
+    try:
+        from ..interaction_guard import component_runtime_status
+        from ..runtime_release import runtime_release_label
+
+        component = component_runtime_status(bot)
+        embed.add_field(
+            name="Runtime Proof",
+            value=(
+                f"Build: `{runtime_release_label()}`\n"
+                f"Component runtime: **{'ready' if component.get('installed') else 'missing'}**\n"
+                f"Ingress since restart: **{int(component.get('ingress_count') or 0)}** • "
+                f"recovered: **{int(component.get('recovery_count') or 0)}** • "
+                f"unacknowledged: **{int(component.get('unacknowledged_count') or 0)}**"
+            )[:1024],
+            inline=False,
+        )
+    except Exception:
+        pass
     embed.add_field(
         name="Important",
         value="True bot-down alerts require a separate watchdog because the bot cannot send Discord messages while its own process is offline.",

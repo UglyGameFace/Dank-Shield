@@ -26,6 +26,7 @@ from typing import Any, Awaitable, Callable, Mapping, Optional, TypeVar
 import discord
 
 from .panel_lifecycle import PRIVATE_MENU_RECOVERY_GRACE_SECONDS
+from .runtime_release import runtime_release_label
 
 T = TypeVar("T")
 _LOG = logging.getLogger("dank_shield.interactions")
@@ -41,6 +42,10 @@ _COMPONENT_OBSERVER_PROBE_TIMES: list[float] = []
 _COMPONENT_OBSERVER_LOG_WINDOW_SECONDS = 60.0
 _COMPONENT_OBSERVER_LOG_LIMIT = 20
 _COMPONENT_OBSERVER_LOG_TIMES: list[float] = []
+_COMPONENT_INGRESS_COUNT = 0
+_COMPONENT_RECOVERY_COUNT = 0
+_COMPONENT_UNACKNOWLEDGED_COUNT = 0
+_COMPONENT_LAST_INGRESS: dict[str, Any] = {}
 _VIEW_STORE_LAYOUT_DISCORD_VERSION = "2.7.1"
 
 
@@ -460,6 +465,49 @@ def _view_store_has_component_owner(bot: Any, interaction: Any) -> bool:
     return _view_store_component_owner_state(bot, interaction) is True
 
 
+def _record_component_ingress(bot: Any, interaction: Any) -> None:
+    global _COMPONENT_INGRESS_COUNT
+    global _COMPONENT_LAST_INGRESS
+
+    try:
+        if interaction.type is not discord.InteractionType.component:
+            return
+    except Exception:
+        return
+
+    _COMPONENT_INGRESS_COUNT += 1
+    ctx = interaction_context(interaction, action_name="component_ingress")
+    _COMPONENT_LAST_INGRESS = {
+        "trace_id": ctx.trace_id,
+        "guild_id": ctx.guild_id,
+        "channel_id": ctx.channel_id,
+        "user_id": ctx.user_id,
+        "message_id": ctx.message_id,
+        "custom_id": ctx.custom_id,
+        "owner_state": _view_store_component_owner_state(bot, interaction),
+        "ephemeral": _message_is_ephemeral(interaction),
+        "response_done": _response_done(interaction),
+        "interaction_age_ms": _interaction_age_ms(interaction),
+    }
+
+
+def component_runtime_status(bot: Any = None) -> dict[str, Any]:
+    count = 0
+    names = ""
+    if bot is not None:
+        count, names = _persistent_view_snapshot(bot)
+    return {
+        "installed": bool(_COMPONENT_OBSERVER_INSTALLED),
+        "release": runtime_release_label(),
+        "ingress_count": int(_COMPONENT_INGRESS_COUNT),
+        "recovery_count": int(_COMPONENT_RECOVERY_COUNT),
+        "unacknowledged_count": int(_COMPONENT_UNACKNOWLEDGED_COUNT),
+        "persistent_view_count": int(count),
+        "persistent_view_types": names,
+        "last_ingress": dict(_COMPONENT_LAST_INGRESS),
+    }
+
+
 def _message_is_ephemeral(interaction: Any) -> bool:
     try:
         flags = getattr(getattr(interaction, "message", None), "flags", None)
@@ -521,6 +569,8 @@ async def _recover_unowned_private_component(
             raise
         recovered = True
         if recovered:
+            global _COMPONENT_RECOVERY_COUNT
+            _COMPONENT_RECOVERY_COUNT += 1
             ctx = interaction_context(interaction, action_name="private_menu_stale_recovery")
             print(
                 "♻️ component_runtime recovered stale private menu "
@@ -596,6 +646,8 @@ async def _observe_component_ack(bot: Any, interaction: discord.Interaction) -> 
             "component reached Dank Shield but remained unacknowledged after "
             f"{_COMPONENT_OBSERVER_GRACE_SECONDS:.1f}s"
         )
+        global _COMPONENT_UNACKNOWLEDGED_COUNT
+        _COMPONENT_UNACKNOWLEDGED_COUNT += 1
         record = log_interaction_failure(
             interaction,
             error,
@@ -646,6 +698,7 @@ def install_component_interaction_runtime(bot: Any) -> bool:
         return False
 
     async def interaction_listener(interaction: discord.Interaction) -> None:
+        _record_component_ingress(bot, interaction)
         recovered = await _recover_unowned_private_component(bot, interaction)
         if recovered:
             return
@@ -664,6 +717,7 @@ def install_component_interaction_runtime(bot: Any) -> bool:
         app_id = _safe_int(getattr(bot, "application_id", 0), 0)
         print(
             "🔎 component_runtime ready "
+            f"release={runtime_release_label()} "
             f"bot_user={bot_user_id} application_id={app_id} "
             f"persistent_views={count} types={names or 'none'}"
         )
@@ -882,6 +936,7 @@ __all__ = [
     "InteractionGuardResult",
     "InteractionSendFailure",
     "clear_recent_interaction_failures",
+    "component_runtime_status",
     "install_component_interaction_observer",
     "install_component_interaction_runtime",
     "interaction_action_key",

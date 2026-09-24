@@ -10,6 +10,7 @@ from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 
 from stoney_verify.interaction_guard import run_guarded_interaction
 from ..guild_config import get_guild_config, invalidate_guild_config
+from .public_owner_authority import interaction_authority_snapshot
 from .public_staff_scope import scoped_interaction_is_staff
 
 
@@ -91,6 +92,16 @@ async def _require_staff(interaction: discord.Interaction) -> bool:
             return True
     except Exception:
         pass
+
+    try:
+        snapshot = interaction_authority_snapshot(interaction)
+        print(
+            "⚠️ verify_authority denied "
+            + " ".join(f"{key}={value}" for key, value in snapshot.items())
+        )
+    except Exception:
+        pass
+
     await _private(
         interaction,
         "❌ Staff only. Server owners and configured staff are allowed.",

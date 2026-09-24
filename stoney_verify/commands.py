@@ -190,8 +190,22 @@ except Exception as e:
     async def handle_possible_submission(message: discord.Message) -> None:  # type: ignore
         return None
 
-    def register_interaction_handlers(bot_instance: Any) -> None:  # type: ignore
-        return None
+    def register_interaction_handlers(bot_instance: Any) -> bool:  # type: ignore
+        return False
+
+
+# Profile/Role public panels contain semantic raw component buttons whose
+# canonical owner is a dedicated on_interaction runtime. Install that owner
+# strictly before the tolerant split-command registrar so a partial registrar
+# failure can never leave visible Profile/Role controls with no callback route.
+try:
+    from .commands_ext.public_self_roles_group import (
+        install_profile_interaction_runtime as _install_profile_interaction_runtime,
+    )
+    _install_profile_interaction_runtime(bot, strict=True)
+except Exception as e:
+    print(f"❌ commands.py Profile/Role interaction runtime failed closed: {repr(e)}")
+    raise
 
 
 # ============================================================
@@ -240,12 +254,11 @@ except Exception as e:
 # Register centralized component interaction handler
 # ============================================================
 try:
-    register_interaction_handlers(bot)
+    if not register_interaction_handlers(bot):
+        raise RuntimeError("central verification/VC interaction listener did not register")
 except Exception as e:
-    try:
-        print(f"⚠️ commands.py failed to register interaction handlers: {repr(e)}")
-    except Exception:
-        pass
+    print(f"❌ commands.py centralized interaction runtime failed closed: {repr(e)}")
+    raise
 
 
 # ============================================================

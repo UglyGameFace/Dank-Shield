@@ -68,6 +68,29 @@ def test_verification_center_accepts_actual_server_owner(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+def test_verification_center_accepts_resolved_administrator_without_cached_owner(monkeypatch) -> None:
+    async def scenario() -> None:
+        guild = SimpleNamespace(id=999, owner_id=0, owner=None)
+        interaction = SimpleNamespace(
+            guild=guild,
+            user=SimpleNamespace(id=111),
+            permissions=SimpleNamespace(administrator=True, manage_guild=True),
+        )
+
+        async def forbidden_private(*args, **kwargs) -> None:
+            raise AssertionError("resolved Administrator must not receive Staff only")
+
+        monkeypatch.setattr(
+            public_verify_command_center,
+            "_private",
+            forbidden_private,
+        )
+
+        assert await public_verify_command_center._require_staff(interaction) is True
+
+    asyncio.run(scenario())
+
+
 def test_configured_ticket_staff_roles_support_object_and_dict_configs(monkeypatch) -> None:
     monkeypatch.setattr(
         public_staff_scope,
@@ -102,8 +125,9 @@ def test_ticket_ui_and_permission_sync_use_per_guild_staff_truth() -> None:
     assert "ticket_panel._is_staff_member = scoped_is_staff" in source
     assert "common._staff_check = scoped_interaction_is_staff" in source
     assert "def scoped_interaction_is_staff" in source
-    assert "from .public_owner_authority import is_actual_guild_owner" in source
+    assert "from .public_owner_authority import (" in source
     assert "is_actual_guild_owner" in source
+    assert "interaction_has_administrator_authority" in source
     assert "ticket_transcripts._is_staff_member = scoped_is_staff" in source
     assert "ticket_service._default_staff_role_ids = configured_ticket_staff_role_ids" in source
     assert "install_transcript_claim_runtime_guards(ticket_transcripts)" in source

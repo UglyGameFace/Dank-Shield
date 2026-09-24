@@ -33,7 +33,10 @@ from typing import Any
 
 import discord
 
-from .public_owner_authority import is_actual_guild_owner
+from .public_owner_authority import (
+    interaction_has_administrator_authority,
+    is_actual_guild_owner,
+)
 
 _PATCHED = False
 
@@ -150,18 +153,19 @@ def scoped_is_staff(member: Any) -> bool:
 
 
 def scoped_interaction_is_staff(interaction: Any) -> bool:
-    """Return staff truth with an explicit server-owner fast path.
+    """Return staff truth from owner, resolved Administrator, or configured roles.
 
-    Application-command interactions can occasionally arrive with permission or
-    member state that is less complete than the long-lived guild cache. The
-    owner identity itself is still authoritative, so compare the interaction's
-    user ID to the interaction guild's owner ID before consulting role-based
-    staff policy.
+    Discord supplies interaction-resolved permissions independently of the
+    cached Member object. Check that source before role-based staff policy so
+    legitimate owners/admins are not rejected merely because member/cache state
+    is incomplete on an application-command interaction.
     """
     try:
         user = getattr(interaction, "user", None)
         guild = getattr(interaction, "guild", None)
         if is_actual_guild_owner(user, guild):
+            return True
+        if interaction_has_administrator_authority(interaction):
             return True
         return scoped_is_staff(user)
     except Exception:

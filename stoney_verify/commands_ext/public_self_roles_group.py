@@ -20,6 +20,7 @@ _ATTACHED = False
 _LISTENER_ATTACHED = False
 _CONTEXT_MENU_ATTACHED = False
 _PROFILE_PANEL_VIEW_REGISTERED = False
+_PROFILE_INTERACTION_RUNTIME_ERROR = ""
 
 _PROFILE_PANEL_HARD_LOCKS: dict[tuple[int, int], asyncio.Lock] = {}
 _PROFILE_PANEL_BLOCK_UNTIL: dict[tuple[int, int], float] = {}
@@ -1442,6 +1443,65 @@ def register_profile_panel_runtime(bot: Any) -> bool:
     return False
 
 
+def install_profile_interaction_runtime(bot: Any, *, strict: bool = False) -> bool:
+    """Install the mandatory Profile/Role component owner.
+
+    Several public Profile and Role surfaces intentionally use semantic raw
+    buttons whose business handling lives in the one canonical on_interaction
+    listener below. Those controls must never be exposed while that listener is
+    absent. The persistent ProfilePanelView and the listener therefore form one
+    runtime contract and production startup may require it strictly.
+    """
+    global _LISTENER_ATTACHED
+    global _PROFILE_INTERACTION_RUNTIME_ERROR
+
+    errors: list[str] = []
+
+    persistent_ready = register_profile_panel_runtime(bot)
+    if not persistent_ready:
+        errors.append("persistent ProfilePanelView registration failed")
+
+    if not _LISTENER_ATTACHED:
+        try:
+            add_listener = getattr(bot, "add_listener", None)
+            if not callable(add_listener):
+                raise RuntimeError("Discord client has no callable add_listener")
+            add_listener(_interaction_listener, "on_interaction")
+            _LISTENER_ATTACHED = True
+        except Exception as exc:
+            errors.append(f"interaction listener: {type(exc).__name__}: {exc}")
+
+    ready = bool(persistent_ready and _LISTENER_ATTACHED)
+    _PROFILE_INTERACTION_RUNTIME_ERROR = " | ".join(errors)
+
+    if ready:
+        print(
+            "✅ profile_interaction runtime ready "
+            "persistent_view=True listener=True"
+        )
+        return True
+
+    message = (
+        "Profile/Role component runtime is incomplete "
+        f"persistent_view={persistent_ready} listener={_LISTENER_ATTACHED}"
+    )
+    if _PROFILE_INTERACTION_RUNTIME_ERROR:
+        message += f": {_PROFILE_INTERACTION_RUNTIME_ERROR}"
+    print(f"❌ profile_interaction runtime unavailable: {message}")
+    if strict:
+        raise RuntimeError(message)
+    return False
+
+
+def profile_interaction_runtime_status() -> dict[str, Any]:
+    return {
+        "persistent_view_registered": bool(_PROFILE_PANEL_VIEW_REGISTERED),
+        "listener_registered": bool(_LISTENER_ATTACHED),
+        "ready": bool(_PROFILE_PANEL_VIEW_REGISTERED and _LISTENER_ATTACHED),
+        "error": str(_PROFILE_INTERACTION_RUNTIME_ERROR or ""),
+    }
+
+
 class ProfileCategorySelectView(discord.ui.View):
     def __init__(self, guild: discord.Guild, member: discord.Member, category_key: str) -> None:
         super().__init__(timeout=300)
@@ -2495,15 +2555,8 @@ def register_public_self_roles_group_commands(bot: Any, tree: Any) -> None:
             except Exception:
                 pass
 
-    if bot is not None and not _LISTENER_ATTACHED:
-        try:
-            bot.add_listener(_interaction_listener, "on_interaction")
-            _LISTENER_ATTACHED = True
-        except Exception as exc:
-            try:
-                print(f"⚠️ public_self_roles_group listener failed: {type(exc).__name__}: {exc}")
-            except Exception:
-                pass
+    if bot is not None:
+        install_profile_interaction_runtime(bot, strict=False)
 
     if _attach_groups():
         try:
@@ -2514,4 +2567,12 @@ def register_public_self_roles_group_commands(bot: Any, tree: Any) -> None:
 
 _attach_groups()
 
-__all__ = ["register_public_self_roles_group_commands", "register_profile_panel_runtime", "profile_group", "roles_group", "view_dank_profile_context_menu"]
+__all__ = [
+    "install_profile_interaction_runtime",
+    "profile_interaction_runtime_status",
+    "register_profile_panel_runtime",
+    "register_public_self_roles_group_commands",
+    "profile_group",
+    "roles_group",
+    "view_dank_profile_context_menu",
+]
