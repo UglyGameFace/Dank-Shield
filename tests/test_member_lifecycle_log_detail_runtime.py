@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from stoney_verify import modlog
+from stoney_verify.commands_ext import public_logging_contextual_permission_repair as logging_repair
 from stoney_verify.startup_guards import member_lifecycle_router_guard as router
 
 
@@ -140,3 +141,12 @@ def test_member_logs_health_exposes_intent_listener_and_channel_truth() -> None:
     assert "Join listener registered" in source
     assert "Leave listener registered" in source
     assert "_lifecycle_channel_health" in source
+
+
+def test_post_repair_member_logs_screen_keeps_runtime_health() -> None:
+    source = inspect.getsource(logging_repair._member_logs_embed)
+
+    assert "Join/leave runtime health" in source
+    assert "_lifecycle_channel_health" in source
+    assert "_router_listener_installed" in source
+    assert "Server Members intent requested by this bot process" in source
