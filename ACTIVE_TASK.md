@@ -10,7 +10,19 @@ Verification Center returns:
 
 `❌ Staff only. Server owners and configured staff are allowed.`
 
-This is an authorization-truth failure, not an interaction-delivery failure.
+The user also reports that **Role Builder still does not work**. Repository
+tracing shows both Role Builder doorways depend on the same central authority
+truth:
+
+- `/dank home` → **Roles & Profiles** uses
+  `public_command_hub._admin_or_manage()`; a false result silently routes the
+  server owner to the ordinary member profile entry instead of the staff builder;
+- `/dank profile builder` and `/dank roles ...` use
+  `public_setup_group._require_setup_permission()`, which delegates to the same
+  `interaction_has_manage_guild_authority()` helper.
+
+This is therefore the same authorization-truth failure, not a separate
+interaction-delivery incident.
 
 ## Single active task lock
 
@@ -102,6 +114,12 @@ when access is denied, so another live mismatch is diagnosable without guessing.
 
 Coverage includes:
 
+- both Role Builder doorways accept a resolved Administrator even without cached
+  Member/owner state;
+- the Roles & Profiles home route is locked to the central
+  `_admin_or_manage()` authority contract before opening the builder;
+- the direct `/dank profile builder` route is locked to
+  `_require_setup_permission()`;
 - owner identity with normal `guild.owner_id`;
 - owner identity fallback through `guild.owner.id`;
 - resolved Administrator with no cached owner/member state;
