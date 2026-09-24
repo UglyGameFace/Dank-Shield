@@ -2,158 +2,184 @@
 
 ## Active task / desired outcome
 
-**P0-ANTINUKE-MOD-001 — stop legitimate moderation from becoming durable hostile identity and restore Spam Guard cleanup**
+**P0-BASIC-VERIFY-INTERACTION-001 — restore reliable Basic Verify button dispatch**
 
-Production incident:
+Make the public Basic Verify button acknowledge exactly once, enter one canonical
+verification workflow, and remain restart-safe without competing interaction
+owners.
 
-- Spam Guard correctly detected and removed a malicious member.
-- Its selected spam messages were left behind.
-- A moderator manually deleted one of those messages.
-- AntiNuke treated that ordinary moderator deletion as destructive, contained the moderator,
-  persisted the moderator as a confirmed hostile actor, and fast re-entry kept removing them.
+## Production symptom
 
-The fix must correct the policy and cleanup defects without weakening genuinely destructive
-AntiNuke behavior.
+A live Basic Verify panel with footer
+`dank_shield:basic_verify:v1 • access only` showed Discord's red
+`This interaction failed` result after the user tapped **Verify**.
+
+The displayed panel is the current Basic Verify surface, not the ID-upload flow.
 
 ## Status
 
-**IN PROGRESS — isolated branch**
+**IMPLEMENTED ON TASK BRANCH — validation in progress**
 
-Branch: `fix/antinuke-moderator-spam-cleanup-20260923`
+Branch: `fix/basic-verify-interaction-owner-20260923`
 
-Base: merged `main` commit `67e5c50d00f45c9164e2d09fa7aff352f2a84a66`
-(PR #303).
+Base after sync: `main@78565787362cf63d5f40cf2b7e2abb8c96833b38`
 
-## Confirmed root causes
-
-### 1. Ordinary moderator message deletion is first-strike in normal Contain
-
-`anti_nuke_zero_damage_runtime.py` registers `message_delete` as a strict/destructive
-Guardian action.
-
-`anti_nuke_product_policy_runtime.py` removes the historical hardcoded override in
-normal Contain, but the canonical AntiNuke engine still assigns an untrusted human a
-threshold of 1 and aggregate threshold of 1.
-
-Therefore a moderator who is not manually listed in the AntiNuke trust lists can be
-contained after one ordinary audit-log `message_delete`.
-
-Discord's audit-log contract defines `message_delete` specifically as a message deleted
-by a moderator, with the message author as target and count/channel metadata in
-`entry.extra`. It is not sufficient by itself to prove server takeover.
-
-### 2. The false containment becomes durable and causes a rejoin loop
-
-The hostile-actor containment wrapper records the actor as
-`confirmed_destructive_actor` before containment.
-
-`anti_nuke_reentry_race_runtime._fast_member_join` reads hot/local hostile reputation
-and immediately removes an active hostile identity when AntiNuke is enabled in Contain.
-
-Existing legacy false-positive cleanup covers several ordinary Discord actions but not
-the exact historical reason:
-
-`Dank Shield AntiNuke containment: Message deletion`
-
-As a result, adding the moderator to a trust list does not clear the already-poisoned
-hostile row.
-
-### 3. Spam Guard single-message cleanup uses an incompatible delete call
-
-`spam_guard._delete_recent_messages` calls
-`PartialMessage.delete(reason=reason)` for the one-message path and repeats the same
-call in fallback cleanup.
-
-The deployed discord.py Message/PartialMessage delete path does not accept that
-`reason=` keyword. The exception is swallowed, so `deleted_count` can remain zero
-while Spam Guard still proceeds to timeout/kick/ban the detected spammer.
-
-`commands_ext/public_spam_cleanup_hardening.py` repeats the same incompatible
-`message.delete(reason=...)` pattern.
+No merge-readiness claim is made until exact-head validation completes.\n\nThe branch was synchronized after AntiNuke work advanced `main` twice. The latest\nmain delta changes AntiNuke/Spam Guard/Protection Center files plus `ACTIVE_TASK.md`;\nthere is still no overlap with this task's Basic Verify runtime or regression files.
 
 ## Scope
 
 In scope:
 
-- make normal Contain treat ordinary `message_delete` as non-punitive;
-- preserve first-strike `message_delete` enforcement in Strict Lockdown;
-- keep `message_bulk_delete` as a distinct high-risk action;
-- automatically mask and durably clear only legacy hostile records produced by the exact
-  ordinary-message-deletion false-positive reason;
-- preserve real destructive hostile records such as channel deletion;
-- repair Spam Guard single-message/fallback message deletion using the supported delete API;
-- repair the public Spam Guard cleanup sweep's direct Message.delete call;
-- make unexpected cleanup failures visible instead of silently disappearing;
-- add a native Discord role selector for AntiNuke trusted roles using the existing
-  `antinuke_trusted_role_ids` persistence;
-- retain existing trusted user and pre-approved bot ID support;
-- add focused regression coverage for every behavior above.
+- trace the real Basic Verify component dispatch path;
+- restore one runtime owner for the Basic Verify custom ID;
+- preserve restart-safe persistent-view handling;
+- retain a fallback only when persistent-view registration itself fails;
+- ensure acknowledgement occurs before config/database/role work;
+- prevent an already-acknowledged duplicate route from mutating roles again;
+- retire the live compatibility wrapper that independently intercepted the same
+  Basic Verify component;
+- replace source-shape runtime coverage with behavioral regression tests.
 
 Out of scope:
 
-- weakening channel/role/webhook/integration destructive protections;
-- changing bot-add authorization policy;
-- removing Strict Lockdown;
-- changing Spam Guard detection thresholds or kick/ban policy;
-- Exit Card Unicode work.
+- ID/web verification;
+- VC verification;
+- ticket creation;
+- verification role-policy redesign;
+- setup redesign;
+- AntiNuke;
+- Spam Guard;
+- unrelated startup-guard cleanup.
 
-## Intended product behavior
+## Execution path inspected
 
-Normal Contain:
+Production boot:
 
-- ordinary moderator deletion of a message is not a destructive AntiNuke incident;
-- bulk message deletion remains independently protected;
-- destructive structural/moderation actions remain protected;
-- moderators do not need manual trust merely to perform routine message cleanup.
+`Discloud -> main.py -> stoney_verify.app -> commands/events -> bot.run()`
 
-Strict Lockdown:
+Basic Verify paths before this task:
 
-- `message_delete` remains a protected first-strike action.
+1. `app.py` called `install_basic_verify_runtime(bot, strict=True)` before login.
+2. That installer registered `BasicVerifyView()` with `bot.add_view(...)`.
+3. The same installer also registered a global `on_interaction` fallback for the
+   same `dank:basic_verify:v1` custom ID even when the persistent view succeeded.
+4. `sitecustomize.py` also loaded `basic_verification_mode_guard`.
+5. That compatibility guard independently wrapped
+   `interaction_handlers.handle_component_interaction` and called
+   `maybe_handle_basic_verify_interaction()` for the same Basic Verify custom ID.
+6. The persistent button callback contained a second copy of the handler flow.
 
-Trust lists:
+That left multiple live responders able to race on one Discord component
+interaction.
 
-- user IDs and pre-approved bot IDs remain available;
-- trusted roles are selectable through a native Discord role picker;
-- role trust is an optional delegation feature, not a workaround for the moderator
-  false-positive.
+## Root cause / regression finding
 
-Spam Guard:
+PR #81 previously established the correct ownership rule: use the persistent
+Basic Verify view when registration succeeds, and install a global fallback only
+when persistent registration cannot be confirmed.
 
-- selected malicious messages are actually deleted using supported discord.py methods;
-- the punitive user action can still proceed independently;
-- cleanup failures are observable in diagnostics instead of being silently swallowed.
+Commit `e2be9e03b9ce` later moved restart safety into the native Basic Verify
+module but changed that contract to register both the persistent view and the
+global fallback every time. The older live compatibility wrapper in
+`basic_verification_mode_guard` also remained reachable through
+`sitecustomize.py`.
+
+The result was duplicate dispatch ownership around one custom ID. This is an
+ownership regression, not a reason to add another retry or another listener.
+
+## Changes
+
+### `stoney_verify/verification_new/basic_verify.py`
+
+- Persistent `BasicVerifyView` is the primary and authoritative runtime owner.
+- The global `on_interaction` fallback is registered only if `add_view()`
+  fails.
+- Once either route owns the custom ID, repeated installer calls cannot add a
+  second route later in the same process.
+- Fallback acknowledgement is immediate because no persistent view exists in
+  fallback mode.
+- `BasicVerifyButton.callback` delegates to the one canonical
+  `maybe_handle_basic_verify_interaction()` implementation.
+- `_ack()` now treats an already-acknowledged interaction as already claimed
+  and does not allow a second role mutation.
+- Canonical click logging includes the Discord interaction ID.
+
+### `stoney_verify/startup_guards/basic_verification_mode_guard.py`
+
+- Removed the compatibility wrapper that intercepted Basic Verify in the
+  centralized component handler.
+- The guard retains its still-live allowlist, Verify Panel command, and sync
+  compatibility responsibilities.
+- Native Basic Verify runtime ownership remains in
+  `verification_new/basic_verify.py`.
+
+### Tests
+
+- Replaced `tests/test_basic_verify_native_restart_runtime_static.py`.
+- Added behavioral `tests/test_basic_verify_native_restart_runtime.py` covering:
+  - persistent-view ownership without a duplicate listener;
+  - fallback-only behavior when persistent registration fails;
+  - idempotent registration;
+  - no late second owner after fallback registration;
+  - fail-closed behavior when neither route can register;
+  - exact custom-ID fallback routing;
+  - button delegation to the canonical handler;
+  - acknowledgement before role/database work;
+  - no duplicate role mutation after another route already acknowledged.
+
+## Compatibility review
+
+Preserved:
+
+- custom ID `dank:basic_verify:v1`;
+- persistent view class and timeout;
+- current and old posted panels;
+- Basic Verify authorization checks;
+- configured role resolution;
+- role hierarchy checks;
+- role mutation lock;
+- user-facing success/error behavior;
+- `register_basic_verify_runtime` compatibility alias;
+- pre-login strict runtime installation from `app.py`;
+- `/verify panel` canonical posting path.
+
+No schema, command name, role-policy, or panel-layout changes are included.
 
 ## Validation required
 
-Before merge readiness:
+- exact branch diff inspection;
+- conflict-marker / whitespace inspection;
+- Python compile;
+- behavioral Basic Verify runtime tests;
+- verification-mode authorization tests;
+- Verify Panel posting tests;
+- persistent interaction compatibility tests;
+- relevant startup/interaction ownership tests;
+- full `pytest tests/`;
+- standalone repository tool checks required by CI;
+- GitHub Actions on the exact final head;
+- final changed-file and review-thread inspection.
 
-- focused AntiNuke benign-action / product-policy / hostile-reentry tests;
-- focused Protection Center trust UI tests;
-- focused Spam Guard cleanup tests for one message, fallback, bulk, and sweep paths;
-- exact legacy false-positive cleanup test for Message deletion;
-- explicit regression proving Channel deletion hostile reputation is never cleared;
-- explicit Strict Lockdown regression proving message deletion is still enforced;
-- Python 3.11 compile;
-- full repository `tests/` suite;
-- standalone `tools/test_*.py` checks and repository audits;
-- exact-head workflow/review/conflict inspection.
+## Cleanup / conflicts
 
-## Completed prerequisite
+The duplicate Basic Verify compatibility dispatcher is removed rather than
+layered with another guard.
 
-PR #303 — Prevent AntiNuke self-ejection on bot-removal integration cleanup
+No unrelated production subsystem is intentionally changed.
 
-- merged to `main` as `67e5c50d00f45c9164e2d09fa7aff352f2a84a66`;
-- exact tested PR head passed 1850 tests plus all repository workflows/audits.
+## Blockers / risks
 
-## Suspended task
+Live Discord acceptance still requires deployment after validated merge. A
+repository test cannot reproduce Discord's client-side red failure banner, so
+post-deploy acceptance must include one real Unverified account clicking the
+existing panel after a bot restart.
 
-PR #302 — Diagnose cross-guild Exit Card Unicode rendering
+## Backlog
 
-- remains suspended;
-- do not mix its runtime/test changes into this P0.
+None added from this task.
 
 ## Next step
 
-Implement the normal-Contain message-delete policy boundary, exact legacy reputation
-cleanup, Spam Guard delete compatibility fixes, and native trusted-role selector with
-focused regression tests before opening the implementation PR for full CI.
+Run exact-head targeted validation, correct only failures caused by this task,
+then run the full repository validation and inspect the final diff before any
+merge-readiness decision.
