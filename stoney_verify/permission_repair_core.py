@@ -276,10 +276,29 @@ def permission_overwrite_edit_blocker(
         return "Dank Shield could not resolve its member record in this server."
 
     guild_permissions = getattr(me, "guild_permissions", None)
-    if bool(getattr(guild_permissions, "administrator", False)):
+    guild_admin = bool(getattr(guild_permissions, "administrator", False))
+    guild_manage_roles = bool(getattr(guild_permissions, "manage_roles", False))
+    if guild_admin:
         return ""
 
-    if not bool(getattr(guild_permissions, "manage_roles", False)):
+    try:
+        effective = target.permissions_for(me)
+    except Exception:
+        return "Dank Shield could not resolve its effective permissions for this target."
+
+    effective_manage_roles = bool(
+        getattr(effective, "administrator", False)
+        or getattr(effective, "manage_roles", False)
+    )
+
+    # Lightweight tests and partial cache objects may not expose
+    # Member.guild_permissions even when the channel resolver can still prove
+    # effective Manage Roles. Prefer proven effective authority over guessing a
+    # server-role failure from an absent cache field.
+    if guild_permissions is None and effective_manage_roles:
+        return ""
+
+    if guild_permissions is not None and not guild_manage_roles:
         return (
             "Dank Shield's server role is missing **Manage Roles**. Discord requires "
             "Manage Roles (shown as **Manage Permissions** in channel settings) to "
@@ -287,14 +306,7 @@ def permission_overwrite_edit_blocker(
             "grant Manage Roles on its server role, then retry."
         )
 
-    try:
-        effective = target.permissions_for(me)
-    except Exception:
-        return "Dank Shield could not resolve its effective permissions for this target."
-
-    if bool(getattr(effective, "administrator", False)) or bool(
-        getattr(effective, "manage_roles", False)
-    ):
+    if effective_manage_roles:
         return ""
 
     return (
