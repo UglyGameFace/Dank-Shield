@@ -497,26 +497,28 @@ async def _recover_unowned_private_component(
         if owner_state is not False:
             return False
 
-        # Take the Discord acknowledgement claim atomically. If any legitimate
-        # additive listener won the race after the grace check, defer raises (or
-        # response.is_done flips) and stale recovery exits without sending a
-        # competing response.
+        # Atomically claim the interaction by replacing the stale ephemeral
+        # message itself. discord.py stores the replacement view under the same
+        # message ID as part of InteractionResponse.edit_message(), so recovery
+        # both removes the dead controls and immediately restores ViewStore
+        # ownership. If another listener wins first, this response raises and
+        # recovery exits without a competing message.
+        from .commands_ext.public_command_surface_v2 import (
+            replace_with_compact_dank_home,
+        )
+
         try:
-            await interaction.response.defer(ephemeral=True, thinking=True)
+            await replace_with_compact_dank_home(
+                interaction,
+                content=(
+                    "♻️ That private Dank Shield menu expired or belonged to an older bot session. "
+                    "I refreshed the Control Center in place; the stale action was not executed."
+                ),
+            )
         except Exception:
             if _response_done(interaction):
                 return False
             raise
-
-        from .commands_ext.public_command_surface_v2 import open_compact_dank_home
-
-        await open_compact_dank_home(
-            interaction,
-            content=(
-                "♻️ That private Dank Shield menu expired or belonged to an older bot session. "
-                "I opened a fresh Control Center instead; the stale action was not executed."
-            ),
-        )
         recovered = True
         if recovered:
             ctx = interaction_context(interaction, action_name="private_menu_stale_recovery")
