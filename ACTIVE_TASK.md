@@ -235,6 +235,14 @@ Separate from this P0:
   manually trusted is not an acceptable product-level resolution for ordinary
   moderation.
 
+- **UI follow-up — trusted AntiNuke roles should use native role selection.**
+  The persistence model already supports `antinuke_trusted_role_ids`, but the public
+  Trust Lists surface still requires manual ID-style entry. Replace that friction with
+  a native Discord role selector that shows the currently trusted roles and supports
+  add/remove without requiring owners to paste individual moderator user IDs.
+  This is a product/UI improvement, not the fix for the moderator false-positive:
+  ordinary moderation still must not require blanket trust to avoid punishment.
+
 - **P0 follow-up — Spam Guard single-message cleanup silently fails before kick.**
   `spam_guard._delete_recent_messages` calls
   `PartialMessage.delete(reason=reason)` when one cleanup message is selected, catches
