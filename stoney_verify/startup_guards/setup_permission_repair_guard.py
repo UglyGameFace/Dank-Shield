@@ -273,11 +273,18 @@ def _can_repair_channel(channel: Any) -> bool:
 
 
 def _channel_manage_missing(channel: Any, me: Optional[discord.Member]) -> bool:
+    """Compatibility name for the channel-overwrite mutation prerequisite.
+
+    Historical code called this a Manage Channels check. Discord/discord.py
+    actually require Manage Roles (shown as Manage Permissions in channel
+    settings) for set_permissions(). Keep the old helper name only so dormant
+    compatibility callers do not break while using the correct capability.
+    """
     try:
         if not isinstance(me, discord.Member):
             return True
         perms = channel.permissions_for(me)
-        return not bool(perms.manage_channels or perms.administrator)
+        return not bool(perms.manage_roles or perms.administrator)
     except Exception:
         return True
 
@@ -407,8 +414,21 @@ async def _preview_or_apply(guild: discord.Guild, *, apply: bool) -> dict[str, A
     me = _bot_member(guild)
     if me is None:
         return {"ok": False, "error": "Bot member could not be resolved.", "changed": [], "unchanged": [], "failed": [], "notes": [], "missing_mappings": [], "manual_actions": ["Reinvite or restart Dank Shield so Discord exposes the bot member."], "target_count": 0, "applied": bool(apply)}
-    if not (me.guild_permissions.manage_channels or me.guild_permissions.administrator):
-        return {"ok": False, "error": "Bot is missing Manage Channels.", "changed": [], "unchanged": [], "failed": [], "notes": [], "missing_mappings": [], "manual_actions": ["Give Dank Shield Manage Channels, then rerun Preview/Fix Permissions."], "target_count": 0, "applied": bool(apply)}
+    if not (me.guild_permissions.manage_roles or me.guild_permissions.administrator):
+        return {
+            "ok": False,
+            "error": "Bot is missing Manage Roles / Manage Permissions.",
+            "changed": [],
+            "unchanged": [],
+            "failed": [],
+            "notes": [],
+            "missing_mappings": [],
+            "manual_actions": [
+                "Give Dank Shield Manage Roles at the server level. Discord requires it to edit channel/category permission overwrites."
+            ],
+            "target_count": 0,
+            "applied": bool(apply),
+        }
 
     targets, notes, missing_mappings, manual_actions = await _build_targets(guild)
     changed: list[str] = []
@@ -418,7 +438,7 @@ async def _preview_or_apply(guild: discord.Guild, *, apply: bool) -> dict[str, A
     for item in targets:
         channel = item.channel
         if _channel_manage_missing(channel, me):
-            manual_actions.append(f"{_channel_label(channel)}: bot lacks Manage Channels in this channel/category.")
+            manual_actions.append(f"{_channel_label(channel)}: bot lacks Manage Permissions (Manage Roles) in this channel/category.")
             continue
         pending_labels: list[str] = []
         fixed_labels: list[str] = []
@@ -435,7 +455,7 @@ async def _preview_or_apply(guild: discord.Guild, *, apply: bool) -> dict[str, A
                     await channel.set_permissions(target, overwrite=expected, reason="Dank Shield setup permission repair")
                     fixed_labels.append(_target_label(target))
                 except discord.Forbidden:
-                    failed.append(f"{_channel_label(channel)} -> {_target_label(target)}: Discord denied Manage Channels")
+                    failed.append(f"{_channel_label(channel)} -> {_target_label(target)}: Discord denied Manage Permissions / Manage Roles")
                 except Exception as exc:
                     failed.append(f"{_channel_label(channel)} -> {_target_label(target)}: {type(exc).__name__}")
         labels = fixed_labels if apply else pending_labels
