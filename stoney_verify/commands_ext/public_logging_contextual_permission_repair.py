@@ -493,6 +493,42 @@ def _member_logs_embed(
         ),
         inline=False,
     )
+    try:
+        from stoney_verify.startup_guards import member_lifecycle_router_guard as router
+
+        lifecycle_ready, lifecycle_health = router._lifecycle_channel_health(
+            guild,
+            join_leave_channel,
+        )
+        members_intent = bool(
+            getattr(getattr(router.bot, "intents", None), "members", False)
+        )
+        join_listener_ready = router._router_listener_installed(
+            "on_member_join",
+            router._join_listener,
+        )
+        leave_listener_ready = router._router_listener_installed(
+            "on_member_remove",
+            router._leave_listener,
+        )
+        embed.add_field(
+            name="Join/leave runtime health",
+            value=(
+                f"{lifecycle_health}\n"
+                f"{'✅' if members_intent else '❌'} Server Members intent requested by this bot process\n"
+                f"{'✅' if join_listener_ready else '❌'} Join listener registered\n"
+                f"{'✅' if leave_listener_ready else '❌'} Leave listener registered"
+            )[:1024],
+            inline=False,
+        )
+        if not lifecycle_ready:
+            embed.color = discord.Color.orange()
+    except Exception:
+        embed.add_field(
+            name="Join/leave runtime health",
+            value="⚠️ Runtime listener health could not be resolved on this refresh.",
+            inline=False,
+        )
     embed.add_field(
         name="Live exit card",
         value=(exit_channel.mention if isinstance(exit_channel, discord.TextChannel) else f"`Unavailable: {exit_reason}`"),
