@@ -661,7 +661,7 @@ async def _rebuild_recommended_menu(
         )
         fixes.append(
             "Run `/dank setup` → **Safety & Repair** → **Specific Channel**, "
-            "or `/dank diagnostics` → **Fix Channel Access**."
+            "or `/dank diagnostics` → **Repair Bot Access** → **Specific Channel**."
         )
 
     if warnings:

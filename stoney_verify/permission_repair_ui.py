@@ -247,7 +247,7 @@ class TargetSearchModal(discord.ui.Modal, title="Search Dank Shield Targets"):
         if not core._actor_can_manage(interaction):
             return await _safe_ephemeral(
                 interaction,
-                "❌ Manage Server, Manage Channels, or Administrator is required.",
+                "❌ Server owner or Manage Server, Manage Channels, or Administrator authority is required.",
             )
 
         view = TargetChannelPickerView(
@@ -392,7 +392,7 @@ class TargetChannelPickerView(DankPickerView):
         if not core._actor_can_manage(interaction):
             return await _safe_ephemeral(
                 interaction,
-                "❌ Manage Server, Manage Channels, or Administrator is required.",
+                "❌ Server owner or Manage Server, Manage Channels, or Administrator authority is required.",
             )
         view = TargetChannelPickerView(
             self.state,
@@ -414,7 +414,7 @@ class TargetChannelPickerView(DankPickerView):
         if not core._actor_can_manage(interaction):
             return await _safe_ephemeral(
                 interaction,
-                "❌ Manage Server, Manage Channels, or Administrator is required.",
+                "❌ Server owner or Manage Server, Manage Channels, or Administrator authority is required.",
             )
         try:
             channel_id = int(str(value).strip())
@@ -494,7 +494,7 @@ class _TargetBrowserButton(discord.ui.Button):
         if not core._actor_can_manage(interaction):
             return await _safe_ephemeral(
                 interaction,
-                "❌ Manage Server, Manage Channels, or Administrator is required.",
+                "❌ Server owner or Manage Server, Manage Channels, or Administrator authority is required.",
             )
 
         browser = TargetChannelPickerView(
@@ -540,12 +540,12 @@ class TargetPermissionRepairView(core.TargetPermissionRepairView):
 
 
 async def open_target_permission_repair(interaction: discord.Interaction) -> None:
-    if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+    if interaction.guild is None or int(getattr(interaction.user, "id", 0) or 0) <= 0:
         return await _safe_ephemeral(interaction, "❌ This must be used inside a server.")
     if not core._actor_can_manage(interaction):
         return await _safe_ephemeral(
             interaction,
-            "❌ Manage Server, Manage Channels, or Administrator is required.",
+            "❌ Server owner or Manage Server, Manage Channels, or Administrator authority is required.",
         )
 
     state = core.PermissionRepairState(

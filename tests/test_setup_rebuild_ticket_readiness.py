@@ -44,7 +44,7 @@ def test_rebuild_existing_choices_does_not_report_ready_with_ticket_blockers(
     assert "ACTIVE TICKETS" in message
     assert "View Channel" in message
     assert "Send Messages" in message
-    assert "Fix Channel Access" in message
+    assert "Repair Bot Access" in message
     assert "Nothing changed" not in message
 
 

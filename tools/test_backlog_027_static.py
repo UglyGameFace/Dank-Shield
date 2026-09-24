@@ -164,8 +164,8 @@ def main() -> int:
     )
     require(
         "stoney_verify/commands_ext/public_diagnostics_group.py",
-        "Fix Channel Access",
-        "open_target_permission_repair",
+        "Repair Bot Access",
+        "open_permission_repair",
     )
 
     # #2 — serialized invite cache/diff, canonical aliases, separate approval

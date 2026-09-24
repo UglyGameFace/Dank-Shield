@@ -570,7 +570,7 @@ async def _contextual_open_health_check(
 
     embed = await setup._build_plain_setup_health_embed(guild)
     target, title, explanation, _requirement_key = await setup._guided_setup_target(guild)
-    ready = target == "ready"
+    structure_ready = target == "ready"
     cfg = await get_guild_config(int(guild.id), refresh=True)
     manual_issues = _setup_manual_issues(
         guild,
@@ -579,6 +579,27 @@ async def _contextual_open_health_check(
         guided_title=title,
         guided_explanation=explanation,
     )
+    access_audit = contextual.audit_context(
+        guild,
+        _setup_targets(guild, cfg),
+        manual_issues=manual_issues,
+    )
+    ready = bool(structure_ready and access_audit.healthy)
+
+    if structure_ready and not access_audit.healthy:
+        embed.title = "⚠️ Configuration Saved — Access Needs Attention"
+        embed.description = (
+            "Saved roles, channels, and feature choices are complete, but Dank Shield "
+            "still lacks required access on one or more configured targets. Do not "
+            "start guided feature testing until the access check below is clean."
+        )
+        embed.color = discord.Color.orange()
+        issues = contextual.remaining_issue_lines(access_audit)
+        embed.add_field(
+            name="Access blockers",
+            value=("\n".join(f"• {item}" for item in issues[:4]) or "Access re-check is still unhealthy.")[:1024],
+            inline=False,
+        )
 
     if saved_message:
         embed.add_field(
@@ -588,6 +609,18 @@ async def _contextual_open_health_check(
         )
 
     view = setup.SetupReviewView(ready=ready)
+    if structure_ready and not access_audit.healthy:
+        # The normal "continue setup" action has nowhere useful to go once all
+        # saved configuration steps are complete. Remove that misleading route
+        # and keep the repair/manual-fix control as the only forward action.
+        for child in list(view.children):
+            if str(getattr(child, "custom_id", "") or "") in {
+                "dank_setup_review:fix_next",
+                "dank_setup_review:launch",
+                "dank_setup_review:next",
+            }:
+                view.remove_item(child)
+
     view.add_item(
         SetupContextRepairButton(
             guild=guild,

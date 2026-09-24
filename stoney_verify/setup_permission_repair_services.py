@@ -14,6 +14,8 @@ import unicodedata
 
 import discord
 
+from . import permission_repair_core as repair_core
+
 
 _PUBLIC_CATEGORY_ALIASES: dict[str, set[str]] = {
     "Start/public category": {"start", "starthere", "welcome", "onboarding", "newmembers", "startcategory"},
@@ -96,20 +98,28 @@ def legacy_label(channel: Any) -> str:
 
 
 def _bot_blockers(guild: discord.Guild) -> list[str]:
-    from stoney_verify.startup_guards import setup_permission_repair_guard as legacy
-
-    me = legacy._bot_member(guild)
+    me = repair_core._bot_member(guild)
     if me is None:
         return ["Dank Shield could not resolve its bot member in this server."]
 
     blockers: list[str] = []
     perms = me.guild_permissions
+
+    # Permission-overwrite mutation itself requires Manage Roles / Manage
+    # Permissions. Manage Channels is still important for ticket/channel
+    # creation, but it must not be misreported as the overwrite-edit gate.
+    if not (perms.manage_roles or perms.administrator):
+        blockers.append(
+            "Dank Shield is missing **Manage Roles** at the server level. Discord requires "
+            "Manage Roles (shown as Manage Permissions in channel settings) to repair channel overwrites."
+        )
     if not (perms.manage_channels or perms.administrator):
-        blockers.append("Dank Shield is missing **Manage Channels** at the server level.")
+        blockers.append(
+            "Dank Shield is missing **Manage Channels** at the server level; ticket/channel creation "
+            "features may still fail after permission-overwrite repair."
+        )
     if not (perms.view_channel or perms.administrator):
         blockers.append("Dank Shield is missing baseline **View Channels** access.")
-    if not (perms.manage_roles or perms.administrator):
-        blockers.append("Dank Shield is missing **Manage Roles**; role-related setup repairs still require it.")
     if not (perms.view_audit_log or perms.administrator):
         blockers.append("Dank Shield is missing **View Audit Log**; audit-backed setup checks will be less reliable.")
     return blockers
@@ -318,7 +328,11 @@ async def preview_or_apply(
     from stoney_verify.startup_guards import setup_permission_repair_guard as legacy
 
     blockers = _bot_blockers(guild)
-    hard_blockers = [item for item in blockers if "Manage Channels" in item or "could not resolve" in item]
+    hard_blockers = [
+        item
+        for item in blockers
+        if "Manage Roles" in item or "could not resolve" in item
+    ]
     if hard_blockers:
         return {
             "ok": False,
@@ -344,13 +358,17 @@ async def preview_or_apply(
     changed: list[str] = []
     unchanged: list[str] = []
     failed: list[str] = []
-    me = legacy._bot_member(guild)
+    me = repair_core._bot_member(guild)
 
     for item in targets:
         channel = item.channel
-        if legacy._channel_manage_missing(channel, me):
+        overwrite_blocker = repair_core.permission_overwrite_edit_blocker(
+            guild,
+            channel,
+        )
+        if overwrite_blocker:
             manual_actions.append(
-                f"{legacy._channel_label(channel)}: Discord blocks Dank Shield from managing this channel/category."
+                f"{legacy._channel_label(channel)}: {overwrite_blocker}"
             )
             continue
 
@@ -376,8 +394,16 @@ async def preview_or_apply(
                 )
                 applied_labels.append(label)
             except discord.Forbidden:
+                blocker = repair_core.permission_overwrite_edit_blocker(
+                    guild,
+                    channel,
+                )
                 failed.append(
-                    f"{legacy._channel_label(channel)} → {label}: Discord denied Manage Channels."
+                    f"{legacy._channel_label(channel)} → {label}: "
+                    + (
+                        blocker
+                        or "Discord denied permission-overwrite editing after the cached Manage Roles check passed."
+                    )
                 )
             except Exception as exc:
                 failed.append(
@@ -485,9 +511,10 @@ def result_embed(result: dict[str, Any]) -> discord.Embed:
         embed.add_field(
             name="What to do",
             value=(
-                "For a blocked channel, use **Specific Channel** to inspect it. If Discord says Dank Shield lacks "
-                "Manage Channels there, fix the bot role/channel deny or use **Reauthorize Dank Shield**, then preview again. "
-                "For missing mappings, use **Setup Plan & Server Items → Choose Roles & Channels**."
+                "For a blocked channel, use **Specific Channel** to inspect it. Permission-overwrite repair requires "
+                "**Manage Roles** at the server level and **Manage Permissions** in that target. If a channel/category "
+                "deny is blocking Manage Permissions, remove that deny or explicitly allow it for Dank Shield in Discord, "
+                "then preview again. For missing mappings, use **Setup Plan & Server Items → Choose Roles & Channels**."
             ),
             inline=False,
         )

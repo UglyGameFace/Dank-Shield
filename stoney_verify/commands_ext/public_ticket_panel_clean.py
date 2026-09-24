@@ -758,7 +758,7 @@ def _setup_problem_embed(guild: discord.Guild, blockers: List[str], warnings: Li
     embed.add_field(name="Blockers", value=("\n".join(f"• {x}" for x in blockers) or "None")[:1024], inline=False)
     if warnings:
         embed.add_field(name="Warnings", value="\n".join(f"• {x}" for x in warnings)[:1024], inline=False)
-    embed.add_field(name="Fastest fix", value="Run `/dank setup` → **Safety & Repair** → **Specific Channel**, or `/dank diagnostics` → **Fix Channel Access**.", inline=False)
+    embed.add_field(name="Fastest fix", value="Run `/dank setup` → **Safety & Repair** → **Specific Channel**, or `/dank diagnostics` → **Repair Bot Access** → **Specific Channel**.", inline=False)
     return embed
 
 

@@ -2,150 +2,211 @@
 
 ## Active task / desired outcome
 
-**P0-BASIC-VERIFY-COMPONENT-003 — repair legacy Basic Verify buttons that remain visibly clickable but cannot dispatch**
+**P0-ACCESS-REPAIR-RUNTIME-004 — consolidate Dank Shield access repair and eliminate false startup-health failures**
 
-Fresh `/dank home` controls now work on the deployed #312 runtime, while the
-existing public **Verify** button still returns Discord's red
-`Interaction failed` banner.
+Production screenshots after reinvite + role repositioning show that Dank Shield's
+repair surfaces disagree with each other:
 
-This isolates the remaining live failure to Basic Verify panel compatibility.
+- Diagnostics → **Fix Channel Access** can deny the guild owner with
+  `Manage Server, Manage Channels, or Administrator is required`;
+- selected-target Fix Access can attempt a write and then return Discord
+  `Forbidden`;
+- Setup Check can say configuration passed while reporting several configured
+  verification/ticket targets still missing bot access;
+- diagnostics reports retired/lazy verification compatibility modules as
+  missing startup owners even though current production boot intentionally does
+  not load them as startup owners.
+
+PR #313 is already merged and all exact-head workflows passed. Basic Verify
+legacy-panel repair remains separate and is not being reopened here.
 
 ## Single active task lock
 
-Only this Basic Verify component-identity repair is active.
+Only access-repair authority/capability ownership and startup-health truth are
+active in this task.
 
-Do not reopen the completed global component-runtime or authority work unless
-new evidence points back to it.
+Do not broaden into unrelated setup, ticket, verification, AntiNuke, or design
+changes.
 
-## Production proof
+## Root causes
 
-PR #312 is merged and Discloud reports the merge deployed successfully.
+### 1. Repair authorization had a second local authority implementation
 
-Live startup proves:
+`permission_repair_core._actor_can_manage()` independently required a cached
+`discord.Member` and read only cached guild permissions/owner ID.
 
-- `profile_interaction runtime ready persistent_view=True listener=True`;
-- `ticket_panel_runtime ready persistent_view=True fallback_listener=True panel_reconciler=True`;
-- `basic_verify runtime ready owner=persistent_view delayed_fallback=True panel_reconciler=True`;
-- `interaction_handlers: registered component interaction handler`;
-- `component_runtime ready release=src:7e2f3278f466512a`;
-- persistent ViewStore inventory includes `BasicVerifyView`;
-- a fresh `/dank home` button works.
+That bypassed the canonical owner/interaction-permission authority introduced
+for the rest of the public command surface. A valid owner/manager could pass the
+Diagnostics doorway and then be rejected by the Fix Access subsystem.
 
-Therefore this is no longer a generic ViewStore/startup-registration failure.
+### 2. Setup repair still used the wrong Discord permission prerequisite
 
-## Root cause
+The setup repair compatibility path treated **Manage Channels** as the
+permission required to mutate channel permission overwrites.
 
-The investigation found two reconciliation gaps that can leave a visibly
-clickable Basic Verify panel with no route to the current process.
+discord.py `GuildChannel.set_permissions()` requires **Manage Roles**
+(Discord's channel UI calls the equivalent channel capability
+**Manage Permissions**).
 
-### 1. Persisted component identity was not proven
+This caused repair previews/results to disagree with the selected-target repair
+and to give the wrong remediation instruction.
 
-Basic Verify restart reconciliation persisted and trusted only:
+### 3. Self-lockout was presented as auto-repairable
 
-- `basic_verify_panel_message_id`;
-- `basic_verify_panel_application_id`.
+If Dank Shield has Manage Roles at the server level but a category/channel
+resolves **Manage Permissions** as denied for the bot, Discord will not permit
+the bot to edit the overwrite that is blocking itself.
 
-That is not enough for long-lived public panels. The exact component contract
-must also be proven before a zero-REST message-bound View registration.
+The UI still exposed green repair actions and retry/reauthorize guidance even
+though that exact target required a manual Discord permission change first.
 
-The current component contract is:
+### 4. Startup diagnostics still expected retired/lazy compatibility guards
 
-`dank:basic_verify:v1`
+`startup_diagnostics.EXPECTED_STARTUP_OWNER_MODULES` still listed:
 
-### 2. Legacy discovery ignored foreign application panels and stale channel IDs
+- `basic_verification_mode_guard`;
+- `id_verify_allowlist_guard`;
+- `unverified_ticket_panel_flow`.
 
-When no usable persisted panel identity existed, the posting/discovery path
-looked only at Basic Verify messages authored by the **current** bot application.
-A panel authored by a previous Dank Shield application could therefore remain
-visible while its clicks were routed somewhere other than the current process.
+Current `main.py`, `app.py`, and `commands.py` do not own those as
+mandatory startup modules. The health report therefore emitted false warnings.
 
-The reconciler also trusted only the persisted verify-channel ID. If that slot
-was missing/stale, it returned `no_channel` even when a cached
-`#verification` / `#verify` text channel clearly existed.
+## Repair in progress
 
-This matches the live boundary: fresh `/dank home` controls work, while the
-old public Verify panel produces Discord's red failure and no canonical
-`basic_verify click` evidence.
+### Canonical actor authority
 
-## Repair
+A shared
+`interaction_has_channel_management_authority()` now recognizes:
 
-Basic Verify panel identity now persists a third proof:
+- actual guild owner;
+- Administrator;
+- Manage Server;
+- Manage Channels;
 
-- `basic_verify_panel_component_id = dank:basic_verify:v1`.
+using Discord-resolved interaction permissions before cached Member state.
 
-The zero-REST exact-bind path is allowed only when all three are current:
+Fix Access delegates to that owner instead of maintaining a second permission
+gate.
 
-1. exact persisted message ID;
-2. exact current bot/application identity;
-3. exact current Basic Verify component ID.
+### Canonical overwrite capability
 
-Existing rows without component proof, or rows with a retired component ID, use
-one bounded reconciliation fetch.
+`permission_overwrite_edit_blocker()` is now the single capability check for
+channel/category overwrite mutation.
 
-The reconciler resolves the verify channel from persisted guild config first and
-then falls back to the guild's cached `verification` / `verify` text channel
-name. This fallback performs no Discord REST scan across the guild.
+It distinguishes:
 
-Basic Verify history discovery is still bounded to one verification channel and
-80 messages. It now recognizes both current-application and foreign-application
-Basic Verify-marked messages.
+1. missing server-level Manage Roles;
+2. target-level Manage Permissions self-lockout;
+3. a genuinely repairable target.
 
-For a current-bot Basic Verify message:
+Selected-target and setup repair consume the same capability truth.
 
-- if the actual message already contains `dank:basic_verify:v1`, persist the
-  component proof and bind it;
-- if the embed/message is Basic Verify but the actual component ID is old or
-  missing, edit that exact message **in place** with the current embed +
-  `BasicVerifyView`, persist the new component proof, and bind it;
-- if the edit fails, report `component_repair_failed` and do not falsely record
-  the panel as healthy.
+When a target is self-locked, the normal green Fix Missing Access action is
+disabled and labeled **Manual Discord Fix Required** instead of repeatedly
+issuing doomed writes.
 
-For a foreign-application Basic Verify message:
+### Setup repair compatibility
 
-- first confirm a current-application replacement exists or was posted;
-- then remove the stale foreign panel when Discord permissions allow;
-- foreign cleanup requires a strict Dank Shield Basic Verify footer/component
-  signature, never the broader historical title heuristic;
-- never delete the stale panel before the replacement is confirmed;
-- keep the scan bounded to the verification channel.
+The still-referenced setup compatibility helper keeps its historical function
+name for callers, but its implementation now checks Manage Roles / Manage
+Permissions rather than Manage Channels.
+
+Setup preview/apply uses the canonical overwrite capability and reports Discord
+Forbidden results with the same explanation as selected-target repair.
+
+### Setup Check truth
+
+Setup Check no longer treats saved configuration completeness as sufficient to
+show a green pass.
+
+When the guided configuration is structurally complete but the configured
+channel/category access audit is unhealthy:
+
+- the title becomes **Configuration Saved — Access Needs Attention**;
+- the description states that feature testing is blocked on access;
+- the misleading guided-test / continue action is removed;
+- the contextual access-repair/manual-fix control becomes the forward action.
+
+This prevents the previous contradictory card that said Configuration Check
+Passed while simultaneously listing unrepaired access targets.
+
+### One generic repair doorway
+
+Diagnostics now exposes **Repair Bot Access** and hands off to the same
+`setup_permission_repair_services.open_permission_repair()` hub used by Setup.
+
+The canonical generic flow is:
+
+1. preview configured access;
+2. apply safe fixes;
+3. use **Specific Channel** only to inspect one blocked target.
+
+Existing ticket/setup recovery guidance points to that same route.
+
+### Undo truth
+
+A repair that changes zero overwrites no longer creates or displays an undo
+token. Failed/no-op attempts are still audit-recorded, but no restore snapshot
+is manufactured. **Undo Repair** remains disabled until a real change produced
+a valid token.
+
+### Startup diagnostics
+
+The startup-health contract now tracks actual native boot owners:
+
+- process health;
+- Discord API safety;
+- command runtime;
+- public env-ID isolation;
+- shared interaction runtime;
+- Basic Verify runtime;
+- public ticket panel runtime;
+- centralized interaction handlers;
+- Profile/Role interaction runtime;
+- authoritative activity tracker.
+
+Retired/lazy verification compatibility modules are no longer false mandatory
+startup owners.
 
 ## Safety invariants
 
-- no duplicate Verify panel is created merely because the component version is old;
-- the existing message is repaired in place when owned by the current bot;
-- no role mutation occurs during startup reconciliation;
-- Verify clicks still acknowledge before DB/role work;
-- the persistent view and delayed fallback still delegate to one canonical
-  `maybe_handle_basic_verify_interaction` business path;
-- startup REST remains bounded for legacy/unproven rows;
-- no all-channel or all-message reconciliation is introduced;
-- a missing saved verify-channel ID can recover from the guild's already-cached
-  channel list without REST.
+- actual guild owners must never be denied because Member cache shape is partial;
+- non-owner users without resolved management authority remain denied;
+- no repair path claims Manage Channels is the permission required for
+  `set_permissions()`;
+- no target is advertised as auto-fixable when the bot cannot edit permission
+  overwrites there;
+- reauthorization remains non-Administrator;
+- no unrelated member/staff visibility is modified;
+- no dormant startup-guard bulk loader is restored;
+- diagnostics remains read-only.
 
 ## Validation required
 
-- focused Basic Verify restart/runtime tests;
-- component lifecycle architecture tests;
+- canonical owner/Manage Channels interaction authority tests;
+- server-level Manage Roles prerequisite tests;
+- channel-level Manage Permissions self-lockout tests;
+- setup repair regression tests;
+- startup diagnostics owner-contract tests;
 - Python compile;
-- full `pytest tests/`;
+- full test suite;
 - all GitHub workflow gates;
-- currentness / mergeability / review / diff hygiene;
-- after deployment, confirm startup reports
-  `repaired_component` for the affected legacy panel or otherwise shows the
-  exact reconciliation result;
-- live click on the repaired public Verify button must emit
-  `✅ basic_verify click ...` and acknowledge before role work.
+- currentness / mergeability / review / diff hygiene.
 
 ## Status
 
-**VALIDATING — Basic Verify identity/discovery repair frozen; exact-head validation pending**
+**VALIDATING — implementation frozen; exact-head CI and merge hygiene pending**
 
-Branch: `fix/basic-verify-component-identity-20260924`
+Branch: `fix/canonical-access-repair-runtime-20260924`
 
-Base: current `main` after PR #312.
+Base: current `main` after merged PR #313.
 
-## Next step
+## Production acceptance after deploy
 
-Open the focused PR, run exact-head CI, repair only failures causally related to
-this Basic Verify compatibility defect, and merge only when all required gates
-are green.
+1. guild owner can open Diagnostics → Fix Channel Access;
+2. a repairable channel performs the write successfully;
+3. a self-locked channel clearly says exactly which Discord permission must be
+   manually restored and does not expose a fake green repair action;
+4. Setup Check and Specific Channel show the same prerequisite truth;
+5. diagnostics no longer reports retired/lazy verification guards as missing
+   startup owners.
