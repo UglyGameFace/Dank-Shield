@@ -162,3 +162,80 @@ def test_startup_diagnostics_only_tracks_real_native_boot_owners() -> None:
 
     assert owners.isdisjoint(retired_or_lazy)
     assert required_native <= owners
+
+
+def _component(view: discord.ui.View, custom_id: str):
+    matches = [
+        child
+        for child in view.children
+        if str(getattr(child, "custom_id", "") or "") == custom_id
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def test_undo_is_disabled_until_a_real_repair_created_a_token() -> None:
+    guild = SimpleNamespace(me=None)
+    empty_state = core.PermissionRepairState(guild=guild, actor_id=1)
+    empty_view = core.TargetPermissionRepairView(empty_state)
+    assert _component(empty_view, "dank_permission_repair:undo").disabled is True
+
+    changed_state = core.PermissionRepairState(
+        guild=guild,
+        actor_id=1,
+        last_token="abc123",
+    )
+    changed_view = core.TargetPermissionRepairView(changed_state)
+    assert _component(changed_view, "dank_permission_repair:undo").disabled is False
+
+
+def test_failed_noop_repair_does_not_create_meaningless_undo_token(monkeypatch) -> None:
+    guild = SimpleNamespace(id=77)
+    target = SimpleNamespace(id=10, name="verification", mention="<#10>")
+    member = object()
+    audit = core.TargetPermissionAudit(
+        guild_id=77,
+        target_id=10,
+        target_name="verification",
+        feature="general",
+        mode="minimum",
+        required=["send_messages"],
+        missing=["send_messages"],
+        repairable_missing=[],
+        blockers=["manual Discord permission fix required"],
+    )
+
+    monkeypatch.setattr(core, "_bot_member", lambda _guild: member)
+    monkeypatch.setattr(
+        core,
+        "audit_targets",
+        lambda *_args, **_kwargs: [audit],
+    )
+
+    recorded: list[tuple[str, dict]] = []
+
+    async def record(**kwargs):
+        recorded.append((kwargs["event_type"], dict(kwargs["metadata"])))
+        return True
+
+    monkeypatch.setattr(core, "_record_repair_event", record)
+
+    result = asyncio.run(
+        core.apply_target_repair(
+            guild,
+            target,
+            actor_id=99,
+            feature="general",
+            mode="minimum",
+            include_children=False,
+        )
+    )
+
+    assert result.changed_targets == []
+    assert result.failed_targets
+    assert result.token == ""
+    assert result.notes == [
+        "No overwrite changed, so no undo snapshot was created."
+    ]
+    assert recorded and recorded[0][0] == "permission_repair_attempt"
+    assert "token" not in recorded[0][1]
