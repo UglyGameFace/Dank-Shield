@@ -865,13 +865,16 @@ async def _reconcile_one_basic_verify_panel(
             )
 
         if author_id > 0 and author_id != current_application_id:
-            deleted = await _delete_stale_foreign_basic_verify_panel(message)
+            # Preserve the stale panel until a current-application replacement
+            # is confirmed. A transient send/history failure must never turn a
+            # broken interaction into a missing panel.
             result = await post_basic_verify_panel(
                 channel,
                 bot_instance=bot,
                 require_history_scan_for_post=True,
             )
             if result in {"posted", "updated"}:
+                deleted = await _delete_stale_foreign_basic_verify_panel(message)
                 return (
                     "replaced_foreign_deleted"
                     if deleted
