@@ -25,6 +25,8 @@ from typing import Any, Awaitable, Callable, Mapping, Optional, TypeVar
 
 import discord
 
+from .panel_lifecycle import PRIVATE_MENU_RECOVERY_GRACE_SECONDS
+
 T = TypeVar("T")
 _LOG = logging.getLogger("dank_shield.interactions")
 _RECENT_FAILURE_LIMIT = 250
@@ -403,6 +405,115 @@ def _persistent_view_snapshot(bot: Any) -> tuple[int, str]:
     return len(views), ",".join(names[:24])
 
 
+def _component_store_key(interaction: Any) -> tuple[int, str]:
+    data = _interaction_data(interaction)
+    return (
+        _safe_int(data.get("component_type"), 0),
+        _safe_text(data.get("custom_id"), limit=180),
+    )
+
+
+def _view_store_has_component_owner(bot: Any, interaction: Any) -> bool:
+    """Return whether discord.py ViewStore has a real owner for this component.
+
+    discord.py 2.7.1 resolves message-specific ownership first, then a global
+    persistent view registered under the None message key, then dynamic items.
+    Reading the store here mirrors that lookup without dispatching anything.
+    """
+    component_type, custom_id = _component_store_key(interaction)
+    if component_type <= 0 or not custom_id:
+        return False
+    try:
+        state = getattr(bot, "_connection", None)
+        store = getattr(state, "_view_store", None)
+        views = getattr(store, "_views", None)
+        if not isinstance(views, dict):
+            return False
+        message_id = _safe_int(
+            getattr(getattr(interaction, "message", None), "id", 0),
+            0,
+        )
+        key = (component_type, custom_id)
+        if message_id > 0 and key in (views.get(message_id, {}) or {}):
+            return True
+        if key in (views.get(None, {}) or {}):
+            return True
+        dynamic = getattr(store, "_dynamic_items", None)
+        if isinstance(dynamic, dict):
+            for pattern in dynamic.keys():
+                try:
+                    if pattern.fullmatch(custom_id) is not None:
+                        return True
+                except Exception:
+                    continue
+    except Exception:
+        return False
+    return False
+
+
+def _message_is_ephemeral(interaction: Any) -> bool:
+    try:
+        flags = getattr(getattr(interaction, "message", None), "flags", None)
+        return bool(getattr(flags, "ephemeral", False))
+    except Exception:
+        return False
+
+
+async def _recover_unowned_private_component(
+    bot: Any,
+    interaction: discord.Interaction,
+) -> bool:
+    """Recover a private component only when discord.py has no ViewStore owner.
+
+    This is not a second business handler. It never executes the stale action.
+    It only replaces a dead private menu with the canonical Control Center after
+    discord.py has already failed to find a message, persistent, or dynamic view
+    owner and existing additive listeners have had a short grace period.
+    """
+    try:
+        if interaction.type is not discord.InteractionType.component:
+            return False
+        if _response_done(interaction):
+            return False
+        if not _message_is_ephemeral(interaction):
+            return False
+        if _view_store_has_component_owner(bot, interaction):
+            return False
+
+        await asyncio.sleep(PRIVATE_MENU_RECOVERY_GRACE_SECONDS)
+        if _response_done(interaction):
+            return False
+        if _view_store_has_component_owner(bot, interaction):
+            return False
+
+        from .commands_ext.public_command_surface_v2 import open_compact_dank_home
+
+        await open_compact_dank_home(
+            interaction,
+            content=(
+                "♻️ That private Dank Shield menu expired or belonged to an older bot session. "
+                "I opened a fresh Control Center instead; the stale action was not executed."
+            ),
+        )
+        recovered = _response_done(interaction)
+        if recovered:
+            ctx = interaction_context(interaction, action_name="private_menu_stale_recovery")
+            print(
+                "♻️ component_runtime recovered stale private menu "
+                f"interaction={getattr(interaction, 'id', 0)} "
+                f"guild={ctx.guild_id} user={ctx.user_id} "
+                f"message={ctx.message_id} custom_id={ctx.custom_id!r}"
+            )
+        return recovered
+    except Exception as exc:
+        if _observer_log_allowed():
+            print(
+                "⚠️ component_runtime private-menu recovery failed "
+                f"error={type(exc).__name__}: {_safe_error_text(exc)}"
+            )
+        return False
+
+
 def _interaction_age_ms(interaction: Any) -> int:
     try:
         created_at = getattr(interaction, "created_at", None)
@@ -492,7 +603,12 @@ async def _observe_component_ack(bot: Any, interaction: discord.Interaction) -> 
 
 
 def install_component_interaction_observer(bot: Any) -> bool:
-    """Install one passive component ingress/ack observer on the shared bot."""
+    """Install the shared component lifecycle safety runtime on the bot.
+
+    The runtime has two responsibilities only: recover definitely unowned
+    private-session controls to the canonical Control Center, and observe any
+    component that still remains unacknowledged. It never replays a stale action.
+    """
     global _COMPONENT_OBSERVER_INSTALLED
     global _COMPONENT_OBSERVER_READY_LOGGED
 
@@ -506,6 +622,9 @@ def install_component_interaction_observer(bot: Any) -> bool:
         return False
 
     async def interaction_listener(interaction: discord.Interaction) -> None:
+        recovered = await _recover_unowned_private_component(bot, interaction)
+        if recovered:
+            return
         await _observe_component_ack(bot, interaction)
 
     async def ready_listener() -> None:
