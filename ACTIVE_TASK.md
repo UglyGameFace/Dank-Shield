@@ -2,186 +2,184 @@
 
 ## Active task / desired outcome
 
-**P0-SETTINGS-001B — Spam Guard core settings + canonical setup persistence**
+**P0-BASIC-VERIFY-INTERACTION-001 — restore reliable Basic Verify button dispatch**
 
-Make the settings registry the semantic owner for Spam Guard core settings while keeping `spam_guard.py` as the single persistence/cache/diagnostics owner for `guild_security_settings`.
+Make the public Basic Verify button acknowledge exactly once, enter one canonical
+verification workflow, and remain restart-safe without competing interaction
+owners.
 
-Remove the duplicate Spam Guard storage/cache path from the setup compatibility UI.
+## Production symptom
+
+A live Basic Verify panel with footer
+`dank_shield:basic_verify:v1 • access only` showed Discord's red
+`This interaction failed` result after the user tapped **Verify**.
+
+The displayed panel is the current Basic Verify surface, not the ID-upload flow.
 
 ## Status
 
-**IMPLEMENTED — synced to current main; exact-head validation pending**
+**IMPLEMENTED ON TASK BRANCH — validation in progress**
 
-Branch: `audit/settings-registry-spamguard-20260922`
+Branch: `fix/basic-verify-interaction-owner-20260923`
 
-Base: current `main` at `80f96f54fe99abce7a2663dde817e91ce3711178` after PR #301.
+Base: `main@0935f80071723b878ba1fb85a3402608512d1aec`
 
-## Previous task closed
-
-**P0-SETTINGS-001A** is complete.
-
-PR #296 merged as:
-
-`e949f9651f58e3fce3fccbaff3aca9789da813b2`
-
-Exact implementation head:
-
-`91b54aac57d1a75574fd687f457fcef6385787d8`
-
-Termux validation passed:
-
-- diff integrity;
-- Python compile;
-- settings-registry focused tests;
-- Protection/Invite compatibility;
-- Spam Guard settings regressions;
-- Protection Center regressions;
-- full suite: **1814 passed, 79 warnings, 0 failures**.
-
-Post-merge verification confirmed:
-
-- registry present on `main`;
-- registry remains schema-only;
-- Invite Scope wired to registry;
-- Protection Center effective shield state wired;
-- Invite Policy Engine wired;
-- recovery preflight wired;
-- Spam Guard compatibility reads wired;
-- registry regression coverage present.
-
-## Root cause / ownership finding
-
-Spam Guard still had split semantic and persistence ownership after the first registry slice.
-
-### Canonical Spam Guard runtime owner
-
-`spam_guard.py` already owns:
-
-- `guild_security_settings` database writes;
-- DB readback verification;
-- runtime fallback/cache;
-- persistence diagnostics;
-- bootstrap rows for new guilds;
-- enforcement behavior.
-
-### Duplicate setup owner
-
-`startup_guards/setup_service_modes.py` remained production-reachable through the public Spam Guard setup UI and health tooling. It independently owned:
-
-- a second Spam Guard default dictionary;
-- broader/different numeric bounds;
-- a setup-only 60-minute timeout default while runtime default was 30;
-- a private runtime-cache read;
-- direct raw Supabase writes to `guild_security_settings`;
-- a fallback minimal DB payload;
-- direct mutation of Spam Guard's private runtime cache.
-
-That allowed setup and runtime to disagree about saved values and persistence state.
-
-## Canonical ownership after this slice
-
-### Setting meaning
-
-`settings_registry.py` owns:
-
-- Spam Guard semantic keys;
-- persisted `spam_*` aliases and precedence;
-- exact defaults;
-- exact numeric bounds;
-- allowed/exempt ID normalization;
-- allowed invite code compatibility;
-- Safe/Strict/Off presets.
-
-### Persistence/cache/diagnostics
-
-`spam_guard.py` remains the sole owner via:
-
-- `get_spam_settings`;
-- `save_spam_settings`;
-- canonical DB payload/readback;
-- runtime cache;
-- persistence diagnostics.
-
-### Setup compatibility UI
-
-`setup_service_modes.py` remains a UI/navigation compatibility helper only.
-
-It now reads and saves through the canonical Spam Guard service.
+No merge-readiness claim is made until exact-head validation completes.
 
 ## Scope
 
 In scope:
 
-- register Spam Guard core schema in settings registry;
-- preserve persisted-column precedence;
-- preserve exact runtime defaults/bounds;
-- share presets with Protection Center;
-- route Spam Guard normalizer/defaults through registry;
-- route setup Spam Guard reads through `get_spam_settings`;
-- route setup Spam Guard writes through `save_spam_settings`;
-- remove duplicate setup DB/cache helpers;
-- fix setup-only default drift from 60m to canonical 30m;
-- update focused regressions and ownership docs.
+- trace the real Basic Verify component dispatch path;
+- restore one runtime owner for the Basic Verify custom ID;
+- preserve restart-safe persistent-view handling;
+- retain a fallback only when persistent-view registration itself fails;
+- ensure acknowledgement occurs before config/database/role work;
+- prevent an already-acknowledged duplicate route from mutating roles again;
+- retire the live compatibility wrapper that independently intercepted the same
+  Basic Verify component;
+- replace source-shape runtime coverage with behavioral regression tests.
 
 Out of scope:
 
-- changing Spam Guard enforcement rules;
-- changing table schema;
-- removing `setup_service_modes.py` UI exports;
-- changing setup service-selection flags;
-- migrating AntiNuke/design/ticket/verification settings;
-- changing Invite Shield policy.
+- ID/web verification;
+- VC verification;
+- ticket creation;
+- verification role-policy redesign;
+- setup redesign;
+- AntiNuke;
+- Spam Guard;
+- unrelated startup-guard cleanup.
 
-## Expected production behavior
+## Execution path inspected
 
-Spam Guard policy/enforcement behavior is unchanged.
+Production boot:
 
-Setup now displays and saves the same normalized Spam Guard state that the runtime actually uses.
+`Discloud -> main.py -> stoney_verify.app -> commands/events -> bot.run()`
 
-A setup save receives the same persistence/readback/cache handling as every other Spam Guard save.
+Basic Verify paths before this task:
 
-## Branch sync / integration state
+1. `app.py` called `install_basic_verify_runtime(bot, strict=True)` before login.
+2. That installer registered `BasicVerifyView()` with `bot.add_view(...)`.
+3. The same installer also registered a global `on_interaction` fallback for the
+   same `dank:basic_verify:v1` custom ID even when the persistent view succeeded.
+4. `sitecustomize.py` also loaded `basic_verification_mode_guard`.
+5. That compatibility guard independently wrapped
+   `interaction_handlers.handle_component_interaction` and called
+   `maybe_handle_basic_verify_interaction()` for the same Basic Verify custom ID.
+6. The persistent button callback contained a second copy of the handler flow.
 
-PR #297 was 50 commits behind current `main`. The task-owned file set was checked against those 50 commits and had **no overlapping changed paths**. The branch was then synchronized with current `main` using merge commit:
+That left multiple live responders able to race on one Discord component
+interaction.
 
-`9c868b56c4eae83ff13a8af90c1f497d2cb46e9c`
+## Root cause / regression finding
 
-Post-sync verification:
+PR #81 previously established the correct ownership rule: use the persistent
+Basic Verify view when registration succeeds, and install a global fallback only
+when persistent registration cannot be confirmed.
 
-- PR is mergeable;
-- branch is 15 commits ahead / 0 behind current `main`;
-- merge base exactly matches `80f96f54fe99abce7a2663dde817e91ce3711178`;
-- changed-file scope remains exactly the same 10 task-owned files;
-- review threads remain empty;
-- GitHub-hosted workflows still fail before runner execution (`steps=null`), so they provide no code-test signal.
+Commit `e2be9e03b9ce` later moved restart safety into the native Basic Verify
+module but changed that contract to register both the persistent view and the
+global fallback every time. The older live compatibility wrapper in
+`basic_verification_mode_guard` also remained reachable through
+`sitecustomize.py`.
 
+The result was duplicate dispatch ownership around one custom ID. This is an
+ownership regression, not a reason to add another retry or another listener.
 
-## Validation failure found after sync
+## Changes
 
-Exact-head Termux focused regressions exposed one stale ownership assertion in `tests/test_settings_registry_protection.py`. The test still required `_registry_setting_bool` inside `spam_guard.py`, but this active slice intentionally replaced per-setting Spam Guard reads with whole-object delegation through `_registry_spam_guard_defaults` and `_registry_normalize_spam_guard_settings`.
+### `stoney_verify/verification_new/basic_verify.py`
 
-Root cause: the older Protection-registry wiring test encoded the previous implementation detail rather than the new canonical ownership contract.
+- Persistent `BasicVerifyView` is the primary and authoritative runtime owner.
+- The global `on_interaction` fallback is registered only if `add_view()`
+  fails.
+- Once either route owns the custom ID, repeated installer calls cannot add a
+  second route later in the same process.
+- Fallback acknowledgement is immediate because no persistent view exists in
+  fallback mode.
+- `BasicVerifyButton.callback` delegates to the one canonical
+  `maybe_handle_basic_verify_interaction()` implementation.
+- `_ack()` now treats an already-acknowledged interaction as already claimed
+  and does not allow a second role mutation.
+- Canonical click logging includes the Discord interaction ID.
 
-Fix: updated that regression to require the two canonical Spam Guard registry delegates and explicitly reject the obsolete `_registry_setting_bool` path in `spam_guard.py`. No runtime code was changed.
+### `stoney_verify/startup_guards/basic_verification_mode_guard.py`
+
+- Removed the compatibility wrapper that intercepted Basic Verify in the
+  centralized component handler.
+- The guard retains its still-live allowlist, Verify Panel command, and sync
+  compatibility responsibilities.
+- Native Basic Verify runtime ownership remains in
+  `verification_new/basic_verify.py`.
+
+### Tests
+
+- Replaced `tests/test_basic_verify_native_restart_runtime_static.py`.
+- Added behavioral `tests/test_basic_verify_native_restart_runtime.py` covering:
+  - persistent-view ownership without a duplicate listener;
+  - fallback-only behavior when persistent registration fails;
+  - idempotent registration;
+  - no late second owner after fallback registration;
+  - fail-closed behavior when neither route can register;
+  - exact custom-ID fallback routing;
+  - button delegation to the canonical handler;
+  - acknowledgement before role/database work;
+  - no duplicate role mutation after another route already acknowledged.
+
+## Compatibility review
+
+Preserved:
+
+- custom ID `dank:basic_verify:v1`;
+- persistent view class and timeout;
+- current and old posted panels;
+- Basic Verify authorization checks;
+- configured role resolution;
+- role hierarchy checks;
+- role mutation lock;
+- user-facing success/error behavior;
+- `register_basic_verify_runtime` compatibility alias;
+- pre-login strict runtime installation from `app.py`;
+- `/verify panel` canonical posting path.
+
+No schema, command name, role-policy, or panel-layout changes are included.
 
 ## Validation required
 
-- exact-head `git diff --check`;
+- exact branch diff inspection;
+- conflict-marker / whitespace inspection;
 - Python compile;
-- `tests/test_settings_registry_spamguard.py`;
-- `tests/test_settings_registry_protection.py`;
-- `tests/test_spam_guard_default_on_behavior.py`;
-- `tests/test_spam_guard_default_on_bootstrap_behavior.py`;
-- `tests/test_external_healthchecks_watchdog_static.py`;
-- `tests/test_setup_service_navigation_native.py`;
-- `tests/test_setup_service_modes_native_no_patch.py`;
-- Protection Center regressions;
-- invite-policy regressions;
-- full Python suite;
-- exact-head review-thread/diff inspection;
-- merge with expected-head guard;
-- post-merge ownership verification on `main`.
+- behavioral Basic Verify runtime tests;
+- verification-mode authorization tests;
+- Verify Panel posting tests;
+- persistent interaction compatibility tests;
+- relevant startup/interaction ownership tests;
+- full `pytest tests/`;
+- standalone repository tool checks required by CI;
+- GitHub Actions on the exact final head;
+- final changed-file and review-thread inspection.
+
+## Cleanup / conflicts
+
+The duplicate Basic Verify compatibility dispatcher is removed rather than
+layered with another guard.
+
+No unrelated production subsystem is intentionally changed.
+
+## Blockers / risks
+
+Live Discord acceptance still requires deployment after validated merge. A
+repository test cannot reproduce Discord's client-side red failure banner, so
+post-deploy acceptance must include one real Unverified account clicking the
+existing panel after a bot restart.
+
+## Backlog
+
+None added from this task.
 
 ## Next step
 
-Re-run exact-head Termux validation after the stale Protection-registry assertion repair because GitHub-hosted jobs are failing before runner execution. Then perform final diff/review-thread inspection, mark the PR ready, merge with an expected-head guard, and verify ownership on `main` before moving to the next settings family.
+Run exact-head targeted validation, correct only failures caused by this task,
+then run the full repository validation and inspect the final diff before any
+merge-readiness decision.
