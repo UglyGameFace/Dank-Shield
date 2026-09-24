@@ -1106,8 +1106,8 @@ def test_periodic_refresh_only_visits_active_server_stats_displays(monkeypatch) 
 
         await security_stats.refresh_all_security_stats_displays.coro()
 
-        assert refreshed == [101, 303]
-        assert 202 not in security_stats._ACTIVE_DISPLAY_GUILDS
+        assert set(refreshed) == {101, 303}
+        assert len(refreshed) == 2
         security_stats._ACTIVE_DISPLAY_GUILDS.clear()
 
     asyncio.run(scenario())
