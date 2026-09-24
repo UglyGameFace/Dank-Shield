@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import discord
@@ -305,3 +307,20 @@ def test_already_acknowledged_duplicate_never_repeats_role_mutation(
         assert handled is True
 
     asyncio.run(scenario())
+
+
+def test_host_compatibility_path_does_not_install_a_second_basic_verify_dispatcher() -> None:
+    code = """
+from stoney_verify import interaction_handlers
+
+handler = interaction_handlers.handle_component_interaction
+assert not getattr(handler, "_basic_verify_ready", False)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
