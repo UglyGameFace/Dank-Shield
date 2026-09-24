@@ -156,8 +156,8 @@ def test_counter_allocator_failure_is_user_visible_and_creates_no_channel(monkey
         parent = SimpleNamespace(name="ACTIVE TICKETS")
         staff = object()
 
-        async def noop_defer(_interaction, _thinking=False) -> None:
-            return None
+        async def noop_defer(_interaction, _thinking=False) -> bool:
+            return True
 
         async def active_category(_guild):
             return parent

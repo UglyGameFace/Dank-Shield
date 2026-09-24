@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-"""Runtime hardening for Basic Verify, setup visibility, schema lag, and modlog aliases.
+"""Legacy compatibility hardening for setup visibility, schema lag, and modlog aliases.
+
+Basic Verify interaction ownership now lives only in
+verification_new.basic_verify.install_basic_verify_runtime(). This module must
+not register another Basic Verify interaction listener even if imported.
 
 Member join/leave routing now lives only in member_lifecycle_router_guard.
 This file intentionally does not patch member lifecycle listeners anymore, because
@@ -14,8 +18,6 @@ from typing import Any, Optional
 import discord
 
 _INSTALLED = False
-_BASIC_VERIFY_FALLBACK_INSTALLED = False
-
 
 def _log(message: str) -> None:
     try:
@@ -51,41 +53,6 @@ def _schema_safe_execute(label: str, payload: dict[str, Any], executor: Any) -> 
                 continue
             raise
     return executor(clean)
-
-
-def _install_basic_verify_fallback() -> None:
-    global _BASIC_VERIFY_FALLBACK_INSTALLED
-    if _BASIC_VERIFY_FALLBACK_INSTALLED:
-        return
-    try:
-        from stoney_verify.globals import bot
-        from stoney_verify.setup_engine.verification_modes import BASIC_VERIFY_CUSTOM_ID
-        from stoney_verify.verification_new.basic_verify import maybe_handle_basic_verify_interaction
-    except Exception as exc:
-        _log(f"basic verify fallback unavailable: {type(exc).__name__}: {exc}")
-        return
-    if bot is None:
-        return
-
-    @bot.listen("on_interaction")
-    async def _dank_basic_verify_fallback(interaction: discord.Interaction) -> None:
-        try:
-            if getattr(interaction, "type", None) is not discord.InteractionType.component:
-                return
-            data = getattr(interaction, "data", None) or {}
-            if str(data.get("custom_id") or "") != BASIC_VERIFY_CUSTOM_ID:
-                return
-            if getattr(getattr(interaction, "response", None), "is_done", lambda: False)():
-                return
-            await maybe_handle_basic_verify_interaction(interaction)
-        except Exception as exc:
-            try:
-                print(f"⚠️ basic_verify fallback failed: {type(exc).__name__}: {exc}")
-            except Exception:
-                pass
-
-    _BASIC_VERIFY_FALLBACK_INSTALLED = True
-    _log("basic verify component fallback active")
 
 
 def _patch_ticket_panel_basic_verify_warning() -> None:
@@ -243,7 +210,6 @@ def install() -> bool:
     global _INSTALLED
     if _INSTALLED:
         return True
-    _install_basic_verify_fallback()
     _patch_ticket_panel_basic_verify_warning()
     _patch_setup_join_leave_alias_picker()
     _patch_member_lifecycle_router()

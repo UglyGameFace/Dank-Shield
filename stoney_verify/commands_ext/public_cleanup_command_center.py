@@ -10,6 +10,8 @@ invite policy engine, cleanup worker behavior, and audit logging stay canonical.
 from typing import Any, Optional
 
 import discord
+
+from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 from discord import app_commands
 
 from .common import _staff_check
@@ -75,7 +77,7 @@ async def _require_staff(interaction: discord.Interaction) -> bool:
 
 
 class _OwnedView(discord.ui.View):
-    def __init__(self, owner_id: int, *, timeout: float = 900) -> None:
+    def __init__(self, owner_id: int, *, timeout: float = PRIVATE_MENU_TTL_SECONDS) -> None:
         super().__init__(timeout=timeout)
         self.owner_id = int(owner_id)
 

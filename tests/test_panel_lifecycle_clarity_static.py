@@ -39,5 +39,5 @@ def test_public_panels_still_use_persistent_views():
     assert "super().__init__(timeout=None)" in PROFILE
     assert "class PublicCreateTicketPanelView" in TICKET
     ticket_start = TICKET.index("class PublicCreateTicketPanelView")
-    ticket_end = TICKET.index("async def _component_fallback_listener", ticket_start)
+    ticket_end = TICKET.index("def _panel_embed", ticket_start)
     assert "super().__init__(timeout=None)" in TICKET[ticket_start:ticket_end]

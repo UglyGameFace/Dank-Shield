@@ -13,6 +13,7 @@ from typing import Any, Optional
 import discord
 from discord import app_commands
 
+from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS, private_menu_lifecycle_text
 from .public_setup_group import dank_group
 
 _INSTALLED = False
@@ -48,7 +49,7 @@ async def _private(
 
 
 class _OwnedView(discord.ui.View):
-    def __init__(self, owner_id: int, *, timeout: float = 900) -> None:
+    def __init__(self, owner_id: int, *, timeout: float = PRIVATE_MENU_TTL_SECONDS) -> None:
         super().__init__(timeout=timeout)
         self.owner_id = int(owner_id)
 
@@ -82,6 +83,11 @@ def _home_embed() -> discord.Embed:
     embed.add_field(
         name="Utility",
         value="🧰 Community Tools • 📊 Server Stats • 📡 Status • 🩺 Diagnostics • 📎 Card Assets • ❓ Help",
+        inline=False,
+    )
+    embed.add_field(
+        name="Control lifetime",
+        value=private_menu_lifecycle_text(),
         inline=False,
     )
     embed.add_field(
@@ -157,13 +163,13 @@ def _asset_embed() -> discord.Embed:
 
 
 class CompactDankHomeView(_OwnedView):
-    @discord.ui.button(label="Setup & Settings", emoji="⚙️", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Setup & Settings", emoji="⚙️", style=discord.ButtonStyle.success, custom_id="dank:home:setup:v1", row=0)
     async def setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_command_hub import _invoke_saved
         await _invoke_saved("setup", interaction)
 
-    @discord.ui.button(label="Protection", emoji="🛡️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Protection", emoji="🛡️", style=discord.ButtonStyle.primary, custom_id="dank:home:protection:v1", row=0)
     async def protection(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_command_hub import _admin_or_manage
@@ -175,31 +181,31 @@ class CompactDankHomeView(_OwnedView):
             content="🛡️ Protection Center opened from `/dank home`.",
         )
 
-    @discord.ui.button(label="Tickets", emoji="🎫", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Tickets", emoji="🎫", style=discord.ButtonStyle.primary, custom_id="dank:home:tickets:v1", row=0)
     async def tickets(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_ticket_command_center import open_ticket_operations_center
         await open_ticket_operations_center(interaction)
 
-    @discord.ui.button(label="Verification", emoji="✅", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Verification", emoji="✅", style=discord.ButtonStyle.primary, custom_id="dank:home:verification:v1", row=0)
     async def verification(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_verify_command_center import open_verify_command_center
         await open_verify_command_center(interaction)
 
-    @discord.ui.button(label="Welcome, Join & Exit", emoji="👋", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Welcome, Join & Exit", emoji="👋", style=discord.ButtonStyle.primary, custom_id="dank:home:welcome:v1", row=0)
     async def welcome(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from stoney_verify.welcome_setup_ui import open_welcome_setup
         await open_welcome_setup(interaction)
 
-    @discord.ui.button(label="Members & Moderation", emoji="👥", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Members & Moderation", emoji="👥", style=discord.ButtonStyle.secondary, custom_id="dank:home:members:v1", row=1)
     async def members(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_mod_command_center import open_mod_command_center
         await open_mod_command_center(interaction)
 
-    @discord.ui.button(label="Server Design", emoji="🎨", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Server Design", emoji="🎨", style=discord.ButtonStyle.secondary, custom_id="dank:home:design:v1", row=1)
     async def design(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         # Server Design's established authority is Manage Channels. Do not put a
@@ -208,7 +214,7 @@ class CompactDankHomeView(_OwnedView):
         from . import public_design_bridge
         await public_design_bridge.open_design_studio_from_setup(interaction)
 
-    @discord.ui.button(label="Roles & Profiles", emoji="🎭", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Roles & Profiles", emoji="🎭", style=discord.ButtonStyle.secondary, custom_id="dank:home:roles:v1", row=1)
     async def roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_command_hub import _admin_or_manage, open_profile_entry
@@ -217,7 +223,7 @@ class CompactDankHomeView(_OwnedView):
         from .public_self_roles_group import _post_profile_builder
         await _post_profile_builder(interaction, title="Profile Panel")
 
-    @discord.ui.button(label="Logs & Activity", emoji="🧾", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Logs & Activity", emoji="🧾", style=discord.ButtonStyle.secondary, custom_id="dank:home:logs:v1", row=1)
     async def logs(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_command_hub import _admin_or_manage
@@ -226,31 +232,31 @@ class CompactDankHomeView(_OwnedView):
         from .public_setup_recommend import _open_advanced_logs_activity
         await _open_advanced_logs_activity(interaction)
 
-    @discord.ui.button(label="My Profile", emoji="🪪", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="My Profile", emoji="🪪", style=discord.ButtonStyle.secondary, custom_id="dank:home:profile:v1", row=1)
     async def profile(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_command_hub import open_profile_entry
         await open_profile_entry(interaction)
 
-    @discord.ui.button(label="Community Tools", emoji="🧰", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Community Tools", emoji="🧰", style=discord.ButtonStyle.secondary, custom_id="dank:home:community:v1", row=2)
     async def community(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_community_tools import open_community_tools
         await open_community_tools(interaction, replace_message=True)
 
-    @discord.ui.button(label="Status", emoji="📡", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Status", emoji="📡", style=discord.ButtonStyle.secondary, custom_id="dank:home:status:v1", row=2)
     async def status(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_command_hub import _invoke_saved
         await _invoke_saved("status", interaction)
 
-    @discord.ui.button(label="Diagnostics", emoji="🩺", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Diagnostics", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id="dank:home:diagnostics:v1", row=2)
     async def diagnostics(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_command_hub import _invoke_saved
         await _invoke_saved("diagnostics", interaction)
 
-    @discord.ui.button(label="Card Assets", emoji="📎", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Card Assets", emoji="📎", style=discord.ButtonStyle.secondary, custom_id="dank:home:assets:v1", row=2)
     async def assets(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.edit_message(
@@ -259,7 +265,7 @@ class CompactDankHomeView(_OwnedView):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @discord.ui.button(label="Help", emoji="❓", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Help", emoji="❓", style=discord.ButtonStyle.secondary, custom_id="dank:home:help:v1", row=2)
     async def help(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.edit_message(
@@ -268,20 +274,20 @@ class CompactDankHomeView(_OwnedView):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @discord.ui.button(label="Server Stats", emoji="📊", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="Server Stats", emoji="📊", style=discord.ButtonStyle.secondary, custom_id="dank:home:server_stats:v1", row=3)
     async def server_stats(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_server_stats import open_server_stats_center
         await open_server_stats_center(interaction)
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, row=3)
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, custom_id="dank:home:close:v1", row=3)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.edit_message(content="Dank Shield Control Center closed.", embed=None, view=None)
 
 
 class CompactHelpView(_OwnedView):
-    @discord.ui.button(label="Control Center", emoji="🏠", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Control Center", emoji="🏠", style=discord.ButtonStyle.primary, custom_id="dank:help:home:v1")
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.edit_message(
@@ -290,26 +296,26 @@ class CompactHelpView(_OwnedView):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, custom_id="dank:help:close:v1")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.edit_message(content="Help closed.", embed=None, view=None)
 
 
 class CardAssetView(_OwnedView):
-    @discord.ui.button(label="Welcome / Exit Studio", emoji="👋", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Welcome / Exit Studio", emoji="👋", style=discord.ButtonStyle.primary, custom_id="dank:assets:studio:v1", row=0)
     async def studio(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from stoney_verify.welcome_setup_ui import open_welcome_setup
         await open_welcome_setup(interaction)
 
-    @discord.ui.button(label="Clear Uploaded Font", emoji="🧹", style=discord.ButtonStyle.danger, row=0)
+    @discord.ui.button(label="Clear Uploaded Font", emoji="🧹", style=discord.ButtonStyle.danger, custom_id="dank:assets:clear_font:v1", row=0)
     async def clear_font(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_welcome_card_studio import welcome_card_font_clear
         await welcome_card_font_clear(interaction)
 
-    @discord.ui.button(label="Control Center", emoji="🏠", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Control Center", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank:assets:home:v1", row=1)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.edit_message(
@@ -319,9 +325,28 @@ class CardAssetView(_OwnedView):
         )
 
 
-async def open_compact_dank_home(interaction: discord.Interaction) -> None:
+async def replace_with_compact_dank_home(
+    interaction: discord.Interaction,
+    *,
+    content: str = "",
+) -> None:
+    """Atomically replace a component message with a fresh canonical home view."""
+    await interaction.response.edit_message(
+        content=content or None,
+        embed=_home_embed(),
+        view=CompactDankHomeView(int(interaction.user.id)),
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
+async def open_compact_dank_home(
+    interaction: discord.Interaction,
+    *,
+    content: str = "",
+) -> None:
     await _private(
         interaction,
+        content=content,
         embed=_home_embed(),
         view=CompactDankHomeView(int(interaction.user.id)),
     )

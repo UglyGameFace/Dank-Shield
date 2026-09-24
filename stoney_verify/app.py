@@ -65,6 +65,9 @@ from .members_new.activity_tracker import (
     install_activity_tracker as _install_activity_tracker,
     persisted_last_heartbeat_at as _persisted_last_heartbeat_at,
 )
+from .interaction_guard import (
+    install_component_interaction_runtime as _install_component_interaction_runtime,
+)
 from .startup_recovery_coordinator import startup_recovery_slot
 from .tickets_new import service as _tickets_service  # noqa: F401
 from .tickets_new import transcript_service as _transcript_service  # noqa: F401
@@ -88,6 +91,19 @@ except Exception as e:
         repr(e),
     )
     raise
+
+# Production-wide component lifecycle safety. The runtime never replays stale
+# business actions. It proves whether discord.py has an owner for each private
+# component, self-recovers orphaned private menus to a fresh Control Center, and
+# records components that still miss the acknowledgement window.
+try:
+    if not _install_component_interaction_runtime(bot):
+        print("⚠️ component_runtime was not installed")
+except Exception as e:
+    print(
+        "⚠️ component_runtime install failed:",
+        repr(e),
+    )
 
 
 # Native authoritative member activity tracking. This is an explicit runtime

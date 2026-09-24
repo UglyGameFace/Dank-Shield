@@ -25,11 +25,23 @@ from typing import Any, Awaitable, Callable, Mapping, Optional, TypeVar
 
 import discord
 
+from .panel_lifecycle import PRIVATE_MENU_RECOVERY_GRACE_SECONDS
+
 T = TypeVar("T")
 _LOG = logging.getLogger("dank_shield.interactions")
 _RECENT_FAILURE_LIMIT = 250
 _RECENT_FAILURES: list["InteractionFailureRecord"] = []
 _ACTION_LOCKS: dict[str, asyncio.Lock] = {}
+_COMPONENT_OBSERVER_INSTALLED = False
+_COMPONENT_OBSERVER_READY_LOGGED = False
+_COMPONENT_OBSERVER_GRACE_SECONDS = 2.5
+_COMPONENT_OBSERVER_PROBE_WINDOW_SECONDS = 60.0
+_COMPONENT_OBSERVER_PROBE_LIMIT = 60
+_COMPONENT_OBSERVER_PROBE_TIMES: list[float] = []
+_COMPONENT_OBSERVER_LOG_WINDOW_SECONDS = 60.0
+_COMPONENT_OBSERVER_LOG_LIMIT = 20
+_COMPONENT_OBSERVER_LOG_TIMES: list[float] = []
+_VIEW_STORE_LAYOUT_DISCORD_VERSION = "2.7.1"
 
 
 @dataclass(frozen=True)
@@ -239,6 +251,18 @@ def _store_failure(record: InteractionFailureRecord) -> None:
         _RECENT_FAILURES.pop(0)
 
 
+def _latest_interaction_failure(
+    interaction: Any,
+    *,
+    stage: str,
+) -> InteractionFailureRecord | None:
+    trace_id = _trace_id(interaction)
+    for record in reversed(_RECENT_FAILURES):
+        if record.stage == stage and record.context.trace_id == trace_id:
+            return record
+    return None
+
+
 def recent_interaction_failures(*, limit: int = 25) -> list[InteractionFailureRecord]:
     """Return recent native interaction failures for diagnostics/tests."""
 
@@ -332,9 +356,13 @@ async def safe_defer_interaction(
     """Acknowledge an interaction once and log failures with context."""
 
     try:
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=ephemeral)
+        # A previous canonical step may already have acknowledged the same
+        # interaction (for example a component edit before a guarded mutation).
+        # That is a valid claim, not a defer failure.
+        if interaction.response.is_done():
             return True
+        await interaction.response.defer(ephemeral=ephemeral)
+        return True
     except Exception as exc:
         log_interaction_failure(
             interaction,
@@ -345,6 +373,317 @@ async def safe_defer_interaction(
         )
         return False
     return False
+
+
+def _observer_probe_allowed() -> bool:
+    now = time.monotonic()
+    cutoff = now - _COMPONENT_OBSERVER_PROBE_WINDOW_SECONDS
+    while _COMPONENT_OBSERVER_PROBE_TIMES and _COMPONENT_OBSERVER_PROBE_TIMES[0] <= cutoff:
+        _COMPONENT_OBSERVER_PROBE_TIMES.pop(0)
+    if len(_COMPONENT_OBSERVER_PROBE_TIMES) >= _COMPONENT_OBSERVER_PROBE_LIMIT:
+        return False
+    _COMPONENT_OBSERVER_PROBE_TIMES.append(now)
+    return True
+
+
+def _observer_log_allowed() -> bool:
+    now = time.monotonic()
+    cutoff = now - _COMPONENT_OBSERVER_LOG_WINDOW_SECONDS
+    while _COMPONENT_OBSERVER_LOG_TIMES and _COMPONENT_OBSERVER_LOG_TIMES[0] <= cutoff:
+        _COMPONENT_OBSERVER_LOG_TIMES.pop(0)
+    if len(_COMPONENT_OBSERVER_LOG_TIMES) >= _COMPONENT_OBSERVER_LOG_LIMIT:
+        return False
+    _COMPONENT_OBSERVER_LOG_TIMES.append(now)
+    return True
+
+
+def _persistent_view_snapshot(bot: Any) -> tuple[int, str]:
+    try:
+        views = list(getattr(bot, "persistent_views", None) or [])
+    except Exception:
+        views = []
+    names = sorted({type(view).__name__ for view in views if view is not None})
+    return len(views), ",".join(names[:24])
+
+
+def _component_store_key(interaction: Any) -> tuple[int, str]:
+    data = _interaction_data(interaction)
+    return (
+        _safe_int(data.get("component_type"), 0),
+        _safe_text(data.get("custom_id"), limit=180),
+    )
+
+
+def _view_store_component_owner_state(bot: Any, interaction: Any) -> bool | None:
+    """Return True/False only when the pinned ViewStore contract is known.
+
+    discord.py 2.7.1 resolves message-specific ownership first, then a global
+    persistent view registered under the None message key, while dynamic items
+    are dispatched independently before that lookup. Reading the store mirrors
+    that contract without dispatching anything. Unknown library/store layouts
+    return None so stale recovery fails closed instead of stealing a live click.
+    """
+    if str(getattr(discord, "__version__", "") or "") != _VIEW_STORE_LAYOUT_DISCORD_VERSION:
+        return None
+    component_type, custom_id = _component_store_key(interaction)
+    if component_type <= 0 or not custom_id:
+        return None
+    try:
+        state = getattr(bot, "_connection", None)
+        store = getattr(state, "_view_store", None)
+        views = getattr(store, "_views", None)
+        dynamic = getattr(store, "_dynamic_items", None)
+        if not isinstance(views, dict) or not isinstance(dynamic, dict):
+            return None
+        message_id = _safe_int(
+            getattr(getattr(interaction, "message", None), "id", 0),
+            0,
+        )
+        key = (component_type, custom_id)
+        if message_id > 0 and key in (views.get(message_id, {}) or {}):
+            return True
+        if key in (views.get(None, {}) or {}):
+            return True
+        for pattern in dynamic.keys():
+            try:
+                if pattern.fullmatch(custom_id) is not None:
+                    return True
+            except Exception:
+                continue
+        return False
+    except Exception:
+        return None
+
+
+def _view_store_has_component_owner(bot: Any, interaction: Any) -> bool:
+    """Compatibility helper used by diagnostics/tests."""
+    return _view_store_component_owner_state(bot, interaction) is True
+
+
+def _message_is_ephemeral(interaction: Any) -> bool:
+    try:
+        flags = getattr(getattr(interaction, "message", None), "flags", None)
+        return bool(getattr(flags, "ephemeral", False))
+    except Exception:
+        return False
+
+
+async def _recover_unowned_private_component(
+    bot: Any,
+    interaction: discord.Interaction,
+) -> bool:
+    """Recover a private component only when discord.py has no ViewStore owner.
+
+    This is not a second business handler. It never executes the stale action.
+    It only replaces a dead private menu with the canonical Control Center after
+    discord.py has already failed to find a message, persistent, or dynamic view
+    owner and existing additive listeners have had a short grace period.
+    """
+    try:
+        if interaction.type is not discord.InteractionType.component:
+            return False
+        if _response_done(interaction):
+            return False
+        if not _message_is_ephemeral(interaction):
+            return False
+        owner_state = _view_store_component_owner_state(bot, interaction)
+        if owner_state is not False:
+            return False
+
+        await asyncio.sleep(PRIVATE_MENU_RECOVERY_GRACE_SECONDS)
+        if _response_done(interaction):
+            return False
+        owner_state = _view_store_component_owner_state(bot, interaction)
+        if owner_state is not False:
+            return False
+
+        # Atomically claim the interaction by replacing the stale ephemeral
+        # message itself. discord.py stores the replacement view under the same
+        # message ID as part of InteractionResponse.edit_message(), so recovery
+        # both removes the dead controls and immediately restores ViewStore
+        # ownership. If another listener wins first, this response raises and
+        # recovery exits without a competing message.
+        from .commands_ext.public_command_surface_v2 import (
+            replace_with_compact_dank_home,
+        )
+
+        try:
+            await replace_with_compact_dank_home(
+                interaction,
+                content=(
+                    "♻️ That private Dank Shield menu expired or belonged to an older bot session. "
+                    "I refreshed the Control Center in place; the stale action was not executed."
+                ),
+            )
+        except Exception:
+            if _response_done(interaction):
+                return False
+            raise
+        recovered = True
+        if recovered:
+            ctx = interaction_context(interaction, action_name="private_menu_stale_recovery")
+            print(
+                "♻️ component_runtime recovered stale private menu "
+                f"interaction={getattr(interaction, 'id', 0)} "
+                f"guild={ctx.guild_id} user={ctx.user_id} "
+                f"message={ctx.message_id} custom_id={ctx.custom_id!r}"
+            )
+        return recovered
+    except Exception as exc:
+        if _observer_log_allowed():
+            print(
+                "⚠️ component_runtime private-menu recovery failed "
+                f"error={type(exc).__name__}: {_safe_error_text(exc)}"
+            )
+        return False
+
+
+def _interaction_age_ms(interaction: Any) -> int:
+    try:
+        created_at = getattr(interaction, "created_at", None)
+        if created_at is None:
+            return -1
+        age = (discord.utils.utcnow() - created_at).total_seconds() * 1000.0
+        return max(0, int(round(age)))
+    except Exception:
+        return -1
+
+
+async def _observe_component_ack(bot: Any, interaction: discord.Interaction) -> None:
+    """Record component clicks that reach this process but remain unanswered.
+
+    This observer is deliberately passive. It never acknowledges an interaction,
+    dispatches a callback, or mutates feature state. Its only purpose is to tell
+    production logs whether Discord delivered a click to the current process and
+    whether native ViewStore/business handling acknowledged it within the normal
+    component window.
+    """
+    try:
+        if interaction.type is not discord.InteractionType.component:
+            return
+        if _response_done(interaction):
+            return
+        if not _observer_probe_allowed():
+            return
+        await asyncio.sleep(_COMPONENT_OBSERVER_GRACE_SECONDS)
+        if _response_done(interaction):
+            return
+
+        message = getattr(interaction, "message", None)
+        author = getattr(message, "author", None)
+        bot_user = getattr(bot, "user", None)
+        message_author_id = _safe_int(getattr(author, "id", 0), 0)
+        bot_user_id = _safe_int(getattr(bot_user, "id", 0), 0)
+        application_id = _safe_int(getattr(interaction, "application_id", 0), 0)
+        persistent_count, persistent_names = _persistent_view_snapshot(bot)
+        extra = {
+            "interaction_age_ms": _interaction_age_ms(interaction),
+            "message_author_id": message_author_id,
+            "bot_user_id": bot_user_id,
+            "interaction_application_id": application_id,
+            "message_author_matches_bot": bool(
+                message_author_id > 0
+                and bot_user_id > 0
+                and message_author_id == bot_user_id
+            ),
+            "persistent_view_count": persistent_count,
+            "persistent_view_types": persistent_names,
+        }
+        if not _observer_log_allowed():
+            return
+
+        error = RuntimeError(
+            "component reached Dank Shield but remained unacknowledged after "
+            f"{_COMPONENT_OBSERVER_GRACE_SECONDS:.1f}s"
+        )
+        record = log_interaction_failure(
+            interaction,
+            error,
+            stage="component_unacknowledged",
+            action_name=_command_path(interaction),
+            fix_hint=(
+                "The click reached the running bot but no callback acknowledged it. "
+                "Inspect persistent-view ownership, callback errors, and acknowledgement logs."
+            ),
+            extra=extra,
+        )
+        print(
+            "🚨 component_runtime unacknowledged "
+            f"error_id={record.error_id} "
+            f"interaction={getattr(interaction, 'id', 0)} "
+            f"custom_id={record.context.custom_id!r} "
+            f"guild={record.context.guild_id} message={record.context.message_id} "
+            f"age_ms={extra['interaction_age_ms']} "
+            f"message_author={message_author_id} bot_user={bot_user_id} "
+            f"application_id={application_id} "
+            f"persistent_views={persistent_count}"
+        )
+    except Exception as exc:
+        if _observer_log_allowed():
+            print(
+                "⚠️ component_runtime observer failed "
+                f"error={type(exc).__name__}: {_safe_error_text(exc)}"
+            )
+
+
+def install_component_interaction_runtime(bot: Any) -> bool:
+    """Install the shared component lifecycle safety runtime on the bot.
+
+    The runtime has two responsibilities only: recover definitely unowned
+    private-session controls to the canonical Control Center, and observe any
+    component that still remains unacknowledged. It never replays a stale action.
+    """
+    global _COMPONENT_OBSERVER_INSTALLED
+    global _COMPONENT_OBSERVER_READY_LOGGED
+
+    marker = "_dank_component_interaction_observer_installed"
+    if _COMPONENT_OBSERVER_INSTALLED or bool(getattr(bot, marker, False)):
+        _COMPONENT_OBSERVER_INSTALLED = True
+        return True
+
+    add_listener = getattr(bot, "add_listener", None)
+    if not callable(add_listener):
+        return False
+
+    async def interaction_listener(interaction: discord.Interaction) -> None:
+        recovered = await _recover_unowned_private_component(bot, interaction)
+        if recovered:
+            return
+        await _observe_component_ack(bot, interaction)
+
+    async def ready_listener() -> None:
+        global _COMPONENT_OBSERVER_READY_LOGGED
+        if _COMPONENT_OBSERVER_READY_LOGGED:
+            return
+        _COMPONENT_OBSERVER_READY_LOGGED = True
+        # Let the already-registered persistent-view on_ready listeners get one
+        # event-loop turn before taking the startup inventory snapshot.
+        await asyncio.sleep(0)
+        count, names = _persistent_view_snapshot(bot)
+        bot_user_id = _safe_int(getattr(getattr(bot, "user", None), "id", 0), 0)
+        app_id = _safe_int(getattr(bot, "application_id", 0), 0)
+        print(
+            "🔎 component_runtime ready "
+            f"bot_user={bot_user_id} application_id={app_id} "
+            f"persistent_views={count} types={names or 'none'}"
+        )
+
+    try:
+        add_listener(interaction_listener, "on_interaction")
+        add_listener(ready_listener, "on_ready")
+        setattr(bot, marker, True)
+        _COMPONENT_OBSERVER_INSTALLED = True
+        return True
+    except Exception as exc:
+        print(
+            "⚠️ component_runtime observer registration failed "
+            f"error={type(exc).__name__}: {_safe_error_text(exc)}"
+        )
+        return False
+
+
+# Compatibility alias for older imports while the runtime name becomes canonical.
+install_component_interaction_observer = install_component_interaction_runtime
 
 
 async def safe_send_interaction(
@@ -488,7 +827,23 @@ async def run_guarded_interaction(
 
     async with lock:
         if defer:
-            await safe_defer_interaction(interaction, ephemeral=ephemeral, action_name=resolved_action)
+            acknowledged = await safe_defer_interaction(
+                interaction,
+                ephemeral=ephemeral,
+                action_name=resolved_action,
+            )
+            if not acknowledged:
+                record = _latest_interaction_failure(
+                    interaction,
+                    stage="defer_failed",
+                )
+                return InteractionGuardResult(
+                    ok=False,
+                    error_id=str(getattr(record, "error_id", "") or ""),
+                    error_type=str(getattr(record, "error_type", "") or ""),
+                    error_message=str(getattr(record, "error_message", "") or ""),
+                    sent_to_user=False,
+                )
 
         try:
             await action()
@@ -527,6 +882,8 @@ __all__ = [
     "InteractionGuardResult",
     "InteractionSendFailure",
     "clear_recent_interaction_failures",
+    "install_component_interaction_observer",
+    "install_component_interaction_runtime",
     "interaction_action_key",
     "interaction_context",
     "log_interaction_failure",

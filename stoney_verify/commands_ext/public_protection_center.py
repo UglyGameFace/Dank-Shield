@@ -14,6 +14,8 @@ from typing import Any, Awaitable, Callable, Mapping
 
 import discord
 
+from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+
 from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
 from ..interaction_guard import log_interaction_failure, run_guarded_interaction, safe_send_interaction
 from ..settings_registry import (
@@ -1644,7 +1646,7 @@ class StarterPackImportModal(discord.ui.Modal, title="Import Starter Filter Pack
 
 class ProtectionCenterView(discord.ui.View):
     def __init__(self, *, author_id: int, cfg: Any | None = None, spam: dict[str, Any] | None = None) -> None:
-        super().__init__(timeout=900)
+        super().__init__(timeout=PRIVATE_MENU_TTL_SECONDS)
         self.author_id = int(author_id)
         self.cfg = cfg
         self.spam = dict(spam or {})

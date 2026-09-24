@@ -302,15 +302,16 @@ def test_delayed_fallback_claims_click_when_persistent_dispatch_misses(
     asyncio.run(scenario())
 
 
-def test_persisted_panel_message_id_binds_exact_message_without_history_scan(
+def test_saved_current_application_panel_binds_exact_message_without_rest(
     monkeypatch,
 ) -> None:
     async def scenario() -> None:
         class FakeGuild:
             id = 77
+            me = SimpleNamespace(id=42)
 
             def get_channel(self, _channel_id: int):
-                raise AssertionError("persisted panel binding must not scan a channel")
+                raise AssertionError("known current application must not use REST")
 
         fake_bot = FakeBot()
         sentinel_view = object()
@@ -321,6 +322,7 @@ def test_persisted_panel_message_id_binds_exact_message_without_history_scan(
             FakeGuild(),
             {
                 runtime._BASIC_VERIFY_PANEL_MESSAGE_ID_KEY: "123456",
+                runtime._BASIC_VERIFY_PANEL_APPLICATION_ID_KEY: "42",
                 "verify_channel_id": "999",
             },
         )
@@ -328,6 +330,256 @@ def test_persisted_panel_message_id_binds_exact_message_without_history_scan(
         assert result == "bound"
         assert fake_bot.views == [(sentinel_view, 123456)]
         assert 123456 in runtime._BOUND_PANEL_MESSAGE_IDS
+
+    asyncio.run(scenario())
+
+
+def test_saved_panel_without_application_identity_fetches_and_migrates(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        writes: list[tuple[int, int, int]] = []
+        fetched: list[int] = []
+
+        class FakeTextChannel:
+            id = 99
+
+            async def fetch_message(self, message_id: int):
+                fetched.append(message_id)
+                return SimpleNamespace(
+                    id=message_id,
+                    author=SimpleNamespace(id=42),
+                    components=[
+                        SimpleNamespace(
+                            custom_id=runtime.BASIC_VERIFY_CUSTOM_ID,
+                            children=[],
+                        )
+                    ],
+                    embeds=[],
+                )
+
+        class FakeGuild:
+            id = 77
+            me = SimpleNamespace(id=42)
+
+            def get_channel(self, channel_id: int):
+                assert channel_id == 99
+                return FakeTextChannel()
+
+        async def no_reserve(*, label: str) -> None:
+            assert "identity fetch" in label
+
+        async def fake_persist(
+            guild_id: int,
+            message_id: int,
+            *,
+            application_id: int = 0,
+        ) -> None:
+            writes.append((guild_id, message_id, application_id))
+
+        fake_bot = FakeBot()
+        sentinel_view = object()
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+        monkeypatch.setattr(runtime, "BasicVerifyView", lambda: sentinel_view)
+        monkeypatch.setattr(runtime, "_reserve_basic_verify_recovery_request", no_reserve)
+        monkeypatch.setattr(runtime, "_persist_basic_verify_panel_message_id", fake_persist)
+
+        result = await runtime._reconcile_one_basic_verify_panel(
+            fake_bot,
+            FakeGuild(),
+            {
+                runtime._BASIC_VERIFY_PANEL_MESSAGE_ID_KEY: "123456",
+                "verify_channel_id": "99",
+            },
+            allow_legacy_rest=True,
+        )
+
+        assert result == "migrated_current"
+        assert fetched == [123456]
+        assert writes == [(77, 123456, 42)]
+        assert fake_bot.views == [(sentinel_view, 123456)]
+
+    asyncio.run(scenario())
+
+
+def test_saved_foreign_application_panel_is_replaced(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        replacement_calls: list[tuple[int, bool]] = []
+        lifecycle: list[str] = []
+
+        class FakeTextChannel:
+            id = 99
+
+            async def fetch_message(self, message_id: int):
+                return SimpleNamespace(
+                    id=message_id,
+                    author=SimpleNamespace(id=999),
+                    components=[
+                        SimpleNamespace(
+                            custom_id=runtime.BASIC_VERIFY_CUSTOM_ID,
+                            children=[],
+                        )
+                    ],
+                    embeds=[],
+                )
+
+        class FakeGuild:
+            id = 77
+            me = SimpleNamespace(id=42)
+
+            def get_channel(self, channel_id: int):
+                assert channel_id == 99
+                return FakeTextChannel()
+
+        async def no_reserve(*, label: str) -> None:
+            assert "identity fetch" in label
+
+        async def fake_delete(_message) -> bool:
+            lifecycle.append("delete")
+            return True
+
+        async def fake_post(
+            channel,
+            *,
+            actor_id: int = 0,
+            bot_instance=None,
+            require_history_scan_for_post: bool = False,
+        ) -> str:
+            assert bot_instance is fake_bot
+            lifecycle.append("post")
+            replacement_calls.append((channel.id, require_history_scan_for_post))
+            return "posted"
+
+        fake_bot = FakeBot()
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+        monkeypatch.setattr(runtime, "_reserve_basic_verify_recovery_request", no_reserve)
+        monkeypatch.setattr(runtime, "_delete_stale_foreign_basic_verify_panel", fake_delete)
+        monkeypatch.setattr(runtime, "post_basic_verify_panel", fake_post)
+
+        result = await runtime._reconcile_one_basic_verify_panel(
+            fake_bot,
+            FakeGuild(),
+            {
+                runtime._BASIC_VERIFY_PANEL_MESSAGE_ID_KEY: "123456",
+                runtime._BASIC_VERIFY_PANEL_APPLICATION_ID_KEY: "999",
+                "verify_channel_id": "99",
+            },
+            allow_legacy_rest=True,
+        )
+
+        assert result == "replaced_foreign_deleted"
+        assert replacement_calls == [(99, True)]
+        assert lifecycle == ["post", "delete"]
+
+    asyncio.run(scenario())
+
+
+def test_foreign_panel_is_preserved_when_replacement_cannot_be_confirmed(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        lifecycle: list[str] = []
+
+        class FakeTextChannel:
+            id = 99
+
+            async def fetch_message(self, message_id: int):
+                return SimpleNamespace(
+                    id=message_id,
+                    author=SimpleNamespace(id=999),
+                    components=[
+                        SimpleNamespace(
+                            custom_id=runtime.BASIC_VERIFY_CUSTOM_ID,
+                            children=[],
+                        )
+                    ],
+                    embeds=[],
+                )
+
+        class FakeGuild:
+            id = 77
+            me = SimpleNamespace(id=42)
+
+            def get_channel(self, channel_id: int):
+                assert channel_id == 99
+                return FakeTextChannel()
+
+        async def no_reserve(*, label: str) -> None:
+            assert "identity fetch" in label
+
+        async def forbidden_delete(_message) -> bool:
+            lifecycle.append("delete")
+            raise AssertionError("stale panel must survive a failed replacement")
+
+        async def fake_post(
+            channel,
+            *,
+            actor_id: int = 0,
+            bot_instance=None,
+            require_history_scan_for_post: bool = False,
+        ) -> str:
+            _ = actor_id
+            assert bot_instance is fake_bot
+            assert require_history_scan_for_post is True
+            lifecycle.append("post")
+            return "scan_failed"
+
+        fake_bot = FakeBot()
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+        monkeypatch.setattr(runtime, "_reserve_basic_verify_recovery_request", no_reserve)
+        monkeypatch.setattr(runtime, "_delete_stale_foreign_basic_verify_panel", forbidden_delete)
+        monkeypatch.setattr(runtime, "post_basic_verify_panel", fake_post)
+
+        result = await runtime._reconcile_one_basic_verify_panel(
+            fake_bot,
+            FakeGuild(),
+            {
+                runtime._BASIC_VERIFY_PANEL_MESSAGE_ID_KEY: "123456",
+                runtime._BASIC_VERIFY_PANEL_APPLICATION_ID_KEY: "999",
+                "verify_channel_id": "99",
+            },
+            allow_legacy_rest=True,
+        )
+
+        assert result == "foreign_replacement_scan_failed"
+        assert lifecycle == ["post"]
+
+    asyncio.run(scenario())
+
+
+def test_saved_unknown_application_panel_respects_startup_rest_cap(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        class FakeTextChannel:
+            id = 99
+
+            async def fetch_message(self, _message_id: int):
+                raise AssertionError("REST must remain deferred when budget is exhausted")
+
+        class FakeGuild:
+            id = 77
+            me = SimpleNamespace(id=42)
+
+            def get_channel(self, channel_id: int):
+                assert channel_id == 99
+                return FakeTextChannel()
+
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+
+        result = await runtime._reconcile_one_basic_verify_panel(
+            FakeBot(),
+            FakeGuild(),
+            {
+                runtime._BASIC_VERIFY_PANEL_MESSAGE_ID_KEY: "123456",
+                "verify_channel_id": "99",
+            },
+            allow_legacy_rest=False,
+        )
+
+        assert result == "legacy_deferred"
 
     asyncio.run(scenario())
 
@@ -388,7 +640,13 @@ def test_legacy_current_bot_panel_is_updated_persisted_and_bound(
                 "basic_verify_enabled": True,
             }
 
-        async def fake_persist(guild_id: int, message_id: int) -> None:
+        async def fake_persist(
+            guild_id: int,
+            message_id: int,
+            *,
+            application_id: int = 0,
+        ) -> None:
+            _ = application_id
             writes.append((guild_id, message_id))
 
         monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
@@ -470,7 +728,13 @@ def test_foreign_legacy_panel_causes_fresh_current_bot_panel(
                 "basic_verify_enabled": True,
             }
 
-        async def fake_persist(guild_id: int, message_id: int) -> None:
+        async def fake_persist(
+            guild_id: int,
+            message_id: int,
+            *,
+            application_id: int = 0,
+        ) -> None:
+            _ = application_id
             writes.append((guild_id, message_id))
 
         monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)

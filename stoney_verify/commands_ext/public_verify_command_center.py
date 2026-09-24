@@ -6,6 +6,8 @@ from typing import Any, Optional
 
 import discord
 
+from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+
 from stoney_verify.interaction_guard import run_guarded_interaction
 from ..guild_config import get_guild_config, invalidate_guild_config
 from .public_staff_scope import scoped_interaction_is_staff
@@ -97,7 +99,7 @@ async def _require_staff(interaction: discord.Interaction) -> bool:
 
 
 class _OwnedView(discord.ui.View):
-    def __init__(self, owner_id: int, *, timeout: float = 900) -> None:
+    def __init__(self, owner_id: int, *, timeout: float = PRIVATE_MENU_TTL_SECONDS) -> None:
         super().__init__(timeout=timeout)
         self.owner_id = int(owner_id)
 

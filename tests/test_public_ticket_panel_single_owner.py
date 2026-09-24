@@ -140,12 +140,86 @@ def test_expired_interaction_state_is_pruned_on_next_click() -> None:
     asyncio.run(scenario())
 
 
-def test_persistent_view_is_primary_owner_and_fallback_is_only_failure_path() -> None:
+def test_defer_failure_is_not_treated_as_a_claim() -> None:
+    async def scenario() -> None:
+        class Response:
+            def is_done(self) -> bool:
+                return False
+
+            async def defer(self, **_kwargs) -> None:
+                raise RuntimeError("simulated ack failure")
+
+        interaction = SimpleNamespace(response=Response())
+        assert await panel._defer(interaction, True) is False
+
+    asyncio.run(scenario())
+
+
+def test_preacknowledged_confirm_path_remains_valid() -> None:
+    async def scenario() -> None:
+        class Response:
+            def is_done(self) -> bool:
+                return True
+
+            async def defer(self, **_kwargs) -> None:
+                raise AssertionError("already-acknowledged interaction must not defer again")
+
+        interaction = SimpleNamespace(response=Response())
+        assert await panel._defer(interaction, True) is True
+
+    asyncio.run(scenario())
+
+
+def test_panel_click_stops_before_lookup_when_ack_fails(monkeypatch) -> None:
+    async def scenario() -> None:
+        async def failed_ack(_interaction, _thinking=False) -> bool:
+            return False
+
+        async def forbidden_lookup(*_args, **_kwargs):
+            raise AssertionError("ticket lookup must not run after ack failure")
+
+        monkeypatch.setattr(panel, "_defer", failed_ack)
+        monkeypatch.setattr(panel, "_existing_open", forbidden_lookup)
+
+        await panel._handle_panel_button_core(
+            SimpleNamespace(guild=SimpleNamespace(id=77), user=SimpleNamespace(id=88))
+        )
+
+    asyncio.run(scenario())
+
+
+def test_ticket_creation_stops_before_category_lookup_when_ack_fails(monkeypatch) -> None:
+    async def scenario() -> None:
+        async def failed_ack(_interaction, _thinking=False) -> bool:
+            return False
+
+        async def forbidden_category(*_args, **_kwargs):
+            raise AssertionError("category lookup must not run after ack failure")
+
+        monkeypatch.setattr(panel, "_defer", failed_ack)
+        monkeypatch.setattr(panel, "_active_category", forbidden_category)
+
+        await panel._create_ticket(
+            SimpleNamespace(guild=SimpleNamespace(id=77), user=SimpleNamespace(id=88)),
+            {"slug": "support", "name": "Support"},
+        )
+
+    asyncio.run(scenario())
+
+
+def test_clean_panel_delegates_runtime_registration_to_single_owner() -> None:
     source = PANEL.read_text(encoding="utf-8")
     assert "super().__init__(timeout=None)" in source
-    assert "if not _PANEL_VIEW_REGISTERED and not _PANEL_FALLBACK_LISTENER_REGISTERED" in source
-    assert "persistent view unavailable; registered Create Ticket fallback listener" in source
-    assert "elif _PANEL_VIEW_REGISTERED:" in source
+    assert "install_public_ticket_panel_runtime" in source
+    assert "ticket_panel_runtime_status" in source
+    assert "bot.add_listener(_component_fallback_listener" not in source
+    assert "elif _PANEL_VIEW_REGISTERED:" not in source
+
+
+def test_known_historical_public_ticket_button_ids_stay_compatible() -> None:
+    assert panel.PANEL_BUTTON_CUSTOM_ID in panel.PANEL_BUTTON_CUSTOM_IDS
+    assert "sv:ticket:panel:create:v6" in panel.PANEL_BUTTON_CUSTOM_IDS
+    assert "ticket_create" in panel.PANEL_BUTTON_CUSTOM_IDS
 
 
 def test_owner_file_keeps_category_and_persistent_number_ownership() -> None:

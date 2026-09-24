@@ -9,8 +9,9 @@ unrelated command registration failure skips the public ticket command module.
 """
 
 import asyncio
+import os
 import time
-from typing import Any
+from typing import Any, Mapping
 
 import discord
 
@@ -18,11 +19,36 @@ from .commands_ext import public_ticket_panel_clean as panel
 
 _RUNTIME_VIEW_REGISTERED = False
 _RUNTIME_FALLBACK_LISTENER_REGISTERED = False
+_RUNTIME_READY_RECONCILER_REGISTERED = False
+_RUNTIME_READY_RECONCILE_STARTED = False
 _RUNTIME_REGISTRATION_ERROR = ""
+_BOUND_PANEL_MESSAGE_IDS: set[int] = set()
+
+_TICKET_PANEL_APPLICATION_ID_KEY = "ticket_panel_application_id"
 
 _TICKET_SELECT_COMPONENT_TYPE = 3
 _TICKET_PICKER_CONTENT = "Choose a ticket type."
 _TICKET_PICKER_TITLE = "Create Ticket"
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        raw = str(os.getenv(name, "") or "").strip()
+        if not raw:
+            return int(default)
+        return max(0, int(raw))
+    except Exception:
+        return int(default)
+
+
+def _legacy_panel_reconcile_limit() -> int:
+    return max(
+        1,
+        min(
+            200,
+            _env_int("DANK_TICKET_PANEL_LEGACY_RECONCILE_PER_START", 50),
+        ),
+    )
 
 
 def _custom_id(interaction: discord.Interaction) -> str:
@@ -88,6 +114,7 @@ def _trace(
             f"interaction={_safe_id(getattr(interaction, 'id', 0))}",
             f"guild={_safe_id(getattr(guild, 'id', 0))}",
             f"user={_safe_id(getattr(user, 'id', 0))}",
+            f"custom_id={_custom_id(interaction)!r}",
             f"age_ms={_interaction_age_ms(interaction)}",
             f"response_done={_response_done(interaction)}",
         ]
@@ -277,11 +304,443 @@ async def _ticket_panel_fallback_listener(
             pass
 
 
+def bind_public_ticket_panel_message(bot: Any, message_id: int) -> bool:
+    mid = _safe_id(message_id)
+    if mid <= 0:
+        return False
+    if mid in _BOUND_PANEL_MESSAGE_IDS:
+        return True
+    try:
+        add_view = getattr(bot, "add_view", None)
+        if not callable(add_view):
+            return False
+        add_view(panel.PublicCreateTicketPanelView(), message_id=mid)
+        _BOUND_PANEL_MESSAGE_IDS.add(mid)
+        return True
+    except Exception as exc:
+        try:
+            print(
+                "⚠️ ticket_panel_runtime exact message bind failed "
+                f"message={mid} error={type(exc).__name__}: {exc}"
+            )
+        except Exception:
+            pass
+        return False
+
+
+def _row_ticket_panel_config(row: Mapping[str, Any]) -> dict[str, Any]:
+    cfg: dict[str, Any] = {}
+    try:
+        for bucket in ("settings", "config", "metadata", "meta"):
+            nested = row.get(bucket)
+            if isinstance(nested, Mapping):
+                cfg.update(dict(nested))
+        for key, value in row.items():
+            if key not in {"settings", "config", "metadata", "meta"} and value is not None:
+                cfg[key] = value
+    except Exception:
+        pass
+    return cfg
+
+
+async def _discover_ticket_panel_rows(
+    guild_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    if not guild_ids:
+        return {}
+
+    try:
+        from .globals import get_supabase
+        from .guild_config import GUILD_CONFIG_TABLE_FALLBACKS
+    except Exception:
+        return {}
+
+    sb = get_supabase()
+    if sb is None:
+        return {}
+
+    def _read() -> dict[int, dict[str, Any]]:
+        found: dict[int, dict[str, Any]] = {}
+        for start in range(0, len(guild_ids), 100):
+            batch = guild_ids[start : start + 100]
+            rows = None
+            for table_name in GUILD_CONFIG_TABLE_FALLBACKS:
+                try:
+                    response = (
+                        sb.table(table_name)
+                        .select("guild_id,settings,config,metadata,meta")
+                        .in_("guild_id", [str(gid) for gid in batch])
+                        .execute()
+                    )
+                    rows = list(getattr(response, "data", None) or [])
+                    break
+                except Exception:
+                    continue
+            for row in list(rows or []):
+                if not isinstance(row, Mapping):
+                    continue
+                gid = _safe_id(row.get("guild_id"))
+                if gid <= 0:
+                    continue
+                cfg = _row_ticket_panel_config(row)
+                if (
+                    _safe_id(cfg.get("ticket_panel_channel_id")) > 0
+                    or _safe_id(cfg.get("support_channel_id")) > 0
+                ):
+                    found[gid] = cfg
+        return found
+
+    try:
+        return await asyncio.to_thread(_read)
+    except Exception as exc:
+        try:
+            print(
+                "⚠️ ticket_panel_runtime panel discovery failed "
+                f"error={type(exc).__name__}: {exc}"
+            )
+        except Exception:
+            pass
+        return {}
+
+
+def _message_custom_ids(message: Any) -> set[str]:
+    found: set[str] = set()
+
+    def visit(component: Any) -> None:
+        try:
+            custom_id = str(getattr(component, "custom_id", "") or "").strip()
+            if custom_id:
+                found.add(custom_id)
+        except Exception:
+            pass
+        try:
+            for child in list(getattr(component, "children", None) or []):
+                visit(child)
+        except Exception:
+            pass
+
+    try:
+        for component in list(getattr(message, "components", None) or []):
+            visit(component)
+    except Exception:
+        pass
+    return found
+
+
+def _message_looks_like_ticket_panel(message: Any) -> bool:
+    ids = _message_custom_ids(message)
+    if ids.intersection(set(panel.PANEL_BUTTON_CUSTOM_IDS)):
+        return True
+
+    try:
+        embeds = list(getattr(message, "embeds", None) or [])
+    except Exception:
+        embeds = []
+    for embed in embeds:
+        title = str(getattr(embed, "title", "") or "").strip()
+        footer = str(getattr(getattr(embed, "footer", None), "text", "") or "").strip()
+        if title == "🎫 Need help? Open a ticket":
+            return True
+        if "Dank Shield ticket panel" in footer:
+            return True
+    return False
+
+
+async def _reserve_recovery_requests(
+    weight: int,
+    *,
+    label: str,
+) -> None:
+    try:
+        from .startup_guards.discord_api_safety import (
+            reserve_recovery_discord_rest_requests,
+        )
+        await reserve_recovery_discord_rest_requests(
+            max(1, int(weight)),
+            label=label,
+        )
+    except Exception:
+        return
+
+
+async def _persist_ticket_panel_identity(
+    guild: discord.Guild,
+    channel: discord.TextChannel,
+    message: discord.Message,
+) -> None:
+    await panel.persist_public_ticket_panel_identity(
+        int(guild.id),
+        int(channel.id),
+        int(message.id),
+        application_id=_safe_id(
+            getattr(getattr(guild, "me", None), "id", 0)
+        ),
+    )
+
+
+async def _post_current_ticket_panel(
+    bot: Any,
+    channel: discord.TextChannel,
+) -> discord.Message:
+    await _reserve_recovery_requests(
+        1,
+        label=(
+            "ticket panel replacement post "
+            f"guild={int(channel.guild.id)} channel={int(channel.id)}"
+        ),
+    )
+    message = await panel.post_public_ticket_panel_message(channel)
+    bind_public_ticket_panel_message(bot, int(message.id))
+    return message
+
+
+async def _delete_stale_foreign_panel_if_safe(
+    message: discord.Message,
+) -> bool:
+    channel = getattr(message, "channel", None)
+    guild = getattr(message, "guild", None)
+    if not isinstance(channel, discord.TextChannel) or not isinstance(guild, discord.Guild):
+        return False
+    if not _message_looks_like_ticket_panel(message):
+        return False
+
+    me = getattr(guild, "me", None)
+    try:
+        if me is None or not bool(channel.permissions_for(me).manage_messages):
+            return False
+    except Exception:
+        return False
+
+    try:
+        await _reserve_recovery_requests(
+            1,
+            label=(
+                "ticket panel stale foreign delete "
+                f"guild={int(guild.id)} channel={int(channel.id)}"
+            ),
+        )
+        await message.delete()
+        return True
+    except Exception:
+        return False
+
+
+async def _reconcile_saved_ticket_panel(
+    bot: Any,
+    guild: discord.Guild,
+    cfg: Mapping[str, Any],
+    *,
+    allow_legacy_rest: bool,
+) -> str:
+    channel_id = _safe_id(
+        cfg.get("ticket_panel_channel_id")
+        or cfg.get("support_channel_id")
+        or cfg.get("ticket_support_channel_id")
+    )
+    message_id = _safe_id(
+        cfg.get("ticket_panel_message_id")
+        or cfg.get("support_message_id")
+        or cfg.get("ticket_support_message_id")
+    )
+    saved_application_id = _safe_id(
+        cfg.get(_TICKET_PANEL_APPLICATION_ID_KEY)
+    )
+    current_application_id = _safe_id(
+        getattr(getattr(guild, "me", None), "id", 0)
+    )
+
+    channel = guild.get_channel(channel_id) if channel_id > 0 else None
+    if not isinstance(channel, discord.TextChannel):
+        return "no_channel"
+
+    if message_id > 0 and (
+        saved_application_id > 0
+        and saved_application_id == current_application_id
+    ):
+        return (
+            "bound"
+            if bind_public_ticket_panel_message(bot, message_id)
+            else "bind_failed"
+        )
+
+    if not allow_legacy_rest:
+        return "legacy_deferred"
+
+    message: discord.Message | None = None
+    if message_id > 0:
+        try:
+            await _reserve_recovery_requests(
+                1,
+                label=(
+                    "ticket panel identity fetch "
+                    f"guild={int(guild.id)} channel={int(channel.id)}"
+                ),
+            )
+            message = await channel.fetch_message(message_id)
+        except discord.NotFound:
+            return "missing_message"
+        except Exception as exc:
+            try:
+                print(
+                    "⚠️ ticket_panel_runtime saved panel fetch failed "
+                    f"guild={guild.id} channel={channel.id} message={message_id} "
+                    f"error={type(exc).__name__}: {exc}"
+                )
+            except Exception:
+                pass
+            return "fetch_failed"
+    else:
+        try:
+            await _reserve_recovery_requests(
+                1,
+                label=(
+                    "ticket panel legacy history "
+                    f"guild={int(guild.id)} channel={int(channel.id)}"
+                ),
+            )
+            async for candidate in channel.history(limit=60):
+                if _message_looks_like_ticket_panel(candidate):
+                    message = candidate
+                    break
+        except Exception:
+            return "scan_failed"
+        if message is None:
+            return "not_found"
+
+    author_id = _safe_id(
+        getattr(getattr(message, "author", None), "id", 0)
+    )
+
+    if author_id == current_application_id and current_application_id > 0:
+        ids = _message_custom_ids(message)
+        # Historical IDs remain accepted by the fallback so old panels never
+        # dead-end, but once we have the real message in hand migrate it to the
+        # single canonical button ID. Compatibility is an entry alias, not a
+        # second permanent panel generation.
+        if panel.PANEL_BUTTON_CUSTOM_ID not in ids:
+            try:
+                await _reserve_recovery_requests(
+                    1,
+                    label=(
+                        "ticket panel legacy refresh "
+                        f"guild={int(guild.id)} channel={int(channel.id)}"
+                    ),
+                )
+                await message.edit(
+                    embed=panel._panel_embed(guild),
+                    view=panel.PublicCreateTicketPanelView(),
+                )
+            except Exception:
+                return "refresh_failed"
+
+        await _persist_ticket_panel_identity(guild, channel, message)
+        return (
+            "migrated_current"
+            if bind_public_ticket_panel_message(bot, int(message.id))
+            else "bind_failed"
+        )
+
+    # A component message created by a different Discord application cannot
+    # route its button interaction to the currently running application.
+    # Replace only a message that is clearly the configured ticket panel.
+    if _message_looks_like_ticket_panel(message):
+        replacement = await _post_current_ticket_panel(bot, channel)
+        deleted = await _delete_stale_foreign_panel_if_safe(message)
+        return (
+            "replaced_foreign_deleted"
+            if deleted
+            else "replaced_foreign"
+        )
+
+    return "saved_message_not_ticket_panel"
+
+
+async def _reconcile_ticket_panels_after_ready(bot: Any) -> None:
+    global _RUNTIME_READY_RECONCILE_STARTED
+    if _RUNTIME_READY_RECONCILE_STARTED:
+        return
+    _RUNTIME_READY_RECONCILE_STARTED = True
+
+    try:
+        guilds = {
+            int(guild.id): guild
+            for guild in list(getattr(bot, "guilds", []) or [])
+            if isinstance(guild, discord.Guild)
+        }
+        rows = await _discover_ticket_panel_rows(sorted(guilds))
+        legacy_limit = _legacy_panel_reconcile_limit()
+        legacy_used = 0
+        counts: dict[str, int] = {}
+
+        for gid, cfg in rows.items():
+            guild = guilds.get(int(gid))
+            if not isinstance(guild, discord.Guild):
+                continue
+
+            current_application_id = _safe_id(
+                getattr(getattr(guild, "me", None), "id", 0)
+            )
+            saved_application_id = _safe_id(
+                cfg.get(_TICKET_PANEL_APPLICATION_ID_KEY)
+            )
+            needs_legacy_rest = not (
+                saved_application_id > 0
+                and saved_application_id == current_application_id
+            )
+            allow_legacy_rest = True
+            if needs_legacy_rest:
+                if legacy_used >= legacy_limit:
+                    allow_legacy_rest = False
+                else:
+                    legacy_used += 1
+
+            result = await _reconcile_saved_ticket_panel(
+                bot,
+                guild,
+                cfg,
+                allow_legacy_rest=allow_legacy_rest,
+            )
+            counts[result] = counts.get(result, 0) + 1
+            await asyncio.sleep(0)
+
+        print(
+            "✅ ticket_panel_runtime reconciliation complete "
+            f"guilds={len(rows)} legacy_rest={legacy_used} results={counts}"
+        )
+    except Exception as exc:
+        try:
+            print(
+                "⚠️ ticket_panel_runtime reconciliation failed "
+                f"error={type(exc).__name__}: {exc}"
+            )
+        except Exception:
+            pass
+
+
+async def _ticket_panel_ready_listener(bot: Any) -> None:
+    try:
+        asyncio.create_task(
+            _reconcile_ticket_panels_after_ready(bot),
+            name="ticket-panel-reconcile",
+        )
+    except Exception as exc:
+        try:
+            print(
+                "⚠️ ticket_panel_runtime could not schedule reconciliation "
+                f"error={type(exc).__name__}: {exc}"
+            )
+        except Exception:
+            pass
+
+
 def ticket_panel_runtime_status() -> dict[str, Any]:
     return {
         "persistent_view_registered": bool(_RUNTIME_VIEW_REGISTERED),
         "fallback_listener_registered": bool(
             _RUNTIME_FALLBACK_LISTENER_REGISTERED
+        ),
+        "panel_reconciler_registered": bool(
+            _RUNTIME_READY_RECONCILER_REGISTERED
         ),
         "ready": bool(
             _RUNTIME_VIEW_REGISTERED
@@ -305,25 +764,14 @@ def install_public_ticket_panel_runtime(
     """
     global _RUNTIME_VIEW_REGISTERED
     global _RUNTIME_FALLBACK_LISTENER_REGISTERED
+    global _RUNTIME_READY_RECONCILER_REGISTERED
     global _RUNTIME_REGISTRATION_ERROR
 
     errors: list[str] = []
 
-    # Reconcile with the command registrar when this function is called after
-    # command setup in tests or alternate entrypoints.  In normal production
-    # startup this installer runs first and then marks the clean registrar's
-    # flags so registration remains single-owner and idempotent.
-    if bool(getattr(panel, "_PANEL_VIEW_REGISTERED", False)):
-        _RUNTIME_VIEW_REGISTERED = True
-    elif (
-        bool(getattr(panel, "_PANEL_FALLBACK_LISTENER_REGISTERED", False))
-        and not _RUNTIME_FALLBACK_LISTENER_REGISTERED
-    ):
-        # The clean registrar sets this flag without a listener when its view
-        # succeeds, so only trust it as evidence of a real fallback when the
-        # persistent view itself is absent.
-        _RUNTIME_FALLBACK_LISTENER_REGISTERED = True
-
+    # This module is the runtime registration authority. The clean command
+    # registrar mirrors these flags after calling this installer, but its flags
+    # are never trusted as proof that Discord registrations actually exist.
     if not _RUNTIME_VIEW_REGISTERED:
         try:
             add_view = getattr(bot, "add_view", None)
@@ -357,6 +805,25 @@ def install_public_ticket_panel_runtime(
                 f"{type(exc).__name__}: {exc}"
             )
 
+    if not _RUNTIME_READY_RECONCILER_REGISTERED:
+        try:
+            add_listener = getattr(bot, "add_listener", None)
+            if not callable(add_listener):
+                raise RuntimeError(
+                    "Discord client has no callable add_listener"
+                )
+
+            async def _ready_reconciler() -> None:
+                await _ticket_panel_ready_listener(bot)
+
+            add_listener(_ready_reconciler, "on_ready")
+            _RUNTIME_READY_RECONCILER_REGISTERED = True
+        except Exception as exc:
+            errors.append(
+                "panel reconciler: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
     ready = bool(
         _RUNTIME_VIEW_REGISTERED
         or _RUNTIME_FALLBACK_LISTENER_REGISTERED
@@ -366,7 +833,8 @@ def install_public_ticket_panel_runtime(
     if ready and not errors:
         print(
             "✅ ticket_panel_runtime ready "
-            "persistent_view=True fallback_listener=True"
+            "persistent_view=True fallback_listener=True "
+            f"panel_reconciler={_RUNTIME_READY_RECONCILER_REGISTERED}"
         )
     elif ready:
         print(
@@ -388,6 +856,7 @@ def install_public_ticket_panel_runtime(
 
 
 __all__ = [
+    "bind_public_ticket_panel_message",
     "install_public_ticket_panel_runtime",
     "ticket_panel_runtime_status",
 ]

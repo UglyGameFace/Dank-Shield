@@ -6,6 +6,8 @@ from typing import Any, Optional
 
 import discord
 
+from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+
 from stoney_verify.share_router_resources import (
     DEFAULT_SHARE_CHANNELS,
     SHARE_ROUTER_CATEGORY_NAME,
@@ -198,7 +200,7 @@ async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
 
 
 class _OwnedView(discord.ui.View):
-    def __init__(self, owner_id: int, *, timeout: float = 900) -> None:
+    def __init__(self, owner_id: int, *, timeout: float = PRIVATE_MENU_TTL_SECONDS) -> None:
         super().__init__(timeout=timeout)
         self.owner_id = int(owner_id)
 

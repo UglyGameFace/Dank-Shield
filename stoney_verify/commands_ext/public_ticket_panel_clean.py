@@ -35,7 +35,15 @@ _MENU_TTL_SECONDS = 900.0
 _INTERACTION_TTL_SECONDS = 90.0
 
 PANEL_BUTTON_CUSTOM_ID = "sv:ticket:panel:create:clean:v1"
-PANEL_BUTTON_CUSTOM_IDS = {PANEL_BUTTON_CUSTOM_ID}
+LEGACY_PANEL_BUTTON_CUSTOM_IDS = frozenset(
+    {
+        "sv:ticket:panel:create:v6",
+        "ticket_create",
+    }
+)
+PANEL_BUTTON_CUSTOM_IDS = frozenset(
+    {PANEL_BUTTON_CUSTOM_ID, *LEGACY_PANEL_BUTTON_CUSTOM_IDS}
+)
 
 # Keep compatibility for callers/tests that still reference DEFAULT_ROWS, but
 # derive it from the one managed category catalog instead of maintaining a
@@ -507,12 +515,27 @@ async def _edit_or_reply(i: discord.Interaction, *, content: str, embed: Optiona
         await _ephemeral(i, content, embed=embed, view=view)
 
 
-async def _defer(i: discord.Interaction, thinking: bool = False) -> None:
+async def _defer(i: discord.Interaction, thinking: bool = False) -> bool:
+    """Ensure the interaction is acknowledged before expensive ticket work.
+
+    A response that was already completed by the same canonical flow is valid
+    (for example Confirm edits its menu before ticket creation). A real defer
+    failure on an otherwise-unanswered interaction is not: callers must stop
+    before DB/category/channel mutation.
+    """
     try:
-        if not i.response.is_done():
-            await i.response.defer(ephemeral=True, thinking=thinking)
+        if i.response.is_done():
+            return True
+        await i.response.defer(ephemeral=True, thinking=thinking)
+        return True
     except Exception as e:
+        try:
+            if i.response.is_done():
+                return True
+        except Exception:
+            pass
         _warn(f"defer failed error={type(e).__name__}: {_short(e, 220)}")
+        return False
 
 
 async def _create_synced_ticket_channel(guild: discord.Guild, owner: discord.Member, parent: discord.CategoryChannel, row: Dict[str, Any], number: int) -> discord.TextChannel:
@@ -540,7 +563,8 @@ async def _create_synced_ticket_channel(guild: discord.Guild, owner: discord.Mem
 
 
 async def _create_ticket(i: discord.Interaction, row: Dict[str, Any]) -> None:
-    await _defer(i, True)
+    if not await _defer(i, True):
+        return
     guild = i.guild
     owner = i.user if isinstance(i.user, discord.Member) else None
     if guild is None or owner is None:
@@ -824,7 +848,8 @@ class TicketSelectView(discord.ui.View):
 async def _handle_panel_button_core(i: discord.Interaction) -> None:
     guild = i.guild
     member = _member_from_interaction(i)
-    await _defer(i, True)
+    if not await _defer(i, True):
+        return
     if guild is None or member is None:
         return await _ephemeral(i, "❌ This must be used inside a server.")
     try:
@@ -896,29 +921,64 @@ class PublicCreateTicketPanelView(discord.ui.View):
         await _handle_panel_button(i)
 
 
-async def _component_fallback_listener(i: discord.Interaction) -> None:
-    try:
-        if i.type is not discord.InteractionType.component:
-            return
-        data = i.data if isinstance(i.data, dict) else {}
-        custom_id = _safe_str(data.get("custom_id"))
-        if custom_id not in PANEL_BUTTON_CUSTOM_IDS:
-            return
-        await asyncio.sleep(0.15)
-        if i.response.is_done():
-            return
-        _warn("persistent view missed Create Ticket button; fallback handled it")
-        await _handle_panel_button(i)
-    except Exception as e:
-        _warn(f"panel fallback listener crashed: {type(e).__name__}: {_short(e, 220)}")
-
-
 def _panel_embed(guild: discord.Guild) -> discord.Embed:
     e = discord.Embed(title="🎫 Need help? Open a ticket", description="Press **Create Ticket** below, then pick the ticket type.\n\nNo form first. No guessing. You can confirm the category before anything is created.", color=discord.Color.blurple(), timestamp=discord.utils.utcnow())
     e.add_field(name="How it works", value="1. Press **Create Ticket**\n2. Pick a ticket type\n3. Confirm or go back\n4. A private ticket channel opens", inline=False)
     e.add_field(name="Panel lifetime", value=public_panel_lifecycle_text("Create Ticket panel", "Private ticket type menus/confirm screens"), inline=False)
     e.set_footer(text=f"{guild.name} • Dank Shield ticket panel • category-menu")
     return e
+
+
+async def persist_public_ticket_panel_identity(
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+    *,
+    application_id: int = 0,
+) -> None:
+    try:
+        from ..guild_config import upsert_guild_config
+
+        payload = {
+            "ticket_panel_channel_id": str(int(channel_id)),
+            "ticket_panel_message_id": str(int(message_id)),
+            "__config_write_mode": "explicit_override",
+            "__config_write_source": "ticket_panel.identity",
+        }
+        if int(application_id or 0) > 0:
+            payload["ticket_panel_application_id"] = str(
+                int(application_id)
+            )
+        await upsert_guild_config(
+            int(guild_id),
+            payload,
+        )
+    except Exception as e:
+        _warn(
+            "saving panel config failed "
+            f"guild={guild_id} message={message_id}: "
+            f"{type(e).__name__}: {_short(e, 220)}"
+        )
+
+
+async def post_public_ticket_panel_message(
+    target: discord.TextChannel,
+) -> discord.Message:
+    guild = target.guild
+    msg = await target.send(
+        embed=_panel_embed(guild),
+        view=PublicCreateTicketPanelView(),
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+    await persist_public_ticket_panel_identity(
+        int(guild.id),
+        int(target.id),
+        int(msg.id),
+        application_id=int(
+            getattr(getattr(guild, "me", None), "id", 0) or 0
+        ),
+    )
+    return msg
 
 
 async def _post_panel(i: discord.Interaction, channel: Optional[discord.TextChannel] = None) -> None:
@@ -935,16 +995,28 @@ async def _post_panel(i: discord.Interaction, channel: Optional[discord.TextChan
     if missing:
         return await reply_once(i, {"content": f"❌ I cannot post in {target.mention}. Missing: {', '.join(missing)}.", "ephemeral": True})
     try:
-        msg = await target.send(embed=_panel_embed(guild), view=PublicCreateTicketPanelView(), allowed_mentions=discord.AllowedMentions.none())
+        msg = await post_public_ticket_panel_message(target)
     except Exception as e:
         return await reply_once(i, {"content": f"❌ Failed posting ticket panel in {target.mention}: `{type(e).__name__}: {_short(e, 220)}`", "ephemeral": True})
+
+    # Bind the exact newly-created message to the canonical restart runtime.
+    # Local import avoids making the panel implementation own runtime startup.
     try:
-        from .public_setup_config_writer import upsert_guild_config
-        from ..guild_config import invalidate_guild_config
-        await upsert_guild_config(guild.id, {"ticket_panel_channel_id": str(target.id), "ticket_panel_message_id": str(msg.id)})
-        invalidate_guild_config(guild.id)
-    except Exception as e:
-        _warn(f"saving panel config failed guild={guild.id}: {type(e).__name__}: {_short(e, 220)}")
+        from .. import ticket_panel_runtime
+        target_bot = getattr(i, "client", None)
+        if target_bot is None:
+            try:
+                from ..globals import bot as target_bot
+            except Exception:
+                target_bot = None
+        if target_bot is not None:
+            ticket_panel_runtime.bind_public_ticket_panel_message(
+                target_bot,
+                int(msg.id),
+            )
+    except Exception:
+        pass
+
     await reply_once(i, {"content": f"✅ Posted the public **category-menu Create Ticket** panel in {target.mention}.", "ephemeral": True})
 
 
@@ -1055,22 +1127,24 @@ def _ticket_panel_group() -> app_commands.Group:
 
 def register_public_ticket_panel_clean(bot: Any, tree: Any) -> None:
     global _PANEL_VIEW_REGISTERED, _PANEL_GROUP_REGISTERED, _PANEL_FALLBACK_LISTENER_REGISTERED
-    if not _PANEL_VIEW_REGISTERED:
-        try:
-            bot.add_view(PublicCreateTicketPanelView())
-            _PANEL_VIEW_REGISTERED = True
-            _log(f"registered persistent Create Ticket view custom_id={PANEL_BUTTON_CUSTOM_ID}")
-        except Exception as e:
-            _warn(f"could not register persistent view: {e!r}")
-    if not _PANEL_VIEW_REGISTERED and not _PANEL_FALLBACK_LISTENER_REGISTERED:
-        try:
-            bot.add_listener(_component_fallback_listener, "on_interaction")
-            _PANEL_FALLBACK_LISTENER_REGISTERED = True
-            _log("persistent view unavailable; registered Create Ticket fallback listener")
-        except Exception as e:
-            _warn(f"could not register Create Ticket fallback listener: {e!r}")
-    elif _PANEL_VIEW_REGISTERED:
-        _PANEL_FALLBACK_LISTENER_REGISTERED = True
+
+    # Runtime ownership belongs to ticket_panel_runtime. Do not independently
+    # register a view/listener here or infer that a fallback exists merely
+    # because add_view() succeeded.
+    try:
+        from ..ticket_panel_runtime import (
+            install_public_ticket_panel_runtime,
+            ticket_panel_runtime_status,
+        )
+        install_public_ticket_panel_runtime(bot, strict=False)
+        status = ticket_panel_runtime_status()
+        _PANEL_VIEW_REGISTERED = bool(status["persistent_view_registered"])
+        _PANEL_FALLBACK_LISTENER_REGISTERED = bool(
+            status["fallback_listener_registered"]
+        )
+    except Exception as e:
+        _warn(f"could not install canonical ticket panel runtime: {e!r}")
+
     if not _PANEL_GROUP_REGISTERED:
         try:
             if tree.get_command("ticket-panel", guild=None) is not None:
@@ -1087,5 +1161,7 @@ def register_public_ticket_panel_clean(bot: Any, tree: Any) -> None:
 
 __all__ = [
     "handle_public_ticket_panel_click",
+    "persist_public_ticket_panel_identity",
+    "post_public_ticket_panel_message",
     "register_public_ticket_panel_clean",
 ]

@@ -11,6 +11,8 @@ from typing import Any, Optional, Sequence
 
 import discord
 
+from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+
 from stoney_verify.community_lookup_service import (
     CommunityLookupError,
     WEATHER_LABELS,
@@ -150,7 +152,7 @@ async def _replace(
 
 
 class _OwnedView(discord.ui.View):
-    def __init__(self, owner_id: int, *, timeout: float = 900) -> None:
+    def __init__(self, owner_id: int, *, timeout: float = PRIVATE_MENU_TTL_SECONDS) -> None:
         super().__init__(timeout=timeout)
         self.owner_id = int(owner_id)
 
