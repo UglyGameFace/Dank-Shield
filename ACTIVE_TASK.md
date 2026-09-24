@@ -70,24 +70,30 @@ also wrote `exit_card_channel_id`.
 That crossed ownership boundaries: configuring an audit/event route silently
 changed the member-facing Exit Card Studio target.
 
-### 5. Live non-delivery reason is not proven from current production logs
+### 5. Production startup proves the router and operational route existed
 
-The active router already logs exact skip reasons:
+A recent production startup line from September 24 shows:
 
-- no configured join/leave route;
-- missing View Channel;
-- missing Send Messages;
-- missing Embed Links;
-- bot member unavailable;
-- send exception.
+`member lifecycle routes ready guild=1098088221457514609 ... join_log=1516001635023716443 ... staff=1516001634113687613`
 
-No current Dank Shield production log file containing a real failing join/leave
-event was available in the conversation/library search, so the exact live skip
-branch is not being guessed.
+The same line reported the old member-facing welcome/exit compatibility route as
+missing channel `1499880759622631475`.
 
-The user recently demonstrated broad channel-access failures, making route
-permissions a plausible dependency, but the implementation must expose runtime
-health directly rather than rely on inference.
+This proves, for that deployment:
+
+- the authoritative lifecycle router was active;
+- an operational join/leave route was configured and resolved;
+- the staff audit route was configured and resolved;
+- the member-facing welcome/exit compatibility mapping had stale channel state.
+
+The old startup line did **not** test whether the operational channel was
+writable, so it could not distinguish a healthy route from missing View Channel
+/ Send Messages / Embed Links. No real failing join/leave event line was present
+in the available production sample, so the exact live event-time skip branch is
+still not invented.
+
+The router now records operational route writability during startup and exposes
+the same health on the Member Logs screen.
 
 ## Implementation
 
@@ -152,8 +158,11 @@ The Member Lifecycle Routing response now reports:
 - whether the canonical join listener is registered;
 - whether the canonical leave listener is registered.
 
-This makes a future non-delivery diagnosable from Discord instead of requiring
-guesswork from host logs.
+Startup route logging now records the same operational-channel writability
+result alongside the resolved channel ID.
+
+This makes a future non-delivery diagnosable from Discord and from one startup
+line instead of requiring guesswork.
 
 ## Safety invariants
 
