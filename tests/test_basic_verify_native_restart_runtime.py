@@ -993,6 +993,181 @@ def test_disabled_legacy_panel_repairs_component_before_binding(
     asyncio.run(scenario())
 
 
+def test_reconcile_falls_back_to_cached_verification_channel_name(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        calls: list[int] = []
+
+        class FakeTextChannel:
+            def __init__(self) -> None:
+                self.id = 99
+                self.name = "🔐verification"
+
+        class FakeGuild:
+            id = 77
+            me = SimpleNamespace(id=42)
+
+            def __init__(self) -> None:
+                self.text_channels = [FakeTextChannel()]
+
+            def get_channel(self, _channel_id: int):
+                return None
+
+        async def no_reserve(*, label: str) -> None:
+            assert "legacy panel" in label
+
+        async def fake_post(
+            channel,
+            *,
+            actor_id: int = 0,
+            bot_instance=None,
+            require_history_scan_for_post: bool = False,
+        ) -> str:
+            _ = actor_id
+            assert bot_instance is fake_bot
+            assert require_history_scan_for_post is True
+            calls.append(channel.id)
+            return "posted"
+
+        fake_bot = FakeBot()
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+        monkeypatch.setattr(
+            runtime,
+            "basic_verify_allowed_for_guild",
+            lambda _guild, _cfg: True,
+        )
+        monkeypatch.setattr(runtime, "_reserve_basic_verify_recovery_request", no_reserve)
+        monkeypatch.setattr(runtime, "post_basic_verify_panel", fake_post)
+
+        result = await runtime._reconcile_one_basic_verify_panel(
+            fake_bot,
+            FakeGuild(),
+            {},
+            allow_legacy_rest=True,
+        )
+
+        assert result == "posted"
+        assert calls == [99]
+
+    asyncio.run(scenario())
+
+
+def test_legacy_foreign_panel_is_removed_after_current_replacement_posts(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        writes: list[tuple[int, int, int]] = []
+        deleted: list[int] = []
+
+        class FakeGuild:
+            id = 77
+
+            def __init__(self) -> None:
+                self.me = SimpleNamespace(id=42)
+                self.channel = None
+
+        class FakeTextChannel:
+            id = 99
+            name = "verification"
+
+            def __init__(self, guild) -> None:
+                self.guild = guild
+                guild.channel = self
+                self._foreign = FakeMessage(self, guild)
+
+            def history(self, *, limit: int):
+                assert limit == 80
+
+                class History:
+                    def __init__(self, item) -> None:
+                        self.item = item
+                        self.done = False
+
+                    def __aiter__(self):
+                        return self
+
+                    async def __anext__(self):
+                        if self.done:
+                            raise StopAsyncIteration
+                        self.done = True
+                        return self.item
+
+                return History(self._foreign)
+
+            async def send(self, **kwargs):
+                assert isinstance(kwargs["view"], runtime.BasicVerifyView)
+                return SimpleNamespace(id=777, author=SimpleNamespace(id=42))
+
+            def permissions_for(self, _member):
+                return SimpleNamespace(manage_messages=True)
+
+        class FakeMessage:
+            id = 444
+            author = SimpleNamespace(id=999)
+            embeds = [discord.Embed(title="Verify to unlock server access")]
+            components = [
+                SimpleNamespace(custom_id=runtime.BASIC_VERIFY_CUSTOM_ID, children=[])
+            ]
+
+            def __init__(self, channel, guild) -> None:
+                self.channel = channel
+                self.guild = guild
+
+            async def delete(self) -> None:
+                deleted.append(self.id)
+
+        async def fake_cfg(_guild_id: int, refresh: bool = False):
+            assert refresh is True
+            return {"basic_verify_enabled": True}
+
+        async def fake_persist(
+            guild_id: int,
+            message_id: int,
+            *,
+            application_id: int = 0,
+        ) -> None:
+            writes.append((guild_id, message_id, application_id))
+
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+        monkeypatch.setattr(runtime.discord, "Guild", FakeGuild)
+        monkeypatch.setattr(runtime, "get_guild_config", fake_cfg)
+        monkeypatch.setattr(
+            runtime,
+            "basic_verify_allowed_for_guild",
+            lambda _guild, _cfg: True,
+        )
+        monkeypatch.setattr(
+            runtime,
+            "build_basic_verify_embed",
+            lambda *_a: discord.Embed(title="fresh"),
+        )
+        monkeypatch.setattr(
+            runtime,
+            "is_basic_verify_panel_embed",
+            lambda _embed: True,
+        )
+        monkeypatch.setattr(runtime, "_persist_basic_verify_panel_message_id", fake_persist)
+        monkeypatch.setattr(runtime, "_reserve_basic_verify_recovery_request", lambda **_kwargs: None)
+
+        bot = FakeBot()
+        guild = FakeGuild()
+        channel = FakeTextChannel(guild)
+
+        result = await runtime.post_basic_verify_panel(
+            channel,
+            bot_instance=bot,
+            require_history_scan_for_post=True,
+        )
+
+        assert result == "posted"
+        assert writes == [(77, 777, 42)]
+        assert bot.views[-1][1] == 777
+        assert deleted == [444]
+
+    asyncio.run(scenario())
+
+
 def test_button_callback_delegates_to_canonical_interaction_handler(
     monkeypatch,
 ) -> None:
