@@ -166,6 +166,12 @@ Not restored:
 
 ## Backlog
 
+**Next P0 after this task:** live ticket creation/panel failure reported in
+production. Do not mix ticket changes into this Basic Verify PR. Reproduce the
+exact public ticket entry path against current main, trace persistent-panel
+ownership, acknowledgement timing, setup/config lookup, channel/category
+creation, permission overwrites, and post-create handoff before changing code.
+
 The startup activity reconciliation log is extremely noisy and can take minutes
 across channel/thread history. Its requests are being paced correctly, but its
 scope/cost deserves a separate performance task after verification reliability
