@@ -140,7 +140,7 @@ jobs:
           select public.record_dank_quiet_notice_activity(1001, now() + interval '1 day');
           select public.record_dank_quiet_notice_activity(1001, now() - interval '1 day');
 
-          do $
+          do $$
           begin
               if (select last_notice_message_id from public.dank_quiet_notices where guild_id = 1001) is distinct from 777 then
                   raise exception 'quiet activity persistence overwrote delivery identity';
@@ -149,23 +149,23 @@ jobs:
                   raise exception 'quiet activity persistence regressed the newest activity timestamp';
               end if;
           end;
-          $;
+          $$;
 
           -- A stale worker must not clear a newer tracked delivery.
           select public.clear_dank_quiet_notice_delivery(1001, 888);
 
-          do $
+          do $$
           begin
               if (select last_notice_message_id from public.dank_quiet_notices where guild_id = 1001) is distinct from 777 then
                   raise exception 'stale quiet-delivery clear erased the current message id';
               end if;
           end;
-          $;
+          $$;
 
           -- The worker that actually deleted the tracked message may clear it.
           select public.clear_dank_quiet_notice_delivery(1001, 777);
 
-          do $
+          do $$
           begin
               if (select last_notice_message_id from public.dank_quiet_notices where guild_id = 1001) is not null then
                   raise exception 'matching quiet-delivery clear did not clear the message id';
@@ -174,7 +174,7 @@ jobs:
                   raise exception 'matching quiet-delivery clear did not clear the sent timestamp';
               end if;
           end;
-          $;
+          $$;
 
           select public.save_dank_sticky_bundle(
               jsonb_build_object(
