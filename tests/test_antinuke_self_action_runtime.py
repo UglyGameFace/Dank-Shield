@@ -58,9 +58,12 @@ def _entry(
     action: str,
     actor_id: int = 55,
     target_id: int | None = None,
+    related_bot_id: int | None = None,
     reason: str = "",
 ):
     target = SimpleNamespace(id=target_id) if target_id is not None else None
+    if target is not None and related_bot_id is not None:
+        target.application = SimpleNamespace(id=related_bot_id)
     return SimpleNamespace(
         id=1234,
         guild=guild,
@@ -74,6 +77,7 @@ def _entry(
 
 def _reset() -> None:
     runtime._PENDING.clear()  # noqa: SLF001
+    runtime._EXPECTED_SIDE_EFFECTS.clear()  # noqa: SLF001
     runtime._COMPROMISE_GUILDS.clear()  # noqa: SLF001
 
 
@@ -137,6 +141,356 @@ def test_stale_authorization_expires() -> None:
     runtime._prune_pending(created + runtime._AUTH_TTL_SECONDS + 1.0)  # noqa: SLF001
 
     assert nonce not in runtime._PENDING  # noqa: SLF001
+
+
+def test_expected_bot_removal_integration_delete_is_one_time(monkeypatch) -> None:
+    _reset()
+    bot = FakeBot()
+    guild = FakeGuild()
+
+    async def should_not_read_settings(_guild_id: int):
+        raise AssertionError(
+            "expected Discord cleanup must be consumed before compromise checks"
+        )
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", should_not_read_settings)
+
+    token = runtime._expect_side_effect(  # noqa: SLF001
+        guild.id,
+        "integration_delete",
+        related_bot_id=444,
+        source_action="bot_kick",
+    )
+    assert token in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
+
+    expected = _entry(
+        guild,
+        action="integration_delete",
+        target_id=9001,
+        related_bot_id=444,
+    )
+    asyncio.run(runtime._audit_guard(bot, expected))  # noqa: SLF001
+
+    assert guild.leave_calls == 0
+    assert runtime._EXPECTED_SIDE_EFFECTS == {}  # noqa: SLF001
+
+
+def test_expected_bot_removal_side_effect_does_not_hide_unrelated_or_second_delete(
+    monkeypatch,
+) -> None:
+    _reset()
+    bot = FakeBot()
+    guild = FakeGuild()
+
+    async def settings(_guild_id: int):
+        return {"antinuke_enabled": True, "antinuke_mode": "contain"}
+
+    async def no_warning(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
+    monkeypatch.setattr(runtime, "_warn_owner", no_warning)
+
+    runtime._expect_side_effect(  # noqa: SLF001
+        guild.id,
+        "integration_delete",
+        related_bot_id=444,
+        source_action="bot_kick",
+    )
+
+    unrelated = _entry(
+        guild,
+        action="integration_delete",
+        target_id=9002,
+        related_bot_id=777,
+    )
+    asyncio.run(runtime._audit_guard(bot, unrelated))  # noqa: SLF001
+    assert guild.leave_calls == 1
+    assert len(runtime._EXPECTED_SIDE_EFFECTS) == 1  # noqa: SLF001
+
+    _reset()
+    runtime._expect_side_effect(  # noqa: SLF001
+        guild.id,
+        "integration_delete",
+        related_bot_id=444,
+        source_action="bot_kick",
+    )
+    first = _entry(
+        guild,
+        action="integration_delete",
+        target_id=9001,
+        related_bot_id=444,
+    )
+    asyncio.run(runtime._audit_guard(bot, first))  # noqa: SLF001
+    assert guild.leave_calls == 1
+
+    second = _entry(
+        guild,
+        action="integration_delete",
+        target_id=9003,
+        related_bot_id=444,
+    )
+    asyncio.run(runtime._audit_guard(bot, second))  # noqa: SLF001
+    assert guild.leave_calls == 2
+
+
+def test_expected_bot_removal_accepts_sparse_integration_target_once(
+    monkeypatch,
+) -> None:
+    _reset()
+    bot = FakeBot()
+    guild = FakeGuild()
+
+    async def should_not_read_settings(_guild_id: int):
+        raise AssertionError(
+            "sparse expected Discord cleanup must be consumed before compromise checks"
+        )
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", should_not_read_settings)
+
+    runtime._expect_side_effect(  # noqa: SLF001
+        guild.id,
+        "integration_delete",
+        related_bot_id=444,
+        source_action="bot_kick",
+    )
+    sparse = _entry(
+        guild,
+        action="integration_delete",
+        target_id=9001,
+    )
+    asyncio.run(runtime._audit_guard(bot, sparse))  # noqa: SLF001
+
+    assert guild.leave_calls == 0
+    assert runtime._EXPECTED_SIDE_EFFECTS == {}  # noqa: SLF001
+
+
+def test_expected_bot_removal_side_effect_expires() -> None:
+    _reset()
+    token = runtime._expect_side_effect(  # noqa: SLF001
+        7,
+        "integration_delete",
+        related_bot_id=444,
+        source_action="bot_kick",
+    )
+    created = runtime._EXPECTED_SIDE_EFFECTS[token].created_at  # noqa: SLF001
+
+    runtime._prune_expected_side_effects(  # noqa: SLF001
+        created + runtime._SIDE_EFFECT_TTL_SECONDS + 1.0
+    )
+
+    assert token not in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
+
+
+def test_http_bot_kick_arms_expected_integration_cleanup(monkeypatch) -> None:
+    _reset()
+    bot = FakeBot()
+    bot.get_user = lambda user_id: (
+        SimpleNamespace(id=444, bot=True) if int(user_id) == 444 else None
+    )
+    route = FakeRoute("DELETE", "/guilds/7/members/444")
+
+    assert runtime._patch_http(bot) is True  # noqa: SLF001
+    asyncio.run(
+        bot.http.request(
+            route,
+            reason="Dank Shield AntiNuke rollback: unauthorized bot addition",
+        )
+    )
+
+    assert len(runtime._EXPECTED_SIDE_EFFECTS) == 1  # noqa: SLF001
+    expected = next(iter(runtime._EXPECTED_SIDE_EFFECTS.values()))  # noqa: SLF001
+    assert expected.guild_id == 7
+    assert expected.action == "integration_delete"
+    assert expected.related_bot_id == 444
+    assert expected.source_action == "bot_kick"
+
+    async def should_not_read_settings(_guild_id: int):
+        raise AssertionError(
+            "derived integration cleanup must be consumed before compromise checks"
+        )
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", should_not_read_settings)
+    event = _entry(
+        FakeGuild(7),
+        action="integration_delete",
+        target_id=9001,
+        related_bot_id=444,
+    )
+    asyncio.run(runtime._audit_guard(bot, event))  # noqa: SLF001
+
+    assert runtime._EXPECTED_SIDE_EFFECTS == {}  # noqa: SLF001
+
+
+def test_http_bot_kick_direct_audit_then_integration_cleanup_is_order_safe(
+    monkeypatch,
+) -> None:
+    _reset()
+    bot = FakeBot()
+    bot.get_user = lambda user_id: (
+        SimpleNamespace(id=444, bot=True) if int(user_id) == 444 else None
+    )
+    guild = FakeGuild(7)
+    route = FakeRoute("DELETE", "/guilds/7/members/444")
+
+    assert runtime._patch_http(bot) is True  # noqa: SLF001
+    asyncio.run(
+        bot.http.request(
+            route,
+            reason="Dank Shield AntiNuke rollback: unauthorized bot addition",
+        )
+    )
+
+    stamped_reason = bot.http.calls[0][1]["reason"]
+    assert len(runtime._PENDING) == 1  # noqa: SLF001
+    assert len(runtime._EXPECTED_SIDE_EFFECTS) == 1  # noqa: SLF001
+
+    async def should_not_read_settings(_guild_id: int):
+        raise AssertionError(
+            "authorized direct and derived actions must be consumed before settings"
+        )
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", should_not_read_settings)
+
+    direct = _entry(
+        guild,
+        action="kick",
+        target_id=444,
+        reason=stamped_reason,
+    )
+    asyncio.run(runtime._audit_guard(bot, direct))  # noqa: SLF001
+
+    assert runtime._PENDING == {}  # noqa: SLF001
+    assert len(runtime._EXPECTED_SIDE_EFFECTS) == 1  # noqa: SLF001
+
+    derived = _entry(
+        guild,
+        action="integration_delete",
+        target_id=9001,
+        related_bot_id=444,
+    )
+    asyncio.run(runtime._audit_guard(bot, derived))  # noqa: SLF001
+
+    assert guild.leave_calls == 0
+    assert runtime._PENDING == {}  # noqa: SLF001
+    assert runtime._EXPECTED_SIDE_EFFECTS == {}  # noqa: SLF001
+
+
+def test_concurrent_bot_removal_receipts_match_rich_identity_out_of_order() -> None:
+    _reset()
+    first = runtime._expect_side_effect(  # noqa: SLF001
+        7,
+        "integration_delete",
+        related_bot_id=444,
+        source_action="bot_kick",
+    )
+    second = runtime._expect_side_effect(  # noqa: SLF001
+        7,
+        "integration_delete",
+        related_bot_id=555,
+        source_action="bot_kick",
+    )
+
+    guild = FakeGuild(7)
+    second_entry = _entry(
+        guild,
+        action="integration_delete",
+        target_id=9002,
+        related_bot_id=555,
+    )
+    assert (
+        runtime._consume_expected_side_effect(  # noqa: SLF001
+            guild,
+            second_entry,
+            "integration_delete",
+        )
+        is True
+    )
+
+    assert first in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
+    assert second not in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
+
+    first_entry = _entry(
+        guild,
+        action="integration_delete",
+        target_id=9001,
+        related_bot_id=444,
+    )
+    assert (
+        runtime._consume_expected_side_effect(  # noqa: SLF001
+            guild,
+            first_entry,
+            "integration_delete",
+        )
+        is True
+    )
+    assert runtime._EXPECTED_SIDE_EFFECTS == {}  # noqa: SLF001
+
+
+def test_http_bot_ban_uses_cache_or_antinuke_reason_fallback() -> None:
+    _reset()
+    bot = FakeBot()
+    route = FakeRoute("PUT", "/guilds/7/bans/447")
+
+    assert runtime._patch_http(bot) is True  # noqa: SLF001
+    asyncio.run(
+        bot.http.request(
+            route,
+            reason="Dank Shield AntiNuke: fast known-hostile bot re-add block",
+        )
+    )
+
+    expected = list(runtime._EXPECTED_SIDE_EFFECTS.values())  # noqa: SLF001
+    assert len(expected) == 1
+    assert expected[0].related_bot_id == 447
+    assert expected[0].source_action == "bot_ban"
+
+
+def test_http_human_removal_does_not_arm_integration_cleanup() -> None:
+    _reset()
+    bot = FakeBot()
+    bot.get_user = lambda user_id: SimpleNamespace(id=int(user_id), bot=False)
+    route = FakeRoute("DELETE", "/guilds/7/members/446")
+
+    assert runtime._patch_http(bot) is True  # noqa: SLF001
+    asyncio.run(
+        bot.http.request(
+            route,
+            reason=(
+                "Dank Shield AntiNuke containment: unauthorized bot addition "
+                "• definitive AntiNuke containment"
+            ),
+        )
+    )
+
+    assert runtime._EXPECTED_SIDE_EFFECTS == {}  # noqa: SLF001
+
+
+def test_failed_http_bot_removal_cancels_side_effect_and_nonce() -> None:
+    _reset()
+
+    class FailingHTTP:
+        async def request(self, route, *args, **kwargs):
+            _ = route, args, kwargs
+            raise RuntimeError("request failed")
+
+    bot = FakeBot()
+    bot.http = FailingHTTP()
+    bot.get_user = lambda user_id: (
+        SimpleNamespace(id=444, bot=True) if int(user_id) == 444 else None
+    )
+    route = FakeRoute("DELETE", "/guilds/7/members/444")
+
+    assert runtime._patch_http(bot) is True  # noqa: SLF001
+    try:
+        asyncio.run(bot.http.request(route, reason="ordinary bot moderation"))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("failed bot removal must propagate the original error")
+
+    assert runtime._PENDING == {}  # noqa: SLF001
+    assert runtime._EXPECTED_SIDE_EFFECTS == {}  # noqa: SLF001
 
 
 def test_unmatched_bot_attributed_action_self_ejects_in_contain_mode(monkeypatch) -> None:
