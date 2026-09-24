@@ -215,6 +215,22 @@ def test_view_store_owner_detection_matches_message_global_and_dynamic_routes():
     assert guard._view_store_has_component_owner(bot, interaction) is False
 
 
+def test_unknown_discord_view_store_layout_disables_private_recovery(monkeypatch):
+    async def run() -> None:
+        interaction = FakeInteraction(ephemeral=True)
+        store = Obj(_views={}, _dynamic_items={})
+        bot = Obj(_connection=Obj(_view_store=store))
+
+        monkeypatch.setattr(guard.discord, "__version__", "99.0.0")
+        monkeypatch.setattr(guard, "PRIVATE_MENU_RECOVERY_GRACE_SECONDS", 0.0)
+
+        assert guard._view_store_component_owner_state(bot, interaction) is None
+        assert await guard._recover_unowned_private_component(bot, interaction) is False
+        assert interaction.response.done is False
+
+    asyncio.run(run())
+
+
 def test_unowned_ephemeral_component_recovers_to_fresh_home(monkeypatch):
     async def run() -> None:
         from stoney_verify.commands_ext import public_command_surface_v2 as surface
