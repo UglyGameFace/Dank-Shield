@@ -20,6 +20,8 @@ from typing import Any, Awaitable, Callable, Mapping
 
 import discord
 
+from .public_owner_authority import interaction_is_actual_guild_owner
+
 from stoney_verify.interaction_guard import run_guarded_interaction, safe_send_interaction
 from stoney_verify.share_router_resources import is_share_router_design_resource
 from stoney_verify.services import server_design_plan_service as plan_service
@@ -282,8 +284,14 @@ async def _reject_reserved_design_target(
 
 
 def _can_user_design(interaction: discord.Interaction) -> bool:
+    if interaction_is_actual_guild_owner(interaction):
+        return True
     try:
-        return bool(interaction.guild and isinstance(interaction.user, discord.Member) and interaction.user.guild_permissions.manage_channels)
+        return bool(
+            interaction.guild
+            and isinstance(interaction.user, discord.Member)
+            and interaction.user.guild_permissions.manage_channels
+        )
     except Exception:
         return False
 
