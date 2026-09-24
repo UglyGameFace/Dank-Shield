@@ -106,7 +106,7 @@ def test_protection_legacy_stats_button_routes_to_canonical_stats_center(
         button = _item(view, "dank_protection:live_stats")
         interaction = SimpleNamespace(user=SimpleNamespace(id=1))
 
-        assert str(button.label) == "Server Stats"
+        assert str(button.label) == "Server Stats: SET UP"
         await button.callback(interaction)
 
         assert calls == [interaction]
