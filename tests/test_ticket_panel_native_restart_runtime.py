@@ -238,6 +238,86 @@ def test_legacy_saved_current_bot_panel_persists_application_identity(
     asyncio.run(scenario())
 
 
+def test_legacy_v6_current_bot_panel_is_upgraded_to_canonical_view(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        edits: list[tuple[object, object]] = []
+        writes: list[tuple[int, int, int]] = []
+
+        class FakeMessage:
+            id = 555
+            author = SimpleNamespace(id=222)
+            components = [
+                SimpleNamespace(
+                    custom_id="sv:ticket:panel:create:v6",
+                    children=[],
+                )
+            ]
+            embeds = [
+                SimpleNamespace(
+                    title="🎫 Need help? Open a ticket",
+                    footer=SimpleNamespace(
+                        text="Guild • Dank Shield ticket panel • category-menu"
+                    ),
+                )
+            ]
+
+            async def edit(self, *, embed, view) -> None:
+                edits.append((embed, view))
+
+        class FakeTextChannel:
+            id = 444
+
+            async def fetch_message(self, message_id: int):
+                assert message_id == 555
+                return FakeMessage()
+
+        class FakeGuild:
+            id = 333
+            me = SimpleNamespace(id=222)
+
+            def get_channel(self, channel_id: int):
+                assert channel_id == 444
+                return FakeTextChannel()
+
+        async def no_reserve(*args, **kwargs) -> None:
+            return None
+
+        async def fake_persist(guild, channel, message) -> None:
+            writes.append((guild.id, channel.id, message.id))
+
+        fake_bot = FakeBot()
+        sentinel_view = object()
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+        monkeypatch.setattr(runtime, "_reserve_recovery_requests", no_reserve)
+        monkeypatch.setattr(runtime, "_persist_ticket_panel_identity", fake_persist)
+        monkeypatch.setattr(panel, "PublicCreateTicketPanelView", lambda: sentinel_view)
+        monkeypatch.setattr(
+            panel,
+            "_panel_embed",
+            lambda _guild: SimpleNamespace(title="canonical"),
+        )
+
+        result = await runtime._reconcile_saved_ticket_panel(
+            fake_bot,
+            FakeGuild(),
+            {
+                "ticket_panel_channel_id": "444",
+                "ticket_panel_message_id": "555",
+            },
+            allow_legacy_rest=True,
+        )
+
+        assert result == "migrated_current"
+        assert len(edits) == 1
+        assert edits[0][1] is sentinel_view
+        assert writes == [(333, 444, 555)]
+        assert fake_bot.views == [(sentinel_view, 555)]
+
+    asyncio.run(scenario())
+
+
 def test_foreign_saved_panel_is_replaced_and_rebound(
     monkeypatch,
 ) -> None:
