@@ -993,6 +993,23 @@ def test_disabled_legacy_panel_repairs_component_before_binding(
     asyncio.run(scenario())
 
 
+def test_foreign_cleanup_requires_strict_dank_shield_signature() -> None:
+    signed_embed = discord.Embed(title="Anything")
+    signed_embed.set_footer(text=f"{runtime.BASIC_VERIFY_FOOTER} • access only")
+    signed = SimpleNamespace(
+        components=[],
+        embeds=[signed_embed],
+    )
+    assert runtime._message_has_strict_basic_verify_signature(signed) is True
+
+    unrelated = SimpleNamespace(
+        components=[],
+        embeds=[discord.Embed(title="Verify to unlock server access")],
+    )
+    assert runtime._message_looks_like_basic_verify_panel(unrelated) is True
+    assert runtime._message_has_strict_basic_verify_signature(unrelated) is False
+
+
 def test_reconcile_falls_back_to_cached_verification_channel_name(
     monkeypatch,
 ) -> None:
