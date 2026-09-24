@@ -54,6 +54,8 @@ def test_ready_logs_resolved_member_lifecycle_routes() -> None:
     assert "member lifecycle routes ready" in ROUTER
     assert "members intent is disabled in code" in ROUTER
     assert "join_reason=" in ROUTER
+    assert "join_log_ready=" in ROUTER
+    assert "join_log_health=" in ROUTER
     assert "exit_reason=" in ROUTER
 
 
