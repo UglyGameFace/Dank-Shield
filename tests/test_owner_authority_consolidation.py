@@ -61,6 +61,50 @@ def test_resolved_interaction_administrator_does_not_require_member_cache() -> N
     assert public_command_hub._admin_or_manage(interaction)
 
 
+def test_role_builder_doorways_accept_resolved_admin_without_member_cache(monkeypatch) -> None:
+    async def scenario() -> None:
+        guild = SimpleNamespace(id=9001, owner_id=0, owner=None)
+        interaction = SimpleNamespace(
+            guild=guild,
+            user=SimpleNamespace(id=111),
+            permissions=SimpleNamespace(administrator=True, manage_guild=True),
+        )
+
+        async def forbidden_reply(*args, **kwargs) -> None:
+            raise AssertionError("resolved Administrator must reach Role Builder")
+
+        monkeypatch.setattr(public_setup_group, "reply_once", forbidden_reply)
+
+        # /dank home -> Roles & Profiles
+        assert public_command_hub._admin_or_manage(interaction)
+
+        # /dank profile builder and /dank roles ... direct entrypoints
+        assert public_setup_group._admin_or_manage_guild(interaction)
+        assert await public_setup_group._require_setup_permission(interaction) is True
+
+    asyncio.run(scenario())
+
+
+def test_role_builder_routes_share_central_authority_contract() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    home = (root / "stoney_verify" / "commands_ext" / "public_command_surface_v2.py").read_text(encoding="utf-8")
+    roles = (root / "stoney_verify" / "commands_ext" / "public_self_roles_group.py").read_text(encoding="utf-8")
+
+    home_start = home.index('label="Roles & Profiles"')
+    home_end = home.index('label="Logs & Activity"', home_start)
+    home_route = home[home_start:home_end]
+    assert "_admin_or_manage(interaction)" in home_route
+    assert "_post_profile_builder(interaction" in home_route
+
+    builder_start = roles.index('@profile_group.command(name="builder"')
+    builder_end = roles.index('@profile_group.command(name="view"', builder_start)
+    builder_route = roles[builder_start:builder_end]
+    assert "await _require_setup_permission(interaction)" in builder_route
+    assert "await _post_profile_builder(interaction" in builder_route
+
+
 def test_partial_non_owner_without_resolved_permissions_still_fails_closed() -> None:
     guild = SimpleNamespace(id=9001, owner_id=111, owner=SimpleNamespace(id=111))
     interaction = SimpleNamespace(
