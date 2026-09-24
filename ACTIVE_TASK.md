@@ -35,28 +35,37 @@ Therefore this is no longer a generic ViewStore/startup-registration failure.
 
 ## Root cause
 
-Basic Verify restart reconciliation persisted and trusted:
+The investigation found two reconciliation gaps that can leave a visibly
+clickable Basic Verify panel with no route to the current process.
+
+### 1. Persisted component identity was not proven
+
+Basic Verify restart reconciliation persisted and trusted only:
 
 - `basic_verify_panel_message_id`;
 - `basic_verify_panel_application_id`.
 
-That was insufficient.
+That is not enough for long-lived public panels. The exact component contract
+must also be proven before a zero-REST message-bound View registration.
 
-An older Basic Verify message can still belong to the current Discord application
-while carrying a retired button `custom_id`. The startup fast path saw the
-current application identity and called:
-
-`bot.add_view(BasicVerifyView(), message_id=<old message>)`
-
-without proving that the visible button on that message used today's component
-contract:
+The current component contract is:
 
 `dank:basic_verify:v1`
 
-discord.py dispatches views by component type + `custom_id` (and message/global
-scope). Binding today's View to an old message ID cannot make a retired custom ID
-magically match. The panel therefore looked healthy at startup but clicks still
-fell through to Discord's red failure banner.
+### 2. Legacy discovery ignored foreign application panels and stale channel IDs
+
+When no usable persisted panel identity existed, the posting/discovery path
+looked only at Basic Verify messages authored by the **current** bot application.
+A panel authored by a previous Dank Shield application could therefore remain
+visible while its clicks were routed somewhere other than the current process.
+
+The reconciler also trusted only the persisted verify-channel ID. If that slot
+was missing/stale, it returned `no_channel` even when a cached
+`#verification` / `#verify` text channel clearly existed.
+
+This matches the live boundary: fresh `/dank home` controls work, while the
+old public Verify panel produces Discord's red failure and no canonical
+`basic_verify click` evidence.
 
 ## Repair
 
@@ -73,6 +82,14 @@ The zero-REST exact-bind path is allowed only when all three are current:
 Existing rows without component proof, or rows with a retired component ID, use
 one bounded reconciliation fetch.
 
+The reconciler resolves the verify channel from persisted guild config first and
+then falls back to the guild's cached `verification` / `verify` text channel
+name. This fallback performs no Discord REST scan across the guild.
+
+Basic Verify history discovery is still bounded to one verification channel and
+80 messages. It now recognizes both current-application and foreign-application
+Basic Verify-marked messages.
+
 For a current-bot Basic Verify message:
 
 - if the actual message already contains `dank:basic_verify:v1`, persist the
@@ -83,7 +100,12 @@ For a current-bot Basic Verify message:
 - if the edit fails, report `component_repair_failed` and do not falsely record
   the panel as healthy.
 
-Foreign-application replacement behavior remains unchanged.
+For a foreign-application Basic Verify message:
+
+- first confirm a current-application replacement exists or was posted;
+- then remove the stale foreign panel when Discord permissions allow;
+- never delete the stale panel before the replacement is confirmed;
+- keep the scan bounded to the verification channel.
 
 ## Safety invariants
 
@@ -93,7 +115,10 @@ Foreign-application replacement behavior remains unchanged.
 - Verify clicks still acknowledge before DB/role work;
 - the persistent view and delayed fallback still delegate to one canonical
   `maybe_handle_basic_verify_interaction` business path;
-- startup REST remains bounded for legacy/unproven rows.
+- startup REST remains bounded for legacy/unproven rows;
+- no all-channel or all-message reconciliation is introduced;
+- a missing saved verify-channel ID can recover from the guild's already-cached
+  channel list without REST.
 
 ## Validation required
 
