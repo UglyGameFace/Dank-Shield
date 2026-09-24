@@ -764,21 +764,9 @@ def install_public_ticket_panel_runtime(
 
     errors: list[str] = []
 
-    # Reconcile with the command registrar when this function is called after
-    # command setup in tests or alternate entrypoints.  In normal production
-    # startup this installer runs first and then marks the clean registrar's
-    # flags so registration remains single-owner and idempotent.
-    if bool(getattr(panel, "_PANEL_VIEW_REGISTERED", False)):
-        _RUNTIME_VIEW_REGISTERED = True
-    elif (
-        bool(getattr(panel, "_PANEL_FALLBACK_LISTENER_REGISTERED", False))
-        and not _RUNTIME_FALLBACK_LISTENER_REGISTERED
-    ):
-        # The clean registrar sets this flag without a listener when its view
-        # succeeds, so only trust it as evidence of a real fallback when the
-        # persistent view itself is absent.
-        _RUNTIME_FALLBACK_LISTENER_REGISTERED = True
-
+    # This module is the runtime registration authority. The clean command
+    # registrar mirrors these flags after calling this installer, but its flags
+    # are never trusted as proof that Discord registrations actually exist.
     if not _RUNTIME_VIEW_REGISTERED:
         try:
             add_view = getattr(bot, "add_view", None)
