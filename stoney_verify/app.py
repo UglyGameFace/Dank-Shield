@@ -98,12 +98,13 @@ except Exception as e:
 # records components that still miss the acknowledgement window.
 try:
     if not _install_component_interaction_runtime(bot):
-        print("⚠️ component_runtime was not installed")
+        raise RuntimeError("shared component lifecycle runtime did not register")
 except Exception as e:
     print(
-        "⚠️ component_runtime install failed:",
+        "❌ critical component_runtime install failed:",
         repr(e),
     )
+    raise
 
 
 # Native authoritative member activity tracking. This is an explicit runtime
