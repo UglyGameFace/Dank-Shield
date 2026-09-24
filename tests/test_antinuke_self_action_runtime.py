@@ -149,7 +149,9 @@ def test_expected_bot_removal_integration_delete_is_one_time(monkeypatch) -> Non
     guild = FakeGuild()
 
     async def should_not_read_settings(_guild_id: int):
-        raise AssertionError("expected Discord cleanup must be consumed before compromise checks")
+        raise AssertionError(
+            "expected Discord cleanup must be consumed before compromise checks"
+        )
 
     monkeypatch.setattr(anti_nuke, "get_antinuke_settings", should_not_read_settings)
 
