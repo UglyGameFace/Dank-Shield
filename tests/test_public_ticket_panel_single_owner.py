@@ -149,6 +149,12 @@ def test_clean_panel_delegates_runtime_registration_to_single_owner() -> None:
     assert "elif _PANEL_VIEW_REGISTERED:" not in source
 
 
+def test_known_historical_public_ticket_button_ids_stay_compatible() -> None:
+    assert panel.PANEL_BUTTON_CUSTOM_ID in panel.PANEL_BUTTON_CUSTOM_IDS
+    assert "sv:ticket:panel:create:v6" in panel.PANEL_BUTTON_CUSTOM_IDS
+    assert "ticket_create" in panel.PANEL_BUTTON_CUSTOM_IDS
+
+
 def test_owner_file_keeps_category_and_persistent_number_ownership() -> None:
     source = PANEL.read_text(encoding="utf-8")
     assert "reserve_persistent_ticket_number" in source
