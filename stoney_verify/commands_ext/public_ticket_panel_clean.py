@@ -925,17 +925,24 @@ async def persist_public_ticket_panel_identity(
     guild_id: int,
     channel_id: int,
     message_id: int,
+    *,
+    application_id: int = 0,
 ) -> None:
     try:
         from .public_setup_config_writer import upsert_guild_config
         from ..guild_config import invalidate_guild_config
 
+        payload = {
+            "ticket_panel_channel_id": str(int(channel_id)),
+            "ticket_panel_message_id": str(int(message_id)),
+        }
+        if int(application_id or 0) > 0:
+            payload["ticket_panel_application_id"] = str(
+                int(application_id)
+            )
         await upsert_guild_config(
             int(guild_id),
-            {
-                "ticket_panel_channel_id": str(int(channel_id)),
-                "ticket_panel_message_id": str(int(message_id)),
-            },
+            payload,
         )
         invalidate_guild_config(int(guild_id))
     except Exception as e:
@@ -959,6 +966,9 @@ async def post_public_ticket_panel_message(
         int(guild.id),
         int(target.id),
         int(msg.id),
+        application_id=int(
+            getattr(getattr(guild, "me", None), "id", 0) or 0
+        ),
     )
     return msg
 
