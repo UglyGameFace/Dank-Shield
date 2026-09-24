@@ -2092,7 +2092,7 @@ async def handle_component_interaction(interaction: discord.Interaction) -> None
 # Registration
 # ============================================================
 
-def register_interaction_handlers(bot_instance: Any) -> None:
+def register_interaction_handlers(bot_instance: Any) -> bool:
     global _INTERACTION_HANDLERS_REGISTERED
 
     if _INTERACTION_HANDLERS_REGISTERED:
@@ -2100,7 +2100,7 @@ def register_interaction_handlers(bot_instance: Any) -> None:
             print("ℹ️ interaction_handlers already registered; skipping duplicate registration.")
         except Exception:
             pass
-        return
+        return True
 
     @bot_instance.listen("on_interaction")
     async def _stoney_verify_on_interaction(interaction: discord.Interaction):
@@ -2118,11 +2118,20 @@ def register_interaction_handlers(bot_instance: Any) -> None:
         print("✅ interaction_handlers: registered component interaction handler")
     except Exception:
         pass
+    return True
+
+
+def interaction_handlers_runtime_status() -> dict[str, Any]:
+    return {
+        "listener_registered": bool(_INTERACTION_HANDLERS_REGISTERED),
+        "ready": bool(_INTERACTION_HANDLERS_REGISTERED),
+    }
 
 
 __all__ = [
     "handle_possible_submission",
     "handle_component_interaction",
     "register_interaction_handlers",
+    "interaction_handlers_runtime_status",
     "_remove_unverified_role_if_present",
 ]
