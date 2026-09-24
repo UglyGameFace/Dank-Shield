@@ -100,6 +100,39 @@ def test_strict_runtime_fails_closed_when_no_interaction_path_can_register(monke
     assert "listener registration failed" in status["error"]
 
 
+def test_clean_registrar_records_only_real_fallback_listener(monkeypatch) -> None:
+    class FakeTree:
+        def __init__(self) -> None:
+            self.commands: list[object] = []
+
+        def get_command(self, _name: str, guild=None):
+            return None
+
+        def remove_command(self, _name: str, guild=None):
+            return None
+
+        def add_command(self, command: object) -> None:
+            self.commands.append(command)
+
+    fake_bot = FakeBot()
+    monkeypatch.setattr(panel, "PublicCreateTicketPanelView", lambda: object())
+
+    panel.register_public_ticket_panel_clean(fake_bot, FakeTree())
+
+    assert panel._PANEL_VIEW_REGISTERED is True
+    assert panel._PANEL_FALLBACK_LISTENER_REGISTERED is True
+    assert len(fake_bot.views) == 1
+    assert fake_bot.listeners == [
+        (panel._component_fallback_listener, "on_interaction")
+    ]
+
+    # Runtime installation after command registration must adopt both real
+    # bindings instead of attaching a second listener.
+    assert runtime.install_public_ticket_panel_runtime(fake_bot, strict=True) is True
+    assert len(fake_bot.views) == 1
+    assert len(fake_bot.listeners) == 1
+
+
 def test_fallback_only_delegates_clean_ticket_custom_id(monkeypatch) -> None:
     async def scenario() -> None:
         calls: list[object] = []
@@ -143,6 +176,41 @@ def test_fallback_only_delegates_clean_ticket_custom_id(monkeypatch) -> None:
         await runtime._ticket_panel_fallback_listener(already_acknowledged)
         await runtime._ticket_panel_fallback_listener(clean)
         assert calls == [clean]
+
+    asyncio.run(scenario())
+
+
+def test_fallback_recovers_all_known_public_ticket_panel_ids(monkeypatch) -> None:
+    async def scenario() -> None:
+        calls: list[str] = []
+
+        async def no_sleep(_seconds: float) -> None:
+            return None
+
+        async def fake_handler(interaction) -> None:
+            calls.append(str(interaction.data["custom_id"]))
+            interaction.response.done = True
+
+        class Response:
+            def __init__(self) -> None:
+                self.done = False
+
+            def is_done(self) -> bool:
+                return self.done
+
+        monkeypatch.setattr(runtime.asyncio, "sleep", no_sleep)
+        monkeypatch.setattr(panel, "handle_public_ticket_panel_click", fake_handler)
+
+        for index, custom_id in enumerate(sorted(panel.PANEL_BUTTON_CUSTOM_IDS), start=1):
+            interaction = SimpleNamespace(
+                id=500 + index,
+                type=discord.InteractionType.component,
+                data={"custom_id": custom_id},
+                response=Response(),
+            )
+            await runtime._ticket_panel_fallback_listener(interaction)
+
+        assert set(calls) == set(panel.PANEL_BUTTON_CUSTOM_IDS)
 
     asyncio.run(scenario())
 
