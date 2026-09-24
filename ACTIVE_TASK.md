@@ -4,10 +4,14 @@
 
 **P0-INTERACTION-RUNTIME-001 — restore production-wide Discord button reliability across deploy/restart**
 
-Fix the live public **Basic Verify** and **Create Ticket** panels so already-posted
-components cannot silently lose their interaction route after bot restarts,
-application identity changes, or command-registration refactors. Keep one
-canonical business/mutation owner per feature.
+Restore **production-wide Discord component reliability** for Dank Shield as a
+public, soon-to-be-paid bot.
+
+Durable public panels must survive restart/application-identity drift. Private
+ephemeral control sessions may expire for safety, but stale controls must never
+fall through silently to Discord's red `This interaction failed` banner. Keep
+one canonical business/mutation owner per feature and one shared lifecycle
+runtime for stale-session recovery/diagnostics.
 
 ## Production symptom
 
@@ -94,30 +98,56 @@ single `interaction.response.edit_message(...)` with no DB, role, ticket,
 verification, or native-guard dependency. If that fresh button is unacknowledged,
 the fault is below feature business logic.
 
-Many `/dank` menu views have a 900-second in-memory lifetime and are intentionally
-not persistent. A Discloud redeploy invalidates panels opened before that restart;
-that expected stale-menu behavior must not be confused with fresh-panel failure.
+The screenshot of the app-style `/dank home` panel proved a second root cause:
+the panel was created at **2:58 AM** and observed failing at **3:17 AM**, while
+`CompactDankHomeView` used a 900-second (15-minute) in-memory timeout. That is a
+19-minute-old private session. Discord kept rendering the enabled-looking buttons
+after discord.py had removed their ViewStore owner.
 
-### Passive component ingress/ACK observability
+This failure predates PR #309's later merge/redeploy, so #309 did not cause that
+specific dashboard outage.
 
-The shared interaction service now installs one passive observer before Discord
-login. It never acknowledges, dispatches, retries, or mutates a feature. For a
-component that reaches the current process but remains unanswered after 2 seconds,
-it records bounded diagnostics containing custom ID, interaction/message IDs,
-message author ID, current bot ID, interaction application ID, interaction age,
-and the current persistent-view count/types. Startup also logs the current bot
-identity and persistent-view snapshot once.
+A Discloud redeploy creates the same symptom for any non-persistent private view:
+the message remains visible in Discord while the new process has no message-bound
+ViewStore owner. The correct product behavior is not to make destructive/session
+controls immortal; it is to recover a definitely orphaned private session safely
+without replaying its stale action.
 
-This discriminates the two remaining system classes without adding another
-fallback owner:
+### Shared component lifecycle runtime
 
-1. no observer event for a reproduced click => Discord did not deliver that
-   component to this Gateway process (foreign/stale application ownership or
-   external interaction-delivery configuration must be checked);
-2. observer records `component_unacknowledged` => the click reached Dank Shield
-   but native ViewStore/callback/ack handling did not claim it.
+The pre-login shared interaction service is now the canonical
+`install_component_interaction_runtime()`.
 
-The observer is globally bounded to avoid log storms on a large public bot.
+For each component interaction it mirrors discord.py 2.7.1's real ViewStore
+ownership lookup:
+
+1. exact message-ID owner;
+2. global persistent owner registered under `None`;
+3. dynamic-item pattern owner.
+
+If any owner exists, the runtime does **not** handle the click. Native discord.py
+dispatch remains authoritative.
+
+If **no** ViewStore owner exists and the source message is private/ephemeral, the
+runtime gives existing additive listeners a short grace window. If the click is
+still unanswered and still has no ViewStore owner, it does **not replay the stale
+button action**. It opens a fresh canonical Dank Shield Control Center and tells
+the user the old action was not executed.
+
+That makes expired/restarted private menus self-healing without creating a second
+business-logic implementation.
+
+Non-ephemeral/public components are not generically replayed. Durable public
+panels remain feature-owned by their persistent views/reconciliation logic.
+
+The runtime also keeps bounded ingress/ACK observability. Components that have a
+real owner but remain unanswered near Discord's acknowledgement deadline are
+logged with custom ID, message/application identity, interaction age, and
+persistent-view inventory.
+
+Because the ownership check intentionally mirrors discord.py internals, recovery
+is pinned to `discord.py==2.7.1`. Unknown library/ViewStore layouts fail closed:
+recovery disables itself instead of stealing a potentially valid callback.
 
 ### Shared lifecycle defect: persisted message ID was treated as ownership proof
 
@@ -203,6 +233,21 @@ real defer failure on an unanswered interaction returns false and stops before
 mutation.
 
 ## Repair
+
+### Product-wide private-session lifecycle policy
+
+`panel_lifecycle.py` now owns the normal private navigation session lifetime
+(`PRIVATE_MENU_TTL_SECONDS = 15 minutes`) and stale recovery grace.
+
+The main public command centers use that shared value instead of each defining
+their own copy. The compact `/dank home` panel now also uses stable semantic
+component IDs such as `dank:home:setup:v1`,
+`dank:home:verification:v1`, and `dank:home:close:v1` so production logs and
+future migrations can identify exact controls instead of random generated IDs.
+
+The Control Center explains its private-session lifetime to users. Expired or
+pre-redeploy private controls recover to a fresh Control Center automatically
+when discord.py proves they have no owner.
 
 ### Canonical runtime ownership only
 
@@ -307,8 +352,15 @@ Focused coverage now verifies:
 
 - shared native guard stops before action when an unanswered defer fails;
 - already-acknowledged canonical flows remain valid through the shared guard;
-- passive component observer records only still-unacknowledged component clicks;
-- component observer registration is idempotent;
+- ViewStore ownership detection covers message-specific, global persistent, and
+  dynamic-item routes;
+- unowned ephemeral components recover to a fresh canonical Control Center;
+- owned components are never taken over by stale recovery;
+- existing additive interaction listeners receive a grace window before recovery;
+- unowned public components are not generically replayed;
+- unknown discord.py/ViewStore versions fail closed;
+- component runtime registration is idempotent;
+- still-unacknowledged owned components remain observable;
 
 - failed ticket acknowledgement stops before lookup/mutation;
 - already-acknowledged direct Confirm remains valid;
@@ -339,6 +391,11 @@ Focused coverage now verifies:
 - no schema migration;
 - no all-channel scan;
 - no all-message scan;
+- no per-guild background private-menu watcher;
+- stale private recovery runs only when a user actually clicks an orphaned
+  component and only after ViewStore proves no native owner exists;
+- recovery never replays the stale feature mutation;
+- component probes/logging are globally bounded;
 - already-migrated panel identities require zero Discord REST at restart;
 - legacy reconciliation is bounded and recovery-budget paced;
 - replacement occurs only for a configured message that is clearly a Dank Shield
@@ -367,17 +424,21 @@ runtime owner.
 
 ## Backlog
 
-After persistent-panel interaction reliability closes:
+After the production-wide interaction runtime closes:
 
 - reduce startup activity-history recovery cost/noise and its multi-minute REST
   reconciliation footprint;
-- re-check live Basic Verify and Create Ticket acceptance after Discloud deploy.
+- live-acceptance check a fresh `/dank home`, an intentionally stale private
+  menu, Basic Verify, Create Ticket, Verification Center, Ticket Center,
+  Moderation Center, Protection Center, Server Stats, and Server Design after
+  Discloud deploy.
 
 ## Next step
 
-Run exact-head CI for the shared-runtime branch, inspect all changed callers for
-pre-ack/modal compatibility, and keep PR #311 unmerged until the final diff and
-review gates pass. After deploy, the new component-runtime lines provide the
-production proof needed to distinguish Gateway/application ownership from a
-current-process acknowledgement miss. Do not start the startup-performance
-backlog until this P0 is closed.
+Run exact-head CI for the full component-lifecycle branch. Inspect shared
+ViewStore recovery, acknowledgement boundaries, durable panel reconciliation,
+root component IDs, and all changed public centers. Keep PR #311 unmerged until
+compile, full pytest, standalone audits, all workflow gates, final diff/review
+inspection, currentness, and mergeability are proven. Then merge the exact head
+and use Discloud's redeploy plus the new component-runtime telemetry for live
+acceptance. Do not start the startup-performance backlog until this P0 is closed.
