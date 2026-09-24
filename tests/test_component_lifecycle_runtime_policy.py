@@ -12,6 +12,7 @@ from stoney_verify.commands_ext.public_command_surface_v2 import (
     CompactHelpView,
 )
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+from stoney_verify.runtime_release import runtime_release_snapshot
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -97,6 +98,41 @@ def test_private_stale_recovery_never_replays_feature_business_logic() -> None:
     assert "create_text_channel" not in body
     assert "add_roles" not in body
     assert "remove_roles" not in body
+
+
+def test_interaction_runtime_and_profile_owner_fail_closed_at_boot() -> None:
+    app = (ROOT / "stoney_verify" / "app.py").read_text(encoding="utf-8")
+    commands = (ROOT / "stoney_verify" / "commands.py").read_text(encoding="utf-8")
+    profile = (ROOT / "stoney_verify" / "commands_ext" / "public_self_roles_group.py").read_text(encoding="utf-8")
+
+    assert 'raise RuntimeError("shared component lifecycle runtime did not register")' in app
+    assert "install_profile_interaction_runtime" in commands
+    assert "_install_profile_interaction_runtime(bot, strict=True)" in commands
+    assert commands.index("_install_profile_interaction_runtime(bot, strict=True)") < commands.index(
+        "register_all_commands(bot, bot.tree)"
+    )
+
+    assert "def install_profile_interaction_runtime(" in profile
+    assert 'add_listener(_interaction_listener, "on_interaction")' in profile
+    assert "persistent ProfilePanelView registration failed" in profile
+    assert "if strict:" in profile
+    assert "raise RuntimeError(message)" in profile
+
+
+def test_runtime_proof_is_host_independent_and_component_status_is_exposed() -> None:
+    snapshot = runtime_release_snapshot()
+    assert snapshot["proof_version"] == "runtime-proof-v1"
+    assert snapshot["source_fingerprint"]
+    assert snapshot["source_fingerprint"] != "unavailable"
+
+    guard = (ROOT / "stoney_verify" / "interaction_guard.py").read_text(encoding="utf-8")
+    status = (ROOT / "stoney_verify" / "commands_ext" / "public_status_reporter.py").read_text(encoding="utf-8")
+    assert "def component_runtime_status(" in guard
+    assert "_record_component_ingress(bot, interaction)" in guard
+    assert "_COMPONENT_UNACKNOWLEDGED_COUNT" in guard
+    assert "release={runtime_release_label()}" in guard
+    assert 'name="Runtime Proof"' in status
+    assert "component_runtime_status(bot)" in status
 
 
 def test_durable_public_panels_remain_persistent_not_private_sessions() -> None:
