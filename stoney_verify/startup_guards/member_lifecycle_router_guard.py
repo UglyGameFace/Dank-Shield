@@ -499,6 +499,10 @@ async def _ready_listener() -> None:
                 cfg = await _load_config(int(guild.id))
                 join_channel, join_reason = resolve_join_card_channel(guild, cfg)
                 join_log_channel = _resolve_channel(guild, cfg, JOIN_LEAVE_KEYS)
+                join_log_ready, join_log_health = _lifecycle_channel_health(
+                    guild,
+                    join_log_channel,
+                )
                 exit_channel, exit_reason = resolve_exit_card_channel(guild, cfg)
                 staff_channel = _resolve_channel(guild, cfg, STAFF_AUDIT_KEYS)
                 _log(
@@ -507,6 +511,8 @@ async def _ready_listener() -> None:
                     f"join_card={getattr(join_channel, 'id', None) or '-'} "
                     f"join_reason={join_reason!r} "
                     f"join_log={getattr(join_log_channel, 'id', None) or '-'} "
+                    f"join_log_ready={join_log_ready} "
+                    f"join_log_health={join_log_health!r} "
                     f"exit={getattr(exit_channel, 'id', None) or '-'} "
                     f"exit_reason={exit_reason!r} "
                     f"staff={getattr(staff_channel, 'id', None) or '-'}"
