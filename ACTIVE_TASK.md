@@ -2,24 +2,26 @@
 
 ## Active task / desired outcome
 
-**P0-TICKET-PANEL-001 — restore Create Ticket interaction reliability across deploy/restart**
+**P0-PERSISTENT-PANEL-001 — restore Basic Verify + Create Ticket interaction reliability across deploy/restart**
 
-Fix the live public **Create Ticket** panel so an already-posted panel cannot
-silently lose its interaction route after bot restarts, application identity
-changes, or command-registration refactors.
+Fix the live public **Basic Verify** and **Create Ticket** panels so already-posted
+components cannot silently lose their interaction route after bot restarts,
+application identity changes, or command-registration refactors. Keep one
+canonical business/mutation owner per feature.
 
 ## Production symptom
 
-Members press **Create Ticket** and Discord returns:
+Production has two confirmed durable-panel failures:
 
-`This interaction failed`
+- the green **Verify** button returns Discord's red `This interaction failed`;
+- **Create Ticket** returns the same red interaction failure.
 
-The failure appears alongside the recent Basic Verify/persistent-panel incidents,
-but ticket creation has its own runtime and must be repaired independently.
+The matching symptom is significant because neither canonical handler can ack a
+component interaction that Discord routes to a different application identity.
 
 ## Status
 
-**IMPLEMENTED — PR #310 compatibility folded into #311; exact-head validation rerun pending**
+**IMPLEMENTED — shared application-identity repair added to #311; exact-head validation pending**
 
 Branch: `fix/ticket-panel-restart-reconciliation-20260924`
 
@@ -50,7 +52,26 @@ existing delayed fallback is normally real in production.
 
 ## Root-cause findings
 
-Two concrete lifecycle defects remained.
+### Shared lifecycle defect: persisted message ID was treated as ownership proof
+
+PR #308 correctly added exact message-ID persistence/binding for Basic Verify, but
+its fast path stored only `basic_verify_panel_message_id`. Once that ID existed,
+startup called `bot.add_view(..., message_id=...)` without proving the saved
+message was authored by the currently running Discord application.
+
+That means a foreign-application Basic Verify message could be persisted and then
+faithfully rebound forever even though its click can never arrive at the current
+bot. The existing persistent view and delayed fallback are powerless in that
+case because there is no gateway interaction to acknowledge.
+
+The #308 regression test explicitly codified the zero-REST message-ID-only fast
+path, so this was a real architectural gap rather than missing registration.
+
+Ticket #311 independently identified the same ownership problem for Create
+Ticket. The active task therefore covers both durable public panels under one
+root-cause class instead of shipping separate bandages.
+
+The ticket path also had these concrete lifecycle defects:
 
 ### 1. Saved panel identity was never used by the runtime
 
@@ -123,7 +144,20 @@ failures identify the exact panel generation immediately.
 
 ### Persist exact panel + application identity
 
-Panel posting now persists through canonical guild-config ownership:
+Basic Verify now persists both:
+
+- `basic_verify_panel_message_id`;
+- `basic_verify_panel_application_id`.
+
+Its restart reconciler only takes the zero-REST exact-bind path when the saved
+application identity matches the current bot. Legacy persisted IDs without an
+application ID are bounded by the existing startup recovery cap and fetch only
+the exact saved message. Current-app messages are migrated by persisting the
+application identity; foreign-app messages are replaced by a current-app panel,
+and the stale foreign panel is deleted only when it is clearly a Basic Verify
+panel and Manage Messages is available.
+
+Create Ticket panel posting now persists through canonical guild-config ownership:
 
 - `ticket_panel_channel_id`;
 - `ticket_panel_message_id`;
@@ -183,6 +217,10 @@ security are unchanged.
 
 Focused coverage now verifies:
 
+- Basic Verify saved current-application panels bind with zero REST;
+- Basic Verify legacy saved IDs fetch the exact message and persist application identity;
+- Basic Verify foreign-application saved panels are replaced;
+- Basic Verify unknown-identity recovery respects the bounded startup REST cap;
 - persistent view + real delayed fallback + ready reconciler registration;
 - idempotent registration;
 - fallback-only degraded operation;
@@ -231,7 +269,7 @@ runtime owner.
 
 ## Backlog
 
-After ticket interaction reliability closes:
+After persistent-panel interaction reliability closes:
 
 - reduce startup activity-history recovery cost/noise and its multi-minute REST
   reconciliation footprint;
@@ -239,6 +277,7 @@ After ticket interaction reliability closes:
 
 ## Next step
 
-Run exact-head CI after folding PR #310 compatibility into #311. If all
-workflows remain green, perform final currentness/diff/review inspection, close
-the superseded PR #310, and make PR #311 ready for merge.
+Run exact-head CI after the shared Basic Verify application-identity repair. If
+all workflows are green, perform final currentness/diff/review inspection and
+make PR #311 ready for merge. PR #310 is already superseded/closed; do not revive
+it.
