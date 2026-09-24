@@ -38,6 +38,7 @@ LEGACY_REASONS = {
     "Dank Shield AntiNuke containment: Thread/forum-post mutation",
     "Dank Shield AntiNuke containment: Soundboard creation",
     "Dank Shield AntiNuke containment: Soundboard mutation",
+    "Dank Shield AntiNuke containment: Message deletion",
 }
 
 
@@ -159,7 +160,7 @@ def test_real_destructive_reputation_is_never_cleared(monkeypatch) -> None:
 def test_fast_reentry_cannot_reban_benign_action_false_positive(monkeypatch) -> None:
     _reset()
     hostile._MEMORY[(10, 55)] = _legacy_row(  # noqa: SLF001
-        "Dank Shield AntiNuke containment: Scheduled-event cancellation"
+        "Dank Shield AntiNuke containment: Message deletion"
     )
     clears: list[int] = []
     bans: list[int] = []

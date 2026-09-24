@@ -365,15 +365,29 @@ async def _delete_message_object(message: discord.Message) -> bool:
         except Exception:
             return False
 
-        await message.delete(reason="Dank Shield Spam Guard burst cleanup sweep")
+        await message.delete()
         return True
     except discord.NotFound:
         return False
-    except discord.Forbidden:
+    except (discord.Forbidden, discord.HTTPException) as exc:
+        try:
+            print(
+                "⚠️ public_spam_cleanup_hardening delete blocked "
+                f"guild={getattr(getattr(message, 'guild', None), 'id', 0)} "
+                f"message={getattr(message, 'id', 0)} error={type(exc).__name__}"
+            )
+        except Exception:
+            pass
         return False
-    except discord.HTTPException:
-        return False
-    except Exception:
+    except Exception as exc:
+        try:
+            print(
+                "⚠️ public_spam_cleanup_hardening delete failed "
+                f"guild={getattr(getattr(message, 'guild', None), 'id', 0)} "
+                f"message={getattr(message, 'id', 0)} error={type(exc).__name__}: {exc}"
+            )
+        except Exception:
+            pass
         return False
 
 

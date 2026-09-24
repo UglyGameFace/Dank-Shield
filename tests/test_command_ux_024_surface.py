@@ -59,6 +59,7 @@ def test_home_exposes_all_major_centers() -> None:
         "Roles & Profiles",
         "Logs & Activity",
         "My Profile",
+        "Server Stats",
         "Status",
         "Diagnostics",
         "Card Assets",
