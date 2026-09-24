@@ -33,6 +33,9 @@ _ACTION_LOCKS: dict[str, asyncio.Lock] = {}
 _COMPONENT_OBSERVER_INSTALLED = False
 _COMPONENT_OBSERVER_READY_LOGGED = False
 _COMPONENT_OBSERVER_GRACE_SECONDS = 2.0
+_COMPONENT_OBSERVER_PROBE_WINDOW_SECONDS = 60.0
+_COMPONENT_OBSERVER_PROBE_LIMIT = 60
+_COMPONENT_OBSERVER_PROBE_TIMES: list[float] = []
 _COMPONENT_OBSERVER_LOG_WINDOW_SECONDS = 60.0
 _COMPONENT_OBSERVER_LOG_LIMIT = 20
 _COMPONENT_OBSERVER_LOG_TIMES: list[float] = []
@@ -369,6 +372,17 @@ async def safe_defer_interaction(
     return False
 
 
+def _observer_probe_allowed() -> bool:
+    now = time.monotonic()
+    cutoff = now - _COMPONENT_OBSERVER_PROBE_WINDOW_SECONDS
+    while _COMPONENT_OBSERVER_PROBE_TIMES and _COMPONENT_OBSERVER_PROBE_TIMES[0] <= cutoff:
+        _COMPONENT_OBSERVER_PROBE_TIMES.pop(0)
+    if len(_COMPONENT_OBSERVER_PROBE_TIMES) >= _COMPONENT_OBSERVER_PROBE_LIMIT:
+        return False
+    _COMPONENT_OBSERVER_PROBE_TIMES.append(now)
+    return True
+
+
 def _observer_log_allowed() -> bool:
     now = time.monotonic()
     cutoff = now - _COMPONENT_OBSERVER_LOG_WINDOW_SECONDS
@@ -413,6 +427,8 @@ async def _observe_component_ack(bot: Any, interaction: discord.Interaction) -> 
         if interaction.type is not discord.InteractionType.component:
             return
         if _response_done(interaction):
+            return
+        if not _observer_probe_allowed():
             return
         await asyncio.sleep(_COMPONENT_OBSERVER_GRACE_SECONDS)
         if _response_done(interaction):
