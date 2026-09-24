@@ -66,7 +66,7 @@ from .members_new.activity_tracker import (
     persisted_last_heartbeat_at as _persisted_last_heartbeat_at,
 )
 from .interaction_guard import (
-    install_component_interaction_observer as _install_component_interaction_observer,
+    install_component_interaction_runtime as _install_component_interaction_runtime,
 )
 from .startup_recovery_coordinator import startup_recovery_slot
 from .tickets_new import service as _tickets_service  # noqa: F401
@@ -92,16 +92,16 @@ except Exception as e:
     )
     raise
 
-# Passive production-wide component observability. This listener never handles
-# a click or mutates feature state; it only records component interactions that
-# reached this process but remained unacknowledged after the native ViewStore
-# and feature callbacks had time to respond.
+# Production-wide component lifecycle safety. The runtime never replays stale
+# business actions. It proves whether discord.py has an owner for each private
+# component, self-recovers orphaned private menus to a fresh Control Center, and
+# records components that still miss the acknowledgement window.
 try:
-    if not _install_component_interaction_observer(bot):
-        print("⚠️ component_runtime observer was not installed")
+    if not _install_component_interaction_runtime(bot):
+        print("⚠️ component_runtime was not installed")
 except Exception as e:
     print(
-        "⚠️ component_runtime observer install failed:",
+        "⚠️ component_runtime install failed:",
         repr(e),
     )
 
