@@ -561,6 +561,7 @@ async def post_basic_verify_panel(
     *,
     actor_id: int = 0,
     bot_instance: Any = None,
+    require_history_scan_for_post: bool = False,
 ) -> str:
     if not isinstance(channel, discord.TextChannel):
         return "invalid_channel"
@@ -570,6 +571,7 @@ async def post_basic_verify_panel(
     embed = build_basic_verify_embed(channel.guild, cfg)
     view = BasicVerifyView()
 
+    history_scan_completed = False
     try:
         me = channel.guild.me
         me_id = int(getattr(me, "id", 0) or 0)
@@ -593,8 +595,20 @@ async def post_basic_verify_panel(
                 if target_bot is not None:
                     _bind_basic_verify_panel_message(target_bot, int(msg.id))
                 return "updated"
-    except Exception:
-        pass
+        history_scan_completed = True
+    except Exception as exc:
+        try:
+            print(
+                "⚠️ basic_verify panel history scan failed "
+                f"guild={getattr(channel.guild, 'id', 0)} "
+                f"channel={getattr(channel, 'id', 0)} "
+                f"error={type(exc).__name__}: {exc}"
+            )
+        except Exception:
+            pass
+
+    if require_history_scan_for_post and not history_scan_completed:
+        return "scan_failed"
 
     msg = await channel.send(
         embed=embed,
@@ -727,6 +741,7 @@ async def _reconcile_one_basic_verify_panel(
         return await post_basic_verify_panel(
             channel,
             bot_instance=bot,
+            require_history_scan_for_post=True,
         )
 
     # A disabled-mode legacy panel is still worth locating and binding so its
