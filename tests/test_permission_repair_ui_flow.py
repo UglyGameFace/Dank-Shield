@@ -110,8 +110,16 @@ def test_setup_apply_reports_only_successful_discord_writes(monkeypatch) -> None
         return [item], [], [], []
 
     monkeypatch.setattr(setup_permission_repair_services, "_build_expanded_targets", build_targets)
-    monkeypatch.setattr(legacy, "_bot_member", lambda _guild: object())
-    monkeypatch.setattr(legacy, "_channel_manage_missing", lambda _channel, _me: False)
+    monkeypatch.setattr(
+        setup_permission_repair_services.repair_core,
+        "_bot_member",
+        lambda _guild: object(),
+    )
+    monkeypatch.setattr(
+        setup_permission_repair_services.repair_core,
+        "permission_overwrite_edit_blocker",
+        lambda _guild, _channel: "",
+    )
     monkeypatch.setattr(legacy, "_channel_label", lambda _channel: "#test")
     monkeypatch.setattr(legacy, "_target_label", lambda _target: "@Dank Shield")
     monkeypatch.setattr(legacy, "_overwrite_changed", lambda _current, _expected: True)
