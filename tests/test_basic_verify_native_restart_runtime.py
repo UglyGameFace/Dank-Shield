@@ -23,10 +23,10 @@ class FakeBot:
         self.fail_view = fail_view
         self.fail_listener = fail_listener
 
-    def add_view(self, view: object) -> None:
+    def add_view(self, view: object, *, message_id: int | None = None) -> None:
         if self.fail_view:
             raise RuntimeError("view registration failed")
-        self.views.append(view)
+        self.views.append((view, message_id))
 
     def add_listener(self, listener: object, name: str) -> None:
         if self.fail_listener:
@@ -38,6 +38,9 @@ def _reset_runtime_state() -> None:
     runtime._RUNTIME_VIEW_REGISTERED = False
     runtime._RUNTIME_FALLBACK_LISTENER_REGISTERED = False
     runtime._RUNTIME_REGISTRATION_ERROR = ""
+    runtime._RUNTIME_READY_RECONCILER_REGISTERED = False
+    runtime._RUNTIME_READY_RECONCILE_STARTED = False
+    runtime._BOUND_PANEL_MESSAGE_IDS.clear()
     runtime._BASIC_VERIFY_LOCKS.clear()
 
 
@@ -59,10 +62,13 @@ def test_runtime_registers_persistent_view_and_delayed_safety_listener(
 
     assert runtime.install_basic_verify_runtime(fake_bot, strict=True) is True
 
-    assert fake_bot.views == [sentinel_view]
-    assert fake_bot.listeners == [
-        (runtime._basic_verify_fallback_listener, "on_interaction")
-    ]
+    assert fake_bot.views == [(sentinel_view, None)]
+    assert len(fake_bot.listeners) == 2
+    assert fake_bot.listeners[0] == (
+        runtime._basic_verify_fallback_listener,
+        "on_interaction",
+    )
+    assert fake_bot.listeners[1][1] == "on_ready"
     assert runtime.basic_verify_runtime_status() == {
         "persistent_view_registered": True,
         "fallback_listener_registered": True,
@@ -80,9 +86,12 @@ def test_runtime_uses_listener_only_when_persistent_view_registration_fails(
     assert runtime.install_basic_verify_runtime(fake_bot, strict=True) is True
 
     assert fake_bot.views == []
-    assert fake_bot.listeners == [
-        (runtime._basic_verify_fallback_listener, "on_interaction")
-    ]
+    assert len(fake_bot.listeners) == 2
+    assert fake_bot.listeners[0] == (
+        runtime._basic_verify_fallback_listener,
+        "on_interaction",
+    )
+    assert fake_bot.listeners[1][1] == "on_ready"
     status = runtime.basic_verify_runtime_status()
     assert status["persistent_view_registered"] is False
     assert status["fallback_listener_registered"] is True
@@ -97,13 +106,13 @@ def test_runtime_can_fill_missing_persistent_view_without_duplicate_listener(
     monkeypatch.setattr(runtime, "BasicVerifyView", lambda: object())
 
     assert runtime.install_basic_verify_runtime(fake_bot, strict=True) is True
-    assert len(fake_bot.listeners) == 1
+    assert len(fake_bot.listeners) == 2
     assert fake_bot.views == []
 
     fake_bot.fail_view = False
     assert runtime.install_basic_verify_runtime(fake_bot, strict=True) is True
 
-    assert len(fake_bot.listeners) == 1
+    assert len(fake_bot.listeners) == 2
     assert len(fake_bot.views) == 1
     status = runtime.basic_verify_runtime_status()
     assert status["persistent_view_registered"] is True
@@ -120,9 +129,12 @@ def test_runtime_install_is_idempotent_after_full_registration(
     assert runtime.install_basic_verify_runtime(fake_bot, strict=True) is True
 
     assert len(fake_bot.views) == 1
-    assert fake_bot.listeners == [
-        (runtime._basic_verify_fallback_listener, "on_interaction")
-    ]
+    assert len(fake_bot.listeners) == 2
+    assert fake_bot.listeners[0] == (
+        runtime._basic_verify_fallback_listener,
+        "on_interaction",
+    )
+    assert fake_bot.listeners[1][1] == "on_ready"
 
 
 def test_strict_runtime_fails_closed_when_no_interaction_route_can_register(
@@ -286,6 +298,207 @@ def test_delayed_fallback_claims_click_when_persistent_dispatch_misses(
 
         assert calls == [interaction]
         assert response.is_done() is True
+
+    asyncio.run(scenario())
+
+
+def test_persisted_panel_message_id_binds_exact_message_without_history_scan(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        class FakeGuild:
+            id = 77
+
+            def get_channel(self, _channel_id: int):
+                raise AssertionError("persisted panel binding must not scan a channel")
+
+        fake_bot = FakeBot()
+        sentinel_view = object()
+        monkeypatch.setattr(runtime, "BasicVerifyView", lambda: sentinel_view)
+
+        result = await runtime._reconcile_one_basic_verify_panel(
+            fake_bot,
+            FakeGuild(),
+            {
+                runtime._BASIC_VERIFY_PANEL_MESSAGE_ID_KEY: "123456",
+                "verify_channel_id": "999",
+            },
+        )
+
+        assert result == "bound"
+        assert fake_bot.views == [(sentinel_view, 123456)]
+        assert 123456 in runtime._BOUND_PANEL_MESSAGE_IDS
+
+    asyncio.run(scenario())
+
+
+def test_legacy_current_bot_panel_is_updated_persisted_and_bound(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        edits: list[object] = []
+        writes: list[tuple[int, int]] = []
+
+        class FakeMessage:
+            id = 555
+            author = SimpleNamespace(id=42)
+            embeds = [discord.Embed(title="Verify to unlock server access")]
+
+            async def edit(self, *, embed, view) -> None:
+                edits.append((embed, view))
+
+        class FakeHistory:
+            def __aiter__(self):
+                self._done = False
+                return self
+
+            async def __anext__(self):
+                if self._done:
+                    raise StopAsyncIteration
+                self._done = True
+                return FakeMessage()
+
+        class FakeTextChannel:
+            id = 99
+            guild = None
+
+            def history(self, *, limit: int):
+                assert limit == 80
+                return FakeHistory()
+
+            async def send(self, *args, **kwargs):
+                raise AssertionError("existing current-bot panel must be updated")
+
+        class FakeGuild:
+            id = 77
+            me = SimpleNamespace(id=42)
+
+            def __init__(self) -> None:
+                self.channel = FakeTextChannel()
+                self.channel.guild = self
+
+            def get_channel(self, channel_id: int):
+                assert channel_id == 99
+                return self.channel
+
+        async def fake_cfg(_guild_id: int, refresh: bool = False):
+            assert refresh is True
+            return {
+                "verify_channel_id": "99",
+                "basic_verify_enabled": True,
+            }
+
+        async def fake_persist(guild_id: int, message_id: int) -> None:
+            writes.append((guild_id, message_id))
+
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+        monkeypatch.setattr(runtime, "get_guild_config", fake_cfg)
+        monkeypatch.setattr(
+            runtime,
+            "basic_verify_allowed_for_guild",
+            lambda _guild, _cfg: True,
+        )
+        monkeypatch.setattr(runtime, "build_basic_verify_embed", lambda *_a: discord.Embed(title="fresh"))
+        monkeypatch.setattr(runtime, "is_basic_verify_panel_embed", lambda _embed: True)
+        monkeypatch.setattr(
+            runtime,
+            "_persist_basic_verify_panel_message_id",
+            fake_persist,
+        )
+
+        bot = FakeBot()
+        guild = FakeGuild()
+
+        result = await runtime.post_basic_verify_panel(
+            guild.channel,
+            bot_instance=bot,
+        )
+
+        assert result == "updated"
+        assert len(edits) == 1
+        assert writes == [(77, 555)]
+        assert bot.views[0][1] == 555
+
+    asyncio.run(scenario())
+
+
+def test_foreign_legacy_panel_causes_fresh_current_bot_panel(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        writes: list[tuple[int, int]] = []
+
+        class FakeMessage:
+            def __init__(self, *, message_id: int, author_id: int) -> None:
+                self.id = message_id
+                self.author = SimpleNamespace(id=author_id)
+                self.embeds = [discord.Embed(title="Verify to unlock server access")]
+
+        class FakeHistory:
+            def __aiter__(self):
+                self._items = iter([FakeMessage(message_id=444, author_id=999)])
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._items)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+        class FakeTextChannel:
+            id = 99
+            guild = None
+
+            def history(self, *, limit: int):
+                assert limit == 80
+                return FakeHistory()
+
+            async def send(self, *args, **kwargs):
+                return SimpleNamespace(id=777)
+
+        class FakeGuild:
+            id = 77
+            me = SimpleNamespace(id=42)
+
+            def __init__(self) -> None:
+                self.channel = FakeTextChannel()
+                self.channel.guild = self
+
+        async def fake_cfg(_guild_id: int, refresh: bool = False):
+            return {
+                "verify_channel_id": "99",
+                "basic_verify_enabled": True,
+            }
+
+        async def fake_persist(guild_id: int, message_id: int) -> None:
+            writes.append((guild_id, message_id))
+
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+        monkeypatch.setattr(runtime, "get_guild_config", fake_cfg)
+        monkeypatch.setattr(
+            runtime,
+            "basic_verify_allowed_for_guild",
+            lambda _guild, _cfg: True,
+        )
+        monkeypatch.setattr(runtime, "build_basic_verify_embed", lambda *_a: discord.Embed(title="fresh"))
+        monkeypatch.setattr(runtime, "is_basic_verify_panel_embed", lambda _embed: True)
+        monkeypatch.setattr(
+            runtime,
+            "_persist_basic_verify_panel_message_id",
+            fake_persist,
+        )
+
+        bot = FakeBot()
+        guild = FakeGuild()
+
+        result = await runtime.post_basic_verify_panel(
+            guild.channel,
+            bot_instance=bot,
+        )
+
+        assert result == "posted"
+        assert writes == [(77, 777)]
+        assert bot.views[0][1] == 777
 
     asyncio.run(scenario())
 
