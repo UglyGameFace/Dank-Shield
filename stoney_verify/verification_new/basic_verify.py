@@ -139,6 +139,22 @@ def _channel_by_name(guild: discord.Guild, *tokens: str) -> Optional[discord.Tex
     return None
 
 
+def _reconcile_verify_channel(
+    guild: discord.Guild,
+    cfg: Any,
+) -> Optional[discord.TextChannel]:
+    """Resolve the one Basic Verify channel without REST or all-channel scans."""
+    return (
+        _channel_from_cfg(
+            guild,
+            cfg,
+            "verify_channel_id",
+            "verification_channel_id",
+        )
+        or _channel_by_name(guild, "verification", "verify")
+    )
+
+
 def _role(guild: discord.Guild, role_id: int) -> Optional[discord.Role]:
     try:
         role = guild.get_role(int(role_id or 0)) if int(role_id or 0) > 0 else None
@@ -634,6 +650,42 @@ def _bind_basic_verify_panel_message(
         return False
 
 
+async def _scan_basic_verify_panels(
+    channel: discord.TextChannel,
+    *,
+    limit: int = 80,
+) -> tuple[list[Any], list[Any]]:
+    """Return current-app and foreign-app Basic Verify messages newest first."""
+    current: list[Any] = []
+    foreign: list[Any] = []
+    me_id = _safe_int(getattr(getattr(channel.guild, "me", None), "id", 0), 0)
+
+    async for message in channel.history(limit=max(1, int(limit))):
+        if not _message_looks_like_basic_verify_panel(message):
+            continue
+        author_id = _safe_int(
+            getattr(getattr(message, "author", None), "id", 0),
+            0,
+        )
+        if author_id > 0 and author_id == me_id:
+            current.append(message)
+        else:
+            foreign.append(message)
+
+    return current, foreign
+
+
+async def _cleanup_foreign_basic_verify_panels(messages: list[Any]) -> int:
+    removed = 0
+    for message in list(messages or []):
+        try:
+            if await _delete_stale_foreign_basic_verify_panel(message):
+                removed += 1
+        except Exception:
+            continue
+    return removed
+
+
 async def post_basic_verify_panel(
     channel: discord.TextChannel,
     *,
@@ -650,30 +702,13 @@ async def post_basic_verify_panel(
     view = BasicVerifyView()
 
     history_scan_completed = False
+    current_panels: list[Any] = []
+    foreign_panels: list[Any] = []
     try:
-        me = channel.guild.me
-        me_id = int(getattr(me, "id", 0) or 0)
-        async for msg in channel.history(limit=80):
-            if int(getattr(getattr(msg, "author", None), "id", 0) or 0) != me_id:
-                continue
-            if not msg.embeds:
-                continue
-            if is_basic_verify_panel_embed(msg.embeds[0]):
-                await msg.edit(embed=embed, view=view)
-                await _persist_basic_verify_panel_message_id(
-                    int(channel.guild.id),
-                    int(msg.id),
-                    application_id=me_id,
-                )
-                target_bot = bot_instance
-                if target_bot is None:
-                    try:
-                        from stoney_verify.globals import bot as target_bot
-                    except Exception:
-                        target_bot = None
-                if target_bot is not None:
-                    _bind_basic_verify_panel_message(target_bot, int(msg.id))
-                return "updated"
+        current_panels, foreign_panels = await _scan_basic_verify_panels(
+            channel,
+            limit=80,
+        )
         history_scan_completed = True
     except Exception as exc:
         try:
@@ -685,6 +720,34 @@ async def post_basic_verify_panel(
             )
         except Exception:
             pass
+
+    me_id = _safe_int(getattr(getattr(channel.guild, "me", None), "id", 0), 0)
+    target_bot = bot_instance
+    if target_bot is None:
+        try:
+            from stoney_verify.globals import bot as target_bot
+        except Exception:
+            target_bot = None
+
+    if current_panels:
+        msg = current_panels[0]
+        await msg.edit(embed=embed, view=view)
+        await _persist_basic_verify_panel_message_id(
+            int(channel.guild.id),
+            int(msg.id),
+            application_id=me_id,
+        )
+        if target_bot is not None:
+            _bind_basic_verify_panel_message(target_bot, int(msg.id))
+        removed = await _cleanup_foreign_basic_verify_panels(foreign_panels)
+        if foreign_panels:
+            print(
+                "♻️ basic_verify legacy foreign cleanup "
+                f"guild={channel.guild.id} channel={channel.id} "
+                f"found={len(foreign_panels)} removed={removed} "
+                "replacement=current_existing"
+            )
+        return "updated"
 
     if require_history_scan_for_post and not history_scan_completed:
         return "scan_failed"
@@ -702,14 +765,16 @@ async def post_basic_verify_panel(
             _safe_int(getattr(getattr(channel.guild, "me", None), "id", 0), 0),
         ),
     )
-    target_bot = bot_instance
-    if target_bot is None:
-        try:
-            from stoney_verify.globals import bot as target_bot
-        except Exception:
-            target_bot = None
     if target_bot is not None:
         _bind_basic_verify_panel_message(target_bot, int(msg.id))
+    removed = await _cleanup_foreign_basic_verify_panels(foreign_panels)
+    if foreign_panels:
+        print(
+            "♻️ basic_verify legacy foreign cleanup "
+            f"guild={channel.guild.id} channel={channel.id} "
+            f"found={len(foreign_panels)} removed={removed} "
+            "replacement=current_posted"
+        )
     _ = actor_id
     return "posted"
 
@@ -820,14 +885,10 @@ async def _reconcile_one_basic_verify_panel(
             else "bind_failed"
         )
 
-    channel_id = _safe_int(
-        _cfg_value(cfg, "verify_channel_id", 0)
-        or _cfg_value(cfg, "verification_channel_id", 0),
-        0,
-    )
-    channel = guild.get_channel(channel_id) if channel_id > 0 else None
+    channel = _reconcile_verify_channel(guild, cfg)
     if not isinstance(channel, discord.TextChannel):
         return "no_channel"
+    channel_id = int(channel.id)
 
     if persisted_mid > 0:
         if not allow_legacy_rest:
