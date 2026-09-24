@@ -6,18 +6,25 @@ from typing import Any, Dict, List, Optional, Sequence
 
 
 # This is the explicit startup-health contract, not an activation registry.
-# Every module here has a verified owner in main.py, sitecustomize.py, or a
-# transitive import from one of those owners. Diagnostics only observe whether
-# those already-owned modules are present in sys.modules. They never import a
-# missing module as a repair action.
+# Every module here is an actual native production owner imported by main.py,
+# app.py, or commands.py before Discord login/command use. Diagnostics only
+# observe whether those already-owned modules are present in sys.modules. They
+# never import a missing module as a repair action.
+#
+# Do not list dormant compatibility guards or feature modules that are loaded
+# lazily on demand. Doing so turns an intentional architecture migration into a
+# permanent false startup warning.
 EXPECTED_STARTUP_OWNER_MODULES: tuple[str, ...] = (
     "stoney_verify.startup_guards.process_health",
     "stoney_verify.startup_guards.discord_api_safety",
     "stoney_verify.command_runtime",
     "stoney_verify.startup_guards.public_server_env_id_guard",
-    "stoney_verify.startup_guards.basic_verification_mode_guard",
-    "stoney_verify.startup_guards.id_verify_allowlist_guard",
-    "stoney_verify.startup_guards.unverified_ticket_panel_flow",
+    "stoney_verify.interaction_guard",
+    "stoney_verify.verification_new.basic_verify",
+    "stoney_verify.ticket_panel_runtime",
+    "stoney_verify.interaction_handlers",
+    "stoney_verify.commands_ext.public_self_roles_group",
+    "stoney_verify.members_new.activity_tracker",
 )
 
 
