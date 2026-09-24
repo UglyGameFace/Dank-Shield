@@ -298,7 +298,7 @@ def _member_log_manual_issues(
         issues.append(
             "Live exit-card route is unavailable: "
             + str(exit_reason or "no channel configured")
-            + ". Choose the intended Exit Card / join-leave log channel first."
+            + ". Choose the intended Exit Card Studio channel first."
         )
     if _staff_audit_is_configured(cfg) and not isinstance(staff_channel, discord.TextChannel):
         issues.append(
@@ -473,8 +473,9 @@ def _member_logs_embed(
     embed = discord.Embed(
         title="👋 Member Lifecycle Routing",
         description=(
-            "Welcome Card Studio owns the live join card. Exit Card Studio owns the live leave card. "
-            "Staff audit remains a separate route."
+            "Welcome Card Studio owns the member-facing join card. The operational "
+            "join/leave log independently records member lifecycle events. Exit Card "
+            "Studio owns the member-facing leave card. Staff audit remains separate."
         ),
         color=discord.Color.blurple(),
     )
