@@ -1,12 +1,71 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+from stoney_verify.commands_ext import common
 from stoney_verify.commands_ext import public_staff_scope
+from stoney_verify.commands_ext import public_verify_command_center
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+
+
+def _owner_interaction(*, owner_id: int = 111) -> SimpleNamespace:
+    guild = SimpleNamespace(id=999, owner_id=owner_id)
+    user = SimpleNamespace(id=owner_id, guild=guild)
+    return SimpleNamespace(guild=guild, user=user)
+
+
+def test_server_owner_is_staff_without_role_or_permission_resolution(monkeypatch) -> None:
+    interaction = _owner_interaction(owner_id=111)
+
+    monkeypatch.setattr(
+        public_staff_scope,
+        "_cached_runtime_config",
+        lambda _guild_id: {},
+    )
+
+    assert public_staff_scope.scoped_is_staff(interaction.user) is True
+    assert public_staff_scope.scoped_interaction_is_staff(interaction) is True
+    assert common._staff_check(interaction) is True
+
+
+def test_non_owner_without_member_state_or_staff_config_fails_closed(monkeypatch) -> None:
+    guild = SimpleNamespace(id=999, owner_id=111)
+    user = SimpleNamespace(id=222, guild=guild)
+    interaction = SimpleNamespace(guild=guild, user=user)
+
+    monkeypatch.setattr(
+        public_staff_scope,
+        "_cached_runtime_config",
+        lambda _guild_id: {},
+    )
+
+    assert public_staff_scope.scoped_is_staff(user) is False
+    assert public_staff_scope.scoped_interaction_is_staff(interaction) is False
+    assert common._staff_check(interaction) is False
+
+
+def test_verification_center_accepts_actual_server_owner(monkeypatch) -> None:
+    async def scenario() -> None:
+        interaction = _owner_interaction(owner_id=111)
+
+        async def forbidden_private(*args, **kwargs) -> None:
+            raise AssertionError("server owner must not receive Staff only")
+
+        monkeypatch.setattr(
+            public_verify_command_center,
+            "_private",
+            forbidden_private,
+        )
+
+        assert await public_verify_command_center._require_staff(interaction) is True
+
+    asyncio.run(scenario())
 
 
 def test_configured_ticket_staff_roles_support_object_and_dict_configs(monkeypatch) -> None:
@@ -41,6 +100,9 @@ def test_cold_public_config_cache_fails_safe_to_no_staff_roles(monkeypatch) -> N
 def test_ticket_ui_and_permission_sync_use_per_guild_staff_truth() -> None:
     source = (ROOT / "stoney_verify/commands_ext/public_staff_scope.py").read_text(encoding="utf-8")
     assert "ticket_panel._is_staff_member = scoped_is_staff" in source
+    assert "common._staff_check = scoped_interaction_is_staff" in source
+    assert "def scoped_interaction_is_staff" in source
+    assert "_is_actual_guild_owner" in source
     assert "ticket_transcripts._is_staff_member = scoped_is_staff" in source
     assert "ticket_service._default_staff_role_ids = configured_ticket_staff_role_ids" in source
     assert "install_transcript_claim_runtime_guards(ticket_transcripts)" in source
