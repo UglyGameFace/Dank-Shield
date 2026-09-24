@@ -902,7 +902,7 @@ def test_disable_keeps_failed_cleanup_ids_for_safe_retry(monkeypatch) -> None:
     )
 
     assert ok is False
-    assert "safe retry" in note
+    assert "safely retry" in note
     assert category.deleted is False
     assert writes[-1][security_stats.SECURITY_STATS_ENABLED_KEY] is False
     assert writes[-1][security_stats.SECURITY_STATS_CATEGORY_ID_KEY] == str(category.id)
