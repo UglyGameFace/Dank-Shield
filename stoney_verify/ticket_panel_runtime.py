@@ -88,6 +88,7 @@ def _trace(
             f"interaction={_safe_id(getattr(interaction, 'id', 0))}",
             f"guild={_safe_id(getattr(guild, 'id', 0))}",
             f"user={_safe_id(getattr(user, 'id', 0))}",
+            f"custom_id={_custom_id(interaction)!r}",
             f"age_ms={_interaction_age_ms(interaction)}",
             f"response_done={_response_done(interaction)}",
         ]
@@ -315,13 +316,7 @@ def install_public_ticket_panel_runtime(
     # flags so registration remains single-owner and idempotent.
     if bool(getattr(panel, "_PANEL_VIEW_REGISTERED", False)):
         _RUNTIME_VIEW_REGISTERED = True
-    elif (
-        bool(getattr(panel, "_PANEL_FALLBACK_LISTENER_REGISTERED", False))
-        and not _RUNTIME_FALLBACK_LISTENER_REGISTERED
-    ):
-        # The clean registrar sets this flag without a listener when its view
-        # succeeds, so only trust it as evidence of a real fallback when the
-        # persistent view itself is absent.
+    if bool(getattr(panel, "_PANEL_FALLBACK_LISTENER_REGISTERED", False)):
         _RUNTIME_FALLBACK_LISTENER_REGISTERED = True
 
     if not _RUNTIME_VIEW_REGISTERED:
