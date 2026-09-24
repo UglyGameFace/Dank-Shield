@@ -580,6 +580,13 @@ def is_unverified(member: discord.Member) -> bool:
 
 def is_staff(member: discord.Member) -> bool:
     try:
+        guild = getattr(member, "guild", None)
+        if int(getattr(member, "id", 0) or 0) == int(getattr(guild, "owner_id", 0) or 0):
+            return True
+    except Exception:
+        pass
+
+    try:
         if member.guild_permissions.administrator:
             return True
     except Exception:
