@@ -245,6 +245,18 @@ def _store_failure(record: InteractionFailureRecord) -> None:
         _RECENT_FAILURES.pop(0)
 
 
+def _latest_interaction_failure(
+    interaction: Any,
+    *,
+    stage: str,
+) -> InteractionFailureRecord | None:
+    trace_id = _trace_id(interaction)
+    for record in reversed(_RECENT_FAILURES):
+        if record.stage == stage and record.context.trace_id == trace_id:
+            return record
+    return None
+
+
 def recent_interaction_failures(*, limit: int = 25) -> list[InteractionFailureRecord]:
     """Return recent native interaction failures for diagnostics/tests."""
 
@@ -426,6 +438,9 @@ async def _observe_component_ack(bot: Any, interaction: discord.Interaction) -> 
             "persistent_view_count": persistent_count,
             "persistent_view_types": persistent_names,
         }
+        if not _observer_log_allowed():
+            return
+
         error = RuntimeError(
             "component reached Dank Shield but remained unacknowledged after "
             f"{_COMPONENT_OBSERVER_GRACE_SECONDS:.1f}s"
@@ -441,18 +456,17 @@ async def _observe_component_ack(bot: Any, interaction: discord.Interaction) -> 
             ),
             extra=extra,
         )
-        if _observer_log_allowed():
-            print(
-                "🚨 component_runtime unacknowledged "
-                f"error_id={record.error_id} "
-                f"interaction={getattr(interaction, 'id', 0)} "
-                f"custom_id={record.context.custom_id!r} "
-                f"guild={record.context.guild_id} message={record.context.message_id} "
-                f"age_ms={extra['interaction_age_ms']} "
-                f"message_author={message_author_id} bot_user={bot_user_id} "
-                f"application_id={application_id} "
-                f"persistent_views={persistent_count}"
-            )
+        print(
+            "🚨 component_runtime unacknowledged "
+            f"error_id={record.error_id} "
+            f"interaction={getattr(interaction, 'id', 0)} "
+            f"custom_id={record.context.custom_id!r} "
+            f"guild={record.context.guild_id} message={record.context.message_id} "
+            f"age_ms={extra['interaction_age_ms']} "
+            f"message_author={message_author_id} bot_user={bot_user_id} "
+            f"application_id={application_id} "
+            f"persistent_views={persistent_count}"
+        )
     except Exception as exc:
         if _observer_log_allowed():
             print(
@@ -653,8 +667,10 @@ async def run_guarded_interaction(
                 action_name=resolved_action,
             )
             if not acknowledged:
-                failures = recent_interaction_failures(limit=1)
-                record = failures[-1] if failures else None
+                record = _latest_interaction_failure(
+                    interaction,
+                    stage="defer_failed",
+                )
                 return InteractionGuardResult(
                     ok=False,
                     error_id=str(getattr(record, "error_id", "") or ""),
