@@ -23,7 +23,7 @@ owner truth was still duplicated in a second permission implementation.
 
 ## Status
 
-**IMPLEMENTED AND VALIDATED — merge-ready pending exact-head documentation-only rerun**
+**IMPLEMENTED — final exact-head validation pending after top-level Design audit**
 
 Branch: `fix/owner-authority-consolidation-20260924`
 
@@ -102,6 +102,19 @@ instead of maintaining a separate owner implementation.
 `common._staff_check` also uses the canonical owner helper as its baseline
 fast path.
 
+### Server Design doorway
+
+The top-level **Server Design** route deliberately uses **Manage Channels**
+instead of Administrator/Manage Server. Its backend still checked
+`isinstance(interaction.user, discord.Member)` before permission resolution,
+which could reproduce the same false owner denial under partial interaction
+state.
+
+`public_design_studio._can_user_design()` now grants the actual guild owner
+first through the canonical owner helper, while non-owner users still require
+the existing **Manage Channels** permission. The Design permission model was not
+broadened for anyone else.
+
 ## Security properties preserved
 
 - no hardcoded user/guild IDs;
@@ -156,9 +169,10 @@ Exact implementation head `f35b78af68c09b4e90b8e746b7d9ac6e5307c707` passed:
 Final diff inspection found no conflict markers, trailing whitespace, or debug
 artifacts. PR review-thread inspection found no open review threads.
 
-This documentation-only status update creates a new exact head, so CI must rerun
-once more before the PR is marked ready. No implementation code changed after
-the validated head.
+A follow-up audit of every top-level `/dank home` management doorway found one
+remaining Member-first permission check in Server Design. That implementation
+was corrected after the validation above, so those results are historical
+evidence only; the new exact head must pass the complete gates again.
 
 ## Backlog
 
@@ -173,6 +187,7 @@ task.
 
 ## Next step
 
-Allow the documentation-only exact-head CI rerun to finish. If it remains green,
+Run the complete exact-head CI after the Server Design audit repair. If all
+workflows remain green, perform final currentness/diff/review inspection and
 mark PR #309 ready for merge. After merge, activate the isolated Create Ticket
 persistent-interaction repair.
