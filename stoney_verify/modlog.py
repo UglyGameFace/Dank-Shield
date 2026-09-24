@@ -2038,6 +2038,14 @@ async def build_member_leave_embed(
         value=f"{member.mention} (`{member}` | `{member.id}`)",
         inline=False,
     )
+    embed.add_field(
+        name="Exit Classification",
+        value=(
+            "Voluntary/ordinary leave. No matching recent kick or ban audit "
+            "entry was found before this record was built."
+        ),
+        inline=False,
+    )
 
     created_at = _safe_dt_utc(getattr(member, "created_at", None))
     joined_at = _safe_dt_utc(getattr(member, "joined_at", None))
