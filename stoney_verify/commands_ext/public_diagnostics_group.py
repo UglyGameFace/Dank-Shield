@@ -32,15 +32,21 @@ class DiagnosticsActionView(discord.ui.View):
         super().__init__(timeout=600)
         self.actor_id = int(actor_id)
 
-    @discord.ui.button(label="Fix Channel Access", emoji="🛠️", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Repair Bot Access", emoji="🛠️", style=discord.ButtonStyle.primary)
     async def fix_access(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if interaction.user.id != self.actor_id:
             return await interaction.response.send_message("❌ This diagnostics screen belongs to another admin.", ephemeral=True)
         if not _admin_or_manage_guild(interaction):
-            return await interaction.response.send_message("❌ Manage Server or Administrator is required.", ephemeral=True)
-        from stoney_verify.permission_repair import open_target_permission_repair
-        await open_target_permission_repair(interaction)
+            return await interaction.response.send_message("❌ Server owner, Manage Server, or Administrator authority is required.", ephemeral=True)
+
+        # Diagnostics hands off to the same canonical access-repair hub used by
+        # Setup. Specific-channel repair remains available inside that hub.
+        from stoney_verify.setup_permission_repair_services import (
+            open_permission_repair,
+        )
+
+        await open_permission_repair(interaction, parent="security")
 
 
 
@@ -175,7 +181,7 @@ def _startup_diagnostics_embed(
         title="🩺 Dank Shield Diagnostics",
         description=(
             "Read-only startup-owner, guild-config, and activity-coverage health report. The report itself does **not** import or reload guards, "
-            "change setup, grant permissions, touch tickets, or mutate server config. Use **Fix Channel Access** below only when you intentionally want the separate repair workflow."
+            "change setup, grant permissions, touch tickets, or mutate server config. Use **Repair Bot Access** below only when you intentionally want the separate repair workflow."
         ),
         color=color,
         timestamp=now_utc(),
