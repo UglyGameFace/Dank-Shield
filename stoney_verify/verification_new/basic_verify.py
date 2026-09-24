@@ -10,11 +10,17 @@ This is the default public-server verification flow:
 """
 
 import asyncio
+import os
 from typing import Any, Mapping, Optional
 
 import discord
 
-from stoney_verify.guild_config import get_guild_config
+from stoney_verify.guild_config import (
+    GUILD_CONFIG_TABLE_FALLBACKS,
+    get_guild_config,
+    upsert_guild_config,
+)
+from stoney_verify.globals import get_supabase
 from stoney_verify.setup_engine.loader import snapshot_from_config
 from stoney_verify.setup_engine.verification_modes import (
     BASIC_VERIFY_CUSTOM_ID,
@@ -28,6 +34,33 @@ _RUNTIME_VIEW_REGISTERED = False
 _RUNTIME_FALLBACK_LISTENER_REGISTERED = False
 _RUNTIME_REGISTRATION_ERROR: str = ""
 _BASIC_VERIFY_FALLBACK_GRACE_SECONDS = 0.15
+_BASIC_VERIFY_PANEL_MESSAGE_ID_KEY = "basic_verify_panel_message_id"
+_RUNTIME_READY_RECONCILER_REGISTERED = False
+_RUNTIME_READY_RECONCILE_STARTED = False
+_BOUND_PANEL_MESSAGE_IDS: set[int] = set()
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        raw = str(os.getenv(name, "") or "").strip()
+        if not raw:
+            return int(default)
+        return max(0, int(raw))
+    except Exception:
+        return int(default)
+
+
+def _legacy_panel_backfill_limit() -> int:
+    # Existing installations created before panel-message persistence need one
+    # bounded history lookup. New/updated panels persist their message ID and
+    # never need this recovery scan again.
+    return max(
+        1,
+        min(
+            200,
+            _env_int("DANK_BASIC_VERIFY_LEGACY_PANEL_BACKFILL_PER_START", 50),
+        ),
+    )
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -364,6 +397,7 @@ def install_basic_verify_runtime(
     global _RUNTIME_VIEW_REGISTERED
     global _RUNTIME_FALLBACK_LISTENER_REGISTERED
     global _RUNTIME_REGISTRATION_ERROR
+    global _RUNTIME_READY_RECONCILER_REGISTERED
 
     if _RUNTIME_VIEW_REGISTERED and _RUNTIME_FALLBACK_LISTENER_REGISTERED:
         return True
@@ -405,6 +439,25 @@ def install_basic_verify_runtime(
                 f"{type(exc).__name__}: {exc}"
             )
 
+    if not _RUNTIME_READY_RECONCILER_REGISTERED:
+        try:
+            add_listener = getattr(bot, "add_listener", None)
+            if not callable(add_listener):
+                raise RuntimeError(
+                    "Discord client has no callable add_listener"
+                )
+
+            async def _ready_reconciler() -> None:
+                await _basic_verify_ready_listener(bot)
+
+            add_listener(_ready_reconciler, "on_ready")
+            _RUNTIME_READY_RECONCILER_REGISTERED = True
+        except Exception as exc:
+            errors.append(
+                "panel reconciler: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
     ready = bool(
         _RUNTIME_VIEW_REGISTERED
         or _RUNTIME_FALLBACK_LISTENER_REGISTERED
@@ -415,7 +468,8 @@ def install_basic_verify_runtime(
     if _RUNTIME_VIEW_REGISTERED and _RUNTIME_FALLBACK_LISTENER_REGISTERED:
         print(
             "✅ basic_verify runtime ready "
-            "owner=persistent_view delayed_fallback=True"
+            "owner=persistent_view delayed_fallback=True "
+            f"panel_reconciler={_RUNTIME_READY_RECONCILER_REGISTERED}"
         )
     elif ready:
         print(
@@ -443,7 +497,67 @@ def register_basic_verify_runtime(bot: Any) -> bool:
     return install_basic_verify_runtime(bot, strict=False)
 
 
-async def post_basic_verify_panel(channel: discord.TextChannel, *, actor_id: int = 0) -> str:
+async def _persist_basic_verify_panel_message_id(
+    guild_id: int,
+    message_id: int,
+) -> None:
+    gid = _safe_int(guild_id, 0)
+    mid = _safe_int(message_id, 0)
+    if gid <= 0 or mid <= 0:
+        return
+    try:
+        await upsert_guild_config(
+            gid,
+            {
+                _BASIC_VERIFY_PANEL_MESSAGE_ID_KEY: str(mid),
+                "__config_write_mode": "explicit_override",
+                "__config_write_source": "basic_verify.panel_message_identity",
+            },
+        )
+    except Exception as exc:
+        try:
+            print(
+                "⚠️ basic_verify panel identity persistence failed "
+                f"guild={gid} message={mid} "
+                f"error={type(exc).__name__}: {exc}"
+            )
+        except Exception:
+            pass
+
+
+def _bind_basic_verify_panel_message(
+    bot: Any,
+    message_id: int,
+) -> bool:
+    mid = _safe_int(message_id, 0)
+    if mid <= 0:
+        return False
+    if mid in _BOUND_PANEL_MESSAGE_IDS:
+        return True
+    try:
+        add_view = getattr(bot, "add_view", None)
+        if not callable(add_view):
+            return False
+        add_view(BasicVerifyView(), message_id=mid)
+        _BOUND_PANEL_MESSAGE_IDS.add(mid)
+        return True
+    except Exception as exc:
+        try:
+            print(
+                "⚠️ basic_verify message-bound view registration failed "
+                f"message={mid} error={type(exc).__name__}: {exc}"
+            )
+        except Exception:
+            pass
+        return False
+
+
+async def post_basic_verify_panel(
+    channel: discord.TextChannel,
+    *,
+    actor_id: int = 0,
+    bot_instance: Any = None,
+) -> str:
     if not isinstance(channel, discord.TextChannel):
         return "invalid_channel"
     cfg = await get_guild_config(channel.guild.id, refresh=True)
@@ -462,13 +576,241 @@ async def post_basic_verify_panel(channel: discord.TextChannel, *, actor_id: int
                 continue
             if is_basic_verify_panel_embed(msg.embeds[0]):
                 await msg.edit(embed=embed, view=view)
+                await _persist_basic_verify_panel_message_id(
+                    int(channel.guild.id),
+                    int(msg.id),
+                )
+                target_bot = bot_instance
+                if target_bot is None:
+                    try:
+                        from stoney_verify.globals import bot as target_bot
+                    except Exception:
+                        target_bot = None
+                if target_bot is not None:
+                    _bind_basic_verify_panel_message(target_bot, int(msg.id))
                 return "updated"
     except Exception:
         pass
 
-    await channel.send(embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
+    msg = await channel.send(
+        embed=embed,
+        view=view,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+    await _persist_basic_verify_panel_message_id(
+        int(channel.guild.id),
+        int(msg.id),
+    )
+    target_bot = bot_instance
+    if target_bot is None:
+        try:
+            from stoney_verify.globals import bot as target_bot
+        except Exception:
+            target_bot = None
+    if target_bot is not None:
+        _bind_basic_verify_panel_message(target_bot, int(msg.id))
     _ = actor_id
     return "posted"
+
+
+def _row_basic_verify_config(row: Mapping[str, Any]) -> dict[str, Any]:
+    cfg: dict[str, Any] = {}
+    try:
+        for bucket in ("settings", "config", "metadata", "meta"):
+            nested = row.get(bucket)
+            if isinstance(nested, Mapping):
+                cfg.update(dict(nested))
+        for key, value in row.items():
+            if key not in {"settings", "config", "metadata", "meta"} and value is not None:
+                cfg[key] = value
+    except Exception:
+        pass
+    return cfg
+
+
+async def _discover_basic_verify_panel_rows(
+    guild_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    if not guild_ids:
+        return {}
+    sb = get_supabase()
+    if sb is None:
+        return {}
+
+    def _read() -> dict[int, dict[str, Any]]:
+        found: dict[int, dict[str, Any]] = {}
+        for start in range(0, len(guild_ids), 100):
+            batch = guild_ids[start : start + 100]
+            rows = None
+            for table_name in GUILD_CONFIG_TABLE_FALLBACKS:
+                try:
+                    response = (
+                        sb.table(table_name)
+                        .select(
+                            "guild_id,verify_channel_id,settings,config,metadata,meta"
+                        )
+                        .in_("guild_id", [str(gid) for gid in batch])
+                        .execute()
+                    )
+                    rows = list(getattr(response, "data", None) or [])
+                    break
+                except Exception:
+                    continue
+            for row in list(rows or []):
+                if not isinstance(row, Mapping):
+                    continue
+                gid = _safe_int(row.get("guild_id"), 0)
+                if gid <= 0:
+                    continue
+                found[gid] = _row_basic_verify_config(row)
+        return found
+
+    try:
+        return await asyncio.to_thread(_read)
+    except Exception as exc:
+        try:
+            print(
+                "⚠️ basic_verify panel discovery failed "
+                f"error={type(exc).__name__}: {exc}"
+            )
+        except Exception:
+            pass
+        return {}
+
+
+async def _reconcile_one_basic_verify_panel(
+    bot: Any,
+    guild: discord.Guild,
+    cfg: Mapping[str, Any],
+) -> str:
+    persisted_mid = _safe_int(
+        _cfg_value(cfg, _BASIC_VERIFY_PANEL_MESSAGE_ID_KEY, 0),
+        0,
+    )
+    if persisted_mid > 0:
+        return (
+            "bound"
+            if _bind_basic_verify_panel_message(bot, persisted_mid)
+            else "bind_failed"
+        )
+
+    channel_id = _safe_int(
+        _cfg_value(cfg, "verify_channel_id", 0)
+        or _cfg_value(cfg, "verification_channel_id", 0),
+        0,
+    )
+    channel = guild.get_channel(channel_id) if channel_id > 0 else None
+    if not isinstance(channel, discord.TextChannel):
+        return "no_channel"
+
+    # The panel-posting path scans only current-bot messages. If an old panel
+    # belongs to a previous application identity, it will post a fresh panel
+    # owned by the currently running bot instead of leaving a dead component.
+    if basic_verify_allowed_for_guild(guild, cfg):
+        try:
+            from stoney_verify.startup_guards.discord_api_safety import (
+                reserve_recovery_discord_rest_requests,
+            )
+            await reserve_recovery_discord_rest_requests(
+                1,
+                label=(
+                    "basic verify legacy panel "
+                    f"guild={int(guild.id)} channel={int(channel.id)}"
+                ),
+            )
+        except Exception:
+            pass
+        return await post_basic_verify_panel(
+            channel,
+            bot_instance=bot,
+        )
+
+    # A disabled-mode legacy panel is still worth locating and binding so its
+    # button can answer with the canonical disabled reason instead of timing out.
+    try:
+        me_id = _safe_int(getattr(getattr(guild, "me", None), "id", 0), 0)
+        async for msg in channel.history(limit=80):
+            if not msg.embeds or not is_basic_verify_panel_embed(msg.embeds[0]):
+                continue
+            if _safe_int(getattr(getattr(msg, "author", None), "id", 0), 0) != me_id:
+                continue
+            await _persist_basic_verify_panel_message_id(
+                int(guild.id),
+                int(msg.id),
+            )
+            _bind_basic_verify_panel_message(bot, int(msg.id))
+            return "bound_disabled"
+    except Exception:
+        return "scan_failed"
+    return "not_found"
+
+
+async def _reconcile_basic_verify_panels_after_ready(bot: Any) -> None:
+    global _RUNTIME_READY_RECONCILE_STARTED
+    if _RUNTIME_READY_RECONCILE_STARTED:
+        return
+    _RUNTIME_READY_RECONCILE_STARTED = True
+
+    try:
+        guilds = {
+            int(guild.id): guild
+            for guild in list(getattr(bot, "guilds", []) or [])
+            if isinstance(guild, discord.Guild)
+        }
+        rows = await _discover_basic_verify_panel_rows(sorted(guilds))
+        legacy_budget = _legacy_panel_backfill_limit()
+        legacy_used = 0
+        counts: dict[str, int] = {}
+
+        for gid, cfg in rows.items():
+            guild = guilds.get(int(gid))
+            if not isinstance(guild, discord.Guild):
+                continue
+
+            persisted_mid = _safe_int(
+                _cfg_value(cfg, _BASIC_VERIFY_PANEL_MESSAGE_ID_KEY, 0),
+                0,
+            )
+            if persisted_mid <= 0:
+                if legacy_used >= legacy_budget:
+                    counts["legacy_deferred"] = counts.get("legacy_deferred", 0) + 1
+                    continue
+                legacy_used += 1
+
+            result = await _reconcile_one_basic_verify_panel(bot, guild, cfg)
+            counts[result] = counts.get(result, 0) + 1
+            await asyncio.sleep(0)
+
+        print(
+            "✅ basic_verify panel reconciliation complete "
+            f"guilds={len(rows)} legacy_scans={legacy_used} results={counts}"
+        )
+    except Exception as exc:
+        try:
+            print(
+                "⚠️ basic_verify panel reconciliation failed "
+                f"error={type(exc).__name__}: {exc}"
+            )
+        except Exception:
+            pass
+
+
+async def _basic_verify_ready_listener(bot: Any) -> None:
+    # Never block Discord on_ready. Reconcile in the background after the bot is
+    # fully connected so existing interactions remain responsive.
+    try:
+        asyncio.create_task(
+            _reconcile_basic_verify_panels_after_ready(bot),
+            name="basic-verify-panel-reconcile",
+        )
+    except Exception as exc:
+        try:
+            print(
+                "⚠️ basic_verify could not schedule panel reconciliation "
+                f"error={type(exc).__name__}: {exc}"
+            )
+        except Exception:
+            pass
 
 
 async def apply_basic_verification(member: discord.Member) -> tuple[bool, str]:
