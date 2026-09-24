@@ -114,6 +114,42 @@ Permissions rather than Manage Channels.
 Setup preview/apply uses the canonical overwrite capability and reports Discord
 Forbidden results with the same explanation as selected-target repair.
 
+### Setup Check truth
+
+Setup Check no longer treats saved configuration completeness as sufficient to
+show a green pass.
+
+When the guided configuration is structurally complete but the configured
+channel/category access audit is unhealthy:
+
+- the title becomes **Configuration Saved — Access Needs Attention**;
+- the description states that feature testing is blocked on access;
+- the misleading guided-test / continue action is removed;
+- the contextual access-repair/manual-fix control becomes the forward action.
+
+This prevents the previous contradictory card that said Configuration Check
+Passed while simultaneously listing unrepaired access targets.
+
+### One generic repair doorway
+
+Diagnostics now exposes **Repair Bot Access** and hands off to the same
+`setup_permission_repair_services.open_permission_repair()` hub used by Setup.
+
+The canonical generic flow is:
+
+1. preview configured access;
+2. apply safe fixes;
+3. use **Specific Channel** only to inspect one blocked target.
+
+Existing ticket/setup recovery guidance points to that same route.
+
+### Undo truth
+
+A repair that changes zero overwrites no longer creates or displays an undo
+token. Failed/no-op attempts are still audit-recorded, but no restore snapshot
+is manufactured. **Undo Repair** remains disabled until a real change produced
+a valid token.
+
 ### Startup diagnostics
 
 The startup-health contract now tracks actual native boot owners:
@@ -159,7 +195,7 @@ startup owners.
 
 ## Status
 
-**IN PROGRESS — implementation complete enough for focused CI; exact-head validation pending**
+**VALIDATING — implementation frozen; exact-head CI and merge hygiene pending**
 
 Branch: `fix/canonical-access-repair-runtime-20260924`
 
