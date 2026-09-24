@@ -23,7 +23,7 @@ owner truth was still duplicated in a second permission implementation.
 
 ## Status
 
-**ROOT CAUSE CONFIRMED — canonical owner authority implemented; validation pending**
+**IMPLEMENTED AND VALIDATED — merge-ready pending exact-head documentation-only rerun**
 
 Branch: `fix/owner-authority-consolidation-20260924`
 
@@ -128,18 +128,37 @@ Added `tests/test_owner_authority_consolidation.py` covering:
 
 Existing PR #307 staff-scope regressions remain in place.
 
-## Validation required
+## Validation results
 
-- exact branch diff/currentness;
-- conflict-marker and whitespace inspection;
+Exact implementation head `f35b78af68c09b4e90b8e746b7d9ac6e5307c707` passed:
+
+- PR mergeable and 0 commits behind `main`;
+- committed-diff whitespace check;
 - Python compile;
-- focused owner/staff/server-control tests;
-- setup/command-surface regressions;
-- ticket security regressions;
-- full `pytest tests/`;
-- standalone repository audits;
-- GitHub workflow gates;
-- final review-thread/mergeability inspection.
+- complete unit test suite;
+- standalone tool checks;
+- public setup/isolation audit;
+- canonical public command-surface audit;
+- startup-friction audit;
+- public invite-permission audit;
+- setup-safety audit;
+- Dank Design Smart Auto-Detect audit;
+- role-truth ownership audit;
+- event-boundary ownership audit;
+- focused claim-first ticket security suite;
+- managed-category SQL smoke test;
+- Ticket Owner Emergency Override workflow;
+- Application Command Size Diagnostics;
+- DS Backlog 027 Validation;
+- Dank Design Regression CI;
+- Profile Runtime Diagnostics.
+
+Final diff inspection found no conflict markers, trailing whitespace, or debug
+artifacts. PR review-thread inspection found no open review threads.
+
+This documentation-only status update creates a new exact head, so CI must rerun
+once more before the PR is marked ready. No implementation code changed after
+the validated head.
 
 ## Backlog
 
@@ -154,6 +173,6 @@ task.
 
 ## Next step
 
-Open the isolated draft PR, run exact-head validation, correct only regressions
-caused by this authority consolidation, then merge before activating the ticket
-interaction repair.
+Allow the documentation-only exact-head CI rerun to finish. If it remains green,
+mark PR #309 ready for merge. After merge, activate the isolated Create Ticket
+persistent-interaction repair.
