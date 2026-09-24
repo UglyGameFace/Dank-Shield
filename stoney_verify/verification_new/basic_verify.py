@@ -36,6 +36,7 @@ _RUNTIME_REGISTRATION_ERROR: str = ""
 _BASIC_VERIFY_FALLBACK_GRACE_SECONDS = 0.15
 _BASIC_VERIFY_PANEL_MESSAGE_ID_KEY = "basic_verify_panel_message_id"
 _BASIC_VERIFY_PANEL_APPLICATION_ID_KEY = "basic_verify_panel_application_id"
+_BASIC_VERIFY_PANEL_COMPONENT_ID_KEY = "basic_verify_panel_component_id"
 _RUNTIME_READY_RECONCILER_REGISTERED = False
 _RUNTIME_READY_RECONCILE_STARTED = False
 _BOUND_PANEL_MESSAGE_IDS: set[int] = set()
@@ -515,6 +516,7 @@ async def _persist_basic_verify_panel_message_id(
         return
     patch = {
         _BASIC_VERIFY_PANEL_MESSAGE_ID_KEY: str(mid),
+        _BASIC_VERIFY_PANEL_COMPONENT_ID_KEY: BASIC_VERIFY_CUSTOM_ID,
         "__config_write_mode": "explicit_override",
         "__config_write_source": "basic_verify.panel_identity",
     }
@@ -792,19 +794,25 @@ async def _reconcile_one_basic_verify_panel(
         _cfg_value(cfg, _BASIC_VERIFY_PANEL_APPLICATION_ID_KEY, 0),
         0,
     )
+    saved_component_id = str(
+        _cfg_value(cfg, _BASIC_VERIFY_PANEL_COMPONENT_ID_KEY, "") or ""
+    ).strip()
     current_application_id = _safe_int(
         getattr(getattr(guild, "me", None), "id", 0),
         0,
     )
 
-    # Only zero-REST bind when persisted ownership is known to match the
-    # currently running Discord application. A message ID alone is not enough:
-    # a foreign-application component can look valid but its click never reaches
-    # this process, so neither the persistent view nor delayed fallback can ack.
+    # Only zero-REST bind when persisted ownership AND the exact component
+    # contract are both proven current. Message/application identity alone is
+    # insufficient because an older Basic Verify message can be authored by the
+    # same bot application while carrying a retired custom_id. Binding today's
+    # View to that message ID would look healthy at startup but Discord would
+    # never route the old button to today's (component_type, custom_id) key.
     if (
         persisted_mid > 0
         and saved_application_id > 0
         and saved_application_id == current_application_id
+        and saved_component_id == BASIC_VERIFY_CUSTOM_ID
     ):
         return (
             "bound"
@@ -853,6 +861,63 @@ async def _reconcile_one_basic_verify_panel(
             0,
         )
         if author_id == current_application_id and current_application_id > 0:
+            custom_ids = _message_custom_ids(message)
+            if BASIC_VERIFY_CUSTOM_ID not in custom_ids:
+                try:
+                    await message.edit(
+                        embed=build_basic_verify_embed(guild, cfg),
+                        view=BasicVerifyView(),
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                except TypeError:
+                    # Compatibility with lightweight test doubles and Discord
+                    # message implementations that do not expose
+                    # allowed_mentions on edit().
+                    try:
+                        await message.edit(
+                            embed=build_basic_verify_embed(guild, cfg),
+                            view=BasicVerifyView(),
+                        )
+                    except Exception as exc:
+                        try:
+                            print(
+                                "⚠️ basic_verify component contract repair failed "
+                                f"guild={guild.id} channel={channel.id} message={message.id} "
+                                f"found={sorted(custom_ids)} expected={BASIC_VERIFY_CUSTOM_ID!r} "
+                                f"error={type(exc).__name__}: {exc}"
+                            )
+                        except Exception:
+                            pass
+                        return "component_repair_failed"
+                except Exception as exc:
+                    try:
+                        print(
+                            "⚠️ basic_verify component contract repair failed "
+                            f"guild={guild.id} channel={channel.id} message={message.id} "
+                            f"found={sorted(custom_ids)} expected={BASIC_VERIFY_CUSTOM_ID!r} "
+                            f"error={type(exc).__name__}: {exc}"
+                        )
+                    except Exception:
+                        pass
+                    return "component_repair_failed"
+
+                await _persist_basic_verify_panel_message_id(
+                    int(guild.id),
+                    int(message.id),
+                    application_id=current_application_id,
+                )
+                bound = _bind_basic_verify_panel_message(bot, int(message.id))
+                try:
+                    print(
+                        "♻️ basic_verify repaired legacy component contract "
+                        f"guild={guild.id} channel={channel.id} message={message.id} "
+                        f"old_ids={sorted(custom_ids)} new_id={BASIC_VERIFY_CUSTOM_ID!r} "
+                        f"bound={bound}"
+                    )
+                except Exception:
+                    pass
+                return "repaired_component" if bound else "repair_bind_failed"
+
             await _persist_basic_verify_panel_message_id(
                 int(guild.id),
                 int(message.id),
@@ -956,6 +1021,9 @@ async def _reconcile_basic_verify_panels_after_ready(bot: Any) -> None:
                 _cfg_value(cfg, _BASIC_VERIFY_PANEL_APPLICATION_ID_KEY, 0),
                 0,
             )
+            saved_component_id = str(
+                _cfg_value(cfg, _BASIC_VERIFY_PANEL_COMPONENT_ID_KEY, "") or ""
+            ).strip()
             current_application_id = _safe_int(
                 getattr(getattr(guild, "me", None), "id", 0),
                 0,
@@ -964,6 +1032,7 @@ async def _reconcile_basic_verify_panels_after_ready(bot: Any) -> None:
                 persisted_mid > 0
                 and saved_application_id > 0
                 and saved_application_id == current_application_id
+                and saved_component_id == BASIC_VERIFY_CUSTOM_ID
             )
             allow_legacy_rest = True
             if needs_legacy_rest:
