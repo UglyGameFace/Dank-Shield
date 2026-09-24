@@ -929,12 +929,13 @@ async def persist_public_ticket_panel_identity(
     application_id: int = 0,
 ) -> None:
     try:
-        from .public_setup_config_writer import upsert_guild_config
-        from ..guild_config import invalidate_guild_config
+        from ..guild_config import upsert_guild_config
 
         payload = {
             "ticket_panel_channel_id": str(int(channel_id)),
             "ticket_panel_message_id": str(int(message_id)),
+            "__config_write_mode": "explicit_override",
+            "__config_write_source": "ticket_panel.identity",
         }
         if int(application_id or 0) > 0:
             payload["ticket_panel_application_id"] = str(
@@ -944,7 +945,6 @@ async def persist_public_ticket_panel_identity(
             int(guild_id),
             payload,
         )
-        invalidate_guild_config(int(guild_id))
     except Exception as e:
         _warn(
             "saving panel config failed "
