@@ -497,6 +497,17 @@ async def _recover_unowned_private_component(
         if owner_state is not False:
             return False
 
+        # Take the Discord acknowledgement claim atomically. If any legitimate
+        # additive listener won the race after the grace check, defer raises (or
+        # response.is_done flips) and stale recovery exits without sending a
+        # competing response.
+        try:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        except Exception:
+            if _response_done(interaction):
+                return False
+            raise
+
         from .commands_ext.public_command_surface_v2 import open_compact_dank_home
 
         await open_compact_dank_home(
@@ -506,7 +517,7 @@ async def _recover_unowned_private_component(
                 "I opened a fresh Control Center instead; the stale action was not executed."
             ),
         )
-        recovered = _response_done(interaction)
+        recovered = True
         if recovered:
             ctx = interaction_context(interaction, action_name="private_menu_stale_recovery")
             print(
