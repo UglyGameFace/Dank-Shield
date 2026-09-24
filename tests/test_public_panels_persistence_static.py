@@ -25,6 +25,9 @@ def test_public_profile_panel_is_persistent_and_registered_on_boot():
     assert 'custom_id=f"{PROFILE_PREFIX}open:identity"' in block
     assert 'custom_id=f"{PROFILE_PREFIX}open:interests"' in block
     assert "add_view(ProfilePanelView())" in PROFILE
+    assert "def install_profile_interaction_runtime(" in PROFILE
+    assert 'add_listener(_interaction_listener, "on_interaction")' in PROFILE
+    assert "persistent ProfilePanelView registration failed" in PROFILE
 
 
 def test_public_advanced_self_role_panel_is_persistent():
