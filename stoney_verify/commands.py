@@ -190,8 +190,8 @@ except Exception as e:
     async def handle_possible_submission(message: discord.Message) -> None:  # type: ignore
         return None
 
-    def register_interaction_handlers(bot_instance: Any) -> None:  # type: ignore
-        return None
+    def register_interaction_handlers(bot_instance: Any) -> bool:  # type: ignore
+        return False
 
 
 # Profile/Role public panels contain semantic raw component buttons whose
@@ -254,12 +254,11 @@ except Exception as e:
 # Register centralized component interaction handler
 # ============================================================
 try:
-    register_interaction_handlers(bot)
+    if not register_interaction_handlers(bot):
+        raise RuntimeError("central verification/VC interaction listener did not register")
 except Exception as e:
-    try:
-        print(f"⚠️ commands.py failed to register interaction handlers: {repr(e)}")
-    except Exception:
-        pass
+    print(f"❌ commands.py centralized interaction runtime failed closed: {repr(e)}")
+    raise
 
 
 # ============================================================
