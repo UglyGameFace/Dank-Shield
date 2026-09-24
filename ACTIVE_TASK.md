@@ -237,6 +237,19 @@ mutation.
 
 ## Repair
 
+### Duplicate historical Basic Verify owner retired
+
+The historical `member_lifecycle_verify_runtime_hardening.py` module still
+contained a self-installing Basic Verify `on_interaction` fallback. The bulk
+startup-guard registry is inert today, and no production direct import was found,
+but importing that module in the future would have resurrected a second Basic
+Verify interaction owner with different timing.
+
+That duplicate fallback implementation and its install call are now removed.
+The module retains its unrelated setup/schema/modlog compatibility work. The
+standalone runtime ownership audit now asserts the duplicate listener remains
+absent and points to the canonical `install_basic_verify_runtime` owner.
+
 ### Product-wide private-session lifecycle policy
 
 `panel_lifecycle.py` now owns the normal private navigation session lifetime
