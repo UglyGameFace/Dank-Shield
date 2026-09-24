@@ -575,6 +575,27 @@ def _message_custom_ids(message: Any) -> set[str]:
     return found
 
 
+def _message_has_strict_basic_verify_signature(message: Any) -> bool:
+    """Require Dank Shield-specific proof before treating a foreign message as ours."""
+    if BASIC_VERIFY_CUSTOM_ID in _message_custom_ids(message):
+        return True
+    try:
+        for embed in list(getattr(message, "embeds", None) or []):
+            footer_text = str(
+                getattr(getattr(embed, "footer", None), "text", "") or ""
+            ).strip()
+            if BASIC_VERIFY_FOOTER in footer_text:
+                return True
+            if footer_text in {
+                "Dank Shield Basic Verify",
+                "Dank Shield Basic Verify • access only",
+            }:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def _message_looks_like_basic_verify_panel(message: Any) -> bool:
     if BASIC_VERIFY_CUSTOM_ID in _message_custom_ids(message):
         return True
@@ -602,7 +623,7 @@ async def _delete_stale_foreign_basic_verify_panel(message: Any) -> bool:
     guild = getattr(message, "guild", None)
     if not isinstance(channel, discord.TextChannel) or not isinstance(guild, discord.Guild):
         return False
-    if not _message_looks_like_basic_verify_panel(message):
+    if not _message_has_strict_basic_verify_signature(message):
         return False
     me = getattr(guild, "me", None)
     try:
@@ -661,15 +682,19 @@ async def _scan_basic_verify_panels(
     me_id = _safe_int(getattr(getattr(channel.guild, "me", None), "id", 0), 0)
 
     async for message in channel.history(limit=max(1, int(limit))):
-        if not _message_looks_like_basic_verify_panel(message):
-            continue
         author_id = _safe_int(
             getattr(getattr(message, "author", None), "id", 0),
             0,
         )
         if author_id > 0 and author_id == me_id:
-            current.append(message)
-        else:
+            if _message_looks_like_basic_verify_panel(message):
+                current.append(message)
+            continue
+
+        # Foreign messages require the strict Dank Shield signature before they
+        # are even candidates for cleanup. The broad historical-title heuristic
+        # is only safe for messages authored by the current bot.
+        if _message_has_strict_basic_verify_signature(message):
             foreign.append(message)
 
     return current, foreign
