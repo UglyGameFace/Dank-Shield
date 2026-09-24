@@ -104,6 +104,8 @@ For a foreign-application Basic Verify message:
 
 - first confirm a current-application replacement exists or was posted;
 - then remove the stale foreign panel when Discord permissions allow;
+- foreign cleanup requires a strict Dank Shield Basic Verify footer/component
+  signature, never the broader historical title heuristic;
 - never delete the stale panel before the replacement is confirmed;
 - keep the scan bounded to the verification channel.
 
@@ -136,7 +138,7 @@ For a foreign-application Basic Verify message:
 
 ## Status
 
-**IN PROGRESS — component identity repair implemented; exact-head validation pending**
+**VALIDATING — Basic Verify identity/discovery repair frozen; exact-head validation pending**
 
 Branch: `fix/basic-verify-component-identity-20260924`
 
