@@ -515,12 +515,27 @@ async def _edit_or_reply(i: discord.Interaction, *, content: str, embed: Optiona
         await _ephemeral(i, content, embed=embed, view=view)
 
 
-async def _defer(i: discord.Interaction, thinking: bool = False) -> None:
+async def _defer(i: discord.Interaction, thinking: bool = False) -> bool:
+    """Ensure the interaction is acknowledged before expensive ticket work.
+
+    A response that was already completed by the same canonical flow is valid
+    (for example Confirm edits its menu before ticket creation). A real defer
+    failure on an otherwise-unanswered interaction is not: callers must stop
+    before DB/category/channel mutation.
+    """
     try:
-        if not i.response.is_done():
-            await i.response.defer(ephemeral=True, thinking=thinking)
+        if i.response.is_done():
+            return True
+        await i.response.defer(ephemeral=True, thinking=thinking)
+        return True
     except Exception as e:
+        try:
+            if i.response.is_done():
+                return True
+        except Exception:
+            pass
         _warn(f"defer failed error={type(e).__name__}: {_short(e, 220)}")
+        return False
 
 
 async def _create_synced_ticket_channel(guild: discord.Guild, owner: discord.Member, parent: discord.CategoryChannel, row: Dict[str, Any], number: int) -> discord.TextChannel:
@@ -548,7 +563,8 @@ async def _create_synced_ticket_channel(guild: discord.Guild, owner: discord.Mem
 
 
 async def _create_ticket(i: discord.Interaction, row: Dict[str, Any]) -> None:
-    await _defer(i, True)
+    if not await _defer(i, True):
+        return
     guild = i.guild
     owner = i.user if isinstance(i.user, discord.Member) else None
     if guild is None or owner is None:
@@ -832,7 +848,8 @@ class TicketSelectView(discord.ui.View):
 async def _handle_panel_button_core(i: discord.Interaction) -> None:
     guild = i.guild
     member = _member_from_interaction(i)
-    await _defer(i, True)
+    if not await _defer(i, True):
+        return
     if guild is None or member is None:
         return await _ephemeral(i, "❌ This must be used inside a server.")
     try:
