@@ -39,18 +39,22 @@ def test_modlog_target_never_guesses_a_channel_when_mapping_is_absent() -> None:
 
 def test_member_log_targets_use_exact_resolved_routes_and_profiles() -> None:
     join = SimpleNamespace(id=11)
+    operational = SimpleNamespace(id=12)
     exit_route = SimpleNamespace(id=22)
     staff = SimpleNamespace(id=33)
 
-    assert _target_rows(repair._member_log_targets(join, exit_route, staff)) == [
+    assert _target_rows(
+        repair._member_log_targets(join, operational, exit_route, staff)
+    ) == [
         (11, "welcome", "Live join card channel"),
+        (12, "logs", "Operational join/leave log"),
         (22, "logs", "Live exit card channel"),
         (33, "logs", "Staff member-audit channel"),
     ]
 
 
 def test_member_log_target_mapping_drops_unresolved_routes_without_guessing() -> None:
-    assert repair._member_log_targets(None, None, None) == ()
+    assert repair._member_log_targets(None, None, None, None) == ()
 
 
 def test_modlog_manual_issues_keep_mapping_and_view_audit_log_manual() -> None:
@@ -87,6 +91,7 @@ def test_member_log_manual_issues_keep_missing_routes_and_server_permission_manu
         cfg,
         join_channel=None,
         join_reason="no join-card channel configured",
+        join_leave_channel=None,
         exit_channel=None,
         exit_reason="no exit-card channel configured",
         staff_channel=None,
@@ -114,12 +119,31 @@ def test_unconfigured_optional_staff_audit_is_not_invented_as_a_channel_error() 
         cfg,
         join_channel=SimpleNamespace(id=1),
         join_reason="configured join-card channel",
+        join_leave_channel=SimpleNamespace(id=3),
         exit_channel=SimpleNamespace(id=2),
         exit_reason="configured exit-card channel",
         staff_channel=None,
     )
 
     assert not any("staff member-audit route" in item for item in issues)
+
+
+def test_operational_join_leave_route_is_a_real_repair_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operational = SimpleNamespace(id=44)
+    guild = SimpleNamespace(
+        get_channel=lambda channel_id: operational if channel_id == 44 else None,
+    )
+    cfg = {"join_leave_log_channel_id": "44"}
+
+    monkeypatch.setattr(repair.discord, "TextChannel", SimpleNamespace)
+
+    assert repair._resolve_join_leave_log_channel(guild, cfg) is operational
+    targets = repair._member_log_targets(None, operational, None, None)
+    assert _target_rows(targets) == [
+        (44, "logs", "Operational join/leave log")
+    ]
 
 
 def test_logging_contextual_integration_never_owns_discord_overwrite_mutation() -> None:
