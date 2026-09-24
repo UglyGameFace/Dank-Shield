@@ -17,15 +17,15 @@ RUNTIME = Path("stoney_verify/ticket_panel_runtime.py").read_text(encoding="utf-
 
 class FakeBot:
     def __init__(self, *, fail_view: bool = False, fail_listener: bool = False) -> None:
-        self.views: list[object] = []
+        self.views: list[tuple[object, int | None]] = []
         self.listeners: list[tuple[object, str]] = []
         self.fail_view = fail_view
         self.fail_listener = fail_listener
 
-    def add_view(self, view: object) -> None:
+    def add_view(self, view: object, *, message_id: int | None = None) -> None:
         if self.fail_view:
             raise RuntimeError("view registration failed")
-        self.views.append(view)
+        self.views.append((view, message_id))
 
     def add_listener(self, listener: object, name: str) -> None:
         if self.fail_listener:
@@ -36,7 +36,10 @@ class FakeBot:
 def _reset_runtime_state() -> None:
     runtime._RUNTIME_VIEW_REGISTERED = False
     runtime._RUNTIME_FALLBACK_LISTENER_REGISTERED = False
+    runtime._RUNTIME_READY_RECONCILER_REGISTERED = False
+    runtime._RUNTIME_READY_RECONCILE_STARTED = False
     runtime._RUNTIME_REGISTRATION_ERROR = ""
+    runtime._BOUND_PANEL_MESSAGE_IDS.clear()
     panel._PANEL_VIEW_REGISTERED = False
     panel._PANEL_FALLBACK_LISTENER_REGISTERED = False
     panel._MENU_SESSIONS.clear()
@@ -57,10 +60,13 @@ def test_runtime_installs_persistent_view_and_independent_fallback(monkeypatch) 
     monkeypatch.setattr(panel, "PublicCreateTicketPanelView", lambda: sentinel_view)
 
     assert runtime.install_public_ticket_panel_runtime(fake_bot, strict=True) is True
-    assert fake_bot.views == [sentinel_view]
-    assert fake_bot.listeners == [
-        (runtime._ticket_panel_fallback_listener, "on_interaction")
-    ]
+    assert fake_bot.views == [(sentinel_view, None)]
+    assert len(fake_bot.listeners) == 2
+    assert fake_bot.listeners[0] == (
+        runtime._ticket_panel_fallback_listener,
+        "on_interaction",
+    )
+    assert fake_bot.listeners[1][1] == "on_ready"
     assert runtime.ticket_panel_runtime_status()["ready"] is True
     assert panel._PANEL_VIEW_REGISTERED is True
     assert panel._PANEL_FALLBACK_LISTENER_REGISTERED is True
@@ -73,7 +79,7 @@ def test_runtime_install_is_idempotent(monkeypatch) -> None:
     assert runtime.install_public_ticket_panel_runtime(fake_bot, strict=True) is True
     assert runtime.install_public_ticket_panel_runtime(fake_bot, strict=True) is True
     assert len(fake_bot.views) == 1
-    assert len(fake_bot.listeners) == 1
+    assert len(fake_bot.listeners) == 2
 
 
 def test_runtime_remains_operational_when_primary_view_registration_fails(monkeypatch) -> None:
@@ -85,7 +91,7 @@ def test_runtime_remains_operational_when_primary_view_registration_fails(monkey
     assert status["persistent_view_registered"] is False
     assert status["fallback_listener_registered"] is True
     assert "view registration failed" in status["error"]
-    assert len(fake_bot.listeners) == 1
+    assert len(fake_bot.listeners) == 2
 
 
 def test_strict_runtime_fails_closed_when_no_interaction_path_can_register(monkeypatch) -> None:
@@ -98,6 +104,114 @@ def test_strict_runtime_fails_closed_when_no_interaction_path_can_register(monke
     assert status["ready"] is False
     assert "view registration failed" in status["error"]
     assert "listener registration failed" in status["error"]
+
+
+def test_saved_current_application_panel_binds_exact_message_without_rest(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        class FakeTextChannel:
+            id = 444
+
+        class FakeGuild:
+            id = 333
+            me = SimpleNamespace(id=222)
+
+            def get_channel(self, channel_id: int):
+                assert channel_id == 444
+                return FakeTextChannel()
+
+        fake_bot = FakeBot()
+        sentinel_view = object()
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+        monkeypatch.setattr(panel, "PublicCreateTicketPanelView", lambda: sentinel_view)
+
+        result = await runtime._reconcile_saved_ticket_panel(
+            fake_bot,
+            FakeGuild(),
+            {
+                "ticket_panel_channel_id": "444",
+                "ticket_panel_message_id": "555",
+                runtime._TICKET_PANEL_APPLICATION_ID_KEY: "222",
+            },
+            allow_legacy_rest=False,
+        )
+
+        assert result == "bound"
+        assert fake_bot.views == [(sentinel_view, 555)]
+
+    asyncio.run(scenario())
+
+
+def test_foreign_saved_panel_is_replaced_and_rebound(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        class FakeTextChannel:
+            id = 444
+
+            async def fetch_message(self, message_id: int):
+                assert message_id == 555
+                return SimpleNamespace(
+                    id=555,
+                    author=SimpleNamespace(id=999),
+                    components=[],
+                    embeds=[
+                        SimpleNamespace(
+                            title="🎫 Need help? Open a ticket",
+                            footer=SimpleNamespace(
+                                text="Old Guild • Dank Shield ticket panel • category-menu"
+                            ),
+                        )
+                    ],
+                )
+
+        class FakeGuild:
+            id = 333
+            me = SimpleNamespace(id=222)
+
+            def get_channel(self, channel_id: int):
+                assert channel_id == 444
+                return FakeTextChannel()
+
+        replacement = SimpleNamespace(id=777)
+        calls: list[str] = []
+
+        async def no_reserve(*args, **kwargs) -> None:
+            return None
+
+        async def fake_post(_bot, _channel):
+            calls.append("post")
+            return replacement
+
+        async def fake_delete(_message):
+            calls.append("delete")
+            return True
+
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+        monkeypatch.setattr(runtime, "_reserve_recovery_requests", no_reserve)
+        monkeypatch.setattr(runtime, "_post_current_ticket_panel", fake_post)
+        monkeypatch.setattr(
+            runtime,
+            "_delete_stale_foreign_panel_if_safe",
+            fake_delete,
+        )
+
+        result = await runtime._reconcile_saved_ticket_panel(
+            FakeBot(),
+            FakeGuild(),
+            {
+                "ticket_panel_channel_id": "444",
+                "ticket_panel_message_id": "555",
+                runtime._TICKET_PANEL_APPLICATION_ID_KEY: "999",
+            },
+            allow_legacy_rest=True,
+        )
+
+        assert result == "replaced_foreign_deleted"
+        assert calls == ["post", "delete"]
+
+    asyncio.run(scenario())
 
 
 def test_fallback_only_delegates_clean_ticket_custom_id(monkeypatch) -> None:
