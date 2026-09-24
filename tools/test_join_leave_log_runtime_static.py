@@ -73,8 +73,9 @@ def test_setup_logs_uses_explicit_leave_route() -> None:
 
 def test_runtime_hardening_is_loaded_but_does_not_override_router() -> None:
     assert "member_lifecycle_verify_runtime_hardening" in STARTUP_GUARDS
-    assert "_install_basic_verify_fallback" in HARDENING
-    assert "maybe_handle_basic_verify_interaction" in HARDENING
+    assert "_install_basic_verify_fallback" not in HARDENING
+    assert "maybe_handle_basic_verify_interaction" not in HARDENING
+    assert "install_basic_verify_runtime" in HARDENING
     assert "_patch_setup_join_leave_alias_picker" in HARDENING
     assert "_patch_join_context_schema_fallback" in HARDENING
     assert "_patch_modlog_alias_resolution" in HARDENING
