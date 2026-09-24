@@ -1147,8 +1147,11 @@ def test_legacy_foreign_panel_is_removed_after_current_replacement_posts(
             "is_basic_verify_panel_embed",
             lambda _embed: True,
         )
+        async def no_recovery_reserve(**_kwargs) -> None:
+            return None
+
         monkeypatch.setattr(runtime, "_persist_basic_verify_panel_message_id", fake_persist)
-        monkeypatch.setattr(runtime, "_reserve_basic_verify_recovery_request", lambda **_kwargs: None)
+        monkeypatch.setattr(runtime, "_reserve_basic_verify_recovery_request", no_recovery_reserve)
 
         bot = FakeBot()
         guild = FakeGuild()
