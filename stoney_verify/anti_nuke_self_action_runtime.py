@@ -81,6 +81,7 @@ class _ExpectedSideEffect:
     action: str
     guild_id: int
     related_bot_id: int
+    target_key: str
     source_action: str
     created_at: float
 
@@ -286,12 +287,20 @@ def _request_spec(bot: discord.Client, route: Any, kwargs: Mapping[str, Any]) ->
     m = re.fullmatch(r"/channels/(\d+)/messages/bulk-delete", path)
     if m and method == "POST":
         cid = int(m.group(1))
-        return _spec(("message_bulk_delete",), _guild_for_channel(bot, cid))
+        return _spec(
+            ("message_bulk_delete",),
+            _guild_for_channel(bot, cid),
+            _id_key(cid),
+        )
 
     m = re.fullmatch(r"/channels/(\d+)/messages/(\d+)", path)
     if m and method == "DELETE":
         cid = int(m.group(1))
-        return _spec(("message_delete",), _guild_for_channel(bot, cid))
+        return _spec(
+            ("message_delete",),
+            _guild_for_channel(bot, cid),
+            _id_key(cid),
+        )
 
     for pattern in (r"/channels/(\d+)/threads", r"/channels/(\d+)/messages/\d+/threads"):
         m = re.fullmatch(pattern, path)
@@ -341,6 +350,7 @@ def _expect_side_effect(
     action_name: str,
     *,
     related_bot_id: int = 0,
+    target_key: str = "",
     source_action: str = "",
 ) -> str:
     _prune_expected_side_effects()
@@ -354,6 +364,7 @@ def _expect_side_effect(
         action=action,
         guild_id=gid,
         related_bot_id=max(0, _safe_int(related_bot_id, 0)),
+        target_key=str(target_key or "").strip().lower(),
         source_action=str(source_action or "")[:80],
         created_at=time.monotonic(),
     )
@@ -463,11 +474,14 @@ def _consume_expected_side_effect(
         if action == "integration_delete"
         else set()
     )
+    entry_target_key = _entry_target_key(entry, action)
     # Dict insertion order is creation order, so the first matching receipt
     # is already the oldest one. Avoid sorting the global short-lived ledger on
     # every protected audit event.
     for token, expected in list(_EXPECTED_SIDE_EFFECTS.items()):
         if expected.guild_id != gid or expected.action != action:
+            continue
+        if expected.target_key and expected.target_key != entry_target_key:
             continue
         if (
             expected.related_bot_id > 0
@@ -499,6 +513,16 @@ def _cancel(nonce: str) -> None:
 
 
 def _entry_target_key(entry: Any, action_name: str) -> str:
+    if action_name in {"message_delete", "message_bulk_delete"}:
+        extra = getattr(entry, "extra", None)
+        channel = getattr(extra, "channel", None)
+        channel_id = _safe_int(getattr(channel, "id", 0), 0) or _safe_int(
+            getattr(extra, "channel_id", 0),
+            0,
+        )
+        if channel_id > 0:
+            return _id_key(channel_id)
+
     target = getattr(entry, "target", None)
     target_id = _safe_int(getattr(target, "id", 0), 0)
     if target_id > 0:
@@ -506,12 +530,6 @@ def _entry_target_key(entry: Any, action_name: str) -> str:
     code = str(getattr(target, "code", "") or "").strip()
     if code:
         return _code_key(code)
-    if action_name in {"message_delete", "message_bulk_delete"}:
-        extra = getattr(entry, "extra", None)
-        channel = getattr(extra, "channel", None)
-        channel_id = _safe_int(getattr(channel, "id", 0), 0) or _safe_int(getattr(extra, "channel_id", 0), 0)
-        if channel_id > 0:
-            return _id_key(channel_id)
     return ""
 
 
@@ -632,6 +650,8 @@ async def _audit_guard(bot: discord.Client, entry: Any) -> None:
     if _bot_id(bot) <= 0 or _actor_id(entry) != _bot_id(bot):
         return
     if _consume(guild, entry, action_name):
+        if action_name == "message_delete":
+            _consume_expected_side_effect(guild, entry, action_name)
         return
     if _consume_expected_side_effect(guild, entry, action_name):
         return
@@ -655,22 +675,34 @@ def _patch_http(bot: discord.Client) -> bool:
         nonce, reason = _authorize(spec, original_reason)
         kwargs["reason"] = reason
 
-        side_effect = ""
+        side_effects: list[str] = []
         if _local_removal_targets_bot(bot, spec, original_reason):
             source_action = "bot_ban" if "ban" in spec.actions else "bot_kick"
-            side_effect = _expect_side_effect(
+            token = _expect_side_effect(
                 spec.guild_id,
                 "integration_delete",
                 related_bot_id=_target_id_from_key(spec.target_key),
                 source_action=source_action,
             )
+            if token:
+                side_effects.append(token)
+
+        if "message_delete" in spec.actions:
+            token = _expect_side_effect(
+                spec.guild_id,
+                "message_delete",
+                target_key=spec.target_key,
+                source_action="local_message_delete",
+            )
+            if token:
+                side_effects.append(token)
 
         try:
             return await original(route, *args, **kwargs)
         except Exception:
             _cancel(nonce)
-            if side_effect:
-                _cancel_expected_side_effect(side_effect)
+            for token in side_effects:
+                _cancel_expected_side_effect(token)
             raise
 
     setattr(http, "request", guarded_request)
