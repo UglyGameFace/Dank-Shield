@@ -330,6 +330,122 @@ def test_health_check_decorates_current_review_owner_instead_of_replacing_it(
     assert repair_buttons[0].label == "Access Healthy"
 
 
+def test_structurally_complete_setup_does_not_claim_passed_when_access_is_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guild = FakeGuild()
+    captured: dict[str, object] = {}
+
+    class LiveReviewView(integration.discord.ui.View):
+        def __init__(self, *, ready: bool) -> None:
+            super().__init__(timeout=900)
+            self.ready = ready
+            primary = integration.discord.ui.Button(
+                label="Start Guided Test" if ready else "Fix Next Required Item",
+                custom_id=(
+                    "dank_setup_review:launch"
+                    if ready
+                    else "dank_setup_review:fix_next"
+                ),
+            )
+            self.add_item(primary)
+
+    async def allow(_interaction):
+        return True
+
+    async def health_embed(_guild):
+        return integration.discord.Embed(
+            title="✅ Configuration Check Passed",
+            description="Saved config looks ready.",
+            color=integration.discord.Color.green(),
+        )
+
+    async def guided(_guild):
+        return "ready", "", "", ""
+
+    async def config(_guild_id, *, refresh=False):
+        assert refresh is True
+        return {"verify_channel_id": "10"}
+
+    async def edit(_interaction, *, embed=None, view=None, **_kwargs):
+        captured["embed"] = embed
+        captured["view"] = view
+
+    access_audit = integration.contextual.ContextualRepairAudit(
+        targets=[
+            integration.contextual.ContextualTargetAudit(
+                target=integration.contextual.ContextualRepairTarget(
+                    10,
+                    "general",
+                    "Verification start channel",
+                ),
+                audit=SimpleNamespace(
+                    missing=["send_messages"],
+                    blockers=[
+                        "Dank Shield has Manage Roles server-wide, but Manage Permissions is denied."
+                    ],
+                    repairable_missing=[],
+                ),
+            )
+        ]
+    )
+
+    monkeypatch.setattr(integration.solid, "_require_setup_permission", allow)
+    monkeypatch.setattr(integration.setup, "_build_plain_setup_health_embed", health_embed)
+    monkeypatch.setattr(integration.setup, "_guided_setup_target", guided)
+    monkeypatch.setattr(integration, "get_guild_config", config)
+    monkeypatch.setattr(integration, "_setup_manual_issues", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        integration,
+        "_setup_targets",
+        lambda *_args, **_kwargs: (
+            integration.contextual.ContextualRepairTarget(
+                10,
+                "general",
+                "Verification start channel",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        integration.contextual,
+        "audit_context",
+        lambda *_args, **_kwargs: access_audit,
+    )
+    monkeypatch.setattr(integration.setup, "SetupReviewView", LiveReviewView)
+    monkeypatch.setattr(integration.solid, "_edit_or_followup", edit)
+
+    interaction = SimpleNamespace(
+        guild=guild,
+        response=SimpleNamespace(send_message=None),
+    )
+    asyncio.run(
+        integration._contextual_open_health_check(
+            interaction,
+            already_deferred=True,
+        )
+    )
+
+    embed = captured["embed"]
+    view = captured["view"]
+    assert embed.title == "⚠️ Configuration Saved — Access Needs Attention"
+    assert "do not" in str(embed.description).lower()
+    assert view.ready is False
+
+    ids = {
+        str(getattr(child, "custom_id", "") or "")
+        for child in view.children
+    }
+    assert "dank_setup_review:launch" not in ids
+    assert "dank_setup_review:fix_next" not in ids
+    repair = [
+        child
+        for child in view.children
+        if getattr(child, "custom_id", "") == "dank_setup_review:contextual_repair"
+    ]
+    assert len(repair) == 1
+    assert repair[0].label == "Manual Fix Needed"
+
+
 def test_runtime_patch_covers_setup_check_and_verification_channels_without_clobbering_review_owner() -> None:
     source = __import__("pathlib").Path(integration.__file__).read_text(encoding="utf-8")
     assert "setup._open_health_check = _contextual_open_health_check" in source
