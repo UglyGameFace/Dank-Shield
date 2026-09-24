@@ -41,6 +41,7 @@ _COMPONENT_OBSERVER_PROBE_TIMES: list[float] = []
 _COMPONENT_OBSERVER_LOG_WINDOW_SECONDS = 60.0
 _COMPONENT_OBSERVER_LOG_LIMIT = 20
 _COMPONENT_OBSERVER_LOG_TIMES: list[float] = []
+_VIEW_STORE_LAYOUT_DISCORD_VERSION = "2.7.1"
 
 
 @dataclass(frozen=True)
@@ -413,22 +414,27 @@ def _component_store_key(interaction: Any) -> tuple[int, str]:
     )
 
 
-def _view_store_has_component_owner(bot: Any, interaction: Any) -> bool:
-    """Return whether discord.py ViewStore has a real owner for this component.
+def _view_store_component_owner_state(bot: Any, interaction: Any) -> bool | None:
+    """Return True/False only when the pinned ViewStore contract is known.
 
     discord.py 2.7.1 resolves message-specific ownership first, then a global
-    persistent view registered under the None message key, then dynamic items.
-    Reading the store here mirrors that lookup without dispatching anything.
+    persistent view registered under the None message key, while dynamic items
+    are dispatched independently before that lookup. Reading the store mirrors
+    that contract without dispatching anything. Unknown library/store layouts
+    return None so stale recovery fails closed instead of stealing a live click.
     """
+    if str(getattr(discord, "__version__", "") or "") != _VIEW_STORE_LAYOUT_DISCORD_VERSION:
+        return None
     component_type, custom_id = _component_store_key(interaction)
     if component_type <= 0 or not custom_id:
-        return False
+        return None
     try:
         state = getattr(bot, "_connection", None)
         store = getattr(state, "_view_store", None)
         views = getattr(store, "_views", None)
-        if not isinstance(views, dict):
-            return False
+        dynamic = getattr(store, "_dynamic_items", None)
+        if not isinstance(views, dict) or not isinstance(dynamic, dict):
+            return None
         message_id = _safe_int(
             getattr(getattr(interaction, "message", None), "id", 0),
             0,
@@ -438,17 +444,20 @@ def _view_store_has_component_owner(bot: Any, interaction: Any) -> bool:
             return True
         if key in (views.get(None, {}) or {}):
             return True
-        dynamic = getattr(store, "_dynamic_items", None)
-        if isinstance(dynamic, dict):
-            for pattern in dynamic.keys():
-                try:
-                    if pattern.fullmatch(custom_id) is not None:
-                        return True
-                except Exception:
-                    continue
-    except Exception:
+        for pattern in dynamic.keys():
+            try:
+                if pattern.fullmatch(custom_id) is not None:
+                    return True
+            except Exception:
+                continue
         return False
-    return False
+    except Exception:
+        return None
+
+
+def _view_store_has_component_owner(bot: Any, interaction: Any) -> bool:
+    """Compatibility helper used by diagnostics/tests."""
+    return _view_store_component_owner_state(bot, interaction) is True
 
 
 def _message_is_ephemeral(interaction: Any) -> bool:
@@ -477,13 +486,15 @@ async def _recover_unowned_private_component(
             return False
         if not _message_is_ephemeral(interaction):
             return False
-        if _view_store_has_component_owner(bot, interaction):
+        owner_state = _view_store_component_owner_state(bot, interaction)
+        if owner_state is not False:
             return False
 
         await asyncio.sleep(PRIVATE_MENU_RECOVERY_GRACE_SECONDS)
         if _response_done(interaction):
             return False
-        if _view_store_has_component_owner(bot, interaction):
+        owner_state = _view_store_component_owner_state(bot, interaction)
+        if owner_state is not False:
             return False
 
         from .commands_ext.public_command_surface_v2 import open_compact_dank_home
