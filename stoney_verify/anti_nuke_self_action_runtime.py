@@ -24,10 +24,16 @@ _INSTALL_FLAG = "_dank_antinuke_self_action_runtime_installed"
 _HTTP_PATCH_FLAG = "_dank_antinuke_self_action_http_patched"
 _WEBHOOK_PATCH_FLAG = "_dank_antinuke_self_action_webhook_patched"
 _AUTH_TTL_SECONDS = 120.0
+_SIDE_EFFECT_TTL_SECONDS = 15.0
 _MAX_PENDING = 4096
 _REASON_BASE_LIMIT = 380
 _MARKER_RE = re.compile(r"\[DSA:([0-9a-f]{24})\]", re.IGNORECASE)
 _API_PREFIX_RE = re.compile(r"^/api/v\d+")
+_BOT_REMOVAL_REASON_PREFIXES = (
+    "dank shield antinuke rollback: unauthorized bot addition",
+    "dank shield antinuke: fast known-hostile bot re-add block",
+    "dank shield antinuke: previously confirmed hostile bot re-added",
+)
 
 _PROTECTED_ACTIONS = frozenset(
     {
@@ -69,7 +75,18 @@ class _Authorization:
     created_at: float
 
 
+@dataclass
+class _ExpectedSideEffect:
+    token: str
+    action: str
+    guild_id: int
+    related_bot_id: int
+    source_action: str
+    created_at: float
+
+
 _PENDING: dict[str, _Authorization] = {}
+_EXPECTED_SIDE_EFFECTS: dict[str, _ExpectedSideEffect] = {}
 _COMPROMISE_GUILDS: set[int] = set()
 
 
@@ -305,6 +322,168 @@ def _prune_pending(now: Optional[float] = None) -> None:
             _PENDING.pop(auth.nonce, None)
 
 
+def _prune_expected_side_effects(now: Optional[float] = None) -> None:
+    current = time.monotonic() if now is None else float(now)
+    for token, expected in list(_EXPECTED_SIDE_EFFECTS.items()):
+        if current - float(expected.created_at) > _SIDE_EFFECT_TTL_SECONDS:
+            _EXPECTED_SIDE_EFFECTS.pop(token, None)
+    if len(_EXPECTED_SIDE_EFFECTS) > _MAX_PENDING:
+        ordered = sorted(
+            _EXPECTED_SIDE_EFFECTS.values(),
+            key=lambda item: item.created_at,
+        )
+        for expected in ordered[: len(_EXPECTED_SIDE_EFFECTS) - _MAX_PENDING]:
+            _EXPECTED_SIDE_EFFECTS.pop(expected.token, None)
+
+
+def _expect_side_effect(
+    guild_id: int,
+    action_name: str,
+    *,
+    related_bot_id: int = 0,
+    source_action: str = "",
+) -> str:
+    _prune_expected_side_effects()
+    gid = _safe_int(guild_id, 0)
+    action = str(action_name or "").strip().lower()
+    if gid <= 0 or not action:
+        return ""
+    token = secrets.token_hex(12)
+    _EXPECTED_SIDE_EFFECTS[token] = _ExpectedSideEffect(
+        token=token,
+        action=action,
+        guild_id=gid,
+        related_bot_id=max(0, _safe_int(related_bot_id, 0)),
+        source_action=str(source_action or "")[:80],
+        created_at=time.monotonic(),
+    )
+    return token
+
+
+def _cancel_expected_side_effect(token: str) -> None:
+    _EXPECTED_SIDE_EFFECTS.pop(str(token or "").lower(), None)
+
+
+def _target_id_from_key(target_key: str) -> int:
+    text = str(target_key or "").strip().lower()
+    if not text.startswith("id:"):
+        return 0
+    return _safe_int(text[3:], 0)
+
+
+def _local_removal_targets_bot(
+    bot: discord.Client,
+    spec: _RequestSpec,
+    reason: Any,
+) -> bool:
+    if not ({"kick", "ban"} & set(spec.actions)):
+        return False
+
+    target_id = _target_id_from_key(spec.target_key)
+    if target_id <= 0:
+        return False
+
+    if spec.guild_id > 0:
+        get_guild = getattr(bot, "get_guild", None)
+        guild = None
+        if callable(get_guild):
+            try:
+                guild = get_guild(spec.guild_id)
+            except Exception:
+                guild = None
+        if guild is None:
+            for candidate in list(getattr(bot, "guilds", []) or []):
+                if _safe_int(getattr(candidate, "id", 0), 0) == spec.guild_id:
+                    guild = candidate
+                    break
+        get_member = getattr(guild, "get_member", None)
+        if callable(get_member):
+            try:
+                member = get_member(target_id)
+            except Exception:
+                member = None
+            if member is not None and bool(getattr(member, "bot", False)):
+                return True
+
+    get_user = getattr(bot, "get_user", None)
+    if callable(get_user):
+        try:
+            user = get_user(target_id)
+        except Exception:
+            user = None
+        if user is not None and bool(getattr(user, "bot", False)):
+            return True
+
+    # Cover only known AntiNuke bot-removal paths when the freshly-added bot
+    # is not yet available through Discord's local member/user cache. Human AntiNuke
+    # containment reasons deliberately do not qualify.
+    normalized_reason = str(reason or "").strip().casefold()
+    return any(
+        normalized_reason.startswith(prefix)
+        for prefix in _BOT_REMOVAL_REASON_PREFIXES
+    )
+
+
+def _integration_identity_ids(entry: Any) -> set[int]:
+    target = getattr(entry, "target", None)
+    application = getattr(target, "application", None)
+    candidates = (
+        getattr(target, "user", None),
+        application,
+        getattr(application, "bot", None),
+    )
+    found: set[int] = {
+        value
+        for value in (
+            _safe_int(getattr(target, "application_id", 0), 0),
+            _safe_int(getattr(target, "user_id", 0), 0),
+        )
+        if value > 0
+    }
+    for candidate in candidates:
+        value = _safe_int(getattr(candidate, "id", 0), 0)
+        if value > 0:
+            found.add(value)
+    return found
+
+
+def _consume_expected_side_effect(
+    guild: Any,
+    entry: Any,
+    action_name: str,
+) -> bool:
+    _prune_expected_side_effects()
+    gid = _safe_int(getattr(guild, "id", 0), 0)
+    action = str(action_name or "").strip().lower()
+    if gid <= 0 or not action:
+        return False
+
+    related_ids = (
+        _integration_identity_ids(entry)
+        if action == "integration_delete"
+        else set()
+    )
+    # Dict insertion order is creation order, so the first matching receipt
+    # is already the oldest one. Avoid sorting the global short-lived ledger on
+    # every protected audit event.
+    for token, expected in list(_EXPECTED_SIDE_EFFECTS.items()):
+        if expected.guild_id != gid or expected.action != action:
+            continue
+        if (
+            expected.related_bot_id > 0
+            and related_ids
+            and expected.related_bot_id not in related_ids
+        ):
+            continue
+        _EXPECTED_SIDE_EFFECTS.pop(token, None)
+        print(
+            "🧾 AntiNuke consumed expected self-action side effect "
+            f"guild={gid} action={action} source={expected.source_action or 'unknown'}"
+        )
+        return True
+    return False
+
+
 def _authorize(spec: _RequestSpec, reason: Any) -> tuple[str, str]:
     _prune_pending()
     nonce = secrets.token_hex(12)
@@ -454,6 +633,8 @@ async def _audit_guard(bot: discord.Client, entry: Any) -> None:
         return
     if _consume(guild, entry, action_name):
         return
+    if _consume_expected_side_effect(guild, entry, action_name):
+        return
     await _unmatched_self_action(bot, guild, entry, action_name)
 
 
@@ -469,12 +650,27 @@ def _patch_http(bot: discord.Client) -> bool:
         spec = _request_spec(bot, route, kwargs)
         if spec is None:
             return await original(route, *args, **kwargs)
-        nonce, reason = _authorize(spec, kwargs.get("reason"))
+
+        original_reason = kwargs.get("reason")
+        nonce, reason = _authorize(spec, original_reason)
         kwargs["reason"] = reason
+
+        side_effect = ""
+        if _local_removal_targets_bot(bot, spec, original_reason):
+            source_action = "bot_ban" if "ban" in spec.actions else "bot_kick"
+            side_effect = _expect_side_effect(
+                spec.guild_id,
+                "integration_delete",
+                related_bot_id=_target_id_from_key(spec.target_key),
+                source_action=source_action,
+            )
+
         try:
             return await original(route, *args, **kwargs)
         except Exception:
             _cancel(nonce)
+            if side_effect:
+                _cancel_expected_side_effect(side_effect)
             raise
 
     setattr(http, "request", guarded_request)
@@ -531,6 +727,7 @@ def install_anti_nuke_self_action_runtime(bot: discord.Client) -> bool:
     print(
         "🧾 AntiNuke self-action proof active: protected bot-attributed audit actions require "
         f"one-time local authorization; http={'patched' if http_patched else 'unavailable'}; "
+        "bot-removal integration side effects correlated; "
         f"webhook={'patched' if webhook_patched else 'already active'}"
     )
     return True

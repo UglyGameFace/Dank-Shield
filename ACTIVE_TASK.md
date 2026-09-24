@@ -22,9 +22,9 @@ The displayed panel is the current Basic Verify surface, not the ID-upload flow.
 
 Branch: `fix/basic-verify-interaction-owner-20260923`
 
-Base: `main@0935f80071723b878ba1fb85a3402608512d1aec`
+Base after sync: `main@67e5c50d00f45c9164e2d09fa7aff352f2a84a66`
 
-No merge-readiness claim is made until exact-head validation completes.
+No merge-readiness claim is made until exact-head validation completes.\n\nThe branch was synchronized after PR #303 advanced `main`. That merge changed\n`ACTIVE_TASK.md`, `anti_nuke_self_action_runtime.py`, and its AntiNuke tests;\nthere was no overlap with this task's Basic Verify runtime or regression files.
 
 ## Scope
 
