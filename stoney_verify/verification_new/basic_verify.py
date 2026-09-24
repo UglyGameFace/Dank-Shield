@@ -36,6 +36,7 @@ _RUNTIME_REGISTRATION_ERROR: str = ""
 _BASIC_VERIFY_FALLBACK_GRACE_SECONDS = 0.15
 _BASIC_VERIFY_PANEL_MESSAGE_ID_KEY = "basic_verify_panel_message_id"
 _BASIC_VERIFY_PANEL_APPLICATION_ID_KEY = "basic_verify_panel_application_id"
+_BASIC_VERIFY_PANEL_COMPONENT_ID_KEY = "basic_verify_panel_component_id"
 _RUNTIME_READY_RECONCILER_REGISTERED = False
 _RUNTIME_READY_RECONCILE_STARTED = False
 _BOUND_PANEL_MESSAGE_IDS: set[int] = set()
@@ -136,6 +137,22 @@ def _channel_by_name(guild: discord.Guild, *tokens: str) -> Optional[discord.Tex
     except Exception:
         pass
     return None
+
+
+def _reconcile_verify_channel(
+    guild: discord.Guild,
+    cfg: Any,
+) -> Optional[discord.TextChannel]:
+    """Resolve the one Basic Verify channel without REST or all-channel scans."""
+    return (
+        _channel_from_cfg(
+            guild,
+            cfg,
+            "verify_channel_id",
+            "verification_channel_id",
+        )
+        or _channel_by_name(guild, "verification", "verify")
+    )
 
 
 def _role(guild: discord.Guild, role_id: int) -> Optional[discord.Role]:
@@ -515,6 +532,7 @@ async def _persist_basic_verify_panel_message_id(
         return
     patch = {
         _BASIC_VERIFY_PANEL_MESSAGE_ID_KEY: str(mid),
+        _BASIC_VERIFY_PANEL_COMPONENT_ID_KEY: BASIC_VERIFY_CUSTOM_ID,
         "__config_write_mode": "explicit_override",
         "__config_write_source": "basic_verify.panel_identity",
     }
@@ -557,6 +575,27 @@ def _message_custom_ids(message: Any) -> set[str]:
     return found
 
 
+def _message_has_strict_basic_verify_signature(message: Any) -> bool:
+    """Require Dank Shield-specific proof before treating a foreign message as ours."""
+    if BASIC_VERIFY_CUSTOM_ID in _message_custom_ids(message):
+        return True
+    try:
+        for embed in list(getattr(message, "embeds", None) or []):
+            footer_text = str(
+                getattr(getattr(embed, "footer", None), "text", "") or ""
+            ).strip()
+            if BASIC_VERIFY_FOOTER in footer_text:
+                return True
+            if footer_text in {
+                "Dank Shield Basic Verify",
+                "Dank Shield Basic Verify • access only",
+            }:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def _message_looks_like_basic_verify_panel(message: Any) -> bool:
     if BASIC_VERIFY_CUSTOM_ID in _message_custom_ids(message):
         return True
@@ -584,7 +623,7 @@ async def _delete_stale_foreign_basic_verify_panel(message: Any) -> bool:
     guild = getattr(message, "guild", None)
     if not isinstance(channel, discord.TextChannel) or not isinstance(guild, discord.Guild):
         return False
-    if not _message_looks_like_basic_verify_panel(message):
+    if not _message_has_strict_basic_verify_signature(message):
         return False
     me = getattr(guild, "me", None)
     try:
@@ -632,6 +671,46 @@ def _bind_basic_verify_panel_message(
         return False
 
 
+async def _scan_basic_verify_panels(
+    channel: discord.TextChannel,
+    *,
+    limit: int = 80,
+) -> tuple[list[Any], list[Any]]:
+    """Return current-app and foreign-app Basic Verify messages newest first."""
+    current: list[Any] = []
+    foreign: list[Any] = []
+    me_id = _safe_int(getattr(getattr(channel.guild, "me", None), "id", 0), 0)
+
+    async for message in channel.history(limit=max(1, int(limit))):
+        author_id = _safe_int(
+            getattr(getattr(message, "author", None), "id", 0),
+            0,
+        )
+        if author_id > 0 and author_id == me_id:
+            if _message_looks_like_basic_verify_panel(message):
+                current.append(message)
+            continue
+
+        # Foreign messages require the strict Dank Shield signature before they
+        # are even candidates for cleanup. The broad historical-title heuristic
+        # is only safe for messages authored by the current bot.
+        if _message_has_strict_basic_verify_signature(message):
+            foreign.append(message)
+
+    return current, foreign
+
+
+async def _cleanup_foreign_basic_verify_panels(messages: list[Any]) -> int:
+    removed = 0
+    for message in list(messages or []):
+        try:
+            if await _delete_stale_foreign_basic_verify_panel(message):
+                removed += 1
+        except Exception:
+            continue
+    return removed
+
+
 async def post_basic_verify_panel(
     channel: discord.TextChannel,
     *,
@@ -648,30 +727,13 @@ async def post_basic_verify_panel(
     view = BasicVerifyView()
 
     history_scan_completed = False
+    current_panels: list[Any] = []
+    foreign_panels: list[Any] = []
     try:
-        me = channel.guild.me
-        me_id = int(getattr(me, "id", 0) or 0)
-        async for msg in channel.history(limit=80):
-            if int(getattr(getattr(msg, "author", None), "id", 0) or 0) != me_id:
-                continue
-            if not msg.embeds:
-                continue
-            if is_basic_verify_panel_embed(msg.embeds[0]):
-                await msg.edit(embed=embed, view=view)
-                await _persist_basic_verify_panel_message_id(
-                    int(channel.guild.id),
-                    int(msg.id),
-                    application_id=me_id,
-                )
-                target_bot = bot_instance
-                if target_bot is None:
-                    try:
-                        from stoney_verify.globals import bot as target_bot
-                    except Exception:
-                        target_bot = None
-                if target_bot is not None:
-                    _bind_basic_verify_panel_message(target_bot, int(msg.id))
-                return "updated"
+        current_panels, foreign_panels = await _scan_basic_verify_panels(
+            channel,
+            limit=80,
+        )
         history_scan_completed = True
     except Exception as exc:
         try:
@@ -683,6 +745,34 @@ async def post_basic_verify_panel(
             )
         except Exception:
             pass
+
+    me_id = _safe_int(getattr(getattr(channel.guild, "me", None), "id", 0), 0)
+    target_bot = bot_instance
+    if target_bot is None:
+        try:
+            from stoney_verify.globals import bot as target_bot
+        except Exception:
+            target_bot = None
+
+    if current_panels:
+        msg = current_panels[0]
+        await msg.edit(embed=embed, view=view)
+        await _persist_basic_verify_panel_message_id(
+            int(channel.guild.id),
+            int(msg.id),
+            application_id=me_id,
+        )
+        if target_bot is not None:
+            _bind_basic_verify_panel_message(target_bot, int(msg.id))
+        removed = await _cleanup_foreign_basic_verify_panels(foreign_panels)
+        if foreign_panels:
+            print(
+                "♻️ basic_verify legacy foreign cleanup "
+                f"guild={channel.guild.id} channel={channel.id} "
+                f"found={len(foreign_panels)} removed={removed} "
+                "replacement=current_existing"
+            )
+        return "updated"
 
     if require_history_scan_for_post and not history_scan_completed:
         return "scan_failed"
@@ -700,14 +790,16 @@ async def post_basic_verify_panel(
             _safe_int(getattr(getattr(channel.guild, "me", None), "id", 0), 0),
         ),
     )
-    target_bot = bot_instance
-    if target_bot is None:
-        try:
-            from stoney_verify.globals import bot as target_bot
-        except Exception:
-            target_bot = None
     if target_bot is not None:
         _bind_basic_verify_panel_message(target_bot, int(msg.id))
+    removed = await _cleanup_foreign_basic_verify_panels(foreign_panels)
+    if foreign_panels:
+        print(
+            "♻️ basic_verify legacy foreign cleanup "
+            f"guild={channel.guild.id} channel={channel.id} "
+            f"found={len(foreign_panels)} removed={removed} "
+            "replacement=current_posted"
+        )
     _ = actor_id
     return "posted"
 
@@ -792,19 +884,25 @@ async def _reconcile_one_basic_verify_panel(
         _cfg_value(cfg, _BASIC_VERIFY_PANEL_APPLICATION_ID_KEY, 0),
         0,
     )
+    saved_component_id = str(
+        _cfg_value(cfg, _BASIC_VERIFY_PANEL_COMPONENT_ID_KEY, "") or ""
+    ).strip()
     current_application_id = _safe_int(
         getattr(getattr(guild, "me", None), "id", 0),
         0,
     )
 
-    # Only zero-REST bind when persisted ownership is known to match the
-    # currently running Discord application. A message ID alone is not enough:
-    # a foreign-application component can look valid but its click never reaches
-    # this process, so neither the persistent view nor delayed fallback can ack.
+    # Only zero-REST bind when persisted ownership AND the exact component
+    # contract are both proven current. Message/application identity alone is
+    # insufficient because an older Basic Verify message can be authored by the
+    # same bot application while carrying a retired custom_id. Binding today's
+    # View to that message ID would look healthy at startup but Discord would
+    # never route the old button to today's (component_type, custom_id) key.
     if (
         persisted_mid > 0
         and saved_application_id > 0
         and saved_application_id == current_application_id
+        and saved_component_id == BASIC_VERIFY_CUSTOM_ID
     ):
         return (
             "bound"
@@ -812,14 +910,10 @@ async def _reconcile_one_basic_verify_panel(
             else "bind_failed"
         )
 
-    channel_id = _safe_int(
-        _cfg_value(cfg, "verify_channel_id", 0)
-        or _cfg_value(cfg, "verification_channel_id", 0),
-        0,
-    )
-    channel = guild.get_channel(channel_id) if channel_id > 0 else None
+    channel = _reconcile_verify_channel(guild, cfg)
     if not isinstance(channel, discord.TextChannel):
         return "no_channel"
+    channel_id = int(channel.id)
 
     if persisted_mid > 0:
         if not allow_legacy_rest:
@@ -853,6 +947,63 @@ async def _reconcile_one_basic_verify_panel(
             0,
         )
         if author_id == current_application_id and current_application_id > 0:
+            custom_ids = _message_custom_ids(message)
+            if BASIC_VERIFY_CUSTOM_ID not in custom_ids:
+                try:
+                    await message.edit(
+                        embed=build_basic_verify_embed(guild, cfg),
+                        view=BasicVerifyView(),
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                except TypeError:
+                    # Compatibility with lightweight test doubles and Discord
+                    # message implementations that do not expose
+                    # allowed_mentions on edit().
+                    try:
+                        await message.edit(
+                            embed=build_basic_verify_embed(guild, cfg),
+                            view=BasicVerifyView(),
+                        )
+                    except Exception as exc:
+                        try:
+                            print(
+                                "⚠️ basic_verify component contract repair failed "
+                                f"guild={guild.id} channel={channel.id} message={message.id} "
+                                f"found={sorted(custom_ids)} expected={BASIC_VERIFY_CUSTOM_ID!r} "
+                                f"error={type(exc).__name__}: {exc}"
+                            )
+                        except Exception:
+                            pass
+                        return "component_repair_failed"
+                except Exception as exc:
+                    try:
+                        print(
+                            "⚠️ basic_verify component contract repair failed "
+                            f"guild={guild.id} channel={channel.id} message={message.id} "
+                            f"found={sorted(custom_ids)} expected={BASIC_VERIFY_CUSTOM_ID!r} "
+                            f"error={type(exc).__name__}: {exc}"
+                        )
+                    except Exception:
+                        pass
+                    return "component_repair_failed"
+
+                await _persist_basic_verify_panel_message_id(
+                    int(guild.id),
+                    int(message.id),
+                    application_id=current_application_id,
+                )
+                bound = _bind_basic_verify_panel_message(bot, int(message.id))
+                try:
+                    print(
+                        "♻️ basic_verify repaired legacy component contract "
+                        f"guild={guild.id} channel={channel.id} message={message.id} "
+                        f"old_ids={sorted(custom_ids)} new_id={BASIC_VERIFY_CUSTOM_ID!r} "
+                        f"bound={bound}"
+                    )
+                except Exception:
+                    pass
+                return "repaired_component" if bound else "repair_bind_failed"
+
             await _persist_basic_verify_panel_message_id(
                 int(guild.id),
                 int(message.id),
@@ -905,8 +1056,10 @@ async def _reconcile_one_basic_verify_panel(
             require_history_scan_for_post=True,
         )
 
-    # A disabled-mode legacy panel is still worth locating and binding so its
-    # button can answer with the canonical disabled reason instead of timing out.
+    # A disabled-mode legacy panel is still worth locating, but it must obey
+    # the same component-identity contract. Otherwise startup would persist
+    # today's component proof for a visibly old button and recreate the exact
+    # dead-panel failure this reconciler is meant to eliminate.
     try:
         me_id = current_application_id
         async for msg in channel.history(limit=80):
@@ -914,14 +1067,37 @@ async def _reconcile_one_basic_verify_panel(
                 continue
             if _safe_int(getattr(getattr(msg, "author", None), "id", 0), 0) != me_id:
                 continue
+
+            custom_ids = _message_custom_ids(msg)
+            repaired = False
+            if BASIC_VERIFY_CUSTOM_ID not in custom_ids:
+                try:
+                    await msg.edit(
+                        view=BasicVerifyView(),
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                except TypeError:
+                    await msg.edit(view=BasicVerifyView())
+                repaired = True
+
             await _persist_basic_verify_panel_message_id(
                 int(guild.id),
                 int(msg.id),
                 application_id=me_id,
             )
-            _bind_basic_verify_panel_message(bot, int(msg.id))
-            return "bound_disabled"
-    except Exception:
+            bound = _bind_basic_verify_panel_message(bot, int(msg.id))
+            if not bound:
+                return "disabled_bind_failed"
+            return "repaired_disabled_component" if repaired else "bound_disabled"
+    except Exception as exc:
+        try:
+            print(
+                "⚠️ basic_verify disabled-panel component repair failed "
+                f"guild={guild.id} channel={channel.id} "
+                f"error={type(exc).__name__}: {exc}"
+            )
+        except Exception:
+            pass
         return "scan_failed"
     return "not_found"
 
@@ -956,6 +1132,9 @@ async def _reconcile_basic_verify_panels_after_ready(bot: Any) -> None:
                 _cfg_value(cfg, _BASIC_VERIFY_PANEL_APPLICATION_ID_KEY, 0),
                 0,
             )
+            saved_component_id = str(
+                _cfg_value(cfg, _BASIC_VERIFY_PANEL_COMPONENT_ID_KEY, "") or ""
+            ).strip()
             current_application_id = _safe_int(
                 getattr(getattr(guild, "me", None), "id", 0),
                 0,
@@ -964,6 +1143,7 @@ async def _reconcile_basic_verify_panels_after_ready(bot: Any) -> None:
                 persisted_mid > 0
                 and saved_application_id > 0
                 and saved_application_id == current_application_id
+                and saved_component_id == BASIC_VERIFY_CUSTOM_ID
             )
             allow_legacy_rest = True
             if needs_legacy_rest:

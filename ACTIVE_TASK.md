@@ -2,191 +2,150 @@
 
 ## Active task / desired outcome
 
-**P0-AUTHORITY-RUNTIME-002 — restore live authority and component ownership across public controls**
+**P0-BASIC-VERIFY-COMPONENT-003 — repair legacy Basic Verify buttons that remain visibly clickable but cannot dispatch**
 
-Production evidence after PR #311 deployed shows that a fresh `/verify`
-application-command interaction reaches Dank Shield and is acknowledged, but the
-Verification Center returns:
+Fresh `/dank home` controls now work on the deployed #312 runtime, while the
+existing public **Verify** button still returns Discord's red
+`Interaction failed` banner.
 
-`❌ Staff only. Server owners and configured staff are allowed.`
-
-The user also reports that **Role Builder still does not work**. Repository
-tracing shows both Role Builder doorways depend on the same central authority
-truth:
-
-- `/dank home` → **Roles & Profiles** uses
-  `public_command_hub._admin_or_manage()`; a false result silently routes the
-  server owner to the ordinary member profile entry instead of the staff builder;
-- `/dank profile builder` and `/dank roles ...` use
-  `public_setup_group._require_setup_permission()`, which delegates to the same
-  `interaction_has_manage_guild_authority()` helper.
-
-This is therefore the same authorization-truth failure for Role Builder access.
-
-A newer live report says button interactions still show Discord's red
-`Interaction failed` banner broadly. That symptom is not explained by authority
-alone. PR #312 is still unmerged, and the earlier 4:04 PM screenshot happened
-only about three minutes after PR #311 merged, so that screenshot did not prove
-Discloud had completed the #311 redeploy.
-
-Repository tracing also found a real partial-runtime defect: Profile/Role public
-surfaces contain semantic raw buttons whose canonical business owner is the
-module's global `on_interaction` listener. The tolerant command registrar could
-fail that module and continue booting, leaving visible controls with no handler.
-The older centralized verification/VC interaction listener was likewise allowed
-to fail with only a warning.
+This isolates the remaining live failure to Basic Verify panel compatibility.
 
 ## Single active task lock
 
-Only this owner/admin authority task is active.
+Only this Basic Verify component-identity repair is active.
 
-Do not reopen the completed component-lifecycle work unless new evidence points
-back to it. Do not mix unrelated feature work into this branch.
+Do not reopen the completed global component-runtime or authority work unless
+new evidence points back to it.
 
-## Previous task closed
+## Production proof
 
-PR #311 — production-wide Discord interaction reliability — merged to `main`
-as `a67d94bc91e8380bb2b7758af52c0fcab0c376c9`.
+PR #312 is merged and Discloud reports the merge deployed successfully.
 
-Its exact PR head passed all workflow gates before merge.
+Live startup proves:
 
-## Production evidence
+- `profile_interaction runtime ready persistent_view=True listener=True`;
+- `ticket_panel_runtime ready persistent_view=True fallback_listener=True panel_reconciler=True`;
+- `basic_verify runtime ready owner=persistent_view delayed_fallback=True panel_reconciler=True`;
+- `interaction_handlers: registered component interaction handler`;
+- `component_runtime ready release=src:7e2f3278f466512a`;
+- persistent ViewStore inventory includes `BasicVerifyView`;
+- a fresh `/dank home` button works.
 
-The 2026-09-24 4:04 PM Discord screenshot shows:
+Therefore this is no longer a generic ViewStore/startup-registration failure.
 
-- `/verify` was accepted by Discord;
-- Dank Shield sent an immediate ephemeral response;
-- the response came from the staff/owner authorization gate in
-  `public_verify_command_center._require_staff()`;
-- therefore Gateway delivery, slash-command routing, and interaction
-  acknowledgement were alive for this request.
+## Root cause
 
-The failed path is:
+The investigation found two reconciliation gaps that can leave a visibly
+clickable Basic Verify panel with no route to the current process.
 
-`/verify`
-→ `public_verify_command_center._require_staff()`
-→ `public_staff_scope.scoped_interaction_is_staff()`
-→ owner/admin/configured-role authority resolution
-→ false denial
+### 1. Persisted component identity was not proven
 
-## Root-cause class
+Basic Verify restart reconciliation persisted and trusted only:
 
-The merged authority code correctly treated `guild.owner_id == user.id` as an
-owner fast path, but tests assumed `guild.owner_id` was already populated.
+- `basic_verify_panel_message_id`;
+- `basic_verify_panel_application_id`.
 
-For public application-command interactions that assumption is too narrow.
-discord.py exposes additional authoritative runtime evidence:
+That is not enough for long-lived public panels. The exact component contract
+must also be proven before a zero-REST message-bound View registration.
 
-- `guild.owner.id` when the owner object is available;
-- `interaction.permissions`, Discord's resolved permissions for the invoking
-  member in the interaction channel;
-- cached `Member.guild_permissions` when a full Member object is available.
+The current component contract is:
 
-The old gate did not use interaction-resolved Administrator permission before
-requiring a cached `discord.Member` for the fallback path.
+`dank:basic_verify:v1`
+
+### 2. Legacy discovery ignored foreign application panels and stale channel IDs
+
+When no usable persisted panel identity existed, the posting/discovery path
+looked only at Basic Verify messages authored by the **current** bot application.
+A panel authored by a previous Dank Shield application could therefore remain
+visible while its clicks were routed somewhere other than the current process.
+
+The reconciler also trusted only the persisted verify-channel ID. If that slot
+was missing/stale, it returned `no_channel` even when a cached
+`#verification` / `#verify` text channel clearly existed.
+
+This matches the live boundary: fresh `/dank home` controls work, while the
+old public Verify panel produces Discord's red failure and no canonical
+`basic_verify click` evidence.
 
 ## Repair
 
-`public_owner_authority.py` is the single authority owner.
+Basic Verify panel identity now persists a third proof:
 
-It now:
+- `basic_verify_panel_component_id = dank:basic_verify:v1`.
 
-- resolves owner identity from `guild.owner_id`, falling back to
-  `guild.owner.id`;
-- accepts Discord-resolved `interaction.permissions.administrator` without
-  requiring a cached Member object;
-- accepts Discord-resolved `interaction.permissions.manage_guild` for public
-  management surfaces;
-- retains cached Member permission checks as a final compatible source;
-- keeps non-owner/non-admin partial interactions fail-closed;
-- exposes a small non-secret authority snapshot for production denial telemetry.
+The zero-REST exact-bind path is allowed only when all three are current:
 
-`public_staff_scope.scoped_interaction_is_staff()` now evaluates:
+1. exact persisted message ID;
+2. exact current bot/application identity;
+3. exact current Basic Verify component ID.
 
-1. actual guild owner;
-2. interaction-resolved Administrator;
-3. existing configured staff-role policy.
+Existing rows without component proof, or rows with a retired component ID, use
+one bounded reconciliation fetch.
 
-`public_access_control.scoped_interaction_is_server_control()` uses the same
-owner/Administrator truth before its existing role/bootstrap policy.
+The reconciler resolves the verify channel from persisted guild config first and
+then falls back to the guild's cached `verification` / `verify` text channel
+name. This fallback performs no Discord REST scan across the guild.
 
-`public_verify_command_center._require_staff()` logs the authority snapshot only
-when access is denied, so another live mismatch is diagnosable without guessing.
+Basic Verify history discovery is still bounded to one verification channel and
+80 messages. It now recognizes both current-application and foreign-application
+Basic Verify-marked messages.
 
-## Mandatory component ownership
+For a current-bot Basic Verify message:
 
-The repair now treats interaction ownership as a boot contract:
+- if the actual message already contains `dank:basic_verify:v1`, persist the
+  component proof and bind it;
+- if the embed/message is Basic Verify but the actual component ID is old or
+  missing, edit that exact message **in place** with the current embed +
+  `BasicVerifyView`, persist the new component proof, and bind it;
+- if the edit fails, report `component_repair_failed` and do not falsely record
+  the panel as healthy.
 
-- `install_profile_interaction_runtime(bot, strict=True)` runs before the
-  tolerant split-command registrar;
-- Profile Panel persistence and its canonical `on_interaction` listener must
-  both register or startup fails closed;
-- the shared component lifecycle runtime is critical and startup aborts if it
-  cannot install;
-- the centralized verification/VC interaction listener returns explicit
-  readiness and `commands.py` fails closed if it cannot register;
-- command registration may still tolerate unrelated optional UI/command errors,
-  but it can no longer leave these known public component owners absent.
+For a foreign-application Basic Verify message:
 
-## Runtime deployment proof
-
-A new host-independent runtime proof fingerprints the interaction-critical source
-files and prefers a host-provided Git SHA when available. The component runtime
-ready log now includes that proof. Public status reports include the same build
-proof plus component ingress, stale-recovery, and unacknowledged counters.
-
-This makes the next live acceptance diagnostic instead of inferential: we can
-distinguish an old Discloud process from a current process that received a click
-but failed to acknowledge it.
+- first confirm a current-application replacement exists or was posted;
+- then remove the stale foreign panel when Discord permissions allow;
+- foreign cleanup requires a strict Dank Shield Basic Verify footer/component
+  signature, never the broader historical title heuristic;
+- never delete the stale panel before the replacement is confirmed;
+- keep the scan bounded to the verification channel.
 
 ## Safety invariants
 
-- no persisted database owner ID is trusted for live Discord authorization;
-- no cross-guild environment role fallback is introduced;
-- Manage Server is not promoted to ticket-staff authority;
-- configured staff/control roles remain guild-scoped;
-- non-owner partial interactions without resolved authority still fail closed;
-- this is a central authority repair, not a `/verify`-only bypass.
-
-## Tests
-
-Coverage includes:
-
-- both Role Builder doorways accept a resolved Administrator even without cached
-  Member/owner state;
-- the Roles & Profiles home route is locked to the central
-  `_admin_or_manage()` authority contract before opening the builder;
-- the direct `/dank profile builder` route is locked to
-  `_require_setup_permission()`;
-- owner identity with normal `guild.owner_id`;
-- owner identity fallback through `guild.owner.id`;
-- resolved Administrator with no cached owner/member state;
-- resolved management authority through the shared public helper;
-- non-owner partial interaction with no permissions fails closed;
-- Verification Center accepts resolved Administrator without cached owner state;
-- existing per-guild staff-role/config isolation tests remain required.
+- no duplicate Verify panel is created merely because the component version is old;
+- the existing message is repaired in place when owned by the current bot;
+- no role mutation occurs during startup reconciliation;
+- Verify clicks still acknowledge before DB/role work;
+- the persistent view and delayed fallback still delegate to one canonical
+  `maybe_handle_basic_verify_interaction` business path;
+- startup REST remains bounded for legacy/unproven rows;
+- no all-channel or all-message reconciliation is introduced;
+- a missing saved verify-channel ID can recover from the guild's already-cached
+  channel list without REST.
 
 ## Validation required
 
-- exact branch/currentness inspection;
+- focused Basic Verify restart/runtime tests;
+- component lifecycle architecture tests;
 - Python compile;
-- owner-authority focused tests;
-- ticket staff-scope tests;
 - full `pytest tests/`;
-- standalone repository audits;
 - all GitHub workflow gates;
-- final diff/review/mergeability inspection.
+- currentness / mergeability / review / diff hygiene;
+- after deployment, confirm startup reports
+  `repaired_component` for the affected legacy panel or otherwise shows the
+  exact reconciliation result;
+- live click on the repaired public Verify button must emit
+  `✅ basic_verify click ...` and acknowledge before role work.
 
 ## Status
 
-**IN PROGRESS — authority + mandatory component ownership repair implemented; exact-head validation pending**
+**VALIDATING — Basic Verify identity/discovery repair frozen; exact-head validation pending**
 
-Branch: `fix/verify-owner-authority-runtime-20260924`
+Branch: `fix/basic-verify-component-identity-20260924`
 
-Base: `main@a67d94bc91e8380bb2b7758af52c0fcab0c376c9`
+Base: current `main` after PR #312.
 
 ## Next step
 
-Open the focused PR from current `main`, run the full exact-head validation
-suite, repair only failures causally related to this authority task, and merge
-only after every required gate is green.
+Open the focused PR, run exact-head CI, repair only failures causally related to
+this Basic Verify compatibility defect, and merge only when all required gates
+are green.
