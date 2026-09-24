@@ -23,6 +23,10 @@ from typing import Any, Mapping, Optional
 import discord
 
 from .common import reply_once, safe_defer
+from .public_owner_authority import (
+    interaction_is_actual_guild_owner,
+    is_actual_guild_owner,
+)
 
 
 _PATCHED = False
@@ -228,21 +232,6 @@ def _configured_staff_role_ids(member: discord.Member) -> set[int]:
         return set()
 
 
-def _guild_owner_id(member: discord.Member) -> int:
-    try:
-        return _safe_int(getattr(getattr(member, "guild", None), "owner_id", 0), 0)
-    except Exception:
-        return 0
-
-
-def _is_guild_owner(member: discord.Member) -> bool:
-    try:
-        owner_id = _guild_owner_id(member)
-        return owner_id > 0 and int(member.id) == owner_id
-    except Exception:
-        return False
-
-
 def _is_administrator(member: discord.Member) -> bool:
     try:
         return bool(getattr(member.guild_permissions, "administrator", False))
@@ -259,10 +248,13 @@ def _can_manage_guild(member: discord.Member) -> bool:
 
 def scoped_is_server_control(member: object) -> bool:
     """Owner/admin/configured control role. Manage Server bootstraps before a control role exists."""
+    if is_actual_guild_owner(member):
+        return True
+
     if not isinstance(member, discord.Member):
         return False
 
-    if _is_guild_owner(member) or _is_administrator(member):
+    if _is_administrator(member):
         return True
 
     guild_id = _safe_int(getattr(getattr(member, "guild", None), "id", 0), 0)
@@ -277,10 +269,13 @@ def scoped_is_server_control(member: object) -> bool:
 
 def scoped_is_ticket_staff(member: object) -> bool:
     """Ticket staff OR server-control. Manage Server bootstrap does not count as ticket staff."""
+    if is_actual_guild_owner(member):
+        return True
+
     if not isinstance(member, discord.Member):
         return False
 
-    if _is_guild_owner(member) or _is_administrator(member):
+    if _is_administrator(member):
         return True
 
     guild_id = _safe_int(getattr(getattr(member, "guild", None), "id", 0), 0)
@@ -292,12 +287,21 @@ def scoped_is_ticket_staff(member: object) -> bool:
     return bool(_member_role_ids(member).intersection(allowed_ids))
 
 
+def scoped_interaction_is_server_control(interaction: object) -> bool:
+    if interaction_is_actual_guild_owner(interaction):
+        return True
+    try:
+        return scoped_is_server_control(getattr(interaction, "user", None))
+    except Exception:
+        return False
+
+
 async def require_server_control(interaction: discord.Interaction) -> bool:
-    if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+    if interaction.guild is None:
         await reply_once(interaction, {"content": "❌ This command must be used inside a server.", "ephemeral": True})
         return False
 
-    if scoped_is_server_control(interaction.user):
+    if scoped_interaction_is_server_control(interaction):
         return True
 
     control_ids = configured_control_role_ids_for_guild(interaction.guild.id)
@@ -480,6 +484,7 @@ __all__ = [
     "invalidate_access_control_cache",
     "install_public_access_control",
     "require_server_control",
+    "scoped_interaction_is_server_control",
     "scoped_is_server_control",
     "scoped_is_ticket_staff",
 ]
