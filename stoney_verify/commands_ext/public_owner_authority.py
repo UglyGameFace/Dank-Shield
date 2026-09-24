@@ -104,6 +104,26 @@ def interaction_has_manage_guild_authority(interaction: Any) -> bool:
     return _member_permission_flag(getattr(interaction, "user", None), "manage_guild")
 
 
+def interaction_has_channel_management_authority(interaction: Any) -> bool:
+    """Owner, Administrator, Manage Server, or Manage Channels.
+
+    This is the canonical authority boundary for channel-access repair UIs.
+    Discord-resolved interaction permissions are checked before cached Member
+    permissions so repair controls do not reject a real guild owner/manager just
+    because member cache state is partial.
+    """
+    if interaction_has_manage_guild_authority(interaction):
+        return True
+
+    if _interaction_permission_flag(interaction, "manage_channels"):
+        return True
+
+    return _member_permission_flag(
+        getattr(interaction, "user", None),
+        "manage_channels",
+    )
+
+
 def interaction_authority_snapshot(interaction: Any) -> dict[str, Any]:
     """Small non-secret diagnostic snapshot for denied management interactions."""
     guild = getattr(interaction, "guild", None)
@@ -120,8 +140,10 @@ def interaction_authority_snapshot(interaction: Any) -> dict[str, Any]:
         ),
         "interaction_administrator": _permission_flag(resolved, "administrator"),
         "interaction_manage_guild": _permission_flag(resolved, "manage_guild"),
+        "interaction_manage_channels": _permission_flag(resolved, "manage_channels"),
         "member_administrator": _permission_flag(member_permissions, "administrator"),
         "member_manage_guild": _permission_flag(member_permissions, "manage_guild"),
+        "member_manage_channels": _permission_flag(member_permissions, "manage_channels"),
         "user_type": type(user).__name__ if user is not None else "None",
     }
 
@@ -130,6 +152,7 @@ __all__ = [
     "interaction_authority_snapshot",
     "interaction_has_administrator_authority",
     "interaction_has_manage_guild_authority",
+    "interaction_has_channel_management_authority",
     "interaction_is_actual_guild_owner",
     "is_actual_guild_owner",
 ]
