@@ -60,7 +60,8 @@ In scope:
 - support sparse Discord integration audit targets without disabling
   `integration_delete` protection;
 - cancel the correlation when the initiating kick/ban fails;
-- regression-test matching, mismatching, sparse, repeated, expired, kick, and ban paths;
+- regression-test matching, mismatching, sparse, repeated, expired, kick, ban,
+  event-ordering, and concurrent-removal paths;
 - preserve the existing fail-closed compromise path for unexplained self-actions.
 
 Out of scope:
@@ -138,15 +139,24 @@ Completed at exact implementation head before this task-record update:
   no newly added line over 120 characters;
 - isolated correlation logic harness passed matching identity, mismatching identity,
   sparse audit target, guild scoping, one-time use, expiry, cached-bot recognition,
-  exact bot-removal reason fallback, and human-containment rejection;
+  exact bot-removal reason fallback, human-containment rejection, and concurrent
+  same-guild bot removals whose rich integration identities arrive out of order;
 - isolated guarded-request sequencing harness passed: the DSA nonce and derived
-  integration receipt are both armed before the protected HTTP request can complete,
-  and a failed request cancels both.
+  integration receipt are both armed before the protected HTTP request can execute,
+  and a failed request cancels both;
+- focused regression coverage now also exercises both audit order concerns directly:
+  the normal direct kick audit can consume its DSA nonce while the independent
+  integration-cleanup receipt remains available for the derived cleanup.
 
 GitHub-hosted validation is currently non-executing, not code-failing:
 
-- latest inspected PR-head workflow attempt failed every job before any step ran;
-- every returned job had `steps=null`, including `Python compile check`;
+- the failed workflows were explicitly retried and GitHub accepted all five reruns;
+- rerun attempt 2 again failed before any step ran;
+- the Dank Shield CI job metadata reports `runner_id=0`, an empty runner name,
+  an empty steps array, and 0 ms billable Ubuntu execution;
+- a fresh workflow set triggered by the later regression-test commit failed in the
+  same pre-runner state;
+- `Python compile check` therefore still never reached checkout or Python;
 - job-log download returned no executable log on the earlier identical failure mode;
 - therefore GitHub Actions has not run `git diff --check`,
   `python -m compileall -q stoney_verify main.py tools`, or the pytest suite.
