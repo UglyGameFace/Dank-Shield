@@ -28,18 +28,20 @@ class FakeResponse:
         self.deferred = False
         self.sent: list[dict] = []
         self.defer_ephemeral: bool | None = None
+        self.defer_thinking: bool | None = None
         self.fail_defer = fail_defer
         self.fail_send = fail_send
 
     def is_done(self) -> bool:
         return self.done
 
-    async def defer(self, *, ephemeral: bool = True) -> None:
+    async def defer(self, *, ephemeral: bool = True, thinking: bool = False) -> None:
         if self.fail_defer:
             raise RuntimeError("defer exploded")
         self.done = True
         self.deferred = True
         self.defer_ephemeral = ephemeral
+        self.defer_thinking = thinking
 
     async def send_message(self, **payload) -> None:
         if self.fail_send:
@@ -253,6 +255,27 @@ def test_unowned_ephemeral_component_recovers_to_fresh_home(monkeypatch):
         assert recovered is True
         assert len(calls) == 1
         assert "stale action was not executed" in calls[0]
+
+    asyncio.run(run())
+
+
+def test_private_recovery_loses_atomic_claim_cleanly_to_another_listener(monkeypatch):
+    async def run() -> None:
+        interaction = FakeInteraction(ephemeral=True)
+        store = Obj(_views={}, _dynamic_items={})
+        bot = Obj(_connection=Obj(_view_store=store))
+
+        async def losing_defer(**_kwargs) -> None:
+            interaction.response.done = True
+            raise RuntimeError("another listener acknowledged first")
+
+        interaction.response.defer = losing_defer
+        monkeypatch.setattr(guard, "PRIVATE_MENU_RECOVERY_GRACE_SECONDS", 0.0)
+
+        recovered = await guard._recover_unowned_private_component(bot, interaction)
+
+        assert recovered is False
+        assert interaction.response.done is True
 
     asyncio.run(run())
 
