@@ -7,6 +7,7 @@ from stoney_verify.commands_ext import common
 from stoney_verify.commands_ext import public_access_control
 from stoney_verify.commands_ext import public_command_hub
 from stoney_verify.commands_ext import public_diagnostics_group
+from stoney_verify.commands_ext import public_design_studio
 from stoney_verify.commands_ext import public_embed_group
 from stoney_verify.commands_ext import public_owner_authority
 from stoney_verify.commands_ext import public_setup_group
@@ -71,6 +72,12 @@ def test_require_server_control_never_denies_actual_owner(monkeypatch) -> None:
         assert await public_access_control.require_server_control(interaction) is True
 
     asyncio.run(scenario())
+
+
+def test_server_design_accepts_actual_owner_before_member_state() -> None:
+    interaction = _interaction(user_id=111, owner_id=111)
+
+    assert public_design_studio._can_user_design(interaction)
 
 
 def test_shared_public_management_gates_all_accept_partial_owner_state() -> None:
