@@ -140,12 +140,18 @@ def test_expired_interaction_state_is_pruned_on_next_click() -> None:
     asyncio.run(scenario())
 
 
-def test_persistent_view_is_primary_owner_and_fallback_is_only_failure_path() -> None:
+def test_persistent_view_and_delayed_fallback_are_independent_routes() -> None:
     source = PANEL.read_text(encoding="utf-8")
     assert "super().__init__(timeout=None)" in source
-    assert "if not _PANEL_VIEW_REGISTERED and not _PANEL_FALLBACK_LISTENER_REGISTERED" in source
-    assert "persistent view unavailable; registered Create Ticket fallback listener" in source
-    assert "elif _PANEL_VIEW_REGISTERED:" in source
+    assert "if not _PANEL_FALLBACK_LISTENER_REGISTERED" in source
+    assert "registered delayed Create Ticket fallback listener" in source
+    assert "elif _PANEL_VIEW_REGISTERED:" not in source
+
+
+def test_known_historical_public_ticket_button_ids_stay_compatible() -> None:
+    assert panel.PANEL_BUTTON_CUSTOM_ID in panel.PANEL_BUTTON_CUSTOM_IDS
+    assert "sv:ticket:panel:create:v6" in panel.PANEL_BUTTON_CUSTOM_IDS
+    assert "ticket_create" in panel.PANEL_BUTTON_CUSTOM_IDS
 
 
 def test_owner_file_keeps_category_and_persistent_number_ownership() -> None:
