@@ -2,7 +2,7 @@
 
 ## Active task / desired outcome
 
-**P0-PERSISTENT-PANEL-001 — restore Basic Verify + Create Ticket interaction reliability across deploy/restart**
+**P0-INTERACTION-RUNTIME-001 — restore production-wide Discord button reliability across deploy/restart**
 
 Fix the live public **Basic Verify** and **Create Ticket** panels so already-posted
 components cannot silently lose their interaction route after bot restarts,
@@ -10,6 +10,15 @@ application identity changes, or command-registration refactors. Keep one
 canonical business/mutation owner per feature.
 
 ## Production symptom
+
+### Latest escalation
+
+Production now reports that **all buttons appear nonfunctional**, not only Basic
+Verify and Create Ticket. PR #311 is still unmerged, so the new #311 branch
+changes are not the source of the live outage.
+
+This broadens the same active interaction-reliability task to the shared Discord
+component runtime. Feature-specific redesign remains out of scope.
 
 Production has two confirmed durable-panel failures:
 
@@ -21,7 +30,7 @@ component interaction that Discord routes to a different application identity.
 
 ## Status
 
-**IMPLEMENTED — shared application-identity + acknowledgement-boundary repair added to #311; exact-head validation pending**
+**IN PROGRESS — production-wide button outage reported; #311 intentionally blocked from merge pending shared-runtime proof and exact-head validation**
 
 Branch: `fix/ticket-panel-restart-reconciliation-20260924`
 
@@ -51,6 +60,64 @@ The native runtime is installed before the general command registrar, so its
 existing delayed fallback is normally real in production.
 
 ## Root-cause findings
+
+### Shared native interaction acknowledgement defect
+
+`interaction_guard.run_guarded_interaction(..., defer=True)` called the shared
+defer helper but ignored its boolean result. If Discord rejected an unanswered
+interaction acknowledgement, the guarded action still executed DB/config/role or
+channel work. This violates the repository's claim-first contract and became more
+important as many public surfaces were migrated onto the native guard.
+
+The repair now treats an already-completed response as a valid prior canonical
+acknowledgement, but a real defer failure on an unanswered interaction stops the
+action before mutation and returns the exact defer-failure record for that same
+interaction.
+
+### Production-wide dispatch findings
+
+Repository inspection has ruled out several global-dispatch theories:
+
+- current `main` does not clear discord.py's ViewStore;
+- there are no `remove_view(...)` calls;
+- the retired private `View._scheduled_task`/global interaction monkey patch is
+  not live;
+- Spam Guard's interaction-flood runtime does not intercept component clicks;
+- the startup recovery REST limiter uses `asyncio.sleep`, not blocking sleep;
+- the activity tracker is an additive `on_interaction` listener and performs its
+  persistence through `asyncio.to_thread`;
+- PR #304 removed only the duplicate Basic Verify compatibility dispatcher, not
+  a generic all-button dispatcher.
+
+A fresh `/dank home` **Close** callback is a clean runtime canary: it performs a
+single `interaction.response.edit_message(...)` with no DB, role, ticket,
+verification, or native-guard dependency. If that fresh button is unacknowledged,
+the fault is below feature business logic.
+
+Many `/dank` menu views have a 900-second in-memory lifetime and are intentionally
+not persistent. A Discloud redeploy invalidates panels opened before that restart;
+that expected stale-menu behavior must not be confused with fresh-panel failure.
+
+### Passive component ingress/ACK observability
+
+The shared interaction service now installs one passive observer before Discord
+login. It never acknowledges, dispatches, retries, or mutates a feature. For a
+component that reaches the current process but remains unanswered after 2 seconds,
+it records bounded diagnostics containing custom ID, interaction/message IDs,
+message author ID, current bot ID, interaction application ID, interaction age,
+and the current persistent-view count/types. Startup also logs the current bot
+identity and persistent-view snapshot once.
+
+This discriminates the two remaining system classes without adding another
+fallback owner:
+
+1. no observer event for a reproduced click => Discord did not deliver that
+   component to this Gateway process (foreign/stale application ownership or
+   external interaction-delivery configuration must be checked);
+2. observer records `component_unacknowledged` => the click reached Dank Shield
+   but native ViewStore/callback/ack handling did not claim it.
+
+The observer is globally bounded to avoid log storms on a large public bot.
 
 ### Shared lifecycle defect: persisted message ID was treated as ownership proof
 
@@ -238,6 +305,11 @@ security are unchanged.
 
 Focused coverage now verifies:
 
+- shared native guard stops before action when an unanswered defer fails;
+- already-acknowledged canonical flows remain valid through the shared guard;
+- passive component observer records only still-unacknowledged component clicks;
+- component observer registration is idempotent;
+
 - failed ticket acknowledgement stops before lookup/mutation;
 - already-acknowledged direct Confirm remains valid;
 - foreign Basic Verify replacement posts successfully before stale-panel deletion;
@@ -303,7 +375,9 @@ After persistent-panel interaction reliability closes:
 
 ## Next step
 
-Run exact-head CI after the shared Basic Verify application-identity and ticket
-acknowledgement-boundary repair. If all workflows are green, record exact-head
-validation here, perform final currentness/diff/review inspection, and make PR
-#311 ready for merge. PR #310 is already superseded/closed; do not revive it.
+Run exact-head CI for the shared-runtime branch, inspect all changed callers for
+pre-ack/modal compatibility, and keep PR #311 unmerged until the final diff and
+review gates pass. After deploy, the new component-runtime lines provide the
+production proof needed to distinguish Gateway/application ownership from a
+current-process acknowledgement miss. Do not start the startup-performance
+backlog until this P0 is closed.
