@@ -613,7 +613,11 @@ async def _reconcile_saved_ticket_panel(
 
     if author_id == current_application_id and current_application_id > 0:
         ids = _message_custom_ids(message)
-        if not ids.intersection(set(panel.PANEL_BUTTON_CUSTOM_IDS)):
+        # Historical IDs remain accepted by the fallback so old panels never
+        # dead-end, but once we have the real message in hand migrate it to the
+        # single canonical button ID. Compatibility is an entry alias, not a
+        # second permanent panel generation.
+        if panel.PANEL_BUTTON_CUSTOM_ID not in ids:
             try:
                 await _reserve_recovery_requests(
                     1,
