@@ -191,6 +191,40 @@ def _modlog_manual_issues(guild: discord.Guild, cfg: Any) -> list[str]:
     return issues
 
 
+def _resolve_join_leave_log_channel(
+    guild: discord.Guild,
+    cfg: Any,
+) -> Optional[discord.TextChannel]:
+    """Resolve the exact operational lifecycle-log route owned by the router."""
+    try:
+        from stoney_verify.startup_guards.member_lifecycle_router_guard import (
+            JOIN_LEAVE_KEYS,
+        )
+    except Exception:
+        JOIN_LEAVE_KEYS = (
+            "join_leave_log_channel_id",
+            "join_leave_channel_id",
+            "member_join_leave_log_channel_id",
+            "member_lifecycle_log_channel_id",
+            "member_log_channel_id",
+            "member_logs_channel_id",
+            "join_log_channel_id",
+            "join_exit_log_channel_id",
+            "joinlog_channel_id",
+            "joinleave_channel_id",
+            "leave_log_channel_id",
+        )
+
+    for key in JOIN_LEAVE_KEYS:
+        channel_id = _safe_int(_cfg_value(cfg, key, None), 0)
+        if channel_id <= 0:
+            continue
+        channel = guild.get_channel(channel_id)
+        if isinstance(channel, discord.TextChannel):
+            return channel
+    return None
+
+
 def _resolve_staff_audit_channel(guild: discord.Guild, cfg: Any) -> Optional[discord.TextChannel]:
     for key in STAFF_AUDIT_KEYS:
         channel_id = _safe_int(_cfg_value(cfg, key, None), 0)
@@ -208,6 +242,7 @@ def _staff_audit_is_configured(cfg: Any) -> bool:
 
 def _member_log_targets(
     join_channel: Any,
+    join_leave_channel: Any,
     exit_channel: Any,
     staff_channel: Any,
 ) -> tuple[contextual.ContextualRepairTarget, ...]:
@@ -216,6 +251,11 @@ def _member_log_targets(
             join_channel,
             feature="welcome",
             label="Live join card channel",
+        ),
+        _channel_target(
+            join_leave_channel,
+            feature="logs",
+            label="Operational join/leave log",
         ),
         _channel_target(
             exit_channel,
@@ -237,6 +277,7 @@ def _member_log_manual_issues(
     *,
     join_channel: Optional[discord.TextChannel],
     join_reason: str,
+    join_leave_channel: Optional[discord.TextChannel],
     exit_channel: Optional[discord.TextChannel],
     exit_reason: str,
     staff_channel: Optional[discord.TextChannel],
@@ -247,6 +288,11 @@ def _member_log_manual_issues(
             "Live join-card route is unavailable: "
             + str(join_reason or "no channel configured")
             + ". Choose the intended Welcome Card channel first."
+        )
+    if not isinstance(join_leave_channel, discord.TextChannel):
+        issues.append(
+            "Operational join/leave log is not configured or its saved channel is missing. "
+            "Choose the exact Join/Leave Log channel in /dank member-logs."
         )
     if not isinstance(exit_channel, discord.TextChannel):
         issues.append(
@@ -272,13 +318,22 @@ def _member_routes(
     Optional[discord.TextChannel],
     str,
     Optional[discord.TextChannel],
+    Optional[discord.TextChannel],
     str,
     Optional[discord.TextChannel],
 ]:
     join_channel, join_reason = resolve_join_card_channel(guild, cfg)
+    join_leave_channel = _resolve_join_leave_log_channel(guild, cfg)
     exit_channel, exit_reason = resolve_exit_card_channel(guild, cfg)
     staff_channel = _resolve_staff_audit_channel(guild, cfg)
-    return join_channel, join_reason, exit_channel, exit_reason, staff_channel
+    return (
+        join_channel,
+        join_reason,
+        join_leave_channel,
+        exit_channel,
+        exit_reason,
+        staff_channel,
+    )
 
 
 def _member_user_authorized(interaction: discord.Interaction) -> bool:
@@ -414,7 +469,7 @@ def _member_logs_embed(
     *,
     last_action: str = "",
 ) -> discord.Embed:
-    join_channel, join_reason, exit_channel, exit_reason, staff_channel = _member_routes(guild, cfg)
+    join_channel, join_reason, join_leave_channel, exit_channel, exit_reason, staff_channel = _member_routes(guild, cfg)
     embed = discord.Embed(
         title="👋 Member Lifecycle Routing",
         description=(
@@ -426,6 +481,15 @@ def _member_logs_embed(
     embed.add_field(
         name="Live join card",
         value=(join_channel.mention if isinstance(join_channel, discord.TextChannel) else f"`Unavailable: {join_reason}`"),
+        inline=False,
+    )
+    embed.add_field(
+        name="Operational join/leave log",
+        value=(
+            join_leave_channel.mention
+            if isinstance(join_leave_channel, discord.TextChannel)
+            else "`Not configured or missing`"
+        ),
         inline=False,
     )
     embed.add_field(
@@ -530,10 +594,10 @@ class MemberLogsRepairView(discord.ui.View):
         super().__init__(timeout=900)
         self.owner_id = int(owner_id)
         self.guild_id = int(guild.id)
-        join_channel, join_reason, exit_channel, exit_reason, staff_channel = _member_routes(guild, cfg)
+        join_channel, join_reason, join_leave_channel, exit_channel, exit_reason, staff_channel = _member_routes(guild, cfg)
         audit = contextual.audit_context(
             guild,
-            _member_log_targets(join_channel, exit_channel, staff_channel),
+            _member_log_targets(join_channel, join_leave_channel, exit_channel, staff_channel),
             manual_issues=_member_log_manual_issues(
                 guild,
                 cfg,
@@ -577,19 +641,20 @@ class MemberLogsRepairView(discord.ui.View):
             return
         await _defer_component(interaction)
         cfg = await get_guild_config(int(guild.id), refresh=True)
-        join_channel, join_reason, exit_channel, exit_reason, staff_channel = _member_routes(guild, cfg)
+        join_channel, join_reason, join_leave_channel, exit_channel, exit_reason, staff_channel = _member_routes(guild, cfg)
         manual = _member_log_manual_issues(
             guild,
             cfg,
             join_channel=join_channel,
             join_reason=join_reason,
+            join_leave_channel=join_leave_channel,
             exit_channel=exit_channel,
             exit_reason=exit_reason,
             staff_channel=staff_channel,
         )
         result = await contextual.repair_context(
             guild,
-            _member_log_targets(join_channel, exit_channel, staff_channel),
+            _member_log_targets(join_channel, join_leave_channel, exit_channel, staff_channel),
             actor_id=int(interaction.user.id),
             manual_issues=manual,
         )
