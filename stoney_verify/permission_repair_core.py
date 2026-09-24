@@ -621,13 +621,11 @@ async def apply_target_repair(
 
         try:
             current = current_target.overwrites_for(me)
-            snapshot["targets"].append(
-                {
-                    "channel_id": str(current_target.id),
-                    "channel_name": _safe_str(getattr(current_target, "name", "")),
-                    "before": _overwrite_snapshot(current),
-                }
-            )
+            before_snapshot = {
+                "channel_id": str(current_target.id),
+                "channel_name": _safe_str(getattr(current_target, "name", "")),
+                "before": _overwrite_snapshot(current),
+            }
             new_overwrite, changed, preserved = _apply_missing_to_overwrite(
                 current,
                 report.missing,
@@ -649,6 +647,7 @@ async def apply_target_repair(
                 attempts=3,
                 concurrency_key=f"permission-repair:{guild.id}",
             )
+            snapshot["targets"].append(before_snapshot)
             result.changed_targets.append(
                 f"{_target_label(current_target)} — {', '.join(changed)}"
             )
@@ -675,27 +674,55 @@ async def apply_target_repair(
         mode=mode,
         include_children=include_children,
     )
-    _remember_snapshot(snapshot)
-    persisted = await _record_repair_event(
-        guild_id=int(guild.id),
-        actor_id=int(actor_id),
-        event_type="permission_repair",
-        message=(
-            f"Fix Access target={target.id} changed={len(result.changed_targets)} "
-            f"failed={len(result.failed_targets)}"
-        ),
-        metadata={
-            **snapshot,
-            "changed_targets": result.changed_targets,
-            "failed_targets": result.failed_targets,
-            "skipped_conflicts": result.skipped_conflicts,
-        },
-    )
-    result.notes.append(
-        "Undo snapshot saved to activity history."
-        if persisted
-        else "Undo snapshot is available in this bot process; activity-history persistence was unavailable."
-    )
+
+    if result.changed_targets:
+        _remember_snapshot(snapshot)
+        persisted = await _record_repair_event(
+            guild_id=int(guild.id),
+            actor_id=int(actor_id),
+            event_type="permission_repair",
+            message=(
+                f"Fix Access target={target.id} changed={len(result.changed_targets)} "
+                f"failed={len(result.failed_targets)}"
+            ),
+            metadata={
+                **snapshot,
+                "changed_targets": result.changed_targets,
+                "failed_targets": result.failed_targets,
+                "skipped_conflicts": result.skipped_conflicts,
+            },
+        )
+        result.notes.append(
+            "Undo snapshot saved to activity history."
+            if persisted
+            else "Undo snapshot is available in this bot process; activity-history persistence was unavailable."
+        )
+    else:
+        # A failed/no-op repair has nothing to restore. Do not manufacture an
+        # undo token or imply that an unchanged overwrite has a useful snapshot.
+        result.token = ""
+        result.notes.append("No overwrite changed, so no undo snapshot was created.")
+        await _record_repair_event(
+            guild_id=int(guild.id),
+            actor_id=int(actor_id),
+            event_type="permission_repair_attempt",
+            message=(
+                f"Fix Access target={target.id} changed=0 "
+                f"failed={len(result.failed_targets)}"
+            ),
+            metadata={
+                "guild_id": str(guild.id),
+                "actor_id": str(actor_id),
+                "target_id": str(target.id),
+                "feature": feature,
+                "mode": mode,
+                "include_children": bool(include_children),
+                "clear_explicit_denies": bool(clear_explicit_denies),
+                "changed_targets": [],
+                "failed_targets": result.failed_targets,
+                "skipped_conflicts": result.skipped_conflicts,
+            },
+        )
     return result
 
 
@@ -1240,6 +1267,8 @@ class TargetPermissionRepairView(discord.ui.View):
             elif all(audit.healthy for audit in audits):
                 self.fix_missing.label = "Access Already Healthy"
                 self.fix_missing.style = discord.ButtonStyle.secondary
+
+        self.undo.disabled = not bool(state.last_token)
 
         url = reauthorize_url(state.guild)
         if url:
