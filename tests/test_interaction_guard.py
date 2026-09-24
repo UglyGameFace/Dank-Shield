@@ -27,6 +27,7 @@ class FakeResponse:
         self.done = False
         self.deferred = False
         self.sent: list[dict] = []
+        self.edits: list[dict] = []
         self.defer_ephemeral: bool | None = None
         self.defer_thinking: bool | None = None
         self.fail_defer = fail_defer
@@ -48,6 +49,12 @@ class FakeResponse:
             raise RuntimeError("initial send exploded")
         self.done = True
         self.sent.append(payload)
+
+    async def edit_message(self, **payload) -> None:
+        if self.fail_send:
+            raise RuntimeError("edit exploded")
+        self.done = True
+        self.edits.append(payload)
 
 
 class FakeFollowup:
@@ -233,28 +240,25 @@ def test_unknown_discord_view_store_layout_disables_private_recovery(monkeypatch
     asyncio.run(run())
 
 
-def test_unowned_ephemeral_component_recovers_to_fresh_home(monkeypatch):
+def test_unowned_ephemeral_component_recovers_in_place_to_fresh_home(monkeypatch):
     async def run() -> None:
-        from stoney_verify.commands_ext import public_command_surface_v2 as surface
+        from stoney_verify.commands_ext.public_command_surface_v2 import CompactDankHomeView
 
         interaction = FakeInteraction(ephemeral=True)
         store = Obj(_views={}, _dynamic_items={})
         bot = Obj(_connection=Obj(_view_store=store))
-        calls: list[str] = []
-
-        async def fake_home(target, *, content: str = "") -> None:
-            assert target is interaction
-            calls.append(content)
-            target.response.done = True
 
         monkeypatch.setattr(guard, "PRIVATE_MENU_RECOVERY_GRACE_SECONDS", 0.0)
-        monkeypatch.setattr(surface, "open_compact_dank_home", fake_home)
 
         recovered = await guard._recover_unowned_private_component(bot, interaction)
 
         assert recovered is True
-        assert len(calls) == 1
-        assert "stale action was not executed" in calls[0]
+        assert interaction.response.done is True
+        assert len(interaction.response.edits) == 1
+        payload = interaction.response.edits[0]
+        assert "stale action was not executed" in payload["content"]
+        assert isinstance(payload["view"], CompactDankHomeView)
+        assert interaction.followup.sent == []
 
     asyncio.run(run())
 
@@ -265,17 +269,18 @@ def test_private_recovery_loses_atomic_claim_cleanly_to_another_listener(monkeyp
         store = Obj(_views={}, _dynamic_items={})
         bot = Obj(_connection=Obj(_view_store=store))
 
-        async def losing_defer(**_kwargs) -> None:
+        async def losing_edit(**_kwargs) -> None:
             interaction.response.done = True
             raise RuntimeError("another listener acknowledged first")
 
-        interaction.response.defer = losing_defer
+        interaction.response.edit_message = losing_edit
         monkeypatch.setattr(guard, "PRIVATE_MENU_RECOVERY_GRACE_SECONDS", 0.0)
 
         recovered = await guard._recover_unowned_private_component(bot, interaction)
 
         assert recovered is False
         assert interaction.response.done is True
+        assert interaction.followup.sent == []
 
     asyncio.run(run())
 
