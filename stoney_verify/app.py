@@ -76,9 +76,10 @@ from .verification_new.basic_verify import (
     install_basic_verify_runtime as _install_basic_verify_runtime,
 )
 
-# Native Basic Verify persistence. This installs both the fixed persistent
-# view and a delayed interaction fallback before Discord login. Startup only
-# fails when neither handler path can be registered.
+# Native Basic Verify persistence. Register the fixed persistent view and a
+# delayed on_interaction safety listener before Discord login. discord.py gets
+# the persistent view first chance to acknowledge; the listener only takes over
+# if the click is still unanswered after the short grace window.
 try:
     _install_basic_verify_runtime(bot, strict=True)
 except Exception as e:

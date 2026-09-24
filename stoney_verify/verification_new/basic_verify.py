@@ -27,6 +27,7 @@ _BASIC_VERIFY_LOCKS: dict[str, asyncio.Lock] = {}
 _RUNTIME_VIEW_REGISTERED = False
 _RUNTIME_FALLBACK_LISTENER_REGISTERED = False
 _RUNTIME_REGISTRATION_ERROR: str = ""
+_BASIC_VERIFY_FALLBACK_GRACE_SECONDS = 0.15
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -275,7 +276,16 @@ class BasicVerifyView(discord.ui.View):
 async def _basic_verify_fallback_listener(
     interaction: discord.Interaction,
 ) -> None:
-    """Emergency handler used only when persistent-view registration failed."""
+    """Recover Basic Verify clicks missed by persistent-view dispatch.
+
+    discord.py dispatches component views before the public on_interaction
+    event. When the persistent view is registered, give its callback a short
+    grace window to acknowledge first. Only an interaction that is still
+    unanswered after that window is allowed to enter the canonical handler.
+
+    When persistent-view registration failed entirely, there is nothing to wait
+    for and the listener handles the click immediately.
+    """
     try:
         if interaction.type is not discord.InteractionType.component:
             return
@@ -289,10 +299,23 @@ async def _basic_verify_fallback_listener(
         if custom_id != BASIC_VERIFY_CUSTOM_ID:
             return
 
-        # This listener is installed only when add_view() failed, so there is no
-        # native persistent-view callback to wait for. Acknowledge immediately.
         if interaction.response.is_done():
             return
+
+        if _RUNTIME_VIEW_REGISTERED:
+            await asyncio.sleep(_BASIC_VERIFY_FALLBACK_GRACE_SECONDS)
+            if interaction.response.is_done():
+                return
+
+        try:
+            print(
+                "⚠️ basic_verify delayed fallback claimed click "
+                f"interaction={getattr(interaction, 'id', 0)} "
+                f"guild={getattr(getattr(interaction, 'guild', None), 'id', 0)} "
+                f"user={getattr(getattr(interaction, 'user', None), 'id', 0)}"
+            )
+        except Exception:
+            pass
 
         await maybe_handle_basic_verify_interaction(interaction)
     except Exception as exc:
@@ -305,7 +328,6 @@ async def _basic_verify_fallback_listener(
             )
         except Exception:
             pass
-
 
 def basic_verify_runtime_status() -> dict[str, Any]:
     return {
@@ -328,44 +350,43 @@ def install_basic_verify_runtime(
     *,
     strict: bool = False,
 ) -> bool:
-    """Install exactly one restart-safe Basic Verify interaction route.
+    """Install the restart-safe Basic Verify view plus delayed safety listener.
 
-    The fixed persistent view is authoritative. The global on_interaction
-    listener is an emergency fallback only when persistent-view registration
-    fails. Keeping both live for the same custom ID creates competing responders
-    for one Discord interaction and was a regression of the earlier single-owner
-    runtime contract.
+    The persistent view is the primary owner. The global on_interaction
+    listener never races it immediately: discord.py emits the interaction event
+    after scheduling component-view dispatch, so the listener waits briefly and
+    only claims a still-unanswered Basic Verify click.
+
+    Both routes delegate to the same canonical handler and the handler
+    acknowledges before database or role work, so there is still only one role
+    mutation path.
     """
     global _RUNTIME_VIEW_REGISTERED
     global _RUNTIME_FALLBACK_LISTENER_REGISTERED
     global _RUNTIME_REGISTRATION_ERROR
 
-    # Registration is process-scoped for the one shared Dank Shield bot. Once a
-    # route owns the custom ID, repeated command/setup registration must not add
-    # a second responder later in the same process.
-    if _RUNTIME_VIEW_REGISTERED or _RUNTIME_FALLBACK_LISTENER_REGISTERED:
+    if _RUNTIME_VIEW_REGISTERED and _RUNTIME_FALLBACK_LISTENER_REGISTERED:
         return True
 
     errors: list[str] = []
 
-    try:
-        add_view = getattr(bot, "add_view", None)
-        if not callable(add_view):
-            raise RuntimeError(
-                "Discord client has no callable add_view"
+    if not _RUNTIME_VIEW_REGISTERED:
+        try:
+            add_view = getattr(bot, "add_view", None)
+            if not callable(add_view):
+                raise RuntimeError(
+                    "Discord client has no callable add_view"
+                )
+
+            add_view(BasicVerifyView())
+            _RUNTIME_VIEW_REGISTERED = True
+        except Exception as exc:
+            errors.append(
+                "persistent view: "
+                f"{type(exc).__name__}: {exc}"
             )
 
-        add_view(BasicVerifyView())
-        _RUNTIME_VIEW_REGISTERED = True
-    except Exception as exc:
-        errors.append(
-            "persistent view: "
-            f"{type(exc).__name__}: {exc}"
-        )
-
-    # Only install the broad event fallback when the canonical persistent view
-    # could not be registered. It immediately delegates to the same handler.
-    if not _RUNTIME_VIEW_REGISTERED:
+    if not _RUNTIME_FALLBACK_LISTENER_REGISTERED:
         try:
             add_listener = getattr(bot, "add_listener", None)
             if not callable(add_listener):
@@ -391,15 +412,16 @@ def install_basic_verify_runtime(
 
     _RUNTIME_REGISTRATION_ERROR = " | ".join(errors)
 
-    if _RUNTIME_VIEW_REGISTERED:
+    if _RUNTIME_VIEW_REGISTERED and _RUNTIME_FALLBACK_LISTENER_REGISTERED:
         print(
             "✅ basic_verify runtime ready "
-            "owner=persistent_view fallback_listener=False"
+            "owner=persistent_view delayed_fallback=True"
         )
-    elif _RUNTIME_FALLBACK_LISTENER_REGISTERED:
+    elif ready:
         print(
             "⚠️ basic_verify runtime degraded but operational "
-            "owner=fallback_listener "
+            f"persistent_view={_RUNTIME_VIEW_REGISTERED} "
+            f"delayed_fallback={_RUNTIME_FALLBACK_LISTENER_REGISTERED} "
             f"error={_RUNTIME_REGISTRATION_ERROR}"
         )
     else:
@@ -415,7 +437,6 @@ def install_basic_verify_runtime(
             raise RuntimeError(message)
 
     return ready
-
 
 def register_basic_verify_runtime(bot: Any) -> bool:
     """Backward-compatible alias for older callers."""

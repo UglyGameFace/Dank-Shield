@@ -50,7 +50,9 @@ def _isolated_runtime_state():
         _reset_runtime_state()
 
 
-def test_runtime_prefers_one_persistent_view_owner(monkeypatch) -> None:
+def test_runtime_registers_persistent_view_and_delayed_safety_listener(
+    monkeypatch,
+) -> None:
     fake_bot = FakeBot()
     sentinel_view = object()
     monkeypatch.setattr(runtime, "BasicVerifyView", lambda: sentinel_view)
@@ -58,10 +60,12 @@ def test_runtime_prefers_one_persistent_view_owner(monkeypatch) -> None:
     assert runtime.install_basic_verify_runtime(fake_bot, strict=True) is True
 
     assert fake_bot.views == [sentinel_view]
-    assert fake_bot.listeners == []
+    assert fake_bot.listeners == [
+        (runtime._basic_verify_fallback_listener, "on_interaction")
+    ]
     assert runtime.basic_verify_runtime_status() == {
         "persistent_view_registered": True,
-        "fallback_listener_registered": False,
+        "fallback_listener_registered": True,
         "ready": True,
         "error": "",
     }
@@ -86,7 +90,7 @@ def test_runtime_uses_listener_only_when_persistent_view_registration_fails(
     assert "view registration failed" in status["error"]
 
 
-def test_runtime_does_not_add_a_second_owner_on_later_registration(
+def test_runtime_can_fill_missing_persistent_view_without_duplicate_listener(
     monkeypatch,
 ) -> None:
     fake_bot = FakeBot(fail_view=True)
@@ -100,11 +104,13 @@ def test_runtime_does_not_add_a_second_owner_on_later_registration(
     assert runtime.install_basic_verify_runtime(fake_bot, strict=True) is True
 
     assert len(fake_bot.listeners) == 1
-    assert fake_bot.views == []
-    assert runtime.basic_verify_runtime_status()["fallback_listener_registered"] is True
+    assert len(fake_bot.views) == 1
+    status = runtime.basic_verify_runtime_status()
+    assert status["persistent_view_registered"] is True
+    assert status["fallback_listener_registered"] is True
 
 
-def test_runtime_install_is_idempotent_after_persistent_registration(
+def test_runtime_install_is_idempotent_after_full_registration(
     monkeypatch,
 ) -> None:
     fake_bot = FakeBot()
@@ -114,7 +120,9 @@ def test_runtime_install_is_idempotent_after_persistent_registration(
     assert runtime.install_basic_verify_runtime(fake_bot, strict=True) is True
 
     assert len(fake_bot.views) == 1
-    assert fake_bot.listeners == []
+    assert fake_bot.listeners == [
+        (runtime._basic_verify_fallback_listener, "on_interaction")
+    ]
 
 
 def test_strict_runtime_fails_closed_when_no_interaction_route_can_register(
@@ -176,6 +184,108 @@ def test_emergency_fallback_only_delegates_unacknowledged_basic_verify(
         await runtime._basic_verify_fallback_listener(matching)
 
         assert calls == [matching]
+
+    asyncio.run(scenario())
+
+
+def test_delayed_fallback_gives_persistent_callback_first_chance(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        calls: list[str] = []
+
+        class Response:
+            def __init__(self) -> None:
+                self.done = False
+
+            def is_done(self) -> bool:
+                return self.done
+
+        response = Response()
+        interaction = SimpleNamespace(
+            id=4101,
+            type=discord.InteractionType.component,
+            data={"custom_id": runtime.BASIC_VERIFY_CUSTOM_ID},
+            response=response,
+            guild=SimpleNamespace(id=77),
+            user=SimpleNamespace(id=88),
+        )
+
+        async def fake_handler(_interaction) -> bool:
+            calls.append("handler")
+            await asyncio.sleep(0.01)
+            response.done = True
+            return True
+
+        monkeypatch.setattr(
+            runtime,
+            "maybe_handle_basic_verify_interaction",
+            fake_handler,
+        )
+        monkeypatch.setattr(
+            runtime,
+            "_BASIC_VERIFY_FALLBACK_GRACE_SECONDS",
+            0.05,
+        )
+        runtime._RUNTIME_VIEW_REGISTERED = True
+
+        button = runtime.BasicVerifyButton()
+        persistent_task = asyncio.create_task(button.callback(interaction))
+        fallback_task = asyncio.create_task(
+            runtime._basic_verify_fallback_listener(interaction)
+        )
+        await asyncio.gather(persistent_task, fallback_task)
+
+        assert calls == ["handler"]
+        assert response.is_done() is True
+
+    asyncio.run(scenario())
+
+
+def test_delayed_fallback_claims_click_when_persistent_dispatch_misses(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        calls: list[object] = []
+
+        class Response:
+            def __init__(self) -> None:
+                self.done = False
+
+            def is_done(self) -> bool:
+                return self.done
+
+        response = Response()
+        interaction = SimpleNamespace(
+            id=4102,
+            type=discord.InteractionType.component,
+            data={"custom_id": runtime.BASIC_VERIFY_CUSTOM_ID},
+            response=response,
+            guild=SimpleNamespace(id=77),
+            user=SimpleNamespace(id=88),
+        )
+
+        async def fake_handler(received) -> bool:
+            calls.append(received)
+            response.done = True
+            return True
+
+        monkeypatch.setattr(
+            runtime,
+            "maybe_handle_basic_verify_interaction",
+            fake_handler,
+        )
+        monkeypatch.setattr(
+            runtime,
+            "_BASIC_VERIFY_FALLBACK_GRACE_SECONDS",
+            0,
+        )
+        runtime._RUNTIME_VIEW_REGISTERED = True
+
+        await runtime._basic_verify_fallback_listener(interaction)
+
+        assert calls == [interaction]
+        assert response.is_done() is True
 
     asyncio.run(scenario())
 

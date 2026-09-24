@@ -2,155 +2,171 @@
 
 ## Active task / desired outcome
 
-**P0-EXIT-FONT-001 — Cross-guild Exit Card font/Unicode consistency**
+**P0-BASIC-VERIFY-FALLBACK-001 — restore live Basic Verify button reliability after PR #304**
 
-Prove and repair the exact reason an Exit Card could render decorative Unicode
-correctly in one guild but not another while both guilds use the same deployed
-Dank Shield runtime.
+Restore the existing Basic Verify panel so a real Discord button click is
+acknowledged even when discord.py's persistent-view dispatch misses an
+already-posted component after restart.
+
+## Production symptom
+
+The live Basic Verify panel still renders correctly with footer
+`dank_shield:basic_verify:v1 • access only`, but tapping **Verify** can produce
+Discord's red **This interaction failed** banner.
+
+Because the canonical handler defers before config/database/role work, that red
+client failure points to the click not reaching a successful acknowledgement
+path, rather than a normal role-hierarchy/config rejection.
 
 ## Status
 
-**INVESTIGATION REPRODUCTION SYNCED TO CURRENT MAIN — exact-head validation pending**
+**ROOT CAUSE IDENTIFIED — repair implemented; exact-head validation pending**
 
-Branch: `fix/exit-card-font-cross-guild-20260923`
+Branch: `fix/basic-verify-delayed-safety-fallback-20260924`
 
-Base after sync: `main@e6010631ac554c5342a6d1f2642e561f29376c94`
+Base: `main@f9644c73d31b502259c36ff5658265918372e40e`
 
-## Previous task closed
+## Recent-change review
 
-PR #289 — Server Stats repair/customization — was merged by the owner before this
-task resumed.
+PR #289 (Server Stats) and PR #302 (Exit Card Unicode) did not change Basic
+Verify runtime files.
 
-## Reported production symptom
+The only recent Basic Verify production change was PR #304,
+`3c21431e7c4c8920b76ad671cf857b232f300c6d`.
 
-A previous lifecycle-card Unicode/font repair appeared correct in one guild but
-an Exit Card in another guild using the same bot did not show the expected
-font/characters.
+PR #304 correctly removed:
 
-## Execution path confirmed
+- the compatibility wrapper in `basic_verification_mode_guard`;
+- duplicated role-mutation callback code;
+- immediate competing interaction ownership.
 
-Canonical live leave flow:
+But it also changed the native runtime from:
 
-`member_lifecycle_router_guard.py`
-→ `exit_card_runtime.send_live_exit_card`
-→ `exit_card_service.exit_card_file`
-→ `exit_card_renderer.render_exit_card`
-→ `welcome_card_typography_engine._fitted_tile`
-→ `unicode_font_fallback.render_text_mask`
+- persistent view **plus delayed gateway fallback**
 
-Ownership findings:
+to:
 
-- one canonical live Exit Card sender is reachable;
-- Exit Cards and Welcome Cards share the Unicode-aware typography engine;
-- dynamic member names preserve exact Unicode rather than normalizing decorative
-  characters away;
-- per-grapheme fallback is available through bundled and registered fallback fonts.
+- persistent view only whenever `bot.add_view()` succeeds.
 
-## Main-sync review
+That was an over-correction.
 
-The branch was 47 commits behind current main.
+## Root cause
 
-The exact production rendering path and `tests/test_exit_card_renderer.py` were
-compared against the branch's original base. None changed on main during those 47
-commits. Therefore the sync preserves current main wholesale and reapplies only
-this task's renderer-level reproduction test plus this task record.
+The previous validation treated successful `bot.add_view(BasicVerifyView())`
+registration as proof that every real component click would reach that callback.
 
-No production runtime code is changed yet because the renderer failure has not
-been reproduced.
+It is not.
 
-## Per-guild state that can legitimately differ
+For the deployed `discord.py==2.7.1`, the gateway interaction parser:
 
-These values are intentionally guild-scoped:
+1. creates the Interaction;
+2. dispatches the component to the internal ViewStore;
+3. then emits the public `interaction` event.
 
-- `exit_card_font_style`;
-- `welcome_card_font_style`;
-- `welcome_card_custom_font_b64` and custom-font metadata;
-- Exit Card theme/colors/background/shuffle settings.
+The internal view dispatch schedules the item callback. Therefore a delayed
+`on_interaction` listener can safely provide a second *dispatch route* without
+creating a second role-mutation owner:
 
-An explicit Exit Card style overrides that guild's Welcome Card style. Uploaded
-custom fonts are shared between Welcome and Exit only inside the same guild.
+- persistent view gets first chance;
+- listener waits 150 ms;
+- listener exits if the interaction is already acknowledged;
+- only a still-unanswered Basic Verify click enters the same canonical handler;
+- canonical `_ack()` remains the final single-claim boundary before any
+  database or role mutation.
 
-Those settings explain visual differences but should not disable fallback for
-unsupported glyphs.
+This is also the contract originally documented by PR #81, which fixed dead
+already-posted Basic Verify panels by keeping a fallback only after giving native
+view handling the first chance.
 
-## Test gap / reproduction
+## Changes
 
-The existing live-runtime regression proves Unicode reaches `exit_card_file`
-unchanged, but it monkeypatches the renderer.
+### `stoney_verify/verification_new/basic_verify.py`
 
-The branch adds real-renderer coverage for:
+- restored the global Basic Verify `on_interaction` safety listener even when
+  the persistent view registers successfully;
+- restored a short 150 ms grace window when the persistent view exists;
+- skips fallback work if the interaction has already been acknowledged;
+- handles immediately when persistent-view registration failed entirely;
+- both routes still delegate to the same
+  `maybe_handle_basic_verify_interaction()` implementation;
+- `_ack()` still rejects an interaction already claimed elsewhere;
+- partial registration is independently retryable without adding duplicate
+  listeners/views;
+- startup diagnostics now report persistent-view and delayed-fallback state;
+- fallback takeover logging includes the Discord interaction ID.
 
-- `ᗩ ᗰ ᒪ`;
-- `PΛMELA`;
-- `𝓔𝔂𝓮𝔃 𝓞𝓯 𝓑𝓸𝓫`;
+### `stoney_verify/app.py`
 
-across multiple built-in styles, and separately disables registered/system
-fallback discovery to require the repository-bundled
-`NotoSansCanadianAboriginal-VF.ttf` path for the known long-tail glyph case.
+- corrected the startup ownership comment to match the restored runtime.
 
-## Root-cause status
+### Tests
 
-Not yet claiming a production trigger.
+`tests/test_basic_verify_native_restart_runtime.py` now covers:
 
-If the exact-head bundled-font-only renderer test passes, the global renderer is
-deterministic on the deployed code path. The remaining production explanations
-are then outside renderer ownership:
+- persistent view + delayed safety listener registration;
+- fallback-only operation if persistent registration fails;
+- filling a missing persistent route without duplicating the listener;
+- idempotent full registration;
+- strict failure if neither path can register;
+- exact custom-ID filtering;
+- persistent callback winning during the grace window;
+- delayed fallback claiming a click when persistent dispatch misses;
+- canonical button delegation;
+- acknowledgement before role/database work;
+- duplicate role mutation remaining impossible.
 
-1. the observed card was generated before the Unicode fallback deployment and is
-   an immutable older PNG;
-2. the affected guild selected a different explicit Exit/custom font and the
-   complaint is visual-style consistency rather than missing-glyph fallback;
-3. the production input contains a different unsupported Unicode sequence than
-   the known reproduced names;
-4. the running deployment is not actually on the commit assumed by the report.
+## Ownership / compatibility
 
-Do not add another font shim unless one of those is disproved and the canonical
-renderer itself reproduces the failure.
+Still one canonical mutation owner:
 
-## Scope
+`maybe_handle_basic_verify_interaction`
+→ `_ack`
+→ `apply_basic_verification`
 
-In scope:
+Not restored:
 
-- real Exit Card renderer Unicode reproduction;
-- bundled fallback discovery;
-- built-in style coverage;
-- per-guild font/config execution-path review;
-- smallest canonical repair only if reproduced;
-- regression coverage and final integration validation.
+- the old `basic_verification_mode_guard` component wrapper;
+- duplicate callback business logic;
+- a second role/config implementation.
 
-Out of scope:
+Preserved:
 
-- partner-server live activity;
-- Presence Intent work;
-- broad lifecycle redesign;
-- unrelated Welcome/Exit Studio changes.
+- custom ID `dank:basic_verify:v1`;
+- existing posted panels;
+- guild verification-mode authorization;
+- role hierarchy checks;
+- role mutation lock;
+- `/verify panel`;
+- old/current panel embed recognition.
 
 ## Validation required
 
-- exact-head renderer Unicode tests;
-- Welcome fallback regressions;
-- Exit runtime behavior tests;
-- lifecycle text tests;
+- exact branch diff inspection;
+- conflict-marker and whitespace inspection;
 - Python compile;
-- full test suite;
+- Basic Verify behavioral tests;
+- verification-mode authorization tests;
+- public Verify Panel tests;
+- persistent interaction compatibility tests;
+- full `pytest tests/`;
 - standalone repository checks/audits;
-- GitHub workflow gates;
-- final diff/review-thread/mergeability inspection.
+- all GitHub workflow gates;
+- review-thread inspection;
+- final mergeability/currentness check.
 
 ## Blockers / risks
 
-A test-only PR is not a production fix. If exact-head reproduction stays green,
-the task must not be misrepresented as fixing a renderer bug that was never
-reproduced.
+Repository tests can model discord.py's dispatch ordering but cannot reproduce
+Discord's client-side red failure banner. Post-deploy acceptance still requires
+one real Unverified account clicking the existing panel after a bot restart.
 
 ## Backlog
 
-- quiet-server partnered-guild live activity panel;
-- verify startup explicitly requests enabled Presence, Server Members, and
-  Message Content gateway intents as part of that later partner-activity task.
+- partner-server live activity panel remains separate;
+- no unrelated subsystem is active in this task.
 
 ## Next step
 
-Run the exact synchronized renderer/fallback reproduction. If it passes, inspect
-the remaining per-guild/deployment evidence path rather than modifying the
-canonical font engine without a failing case.
+Open the isolated draft PR, run exact-head CI, fix only failures caused by this
+repair, then perform final diff/currentness/review inspection before merge
+readiness.
