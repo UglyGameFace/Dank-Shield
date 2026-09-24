@@ -70,7 +70,7 @@ public_server_env_id_guard public mode active; deployment-level Discord IDs are 
 globals: startup summary: {'guild': 0, ...}
 globals: supabase status: state=ready ... service_role_present=True
 commands_ext registration complete. ... profile=public
-public_command_surface_v2 compact UI installed roots=['View Dank Profile', 'dank', 'mod', 'ticket', 'tickets', 'verify'] dank_children=['home', 'upload'] ...
+public_command_surface_v2 compact UI installed roots=['View Dank Profile', 'dank', 'mod', 'ticket', 'tickets', 'verify'] dank_children=['home', 'purge', 'setup', 'upload'] ...
 ```
 
 The intentional **final** public global application-command surface is exactly **6** commands/items:
@@ -82,12 +82,14 @@ The intentional **final** public global application-command surface is exactly *
 5. `/verify` — one verification status/repair doorway
 6. `View Dank Profile` user context menu
 
-`/dank` intentionally exposes only two direct children:
+`/dank` intentionally exposes only four direct children:
 
 - `/dank home` — the complete mega menu for Setup, Protection, Tickets, Verification, Welcome/Exit, Members & Moderation, Design, Roles/Profiles, Logs, Server Stats, Status, Diagnostics, Card Assets, Help, and profile access.
+- `/dank purge` — the compact destructive-cleanup entrypoint that remains a direct command for explicit targeting and confirmation.
+- `/dank setup` — the guided onboarding/setup entrypoint restored for discoverability while advanced setup tools stay inside the UI.
 - `/dank upload` — the single attachment command for a Join Card background, Exit Card background, or custom card font. This remains a command because Discord buttons cannot provide an attachment field.
 
-Former roots such as `/ticket-intake`, `/ticket-category`, and `/ticket-panel` are not public autocomplete commands anymore. Their implementation modules remain loaded and their actions are available inside `/tickets`. Likewise, former `/dank` shortcuts such as setup/status/diagnostics/welcome are reached through `/dank home` rather than separate autocomplete entries.
+Former roots such as `/ticket-intake`, `/ticket-category`, and `/ticket-panel` are not public autocomplete commands anymore. Their implementation modules remain loaded and their actions are available inside `/tickets`. Likewise, former `/dank` shortcuts such as status/diagnostics/welcome are reached through `/dank home` rather than separate autocomplete entries.
 
 Advanced repair/setup aliases such as direct `/dank setup-review`, `/dank db-check`, and `/dank setup-access` are also not part of the normal public profile. Their functionality belongs inside the guided mega-menu/diagnostics surfaces unless an explicit admin/development profile selects an advanced registrar.
 
