@@ -12,7 +12,7 @@ side effect without weakening fail-closed detection for genuinely unexplained
 
 ## Status
 
-**IMPLEMENTED ON ISOLATED BRANCH — validation in progress**
+**IMPLEMENTATION COMPLETE ON ISOLATED BRANCH — repository validation blocked by runner allocation**
 
 Branch: `fix/antinuke-self-integration-delete-20260923`
 
@@ -114,7 +114,8 @@ existing member-removal safety guard's ownership.
 - receipts expire;
 - a protected HTTP bot kick arms the receipt and the derived cleanup consumes it;
 - cached bot identity can establish the correlation;
-- the stable AntiNuke removal reason covers the freshly-added-bot cache race;
+- a narrow allowlist of actual AntiNuke bot-removal reasons covers the freshly-added-bot
+  cache race without treating human AntiNuke containment as bot removal;
 - failed bot-removal HTTP requests cancel both the direct DSA nonce and side-effect receipt;
 - human removals do not arm a receipt;
 - bot bans arm the same derived cleanup receipt.
@@ -124,17 +125,46 @@ Contain mode.
 
 ## Validation / results
 
-Pending:
+Completed at exact implementation head before this task-record update:
 
-- final branch diff inspection;
-- Python compile/static syntax validation;
+- branch comparison: 10 commits ahead / 0 behind the production base at that checkpoint;
+- changed-file scope: exactly `ACTIVE_TASK.md`,
+  `stoney_verify/anti_nuke_self_action_runtime.py`, and
+  `tests/test_antinuke_self_action_runtime.py`;
+- PR #303 was mergeable and remained draft;
+- review threads: none;
+- cleanup inspection found no leftover temporary Guild kick/ban patch, no broad
+  `startswith("dank shield antinuke")` fallback, no debug/TODO/HACK additions, and
+  no newly added line over 120 characters;
+- isolated correlation logic harness passed matching identity, mismatching identity,
+  sparse audit target, guild scoping, one-time use, expiry, cached-bot recognition,
+  exact bot-removal reason fallback, and human-containment rejection;
+- isolated guarded-request sequencing harness passed: the DSA nonce and derived
+  integration receipt are both armed before the protected HTTP request can complete,
+  and a failed request cancels both.
+
+GitHub-hosted validation is currently non-executing, not code-failing:
+
+- latest inspected PR-head workflow attempt failed every job before any step ran;
+- every returned job had `steps=null`, including `Python compile check`;
+- job-log download returned no executable log on the earlier identical failure mode;
+- therefore GitHub Actions has not run `git diff --check`,
+  `python -m compileall -q stoney_verify main.py tools`, or the pytest suite.
+
+The current environment cannot clone the private repository directly, so the repository
+Python 3.11 compile/test suite cannot be truthfully claimed as run here.
+
+Still required before merge readiness:
+
+- repository-native `git diff --check`;
+- Python 3.11 compileall;
 - focused self-action and zero-damage AntiNuke tests;
-- bot authorization, guardian, race/re-entry, lockdown, runtime-coordinator regressions;
+- bot authorization, guardian, race/re-entry, lockdown, and runtime-coordinator regressions;
 - broader AntiNuke regression suite;
-- full applicable Python suite if the available runner permits it;
-- PR review-thread and exact-head CI inspection.
+- full `tests/` suite per the repository CI convention;
+- final exact-head PR/CI/review inspection after those commands run.
 
-No completion or merge-readiness claim until those checks have evidence.
+No fixed/complete/merge-ready claim is made while repository execution remains blocked.
 
 ## Cleanup / conflicts
 
@@ -172,11 +202,17 @@ authorized bot-removal request, 15 seconds, one-time consumption. If Discord exp
 application or bot identity, a mismatch is rejected and the fail-closed path remains
 active.
 
+The cache-miss reason fallback is restricted to the exact known bot-removal reason family.
+Generic human containment such as
+`Dank Shield AntiNuke containment: unauthorized bot addition ...` explicitly does not
+qualify.
+
 The side-effect receipt is armed before the protected HTTP request so the audit event
 cannot win a race against the request return. If that request fails, both its normal
 DSA nonce and the side-effect receipt are canceled.
 
 ## Next step
 
-Inspect the exact diff, open a draft PR, run the focused and broader AntiNuke validation,
-then resolve any failures before deciding merge readiness.
+Run the repository-native compile and pytest validation as soon as an executable runner is
+available. Keep PR #303 draft until that evidence is green, then perform one final
+exact-head diff/CI/review inspection before any merge decision.
