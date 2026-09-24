@@ -60,10 +60,17 @@ def _entry(
     target_id: int | None = None,
     related_bot_id: int | None = None,
     reason: str = "",
+    channel_id: int | None = None,
 ):
     target = SimpleNamespace(id=target_id) if target_id is not None else None
     if target is not None and related_bot_id is not None:
         target.application = SimpleNamespace(id=related_bot_id)
+    extra = None
+    if channel_id is not None:
+        extra = SimpleNamespace(
+            channel=SimpleNamespace(id=int(channel_id)),
+            channel_id=int(channel_id),
+        )
     return SimpleNamespace(
         id=1234,
         guild=guild,
@@ -72,6 +79,7 @@ def _entry(
         user_id=actor_id,
         target=target,
         reason=reason,
+        extra=extra,
     )
 
 
@@ -141,6 +149,150 @@ def test_stale_authorization_expires() -> None:
     runtime._prune_pending(created + runtime._AUTH_TTL_SECONDS + 1.0)  # noqa: SLF001
 
     assert nonce not in runtime._PENDING  # noqa: SLF001
+
+
+def test_expected_local_message_delete_is_channel_scoped_and_one_time() -> None:
+    _reset()
+    guild = FakeGuild()
+    token = runtime._expect_side_effect(  # noqa: SLF001
+        guild.id,
+        "message_delete",
+        target_key="id:123",
+        source_action="local_message_delete",
+    )
+
+    wrong_channel = _entry(
+        guild,
+        action="message_delete",
+        target_id=9001,
+        channel_id=124,
+    )
+    assert (
+        runtime._consume_expected_side_effect(  # noqa: SLF001
+            guild,
+            wrong_channel,
+            "message_delete",
+        )
+        is False
+    )
+    assert token in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
+
+    matching = _entry(
+        guild,
+        action="message_delete",
+        target_id=9001,
+        channel_id=123,
+    )
+    assert (
+        runtime._entry_target_key(matching, "message_delete")  # noqa: SLF001
+        == "id:123"
+    )
+    assert (
+        runtime._consume_expected_side_effect(  # noqa: SLF001
+            guild,
+            matching,
+            "message_delete",
+        )
+        is True
+    )
+    assert token not in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
+    assert (
+        runtime._consume_expected_side_effect(  # noqa: SLF001
+            guild,
+            matching,
+            "message_delete",
+        )
+        is False
+    )
+
+
+def test_http_message_delete_without_audit_reason_is_expected_self_action(
+    monkeypatch,
+) -> None:
+    _reset()
+    bot = FakeBot()
+    guild = FakeGuild()
+    bot.get_channel = lambda channel_id: (
+        SimpleNamespace(id=channel_id, guild=guild)
+        if int(channel_id) == 123
+        else None
+    )
+
+    assert runtime._patch_http(bot) is True  # noqa: SLF001
+    route = FakeRoute("DELETE", "/channels/123/messages/456")
+    asyncio.run(bot.http.request(route))
+
+    assert len(runtime._EXPECTED_SIDE_EFFECTS) == 1  # noqa: SLF001
+    expected = next(
+        iter(runtime._EXPECTED_SIDE_EFFECTS.values())  # noqa: SLF001
+    )
+    assert expected.action == "message_delete"
+    assert expected.target_key == "id:123"
+
+    async def should_not_read_settings(_guild_id: int):
+        raise AssertionError(
+            "expected local message cleanup must finish before compromise checks"
+        )
+
+    monkeypatch.setattr(
+        anti_nuke,
+        "get_antinuke_settings",
+        should_not_read_settings,
+    )
+    event = _entry(
+        guild,
+        action="message_delete",
+        actor_id=55,
+        target_id=777,
+        channel_id=123,
+        reason="",
+    )
+    asyncio.run(runtime._audit_guard(bot, event))  # noqa: SLF001
+
+    assert guild.leave_calls == 0
+    assert runtime._EXPECTED_SIDE_EFFECTS == {}  # noqa: SLF001
+
+
+def test_message_delete_marker_consumption_clears_fallback_receipt(
+    monkeypatch,
+) -> None:
+    _reset()
+    bot = FakeBot()
+    guild = FakeGuild()
+    bot.get_channel = lambda channel_id: (
+        SimpleNamespace(id=channel_id, guild=guild)
+        if int(channel_id) == 123
+        else None
+    )
+
+    assert runtime._patch_http(bot) is True  # noqa: SLF001
+    route = FakeRoute("DELETE", "/channels/123/messages/456")
+    asyncio.run(bot.http.request(route))
+    reason = bot.http.calls[-1][1]["reason"]
+
+    async def should_not_read_settings(_guild_id: int):
+        raise AssertionError(
+            "DSA marker must be consumed before compromise checks"
+        )
+
+    monkeypatch.setattr(
+        anti_nuke,
+        "get_antinuke_settings",
+        should_not_read_settings,
+    )
+    event = _entry(
+        guild,
+        action="message_delete",
+        actor_id=55,
+        target_id=777,
+        channel_id=123,
+        reason=reason,
+    )
+    asyncio.run(runtime._audit_guard(bot, event))  # noqa: SLF001
+
+    assert runtime._PENDING == {}  # noqa: SLF001
+    assert runtime._EXPECTED_SIDE_EFFECTS == {}  # noqa: SLF001
+    assert guild.leave_calls == 0
 
 
 def test_expected_bot_removal_integration_delete_is_one_time(monkeypatch) -> None:
@@ -587,6 +739,16 @@ def test_route_classifier_covers_webhook_message_and_authority_mutations() -> No
         )
         assert bulk is not None
         assert bulk.actions == frozenset({"message_bulk_delete"})
+        assert bulk.target_key == "id:123"
+
+        single = runtime._request_spec(  # noqa: SLF001
+            bot,
+            FakeRoute("DELETE", "/channels/123/messages/456"),
+            {},
+        )
+        assert single is not None
+        assert single.actions == frozenset({"message_delete"})
+        assert single.target_key == "id:123"
 
         role_grant = runtime._request_spec(  # noqa: SLF001
             bot,
