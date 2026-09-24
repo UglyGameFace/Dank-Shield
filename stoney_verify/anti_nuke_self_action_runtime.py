@@ -453,11 +453,10 @@ def _consume_expected_side_effect(
         if action == "integration_delete"
         else set()
     )
-    ordered = sorted(
-        _EXPECTED_SIDE_EFFECTS.items(),
-        key=lambda item: item[1].created_at,
-    )
-    for token, expected in ordered:
+    # Dict insertion order is creation order, so the first matching receipt
+    # is already the oldest one. Avoid sorting the global short-lived ledger on
+    # every protected audit event.
+    for token, expected in list(_EXPECTED_SIDE_EFFECTS.items()):
         if expected.guild_id != gid or expected.action != action:
             continue
         if (
