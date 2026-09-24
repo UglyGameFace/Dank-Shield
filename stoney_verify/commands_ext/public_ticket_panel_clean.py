@@ -921,6 +921,48 @@ def _panel_embed(guild: discord.Guild) -> discord.Embed:
     return e
 
 
+async def persist_public_ticket_panel_identity(
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+) -> None:
+    try:
+        from .public_setup_config_writer import upsert_guild_config
+        from ..guild_config import invalidate_guild_config
+
+        await upsert_guild_config(
+            int(guild_id),
+            {
+                "ticket_panel_channel_id": str(int(channel_id)),
+                "ticket_panel_message_id": str(int(message_id)),
+            },
+        )
+        invalidate_guild_config(int(guild_id))
+    except Exception as e:
+        _warn(
+            "saving panel config failed "
+            f"guild={guild_id} message={message_id}: "
+            f"{type(e).__name__}: {_short(e, 220)}"
+        )
+
+
+async def post_public_ticket_panel_message(
+    target: discord.TextChannel,
+) -> discord.Message:
+    guild = target.guild
+    msg = await target.send(
+        embed=_panel_embed(guild),
+        view=PublicCreateTicketPanelView(),
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+    await persist_public_ticket_panel_identity(
+        int(guild.id),
+        int(target.id),
+        int(msg.id),
+    )
+    return msg
+
+
 async def _post_panel(i: discord.Interaction, channel: Optional[discord.TextChannel] = None) -> None:
     if not _staff_check(i):
         return await reply_once(i, {"content": "❌ Staff only.", "ephemeral": True})
@@ -935,16 +977,21 @@ async def _post_panel(i: discord.Interaction, channel: Optional[discord.TextChan
     if missing:
         return await reply_once(i, {"content": f"❌ I cannot post in {target.mention}. Missing: {', '.join(missing)}.", "ephemeral": True})
     try:
-        msg = await target.send(embed=_panel_embed(guild), view=PublicCreateTicketPanelView(), allowed_mentions=discord.AllowedMentions.none())
+        msg = await post_public_ticket_panel_message(target)
     except Exception as e:
         return await reply_once(i, {"content": f"❌ Failed posting ticket panel in {target.mention}: `{type(e).__name__}: {_short(e, 220)}`", "ephemeral": True})
+
+    # Bind the exact newly-created message to the canonical restart runtime.
+    # Local import avoids making the panel implementation own runtime startup.
     try:
-        from .public_setup_config_writer import upsert_guild_config
-        from ..guild_config import invalidate_guild_config
-        await upsert_guild_config(guild.id, {"ticket_panel_channel_id": str(target.id), "ticket_panel_message_id": str(msg.id)})
-        invalidate_guild_config(guild.id)
-    except Exception as e:
-        _warn(f"saving panel config failed guild={guild.id}: {type(e).__name__}: {_short(e, 220)}")
+        from .. import ticket_panel_runtime
+        ticket_panel_runtime.bind_public_ticket_panel_message(
+            getattr(i, "client", None) or getattr(i, "_state", None) or None,
+            int(msg.id),
+        )
+    except Exception:
+        pass
+
     await reply_once(i, {"content": f"✅ Posted the public **category-menu Create Ticket** panel in {target.mention}.", "ephemeral": True})
 
 
@@ -1055,22 +1102,24 @@ def _ticket_panel_group() -> app_commands.Group:
 
 def register_public_ticket_panel_clean(bot: Any, tree: Any) -> None:
     global _PANEL_VIEW_REGISTERED, _PANEL_GROUP_REGISTERED, _PANEL_FALLBACK_LISTENER_REGISTERED
-    if not _PANEL_VIEW_REGISTERED:
-        try:
-            bot.add_view(PublicCreateTicketPanelView())
-            _PANEL_VIEW_REGISTERED = True
-            _log(f"registered persistent Create Ticket view custom_id={PANEL_BUTTON_CUSTOM_ID}")
-        except Exception as e:
-            _warn(f"could not register persistent view: {e!r}")
-    if not _PANEL_VIEW_REGISTERED and not _PANEL_FALLBACK_LISTENER_REGISTERED:
-        try:
-            bot.add_listener(_component_fallback_listener, "on_interaction")
-            _PANEL_FALLBACK_LISTENER_REGISTERED = True
-            _log("persistent view unavailable; registered Create Ticket fallback listener")
-        except Exception as e:
-            _warn(f"could not register Create Ticket fallback listener: {e!r}")
-    elif _PANEL_VIEW_REGISTERED:
-        _PANEL_FALLBACK_LISTENER_REGISTERED = True
+
+    # Runtime ownership belongs to ticket_panel_runtime. Do not independently
+    # register a view/listener here or infer that a fallback exists merely
+    # because add_view() succeeded.
+    try:
+        from ..ticket_panel_runtime import (
+            install_public_ticket_panel_runtime,
+            ticket_panel_runtime_status,
+        )
+        install_public_ticket_panel_runtime(bot, strict=False)
+        status = ticket_panel_runtime_status()
+        _PANEL_VIEW_REGISTERED = bool(status["persistent_view_registered"])
+        _PANEL_FALLBACK_LISTENER_REGISTERED = bool(
+            status["fallback_listener_registered"]
+        )
+    except Exception as e:
+        _warn(f"could not install canonical ticket panel runtime: {e!r}")
+
     if not _PANEL_GROUP_REGISTERED:
         try:
             if tree.get_command("ticket-panel", guild=None) is not None:
@@ -1087,5 +1136,7 @@ def register_public_ticket_panel_clean(bot: Any, tree: Any) -> None:
 
 __all__ = [
     "handle_public_ticket_panel_click",
+    "persist_public_ticket_panel_identity",
+    "post_public_ticket_panel_message",
     "register_public_ticket_panel_clean",
 ]
