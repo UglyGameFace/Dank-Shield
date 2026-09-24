@@ -916,6 +916,83 @@ def test_foreign_legacy_panel_causes_fresh_current_bot_panel(
     asyncio.run(scenario())
 
 
+def test_disabled_legacy_panel_repairs_component_before_binding(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        edits: list[dict[str, object]] = []
+        writes: list[tuple[int, int, int]] = []
+
+        class FakeMessage:
+            id = 555
+            author = SimpleNamespace(id=42)
+            embeds = [discord.Embed(title="Verify to unlock server access")]
+            components = [
+                SimpleNamespace(custom_id="legacy:verify:disabled:v0", children=[])
+            ]
+
+            async def edit(self, **payload) -> None:
+                edits.append(dict(payload))
+
+        class FakeHistory:
+            def __aiter__(self):
+                self._done = False
+                return self
+
+            async def __anext__(self):
+                if self._done:
+                    raise StopAsyncIteration
+                self._done = True
+                return FakeMessage()
+
+        class FakeTextChannel:
+            id = 99
+
+            def history(self, *, limit: int):
+                assert limit == 80
+                return FakeHistory()
+
+        class FakeGuild:
+            id = 77
+            me = SimpleNamespace(id=42)
+
+            def get_channel(self, channel_id: int):
+                assert channel_id == 99
+                return FakeTextChannel()
+
+        async def fake_persist(
+            guild_id: int,
+            message_id: int,
+            *,
+            application_id: int = 0,
+        ) -> None:
+            writes.append((guild_id, message_id, application_id))
+
+        fake_bot = FakeBot()
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+        monkeypatch.setattr(
+            runtime,
+            "basic_verify_allowed_for_guild",
+            lambda _guild, _cfg: False,
+        )
+        monkeypatch.setattr(runtime, "_persist_basic_verify_panel_message_id", fake_persist)
+
+        result = await runtime._reconcile_one_basic_verify_panel(
+            fake_bot,
+            FakeGuild(),
+            {"verify_channel_id": "99"},
+            allow_legacy_rest=True,
+        )
+
+        assert result == "repaired_disabled_component"
+        assert len(edits) == 1
+        assert isinstance(edits[0]["view"], runtime.BasicVerifyView)
+        assert writes == [(77, 555, 42)]
+        assert fake_bot.views[-1][1] == 555
+
+    asyncio.run(scenario())
+
+
 def test_button_callback_delegates_to_canonical_interaction_handler(
     monkeypatch,
 ) -> None:
