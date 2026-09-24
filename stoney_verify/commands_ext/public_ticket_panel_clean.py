@@ -896,23 +896,6 @@ class PublicCreateTicketPanelView(discord.ui.View):
         await _handle_panel_button(i)
 
 
-async def _component_fallback_listener(i: discord.Interaction) -> None:
-    try:
-        if i.type is not discord.InteractionType.component:
-            return
-        data = i.data if isinstance(i.data, dict) else {}
-        custom_id = _safe_str(data.get("custom_id"))
-        if custom_id not in PANEL_BUTTON_CUSTOM_IDS:
-            return
-        await asyncio.sleep(0.15)
-        if i.response.is_done():
-            return
-        _warn("persistent view missed Create Ticket button; fallback handled it")
-        await _handle_panel_button(i)
-    except Exception as e:
-        _warn(f"panel fallback listener crashed: {type(e).__name__}: {_short(e, 220)}")
-
-
 def _panel_embed(guild: discord.Guild) -> discord.Embed:
     e = discord.Embed(title="🎫 Need help? Open a ticket", description="Press **Create Ticket** below, then pick the ticket type.\n\nNo form first. No guessing. You can confirm the category before anything is created.", color=discord.Color.blurple(), timestamp=discord.utils.utcnow())
     e.add_field(name="How it works", value="1. Press **Create Ticket**\n2. Pick a ticket type\n3. Confirm or go back\n4. A private ticket channel opens", inline=False)
@@ -995,10 +978,17 @@ async def _post_panel(i: discord.Interaction, channel: Optional[discord.TextChan
     # Local import avoids making the panel implementation own runtime startup.
     try:
         from .. import ticket_panel_runtime
-        ticket_panel_runtime.bind_public_ticket_panel_message(
-            getattr(i, "client", None) or getattr(i, "_state", None) or None,
-            int(msg.id),
-        )
+        target_bot = getattr(i, "client", None)
+        if target_bot is None:
+            try:
+                from ..globals import bot as target_bot
+            except Exception:
+                target_bot = None
+        if target_bot is not None:
+            ticket_panel_runtime.bind_public_ticket_panel_message(
+                target_bot,
+                int(msg.id),
+            )
     except Exception:
         pass
 
