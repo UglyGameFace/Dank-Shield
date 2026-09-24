@@ -65,6 +65,9 @@ from .members_new.activity_tracker import (
     install_activity_tracker as _install_activity_tracker,
     persisted_last_heartbeat_at as _persisted_last_heartbeat_at,
 )
+from .interaction_guard import (
+    install_component_interaction_observer as _install_component_interaction_observer,
+)
 from .startup_recovery_coordinator import startup_recovery_slot
 from .tickets_new import service as _tickets_service  # noqa: F401
 from .tickets_new import transcript_service as _transcript_service  # noqa: F401
@@ -88,6 +91,19 @@ except Exception as e:
         repr(e),
     )
     raise
+
+# Passive production-wide component observability. This listener never handles
+# a click or mutates feature state; it only records component interactions that
+# reached this process but remained unacknowledged after the native ViewStore
+# and feature callbacks had time to respond.
+try:
+    if not _install_component_interaction_observer(bot):
+        print("⚠️ component_runtime observer was not installed")
+except Exception as e:
+    print(
+        "⚠️ component_runtime observer install failed:",
+        repr(e),
+    )
 
 
 # Native authoritative member activity tracking. This is an explicit runtime
