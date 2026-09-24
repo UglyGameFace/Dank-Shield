@@ -40,6 +40,17 @@ def test_non_owner_partial_interaction_fails_closed() -> None:
     assert not public_staff_scope.scoped_interaction_is_staff(interaction)
 
 
+def test_interaction_owner_authority_does_not_require_user_guild_attachment() -> None:
+    guild = SimpleNamespace(id=9001, owner_id=111)
+    interaction = SimpleNamespace(
+        guild=guild,
+        user=SimpleNamespace(id=111),
+    )
+
+    assert public_owner_authority.interaction_is_actual_guild_owner(interaction)
+    assert public_access_control.scoped_interaction_is_server_control(interaction)
+
+
 def test_server_control_owner_fast_path_precedes_member_type_requirement() -> None:
     interaction = _interaction(user_id=111, owner_id=111)
 
