@@ -1046,3 +1046,68 @@ def test_restart_discovery_batches_enabled_stats_guilds(monkeypatch) -> None:
     assert all(len(batch) <= security_stats._STATS_DISCOVERY_BATCH_SIZE for batch in calls)
     assert security_stats._ACTIVE_DISPLAY_GUILDS == {1, 201, 401}
     security_stats._ACTIVE_DISPLAY_GUILDS.clear()
+
+
+def test_event_refresh_scheduler_coalesces_one_task_per_active_guild(monkeypatch) -> None:
+    class FakeTask:
+        def done(self) -> bool:
+            return False
+
+    created: list[str] = []
+
+    def fake_create_task(coro, *, name: str):
+        coro.close()
+        created.append(name)
+        return FakeTask()
+
+    security_stats._ACTIVE_DISPLAY_GUILDS.clear()
+    security_stats._EVENT_REFRESH_TASKS.clear()
+    security_stats._ACTIVE_DISPLAY_GUILDS.add(909)
+    monkeypatch.setattr(security_stats.asyncio, "create_task", fake_create_task)
+
+    security_stats._schedule_security_stats_refresh(909)
+    first = security_stats._EVENT_REFRESH_TASKS[909]
+    security_stats._schedule_security_stats_refresh(909)
+
+    assert security_stats._EVENT_REFRESH_TASKS[909] is first
+    assert created == ["security-stats-refresh-909"]
+
+    security_stats._EVENT_REFRESH_TASKS.clear()
+    security_stats._ACTIVE_DISPLAY_GUILDS.clear()
+
+
+def test_periodic_refresh_only_visits_active_server_stats_displays(monkeypatch) -> None:
+    async def scenario() -> None:
+        refreshed: list[int] = []
+
+        guilds = {
+            101: SimpleNamespace(id=101),
+            202: SimpleNamespace(id=202),
+            303: SimpleNamespace(id=303),
+        }
+
+        class FakeBot:
+            def get_guild(self, guild_id: int):
+                return guilds.get(int(guild_id))
+
+        async def fake_refresh(guild, *, force: bool = False) -> bool:
+            assert force is False
+            refreshed.append(int(guild.id))
+            return True
+
+        security_stats._ACTIVE_DISPLAY_GUILDS.clear()
+        security_stats._ACTIVE_DISPLAY_GUILDS.update({101, 303})
+        monkeypatch.setattr(security_stats, "bot", FakeBot())
+        monkeypatch.setattr(
+            security_stats,
+            "refresh_security_stats_display",
+            fake_refresh,
+        )
+
+        await security_stats.refresh_all_security_stats_displays.coro()
+
+        assert refreshed == [101, 303]
+        assert 202 not in security_stats._ACTIVE_DISPLAY_GUILDS
+        security_stats._ACTIVE_DISPLAY_GUILDS.clear()
+
+    asyncio.run(scenario())
