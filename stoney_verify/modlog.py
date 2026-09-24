@@ -2081,11 +2081,16 @@ async def build_member_leave_embed(
             key=lambda role: int(getattr(role, "position", 0) or 0),
             reverse=True,
         )
-        role_lines = [
-            f"{getattr(role, 'mention', f'@{getattr(role, "name", "unknown")}')} "
-            f"(`{getattr(role, 'id', 0)}`)"
-            for role in roles[:15]
-        ]
+        role_lines: List[str] = []
+        for role in roles[:15]:
+            role_name = _safe_str(getattr(role, "name", None), "unknown")
+            role_mention = _safe_str(
+                getattr(role, "mention", None),
+                f"@{role_name}",
+            )
+            role_lines.append(
+                f"{role_mention} (`{_safe_int(getattr(role, 'id', 0), 0)}`)"
+            )
         embed.add_field(
             name="Roles At Exit",
             value=(
