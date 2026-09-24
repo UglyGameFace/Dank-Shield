@@ -603,6 +603,7 @@ class MemberLogsRepairView(discord.ui.View):
                 cfg,
                 join_channel=join_channel,
                 join_reason=join_reason,
+                join_leave_channel=join_leave_channel,
                 exit_channel=exit_channel,
                 exit_reason=exit_reason,
                 staff_channel=staff_channel,
