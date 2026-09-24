@@ -42,6 +42,7 @@ def _reset_runtime_state() -> None:
     runtime._BOUND_PANEL_MESSAGE_IDS.clear()
     panel._PANEL_VIEW_REGISTERED = False
     panel._PANEL_FALLBACK_LISTENER_REGISTERED = False
+    panel._PANEL_GROUP_REGISTERED = False
     panel._MENU_SESSIONS.clear()
 
 
@@ -80,6 +81,39 @@ def test_runtime_install_is_idempotent(monkeypatch) -> None:
     assert runtime.install_public_ticket_panel_runtime(fake_bot, strict=True) is True
     assert len(fake_bot.views) == 1
     assert len(fake_bot.listeners) == 2
+
+
+def test_clean_registrar_reuses_runtime_without_duplicate_discord_bindings(
+    monkeypatch,
+) -> None:
+    class FakeTree:
+        def __init__(self) -> None:
+            self.commands: list[object] = []
+
+        def get_command(self, _name: str, guild=None):
+            return None
+
+        def remove_command(self, _name: str, guild=None):
+            return None
+
+        def add_command(self, command: object) -> None:
+            self.commands.append(command)
+
+    fake_bot = FakeBot()
+    monkeypatch.setattr(panel, "PublicCreateTicketPanelView", lambda: object())
+
+    assert runtime.install_public_ticket_panel_runtime(fake_bot, strict=True) is True
+    before_views = list(fake_bot.views)
+    before_listeners = list(fake_bot.listeners)
+
+    tree = FakeTree()
+    panel.register_public_ticket_panel_clean(fake_bot, tree)
+
+    assert fake_bot.views == before_views
+    assert fake_bot.listeners == before_listeners
+    assert len(tree.commands) == 1
+    assert panel._PANEL_VIEW_REGISTERED is True
+    assert panel._PANEL_FALLBACK_LISTENER_REGISTERED is True
 
 
 def test_runtime_remains_operational_when_primary_view_registration_fails(monkeypatch) -> None:
