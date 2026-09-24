@@ -10,6 +10,7 @@ from discord import app_commands
 
 from ..globals import *  # noqa: F401,F403
 from ..globals import _parse_iso_datetime
+from .public_owner_authority import interaction_is_actual_guild_owner
 
 
 # ============================================================
@@ -154,15 +155,8 @@ except NameError:
 # ============================================================
 if "_staff_check" not in globals():
     def _staff_check(interaction: discord.Interaction) -> bool:
-        try:
-            guild = getattr(interaction, "guild", None)
-            user = getattr(interaction, "user", None)
-            user_id = int(getattr(user, "id", 0) or 0)
-            owner_id = int(getattr(guild, "owner_id", 0) or 0)
-            if user_id > 0 and owner_id > 0 and user_id == owner_id:
-                return True
-        except Exception:
-            pass
+        if interaction_is_actual_guild_owner(interaction):
+            return True
 
         try:
             from .public_staff_scope import scoped_interaction_is_staff

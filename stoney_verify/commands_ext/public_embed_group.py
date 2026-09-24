@@ -16,6 +16,7 @@ from ..guild_action_guard import decide_guild_action
 from ..guild_context import get_guild_context
 from ..interaction_guard import safe_send_error, safe_send_interaction
 from .public_setup_group import dank_group
+from .public_owner_authority import interaction_has_manage_guild_authority
 
 _ATTACHED = False
 
@@ -26,14 +27,7 @@ embed_group = app_commands.Group(
 
 
 def _admin_or_manage_guild(interaction: discord.Interaction) -> bool:
-    try:
-        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-            return False
-        perms = interaction.user.guild_permissions
-        return bool(perms.administrator or perms.manage_guild)
-    except Exception:
-        return False
-
+    return interaction_has_manage_guild_authority(interaction)
 
 async def _require_embed_permission(interaction: discord.Interaction) -> bool:
     if interaction.guild is None:

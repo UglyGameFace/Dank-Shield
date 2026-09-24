@@ -17,19 +17,13 @@ from ..interaction_guard import recent_interaction_failures, run_guarded_interac
 from ..members_new.activity_scope import ActivityScopeReport, audit_activity_scope, format_activity_scope_problems
 from ..startup_diagnostics import build_startup_health_report
 from .public_setup_group import dank_group
+from .public_owner_authority import interaction_has_manage_guild_authority
 
 _REGISTERED = False
 
 
 def _admin_or_manage_guild(interaction: discord.Interaction) -> bool:
-    try:
-        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-            return False
-        perms = interaction.user.guild_permissions
-        return bool(perms.administrator or perms.manage_guild)
-    except Exception:
-        return False
-
+    return interaction_has_manage_guild_authority(interaction)
 
 class DiagnosticsActionView(discord.ui.View):
     """Keep diagnostics read-only while offering an explicit repair handoff."""

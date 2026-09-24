@@ -14,6 +14,7 @@ import discord
 from ..guild_context import GuildContext, get_guild_context
 from ..interaction_guard import run_guarded_interaction, safe_send_interaction
 from .public_setup_group import dank_group
+from .public_owner_authority import interaction_has_manage_guild_authority
 
 _ATTACHED = False
 
@@ -54,14 +55,7 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 
 def _admin_or_manage_guild(interaction: discord.Interaction) -> bool:
-    try:
-        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-            return False
-        perms = interaction.user.guild_permissions
-        return bool(perms.administrator or perms.manage_guild)
-    except Exception:
-        return False
-
+    return interaction_has_manage_guild_authority(interaction)
 
 def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
     try:
