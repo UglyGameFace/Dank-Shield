@@ -194,6 +194,20 @@ except Exception as e:
         return None
 
 
+# Profile/Role public panels contain semantic raw component buttons whose
+# canonical owner is a dedicated on_interaction runtime. Install that owner
+# strictly before the tolerant split-command registrar so a partial registrar
+# failure can never leave visible Profile/Role controls with no callback route.
+try:
+    from .commands_ext.public_self_roles_group import (
+        install_profile_interaction_runtime as _install_profile_interaction_runtime,
+    )
+    _install_profile_interaction_runtime(bot, strict=True)
+except Exception as e:
+    print(f"❌ commands.py Profile/Role interaction runtime failed closed: {repr(e)}")
+    raise
+
+
 # ============================================================
 # Register split slash commands
 # ============================================================
