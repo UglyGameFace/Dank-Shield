@@ -11,6 +11,7 @@ it" without shell access to the host.
 
 import hashlib
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,7 @@ def runtime_declared_sha() -> str:
     return ""
 
 
+@lru_cache(maxsize=1)
 def runtime_source_fingerprint() -> str:
     root = Path(__file__).resolve().parents[1]
     digest = hashlib.sha256()
@@ -67,6 +69,7 @@ def runtime_source_fingerprint() -> str:
     return digest.hexdigest()[:16]
 
 
+@lru_cache(maxsize=1)
 def runtime_release_snapshot() -> dict[str, Any]:
     declared = runtime_declared_sha()
     return {
@@ -78,6 +81,7 @@ def runtime_release_snapshot() -> dict[str, Any]:
     }
 
 
+@lru_cache(maxsize=1)
 def runtime_release_label() -> str:
     snapshot = runtime_release_snapshot()
     sha = _clean(snapshot.get("declared_sha_short"))
