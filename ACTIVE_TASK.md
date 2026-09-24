@@ -2,171 +2,138 @@
 
 ## Active task / desired outcome
 
-**P0-BASIC-VERIFY-FALLBACK-001 — restore live Basic Verify button reliability after PR #304**
+**P0-OWNER-STAFF-001 — server owner must never be denied by staff gates**
 
-Restore the existing Basic Verify panel so a real Discord button click is
-acknowledged even when discord.py's persistent-view dispatch misses an
-already-posted component after restart.
+Repair the permission path that returned **❌ Staff only.** to the actual Discord
+server owner when opening the compact `/verify` Verification Center.
 
 ## Production symptom
 
-The live Basic Verify panel still renders correctly with footer
-`dank_shield:basic_verify:v1 • access only`, but tapping **Verify** can produce
-Discord's red **This interaction failed** banner.
+The server owner invoked `/verify` in-guild and Dank Shield replied:
 
-Because the canonical handler defers before config/database/role work, that red
-client failure points to the click not reaching a successful acknowledgement
-path, rather than a normal role-hierarchy/config rejection.
+`❌ Staff only.`
+
+That is invalid behavior. The Discord server owner is always authoritative for
+server-management surfaces and must not depend on configured staff-role state.
 
 ## Status
 
-**ROOT CAUSE IDENTIFIED — repair implemented; exact-head validation pending**
+**ROOT CAUSE IDENTIFIED — repair implemented; validation pending**
 
-Branch: `fix/basic-verify-delayed-safety-fallback-20260924`
+Branch: `fix/server-owner-staff-authority-20260924`
 
-Base: `main@f9644c73d31b502259c36ff5658265918372e40e`
-
-## Recent-change review
-
-PR #289 (Server Stats) and PR #302 (Exit Card Unicode) did not change Basic
-Verify runtime files.
-
-The only recent Basic Verify production change was PR #304,
-`3c21431e7c4c8920b76ad671cf857b232f300c6d`.
-
-PR #304 correctly removed:
-
-- the compatibility wrapper in `basic_verification_mode_guard`;
-- duplicated role-mutation callback code;
-- immediate competing interaction ownership.
-
-But it also changed the native runtime from:
-
-- persistent view **plus delayed gateway fallback**
-
-to:
-
-- persistent view only whenever `bot.add_view()` succeeds.
-
-That was an over-correction.
+Base: `main@f7b20ab3bde020493698698c8303709d61660cf0`
 
 ## Root cause
 
-The previous validation treated successful `bot.add_view(BasicVerifyView())`
-registration as proof that every real component click would reach that callback.
+Dank Shield's public staff isolation layer treated these as staff:
 
-It is not.
+- members whose resolved `guild_permissions.administrator` is true;
+- members holding a staff/VC-staff role configured for that guild.
 
-For the deployed `discord.py==2.7.1`, the gateway interaction parser:
+It did **not** explicitly grant the actual Discord guild owner before those
+permission/role checks.
 
-1. creates the Interaction;
-2. dispatches the component to the internal ViewStore;
-3. then emits the public `interaction` event.
+That was unnecessarily brittle. In normal cached `discord.Member` state,
+discord.py derives all guild permissions for the owner, but the product contract
+must not make owner authority depend on that derived permission object or on a
+fully populated member/role cache.
 
-The internal view dispatch schedules the item callback. Therefore a delayed
-`on_interaction` listener can safely provide a second *dispatch route* without
-creating a second role-mutation owner:
+The compact Verification Center then gated `/verify` through the shared staff
+checker and surfaced the false negative as **Staff only.**
 
-- persistent view gets first chance;
-- listener waits 150 ms;
-- listener exits if the interaction is already acknowledged;
-- only a still-unanswered Basic Verify click enters the same canonical handler;
-- canonical `_ack()` remains the final single-claim boundary before any
-  database or role mutation.
-
-This is also the contract originally documented by PR #81, which fixed dead
-already-posted Basic Verify panels by keeping a fallback only after giving native
-view handling the first chance.
+There was a second architectural weakness: the shared staff helper is patched at
+startup. Modules that copy a helper by value can retain an older function
+reference. Owner authority therefore needs to be true in both the canonical
+per-guild scope and the baseline shared helper rather than relying on monkey-patch
+timing.
 
 ## Changes
 
-### `stoney_verify/verification_new/basic_verify.py`
+### `stoney_verify/commands_ext/public_staff_scope.py`
 
-- restored the global Basic Verify `on_interaction` safety listener even when
-  the persistent view registers successfully;
-- restored a short 150 ms grace window when the persistent view exists;
-- skips fallback work if the interaction has already been acknowledged;
-- handles immediately when persistent-view registration failed entirely;
-- both routes still delegate to the same
-  `maybe_handle_basic_verify_interaction()` implementation;
-- `_ack()` still rejects an interaction already claimed elsewhere;
-- partial registration is independently retryable without adding duplicate
-  listeners/views;
-- startup diagnostics now report persistent-view and delayed-fallback state;
-- fallback takeover logging includes the Discord interaction ID.
+- added authoritative guild-owner identity check using
+  `interaction.guild.owner_id == interaction.user.id`;
+- owner check happens before Discord member-type, permission, staff-role, or
+  config-cache requirements;
+- added `scoped_interaction_is_staff()` so interaction-aware permission checks
+  retain guild context even if member state is partial;
+- shared `common._staff_check` patch now binds that interaction-aware helper
+  instead of discarding guild context.
 
-### `stoney_verify/app.py`
+### `stoney_verify/commands_ext/common.py`
 
-- corrected the startup ownership comment to match the restored runtime.
+- baseline shared `_staff_check()` now grants the actual guild owner directly;
+- then delegates to the canonical per-guild staff scope;
+- retains the legacy fallback only if the canonical helper is unavailable.
+
+This makes already-imported references owner-safe instead of depending on later
+function rebinding.
+
+### `stoney_verify/commands_ext/public_verify_command_center.py`
+
+- Verification Center now imports and calls the canonical
+  `scoped_interaction_is_staff()` helper directly;
+- denial copy now clarifies that server owners and configured staff are allowed.
+
+### `stoney_verify/globals.py`
+
+- legacy `is_staff()` now explicitly recognizes the actual guild owner before
+  administrator/env-role checks so stale imported references cannot deny owners.
 
 ### Tests
 
-`tests/test_basic_verify_native_restart_runtime.py` now covers:
+`tests/test_ticket_staff_scope_runtime.py` now verifies:
 
-- persistent view + delayed safety listener registration;
-- fallback-only operation if persistent registration fails;
-- filling a missing persistent route without duplicating the listener;
-- idempotent full registration;
-- strict failure if neither path can register;
-- exact custom-ID filtering;
-- persistent callback winning during the grace window;
-- delayed fallback claiming a click when persistent dispatch misses;
-- canonical button delegation;
-- acknowledgement before role/database work;
-- duplicate role mutation remaining impossible.
+- guild owner succeeds even without role/config/permission resolution;
+- non-owner partial user state still fails closed;
+- shared `common._staff_check` recognizes the owner;
+- Verification Center specifically accepts the owner;
+- canonical common binding uses the interaction-aware staff helper.
 
-## Ownership / compatibility
-
-Still one canonical mutation owner:
-
-`maybe_handle_basic_verify_interaction`
-→ `_ack`
-→ `apply_basic_verification`
-
-Not restored:
-
-- the old `basic_verification_mode_guard` component wrapper;
-- duplicate callback business logic;
-- a second role/config implementation.
+## Scope / compatibility
 
 Preserved:
 
-- custom ID `dank:basic_verify:v1`;
-- existing posted panels;
-- guild verification-mode authorization;
-- role hierarchy checks;
-- role mutation lock;
-- `/verify panel`;
-- old/current panel embed recognition.
+- per-guild configured staff-role isolation;
+- administrator access;
+- cold-cache fail-closed behavior for non-owners;
+- ticket claim/security wrappers;
+- no beta guild role leakage;
+- no hardcoded user/guild IDs.
+
+Not changed:
+
+- Basic Verify green-button role mutation;
+- verification-mode policy;
+- AntiNuke;
+- Server Stats;
+- Exit Card rendering.
 
 ## Validation required
 
-- exact branch diff inspection;
-- conflict-marker and whitespace inspection;
 - Python compile;
-- Basic Verify behavioral tests;
-- verification-mode authorization tests;
-- public Verify Panel tests;
-- persistent interaction compatibility tests;
+- focused owner/staff tests;
+- ticket staff-scope and claim-first regressions;
+- Verification Center tests;
 - full `pytest tests/`;
-- standalone repository checks/audits;
-- all GitHub workflow gates;
-- review-thread inspection;
-- final mergeability/currentness check.
+- standalone repository audits;
+- GitHub workflow gates;
+- final diff/currentness/review-thread inspection.
 
 ## Blockers / risks
 
-Repository tests can model discord.py's dispatch ordering but cannot reproduce
-Discord's client-side red failure banner. Post-deploy acceptance still requires
-one real Unverified account clicking the existing panel after a bot restart.
+The screenshot proves a false owner denial but does not by itself prove whether
+the live interaction arrived with partial member permissions or hit a copied
+pre-patch helper. The repair deliberately removes both failure modes by making
+owner identity authoritative at each shared boundary.
 
 ## Backlog
 
-- partner-server live activity panel remains separate;
-- no unrelated subsystem is active in this task.
+- Basic Verify green-button acceptance still needs live confirmation separately.
+  The `/verify` Staff-only response was a different failure path.
 
 ## Next step
 
-Open the isolated draft PR, run exact-head CI, fix only failures caused by this
-repair, then perform final diff/currentness/review inspection before merge
-readiness.
+Open an isolated draft PR, run exact-head CI and focused owner/staff regressions,
+then make it merge-ready only after the full repository gates pass.
