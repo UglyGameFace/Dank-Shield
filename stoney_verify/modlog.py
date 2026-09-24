@@ -2017,6 +2017,112 @@ async def _build_member_context_fields(
 
 
 
+async def build_member_leave_embed(
+    guild: discord.Guild,
+    member: discord.Member,
+) -> discord.Embed:
+    """Build the canonical detailed staff record for a voluntary member leave.
+
+    Kick and ban paths already preserve moderator/audit evidence separately.
+    This helper restores the useful account, membership, role, and stored member
+    context that the generic voluntary-leave path lost during lifecycle sender
+    consolidation without reviving a second on_member_remove listener.
+    """
+    embed = discord.Embed(
+        title="📤 Member Left",
+        color=discord.Color.blurple(),
+        timestamp=_now_utc(),
+    )
+    embed.add_field(
+        name="User",
+        value=f"{member.mention} (`{member}` | `{member.id}`)",
+        inline=False,
+    )
+
+    created_at = _safe_dt_utc(getattr(member, "created_at", None))
+    joined_at = _safe_dt_utc(getattr(member, "joined_at", None))
+    now = _now_utc()
+
+    account_lines: List[str] = []
+    if created_at is not None:
+        account_days = max(0, int((now - created_at).total_seconds() // 86400))
+        account_lines.append(
+            f"Created: {discord.utils.format_dt(created_at, style='F')} "
+            f"({discord.utils.format_dt(created_at, style='R')})"
+        )
+        account_lines.append(f"Account age at exit: `{account_days}` day(s)")
+    if joined_at is not None:
+        membership_days = max(
+            0,
+            int((now - joined_at).total_seconds() // 86400),
+        )
+        account_lines.append(
+            f"Joined server: {discord.utils.format_dt(joined_at, style='F')} "
+            f"({discord.utils.format_dt(joined_at, style='R')})"
+        )
+        account_lines.append(
+            f"Time in server: `{membership_days}` day(s)"
+        )
+    if account_lines:
+        embed.add_field(
+            name="Account & Membership",
+            value=_chunk_lines(account_lines, 1000),
+            inline=False,
+        )
+
+    try:
+        roles = [
+            role
+            for role in list(getattr(member, "roles", []) or [])
+            if not bool(getattr(role, "is_default", lambda: False)())
+        ]
+        roles = sorted(
+            roles,
+            key=lambda role: int(getattr(role, "position", 0) or 0),
+            reverse=True,
+        )
+        role_lines = [
+            f"{getattr(role, 'mention', f'@{getattr(role, "name", "unknown")}')} "
+            f"(`{getattr(role, 'id', 0)}`)"
+            for role in roles[:15]
+        ]
+        embed.add_field(
+            name="Roles At Exit",
+            value=(
+                _chunk_lines(role_lines, 1000)
+                if role_lines
+                else "No non-default roles."
+            ),
+            inline=False,
+        )
+    except Exception:
+        pass
+
+    try:
+        for name, value, inline in await _build_member_context_fields(guild, member):
+            embed.add_field(
+                name=name,
+                value=_truncate(value, 1024),
+                inline=inline,
+            )
+    except Exception:
+        pass
+
+    try:
+        embed.set_thumbnail(url=str(member.display_avatar.url))
+    except Exception:
+        pass
+    try:
+        embed.set_footer(
+            text=(
+                f"Guild {guild.id} • voluntary leave / no matching kick or ban audit"
+            )
+        )
+    except Exception:
+        pass
+    return embed
+
+
 # ==========================================================
 # Public logging helpers
 # ==========================================================
@@ -2489,6 +2595,7 @@ __all__ = [
     "_audit_find_recent_kick",
     "_audit_find_best_member_update_match",
     "build_quick_mod_view",
+    "build_member_leave_embed",
     "maybe_log_recent_ban",
     "maybe_log_recent_kick",
     "maybe_log_member_update_diff",
