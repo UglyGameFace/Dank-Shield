@@ -30,6 +30,12 @@ _LOG = logging.getLogger("dank_shield.interactions")
 _RECENT_FAILURE_LIMIT = 250
 _RECENT_FAILURES: list["InteractionFailureRecord"] = []
 _ACTION_LOCKS: dict[str, asyncio.Lock] = {}
+_COMPONENT_OBSERVER_INSTALLED = False
+_COMPONENT_OBSERVER_READY_LOGGED = False
+_COMPONENT_OBSERVER_GRACE_SECONDS = 2.0
+_COMPONENT_OBSERVER_LOG_WINDOW_SECONDS = 60.0
+_COMPONENT_OBSERVER_LOG_LIMIT = 20
+_COMPONENT_OBSERVER_LOG_TIMES: list[float] = []
 
 
 @dataclass(frozen=True)
@@ -332,9 +338,13 @@ async def safe_defer_interaction(
     """Acknowledge an interaction once and log failures with context."""
 
     try:
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=ephemeral)
+        # A previous canonical step may already have acknowledged the same
+        # interaction (for example a component edit before a guarded mutation).
+        # That is a valid claim, not a defer failure.
+        if interaction.response.is_done():
             return True
+        await interaction.response.defer(ephemeral=ephemeral)
+        return True
     except Exception as exc:
         log_interaction_failure(
             interaction,
@@ -345,6 +355,155 @@ async def safe_defer_interaction(
         )
         return False
     return False
+
+
+def _observer_log_allowed() -> bool:
+    now = time.monotonic()
+    cutoff = now - _COMPONENT_OBSERVER_LOG_WINDOW_SECONDS
+    while _COMPONENT_OBSERVER_LOG_TIMES and _COMPONENT_OBSERVER_LOG_TIMES[0] <= cutoff:
+        _COMPONENT_OBSERVER_LOG_TIMES.pop(0)
+    if len(_COMPONENT_OBSERVER_LOG_TIMES) >= _COMPONENT_OBSERVER_LOG_LIMIT:
+        return False
+    _COMPONENT_OBSERVER_LOG_TIMES.append(now)
+    return True
+
+
+def _persistent_view_snapshot(bot: Any) -> tuple[int, str]:
+    try:
+        views = list(getattr(bot, "persistent_views", None) or [])
+    except Exception:
+        views = []
+    names = sorted({type(view).__name__ for view in views if view is not None})
+    return len(views), ",".join(names[:24])
+
+
+def _interaction_age_ms(interaction: Any) -> int:
+    try:
+        created_at = getattr(interaction, "created_at", None)
+        if created_at is None:
+            return -1
+        age = (discord.utils.utcnow() - created_at).total_seconds() * 1000.0
+        return max(0, int(round(age)))
+    except Exception:
+        return -1
+
+
+async def _observe_component_ack(bot: Any, interaction: discord.Interaction) -> None:
+    """Record component clicks that reach this process but remain unanswered.
+
+    This observer is deliberately passive. It never acknowledges an interaction,
+    dispatches a callback, or mutates feature state. Its only purpose is to tell
+    production logs whether Discord delivered a click to the current process and
+    whether native ViewStore/business handling acknowledged it within the normal
+    component window.
+    """
+    try:
+        if interaction.type is not discord.InteractionType.component:
+            return
+        if _response_done(interaction):
+            return
+        await asyncio.sleep(_COMPONENT_OBSERVER_GRACE_SECONDS)
+        if _response_done(interaction):
+            return
+
+        message = getattr(interaction, "message", None)
+        author = getattr(message, "author", None)
+        bot_user = getattr(bot, "user", None)
+        message_author_id = _safe_int(getattr(author, "id", 0), 0)
+        bot_user_id = _safe_int(getattr(bot_user, "id", 0), 0)
+        application_id = _safe_int(getattr(interaction, "application_id", 0), 0)
+        persistent_count, persistent_names = _persistent_view_snapshot(bot)
+        extra = {
+            "interaction_age_ms": _interaction_age_ms(interaction),
+            "message_author_id": message_author_id,
+            "bot_user_id": bot_user_id,
+            "interaction_application_id": application_id,
+            "message_author_matches_bot": bool(
+                message_author_id > 0
+                and bot_user_id > 0
+                and message_author_id == bot_user_id
+            ),
+            "persistent_view_count": persistent_count,
+            "persistent_view_types": persistent_names,
+        }
+        error = RuntimeError(
+            "component reached Dank Shield but remained unacknowledged after "
+            f"{_COMPONENT_OBSERVER_GRACE_SECONDS:.1f}s"
+        )
+        record = log_interaction_failure(
+            interaction,
+            error,
+            stage="component_unacknowledged",
+            action_name=_command_path(interaction),
+            fix_hint=(
+                "The click reached the running bot but no callback acknowledged it. "
+                "Inspect persistent-view ownership, callback errors, and acknowledgement logs."
+            ),
+            extra=extra,
+        )
+        if _observer_log_allowed():
+            print(
+                "🚨 component_runtime unacknowledged "
+                f"error_id={record.error_id} "
+                f"interaction={getattr(interaction, 'id', 0)} "
+                f"custom_id={record.context.custom_id!r} "
+                f"guild={record.context.guild_id} message={record.context.message_id} "
+                f"age_ms={extra['interaction_age_ms']} "
+                f"message_author={message_author_id} bot_user={bot_user_id} "
+                f"application_id={application_id} "
+                f"persistent_views={persistent_count}"
+            )
+    except Exception as exc:
+        if _observer_log_allowed():
+            print(
+                "⚠️ component_runtime observer failed "
+                f"error={type(exc).__name__}: {_safe_error_text(exc)}"
+            )
+
+
+def install_component_interaction_observer(bot: Any) -> bool:
+    """Install one passive component ingress/ack observer on the shared bot."""
+    global _COMPONENT_OBSERVER_INSTALLED
+    global _COMPONENT_OBSERVER_READY_LOGGED
+
+    marker = "_dank_component_interaction_observer_installed"
+    if _COMPONENT_OBSERVER_INSTALLED or bool(getattr(bot, marker, False)):
+        _COMPONENT_OBSERVER_INSTALLED = True
+        return True
+
+    add_listener = getattr(bot, "add_listener", None)
+    if not callable(add_listener):
+        return False
+
+    async def interaction_listener(interaction: discord.Interaction) -> None:
+        await _observe_component_ack(bot, interaction)
+
+    async def ready_listener() -> None:
+        global _COMPONENT_OBSERVER_READY_LOGGED
+        if _COMPONENT_OBSERVER_READY_LOGGED:
+            return
+        _COMPONENT_OBSERVER_READY_LOGGED = True
+        count, names = _persistent_view_snapshot(bot)
+        bot_user_id = _safe_int(getattr(getattr(bot, "user", None), "id", 0), 0)
+        app_id = _safe_int(getattr(bot, "application_id", 0), 0)
+        print(
+            "🔎 component_runtime ready "
+            f"bot_user={bot_user_id} application_id={app_id} "
+            f"persistent_views={count} types={names or 'none'}"
+        )
+
+    try:
+        add_listener(interaction_listener, "on_interaction")
+        add_listener(ready_listener, "on_ready")
+        setattr(bot, marker, True)
+        _COMPONENT_OBSERVER_INSTALLED = True
+        return True
+    except Exception as exc:
+        print(
+            "⚠️ component_runtime observer registration failed "
+            f"error={type(exc).__name__}: {_safe_error_text(exc)}"
+        )
+        return False
 
 
 async def safe_send_interaction(
@@ -488,7 +647,21 @@ async def run_guarded_interaction(
 
     async with lock:
         if defer:
-            await safe_defer_interaction(interaction, ephemeral=ephemeral, action_name=resolved_action)
+            acknowledged = await safe_defer_interaction(
+                interaction,
+                ephemeral=ephemeral,
+                action_name=resolved_action,
+            )
+            if not acknowledged:
+                failures = recent_interaction_failures(limit=1)
+                record = failures[-1] if failures else None
+                return InteractionGuardResult(
+                    ok=False,
+                    error_id=str(getattr(record, "error_id", "") or ""),
+                    error_type=str(getattr(record, "error_type", "") or ""),
+                    error_message=str(getattr(record, "error_message", "") or ""),
+                    sent_to_user=False,
+                )
 
         try:
             await action()
@@ -527,6 +700,7 @@ __all__ = [
     "InteractionGuardResult",
     "InteractionSendFailure",
     "clear_recent_interaction_failures",
+    "install_component_interaction_observer",
     "interaction_action_key",
     "interaction_context",
     "log_interaction_failure",
