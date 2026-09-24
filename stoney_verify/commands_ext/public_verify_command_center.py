@@ -8,7 +8,7 @@ import discord
 
 from stoney_verify.interaction_guard import run_guarded_interaction
 from ..guild_config import get_guild_config, invalidate_guild_config
-from .common import _staff_check
+from .public_staff_scope import scoped_interaction_is_staff
 
 
 async def _private(
@@ -85,11 +85,14 @@ async def _invoke(command: Any, interaction: discord.Interaction, /, *args: Any,
 
 async def _require_staff(interaction: discord.Interaction) -> bool:
     try:
-        if _staff_check(interaction):
+        if scoped_interaction_is_staff(interaction):
             return True
     except Exception:
         pass
-    await _private(interaction, "❌ Staff only.")
+    await _private(
+        interaction,
+        "❌ Staff only. Server owners and configured staff are allowed.",
+    )
     return False
 
 

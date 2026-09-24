@@ -155,6 +155,22 @@ except NameError:
 if "_staff_check" not in globals():
     def _staff_check(interaction: discord.Interaction) -> bool:
         try:
+            guild = getattr(interaction, "guild", None)
+            user = getattr(interaction, "user", None)
+            user_id = int(getattr(user, "id", 0) or 0)
+            owner_id = int(getattr(guild, "owner_id", 0) or 0)
+            if user_id > 0 and owner_id > 0 and user_id == owner_id:
+                return True
+        except Exception:
+            pass
+
+        try:
+            from .public_staff_scope import scoped_interaction_is_staff
+            return bool(scoped_interaction_is_staff(interaction))
+        except Exception:
+            pass
+
+        try:
             return isinstance(interaction.user, discord.Member) and is_staff(interaction.user)
         except Exception:
             return False

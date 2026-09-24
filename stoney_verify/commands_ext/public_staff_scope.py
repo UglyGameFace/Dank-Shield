@@ -10,6 +10,7 @@ use because another guild should never inherit the beta server's staff role.
 This module patches the shared staff-check path before public command modules
 import it. The result is intentionally simple:
 
+- The actual Discord server owner always counts as staff, independent of role/cache state.
 - Administrator always counts as staff.
 - Configured staff role from guild_configs counts as staff for that guild only.
 - VC staff role also counts when configured.
@@ -91,7 +92,7 @@ def _cached_runtime_config(guild_id: int) -> Any:
     return {}
 
 
-def _member_role_ids(member: discord.Member) -> set[int]:
+def _member_role_ids(member: Any) -> set[int]:
     ids: set[int] = set()
     try:
         for role in getattr(member, "roles", []) or []:
@@ -119,12 +120,27 @@ def configured_ticket_staff_role_ids(guild_id: int) -> list[int]:
     return ids
 
 
-def _configured_staff_role_ids(member: discord.Member) -> set[int]:
+def _configured_staff_role_ids(member: Any) -> set[int]:
     guild_id = _safe_int(getattr(getattr(member, "guild", None), "id", 0), 0)
     return set(configured_ticket_staff_role_ids(guild_id))
 
 
-def scoped_is_staff(member: discord.Member) -> bool:
+def _is_actual_guild_owner(user: Any, guild: Any = None) -> bool:
+    try:
+        resolved_guild = guild if guild is not None else getattr(user, "guild", None)
+        user_id = _safe_int(getattr(user, "id", 0), 0)
+        owner_id = _safe_int(getattr(resolved_guild, "owner_id", 0), 0)
+        return bool(user_id > 0 and owner_id > 0 and user_id == owner_id)
+    except Exception:
+        return False
+
+
+def scoped_is_staff(member: Any) -> bool:
+    # Guild ownership is authoritative and must not depend on role cache,
+    # configured staff roles, or Discord's resolved permission object.
+    if _is_actual_guild_owner(member):
+        return True
+
     if not isinstance(member, discord.Member):
         return False
 
@@ -139,6 +155,25 @@ def scoped_is_staff(member: discord.Member) -> bool:
         return False
 
     return bool(_member_role_ids(member).intersection(staff_role_ids))
+
+
+def scoped_interaction_is_staff(interaction: Any) -> bool:
+    """Return staff truth with an explicit server-owner fast path.
+
+    Application-command interactions can occasionally arrive with permission or
+    member state that is less complete than the long-lived guild cache. The
+    owner identity itself is still authoritative, so compare the interaction's
+    user ID to the interaction guild's owner ID before consulting role-based
+    staff policy.
+    """
+    try:
+        user = getattr(interaction, "user", None)
+        guild = getattr(interaction, "guild", None)
+        if _is_actual_guild_owner(user, guild):
+            return True
+        return scoped_is_staff(user)
+    except Exception:
+        return False
 
 
 def _patch_staff_helpers() -> None:
@@ -171,7 +206,7 @@ def _patch_staff_helpers() -> None:
     try:
         from . import common
 
-        common._staff_check = lambda interaction: scoped_is_staff(getattr(interaction, "user", None))  # type: ignore[assignment]
+        common._staff_check = scoped_interaction_is_staff  # type: ignore[assignment]
         installed["common"] = True
     except Exception as e:
         print(f"❌ public_staff_scope could not patch common._staff_check: {repr(e)}")
@@ -296,5 +331,6 @@ def register_public_staff_scope(bot, tree) -> None:
 __all__ = [
     "configured_ticket_staff_role_ids",
     "register_public_staff_scope",
+    "scoped_interaction_is_staff",
     "scoped_is_staff",
 ]
