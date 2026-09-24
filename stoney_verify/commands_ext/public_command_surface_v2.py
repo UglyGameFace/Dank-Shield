@@ -325,6 +325,20 @@ class CardAssetView(_OwnedView):
         )
 
 
+async def replace_with_compact_dank_home(
+    interaction: discord.Interaction,
+    *,
+    content: str = "",
+) -> None:
+    """Atomically replace a component message with a fresh canonical home view."""
+    await interaction.response.edit_message(
+        content=content or None,
+        embed=_home_embed(),
+        view=CompactDankHomeView(int(interaction.user.id)),
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
 async def open_compact_dank_home(
     interaction: discord.Interaction,
     *,
