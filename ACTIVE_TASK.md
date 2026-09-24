@@ -2,192 +2,199 @@
 
 ## Active task / desired outcome
 
-**P0-OWNER-AUTHORITY-002 — make actual guild ownership authoritative across public management gates**
+**P0-TICKET-PANEL-RECOVERY-001 — stop existing Create Ticket panels from timing out after deploy/restart**
 
-Eliminate the class of false permission denials where the real Discord server
-owner is rejected because an interaction arrives without fully resolved
-`discord.Member` state or a populated permission/role cache.
-
-## Production evidence
-
-The actual server owner opened **Setup & Settings** from `/dank home` and Dank
-Shield replied:
-
-`❌ Server setup requires the configured server-control role or Administrator.`
-
-The same owner had already hit a separate **Staff only** false denial in the
-Verification Center.
-
-PR #307 fixed the staff/Verification Center path. The Setup failure proved that
-owner truth was still duplicated in a second permission implementation.
+Restore every known public Create Ticket button generation so an already-posted
+panel can reach the one canonical ticket creation handler instead of Discord
+showing **This interaction failed**.
 
 ## Status
 
-**IMPLEMENTED — final exact-head validation pending after top-level Design audit**
+**ROOT CAUSE COMPATIBILITY GAP CONFIRMED — repair implemented; exact-head validation pending**
 
-Branch: `fix/owner-authority-consolidation-20260924`
+Branch: `fix/ticket-panel-legacy-interaction-recovery-20260924`
 
-Base: `main@43e8d8a20d8e6455090bd60eedd92eb6f1851d28`
+Base: `main@353a43ddbf45e15fc93c9eb3e2cd19a3935dfd1f`
 
-## Root cause
+PR #309 owner-authority consolidation was validated and merged before this task
+started.
 
-Public management authorization had multiple independent implementations.
+## Production symptom
 
-The server-control path in
-`commands_ext/public_access_control.py` performed this ordering:
+The owner reported that pressing **Create Ticket** on the live public ticket
+panel returns Discord's red **This interaction failed** banner.
 
-1. require `isinstance(user, discord.Member)`;
-2. only then check whether the user is the guild owner;
-3. then check Administrator/configured server-control role.
+This is an interaction-routing failure shape: the current clean handler defers
+immediately before database/config/category work, so an ordinary setup blocker
+should produce a bot response rather than an unacknowledged Discord component.
 
-An application-command interaction with partial member state could therefore
-return False before the authoritative owner-ID comparison ever ran.
+## Execution path inspected
 
-Several neighboring public UI helpers independently repeated
-`Administrator or Manage Server` checks with the same Member-first assumption,
-including the command hub used by `/dank home`.
+Current public owner:
 
-PR #307 made staff authority owner-safe, but it did not consolidate these
-server-control/manager helpers.
+`commands_ext/public_ticket_panel_clean.py`
+→ `PublicCreateTicketPanelView`
+→ `handle_public_ticket_panel_click()`
+→ `_handle_panel_button()`
+→ `_handle_panel_button_core()`
 
-## Canonical authority contract
+Restart safety:
 
-New module:
+`commands.py`
+→ `ticket_panel_runtime.install_public_ticket_panel_runtime(..., strict=True)`
+→ current persistent view + delayed `on_interaction` fallback
+→ same canonical clean handler
 
-`stoney_verify/commands_ext/public_owner_authority.py`
+Legacy `ticket_create` panels also have a compatibility view in
+`tickets_new/panel.py` that delegates to the same canonical clean handler.
 
-owns the shared identity rule:
+## Root cause / compatibility gap
 
-- `guild.owner_id == user.id` is authoritative first;
-- owner truth does not depend on role cache, configured role IDs, or resolved
-  `guild_permissions`;
-- non-owner users still require real Discord Member state before
-  Administrator/Manage Server permission checks;
-- partial non-owner interactions fail closed.
+Dank Shield has emitted **three** durable public Create Ticket custom IDs over
+the lifetime of the current codebase:
 
-## Changes
+- current clean owner: `sv:ticket:panel:create:clean:v1`;
+- earlier TicketTool parity panel: `sv:ticket:panel:create:v6`;
+- older legacy panel: `ticket_create`.
 
-### `public_access_control.py`
+The restart-safe fallback runtime only recognized the current
+`PANEL_BUTTON_CUSTOM_IDS` set, and that set contained **only**
+`sv:ticket:panel:create:clean:v1`.
 
-- `scoped_is_server_control()` now checks actual guild ownership before the
-  `discord.Member` type gate;
-- `scoped_is_ticket_staff()` follows the same owner-first rule;
-- added `scoped_interaction_is_server_control()` so interaction guild context
-  remains available even when `interaction.user` is partial;
-- `require_server_control()` now rejects only DMs before evaluating canonical
-  owner/server-control authority.
+The parity `v6` panel was actively shipped from April through the later
+TicketTool parity work, but its module is no longer a public runtime registrar.
+An already-posted `v6` message can therefore remain visually valid while no
+current persistent view owns its custom ID. The global ticket fallback ignored
+that ID too, which produces exactly the observed no-acknowledgement failure.
 
-This directly fixes the **Setup & Settings** false denial shown in production.
+The exact live panel custom ID has not been observed in logs yet, so the report
+does not prove the affected message is specifically `v6`. The code defect is
+nevertheless real and covers every known historical public ticket panel
+generation.
 
-### Shared public management surfaces
+## Secondary registration defect
 
-The following manager gates now delegate to the same canonical
-`interaction_has_manage_guild_authority()` helper:
+`public_ticket_panel_clean.register_public_ticket_panel_clean()` previously did:
 
-- `public_command_hub._admin_or_manage`;
-- `public_setup_group._admin_or_manage_guild`;
-- `public_setup_overview._admin_or_manage_guild`;
-- `public_diagnostics_group._admin_or_manage_guild`;
-- `public_embed_group._admin_or_manage_guild`.
+1. successfully register the persistent view;
+2. **not** call `add_listener()`;
+3. set `_PANEL_FALLBACK_LISTENER_REGISTERED = True` anyway.
 
-This covers the compact `/dank home` manager doorways such as Protection,
-Logs, setup overview, diagnostics repair actions, and embed/setup tools without
-duplicating owner logic again.
+Normal production startup currently installs `ticket_panel_runtime` first, so
+that false bookkeeping is not the only explanation for the live failure.
+However, it makes alternate/reordered registration paths lie about whether a
+fallback route actually exists and can cause runtime reconciliation to make the
+wrong ownership decision.
 
-### Staff scope
+## Repair
 
-`public_staff_scope.py` now reuses the canonical guild-owner identity helper
-instead of maintaining a separate owner implementation.
+### Canonical historical-ID support
 
-`common._staff_check` also uses the canonical owner helper as its baseline
-fast path.
+`public_ticket_panel_clean.py` now defines the current ID plus a fixed known
+legacy set:
 
-### Server Design doorway
+- `sv:ticket:panel:create:clean:v1`;
+- `sv:ticket:panel:create:v6`;
+- `ticket_create`.
 
-The top-level **Server Design** route deliberately uses **Manage Channels**
-instead of Administrator/Manage Server. Its backend still checked
-`isinstance(interaction.user, discord.Member)` before permission resolution,
-which could reproduce the same false owner denial under partial interaction
-state.
+All are accepted only as **entry aliases**. Every click still delegates to the
+same canonical clean handler and ticket/category implementation.
 
-`public_design_studio._can_user_design()` now grants the actual guild owner
-first through the canonical owner helper, while non-owner users still require
-the existing **Manage Channels** permission. The Design permission model was not
-broadened for anyone else.
+No old ticket creation business logic is revived.
 
-## Security properties preserved
+### Truthful fallback registration
 
-- no hardcoded user/guild IDs;
-- configured server-control roles remain guild-scoped;
-- configured ticket staff roles remain guild-scoped;
-- Administrator remains valid;
-- Manage Server remains only the bootstrap fallback when no control role is
-  configured;
-- partial non-owner interactions fail closed;
-- ticket claim/security ownership is unchanged;
-- no permission is granted merely because a username/role label resembles an
-  owner/admin role.
+The clean registrar now registers its delayed fallback whenever that fallback
+has not actually been registered, regardless of whether the persistent view
+succeeded.
 
-## Tests
+It no longer sets the fallback flag merely because a view exists.
 
-Added `tests/test_owner_authority_consolidation.py` covering:
+### Runtime reconciliation
 
-- owner identity with no Member/permission/role state;
-- non-owner partial state failing closed;
-- server-control owner fast path before Member type checks;
-- `require_server_control()` never denying the actual owner;
-- shared public management gates all accepting the actual owner;
-- the same gates rejecting partial non-owner state.
+`ticket_panel_runtime.py` now treats view and fallback registration flags
+independently. If an alternate entrypoint registered both real routes first, the
+runtime adopts both instead of attaching a duplicate listener.
 
-Existing PR #307 staff-scope regressions remain in place.
+Ticket trace output now includes the observed `custom_id`, making any future
+historical/stale component immediately attributable from Discloud logs.
 
-## Validation results
+## Interaction safety
 
-Exact implementation head `f35b78af68c09b4e90b8e746b7d9ac6e5307c707` passed:
+The delayed listener still:
 
-- PR mergeable and 0 commits behind `main`;
-- committed-diff whitespace check;
+- waits 150 ms for discord.py's native view dispatch;
+- exits when the interaction is already acknowledged;
+- delegates only still-unanswered known ticket panel IDs;
+- uses the existing per-interaction lock/TTL so two routes cannot create two
+  ticket menus/tickets from one Discord interaction.
+
+Temporary category-select recovery remains unchanged.
+
+## Tests / audits updated
+
+Behavioral coverage now proves:
+
+- the clean registrar records a fallback only after actually calling
+  `add_listener()`;
+- registrar-first then runtime installation does not duplicate views/listeners;
+- every known historical public Create Ticket custom ID reaches the canonical
+  handler through restart fallback;
+- the current clean ID remains supported;
+- interaction duplicate suppression and category-select recovery remain owned by
+  the existing canonical code.
+
+The DS Backlog 027 static audit now requires the truthful fallback condition and
+historical-ID compatibility marker instead of the obsolete fallback-only-on-view
+failure contract.
+
+## Scope / compatibility
+
+Preserved:
+
+- current panel custom ID;
+- old panel messages;
+- canonical category picker;
+- confirmation flow;
+- ticket numbering;
+- setup preflight;
+- claim-first security;
+- category privacy/permissions;
+- verification-ticket special handling;
+- one canonical ticket mutation path.
+
+Not changed:
+
+- ticket channel creation semantics;
+- ticket database schema;
+- staff permissions;
+- Basic Verify;
+- owner authority;
+- startup activity recovery.
+
+## Validation required
+
+- exact diff/currentness inspection;
+- conflict-marker/whitespace/debug inspection;
 - Python compile;
-- complete unit test suite;
-- standalone tool checks;
-- public setup/isolation audit;
-- canonical public command-surface audit;
-- startup-friction audit;
-- public invite-permission audit;
-- setup-safety audit;
-- Dank Design Smart Auto-Detect audit;
-- role-truth ownership audit;
-- event-boundary ownership audit;
-- focused claim-first ticket security suite;
-- managed-category SQL smoke test;
-- Ticket Owner Emergency Override workflow;
-- Application Command Size Diagnostics;
-- DS Backlog 027 Validation;
-- Dank Design Regression CI;
-- Profile Runtime Diagnostics.
-
-Final diff inspection found no conflict markers, trailing whitespace, or debug
-artifacts. PR review-thread inspection found no open review threads.
-
-A follow-up audit of every top-level `/dank home` management doorway found one
-remaining Member-first permission check in Server Design. That implementation
-was corrected after the validation above, so those results are historical
-evidence only; the new exact head must pass the complete gates again.
+- ticket native restart tests;
+- public ticket single-owner tests;
+- persistent interaction compatibility tests;
+- claim-first ticket security;
+- DS Backlog 027 audit;
+- full `pytest tests/`;
+- all repository workflow gates;
+- final review-thread/mergeability inspection.
 
 ## Backlog
 
-**Next P0 after this task:** Create Ticket interaction failure. Current code has
-already exposed a concrete bookkeeping defect: when the persistent Create Ticket
-view registers successfully, `public_ticket_panel_clean.py` sets
-`_PANEL_FALLBACK_LISTENER_REGISTERED = True` without actually registering the
-fallback listener. That task remains isolated until owner authority closes.
+After ticket interaction reliability closes:
 
-Startup activity-history reconciliation cost/noise remains a later performance
-task.
+- reduce startup activity-history reconciliation cost/noise without weakening
+  continuity guarantees.
 
 ## Next step
 
-Run the complete exact-head CI after the Server Design audit repair. If all
-workflows remain green, perform final currentness/diff/review inspection and
-mark PR #309 ready for merge. After merge, activate the isolated Create Ticket
-persistent-interaction repair.
+Open an isolated draft PR and run the complete exact-head validation suite. Fix
+only failures caused by this ticket interaction repair, then make the PR
+merge-ready once every gate and final inspection is green.
