@@ -436,6 +436,44 @@ def test_fallback_only_delegates_clean_ticket_custom_id(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+def test_fallback_recovers_all_known_public_ticket_panel_ids(monkeypatch) -> None:
+    async def scenario() -> None:
+        calls: list[str] = []
+
+        async def no_sleep(_seconds: float) -> None:
+            return None
+
+        async def fake_handler(interaction) -> None:
+            calls.append(str(interaction.data["custom_id"]))
+            interaction.response.done = True
+
+        class Response:
+            def __init__(self) -> None:
+                self.done = False
+
+            def is_done(self) -> bool:
+                return self.done
+
+        monkeypatch.setattr(runtime.asyncio, "sleep", no_sleep)
+        monkeypatch.setattr(panel, "handle_public_ticket_panel_click", fake_handler)
+
+        for index, custom_id in enumerate(
+            sorted(panel.PANEL_BUTTON_CUSTOM_IDS),
+            start=1,
+        ):
+            interaction = SimpleNamespace(
+                id=500 + index,
+                type=discord.InteractionType.component,
+                data={"custom_id": custom_id},
+                response=Response(),
+            )
+            await runtime._ticket_panel_fallback_listener(interaction)
+
+        assert set(calls) == set(panel.PANEL_BUTTON_CUSTOM_IDS)
+
+    asyncio.run(scenario())
+
+
 def test_category_select_fallback_recovers_missed_temporary_view(monkeypatch, capsys) -> None:
     async def scenario() -> None:
         captured: dict[str, object] = {}
