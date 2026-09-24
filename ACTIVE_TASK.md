@@ -213,6 +213,44 @@ PR #302 — **Diagnose cross-guild Exit Card Unicode rendering**
 
 Separate from this P0:
 
+- **P0 follow-up — legitimate moderator message deletion becomes durable hostile identity.**
+  Production report: a moderator deleted a spammer's message after Spam Guard removed
+  the spammer; AntiNuke removed the moderator and continues removing them on rejoin.
+
+  Confirmed execution path:
+  1. zero-damage audit expansion registers `message_delete` as an AntiNuke action;
+  2. normal Contain still treats an actor who is not explicitly in
+     `antinuke_trusted_user_ids` / `antinuke_trusted_role_ids` as first-strike;
+  3. the moderator's ordinary single-message deletion therefore reaches
+     `_contain_actor`;
+  4. hostile-actor wrapping persists the actor as
+     `confirmed_destructive_actor` before containment;
+  5. fast re-entry reads that durable/local hostile record and bans/removes the member
+     again whenever they join while AntiNuke is enabled in Contain mode.
+
+  Existing false-positive sanitization already masks a list of formerly over-punitive
+  ordinary actions (invite, emoji, sticker, scheduled-event, thread, and soundboard
+  actions), but `message_delete` / reason `Dank Shield AntiNuke containment: Message
+  deletion` is not in that contract. Requiring every legitimate moderator to be
+  manually trusted is not an acceptable product-level resolution for ordinary
+  moderation.
+
+- **P0 follow-up — Spam Guard single-message cleanup silently fails before kick.**
+  `spam_guard._delete_recent_messages` calls
+  `PartialMessage.delete(reason=reason)` when one cleanup message is selected, catches
+  the resulting exception, then retries the same incompatible `reason=` call.
+  This repository already documents that the deployed discord.py
+  `Message.delete/PartialMessage.delete` path does not accept that keyword. The result
+  can be `deleted_count=0` while Spam Guard still proceeds to timeout/kick/ban the
+  detected spammer. Multi-message bulk deletion uses a different API path and is not
+  sufficient to cover the single-message case.
+
+  Required follow-up validation should cover single-message cleanup, multi-message
+  cleanup, deletion failure visibility, action ordering, and the guarantee that a
+  legitimate moderator cleaning up the detected spam afterward is not converted into a
+  durable hostile identity.
+
+
 - decide whether bot-install preapproval/authorization UX should change for owner-added
   bots such as Top.gg. That is a product-policy decision and is not required to stop
   Dank Shield from falsely diagnosing its own integration cleanup as credential compromise.
