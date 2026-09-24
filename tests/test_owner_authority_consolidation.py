@@ -32,6 +32,49 @@ def test_owner_identity_is_authoritative_without_member_cache_state() -> None:
     )
 
 
+def test_owner_identity_falls_back_to_guild_owner_object() -> None:
+    guild = SimpleNamespace(id=9001, owner_id=0, owner=SimpleNamespace(id=111))
+    interaction = SimpleNamespace(
+        guild=guild,
+        user=SimpleNamespace(id=111),
+        permissions=SimpleNamespace(administrator=False, manage_guild=False),
+    )
+
+    assert public_owner_authority.interaction_is_actual_guild_owner(interaction)
+    assert public_owner_authority.interaction_has_administrator_authority(interaction)
+    assert public_owner_authority.interaction_has_manage_guild_authority(interaction)
+
+
+def test_resolved_interaction_administrator_does_not_require_member_cache() -> None:
+    guild = SimpleNamespace(id=9001, owner_id=0, owner=None)
+    interaction = SimpleNamespace(
+        guild=guild,
+        user=SimpleNamespace(id=111),
+        permissions=SimpleNamespace(administrator=True, manage_guild=True),
+    )
+
+    assert public_owner_authority.interaction_has_administrator_authority(interaction)
+    assert public_owner_authority.interaction_has_manage_guild_authority(interaction)
+    assert public_staff_scope.scoped_interaction_is_staff(interaction)
+    assert public_access_control.scoped_interaction_is_server_control(interaction)
+    assert common._staff_check(interaction)
+    assert public_command_hub._admin_or_manage(interaction)
+
+
+def test_partial_non_owner_without_resolved_permissions_still_fails_closed() -> None:
+    guild = SimpleNamespace(id=9001, owner_id=111, owner=SimpleNamespace(id=111))
+    interaction = SimpleNamespace(
+        guild=guild,
+        user=SimpleNamespace(id=222),
+        permissions=SimpleNamespace(administrator=False, manage_guild=False),
+    )
+
+    assert not public_owner_authority.interaction_has_administrator_authority(interaction)
+    assert not public_owner_authority.interaction_has_manage_guild_authority(interaction)
+    assert not public_staff_scope.scoped_interaction_is_staff(interaction)
+    assert not public_access_control.scoped_interaction_is_server_control(interaction)
+
+
 def test_non_owner_partial_interaction_fails_closed() -> None:
     interaction = _interaction(user_id=222, owner_id=111)
 
