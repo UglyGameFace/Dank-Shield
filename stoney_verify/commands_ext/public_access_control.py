@@ -24,6 +24,7 @@ import discord
 
 from .common import reply_once, safe_defer
 from .public_owner_authority import (
+    interaction_has_administrator_authority,
     interaction_is_actual_guild_owner,
     is_actual_guild_owner,
 )
@@ -289,6 +290,8 @@ def scoped_is_ticket_staff(member: object) -> bool:
 
 def scoped_interaction_is_server_control(interaction: object) -> bool:
     if interaction_is_actual_guild_owner(interaction):
+        return True
+    if interaction_has_administrator_authority(interaction):
         return True
     try:
         return scoped_is_server_control(getattr(interaction, "user", None))
