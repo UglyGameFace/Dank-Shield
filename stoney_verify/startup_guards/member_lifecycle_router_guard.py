@@ -158,15 +158,175 @@ def _bot_can_read_invites(guild: discord.Guild) -> bool:
         return False
 
 
-def _same_channel_id(channel: Any, channel_id: Any) -> bool:
+def _discord_time(value: Any, style: str = "F") -> str:
     try:
-        return bool(
-            channel is not None
-            and int(getattr(channel, "id", 0) or 0) > 0
-            and int(getattr(channel, "id", 0) or 0) == int(channel_id or 0)
+        if value is None:
+            return "Unknown"
+        return discord.utils.format_dt(value, style=style)
+    except Exception:
+        return "Unknown"
+
+
+def _account_age_days(member: discord.Member) -> int:
+    try:
+        created_at = getattr(member, "created_at", None)
+        if created_at is None:
+            return 0
+        return max(
+            0,
+            int(
+                (discord.utils.utcnow() - created_at).total_seconds()
+                // 86400
+            ),
+        )
+    except Exception:
+        return 0
+
+
+def _membership_days(member: discord.Member) -> int:
+    try:
+        joined_at = getattr(member, "joined_at", None)
+        if joined_at is None:
+            return 0
+        return max(
+            0,
+            int(
+                (discord.utils.utcnow() - joined_at).total_seconds()
+                // 86400
+            ),
+        )
+    except Exception:
+        return 0
+
+
+def _lifecycle_channel_health(
+    guild: discord.Guild,
+    channel: Optional[discord.TextChannel],
+) -> tuple[bool, str]:
+    if not isinstance(channel, discord.TextChannel):
+        return False, "❌ Operational join/leave log is not configured or no longer exists."
+
+    me = guild.me
+    if not isinstance(me, discord.Member):
+        return False, "❌ Dank Shield member state is unavailable."
+
+    try:
+        perms = channel.permissions_for(me)
+        missing = [
+            label
+            for label, allowed in (
+                ("View Channel", getattr(perms, "view_channel", False)),
+                ("Send Messages", getattr(perms, "send_messages", False)),
+                ("Embed Links", getattr(perms, "embed_links", False)),
+            )
+            if not bool(allowed)
+        ]
+    except Exception:
+        return False, f"❌ Could not evaluate access to {channel.mention}."
+
+    if missing:
+        return (
+            False,
+            f"❌ {channel.mention} is missing: " + ", ".join(missing),
+        )
+    return True, f"✅ {channel.mention} is writable for lifecycle embeds."
+
+
+def _router_listener_installed(event_name: str, callback: Any) -> bool:
+    if bot is None:
+        return False
+    try:
+        listeners = list(
+            (getattr(bot, "extra_events", {}) or {}).get(event_name) or []
+        )
+        return any(
+            candidate is callback
+            or (
+                getattr(candidate, "__name__", "") == getattr(callback, "__name__", "")
+                and getattr(candidate, "__module__", "") == __name__
+            )
+            for candidate in listeners
         )
     except Exception:
         return False
+
+
+def _member_lifecycle_embed(
+    member: discord.Member,
+    *,
+    joined: bool,
+) -> discord.Embed:
+    action = "joined" if joined else "left"
+    embed = discord.Embed(
+        title="🌿 Member Joined" if joined else "🍂 Member Left",
+        description=(
+            f"{member.mention} {action} the server.\n"
+            f"`{_safe_str(member)}` • `{member.id}`"
+        ),
+        color=discord.Color.green() if joined else discord.Color.dark_grey(),
+        timestamp=discord.utils.utcnow(),
+    )
+
+    created_at = getattr(member, "created_at", None)
+    embed.add_field(
+        name="Account Created",
+        value=(
+            f"{_discord_time(created_at, 'F')}\n"
+            f"{_discord_time(created_at, 'R')} • "
+            f"`{_account_age_days(member)}` day(s) old"
+        ),
+        inline=False,
+    )
+
+    if not joined:
+        joined_at = getattr(member, "joined_at", None)
+        embed.add_field(
+            name="Server Membership",
+            value=(
+                f"Joined: {_discord_time(joined_at, 'F')}\n"
+                f"Time in server: `{_membership_days(member)}` day(s)"
+            ),
+            inline=False,
+        )
+
+    try:
+        display_name = _safe_str(
+            getattr(member, "display_name", None)
+            or getattr(member, "name", None),
+            str(member.id),
+        )
+        embed.add_field(
+            name="Profile",
+            value=(
+                f"Display name: `{display_name[:180]}`\n"
+                f"Bot account: `{'yes' if bool(getattr(member, 'bot', False)) else 'no'}`"
+            ),
+            inline=False,
+        )
+    except Exception:
+        pass
+
+    try:
+        embed.add_field(
+            name="Members",
+            value=f"`{member.guild.member_count or 'unknown'}`",
+            inline=True,
+        )
+    except Exception:
+        pass
+    try:
+        embed.set_thumbnail(url=str(member.display_avatar.url))
+    except Exception:
+        pass
+    try:
+        embed.set_footer(
+            text=(
+                f"Guild {member.guild.id} • operational member lifecycle log"
+            )
+        )
+    except Exception:
+        pass
+    return embed
 
 
 async def _send_member_log_event(
@@ -181,9 +341,6 @@ async def _send_member_log_event(
         return False
 
     event_name = "join" if joined else "leave"
-    action = "joined" if joined else "left"
-    title = "🌿 Member Joined" if joined else "🍂 Member Left"
-    color = discord.Color.green() if joined else discord.Color.dark_grey()
 
     try:
         me = channel.guild.me
@@ -209,27 +366,7 @@ async def _send_member_log_event(
             )
             return False
 
-        embed = discord.Embed(
-            title=title,
-            description=(
-                f"{member.mention} {action} the server.\n"
-                f"`{_safe_str(member)}` • `{member.id}`"
-            ),
-            color=color,
-            timestamp=discord.utils.utcnow(),
-        )
-        try:
-            embed.add_field(
-                name="Members",
-                value=f"`{member.guild.member_count or 'unknown'}`",
-                inline=True,
-            )
-        except Exception:
-            pass
-        try:
-            embed.set_thumbnail(url=str(member.display_avatar.url))
-        except Exception:
-            pass
+        embed = _member_lifecycle_embed(member, joined=joined)
         await channel.send(
             embed=embed,
             allowed_mentions=discord.AllowedMentions.none(),
@@ -289,10 +426,10 @@ async def _join_listener(member: discord.Member) -> None:
             f"{type(exc).__name__}: {exc}"
         )
 
-    # The operational join/leave log must not depend on Welcome Card Studio or
-    # invite-source attribution. A failed/disabled welcome card still logs the
-    # member join. Only suppress a duplicate when the Studio already delivered
-    # successfully to the exact same configured channel.
+    # The operational join/leave log is an audit-style event stream and must
+    # not depend on Welcome Card Studio or invite-source attribution. The
+    # member-facing card and operational log are separate products, even when
+    # an administrator intentionally points both at the same channel.
     try:
         cfg = await _load_config(int(member.guild.id))
         join_log_channel = _resolve_channel(member.guild, cfg, JOIN_LEAVE_KEYS)
@@ -300,18 +437,6 @@ async def _join_listener(member: discord.Member) -> None:
             _log(
                 f"member join event skipped guild={member.guild.id} member={member.id}: "
                 "no configured join/leave log channel"
-            )
-            return
-
-        if (
-            delivery is not None
-            and bool(getattr(delivery, "sent", False))
-            and _same_channel_id(join_log_channel, getattr(delivery, "channel_id", 0))
-        ):
-            _log(
-                f"member join event duplicate suppressed guild={member.guild.id} "
-                f"member={member.id} channel={join_log_channel.id}: "
-                "Welcome Card Studio already delivered to this channel"
             )
             return
 
@@ -340,10 +465,9 @@ async def _leave_listener(member: discord.Member) -> None:
             f"{type(exc).__name__}: {exc}"
         )
 
-    # The operational join/leave log must not depend on Exit Card Studio. A
-    # failed/disabled exit card still logs the member leave. Only suppress a
-    # duplicate when the Studio already delivered successfully to the exact
-    # same configured channel.
+    # The operational join/leave log is separate from Exit Card Studio. A
+    # successful member-facing exit card never replaces the operational event
+    # record, even if both routes currently point at the same channel.
     try:
         cfg = await _load_config(int(member.guild.id))
         leave_log_channel = _resolve_channel(member.guild, cfg, JOIN_LEAVE_KEYS)
@@ -351,18 +475,6 @@ async def _leave_listener(member: discord.Member) -> None:
             _log(
                 f"member leave event skipped guild={member.guild.id} member={member.id}: "
                 "no configured join/leave log channel"
-            )
-            return
-
-        if (
-            delivery is not None
-            and bool(getattr(delivery, "sent", False))
-            and _same_channel_id(leave_log_channel, getattr(delivery, "channel_id", 0))
-        ):
-            _log(
-                f"member leave event duplicate suppressed guild={member.guild.id} "
-                f"member={member.id} channel={leave_log_channel.id}: "
-                "Exit Card Studio already delivered to this channel"
             )
             return
 
@@ -484,9 +596,8 @@ async def _member_logs_command(
         if join_leave_log is not None:
             for key in JOIN_LEAVE_KEYS:
                 payload[key] = str(join_leave_log.id)
-            # Member Logs owns the operational route and updates the Exit Card
-            # target for compatibility without changing the Studio enable toggle.
-            payload["exit_card_channel_id"] = str(join_leave_log.id)
+            # Exit Card Studio owns its own route. Configuring the operational
+            # join/leave log must not silently retarget the member-facing card.
         if staff_audit_log is not None:
             payload["staff_join_audit_channel_id"] = str(staff_audit_log.id)
             payload["member_audit_log_channel_id"] = str(staff_audit_log.id)
@@ -534,6 +645,21 @@ async def _member_logs_command(
             ),
             inline=False,
         )
+        lifecycle_ready, lifecycle_health = _lifecycle_channel_health(
+            guild,
+            join_log_channel,
+        )
+        members_intent = bool(
+            getattr(getattr(bot, "intents", None), "members", False)
+        )
+        join_listener_ready = _router_listener_installed(
+            "on_member_join",
+            _join_listener,
+        )
+        leave_listener_ready = _router_listener_installed(
+            "on_member_remove",
+            _leave_listener,
+        )
         embed.add_field(
             name="Join/leave event log",
             value=(
@@ -543,6 +669,18 @@ async def _member_logs_command(
             ),
             inline=False,
         )
+        embed.add_field(
+            name="Join/leave runtime health",
+            value=(
+                f"{lifecycle_health}\n"
+                f"{'✅' if members_intent else '❌'} Server Members intent requested by this bot process\n"
+                f"{'✅' if join_listener_ready else '❌'} Join listener registered\n"
+                f"{'✅' if leave_listener_ready else '❌'} Leave listener registered"
+            )[:1024],
+            inline=False,
+        )
+        if not lifecycle_ready:
+            embed.color = discord.Color.orange()
         embed.add_field(
             name="Live exit card",
             value=(
