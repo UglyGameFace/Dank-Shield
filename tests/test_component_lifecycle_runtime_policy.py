@@ -112,11 +112,17 @@ def test_interaction_runtime_and_profile_owner_fail_closed_at_boot() -> None:
         "register_all_commands(bot, bot.tree)"
     )
 
+    interaction_handlers = (ROOT / "stoney_verify" / "interaction_handlers.py").read_text(encoding="utf-8")
+
     assert "def install_profile_interaction_runtime(" in profile
     assert 'add_listener(_interaction_listener, "on_interaction")' in profile
     assert "persistent ProfilePanelView registration failed" in profile
     assert "if strict:" in profile
     assert "raise RuntimeError(message)" in profile
+
+    assert "def register_interaction_handlers(bot_instance: Any) -> bool:" in interaction_handlers
+    assert "interaction_handlers_runtime_status" in interaction_handlers
+    assert 'raise RuntimeError("central verification/VC interaction listener did not register")' in commands
 
 
 def test_runtime_proof_is_host_independent_and_component_status_is_exposed() -> None:
