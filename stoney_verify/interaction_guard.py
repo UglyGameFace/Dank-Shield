@@ -613,7 +613,7 @@ async def _observe_component_ack(bot: Any, interaction: discord.Interaction) -> 
             )
 
 
-def install_component_interaction_observer(bot: Any) -> bool:
+def install_component_interaction_runtime(bot: Any) -> bool:
     """Install the shared component lifecycle safety runtime on the bot.
 
     The runtime has two responsibilities only: recover definitely unowned
@@ -667,6 +667,10 @@ def install_component_interaction_observer(bot: Any) -> bool:
             f"error={type(exc).__name__}: {_safe_error_text(exc)}"
         )
         return False
+
+
+# Compatibility alias for older imports while the runtime name becomes canonical.
+install_component_interaction_observer = install_component_interaction_runtime
 
 
 async def safe_send_interaction(
@@ -866,6 +870,7 @@ __all__ = [
     "InteractionSendFailure",
     "clear_recent_interaction_failures",
     "install_component_interaction_observer",
+    "install_component_interaction_runtime",
     "interaction_action_key",
     "interaction_context",
     "log_interaction_failure",
