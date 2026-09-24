@@ -970,8 +970,10 @@ async def _reconcile_one_basic_verify_panel(
             require_history_scan_for_post=True,
         )
 
-    # A disabled-mode legacy panel is still worth locating and binding so its
-    # button can answer with the canonical disabled reason instead of timing out.
+    # A disabled-mode legacy panel is still worth locating, but it must obey
+    # the same component-identity contract. Otherwise startup would persist
+    # today's component proof for a visibly old button and recreate the exact
+    # dead-panel failure this reconciler is meant to eliminate.
     try:
         me_id = current_application_id
         async for msg in channel.history(limit=80):
@@ -979,14 +981,37 @@ async def _reconcile_one_basic_verify_panel(
                 continue
             if _safe_int(getattr(getattr(msg, "author", None), "id", 0), 0) != me_id:
                 continue
+
+            custom_ids = _message_custom_ids(msg)
+            repaired = False
+            if BASIC_VERIFY_CUSTOM_ID not in custom_ids:
+                try:
+                    await msg.edit(
+                        view=BasicVerifyView(),
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                except TypeError:
+                    await msg.edit(view=BasicVerifyView())
+                repaired = True
+
             await _persist_basic_verify_panel_message_id(
                 int(guild.id),
                 int(msg.id),
                 application_id=me_id,
             )
-            _bind_basic_verify_panel_message(bot, int(msg.id))
-            return "bound_disabled"
-    except Exception:
+            bound = _bind_basic_verify_panel_message(bot, int(msg.id))
+            if not bound:
+                return "disabled_bind_failed"
+            return "repaired_disabled_component" if repaired else "bound_disabled"
+    except Exception as exc:
+        try:
+            print(
+                "⚠️ basic_verify disabled-panel component repair failed "
+                f"guild={guild.id} channel={channel.id} "
+                f"error={type(exc).__name__}: {exc}"
+            )
+        except Exception:
+            pass
         return "scan_failed"
     return "not_found"
 
