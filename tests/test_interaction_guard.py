@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime, timezone
 
 from stoney_verify import interaction_guard as guard
@@ -59,12 +60,19 @@ class FakeFollowup:
 
 
 class FakeInteraction:
-    def __init__(self, *, fail_defer: bool = False, fail_initial_send: bool = False, fail_followup_send: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail_defer: bool = False,
+        fail_initial_send: bool = False,
+        fail_followup_send: bool = False,
+        ephemeral: bool = False,
+    ) -> None:
         self.id = 123456789012345678
         self.guild = Obj(id=111)
         self.channel = Obj(id=222)
         self.user = Obj(id=333)
-        self.message = Obj(id=444, author=Obj(id=999))
+        self.message = Obj(id=444, author=Obj(id=999), flags=Obj(ephemeral=ephemeral))
         self.data = {"custom_id": "dank:test", "component_type": 2}
         self.type = guard.discord.InteractionType.component
         self.application_id = 999
@@ -184,6 +192,100 @@ def test_run_guarded_interaction_stops_when_defer_fails():
         assert len(failures) == 1
         assert failures[0].stage == "defer_failed"
         assert failures[0].context.trace_id == guard._trace_id(interaction)
+
+    asyncio.run(run())
+
+
+def test_view_store_owner_detection_matches_message_global_and_dynamic_routes():
+    interaction = FakeInteraction(ephemeral=True)
+    key = (2, "dank:test")
+
+    store = Obj(_views={444: {key: object()}}, _dynamic_items={})
+    bot = Obj(_connection=Obj(_view_store=store))
+    assert guard._view_store_has_component_owner(bot, interaction) is True
+
+    store._views = {None: {key: object()}}
+    assert guard._view_store_has_component_owner(bot, interaction) is True
+
+    store._views = {}
+    store._dynamic_items = {re.compile(r"dank:test"): object()}
+    assert guard._view_store_has_component_owner(bot, interaction) is True
+
+    store._dynamic_items = {}
+    assert guard._view_store_has_component_owner(bot, interaction) is False
+
+
+def test_unowned_ephemeral_component_recovers_to_fresh_home(monkeypatch):
+    async def run() -> None:
+        from stoney_verify.commands_ext import public_command_surface_v2 as surface
+
+        interaction = FakeInteraction(ephemeral=True)
+        store = Obj(_views={}, _dynamic_items={})
+        bot = Obj(_connection=Obj(_view_store=store))
+        calls: list[str] = []
+
+        async def fake_home(target, *, content: str = "") -> None:
+            assert target is interaction
+            calls.append(content)
+            target.response.done = True
+
+        monkeypatch.setattr(guard, "PRIVATE_MENU_RECOVERY_GRACE_SECONDS", 0.0)
+        monkeypatch.setattr(surface, "open_compact_dank_home", fake_home)
+
+        recovered = await guard._recover_unowned_private_component(bot, interaction)
+
+        assert recovered is True
+        assert len(calls) == 1
+        assert "stale action was not executed" in calls[0]
+
+    asyncio.run(run())
+
+
+def test_owned_ephemeral_component_is_never_taken_over(monkeypatch):
+    async def run() -> None:
+        interaction = FakeInteraction(ephemeral=True)
+        key = (2, "dank:test")
+        store = Obj(_views={444: {key: object()}}, _dynamic_items={})
+        bot = Obj(_connection=Obj(_view_store=store))
+        monkeypatch.setattr(guard, "PRIVATE_MENU_RECOVERY_GRACE_SECONDS", 0.0)
+
+        recovered = await guard._recover_unowned_private_component(bot, interaction)
+
+        assert recovered is False
+        assert interaction.response.done is False
+
+    asyncio.run(run())
+
+
+def test_existing_additive_listener_gets_grace_before_private_recovery(monkeypatch):
+    async def run() -> None:
+        interaction = FakeInteraction(ephemeral=True)
+        store = Obj(_views={}, _dynamic_items={})
+        bot = Obj(_connection=Obj(_view_store=store))
+
+        async def fake_sleep(_seconds: float) -> None:
+            interaction.response.done = True
+
+        monkeypatch.setattr(guard.asyncio, "sleep", fake_sleep)
+        recovered = await guard._recover_unowned_private_component(bot, interaction)
+
+        assert recovered is False
+        assert interaction.response.done is True
+
+    asyncio.run(run())
+
+
+def test_unowned_public_component_is_not_replayed_by_private_recovery(monkeypatch):
+    async def run() -> None:
+        interaction = FakeInteraction(ephemeral=False)
+        store = Obj(_views={}, _dynamic_items={})
+        bot = Obj(_connection=Obj(_view_store=store))
+        monkeypatch.setattr(guard, "PRIVATE_MENU_RECOVERY_GRACE_SECONDS", 0.0)
+
+        recovered = await guard._recover_unowned_private_component(bot, interaction)
+
+        assert recovered is False
+        assert interaction.response.done is False
 
     asyncio.run(run())
 
