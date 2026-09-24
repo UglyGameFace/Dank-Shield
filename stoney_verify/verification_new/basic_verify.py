@@ -399,7 +399,11 @@ def install_basic_verify_runtime(
     global _RUNTIME_REGISTRATION_ERROR
     global _RUNTIME_READY_RECONCILER_REGISTERED
 
-    if _RUNTIME_VIEW_REGISTERED and _RUNTIME_FALLBACK_LISTENER_REGISTERED:
+    if (
+        _RUNTIME_VIEW_REGISTERED
+        and _RUNTIME_FALLBACK_LISTENER_REGISTERED
+        and _RUNTIME_READY_RECONCILER_REGISTERED
+    ):
         return True
 
     errors: list[str] = []
