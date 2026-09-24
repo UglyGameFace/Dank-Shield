@@ -92,6 +92,8 @@ def test_detailed_staff_leave_restores_roles_and_member_context(monkeypatch) -> 
     fields = _field_map(embed)
 
     assert embed.title == "📤 Member Left"
+    assert "Exit Classification" in fields
+    assert "Voluntary/ordinary leave" in fields["Exit Classification"]
     assert "Account & Membership" in fields
     assert "Roles At Exit" in fields
     assert "Trusted" in fields["Roles At Exit"]
