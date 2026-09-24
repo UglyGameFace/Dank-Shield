@@ -102,7 +102,8 @@ def test_ticket_ui_and_permission_sync_use_per_guild_staff_truth() -> None:
     assert "ticket_panel._is_staff_member = scoped_is_staff" in source
     assert "common._staff_check = scoped_interaction_is_staff" in source
     assert "def scoped_interaction_is_staff" in source
-    assert "_is_actual_guild_owner" in source
+    assert "from .public_owner_authority import is_actual_guild_owner" in source
+    assert "is_actual_guild_owner" in source
     assert "ticket_transcripts._is_staff_member = scoped_is_staff" in source
     assert "ticket_service._default_staff_role_ids = configured_ticket_staff_role_ids" in source
     assert "install_transcript_claim_runtime_guards(ticket_transcripts)" in source
