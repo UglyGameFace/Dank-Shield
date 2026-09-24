@@ -23,6 +23,7 @@ _ALWAYS_FIRST_STRIKE_ACTIONS = frozenset({"member_prune"})
 _DIRECT_STRICT_KEYS = frozenset(
     {"channel_delete", "role_delete", "webhook_delete", "message_delete", "message_bulk_delete"}
 )
+_NORMAL_CONTAIN_NON_PUNITIVE_ACTIONS = frozenset({"message_delete"})
 
 
 def _safe_bool(value: Any, default: bool = False) -> bool:
@@ -210,6 +211,11 @@ def _patch_guardian_policy() -> bool:
         spec: tuple[str, str, str, Optional[int]],
     ) -> None:
         settings = await anti_nuke.get_antinuke_settings(int(guild.id))
+        if (
+            action_name in _NORMAL_CONTAIN_NON_PUNITIVE_ACTIONS
+            and not strict_lockdown_active(settings)
+        ):
+            return
         if (
             strict_lockdown_active(settings)
             and action_name in strict_names
