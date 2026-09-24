@@ -734,6 +734,9 @@ def ticket_panel_runtime_status() -> dict[str, Any]:
         "fallback_listener_registered": bool(
             _RUNTIME_FALLBACK_LISTENER_REGISTERED
         ),
+        "panel_reconciler_registered": bool(
+            _RUNTIME_READY_RECONCILER_REGISTERED
+        ),
         "ready": bool(
             _RUNTIME_VIEW_REGISTERED
             or _RUNTIME_FALLBACK_LISTENER_REGISTERED
