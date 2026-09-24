@@ -29,6 +29,11 @@ _MAX_PENDING = 4096
 _REASON_BASE_LIMIT = 380
 _MARKER_RE = re.compile(r"\[DSA:([0-9a-f]{24})\]", re.IGNORECASE)
 _API_PREFIX_RE = re.compile(r"^/api/v\d+")
+_BOT_REMOVAL_REASON_PREFIXES = (
+    "dank shield antinuke rollback: unauthorized bot addition",
+    "dank shield antinuke: fast known-hostile bot re-add block",
+    "dank shield antinuke: previously confirmed hostile bot re-added",
+)
 
 _PROTECTED_ACTIONS = frozenset(
     {
@@ -409,9 +414,14 @@ def _local_removal_targets_bot(
         if user is not None and bool(getattr(user, "bot", False)):
             return True
 
-    # AntiNuke's own bot-removal paths use this stable prefix. This covers the
-    # freshly-added-bot race even if Discord's member/user cache is temporarily sparse.
-    return str(reason or "").strip().casefold().startswith("dank shield antinuke")
+    # Cover only known AntiNuke bot-removal paths when the freshly-added bot
+    # is not yet available through Discord's local member/user cache. Human AntiNuke
+    # containment reasons deliberately do not qualify.
+    normalized_reason = str(reason or "").strip().casefold()
+    return any(
+        normalized_reason.startswith(prefix)
+        for prefix in _BOT_REMOVAL_REASON_PREFIXES
+    )
 
 
 def _integration_identity_ids(entry: Any) -> set[int]:
