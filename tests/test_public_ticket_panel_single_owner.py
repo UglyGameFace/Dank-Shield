@@ -140,6 +140,73 @@ def test_expired_interaction_state_is_pruned_on_next_click() -> None:
     asyncio.run(scenario())
 
 
+def test_defer_failure_is_not_treated_as_a_claim() -> None:
+    async def scenario() -> None:
+        class Response:
+            def is_done(self) -> bool:
+                return False
+
+            async def defer(self, **_kwargs) -> None:
+                raise RuntimeError("simulated ack failure")
+
+        interaction = SimpleNamespace(response=Response())
+        assert await panel._defer(interaction, True) is False
+
+    asyncio.run(scenario())
+
+
+def test_preacknowledged_confirm_path_remains_valid() -> None:
+    async def scenario() -> None:
+        class Response:
+            def is_done(self) -> bool:
+                return True
+
+            async def defer(self, **_kwargs) -> None:
+                raise AssertionError("already-acknowledged interaction must not defer again")
+
+        interaction = SimpleNamespace(response=Response())
+        assert await panel._defer(interaction, True) is True
+
+    asyncio.run(scenario())
+
+
+def test_panel_click_stops_before_lookup_when_ack_fails(monkeypatch) -> None:
+    async def scenario() -> None:
+        async def failed_ack(_interaction, _thinking=False) -> bool:
+            return False
+
+        async def forbidden_lookup(*_args, **_kwargs):
+            raise AssertionError("ticket lookup must not run after ack failure")
+
+        monkeypatch.setattr(panel, "_defer", failed_ack)
+        monkeypatch.setattr(panel, "_existing_open", forbidden_lookup)
+
+        await panel._handle_panel_button_core(
+            SimpleNamespace(guild=SimpleNamespace(id=77), user=SimpleNamespace(id=88))
+        )
+
+    asyncio.run(scenario())
+
+
+def test_ticket_creation_stops_before_category_lookup_when_ack_fails(monkeypatch) -> None:
+    async def scenario() -> None:
+        async def failed_ack(_interaction, _thinking=False) -> bool:
+            return False
+
+        async def forbidden_category(*_args, **_kwargs):
+            raise AssertionError("category lookup must not run after ack failure")
+
+        monkeypatch.setattr(panel, "_defer", failed_ack)
+        monkeypatch.setattr(panel, "_active_category", forbidden_category)
+
+        await panel._create_ticket(
+            SimpleNamespace(guild=SimpleNamespace(id=77), user=SimpleNamespace(id=88)),
+            {"slug": "support", "name": "Support"},
+        )
+
+    asyncio.run(scenario())
+
+
 def test_clean_panel_delegates_runtime_registration_to_single_owner() -> None:
     source = PANEL.read_text(encoding="utf-8")
     assert "super().__init__(timeout=None)" in source
