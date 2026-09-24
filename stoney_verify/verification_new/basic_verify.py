@@ -220,10 +220,13 @@ def is_basic_verify_panel_embed(embed: discord.Embed) -> bool:
 
 
 async def _ack(interaction: discord.Interaction) -> bool:
-    """Acknowledge the button before DB/role work so Discord never times out."""
+    """Claim and acknowledge one Verify click before any DB/role work."""
     try:
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True, thinking=True)
+        # A completed response means another dispatcher already claimed this
+        # Discord interaction. Never perform the role mutation a second time.
+        if interaction.response.is_done():
+            return False
+        await interaction.response.defer(ephemeral=True, thinking=True)
         return True
     except Exception as exc:
         try:
@@ -257,30 +260,10 @@ class BasicVerifyButton(discord.ui.Button):
         super().__init__(label="Verify", emoji="✅", style=discord.ButtonStyle.success, custom_id=BASIC_VERIFY_CUSTOM_ID)
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
-        try:
-            print(
-                "✅ basic_verify click "
-                f"guild={getattr(getattr(interaction, 'guild', None), 'id', 0)} "
-                f"channel={getattr(getattr(interaction, 'channel', None), 'id', 0)} "
-                f"user={getattr(getattr(interaction, 'user', None), 'id', 0)}"
-            )
-        except Exception:
-            pass
-
-        if not interaction.guild or not isinstance(interaction.user, discord.Member):
-            await _reply(interaction, "This only works inside the server.", ok=False)
-            return
-        if not await _ack(interaction):
-            return
-        try:
-            ok, message = await apply_basic_verification(interaction.user)
-            await _reply(interaction, message, ok=ok)
-        except Exception as exc:
-            try:
-                print(f"basic_verify button failed guild={getattr(interaction.guild, 'id', 0)} user={getattr(interaction.user, 'id', 0)} error={type(exc).__name__}: {exc}")
-            except Exception:
-                pass
-            await _reply(interaction, f"Basic verification failed: {type(exc).__name__}. Staff should check setup health.", ok=False)
+        # One canonical interaction handler owns acknowledgement + role mutation.
+        # The persistent view and emergency fallback both delegate here instead
+        # of maintaining competing copies of the Verify workflow.
+        await maybe_handle_basic_verify_interaction(interaction)
 
 
 class BasicVerifyView(discord.ui.View):
@@ -292,7 +275,7 @@ class BasicVerifyView(discord.ui.View):
 async def _basic_verify_fallback_listener(
     interaction: discord.Interaction,
 ) -> None:
-    """Handle an old Basic Verify button if view dispatch ever misses it."""
+    """Emergency handler used only when persistent-view registration failed."""
     try:
         if interaction.type is not discord.InteractionType.component:
             return
@@ -306,9 +289,8 @@ async def _basic_verify_fallback_listener(
         if custom_id != BASIC_VERIFY_CUSTOM_ID:
             return
 
-        # Give discord.py's persistent view the first chance to handle it.
-        await asyncio.sleep(0.15)
-
+        # This listener is installed only when add_view() failed, so there is no
+        # native persistent-view callback to wait for. Acknowledge immediately.
         if interaction.response.is_done():
             return
 
@@ -346,35 +328,44 @@ def install_basic_verify_runtime(
     *,
     strict: bool = False,
 ) -> bool:
-    """Install both restart-safe Basic Verify interaction paths.
+    """Install exactly one restart-safe Basic Verify interaction route.
 
-    The fixed persistent view is the primary route. The global listener is a
-    delayed fallback for already-posted messages if discord.py view dispatch
-    ever misses an interaction after restart.
+    The fixed persistent view is authoritative. The global on_interaction
+    listener is an emergency fallback only when persistent-view registration
+    fails. Keeping both live for the same custom ID creates competing responders
+    for one Discord interaction and was a regression of the earlier single-owner
+    runtime contract.
     """
     global _RUNTIME_VIEW_REGISTERED
     global _RUNTIME_FALLBACK_LISTENER_REGISTERED
     global _RUNTIME_REGISTRATION_ERROR
 
+    # Registration is process-scoped for the one shared Dank Shield bot. Once a
+    # route owns the custom ID, repeated command/setup registration must not add
+    # a second responder later in the same process.
+    if _RUNTIME_VIEW_REGISTERED or _RUNTIME_FALLBACK_LISTENER_REGISTERED:
+        return True
+
     errors: list[str] = []
 
-    if not _RUNTIME_VIEW_REGISTERED:
-        try:
-            add_view = getattr(bot, "add_view", None)
-            if not callable(add_view):
-                raise RuntimeError(
-                    "Discord client has no callable add_view"
-                )
-
-            add_view(BasicVerifyView())
-            _RUNTIME_VIEW_REGISTERED = True
-        except Exception as exc:
-            errors.append(
-                "persistent view: "
-                f"{type(exc).__name__}: {exc}"
+    try:
+        add_view = getattr(bot, "add_view", None)
+        if not callable(add_view):
+            raise RuntimeError(
+                "Discord client has no callable add_view"
             )
 
-    if not _RUNTIME_FALLBACK_LISTENER_REGISTERED:
+        add_view(BasicVerifyView())
+        _RUNTIME_VIEW_REGISTERED = True
+    except Exception as exc:
+        errors.append(
+            "persistent view: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+    # Only install the broad event fallback when the canonical persistent view
+    # could not be registered. It immediately delegates to the same handler.
+    if not _RUNTIME_VIEW_REGISTERED:
         try:
             add_listener = getattr(bot, "add_listener", None)
             if not callable(add_listener):
@@ -400,17 +391,15 @@ def install_basic_verify_runtime(
 
     _RUNTIME_REGISTRATION_ERROR = " | ".join(errors)
 
-    if ready and not errors:
+    if _RUNTIME_VIEW_REGISTERED:
         print(
             "✅ basic_verify runtime ready "
-            "persistent_view=True fallback_listener=True"
+            "owner=persistent_view fallback_listener=False"
         )
-    elif ready:
+    elif _RUNTIME_FALLBACK_LISTENER_REGISTERED:
         print(
             "⚠️ basic_verify runtime degraded but operational "
-            f"persistent_view={_RUNTIME_VIEW_REGISTERED} "
-            "fallback_listener="
-            f"{_RUNTIME_FALLBACK_LISTENER_REGISTERED} "
+            "owner=fallback_listener "
             f"error={_RUNTIME_REGISTRATION_ERROR}"
         )
     else:
@@ -532,6 +521,16 @@ async def maybe_handle_basic_verify_interaction(interaction: discord.Interaction
         custom_id = str(data.get("custom_id") or "")
         if custom_id != BASIC_VERIFY_CUSTOM_ID:
             return False
+        try:
+            print(
+                "✅ basic_verify click "
+                f"interaction={getattr(interaction, 'id', 0)} "
+                f"guild={getattr(getattr(interaction, 'guild', None), 'id', 0)} "
+                f"channel={getattr(getattr(interaction, 'channel', None), 'id', 0)} "
+                f"user={getattr(getattr(interaction, 'user', None), 'id', 0)}"
+            )
+        except Exception:
+            pass
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
             await _reply(interaction, "This only works inside the server.", ok=False)
             return True
