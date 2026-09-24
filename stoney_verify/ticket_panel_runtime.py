@@ -114,6 +114,7 @@ def _trace(
             f"interaction={_safe_id(getattr(interaction, 'id', 0))}",
             f"guild={_safe_id(getattr(guild, 'id', 0))}",
             f"user={_safe_id(getattr(user, 'id', 0))}",
+            f"custom_id={_custom_id(interaction)!r}",
             f"age_ms={_interaction_age_ms(interaction)}",
             f"response_done={_response_done(interaction)}",
         ]
