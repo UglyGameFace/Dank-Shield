@@ -34,7 +34,7 @@ component interaction that Discord routes to a different application identity.
 
 ## Status
 
-**IN PROGRESS — production-wide button outage reported; #311 intentionally blocked from merge pending shared-runtime proof and exact-head validation**
+**VALIDATING — product-wide lifecycle repair implemented; #311 remains blocked from merge until one stable exact head passes the full Definition of Done**
 
 Branch: `fix/ticket-panel-restart-reconciliation-20260924`
 
@@ -131,8 +131,11 @@ dispatch remains authoritative.
 If **no** ViewStore owner exists and the source message is private/ephemeral, the
 runtime gives existing additive listeners a short grace window. If the click is
 still unanswered and still has no ViewStore owner, it does **not replay the stale
-button action**. It opens a fresh canonical Dank Shield Control Center and tells
-the user the old action was not executed.
+button action**. It atomically replaces that same stale ephemeral message with a
+fresh canonical Dank Shield Control Center and tells the user the old action was
+not executed. discord.py stores the replacement View under the same message ID
+as part of the edit response, so the repaired controls become live immediately
+without spawning duplicate private panels.
 
 That makes expired/restarted private menus self-healing without creating a second
 business-logic implementation.
@@ -394,6 +397,8 @@ Focused coverage now verifies:
 - no per-guild background private-menu watcher;
 - stale private recovery runs only when a user actually clicks an orphaned
   component and only after ViewStore proves no native owner exists;
+- recovery replaces the stale private message in place and immediately installs
+  a fresh ViewStore owner instead of creating another panel;
 - recovery never replays the stale feature mutation;
 - component probes/logging are globally bounded;
 - already-migrated panel identities require zero Discord REST at restart;
@@ -401,6 +406,18 @@ Focused coverage now verifies:
 - replacement occurs only for a configured message that is clearly a Dank Shield
   ticket panel;
 - transient fetch failure does not create duplicate panels.
+
+### Validation-infrastructure defect exposed by this task
+
+Touching Community Tools correctly activated its existing SQL/RLS workflow. That
+gate exposed three malformed PostgreSQL anonymous blocks already present on
+`main`: `do $ ... $;` instead of `do $ ... $;`. PostgreSQL failed before
+testing the feature logic.
+
+Because all workflow gates are mandatory for this P0, the branch repairs only
+those dollar-quote delimiters in
+`.github/workflows/smart-stickies-029.yml`. No Community Tools SQL/business
+logic was changed.
 
 ## Validation required
 
