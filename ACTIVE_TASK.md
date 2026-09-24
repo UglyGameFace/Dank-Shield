@@ -2,7 +2,7 @@
 
 ## Active task / desired outcome
 
-**P0-AUTHORITY-RUNTIME-002 — stop legitimate owner/admin interactions from being denied by public management gates**
+**P0-AUTHORITY-RUNTIME-002 — restore live authority and component ownership across public controls**
 
 Production evidence after PR #311 deployed shows that a fresh `/verify`
 application-command interaction reaches Dank Shield and is acknowledged, but the
@@ -21,8 +21,20 @@ truth:
   `public_setup_group._require_setup_permission()`, which delegates to the same
   `interaction_has_manage_guild_authority()` helper.
 
-This is therefore the same authorization-truth failure, not a separate
-interaction-delivery incident.
+This is therefore the same authorization-truth failure for Role Builder access.
+
+A newer live report says button interactions still show Discord's red
+`Interaction failed` banner broadly. That symptom is not explained by authority
+alone. PR #312 is still unmerged, and the earlier 4:04 PM screenshot happened
+only about three minutes after PR #311 merged, so that screenshot did not prove
+Discloud had completed the #311 redeploy.
+
+Repository tracing also found a real partial-runtime defect: Profile/Role public
+surfaces contain semantic raw buttons whose canonical business owner is the
+module's global `on_interaction` listener. The tolerant command registrar could
+fail that module and continue booting, leaving visible controls with no handler.
+The older centralized verification/VC interaction listener was likewise allowed
+to fail with only a warning.
 
 ## Single active task lock
 
@@ -101,6 +113,32 @@ owner/Administrator truth before its existing role/bootstrap policy.
 `public_verify_command_center._require_staff()` logs the authority snapshot only
 when access is denied, so another live mismatch is diagnosable without guessing.
 
+## Mandatory component ownership
+
+The repair now treats interaction ownership as a boot contract:
+
+- `install_profile_interaction_runtime(bot, strict=True)` runs before the
+  tolerant split-command registrar;
+- Profile Panel persistence and its canonical `on_interaction` listener must
+  both register or startup fails closed;
+- the shared component lifecycle runtime is critical and startup aborts if it
+  cannot install;
+- the centralized verification/VC interaction listener returns explicit
+  readiness and `commands.py` fails closed if it cannot register;
+- command registration may still tolerate unrelated optional UI/command errors,
+  but it can no longer leave these known public component owners absent.
+
+## Runtime deployment proof
+
+A new host-independent runtime proof fingerprints the interaction-critical source
+files and prefers a host-provided Git SHA when available. The component runtime
+ready log now includes that proof. Public status reports include the same build
+proof plus component ingress, stale-recovery, and unacknowledged counters.
+
+This makes the next live acceptance diagnostic instead of inferential: we can
+distinguish an old Discloud process from a current process that received a click
+but failed to acknowledge it.
+
 ## Safety invariants
 
 - no persisted database owner ID is trusted for live Discord authorization;
@@ -141,7 +179,7 @@ Coverage includes:
 
 ## Status
 
-**IN PROGRESS — central repair implemented; validation pending**
+**IN PROGRESS — authority + mandatory component ownership repair implemented; exact-head validation pending**
 
 Branch: `fix/verify-owner-authority-runtime-20260924`
 
