@@ -2,139 +2,155 @@
 
 ## Active task / desired outcome
 
-**P0-SERVER-STATS-001 — repair and expand Server Stats from `/dank home`**
+**P0-EXIT-FONT-001 — Cross-guild Exit Card font/Unicode consistency**
 
-Make Server Stats reliable, first-class in the compact UI, substantially more
-customizable, and safe at public-bot scale without creating a second
-persistence/runtime owner.
+Prove and repair the exact reason an Exit Card could render decorative Unicode
+correctly in one guild but not another while both guilds use the same deployed
+Dank Shield runtime.
 
 ## Status
 
-**IMPLEMENTED ON PR #289 — synchronized with current main; exact-head validation pending**
+**INVESTIGATION REPRODUCTION SYNCED TO CURRENT MAIN — exact-head validation pending**
 
-Branch: `fix/server-stats-home-customization`
+Branch: `fix/exit-card-font-cross-guild-20260923`
 
-Base after sync: `main@3c21431e7c4c8920b76ad671cf857b232f300c6d`
+Base after sync: `main@e6010631ac554c5342a6d1f2642e561f29376c94`
 
 ## Previous task closed
 
-PR #304 — Restore single-owner Basic Verify interaction runtime
+PR #289 — Server Stats repair/customization — was merged by the owner before this
+task resumed.
 
-- merged to `main` as `3c21431e7c4c8920b76ad671cf857b232f300c6d`;
-- exact PR head passed **1865 tests, 9 warnings** and all repository workflow/audit gates;
-- post-merge ownership check confirmed the persistent Basic Verify view is
-  authoritative and the duplicate compatibility dispatcher is absent.
+## Reported production symptom
 
-## Root causes / required behavior
+A previous lifecycle-card Unicode/font repair appeared correct in one guild but
+an Exit Card in another guild using the same bot did not show the expected
+font/characters.
 
-The existing Server Stats runtime was real but product access and lifecycle
-ownership were incomplete:
+## Execution path confirmed
 
-- compact `/dank home` had no direct Server Stats destination;
-- Protection exposed only a one-click creation path rather than a management surface;
-- missing tracked categories were not self-healed reliably;
-- Spam Guard counter changes could persist without promptly refreshing visible channels;
-- names, visible counters, number formatting, and placement were hardcoded;
-- periodic all-guild config reads would not scale;
-- fully customized displays could not be safely rediscovered after restart;
-- name-only recovery could adopt unrelated categories;
-- failed hide/remove work could lose ownership IDs;
-- disabling category ownership requires canonical config-key removal rather than an empty-ID write.
+Canonical live leave flow:
 
-## Canonical ownership
+`member_lifecycle_router_guard.py`
+→ `exit_card_runtime.send_live_exit_card`
+→ `exit_card_service.exit_card_file`
+→ `exit_card_renderer.render_exit_card`
+→ `welcome_card_typography_engine._fitted_tile`
+→ `unicode_font_fallback.render_text_mask`
 
-`stoney_verify/security_stats.py` remains the single runtime owner for preference
-normalization, category/channel ownership, counter computation, create/repair/
-refresh/disable behavior, coalesced event refresh, bounded restart discovery, and
-periodic refresh.
+Ownership findings:
 
-`commands_ext/public_server_stats.py` is UI only and delegates mutations to that
-runtime owner.
+- one canonical live Exit Card sender is reachable;
+- Exit Cards and Welcome Cards share the Unicode-aware typography engine;
+- dynamic member names preserve exact Unicode rather than normalizing decorative
+  characters away;
+- per-grapheme fallback is available through bundled and registered fallback fonts.
 
-`guild_config` remains the existing per-guild persistence authority. No schema
-or migration is added.
+## Main-sync review
 
-## Main-sync conflict review
+The branch was 47 commits behind current main.
 
-The original PR base was 142 commits behind current main.
+The exact production rendering path and `tests/test_exit_card_renderer.py` were
+compared against the branch's original base. None changed on main during those 47
+commits. Therefore the sync preserves current main wholesale and reapplies only
+this task's renderer-level reproduction test plus this task record.
 
-Nine of the ten original PR paths were unchanged on main. The only overlapping
-production file was `public_protection_center.py`, which has since gained
-settings-registry work, native Import Pack behavior, and AntiNuke trust-role
-controls.
+No production runtime code is changed yet because the renderer failure has not
+been reproduced.
 
-The synchronized branch preserves current main's Protection Center and reapplies
-only PR #289's Server Stats integration:
+## Per-guild state that can legitimately differ
 
-- rename the existing Live Stats presentation to Server Stats;
-- route its existing custom ID into the dedicated Server Stats center;
-- remove the now-unused one-click `ensure_security_stats_display` import;
-- preserve all newer Protection Center behavior.
+These values are intentionally guild-scoped:
+
+- `exit_card_font_style`;
+- `welcome_card_font_style`;
+- `welcome_card_custom_font_b64` and custom-font metadata;
+- Exit Card theme/colors/background/shuffle settings.
+
+An explicit Exit Card style overrides that guild's Welcome Card style. Uploaded
+custom fonts are shared between Welcome and Exit only inside the same guild.
+
+Those settings explain visual differences but should not disable fallback for
+unsupported glyphs.
+
+## Test gap / reproduction
+
+The existing live-runtime regression proves Unicode reaches `exit_card_file`
+unchanged, but it monkeypatches the renderer.
+
+The branch adds real-renderer coverage for:
+
+- `ᗩ ᗰ ᒪ`;
+- `PΛMELA`;
+- `𝓔𝔂𝓮𝔃 𝓞𝓯 𝓑𝓸𝓫`;
+
+across multiple built-in styles, and separately disables registered/system
+fallback discovery to require the repository-bundled
+`NotoSansCanadianAboriginal-VF.ttf` path for the known long-tail glyph case.
+
+## Root-cause status
+
+Not yet claiming a production trigger.
+
+If the exact-head bundled-font-only renderer test passes, the global renderer is
+deterministic on the deployed code path. The remaining production explanations
+are then outside renderer ownership:
+
+1. the observed card was generated before the Unicode fallback deployment and is
+   an immutable older PNG;
+2. the affected guild selected a different explicit Exit/custom font and the
+   complaint is visual-style consistency rather than missing-glyph fallback;
+3. the production input contains a different unsupported Unicode sequence than
+   the known reproduced names;
+4. the running deployment is not actually on the commit assumed by the report.
+
+Do not add another font shim unless one of those is disproved and the canonical
+renderer itself reproduces the failure.
 
 ## Scope
 
 In scope:
 
-- first-class Server Stats entry from `/dank home`;
-- route Protection's existing stats control to the same center;
-- per-guild category name;
-- visible-counter selection;
-- custom labels/emoji;
-- compact/exact number formatting;
-- top/keep/bottom placement;
-- reset, repair/refresh, disable/remove;
-- missing-display self-heal;
-- coalesced protection-event refresh;
-- bounded active-display periodic work;
-- batched persisted-display discovery;
-- safe ownership recovery;
-- cleanup retry ownership retention;
-- single-panel modal behavior;
-- focused scaling and behavior coverage.
+- real Exit Card renderer Unicode reproduction;
+- bundled fallback discovery;
+- built-in style coverage;
+- per-guild font/config execution-path review;
+- smallest canonical repair only if reproduced;
+- regression coverage and final integration validation.
 
 Out of scope:
 
-- new database schema;
-- unrelated Protection/AntiNuke/Spam policy changes;
-- Quiet Notice;
-- Exit Card Unicode rendering;
-- changing the compact public slash-root budget.
-
-## Compatibility / cleanup
-
-- The compact public command roots remain unchanged.
-- Existing Server Stats config remains authoritative and backward compatible.
-- Protection keeps its historical `dank_protection:live_stats` component custom ID.
-- No duplicate stats persistence/runtime service is introduced.
-- Current main's newer Protection Center features are preserved.
+- partner-server live activity;
+- Presence Intent work;
+- broad lifecycle redesign;
+- unrelated Welcome/Exit Studio changes.
 
 ## Validation required
 
-- exact-head branch/base comparison;
-- diff/conflict/whitespace inspection;
-- Python 3.11 compile;
-- Server Stats focused behavior tests;
-- command-surface regressions;
-- startup recovery/scaling regressions;
-- Protection Center regressions;
-- full `pytest tests/`;
-- standalone `tools/test_*.py` checks;
-- all repository audits;
+- exact-head renderer Unicode tests;
+- Welcome fallback regressions;
+- Exit runtime behavior tests;
+- lifecycle text tests;
+- Python compile;
+- full test suite;
+- standalone repository checks/audits;
 - GitHub workflow gates;
-- review-thread inspection;
-- final mergeability check.
+- final diff/review-thread/mergeability inspection.
 
 ## Blockers / risks
 
-No known code blocker after synchronization. Validation may expose stale tests or
-main-era compatibility changes and those must be resolved before merge readiness.
+A test-only PR is not a production fix. If exact-head reproduction stays green,
+the task must not be misrepresented as fixing a renderer bug that was never
+reproduced.
 
 ## Backlog
 
-- PR #302: cross-guild Exit Card Unicode rendering remains the next task after PR #289.
+- quiet-server partnered-guild live activity panel;
+- verify startup explicitly requests enabled Presence, Server Members, and
+  Message Content gateway intents as part of that later partner-activity task.
 
 ## Next step
 
-Run exact-head validation on the synchronized branch, repair only Server
-Stats-related failures, perform final cleanup/review inspection, then mark PR
-#289 ready and merge with an expected-head guard.
+Run the exact synchronized renderer/fallback reproduction. If it passes, inspect
+the remaining per-guild/deployment evidence path rather than modifying the
+canonical font engine without a failing case.
