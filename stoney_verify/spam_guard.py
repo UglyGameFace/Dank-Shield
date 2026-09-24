@@ -13,7 +13,10 @@ from discord import app_commands
 from discord.ext import tasks
 
 from .globals import *  # noqa: F401,F403
-from .spam_guard_defaults import SPAM_GUARD_DEFAULT_ENABLED
+from .settings_registry import (
+    normalize_spam_guard_settings as _registry_normalize_spam_guard_settings,
+    spam_guard_defaults as _registry_spam_guard_defaults,
+)
 
 # ============================================================
 # Spam / hacked-account guard with compact multi-page control UI
@@ -887,97 +890,16 @@ async def save_quarantine_case(case: Dict[str, Any]) -> Tuple[Optional[Dict[str,
 
 
 def _default_settings(guild_id: int) -> Dict[str, Any]:
-    return {
-        "guild_id": str(guild_id),
-        "enabled": SPAM_GUARD_DEFAULT_ENABLED,
-        "mode": "timeout",
-        "apply_to_verified_users": True,
-        "block_external_invites_only": True,
-        "allow_server_invites": True,
-        "window_seconds": 12,
-        "message_threshold": 5,
-        "duplicate_threshold": 3,
-        "invite_threshold": 2,
-        "multi_invite_immediate": 2,
-        "delete_history": 8,
-        "timeout_minutes": 30,
-        "cooldown_seconds": 20,
-        "quarantine_role_id": "",
-        "exempt_role_ids": [],
-        "invite_allowed_role_ids": [],
-        "allowed_channel_ids": [],
-        "exempt_user_ids": [],
-        "allowed_invite_codes": [],
-    }
+    return dict(_registry_spam_guard_defaults(int(guild_id)))
 
 
 def _normalize_settings(guild_id: int, row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    base = _default_settings(guild_id)
-    if not isinstance(row, dict):
-        return base
-
-    base["enabled"] = _safe_bool(row.get("spam_blocker_enabled", row.get("enabled")), base["enabled"])
-    base["mode"] = _normalize_mode(row.get("spam_mode", row.get("mode")), base["mode"])
-    base["apply_to_verified_users"] = _safe_bool(
-        row.get("spam_apply_to_verified_users", row.get("apply_to_verified_users")),
-        base["apply_to_verified_users"],
+    return dict(
+        _registry_normalize_spam_guard_settings(
+            int(guild_id),
+            row if isinstance(row, dict) else None,
+        )
     )
-    base["block_external_invites_only"] = _safe_bool(
-        row.get("spam_block_external_invites_only", row.get("block_external_invites_only")),
-        base["block_external_invites_only"],
-    )
-    base["allow_server_invites"] = _safe_bool(
-        row.get("spam_allow_server_invites", row.get("allow_server_invites")),
-        base["allow_server_invites"],
-    )
-    base["window_seconds"] = max(
-        5,
-        min(60, _safe_int(row.get("spam_window_seconds", row.get("window_seconds")), base["window_seconds"])),
-    )
-    base["message_threshold"] = max(
-        3,
-        min(20, _safe_int(row.get("spam_message_threshold", row.get("message_threshold")), base["message_threshold"])),
-    )
-    base["duplicate_threshold"] = max(
-        2,
-        min(12, _safe_int(row.get("spam_duplicate_threshold", row.get("duplicate_threshold")), base["duplicate_threshold"])),
-    )
-    base["invite_threshold"] = max(
-        1,
-        min(12, _safe_int(row.get("spam_invite_threshold", row.get("invite_threshold")), base["invite_threshold"])),
-    )
-    base["multi_invite_immediate"] = max(
-        2,
-        min(8, _safe_int(row.get("spam_multi_invite_immediate", row.get("multi_invite_immediate")), base["multi_invite_immediate"])),
-    )
-    base["delete_history"] = max(
-        1,
-        min(30, _safe_int(row.get("spam_delete_history", row.get("delete_history")), base["delete_history"])),
-    )
-    base["timeout_minutes"] = max(
-        1,
-        min(1440, _safe_int(row.get("spam_timeout_minutes", row.get("timeout_minutes")), base["timeout_minutes"])),
-    )
-    base["cooldown_seconds"] = max(
-        5,
-        min(300, _safe_int(row.get("spam_cooldown_seconds", row.get("cooldown_seconds")), base["cooldown_seconds"])),
-    )
-    base["quarantine_role_id"] = _safe_str(row.get("spam_quarantine_role_id", row.get("quarantine_role_id")))
-
-    base["exempt_role_ids"] = _normalize_id_list(row.get("spam_exempt_role_ids", row.get("exempt_role_ids")))
-    base["invite_allowed_role_ids"] = _normalize_id_list(
-        row.get("spam_invite_allowed_role_ids", row.get("invite_allowed_role_ids"))
-    )
-    base["allowed_channel_ids"] = _normalize_id_list(row.get("spam_allowed_channel_ids", row.get("allowed_channel_ids")))
-    base["exempt_user_ids"] = _normalize_id_list(row.get("spam_exempt_user_ids", row.get("exempt_user_ids")))
-
-    raw_codes = row.get("spam_allowed_invite_codes", row.get("allowed_invite_codes"))
-    if isinstance(raw_codes, list):
-        base["allowed_invite_codes"] = _normalize_code_list(raw_codes)
-    else:
-        base["allowed_invite_codes"] = _parse_csvish_codes(str(raw_codes or ""))
-
-    return base
 
 
 def _settings_payload_for_db(settings: Dict[str, Any], *, updated_by: Optional[discord.Member] = None) -> Dict[str, Any]:
@@ -1844,21 +1766,30 @@ async def _delete_recent_messages(
             partials = [channel.get_partial_message(mid) for mid in unique_ids]
 
             if len(partials) == 1:
-                await partials[0].delete(reason=reason)
+                await partials[0].delete()
                 deleted += 1
                 continue
 
             await channel.delete_messages(partials, reason=reason)
             deleted += len(partials)
             continue
-        except Exception:
-            pass
+        except Exception as exc:
+            _debug(
+                "cleanup channel delete failed "
+                f"guild={guild.id} channel={channel_id} messages={len(message_ids)} "
+                f"error={type(exc).__name__}: {exc}"
+            )
 
         for mid in list(dict.fromkeys(message_ids)):
             try:
-                await channel.get_partial_message(mid).delete(reason=reason)
+                await channel.get_partial_message(mid).delete()
                 deleted += 1
-            except Exception:
+            except Exception as exc:
+                _debug(
+                    "cleanup fallback delete failed "
+                    f"guild={guild.id} channel={channel_id} message={mid} "
+                    f"error={type(exc).__name__}: {exc}"
+                )
                 continue
 
     return deleted

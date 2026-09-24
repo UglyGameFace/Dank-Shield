@@ -27,6 +27,8 @@ def test_protection_center_buttons_use_guarded_actions() -> None:
         "protection.invite_blocker",
         "protection.link_shield",
         "protection.open_add_filter_modal",
+        "protection.open_import_filter_pack_modal",
+        "protection.import_filter_pack_modal",
         "protection.open_test_filter_modal",
         "protection.allow_links",
         "protection.refresh",
@@ -43,3 +45,12 @@ def test_protection_center_removed_legacy_local_open_error_prints() -> None:
     assert "public_protection_center open failed" not in SOURCE
     assert "failed to send Protection Center" not in SOURCE
     assert "Protection Center could not open safely" not in SOURCE
+
+
+def test_protection_center_owns_import_pack_without_startup_patch() -> None:
+    assert 'label="Import Pack"' in SOURCE
+    assert 'custom_id="dank_protection:import_pack"' in SOURCE
+    assert "StarterPackImportModal" in SOURCE
+    assert "_merge_imported_filter_terms" in SOURCE
+    assert "protection_pack_manual_import_guard" not in SOURCE
+    assert "protection_import_button_patch" not in SOURCE

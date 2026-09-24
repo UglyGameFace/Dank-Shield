@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import discord
 from discord import app_commands
 
 _READY = False
@@ -14,29 +13,6 @@ def _log(message: str) -> None:
         print(f"basic_verification_mode_guard: {message}")
     except Exception:
         pass
-
-
-def _install_basic_button_listener() -> bool:
-    try:
-        from stoney_verify import interaction_handlers as handlers
-        from stoney_verify.verification_new.basic_verify import maybe_handle_basic_verify_interaction
-    except Exception:
-        return False
-    original = getattr(handlers, "handle_component_interaction", None)
-    if not callable(original) or getattr(original, "_basic_verify_ready", False):
-        return bool(callable(original))
-
-    async def wrapped_component_handler(interaction: discord.Interaction) -> None:
-        try:
-            if await maybe_handle_basic_verify_interaction(interaction):
-                return
-        except Exception:
-            pass
-        return await original(interaction)
-
-    setattr(wrapped_component_handler, "_basic_verify_ready", True)
-    handlers.handle_component_interaction = wrapped_component_handler  # type: ignore[assignment]
-    return True
 
 
 def _install_panel_command() -> bool:
@@ -81,12 +57,14 @@ def apply() -> bool:
         _install_panel_command()
         return True
     a = _install_legacy_allowlist()
-    b = _install_basic_button_listener()
     c = _install_panel_command()
     d = _install_sync_hook()
-    _READY = bool(a or b or c or d)
+    _READY = bool(a or c or d)
     if _READY:
-        _log(f"active allowlist={a} listener={b} panel={c} sync={d}")
+        _log(
+            f"active allowlist={a} panel={c} sync={d} "
+            "basic_button_owner=native_runtime"
+        )
     return _READY
 
 

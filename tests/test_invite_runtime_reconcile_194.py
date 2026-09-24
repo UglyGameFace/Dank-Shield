@@ -105,16 +105,22 @@ def test_startup_invite_scan_uses_recovery_budget_but_live_scan_does_not(monkeyp
     assert reservations == [(3, "invite history guild=777 channel=778")]
 
 
-def test_legacy_invite_guard_delegates_instead_of_owning_second_runtime() -> None:
-    text = (
-        ROOT / "stoney_verify" / "startup_guards" / "discord_invite_blocker_runtime_guard.py"
+def test_legacy_invite_runtime_bridge_stays_retired() -> None:
+    guard_dir = ROOT / "stoney_verify" / "startup_guards"
+    for filename in (
+        "invite_live_enforcer_guard.py",
+        "discord_invite_blocker_runtime_guard.py",
+        "spam_guard_invite_hard_block.py",
+    ):
+        assert not (guard_dir / filename).exists(), filename
+
+    globals_source = (ROOT / "stoney_verify" / "globals.py").read_text(encoding="utf-8")
+    assert "enforce_live_invite_message" in globals_source
+
+    recovery_source = (
+        ROOT / "stoney_verify" / "invite_reconciliation_runtime.py"
     ).read_text(encoding="utf-8")
-    assert "_SWEEP_TASKS" not in text
-    assert "_LAST_SWEEP_AT" not in text
-    assert "bot.add_listener" not in text
-    assert "recovery.install_invite_reconciliation(bot)" in text
-    assert "await recovery._sweep_channel(" in text
-    assert "async def _enforce_message(" in text
+    assert "policy.scan_channel_invites(" in recovery_source
 
 
 def test_install_is_idempotent() -> None:

@@ -129,56 +129,35 @@ Remaining score blockers:
 - large startup guard chain still controls too much behavior
 - many setup/design/ticket/verify callbacks still do raw `interaction.response.*` work
 - command registry still contains runtime pruning/mutation logic
-- settings are not yet defined through one central registry
+- settings registry migration now covers Protection/Automod/Invite and Spam Guard core settings, but other families remain
 - Dank Design still contains too much state/UI/service logic in one command module
 
 ---
 
 ## Current active task
 
-### `P0-INT-001` — Replace monkey-patched interaction logger with native interaction service
+### `P0-SETTINGS-001B` — Spam Guard core settings + canonical setup persistence
 
-Status: `PARTIAL / BLOCKER — diagnostics failure history merged; dormant global interaction patcher retirement in progress`
+Status: `IMPLEMENTED — exact-head validation pending`
 
 Goal:
 
-Stop generic `interaction failed` outcomes without patching Discord.py internals, make native Error IDs actionable, and remove obsolete framework-patching artifacts once their native behavior is owned elsewhere.
+Make the settings registry own Spam Guard setting meaning while keeping `spam_guard.py` as the sole `guild_security_settings` persistence/cache/diagnostics owner.
 
-Progress completed on current `main`:
+Current branch work:
 
-- Protection Center command/button/modal/select paths use native guarded interaction wrappers.
-- Dank Design command-open, exact-format, reviewed Apply, and Undo mutation paths are native-guarded.
-- `/dank setup-find` result Apply is native-guarded and verified on `main`.
-- Ticket Operations Center shared command runner is native-guarded and verified on `main`.
-- Verification Center shared canonical-command dispatcher is native-guarded and verified on `main`.
-- Verification Center role mapping is native-guarded and persistence-verified on `main`.
-- Canonical Verify Panel posting is native-guarded and verified on `main`.
-- `/dank diagnostics` now exposes a guild-filtered, sanitized native interaction failure summary; PR #283 is merged and verified on `main`.
-- Production boot already does not import or apply `global_interaction_trace_guard`.
+- registers core Spam Guard settings with defaults, aliases, precedence, types, and exact numeric bounds;
+- adds shared Spam Guard Safe/Strict/Off presets;
+- routes `spam_guard._default_settings` and `_normalize_settings` through the registry;
+- routes Protection Center Spam Guard presets through the registry;
+- preserves stored allowed-invite-code compatibility;
+- converts setup's Spam Guard read path from private runtime-cache access to `get_spam_settings`;
+- converts setup's Spam Guard save path from raw Supabase writes/private cache mutation to `save_spam_settings`;
+- removes setup's duplicate `guild_security_settings` payload/upsert/cache helpers;
+- corrects setup's drifted 60-minute default to the canonical 30-minute runtime default;
+- updates static/behavior regressions and ownership documentation.
 
-Current locked slice:
-
-- retire the dormant `global_interaction_trace_guard.py` artifact;
-- remove it from inert historical startup metadata;
-- delete the obsolete test that requires its private Discord.py patches;
-- replace the loader regression with assertions that the patcher stays absent from disk, boot owners, and historical metadata;
-- keep the native `interaction_guard.py` service unchanged.
-
-Remaining before `P0-INT-001` can be marked done:
-
-- merge and verify dormant global interaction patcher retirement;
-- resolve remaining direct-command native-guard architecture without nested component-lock collisions;
-- confirm no other P0 interaction path still depends on private Discord.py framework mutation;
-- run the full interaction/protection/design/setup/ticket/verify matrix once executable CI infrastructure is restored.
-
-Exit criteria:
-
-- no production startup guard patches `CommandTree`, app command internals, or `View._scheduled_task`;
-- setup/protection/design/ticket/verify state-changing callbacks use the native interaction service at their authoritative public boundaries;
-- failing guarded callbacks log structured context and show a useful user message;
-- native Error IDs can be inspected safely from the owning guild's diagnostics;
-- state-changing UI paths do not report success unless their required persistence/mutation outcome is verified;
-- tests prevent retired private-framework patchers from being restored.
+No database schema change is required.
 
 
 ---
@@ -219,9 +198,9 @@ The central `guild_config.py` is moving in the right direction. It has guild-sco
 
 ### `P0-INVITE-001` — Invite/link deletion must be exclusively centralized
 
-Status: `PARTIAL / BLOCKER`
+Status: `DONE`
 
-`stoney_verify/invite_policy_engine.py` already has a strong central decision object and correct policy posture. Remaining risk: startup guards and legacy listeners may still contain invite/link delete behavior or overlapping enforcement.
+PR #295 retired the remaining legacy invite listener/bridge/override chain. Live enforcement is `globals.py -> invite_policy_engine.enforce_live_invite_message`; missed-message recovery is `invite_reconciliation_runtime -> invite_policy_engine.scan_channel_invites`. The final delete-path sweep confirmed remaining Automod/Spam cleanup invite paths delegate invite-containing messages to the central policy engine.
 
 ---
 
@@ -233,11 +212,15 @@ The command registry is partially centralized, but it still includes runtime pru
 
 ---
 
-### `P0-SETTINGS-001` — Central settings registry is missing
+### `P0-SETTINGS-001` — Central settings registry/service
 
-Status: `BLOCKER`
+Status: `IN PROGRESS / PARTIAL`
 
-Settings are currently spread across guild config, spam settings, automod presets, invite policy keys, setup helpers, and feature-specific UI code.
+Merged PR #296 established `stoney_verify/settings_registry.py` as the schema/compatibility owner for Protection/Automod/Invite settings without creating a second persistence layer.
+
+The current Spam Guard slice extends that ownership to the core Spam Guard runtime schema: defaults, persisted-column aliases, precedence, numeric bounds, allow/exempt lists, allowed invite codes, and shared Protection Center presets. It also removes the duplicate Spam Guard persistence/cache engine from `startup_guards/setup_service_modes.py`; that setup UI now delegates to `spam_guard.get_spam_settings` / `save_spam_settings`.
+
+Remaining work: inventory and migrate additional setting families one at a time, especially setup service flags, design, tickets, verification, and AntiNuke.
 
 ---
 
@@ -266,12 +249,13 @@ Ticket numbers and channel creation must stay consistent under retries, restarts
 | `global_interaction_trace_guard` | dormant historical patcher; no production importer | **retire/delete** after native interaction ownership and diagnostics replacement |
 | `interaction_action_lock_guard` | likely valid product rule | migrate to central interaction lock/idempotency service |
 | `command_safety` | likely valid validation | keep only as validation, no runtime mutation |
-| `slash_command_cleanup` | dangerous in production if mutating commands | move to explicit dev/admin migration tool or delete |
-| `protection_center_command_guard` | mutates command surface to hide aliases | migrate into deterministic command registry |
-| `protection_import_button_patch` | patch file by name | inspect, migrate valid behavior, delete patch |
-| `spam_guard_invite_hard_block` | overlap risk with invite policy engine | migrate/delete after invite policy verification |
-| `discord_invite_blocker_runtime_guard` | overlap risk with invite policy engine | inspect for direct deletes |
-| `invite_live_enforcer_guard` | loader explicitly calls `apply()` | high-risk inspection required |
+| `slash_command_cleanup` | dormant global CommandTree patcher; useful sync behavior now native | **retire/delete with obsolete ticket command epoch shim; native owner is `command_runtime.DankCommandTree`** |
+| `protection_center_command_guard` | retired; had no production importer | native `commands_ext` registration owns `/dank protection` and legacy alias metadata |
+| `protection_import_button_patch` / `protection_pack_manual_import_guard` | retired dormant UI/config patchers | Import Pack button, modal, normalization, persistence, and interaction safety are native in `public_protection_center.py` |
+| `spam_guard_invite_hard_block` / `discord_invite_blocker_runtime_guard` | retired compatibility bridge chain | live/recovery ownership is native in `globals.py`, `invite_policy_engine`, and `invite_reconciliation_runtime` |
+
+| `invite_live_enforcer_guard` | retired duplicate listener implementation | canonical live listener is installed directly from `globals.py` and calls `enforce_live_invite_message` |
+| `spam_guard_invite_override_options` / `protection_invite_target_precedence_guard` | retired monkey-patch targeting/override chain | native `invite_scope_settings` + Protection Center invite UI own guild-scoped targeting; canonical policy ignores obsolete override patch keys |
 | `server_design_*_guard` | design behavior should be native | migrate into design service/UI |
 | `public_design_enhancements` startup-guard imports | native design path still activates startup guard modules | migrate strict/majority layout into native design services |
 | `setup_*_guard` | too many setup UX fixes at startup | classify and migrate valid UX into setup modules |
@@ -353,7 +337,9 @@ Status: `NOT STARTED`
 
 ### Commit 6 — Central settings registry
 
-Status: `NOT STARTED`
+Status: `IN PROGRESS / FIRST FAMILY IMPLEMENTED`
+
+Protection/Automod/Invite schema and compatibility semantics are the first migrated family. Storage remains with existing canonical persistence owners.
 
 ### Commit 7 — Dank Design service split
 

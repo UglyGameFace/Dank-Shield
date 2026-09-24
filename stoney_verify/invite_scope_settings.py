@@ -9,104 +9,39 @@ invite policy and Protection Center can share one durable source without
 monkey-patching Spam Guard.
 """
 
-import re
 from typing import Any, Mapping
 
 from .guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
+from .settings_registry import (
+    INVITE_PROTECTED_POSTER_RULE_KEY,
+    INVITE_TARGET_ALL_BOTS_KEY,
+    INVITE_TARGET_BOT_IDS_KEY,
+    INVITE_TARGET_CHANNEL_IDS_KEY,
+    coerce_bool,
+    coerce_ids,
+    invite_scope_values,
+)
 
-ALL_BOTS_KEY = "invite_hard_block_target_all_bots"
-BOT_IDS_KEY = "invite_hard_block_target_bot_ids"
-CHANNEL_IDS_KEY = "invite_hard_block_target_channel_ids"
-PROTECTED_RULE_KEY = "invite_protected_poster_rule_enabled"
+ALL_BOTS_KEY = INVITE_TARGET_ALL_BOTS_KEY
+BOT_IDS_KEY = INVITE_TARGET_BOT_IDS_KEY
+CHANNEL_IDS_KEY = INVITE_TARGET_CHANNEL_IDS_KEY
+PROTECTED_RULE_KEY = INVITE_PROTECTED_POSTER_RULE_KEY
 
 _SCOPE_KEYS = (ALL_BOTS_KEY, BOT_IDS_KEY, CHANNEL_IDS_KEY, PROTECTED_RULE_KEY)
 _POLICY_BOUND = False
 _ORIGINAL_POLICY_LOAD: Any = None
 
 
-def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
-    try:
-        value = getattr(cfg, key, None)
-        if value is not None:
-            return value
-    except Exception:
-        pass
-    try:
-        if hasattr(cfg, "get"):
-            value = cfg.get(key)
-            if value is not None:
-                return value
-    except Exception:
-        pass
-    for bucket in ("settings", "config", "metadata", "meta"):
-        try:
-            nested = getattr(cfg, bucket, None)
-            if isinstance(nested, Mapping) and nested.get(key) is not None:
-                return nested.get(key)
-        except Exception:
-            pass
-        try:
-            if hasattr(cfg, "get"):
-                nested = cfg.get(bucket)
-                if isinstance(nested, Mapping) and nested.get(key) is not None:
-                    return nested.get(key)
-        except Exception:
-            pass
-    return default
-
-
 def parse_bool(value: Any, default: bool = False) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return bool(default)
-    text = str(value).strip().lower()
-    if text in {"1", "true", "yes", "y", "on", "enabled", "all"}:
-        return True
-    if text in {"0", "false", "no", "n", "off", "disabled", "none"}:
-        return False
-    return bool(default)
+    return coerce_bool(value, default)
 
 
 def parse_ids(value: Any, *, limit: int = 100) -> list[str]:
-    if isinstance(value, (list, tuple, set)):
-        raw_items = list(value)
-    else:
-        raw_items = re.split(r"[\s,;]+", str(value or ""))
-
-    out: list[str] = []
-    for raw in raw_items:
-        text = str(raw or "").strip().strip("<@#!&>")
-        if text.isdigit() and text not in out:
-            out.append(text)
-        if len(out) >= max(1, int(limit)):
-            break
-    return out
-
-
-def _read_alias(cfg: Any, key: str, default: Any = None) -> Any:
-    value = _cfg_value(cfg, key, None)
-    if value is None:
-        value = _cfg_value(cfg, f"spam_{key}", None)
-    if value is None:
-        legacy = {
-            ALL_BOTS_KEY: "invite_target_all_bots",
-            BOT_IDS_KEY: "invite_target_bot_ids",
-            CHANNEL_IDS_KEY: "invite_target_channel_ids",
-            PROTECTED_RULE_KEY: "protected_poster_invite_rule_enabled",
-        }.get(key)
-        if legacy:
-            value = _cfg_value(cfg, legacy, None)
-    return default if value is None else value
+    return coerce_ids(value, limit=limit)
 
 
 def normalize_scope(cfg: Any) -> dict[str, Any]:
-    return {
-        ALL_BOTS_KEY: parse_bool(_read_alias(cfg, ALL_BOTS_KEY, False), False),
-        BOT_IDS_KEY: parse_ids(_read_alias(cfg, BOT_IDS_KEY, [])),
-        CHANNEL_IDS_KEY: parse_ids(_read_alias(cfg, CHANNEL_IDS_KEY, [])),
-        PROTECTED_RULE_KEY: parse_bool(_read_alias(cfg, PROTECTED_RULE_KEY, False), False),
-    }
+    return invite_scope_values(cfg)
 
 
 async def load_invite_scope_settings(guild_id: int, *, refresh: bool = False) -> dict[str, Any]:

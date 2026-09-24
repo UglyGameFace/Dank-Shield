@@ -2,113 +2,139 @@
 
 ## Active task / desired outcome
 
-**DS-INVITE-REG-001 — Restore live Invite Blocker toggle ownership**
+**P0-SERVER-STATS-001 — repair and expand Server Stats from `/dank home`**
 
-Restore the Protection Center contract so pressing **Invite Blocker** actually toggles live Discord invite blocking, while advanced Invite Shield targeting/cleanup remains available through a separate settings action.
+Make Server Stats reliable, first-class in the compact UI, substantially more
+customizable, and safe at public-bot scale without creating a second
+persistence/runtime owner.
 
 ## Status
 
-**IMPLEMENTED — focused validation and exact-head CI inspection pending**
+**IMPLEMENTED ON PR #289 — synchronized with current main; exact-head validation pending**
 
-## Root cause
+Branch: `fix/server-stats-home-customization`
 
-The Sep. 16 native Invite Shield UI migration captured the original `_toggle_invite_shield` function and then replaced `center._toggle_invite_shield` with `open_invite_shield`.
+Base after sync: `main@3c21431e7c4c8920b76ad671cf857b232f300c6d`
 
-The public Protection Center button still retained the label **Invite Blocker** and still called `_toggle_invite_shield(interaction)`. Because the global function had been rebound, pressing the button opened the editor instead of toggling `automod_block_invites`.
+## Previous task closed
 
-That created a control-plane regression: a server owner could press **Invite Blocker**, configure watched bots/channels, and reasonably believe protection was enabled while the authoritative live blocker flag remained OFF.
+PR #304 — Restore single-owner Basic Verify interaction runtime
 
-## Execution path
+- merged to `main` as `3c21431e7c4c8920b76ad671cf857b232f300c6d`;
+- exact PR head passed **1865 tests, 9 warnings** and all repository workflow/audit gates;
+- post-merge ownership check confirmed the persistent Basic Verify view is
+  authoritative and the duplicate compatibility dispatcher is absent.
 
-`ProtectionCenterView.block_invites_button`
-→ `_toggle_invite_shield`
-→ guild config + Spam Guard persistence
-→ invite policy cache invalidation
-→ `globals.py` `on_message` listener
-→ `invite_policy_engine.enforce_live_invite_message`
-→ `decide_invite_message`
-→ `delete_message_if_allowed`
+## Root causes / required behavior
 
-Advanced configuration now has its own path:
+The existing Server Stats runtime was real but product access and lifecycle
+ownership were incomplete:
 
-`ProtectionCenterView.invite_settings_button`
-→ `public_protection_invite_ui.open_invite_shield`
+- compact `/dank home` had no direct Server Stats destination;
+- Protection exposed only a one-click creation path rather than a management surface;
+- missing tracked categories were not self-healed reliably;
+- Spam Guard counter changes could persist without promptly refreshing visible channels;
+- names, visible counters, number formatting, and placement were hardcoded;
+- periodic all-guild config reads would not scale;
+- fully customized displays could not be safely rediscovered after restart;
+- name-only recovery could adopt unrelated categories;
+- failed hide/remove work could lose ownership IDs;
+- disabling category ownership requires canonical config-key removal rather than an empty-ID write.
+
+## Canonical ownership
+
+`stoney_verify/security_stats.py` remains the single runtime owner for preference
+normalization, category/channel ownership, counter computation, create/repair/
+refresh/disable behavior, coalesced event refresh, bounded restart discovery, and
+periodic refresh.
+
+`commands_ext/public_server_stats.py` is UI only and delegates mutations to that
+runtime owner.
+
+`guild_config` remains the existing per-guild persistence authority. No schema
+or migration is added.
+
+## Main-sync conflict review
+
+The original PR base was 142 commits behind current main.
+
+Nine of the ten original PR paths were unchanged on main. The only overlapping
+production file was `public_protection_center.py`, which has since gained
+settings-registry work, native Import Pack behavior, and AntiNuke trust-role
+controls.
+
+The synchronized branch preserves current main's Protection Center and reapplies
+only PR #289's Server Stats integration:
+
+- rename the existing Live Stats presentation to Server Stats;
+- route its existing custom ID into the dedicated Server Stats center;
+- remove the now-unused one-click `ensure_security_stats_display` import;
+- preserve all newer Protection Center behavior.
 
 ## Scope
 
 In scope:
 
-- preserve native `_toggle_invite_shield` ownership;
-- add a distinct **Invite Settings** action;
-- show authoritative live ON/OFF state in the Invite Shield editor;
-- expose one canonical/testable live enforcement boundary in `invite_policy_engine`;
-- route the guaranteed globals listener through that boundary;
-- add regressions for toggle ownership and real live human-invite deletion;
-- preserve same-server invite allowance.
+- first-class Server Stats entry from `/dank home`;
+- route Protection's existing stats control to the same center;
+- per-guild category name;
+- visible-counter selection;
+- custom labels/emoji;
+- compact/exact number formatting;
+- top/keep/bottom placement;
+- reset, repair/refresh, disable/remove;
+- missing-display self-heal;
+- coalesced protection-event refresh;
+- bounded active-display periodic work;
+- batched persisted-display discovery;
+- safe ownership recovery;
+- cleanup retry ownership retention;
+- single-panel modal behavior;
+- focused scaling and behavior coverage.
 
 Out of scope:
 
-- Quiet Server Notice PR #285;
-- startup Discord REST/rate-limit PR #286;
-- changing invite regex semantics;
-- changing Spam Guard burst policy;
-- changing allowed-user/role/channel exceptions;
-- changing same-server invite policy;
-- retiring other startup guards.
+- new database schema;
+- unrelated Protection/AntiNuke/Spam policy changes;
+- Quiet Notice;
+- Exit Card Unicode rendering;
+- changing the compact public slash-root budget.
 
-## Changes
+## Compatibility / cleanup
 
-- `public_protection_invite_ui.py`
-  - no longer rebinds `center._toggle_invite_shield`;
-  - still captures the original toggle for the editor's own ON/OFF action;
-  - displays live blocker state as ON/OFF/UNKNOWN.
-- `public_protection_center.py`
-  - **Invite Blocker** remains the actual toggle;
-  - new **Invite Settings** button opens the advanced editor.
-- `invite_policy_engine.py`
-  - adds `enforce_live_invite_message` as the canonical testable live boundary.
-- `globals.py`
-  - guaranteed `on_message` listener delegates to the canonical live boundary.
-- tests
-  - lock separate toggle/editor ownership;
-  - prove a human-posted external `discord.gg` invite is deleted when Invite Shield is enabled;
-  - prove a same-server invite remains allowed;
-  - require the globals listener to use the canonical enforcement boundary.
+- The compact public command roots remain unchanged.
+- Existing Server Stats config remains authoritative and backward compatible.
+- Protection keeps its historical `dank_protection:live_stats` component custom ID.
+- No duplicate stats persistence/runtime service is introduced.
+- Current main's newer Protection Center features are preserved.
 
-## Compatibility / cleanup review
+## Validation required
 
-- no startup guard added;
-- no Discord.py monkey patch added;
-- no duplicate delete authority added;
-- central `invite_policy_engine` remains the only delete-decision authority;
-- live listener remains installed from `globals.py`;
-- same-server invites remain allowed by default;
-- normal non-invite links remain outside Invite Shield deletion policy;
-- PR #285 and PR #286 are untouched.
-
-## Validation
-
-Pending on exact final head:
-
-- Python syntax/compile;
-- `tests/test_protection_invite_native_ui.py`;
-- `tests/test_invite_live_enforcement.py`;
-- existing invite policy/message-surface regressions;
-- invite safety audit;
-- relevant full-suite/CI lanes if runners execute;
-- final diff and review-thread inspection.
+- exact-head branch/base comparison;
+- diff/conflict/whitespace inspection;
+- Python 3.11 compile;
+- Server Stats focused behavior tests;
+- command-surface regressions;
+- startup recovery/scaling regressions;
+- Protection Center regressions;
+- full `pytest tests/`;
+- standalone `tools/test_*.py` checks;
+- all repository audits;
+- GitHub workflow gates;
+- review-thread inspection;
+- final mergeability check.
 
 ## Blockers / risks
 
-GitHub Actions has recently produced runnerless failures on neighboring PRs. A red workflow with no executed steps must not be represented as a code/test failure or as successful validation.
-
-Live production verification still requires deployment after merge; repository tests can prove the intended runtime path but cannot prove Discord permissions/config on a deployed guild.
+No known code blocker after synchronization. Validation may expose stale tests or
+main-era compatibility changes and those must be resolved before merge readiness.
 
 ## Backlog
 
-- PR #285 Quiet Server Notice auto-clear remains separate.
-- PR #286 startup Discord REST burst shutdown remains separate.
+- PR #302: cross-guild Exit Card Unicode rendering remains the next task after PR #289.
 
 ## Next step
 
-Inspect the exact branch diff, open a focused draft PR, run/inspect all available exact-head validation, resolve any task-owned failures, then mark merge-ready only with executed evidence.
+Run exact-head validation on the synchronized branch, repair only Server
+Stats-related failures, perform final cleanup/review inspection, then mark PR
+#289 ready and merge with an expected-head guard.

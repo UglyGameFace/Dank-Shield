@@ -16,6 +16,11 @@ import discord
 
 from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
 from ..interaction_guard import log_interaction_failure, run_guarded_interaction, safe_send_interaction
+from ..settings_registry import (
+    SPAM_GUARD_PRESETS,
+    invite_shield_enabled as _registry_invite_shield_enabled,
+    link_shield_enabled as _registry_link_shield_enabled,
+)
 from ..security_stats import (
     SECURITY_STATS_ENABLED_KEY,
     refresh_security_stats_display,
@@ -32,6 +37,8 @@ _ATTACHED = False
 
 ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
 SPACE_RE = re.compile(r"\s+")
+MAX_FILTER_PACK_IMPORT_TERMS = 700
+MAX_FILTER_PACK_CHARS = 22000
 
 LEET_MAP = str.maketrans(
     {
@@ -96,39 +103,8 @@ AUTOMOD_PRESETS: dict[str, dict[str, Any]] = {
     },
 }
 
-SPAM_PRESETS: dict[str, dict[str, Any]] = {
-    "off": {"enabled": False},
-    "safe": {
-        "enabled": True,
-        "mode": "timeout",
-        "apply_to_verified_users": True,
-        "block_external_invites_only": True,
-        "allow_server_invites": True,
-        "window_seconds": 12,
-        "message_threshold": 5,
-        "duplicate_threshold": 3,
-        "invite_threshold": 2,
-        "multi_invite_immediate": 2,
-        "delete_history": 8,
-        "timeout_minutes": 30,
-        "cooldown_seconds": 20,
-    },
-    "strict": {
-        "enabled": True,
-        "mode": "timeout",
-        "apply_to_verified_users": True,
-        "block_external_invites_only": True,
-        "allow_server_invites": True,
-        "window_seconds": 10,
-        "message_threshold": 4,
-        "duplicate_threshold": 2,
-        "invite_threshold": 1,
-        "multi_invite_immediate": 2,
-        "delete_history": 12,
-        "timeout_minutes": 60,
-        "cooldown_seconds": 30,
-    },
-}
+SPAM_PRESETS: dict[str, dict[str, Any]] = SPAM_GUARD_PRESETS
+
 
 SPAM_MODE_LABELS = {
     "log_only": "Alert Only",
@@ -161,6 +137,32 @@ def _csv_items(value: Any) -> list[str]:
         if item and item not in out:
             out.append(item)
     return out
+
+
+def _merge_imported_filter_terms(existing_value: Any, raw_terms: Any) -> tuple[list[str], int, int]:
+    """Merge vetted line-delimited terms into the canonical Automod filter list."""
+
+    existing = _csv_items(existing_value)
+    seen = set(existing)
+    imported: list[str] = []
+    skipped = 0
+
+    for raw in str(raw_terms or "").splitlines():
+        item = _clean_filter_item(raw)
+        if not item or len(item) < 2 or len(item) > 80 or item in seen:
+            skipped += 1
+            continue
+
+        trial = existing + imported + [item]
+        if len(",".join(trial)) > MAX_FILTER_PACK_CHARS:
+            break
+
+        imported.append(item)
+        seen.add(item)
+        if len(imported) >= MAX_FILTER_PACK_IMPORT_TERMS:
+            break
+
+    return existing + imported, len(imported), skipped
 
 
 def _parse_csvish_codes(value: Any) -> list[str]:
@@ -330,19 +332,11 @@ def _invalidate_invite_policy_cache(guild_id: int) -> None:
 
 
 def _invite_shield_enabled_for_ui(cfg: Any, spam: dict[str, Any] | None = None) -> bool:
-    spam = dict(spam or {})
-    return bool(
-        _cfg_bool(cfg, "automod_block_invites", False)
-        or spam.get("invite_shield_enabled")
-        or spam.get("invite_hard_block_enabled")
-        or spam.get("automod_block_invites")
-        or spam.get("block_invites")
-    )
+    return _registry_invite_shield_enabled(cfg, spam)
 
 
 def _link_shield_enabled_for_ui(cfg: Any, spam: dict[str, Any] | None = None) -> bool:
-    spam = dict(spam or {})
-    return bool(_cfg_bool(cfg, "automod_block_links", False) or spam.get("automod_block_links"))
+    return _registry_link_shield_enabled(cfg, spam)
 
 
 async def _save_automod(guild_id: int, updates: dict[str, Any]) -> Any:
@@ -490,7 +484,7 @@ def _protection_embed(guild: discord.Guild, cfg: Any, spam: dict[str, Any], spam
             "**Invite Blocker** = live ON/OFF for Discord invite links.\n"
             "**Block All Links** = stop every URL.\n"
             "**Server Stats** = open the dedicated live counter studio for setup, repair, visibility, labels, layout, and formatting.\n"
-            "**Add Filter/Test** = banned words and bypass tests."
+            "**Add Filter / Import Pack / Test** = add one filter, paste a vetted line-delimited pack, or test bypass behavior."
         ),
         inline=False,
     )
@@ -945,21 +939,12 @@ async def _save_antinuke_trust_lists(
 
 class AntiNukeTrustedIdsModal(discord.ui.Modal):
     def __init__(self, settings: dict[str, Any]) -> None:
-        super().__init__(title="AntiNuke Trust Lists", timeout=300)
+        super().__init__(title="AntiNuke User + Bot Trust", timeout=300)
 
         self.trusted_users = discord.ui.TextInput(
             label="Trusted inviter user IDs",
             placeholder="123456789012345678, 987654321098765432",
             default=", ".join(str(x) for x in settings["antinuke_trusted_user_ids"]),
-            required=False,
-            style=discord.TextStyle.paragraph,
-            max_length=1500,
-        )
-
-        self.trusted_roles = discord.ui.TextInput(
-            label="Trusted inviter role IDs",
-            placeholder="123456789012345678, 987654321098765432",
-            default=", ".join(str(x) for x in settings["antinuke_trusted_role_ids"]),
             required=False,
             style=discord.TextStyle.paragraph,
             max_length=1500,
@@ -975,7 +960,6 @@ class AntiNukeTrustedIdsModal(discord.ui.Modal):
         )
 
         self.add_item(self.trusted_users)
-        self.add_item(self.trusted_roles)
         self.add_item(self.trusted_bots)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -988,10 +972,11 @@ class AntiNukeTrustedIdsModal(discord.ui.Modal):
                 await _send_ephemeral(interaction, "❌ This must be used inside a server.")
                 return
 
+            current = await get_antinuke_settings(int(guild.id))
             users, roles, bots = await _save_antinuke_trust_lists(
                 int(guild.id),
                 trusted_users=self.trusted_users.value,
-                trusted_roles=self.trusted_roles.value,
+                trusted_roles=current["antinuke_trusted_role_ids"],
                 trusted_bots=self.trusted_bots.value,
             )
 
@@ -1007,6 +992,205 @@ class AntiNukeTrustedIdsModal(discord.ui.Modal):
             "protection.antinuke.trusted_ids",
             action,
             defer=True,
+        )
+
+
+async def _update_antinuke_trusted_roles(
+    guild_id: int,
+    selected_role_ids: Any,
+    *,
+    remove: bool = False,
+    blocked_role_ids: set[int] | None = None,
+) -> list[int]:
+    settings = await get_antinuke_settings(int(guild_id))
+    current = set(
+        _parse_antinuke_id_list(settings.get("antinuke_trusted_role_ids"))
+    )
+    selected = set(_parse_antinuke_id_list(selected_role_ids))
+    blocked = {
+        int(role_id)
+        for role_id in (blocked_role_ids or set())
+        if int(role_id) > 0
+    }
+
+    current.difference_update(blocked)
+    if remove:
+        current.difference_update(selected)
+    else:
+        current.update(selected - blocked)
+
+    role_ids = sorted(current)
+    saved = await save_antinuke_settings(
+        int(guild_id),
+        {"antinuke_trusted_role_ids": role_ids},
+    )
+    if hasattr(saved, "get"):
+        return _parse_antinuke_id_list(
+            saved.get("antinuke_trusted_role_ids", role_ids)
+        )
+    return role_ids
+
+
+def _antinuke_trust_manager_text(
+    guild: discord.Guild,
+    settings: dict[str, Any],
+    *,
+    notice: str = "",
+) -> str:
+    role_ids = _parse_antinuke_id_list(
+        settings.get("antinuke_trusted_role_ids")
+    )
+    labels: list[str] = []
+    for role_id in role_ids[:15]:
+        role = guild.get_role(int(role_id))
+        if role is None:
+            labels.append(f"`missing role {role_id}`")
+            continue
+        name = str(
+            getattr(role, "name", "role") or "role"
+        ).replace("`", "'")
+        labels.append(f"`@{name}`")
+
+    role_text = ", ".join(labels) if labels else "None"
+    extra = f"\n\n{notice}" if notice else ""
+    return (
+        "**AntiNuke Trust Manager**\n"
+        f"**Trusted roles ({len(role_ids)}):** {role_text}\n"
+        f"**Trusted users:** "
+        f"{len(settings['antinuke_trusted_user_ids'])} • "
+        f"**Pre-approved bots:** "
+        f"{len(settings['antinuke_trusted_bot_ids'])}\n\n"
+        "Use the role selectors below to add or remove roles. "
+        "Use **Edit User/Bot IDs** only for individual users or "
+        "pre-approved bots. `@everyone` is never accepted as a trusted role."
+        + extra
+    )
+
+
+async def _edit_antinuke_trust_manager(
+    interaction: discord.Interaction,
+    *,
+    selected_role_ids: Any,
+    remove: bool,
+) -> None:
+    if not await _require_antinuke_owner(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        await _send_ephemeral(
+            interaction,
+            "❌ This must be used inside a server.",
+        )
+        return
+
+    default_role_id = int(
+        getattr(getattr(guild, "default_role", None), "id", 0) or 0
+    )
+    role_ids = await _update_antinuke_trusted_roles(
+        int(guild.id),
+        selected_role_ids,
+        remove=remove,
+        blocked_role_ids={default_role_id} if default_role_id > 0 else set(),
+    )
+    settings = await get_antinuke_settings(int(guild.id))
+    notice = (
+        f"✅ {'Removed from' if remove else 'Added to'} trusted roles. "
+        f"Current trusted-role count: **{len(role_ids)}**."
+    )
+    await interaction.response.edit_message(
+        content=_antinuke_trust_manager_text(
+            guild,
+            settings,
+            notice=notice,
+        ),
+        view=AntiNukeTrustManagerView(),
+    )
+
+
+class AntiNukeTrustedRoleAddSelect(discord.ui.RoleSelect):
+    def __init__(self) -> None:
+        super().__init__(
+            placeholder="Add trusted moderator roles…",
+            min_values=1,
+            max_values=10,
+            custom_id="dank_protection:antinuke_trusted_roles_add",
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        async def action() -> None:
+            await _edit_antinuke_trust_manager(
+                interaction,
+                selected_role_ids=[
+                    int(role.id) for role in self.values
+                ],
+                remove=False,
+            )
+
+        await _guard_protection_action(
+            interaction,
+            "protection.antinuke.trusted_roles.add",
+            action,
+            defer=False,
+        )
+
+
+class AntiNukeTrustedRoleRemoveSelect(discord.ui.RoleSelect):
+    def __init__(self) -> None:
+        super().__init__(
+            placeholder="Remove trusted roles…",
+            min_values=1,
+            max_values=10,
+            custom_id="dank_protection:antinuke_trusted_roles_remove",
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        async def action() -> None:
+            await _edit_antinuke_trust_manager(
+                interaction,
+                selected_role_ids=[
+                    int(role.id) for role in self.values
+                ],
+                remove=True,
+            )
+
+        await _guard_protection_action(
+            interaction,
+            "protection.antinuke.trusted_roles.remove",
+            action,
+            defer=False,
+        )
+
+
+class AntiNukeTrustManagerView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=300)
+        self.add_item(AntiNukeTrustedRoleAddSelect())
+        self.add_item(AntiNukeTrustedRoleRemoveSelect())
+
+    @discord.ui.button(
+        label="Edit User/Bot IDs",
+        emoji="✏️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank_protection:antinuke_trusted_ids_edit",
+        row=2,
+    )
+    async def edit_ids_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+
+        async def action() -> None:
+            await _open_antinuke_trusted_modal(interaction)
+
+        await _guard_protection_action(
+            interaction,
+            "protection.antinuke.trusted_ids.open",
+            action,
+            defer=False,
         )
 
 
@@ -1141,6 +1325,28 @@ async def _open_antinuke_trusted_modal(interaction: discord.Interaction) -> None
 
     settings = await get_antinuke_settings(int(guild.id))
     await interaction.response.send_modal(AntiNukeTrustedIdsModal(settings))
+
+
+async def _open_antinuke_trust_manager(
+    interaction: discord.Interaction,
+) -> None:
+    if not await _require_antinuke_owner(interaction):
+        return
+
+    guild = interaction.guild
+    if guild is None:
+        await _send_ephemeral(
+            interaction,
+            "❌ This must be used inside a server.",
+        )
+        return
+
+    settings = await get_antinuke_settings(int(guild.id))
+    await interaction.response.send_message(
+        _antinuke_trust_manager_text(guild, settings),
+        view=AntiNukeTrustManagerView(),
+        ephemeral=True,
+    )
 
 
 async def _open_antinuke_thresholds_modal(interaction: discord.Interaction) -> None:
@@ -1383,6 +1589,59 @@ class TestFilterModal(discord.ui.Modal, title="Test Protection Filter"):
         await _guard_protection_action(interaction, "protection.test_filter_modal", action, defer=True)
 
 
+class StarterPackImportModal(discord.ui.Modal, title="Import Starter Filter Pack"):
+    terms = discord.ui.TextInput(
+        label="Paste vetted line-delimited filter terms",
+        style=discord.TextStyle.paragraph,
+        max_length=3500,
+        required=True,
+        placeholder="Paste one term or phrase per line. Review source quality first.",
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        async def action() -> None:
+            if not await _require_setup_permission(interaction):
+                return
+            guild = interaction.guild
+            if guild is None:
+                await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+                return
+
+            cfg = await get_guild_config(int(guild.id), refresh=True)
+            merged, imported_count, skipped = _merge_imported_filter_terms(
+                _cfg_value(cfg, "automod_bad_words", ""),
+                self.terms.value,
+            )
+            if imported_count <= 0:
+                await _send_ephemeral(
+                    interaction,
+                    "⚪ No new valid terms were imported. They may already exist, be invalid, or exceed the filter-pack limits.",
+                )
+                return
+
+            await _save_automod(
+                int(guild.id),
+                {
+                    "automod_enabled": True,
+                    "automod_bad_words": ",".join(merged),
+                    "automod_filter_pack_imported_count": imported_count,
+                    "automod_filter_pack_skipped_count": skipped,
+                    "automod_filter_pack_updated_by_id": str(int(interaction.user.id)),
+                    "automod_updated_by_id": str(int(interaction.user.id)),
+                },
+            )
+            await _send_ephemeral(
+                interaction,
+                (
+                    f"✅ Imported **{imported_count}** starter-pack filters. "
+                    f"Skipped `{skipped}` duplicates/invalid entries. "
+                    "Use **Test** in Protection Center to verify bypass behavior."
+                ),
+            )
+
+        await _guard_protection_action(interaction, "protection.import_filter_pack_modal", action, defer=True)
+
+
 class ProtectionCenterView(discord.ui.View):
     def __init__(self, *, author_id: int, cfg: Any | None = None, spam: dict[str, Any] | None = None) -> None:
         super().__init__(timeout=900)
@@ -1478,6 +1737,17 @@ class ProtectionCenterView(discord.ui.View):
 
         await _guard_protection_action(interaction, "protection.open_add_filter_modal", action, defer=False)
 
+    @discord.ui.button(label="Import Pack", emoji="🌐", style=discord.ButtonStyle.secondary, custom_id="dank_protection:import_pack", row=2)
+    async def import_pack_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+
+        async def action() -> None:
+            if not await _require_setup_permission(interaction):
+                return
+            await interaction.response.send_modal(StarterPackImportModal())
+
+        await _guard_protection_action(interaction, "protection.open_import_filter_pack_modal", action, defer=False)
+
     @discord.ui.button(label="Test", emoji="🧪", style=discord.ButtonStyle.secondary, custom_id="dank_protection:test", row=2)
     async def test_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -1546,7 +1816,7 @@ class ProtectionCenterView(discord.ui.View):
         _ = button
 
         async def action() -> None:
-            await _open_antinuke_trusted_modal(interaction)
+            await _open_antinuke_trust_manager(interaction)
 
         await _guard_protection_action(
             interaction,

@@ -14,6 +14,11 @@ RETIRED_GUARDS = (
     "invite_hard_block_all_bots_controls_guard.py",
     "protection_invite_cleanup_picker_guard.py",
     "protection_invite_toggle_cleanup_guard.py",
+    "invite_live_enforcer_guard.py",
+    "discord_invite_blocker_runtime_guard.py",
+    "spam_guard_invite_hard_block.py",
+    "spam_guard_invite_override_options.py",
+    "protection_invite_target_precedence_guard.py",
 )
 
 
@@ -64,3 +69,16 @@ def test_native_invite_ui_does_not_restore_raw_discord_resource_pickers() -> Non
     assert "discord.ui.UserSelect" not in native
     assert "discord.ui.RoleSelect" not in native
     assert "await message.delete(" not in native
+
+
+def test_native_live_and_recovery_invite_owners_are_explicit() -> None:
+    globals_source = _text(ROOT / "stoney_verify" / "globals.py")
+    policy_source = _text(ROOT / "stoney_verify" / "invite_policy_engine.py")
+    recovery_source = _text(ROOT / "stoney_verify" / "invite_reconciliation_runtime.py")
+    main_source = _text(ROOT / "main.py")
+
+    assert "async def _dank_globals_live_invite_enforcer" in globals_source
+    assert "enforce_live_invite_message" in globals_source
+    assert "async def enforce_live_invite_message(" in policy_source
+    assert "policy.scan_channel_invites(" in recovery_source
+    assert "_install_invite_reconciliation_runtime()" in main_source

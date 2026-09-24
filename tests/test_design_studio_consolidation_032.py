@@ -54,6 +54,7 @@ def test_server_style_controls_are_only_inside_design_server() -> None:
     assert "DesignServerFontSelect" in V2
     assert "DesignServerStrengthSelect" in V2
     assert "DesignServerCategoryFrameSelect" in V2
+    assert "DesignServerIconModeSelect" in V2
     home_start = V2.index("class DesignHomeView")
     home_end = V2.index("def _snapshot_matches", home_start)
     home = V2[home_start:home_end]
@@ -61,6 +62,7 @@ def test_server_style_controls_are_only_inside_design_server() -> None:
     assert "DesignServerFontSelect" not in home
     assert "DesignServerStrengthSelect" not in home
     assert "DesignServerCategoryFrameSelect" not in home
+    assert "DesignServerIconModeSelect" not in home
 
 
 def test_server_font_picker_fits_discord_and_exposes_full_catalog() -> None:
@@ -99,6 +101,36 @@ def test_server_separator_picker_can_follow_theme_or_hold_custom_choice() -> Non
 
 
 
+def test_server_icon_behavior_is_explicit_and_examples_follow_it() -> None:
+    options = {"theme_id": "gaming_arcade", "strength": 4, "icon_mode": "keep_existing"}
+    frame_view = studio_v2.DesignServerCategoryFrameView(options, page=0)
+    picker = next(
+        item for item in frame_view.children
+        if isinstance(item, studio_v2.DesignServerIconModeSelect)
+    )
+    defaults = [option for option in picker.options if option.default]
+    assert len(defaults) == 1
+    assert defaults[0].value == "keep_existing"
+    assert {str(option.value) for option in picker.options} == {
+        "replace_missing",
+        "keep_existing",
+        "clear",
+    }
+
+    fill_category, fill_channel = studio_v2._design_server_examples(
+        {"theme_id": "gaming_arcade", "strength": 4, "icon_mode": "replace_missing"}
+    )
+    keep_category, keep_channel = studio_v2._design_server_examples(options)
+    clear_category, clear_channel = studio_v2._design_server_examples(
+        {"theme_id": "gaming_arcade", "strength": 4, "icon_mode": "clear"}
+    )
+
+    assert fill_category != keep_category
+    assert fill_channel != keep_channel
+    assert keep_category == clear_category
+    assert keep_channel == clear_channel
+
+
 def test_server_category_frame_browser_exposes_full_catalog_without_row_overflow() -> None:
     grouped_ids = [
         frame_id
@@ -115,7 +147,7 @@ def test_server_category_frame_browser_exposes_full_catalog_without_row_overflow
         item for item in view.children
         if getattr(item, "custom_id", "") == "dank_design_v2:category_frame"
     )
-    assert str(frame_button.label) == "Frame"
+    assert str(frame_button.label) == "Frame / Icons"
 
     buttons = [item for item in view.children if getattr(item, "label", None) is not None]
     assert len(buttons) == 5

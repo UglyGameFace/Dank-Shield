@@ -26,10 +26,11 @@ def test_status_report_distinguishes_internal_and_external_heartbeats():
 
 def test_spamguard_missing_rows_default_on_and_bootstrap():
     defaults = SPAM[SPAM.index("def _default_settings("):SPAM.index("def _normalize_settings(")]
+    normalize = SPAM[SPAM.index("def _normalize_settings("):SPAM.index("def _settings_payload_for_db(")]
     load = SPAM[SPAM.index("async def get_spam_settings("):SPAM.index("async def save_spam_settings(")]
     assert "SPAM_GUARD_DEFAULT_ENABLED = True" in SPAM_DEFAULTS
-    assert "from .spam_guard_defaults import SPAM_GUARD_DEFAULT_ENABLED" in SPAM
-    assert '"enabled": SPAM_GUARD_DEFAULT_ENABLED' in defaults
+    assert "_registry_spam_guard_defaults" in defaults
+    assert "_registry_normalize_spam_guard_settings" in normalize
     assert "_upsert_settings_sync" in load
     assert 'source = "db" if row_found else ("db-bootstrap" if persisted else "defaults")' in load
 
