@@ -19,7 +19,7 @@ but ticket creation has its own runtime and must be repaired independently.
 
 ## Status
 
-**ROOT-CAUSE GAPS CONFIRMED — restart reconciliation implemented; exact-head validation pending**
+**IMPLEMENTED — PR #310 compatibility folded into #311; exact-head validation rerun pending**
 
 Branch: `fix/ticket-panel-restart-reconciliation-20260924`
 
@@ -86,6 +86,21 @@ Normal production bootstrap installs `ticket_panel_runtime` first, so this was
 not sufficient by itself to explain every live failure. It was still an invalid
 secondary ownership path and could lie in alternate/test registration orders.
 
+### 4. Historical public panel IDs were outside the current alias set
+
+A separate open PR (#310) confirmed that Dank Shield has shipped three durable
+public Create Ticket IDs:
+
+- current: `sv:ticket:panel:create:clean:v1`;
+- historical TicketTool-parity panel: `sv:ticket:panel:create:v6`;
+- older legacy panel: `ticket_create`.
+
+PR #311 originally reconciled exact message/application identity but recognized
+only the current clean ID in its generic delayed fallback. The unique
+compatibility work from #310 is now folded into this branch so old panels and
+the newer reconciliation logic are one coherent runtime instead of two
+diverging PRs.
+
 ## Repair
 
 ### Canonical runtime ownership only
@@ -100,6 +115,11 @@ It no longer:
 - sets the fallback-registered flag merely because the persistent view exists.
 
 The duplicate clean-module fallback implementation was removed.
+
+Historical Create Ticket IDs from PR #310 are now aliases into the same
+canonical handler. No historical ticket-creation implementation is revived.
+Runtime trace telemetry includes the observed component custom ID so future live
+failures identify the exact panel generation immediately.
 
 ### Persist exact panel + application identity
 
@@ -171,6 +191,8 @@ Focused coverage now verifies:
 - legacy current-bot panels persist application identity and exact binding;
 - foreign-application saved panels are replaced and rebound;
 - category-select fallback behavior remains intact;
+- current and historical public Create Ticket custom IDs all reach the same
+  canonical handler through the delayed restart fallback;
 - clean registrar delegates to the canonical runtime instead of maintaining a
   second fallback owner;
 - panel-lifetime/static audits track the canonical view after fallback cleanup;
@@ -200,6 +222,13 @@ Focused coverage now verifies:
 - all GitHub workflow gates;
 - final review-thread/mergeability inspection.
 
+## Superseded PR cleanup
+
+PR #310 is superseded by this branch. Its unique historical-ID compatibility and
+traceability changes have been incorporated into PR #311 while #311 retains the
+more complete exact-message/application-identity reconciliation and single
+runtime owner.
+
 ## Backlog
 
 After ticket interaction reliability closes:
@@ -210,6 +239,6 @@ After ticket interaction reliability closes:
 
 ## Next step
 
-Open the isolated draft PR, run exact-head CI, fix only regressions caused by
-this ticket runtime repair, and make it merge-ready only after the complete
-repository gates pass.
+Run exact-head CI after folding PR #310 compatibility into #311. If all
+workflows remain green, perform final currentness/diff/review inspection, close
+the superseded PR #310, and make PR #311 ready for merge.
