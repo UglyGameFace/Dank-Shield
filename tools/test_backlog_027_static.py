@@ -205,7 +205,8 @@ def main() -> int:
         "_MENU_SESSIONS",
         "_CONFIRM_LOCKS",
         "Newest menu wins.",
-        "if not _PANEL_VIEW_REGISTERED and not _PANEL_FALLBACK_LISTENER_REGISTERED",
+        "if not _PANEL_FALLBACK_LISTENER_REGISTERED",
+        "LEGACY_PANEL_BUTTON_CUSTOM_IDS",
         "super().__init__(timeout=None)",
         "Confirm Ticket Category",
     )
