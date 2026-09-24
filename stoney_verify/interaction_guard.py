@@ -32,7 +32,7 @@ _RECENT_FAILURES: list["InteractionFailureRecord"] = []
 _ACTION_LOCKS: dict[str, asyncio.Lock] = {}
 _COMPONENT_OBSERVER_INSTALLED = False
 _COMPONENT_OBSERVER_READY_LOGGED = False
-_COMPONENT_OBSERVER_GRACE_SECONDS = 2.0
+_COMPONENT_OBSERVER_GRACE_SECONDS = 2.5
 _COMPONENT_OBSERVER_PROBE_WINDOW_SECONDS = 60.0
 _COMPONENT_OBSERVER_PROBE_LIMIT = 60
 _COMPONENT_OBSERVER_PROBE_TIMES: list[float] = []
@@ -513,6 +513,9 @@ def install_component_interaction_observer(bot: Any) -> bool:
         if _COMPONENT_OBSERVER_READY_LOGGED:
             return
         _COMPONENT_OBSERVER_READY_LOGGED = True
+        # Let the already-registered persistent-view on_ready listeners get one
+        # event-loop turn before taking the startup inventory snapshot.
+        await asyncio.sleep(0)
         count, names = _persistent_view_snapshot(bot)
         bot_user_id = _safe_int(getattr(getattr(bot, "user", None), "id", 0), 0)
         app_id = _safe_int(getattr(bot, "application_id", 0), 0)
