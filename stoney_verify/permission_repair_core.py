@@ -260,6 +260,52 @@ def _target_supported(target: Any) -> bool:
     return isinstance(target, supported)
 
 
+def permission_overwrite_edit_blocker(
+    guild: discord.Guild,
+    target: discord.abc.GuildChannel,
+) -> str:
+    """Explain why Dank Shield cannot edit channel permission overwrites.
+
+    discord.py GuildChannel.set_permissions requires Manage Roles
+    (shown as Manage Permissions in Discord channel settings), not Manage
+    Channels. Keep this capability test in one place so Setup, Diagnostics,
+    contextual repair, and the selected-target repair agree on prerequisites.
+    """
+    me = _bot_member(guild)
+    if me is None:
+        return "Dank Shield could not resolve its member record in this server."
+
+    guild_permissions = getattr(me, "guild_permissions", None)
+    if bool(getattr(guild_permissions, "administrator", False)):
+        return ""
+
+    if not bool(getattr(guild_permissions, "manage_roles", False)):
+        return (
+            "Dank Shield's server role is missing **Manage Roles**. Discord requires "
+            "Manage Roles (shown as **Manage Permissions** in channel settings) to "
+            "edit channel/category permission overwrites. Reauthorize Dank Shield or "
+            "grant Manage Roles on its server role, then retry."
+        )
+
+    try:
+        effective = target.permissions_for(me)
+    except Exception:
+        return "Dank Shield could not resolve its effective permissions for this target."
+
+    if bool(getattr(effective, "administrator", False)) or bool(
+        getattr(effective, "manage_roles", False)
+    ):
+        return ""
+
+    return (
+        "Dank Shield has Manage Roles server-wide, but **Manage Permissions is denied "
+        "in this channel/category**. That creates a Discord self-lockout: the bot "
+        "cannot edit the overwrite that is blocking its own repair. In Discord, open "
+        "this category/channel → Permissions and allow Manage Permissions for Dank "
+        "Shield (or remove the deny), then rerun Fix Access."
+    )
+
+
 @dataclass
 class TargetPermissionAudit:
     guild_id: int
@@ -362,11 +408,10 @@ def audit_target(
         else:
             report.repairable_missing.append(name)
 
-    if report.missing and not bool(getattr(effective, "manage_roles", False)):
-        report.blockers.append(
-            "Dank Shield does not have Manage Roles / Manage Permissions in this target, so Discord will not let the bot edit its own permission overwrite here. "
-            "Fix the bot role/channel deny or reauthorize Dank Shield first."
-        )
+    if report.missing:
+        overwrite_blocker = permission_overwrite_edit_blocker(guild, target)
+        if overwrite_blocker:
+            report.blockers.append(overwrite_blocker)
 
     try:
         if getattr(me.top_role, "managed", False):
@@ -596,8 +641,13 @@ async def apply_target_repair(
                 f"{_target_label(current_target)} — {', '.join(changed)}"
             )
         except discord.Forbidden:
+            blocker = permission_overwrite_edit_blocker(guild, current_target)
             result.failed_targets.append(
-                f"{_target_label(current_target)} — Discord denied permission-overwrite editing (Manage Roles / Manage Permissions required)."
+                f"{_target_label(current_target)} — "
+                + (
+                    blocker
+                    or "Discord denied permission-overwrite editing even though the cached Manage Roles check passed. Refresh permissions and retry."
+                )
             )
             result.ok = False
         except Exception as exc:
@@ -807,13 +857,13 @@ async def _edit_original_or_followup(
 
 
 def _actor_can_manage(interaction: discord.Interaction) -> bool:
+    """Delegate every Fix Access doorway to the canonical public authority owner."""
     try:
-        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-            return False
-        if int(interaction.user.id) == int(interaction.guild.owner_id):
-            return True
-        perms = interaction.user.guild_permissions
-        return bool(perms.administrator or perms.manage_guild or perms.manage_channels)
+        from .commands_ext.public_owner_authority import (
+            interaction_has_channel_management_authority,
+        )
+
+        return interaction_has_channel_management_authority(interaction)
     except Exception:
         return False
 
@@ -1050,7 +1100,7 @@ class ExplicitDenyConfirmView(discord.ui.View):
             )
         if not _actor_can_manage(interaction):
             return await interaction.response.send_message(
-                "❌ Manage Server or Administrator is required.",
+                "❌ Server owner or Manage Server, Manage Channels, or Administrator authority is required.",
                 ephemeral=True,
             )
         await _safe_defer_update(interaction)
@@ -1151,8 +1201,33 @@ class TargetPermissionRepairView(discord.ui.View):
             if state.include_children and is_category
             else discord.ButtonStyle.secondary
         )
-        self.fix_missing.disabled = state.target is None
-        self.resolve_denies.disabled = state.target is None
+        audits = (
+            audit_targets(
+                state.guild,
+                state.target,
+                feature=state.feature,
+                mode=state.mode,
+                include_children=state.include_children,
+            )
+            if state.target is not None
+            else []
+        )
+        repairable = any(audit.can_apply for audit in audits)
+        clearable_denies = any(
+            bool(audit.explicit_denies) and not audit.blockers
+            for audit in audits
+        )
+
+        self.fix_missing.disabled = state.target is None or not repairable
+        self.resolve_denies.disabled = state.target is None or not clearable_denies
+
+        if state.target is not None and audits and not repairable:
+            if any(audit.blockers for audit in audits):
+                self.fix_missing.label = "Manual Discord Fix Required"
+                self.fix_missing.style = discord.ButtonStyle.secondary
+            elif all(audit.healthy for audit in audits):
+                self.fix_missing.label = "Access Already Healthy"
+                self.fix_missing.style = discord.ButtonStyle.secondary
 
         url = reauthorize_url(state.guild)
         if url:
@@ -1202,7 +1277,7 @@ class TargetPermissionRepairView(discord.ui.View):
         _ = button
         if not _actor_can_manage(interaction) or interaction.user.id != self.state.actor_id:
             return await interaction.response.send_message(
-                "❌ Manage Server, Manage Channels, or Administrator is required.",
+                "❌ Server owner or Manage Server, Manage Channels, or Administrator authority is required.",
                 ephemeral=True,
             )
         if self.state.target is None:
@@ -1233,7 +1308,7 @@ class TargetPermissionRepairView(discord.ui.View):
         _ = button
         if not _actor_can_manage(interaction) or interaction.user.id != self.state.actor_id:
             return await interaction.response.send_message(
-                "❌ Manage Server, Manage Channels, or Administrator is required.",
+                "❌ Server owner or Manage Server, Manage Channels, or Administrator authority is required.",
                 ephemeral=True,
             )
         if self.state.target is None:
@@ -1297,7 +1372,7 @@ async def open_target_permission_repair(interaction: discord.Interaction) -> Non
         )
     if not _actor_can_manage(interaction):
         return await interaction.response.send_message(
-            "❌ Manage Server, Manage Channels, or Administrator is required.",
+            "❌ Server owner or Manage Server, Manage Channels, or Administrator authority is required.",
             ephemeral=True,
         )
 
