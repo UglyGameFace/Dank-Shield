@@ -143,6 +143,67 @@ def test_saved_current_application_panel_binds_exact_message_without_rest(
     asyncio.run(scenario())
 
 
+def test_legacy_saved_current_bot_panel_persists_application_identity(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        writes: list[tuple[int, int, int]] = []
+
+        class FakeTextChannel:
+            id = 444
+
+            async def fetch_message(self, message_id: int):
+                assert message_id == 555
+                return SimpleNamespace(
+                    id=555,
+                    author=SimpleNamespace(id=222),
+                    components=[
+                        SimpleNamespace(
+                            custom_id=panel.PANEL_BUTTON_CUSTOM_ID,
+                            children=[],
+                        )
+                    ],
+                    embeds=[],
+                )
+
+        class FakeGuild:
+            id = 333
+            me = SimpleNamespace(id=222)
+
+            def get_channel(self, channel_id: int):
+                assert channel_id == 444
+                return FakeTextChannel()
+
+        async def no_reserve(*args, **kwargs) -> None:
+            return None
+
+        async def fake_persist(guild, channel, message) -> None:
+            writes.append((guild.id, channel.id, message.id))
+
+        fake_bot = FakeBot()
+        sentinel_view = object()
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+        monkeypatch.setattr(runtime, "_reserve_recovery_requests", no_reserve)
+        monkeypatch.setattr(runtime, "_persist_ticket_panel_identity", fake_persist)
+        monkeypatch.setattr(panel, "PublicCreateTicketPanelView", lambda: sentinel_view)
+
+        result = await runtime._reconcile_saved_ticket_panel(
+            fake_bot,
+            FakeGuild(),
+            {
+                "ticket_panel_channel_id": "444",
+                "ticket_panel_message_id": "555",
+            },
+            allow_legacy_rest=True,
+        )
+
+        assert result == "migrated_current"
+        assert writes == [(333, 444, 555)]
+        assert fake_bot.views == [(sentinel_view, 555)]
+
+    asyncio.run(scenario())
+
+
 def test_foreign_saved_panel_is_replaced_and_rebound(
     monkeypatch,
 ) -> None:
