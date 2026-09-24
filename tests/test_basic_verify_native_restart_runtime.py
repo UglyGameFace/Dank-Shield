@@ -407,6 +407,7 @@ def test_saved_foreign_application_panel_is_replaced(
 ) -> None:
     async def scenario() -> None:
         replacement_calls: list[tuple[int, bool]] = []
+        lifecycle: list[str] = []
 
         class FakeTextChannel:
             id = 99
@@ -436,6 +437,7 @@ def test_saved_foreign_application_panel_is_replaced(
             assert "identity fetch" in label
 
         async def fake_delete(_message) -> bool:
+            lifecycle.append("delete")
             return True
 
         async def fake_post(
@@ -446,6 +448,7 @@ def test_saved_foreign_application_panel_is_replaced(
             require_history_scan_for_post: bool = False,
         ) -> str:
             assert bot_instance is fake_bot
+            lifecycle.append("post")
             replacement_calls.append((channel.id, require_history_scan_for_post))
             return "posted"
 
@@ -468,6 +471,80 @@ def test_saved_foreign_application_panel_is_replaced(
 
         assert result == "replaced_foreign_deleted"
         assert replacement_calls == [(99, True)]
+        assert lifecycle == ["post", "delete"]
+
+    asyncio.run(scenario())
+
+
+def test_foreign_panel_is_preserved_when_replacement_cannot_be_confirmed(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        lifecycle: list[str] = []
+
+        class FakeTextChannel:
+            id = 99
+
+            async def fetch_message(self, message_id: int):
+                return SimpleNamespace(
+                    id=message_id,
+                    author=SimpleNamespace(id=999),
+                    components=[
+                        SimpleNamespace(
+                            custom_id=runtime.BASIC_VERIFY_CUSTOM_ID,
+                            children=[],
+                        )
+                    ],
+                    embeds=[],
+                )
+
+        class FakeGuild:
+            id = 77
+            me = SimpleNamespace(id=42)
+
+            def get_channel(self, channel_id: int):
+                assert channel_id == 99
+                return FakeTextChannel()
+
+        async def no_reserve(*, label: str) -> None:
+            assert "identity fetch" in label
+
+        async def forbidden_delete(_message) -> bool:
+            lifecycle.append("delete")
+            raise AssertionError("stale panel must survive a failed replacement")
+
+        async def fake_post(
+            channel,
+            *,
+            actor_id: int = 0,
+            bot_instance=None,
+            require_history_scan_for_post: bool = False,
+        ) -> str:
+            _ = actor_id
+            assert bot_instance is fake_bot
+            assert require_history_scan_for_post is True
+            lifecycle.append("post")
+            return "scan_failed"
+
+        fake_bot = FakeBot()
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+        monkeypatch.setattr(runtime, "_reserve_basic_verify_recovery_request", no_reserve)
+        monkeypatch.setattr(runtime, "_delete_stale_foreign_basic_verify_panel", forbidden_delete)
+        monkeypatch.setattr(runtime, "post_basic_verify_panel", fake_post)
+
+        result = await runtime._reconcile_one_basic_verify_panel(
+            fake_bot,
+            FakeGuild(),
+            {
+                runtime._BASIC_VERIFY_PANEL_MESSAGE_ID_KEY: "123456",
+                runtime._BASIC_VERIFY_PANEL_APPLICATION_ID_KEY: "999",
+                "verify_channel_id": "99",
+            },
+            allow_legacy_rest=True,
+        )
+
+        assert result == "foreign_replacement_scan_failed"
+        assert lifecycle == ["post"]
 
     asyncio.run(scenario())
 
