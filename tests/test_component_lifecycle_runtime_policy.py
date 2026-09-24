@@ -80,7 +80,7 @@ def test_component_runtime_is_single_prelogin_lifecycle_owner() -> None:
     assert "_dynamic_items" in guard
     assert "_message_is_ephemeral" in guard
     assert "_recover_unowned_private_component" in guard
-    assert "open_compact_dank_home" in guard
+    assert "replace_with_compact_dank_home" in guard
     assert "stale action was not executed" in guard
 
 
@@ -90,7 +90,8 @@ def test_private_stale_recovery_never_replays_feature_business_logic() -> None:
     end = guard.index("def _interaction_age_ms", start)
     body = guard[start:end]
 
-    assert "open_compact_dank_home" in body
+    assert "replace_with_compact_dank_home" in body
+    assert "interaction.response.defer" not in body
     assert "apply_basic_verification" not in body
     assert "handle_public_ticket_panel_click" not in body
     assert "create_text_channel" not in body
