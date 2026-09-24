@@ -2,184 +2,139 @@
 
 ## Active task / desired outcome
 
-**P0-BASIC-VERIFY-INTERACTION-001 — restore reliable Basic Verify button dispatch**
+**P0-SERVER-STATS-001 — repair and expand Server Stats from `/dank home`**
 
-Make the public Basic Verify button acknowledge exactly once, enter one canonical
-verification workflow, and remain restart-safe without competing interaction
-owners.
-
-## Production symptom
-
-A live Basic Verify panel with footer
-`dank_shield:basic_verify:v1 • access only` showed Discord's red
-`This interaction failed` result after the user tapped **Verify**.
-
-The displayed panel is the current Basic Verify surface, not the ID-upload flow.
+Make Server Stats reliable, first-class in the compact UI, substantially more
+customizable, and safe at public-bot scale without creating a second
+persistence/runtime owner.
 
 ## Status
 
-**IMPLEMENTED ON TASK BRANCH — validation in progress**
+**IMPLEMENTED ON PR #289 — synchronized with current main; exact-head validation pending**
 
-Branch: `fix/basic-verify-interaction-owner-20260923`
+Branch: `fix/server-stats-home-customization`
 
-Base after sync: `main@78565787362cf63d5f40cf2b7e2abb8c96833b38`
+Base after sync: `main@3c21431e7c4c8920b76ad671cf857b232f300c6d`
 
-No merge-readiness claim is made until exact-head validation completes.\n\nThe branch was synchronized after AntiNuke work advanced `main` twice. The latest\nmain delta changes AntiNuke/Spam Guard/Protection Center files plus `ACTIVE_TASK.md`;\nthere is still no overlap with this task's Basic Verify runtime or regression files.
+## Previous task closed
+
+PR #304 — Restore single-owner Basic Verify interaction runtime
+
+- merged to `main` as `3c21431e7c4c8920b76ad671cf857b232f300c6d`;
+- exact PR head passed **1865 tests, 9 warnings** and all repository workflow/audit gates;
+- post-merge ownership check confirmed the persistent Basic Verify view is
+  authoritative and the duplicate compatibility dispatcher is absent.
+
+## Root causes / required behavior
+
+The existing Server Stats runtime was real but product access and lifecycle
+ownership were incomplete:
+
+- compact `/dank home` had no direct Server Stats destination;
+- Protection exposed only a one-click creation path rather than a management surface;
+- missing tracked categories were not self-healed reliably;
+- Spam Guard counter changes could persist without promptly refreshing visible channels;
+- names, visible counters, number formatting, and placement were hardcoded;
+- periodic all-guild config reads would not scale;
+- fully customized displays could not be safely rediscovered after restart;
+- name-only recovery could adopt unrelated categories;
+- failed hide/remove work could lose ownership IDs;
+- disabling category ownership requires canonical config-key removal rather than an empty-ID write.
+
+## Canonical ownership
+
+`stoney_verify/security_stats.py` remains the single runtime owner for preference
+normalization, category/channel ownership, counter computation, create/repair/
+refresh/disable behavior, coalesced event refresh, bounded restart discovery, and
+periodic refresh.
+
+`commands_ext/public_server_stats.py` is UI only and delegates mutations to that
+runtime owner.
+
+`guild_config` remains the existing per-guild persistence authority. No schema
+or migration is added.
+
+## Main-sync conflict review
+
+The original PR base was 142 commits behind current main.
+
+Nine of the ten original PR paths were unchanged on main. The only overlapping
+production file was `public_protection_center.py`, which has since gained
+settings-registry work, native Import Pack behavior, and AntiNuke trust-role
+controls.
+
+The synchronized branch preserves current main's Protection Center and reapplies
+only PR #289's Server Stats integration:
+
+- rename the existing Live Stats presentation to Server Stats;
+- route its existing custom ID into the dedicated Server Stats center;
+- remove the now-unused one-click `ensure_security_stats_display` import;
+- preserve all newer Protection Center behavior.
 
 ## Scope
 
 In scope:
 
-- trace the real Basic Verify component dispatch path;
-- restore one runtime owner for the Basic Verify custom ID;
-- preserve restart-safe persistent-view handling;
-- retain a fallback only when persistent-view registration itself fails;
-- ensure acknowledgement occurs before config/database/role work;
-- prevent an already-acknowledged duplicate route from mutating roles again;
-- retire the live compatibility wrapper that independently intercepted the same
-  Basic Verify component;
-- replace source-shape runtime coverage with behavioral regression tests.
+- first-class Server Stats entry from `/dank home`;
+- route Protection's existing stats control to the same center;
+- per-guild category name;
+- visible-counter selection;
+- custom labels/emoji;
+- compact/exact number formatting;
+- top/keep/bottom placement;
+- reset, repair/refresh, disable/remove;
+- missing-display self-heal;
+- coalesced protection-event refresh;
+- bounded active-display periodic work;
+- batched persisted-display discovery;
+- safe ownership recovery;
+- cleanup retry ownership retention;
+- single-panel modal behavior;
+- focused scaling and behavior coverage.
 
 Out of scope:
 
-- ID/web verification;
-- VC verification;
-- ticket creation;
-- verification role-policy redesign;
-- setup redesign;
-- AntiNuke;
-- Spam Guard;
-- unrelated startup-guard cleanup.
+- new database schema;
+- unrelated Protection/AntiNuke/Spam policy changes;
+- Quiet Notice;
+- Exit Card Unicode rendering;
+- changing the compact public slash-root budget.
 
-## Execution path inspected
+## Compatibility / cleanup
 
-Production boot:
-
-`Discloud -> main.py -> stoney_verify.app -> commands/events -> bot.run()`
-
-Basic Verify paths before this task:
-
-1. `app.py` called `install_basic_verify_runtime(bot, strict=True)` before login.
-2. That installer registered `BasicVerifyView()` with `bot.add_view(...)`.
-3. The same installer also registered a global `on_interaction` fallback for the
-   same `dank:basic_verify:v1` custom ID even when the persistent view succeeded.
-4. `sitecustomize.py` also loaded `basic_verification_mode_guard`.
-5. That compatibility guard independently wrapped
-   `interaction_handlers.handle_component_interaction` and called
-   `maybe_handle_basic_verify_interaction()` for the same Basic Verify custom ID.
-6. The persistent button callback contained a second copy of the handler flow.
-
-That left multiple live responders able to race on one Discord component
-interaction.
-
-## Root cause / regression finding
-
-PR #81 previously established the correct ownership rule: use the persistent
-Basic Verify view when registration succeeds, and install a global fallback only
-when persistent registration cannot be confirmed.
-
-Commit `e2be9e03b9ce` later moved restart safety into the native Basic Verify
-module but changed that contract to register both the persistent view and the
-global fallback every time. The older live compatibility wrapper in
-`basic_verification_mode_guard` also remained reachable through
-`sitecustomize.py`.
-
-The result was duplicate dispatch ownership around one custom ID. This is an
-ownership regression, not a reason to add another retry or another listener.
-
-## Changes
-
-### `stoney_verify/verification_new/basic_verify.py`
-
-- Persistent `BasicVerifyView` is the primary and authoritative runtime owner.
-- The global `on_interaction` fallback is registered only if `add_view()`
-  fails.
-- Once either route owns the custom ID, repeated installer calls cannot add a
-  second route later in the same process.
-- Fallback acknowledgement is immediate because no persistent view exists in
-  fallback mode.
-- `BasicVerifyButton.callback` delegates to the one canonical
-  `maybe_handle_basic_verify_interaction()` implementation.
-- `_ack()` now treats an already-acknowledged interaction as already claimed
-  and does not allow a second role mutation.
-- Canonical click logging includes the Discord interaction ID.
-
-### `stoney_verify/startup_guards/basic_verification_mode_guard.py`
-
-- Removed the compatibility wrapper that intercepted Basic Verify in the
-  centralized component handler.
-- The guard retains its still-live allowlist, Verify Panel command, and sync
-  compatibility responsibilities.
-- Native Basic Verify runtime ownership remains in
-  `verification_new/basic_verify.py`.
-
-### Tests
-
-- Replaced `tests/test_basic_verify_native_restart_runtime_static.py`.
-- Added behavioral `tests/test_basic_verify_native_restart_runtime.py` covering:
-  - persistent-view ownership without a duplicate listener;
-  - fallback-only behavior when persistent registration fails;
-  - idempotent registration;
-  - no late second owner after fallback registration;
-  - fail-closed behavior when neither route can register;
-  - exact custom-ID fallback routing;
-  - button delegation to the canonical handler;
-  - acknowledgement before role/database work;
-  - no duplicate role mutation after another route already acknowledged.
-
-## Compatibility review
-
-Preserved:
-
-- custom ID `dank:basic_verify:v1`;
-- persistent view class and timeout;
-- current and old posted panels;
-- Basic Verify authorization checks;
-- configured role resolution;
-- role hierarchy checks;
-- role mutation lock;
-- user-facing success/error behavior;
-- `register_basic_verify_runtime` compatibility alias;
-- pre-login strict runtime installation from `app.py`;
-- `/verify panel` canonical posting path.
-
-No schema, command name, role-policy, or panel-layout changes are included.
+- The compact public command roots remain unchanged.
+- Existing Server Stats config remains authoritative and backward compatible.
+- Protection keeps its historical `dank_protection:live_stats` component custom ID.
+- No duplicate stats persistence/runtime service is introduced.
+- Current main's newer Protection Center features are preserved.
 
 ## Validation required
 
-- exact branch diff inspection;
-- conflict-marker / whitespace inspection;
-- Python compile;
-- behavioral Basic Verify runtime tests;
-- verification-mode authorization tests;
-- Verify Panel posting tests;
-- persistent interaction compatibility tests;
-- relevant startup/interaction ownership tests;
+- exact-head branch/base comparison;
+- diff/conflict/whitespace inspection;
+- Python 3.11 compile;
+- Server Stats focused behavior tests;
+- command-surface regressions;
+- startup recovery/scaling regressions;
+- Protection Center regressions;
 - full `pytest tests/`;
-- standalone repository tool checks required by CI;
-- GitHub Actions on the exact final head;
-- final changed-file and review-thread inspection.
-
-## Cleanup / conflicts
-
-The duplicate Basic Verify compatibility dispatcher is removed rather than
-layered with another guard.
-
-No unrelated production subsystem is intentionally changed.
+- standalone `tools/test_*.py` checks;
+- all repository audits;
+- GitHub workflow gates;
+- review-thread inspection;
+- final mergeability check.
 
 ## Blockers / risks
 
-Live Discord acceptance still requires deployment after validated merge. A
-repository test cannot reproduce Discord's client-side red failure banner, so
-post-deploy acceptance must include one real Unverified account clicking the
-existing panel after a bot restart.
+No known code blocker after synchronization. Validation may expose stale tests or
+main-era compatibility changes and those must be resolved before merge readiness.
 
 ## Backlog
 
-None added from this task.
+- PR #302: cross-guild Exit Card Unicode rendering remains the next task after PR #289.
 
 ## Next step
 
-Run exact-head targeted validation, correct only failures caused by this task,
-then run the full repository validation and inspect the final diff before any
-merge-readiness decision.
+Run exact-head validation on the synchronized branch, repair only Server
+Stats-related failures, perform final cleanup/review inspection, then mark PR
+#289 ready and merge with an expected-head guard.

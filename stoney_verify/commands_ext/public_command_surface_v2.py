@@ -81,7 +81,7 @@ def _home_embed() -> discord.Embed:
     )
     embed.add_field(
         name="Utility",
-        value="🧰 Community Tools • 📡 Status • 🩺 Diagnostics • 📎 Card Assets • ❓ Help",
+        value="🧰 Community Tools • 📊 Server Stats • 📡 Status • 🩺 Diagnostics • 📎 Card Assets • ❓ Help",
         inline=False,
     )
     embed.add_field(
@@ -267,6 +267,12 @@ class CompactDankHomeView(_OwnedView):
             view=CompactHelpView(self.owner_id),
             allowed_mentions=discord.AllowedMentions.none(),
         )
+
+    @discord.ui.button(label="Server Stats", emoji="📊", style=discord.ButtonStyle.secondary, row=3)
+    async def server_stats(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_server_stats import open_server_stats_center
+        await open_server_stats_center(interaction)
 
     @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, row=3)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

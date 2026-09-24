@@ -23,7 +23,6 @@ from ..settings_registry import (
 )
 from ..security_stats import (
     SECURITY_STATS_ENABLED_KEY,
-    ensure_security_stats_display,
     refresh_security_stats_display,
 )
 from ..anti_nuke import (
@@ -484,7 +483,7 @@ def _protection_embed(guild: discord.Guild, cfg: Any, spam: dict[str, Any], spam
             "**Edit Spam Guard** = message speed, duplicate messages, invite-flood threshold, timeout length.\n"
             "**Invite Blocker** = live ON/OFF for Discord invite links.\n"
             "**Block All Links** = stop every URL.\n"
-            "**Live Stats** = create locked voice-channel counters using real Spam Guard actions.\n"
+            "**Server Stats** = open the dedicated live counter studio for setup, repair, visibility, labels, layout, and formatting.\n"
             "**Add Filter / Import Pack / Test** = add one filter, paste a vetted line-delimited pack, or test bypass behavior."
         ),
         inline=False,
@@ -623,7 +622,7 @@ def _decorate_quick_mode_buttons(view: discord.ui.View, cfg: Any, spam: dict[str
             )
         elif custom_id == "dank_protection:live_stats":
             live_stats_on = _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False)
-            child.label = f"Live Stats: {'ON' if live_stats_on else 'SET UP'}"
+            child.label = f"Server Stats: {'ON' if live_stats_on else 'SET UP'}"
             child.style = discord.ButtonStyle.success if live_stats_on else discord.ButtonStyle.secondary
 
 
@@ -1769,28 +1768,19 @@ class ProtectionCenterView(discord.ui.View):
 
         await _guard_protection_action(interaction, "protection.allow_links", action, defer=True)
 
-    @discord.ui.button(label="Live Stats", emoji="📊", style=discord.ButtonStyle.secondary, custom_id="dank_protection:live_stats", row=3)
+    @discord.ui.button(label="Server Stats", emoji="📊", style=discord.ButtonStyle.secondary, custom_id="dank_protection:live_stats", row=3)
     async def live_stats_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
 
         async def action() -> None:
-            if not await _require_setup_permission(interaction):
-                return
-            guild = interaction.guild
-            if guild is None:
-                await _send_ephemeral(interaction, "❌ This must be used inside a server.")
-                return
-            ok, note = await ensure_security_stats_display(guild)
-            if not ok:
-                await _send_ephemeral(interaction, note)
-                return
-            await _refresh_panel(interaction, content=note)
+            from .public_server_stats import open_server_stats_center
+            await open_server_stats_center(interaction)
 
         await _guard_protection_action(
             interaction,
-            "protection.live_stats",
+            "protection.server_stats",
             action,
-            defer=True,
+            defer=False,
         )
 
     @discord.ui.button(label="AntiNuke", emoji="⚪", style=discord.ButtonStyle.secondary, custom_id="dank_protection:antinuke_toggle", row=4)
