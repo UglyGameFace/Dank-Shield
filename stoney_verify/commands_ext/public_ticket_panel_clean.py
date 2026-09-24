@@ -35,7 +35,15 @@ _MENU_TTL_SECONDS = 900.0
 _INTERACTION_TTL_SECONDS = 90.0
 
 PANEL_BUTTON_CUSTOM_ID = "sv:ticket:panel:create:clean:v1"
-PANEL_BUTTON_CUSTOM_IDS = {PANEL_BUTTON_CUSTOM_ID}
+LEGACY_PANEL_BUTTON_CUSTOM_IDS = frozenset(
+    {
+        "sv:ticket:panel:create:v6",
+        "ticket_create",
+    }
+)
+PANEL_BUTTON_CUSTOM_IDS = frozenset(
+    {PANEL_BUTTON_CUSTOM_ID, *LEGACY_PANEL_BUTTON_CUSTOM_IDS}
+)
 
 # Keep compatibility for callers/tests that still reference DEFAULT_ROWS, but
 # derive it from the one managed category catalog instead of maintaining a
@@ -1062,15 +1070,13 @@ def register_public_ticket_panel_clean(bot: Any, tree: Any) -> None:
             _log(f"registered persistent Create Ticket view custom_id={PANEL_BUTTON_CUSTOM_ID}")
         except Exception as e:
             _warn(f"could not register persistent view: {e!r}")
-    if not _PANEL_VIEW_REGISTERED and not _PANEL_FALLBACK_LISTENER_REGISTERED:
+    if not _PANEL_FALLBACK_LISTENER_REGISTERED:
         try:
             bot.add_listener(_component_fallback_listener, "on_interaction")
             _PANEL_FALLBACK_LISTENER_REGISTERED = True
-            _log("persistent view unavailable; registered Create Ticket fallback listener")
+            _log("registered delayed Create Ticket fallback listener")
         except Exception as e:
             _warn(f"could not register Create Ticket fallback listener: {e!r}")
-    elif _PANEL_VIEW_REGISTERED:
-        _PANEL_FALLBACK_LISTENER_REGISTERED = True
     if not _PANEL_GROUP_REGISTERED:
         try:
             if tree.get_command("ticket-panel", guild=None) is not None:
