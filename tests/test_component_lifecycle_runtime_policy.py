@@ -4,6 +4,7 @@ import inspect
 from pathlib import Path
 
 import discord
+from discord.ui.view import ViewStore
 
 from stoney_verify.commands_ext.public_command_surface_v2 import (
     CardAssetView,
@@ -29,7 +30,7 @@ def test_discord_py_viewstore_contract_is_pinned_before_private_recovery() -> No
     assert "discord.py==2.7.1" in requirements
     assert discord.__version__ == "2.7.1"
 
-    source = inspect.getsource(discord.ui.view.ViewStore.dispatch_view)
+    source = inspect.getsource(ViewStore.dispatch_view)
     assert "self.dispatch_dynamic_items(component_type, custom_id, interaction)" in source
     assert "self._views.get(message_id, {}).get(key)" in source
     assert "self._views.get(None, {}).get(key)" in source
