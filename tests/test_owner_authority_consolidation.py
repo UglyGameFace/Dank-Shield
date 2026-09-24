@@ -26,6 +26,7 @@ def test_owner_identity_is_authoritative_without_member_cache_state() -> None:
 
     assert public_owner_authority.interaction_is_actual_guild_owner(interaction)
     assert public_owner_authority.interaction_has_manage_guild_authority(interaction)
+    assert public_owner_authority.interaction_has_channel_management_authority(interaction)
     assert public_owner_authority.is_actual_guild_owner(
         interaction.user,
         interaction.guild,
@@ -59,6 +60,22 @@ def test_resolved_interaction_administrator_does_not_require_member_cache() -> N
     assert public_access_control.scoped_interaction_is_server_control(interaction)
     assert common._staff_check(interaction)
     assert public_command_hub._admin_or_manage(interaction)
+
+
+def test_resolved_manage_channels_is_valid_channel_repair_authority_without_member_cache() -> None:
+    guild = SimpleNamespace(id=9001, owner_id=0, owner=None)
+    interaction = SimpleNamespace(
+        guild=guild,
+        user=SimpleNamespace(id=111),
+        permissions=SimpleNamespace(
+            administrator=False,
+            manage_guild=False,
+            manage_channels=True,
+        ),
+    )
+
+    assert not public_owner_authority.interaction_has_manage_guild_authority(interaction)
+    assert public_owner_authority.interaction_has_channel_management_authority(interaction)
 
 
 def test_role_builder_doorways_accept_resolved_admin_without_member_cache(monkeypatch) -> None:
@@ -115,6 +132,7 @@ def test_partial_non_owner_without_resolved_permissions_still_fails_closed() -> 
 
     assert not public_owner_authority.interaction_has_administrator_authority(interaction)
     assert not public_owner_authority.interaction_has_manage_guild_authority(interaction)
+    assert not public_owner_authority.interaction_has_channel_management_authority(interaction)
     assert not public_staff_scope.scoped_interaction_is_staff(interaction)
     assert not public_access_control.scoped_interaction_is_server_control(interaction)
 
