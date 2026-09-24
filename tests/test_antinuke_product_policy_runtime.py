@@ -183,6 +183,105 @@ def test_guardian_policy_restores_normal_trust_and_reapplies_strict(monkeypatch)
     assert seen_actor_ids == [77, 0]
 
 
+def test_normal_contain_ignores_message_delete_but_strict_lockdown_enforces(
+    monkeypatch,
+) -> None:
+    state = {policy.STRICT_LOCKDOWN_KEY: False}
+    calls: list[tuple[str, int | None]] = []
+
+    async def settings(_guild_id: int):
+        return {
+            "antinuke_enabled": True,
+            "antinuke_mode": "contain",
+            **state,
+        }
+
+    async def base_process(_guild, _entry, _actor, action_name, spec):
+        calls.append((str(action_name), spec[3]))
+
+    async def base_rollback(*_args, **_kwargs):
+        return "ok"
+
+    fake_guardian = SimpleNamespace(
+        _ACTIONS={
+            "message_delete": (
+                "Message deletion",
+                "antinuke_channel_delete_threshold",
+                "message_delete",
+                1,
+            ),
+            "message_bulk_delete": (
+                "Bulk message deletion",
+                "antinuke_channel_delete_threshold",
+                "message_bulk_delete",
+                1,
+            ),
+        },
+        _rollback_untrusted_overwrite=base_rollback,
+        _rollback_untrusted_automod=base_rollback,
+        _process=base_process,
+    )
+    fake_lockdown = SimpleNamespace(
+        _STRICT_GUARDIAN_ACTIONS=frozenset(
+            {"message_delete", "message_bulk_delete"}
+        )
+    )
+    fake_zero = SimpleNamespace(
+        _STRICT_ACTIONS=frozenset(
+            {"message_delete", "message_bulk_delete"}
+        )
+    )
+
+    monkeypatch.setattr(policy, "guardian", fake_guardian)
+    monkeypatch.setattr(policy, "lockdown", fake_lockdown)
+    monkeypatch.setattr(policy, "zero_damage", fake_zero)
+    monkeypatch.setattr(
+        anti_nuke,
+        "get_antinuke_settings",
+        settings,
+    )
+
+    assert policy._patch_guardian_policy() is True  # noqa: SLF001
+    guild = SimpleNamespace(id=7)
+    actor = SimpleNamespace(id=77, bot=False)
+    message_delete = fake_guardian._ACTIONS["message_delete"]
+    bulk_delete = fake_guardian._ACTIONS["message_bulk_delete"]
+
+    asyncio.run(
+        fake_guardian._process(
+            guild,
+            object(),
+            actor,
+            "message_delete",
+            message_delete,
+        )
+    )
+    assert calls == []
+
+    asyncio.run(
+        fake_guardian._process(
+            guild,
+            object(),
+            actor,
+            "message_bulk_delete",
+            bulk_delete,
+        )
+    )
+    assert calls == [("message_bulk_delete", None)]
+
+    state[policy.STRICT_LOCKDOWN_KEY] = True
+    asyncio.run(
+        fake_guardian._process(
+            guild,
+            object(),
+            actor,
+            "message_delete",
+            message_delete,
+        )
+    )
+    assert calls[-1] == ("message_delete", 1)
+
+
 def test_health_message_does_not_invent_bot_permission_failures() -> None:
     message = policy._health_message(  # noqa: SLF001
         "Strict Lockdown was not enabled. Readiness blockers:",
