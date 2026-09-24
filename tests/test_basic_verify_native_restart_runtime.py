@@ -323,6 +323,7 @@ def test_saved_current_application_panel_binds_exact_message_without_rest(
             {
                 runtime._BASIC_VERIFY_PANEL_MESSAGE_ID_KEY: "123456",
                 runtime._BASIC_VERIFY_PANEL_APPLICATION_ID_KEY: "42",
+                runtime._BASIC_VERIFY_PANEL_COMPONENT_ID_KEY: runtime.BASIC_VERIFY_CUSTOM_ID,
                 "verify_channel_id": "999",
             },
         )
@@ -398,6 +399,154 @@ def test_saved_panel_without_application_identity_fetches_and_migrates(
         assert fetched == [123456]
         assert writes == [(77, 123456, 42)]
         assert fake_bot.views == [(sentinel_view, 123456)]
+
+    asyncio.run(scenario())
+
+
+def test_saved_current_application_with_unproven_component_is_repaired_in_place(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        edits: list[dict[str, object]] = []
+        writes: list[tuple[int, int, int]] = []
+
+        class FakeMessage:
+            id = 123456
+            author = SimpleNamespace(id=42)
+            embeds = [discord.Embed(title="Verify to unlock server access")]
+            components = [
+                SimpleNamespace(
+                    custom_id="legacy:verify:button:v0",
+                    children=[],
+                )
+            ]
+
+            async def edit(self, **payload) -> None:
+                edits.append(dict(payload))
+
+        class FakeTextChannel:
+            id = 99
+
+            async def fetch_message(self, message_id: int):
+                assert message_id == 123456
+                return FakeMessage()
+
+        class FakeGuild:
+            id = 77
+            me = SimpleNamespace(id=42)
+
+            def get_channel(self, channel_id: int):
+                assert channel_id == 99
+                return FakeTextChannel()
+
+        async def no_reserve(*, label: str) -> None:
+            assert "identity fetch" in label
+
+        async def fake_persist(
+            guild_id: int,
+            message_id: int,
+            *,
+            application_id: int = 0,
+        ) -> None:
+            writes.append((guild_id, message_id, application_id))
+
+        fake_bot = FakeBot()
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+        monkeypatch.setattr(runtime, "_reserve_basic_verify_recovery_request", no_reserve)
+        monkeypatch.setattr(runtime, "_persist_basic_verify_panel_message_id", fake_persist)
+        monkeypatch.setattr(
+            runtime,
+            "build_basic_verify_embed",
+            lambda *_a: discord.Embed(title="fresh verify"),
+        )
+
+        result = await runtime._reconcile_one_basic_verify_panel(
+            fake_bot,
+            FakeGuild(),
+            {
+                runtime._BASIC_VERIFY_PANEL_MESSAGE_ID_KEY: "123456",
+                runtime._BASIC_VERIFY_PANEL_APPLICATION_ID_KEY: "42",
+                "verify_channel_id": "99",
+            },
+            allow_legacy_rest=True,
+        )
+
+        assert result == "repaired_component"
+        assert len(edits) == 1
+        assert isinstance(edits[0]["view"], runtime.BasicVerifyView)
+        assert writes == [(77, 123456, 42)]
+        assert fake_bot.views[-1][1] == 123456
+
+    asyncio.run(scenario())
+
+
+def test_saved_current_application_with_current_component_migrates_without_edit(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        edits: list[object] = []
+        writes: list[tuple[int, int, int]] = []
+
+        class FakeMessage:
+            id = 123456
+            author = SimpleNamespace(id=42)
+            embeds = []
+            components = [
+                SimpleNamespace(
+                    custom_id=runtime.BASIC_VERIFY_CUSTOM_ID,
+                    children=[],
+                )
+            ]
+
+            async def edit(self, **payload) -> None:
+                edits.append(payload)
+
+        class FakeTextChannel:
+            id = 99
+
+            async def fetch_message(self, message_id: int):
+                assert message_id == 123456
+                return FakeMessage()
+
+        class FakeGuild:
+            id = 77
+            me = SimpleNamespace(id=42)
+
+            def get_channel(self, channel_id: int):
+                assert channel_id == 99
+                return FakeTextChannel()
+
+        async def no_reserve(*, label: str) -> None:
+            assert "identity fetch" in label
+
+        async def fake_persist(
+            guild_id: int,
+            message_id: int,
+            *,
+            application_id: int = 0,
+        ) -> None:
+            writes.append((guild_id, message_id, application_id))
+
+        fake_bot = FakeBot()
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+        monkeypatch.setattr(runtime, "_reserve_basic_verify_recovery_request", no_reserve)
+        monkeypatch.setattr(runtime, "_persist_basic_verify_panel_message_id", fake_persist)
+
+        result = await runtime._reconcile_one_basic_verify_panel(
+            fake_bot,
+            FakeGuild(),
+            {
+                runtime._BASIC_VERIFY_PANEL_MESSAGE_ID_KEY: "123456",
+                runtime._BASIC_VERIFY_PANEL_APPLICATION_ID_KEY: "42",
+                "verify_channel_id": "99",
+            },
+            allow_legacy_rest=True,
+        )
+
+        assert result == "migrated_current"
+        assert edits == []
+        assert writes == [(77, 123456, 42)]
+        assert fake_bot.views[-1][1] == 123456
 
     asyncio.run(scenario())
 
@@ -911,3 +1060,19 @@ assert not getattr(handler, "_basic_verify_ready", False)
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_basic_verify_persists_component_contract_with_panel_identity() -> None:
+    source = open(runtime.__file__, encoding="utf-8").read()
+    assert '_BASIC_VERIFY_PANEL_COMPONENT_ID_KEY = "basic_verify_panel_component_id"' in source
+    persist_start = source.index("async def _persist_basic_verify_panel_message_id")
+    persist_end = source.index("def _message_custom_ids", persist_start)
+    persist = source[persist_start:persist_end]
+    assert "_BASIC_VERIFY_PANEL_COMPONENT_ID_KEY: BASIC_VERIFY_CUSTOM_ID" in persist
+
+    reconcile_start = source.index("async def _reconcile_one_basic_verify_panel")
+    reconcile_end = source.index("async def _reconcile_basic_verify_panels_after_ready", reconcile_start)
+    reconcile = source[reconcile_start:reconcile_end]
+    assert "saved_component_id == BASIC_VERIFY_CUSTOM_ID" in reconcile
+    assert "BASIC_VERIFY_CUSTOM_ID not in custom_ids" in reconcile
+    assert "repaired legacy component contract" in reconcile
