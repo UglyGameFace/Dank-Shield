@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from stoney_verify import modlog
-from stoney_verify import events
 from stoney_verify.startup_guards import member_lifecycle_router_guard as router
 
 
@@ -101,11 +101,16 @@ def test_detailed_staff_leave_restores_roles_and_member_context(monkeypatch) -> 
 
 
 def test_events_uses_detailed_leave_builder_without_second_listener() -> None:
-    source = inspect.getsource(events.on_member_remove)
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "stoney_verify" / "events.py").read_text(encoding="utf-8")
 
-    assert "await build_member_leave_embed(guild, member)" in source
-    assert 'event_key=f"member_leave:{member.id}"' in source
-    assert 'discord.Embed(title="📤 Member Left"' not in source
+    start = source.index("async def on_member_remove(member: discord.Member):")
+    end = source.index("@bot.event\nasync def on_member_update", start)
+    leave_source = source[start:end]
+
+    assert "await build_member_leave_embed(guild, member)" in leave_source
+    assert 'event_key=f"member_leave:{member.id}"' in leave_source
+    assert 'discord.Embed(title="📤 Member Left"' not in leave_source
 
 
 def test_member_logs_configuration_no_longer_retargets_exit_card_studio() -> None:
