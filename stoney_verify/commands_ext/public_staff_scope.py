@@ -33,6 +33,8 @@ from typing import Any
 
 import discord
 
+from .public_owner_authority import is_actual_guild_owner
+
 _PATCHED = False
 
 
@@ -125,20 +127,10 @@ def _configured_staff_role_ids(member: Any) -> set[int]:
     return set(configured_ticket_staff_role_ids(guild_id))
 
 
-def _is_actual_guild_owner(user: Any, guild: Any = None) -> bool:
-    try:
-        resolved_guild = guild if guild is not None else getattr(user, "guild", None)
-        user_id = _safe_int(getattr(user, "id", 0), 0)
-        owner_id = _safe_int(getattr(resolved_guild, "owner_id", 0), 0)
-        return bool(user_id > 0 and owner_id > 0 and user_id == owner_id)
-    except Exception:
-        return False
-
-
 def scoped_is_staff(member: Any) -> bool:
     # Guild ownership is authoritative and must not depend on role cache,
     # configured staff roles, or Discord's resolved permission object.
-    if _is_actual_guild_owner(member):
+    if is_actual_guild_owner(member):
         return True
 
     if not isinstance(member, discord.Member):
@@ -169,7 +161,7 @@ def scoped_interaction_is_staff(interaction: Any) -> bool:
     try:
         user = getattr(interaction, "user", None)
         guild = getattr(interaction, "guild", None)
-        if _is_actual_guild_owner(user, guild):
+        if is_actual_guild_owner(user, guild):
             return True
         return scoped_is_staff(user)
     except Exception:
