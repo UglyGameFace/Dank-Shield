@@ -525,8 +525,9 @@ def render_security_stat_name(
         if icon_mode == "clear":
             icon = ""
 
+    explicit_format = bool(_mapping(preferences.get("formats", {})).get(key))
     design_separator = str(context.get("separator") or "") if context.get("enabled") else ""
-    if icon and design_separator:
+    if icon and design_separator and not explicit_format:
         head = f"{icon} {design_separator} {label}".strip()
     elif icon:
         head = f"{icon} {label}".strip()
@@ -542,7 +543,7 @@ def render_security_stat_name(
 
     for cut in range(min(len(label), 72), 0, -1):
         short_label = label[:cut].rstrip()
-        if icon and design_separator:
+        if icon and design_separator and not explicit_format:
             short_head = f"{icon} {design_separator} {short_label}".strip()
         elif icon:
             short_head = f"{icon} {short_label}".strip()
