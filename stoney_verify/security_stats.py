@@ -276,6 +276,7 @@ def _raw_stat_format_overrides(cfg: Any) -> Dict[str, Dict[str, Any]]:
         }
     return out
 
+
 def normalize_security_stats(value: Any) -> Dict[str, int]:
     raw = _mapping(value)
     normalized = dict(DEFAULT_SECURITY_STATS)
@@ -395,8 +396,8 @@ def _stat_label(preferences: Mapping[str, Any], key: str) -> str:
     metric = security_stat_metric(key)
     formats = _mapping(preferences.get("formats", {}))
     row = _mapping(formats.get(key))
-    if row.get("label"):
-        return _clean_format_piece(row.get("label"), fallback=metric.label, limit=72)
+    if row and "label" in row:
+        return _clean_format_piece(row.get("label"), fallback="", limit=72)
     labels = _mapping(preferences.get("labels", {}))
     if key in labels:
         legacy = _clean_channel_text(
