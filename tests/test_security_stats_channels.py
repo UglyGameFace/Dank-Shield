@@ -15,6 +15,142 @@ def test_compact_stat_formatting_keeps_channel_names_readable() -> None:
     assert security_stats.format_security_stat_count(1_250_000) == "1.25M"
 
 
+def test_metric_registry_is_provider_backed_and_public_picker_safe() -> None:
+    assert tuple(security_stats.SECURITY_STATS_METRICS) == (
+        security_stats.DEFAULT_SECURITY_STATS_VISIBLE_KEYS
+    )
+
+    values = security_stats._metric_values(
+        spam_guard_enabled=True,
+        member_count=5,
+        counts={
+            "spam_blocked": 1,
+            "invites_blocked": 2,
+            "timeouts_issued": 3,
+            "quarantines": 4,
+        },
+        ticket_counts={
+            "open_tickets": 5,
+            "claimed_tickets": 2,
+            "closed_tickets": 9,
+        },
+    )
+    assert set(values) == set(security_stats.SECURITY_STATS_METRICS)
+    assert all(
+        security_stats.security_stat_metric_description(key)
+        for key in security_stats.SECURITY_STATS_METRICS
+    )
+
+
+def test_per_counter_sections_render_requested_ticket_wrappers_exactly() -> None:
+    first = security_stats.security_stats_preferences(
+        {
+            security_stats.SECURITY_STATS_FORMAT_OVERRIDES_KEY: {
+                "open_tickets": {
+                    "icon": "[🎫]",
+                    "label": "Open Tickets",
+                    "separator": ": ",
+                    "value_template": "[{value}]",
+                }
+            }
+        }
+    )
+    assert security_stats.render_security_stat_name(
+        first,
+        "open_tickets",
+        "0",
+    ) == "[🎫] Open Tickets: [0]"
+
+    second = security_stats.security_stats_preferences(
+        {
+            security_stats.SECURITY_STATS_FORMAT_OVERRIDES_KEY: {
+                "open_tickets": {
+                    "icon": "[🎫]",
+                    "label": "Open Tickets",
+                    "separator": ": ",
+                    "value_template": "「{value}」",
+                }
+            }
+        }
+    )
+    assert security_stats.render_security_stat_name(
+        second,
+        "open_tickets",
+        "0",
+    ) == "[🎫] Open Tickets: 「0」"
+    assert security_stats.security_stat_name_prefix(
+        second,
+        "open_tickets",
+    ) == "[🎫] Open Tickets: 「"
+
+
+def test_counter_format_requires_exactly_one_live_value_token() -> None:
+    ok, message, cleaned = security_stats.validate_security_stat_format(
+        "open_tickets",
+        {
+            "icon": "🎫",
+            "label": "Open Tickets",
+            "separator": ": ",
+            "value_template": "「0」",
+        },
+    )
+    assert ok is False
+    assert "{value}" in message
+    assert cleaned == {}
+
+    ok, preview, cleaned = security_stats.validate_security_stat_format(
+        "open_tickets",
+        {
+            "icon": "🎫",
+            "label": "Open Tickets",
+            "separator": ": ",
+            "value_template": "「{value}」",
+        },
+    )
+    assert ok is True
+    assert preview == "🎫 Open Tickets: 「0」"
+    assert cleaned["value_template"] == "「{value}」"
+
+
+def test_design_sync_styles_stable_label_but_never_live_numeric_value() -> None:
+    prefs = security_stats.security_stats_preferences(
+        {
+            security_stats.SECURITY_STATS_INHERIT_DESIGN_KEY: True,
+            "server_design_studio_options": {
+                "theme_id": "gothic_clean",
+                "strength": 4,
+                "font": "fraktur",
+                "separator_id": "pipe_spaced",
+                "category_frame_id": "line",
+            },
+        }
+    )
+
+    rendered = security_stats.render_security_stat_name(
+        prefs,
+        "open_tickets",
+        "0",
+    )
+    assert rendered.endswith(": 0")
+    assert rendered != "🎫 Open Tickets: 0"
+    assert "0" == rendered[-1]
+    assert len(rendered) <= 100
+
+    category = security_stats.security_stats_category_display_name(prefs)
+    assert category
+    assert len(category) <= 100
+
+
+def test_existing_stats_default_to_design_sync_off_until_owner_opts_in() -> None:
+    prefs = security_stats.security_stats_preferences({})
+    assert prefs["inherit_design"] is False
+    assert security_stats.render_security_stat_name(
+        prefs,
+        "open_tickets",
+        "0",
+    ) == "🎫 Open Tickets: 0"
+
+
 def test_normalization_rejects_negative_or_invalid_counters() -> None:
     normalized = security_stats.normalize_security_stats(
         {
@@ -518,6 +654,9 @@ def test_server_stats_preferences_support_custom_category_visibility_labels_and_
             "members": "🫂 Lobby Members",
             "invites_blocked": "🧱 Invites Nuked",
         },
+        "formats": {},
+        "inherit_design": False,
+        "design_options": {},
         "number_style": "exact",
         "placement": "bottom",
     }
