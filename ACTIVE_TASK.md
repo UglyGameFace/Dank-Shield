@@ -214,6 +214,14 @@ server-level bot permissions. A channel/category self-lockout no longer points
 the user back to a reauthorization step that cannot remove a target-specific
 deny.
 
+### Reauthorization guidance is authoritative
+
+The canonical preview, post-repair result, and Specific Channel repair now use
+the same server-level prerequisite truth before showing **Reauthorize Dank
+Shield**. A target-specific channel/category self-lockout no longer exposes an
+OAuth reinvite that cannot remove the deny. Reauthorization is offered only
+when known server-level prerequisites are actually missing.
+
 ### Claim-first repair boundary
 
 The canonical access hub now claims the interaction through
@@ -281,11 +289,14 @@ startup owners.
 - Python compile;
 - full test suite;
 - all GitHub workflow gates;
-- currentness / mergeability / review / diff hygiene.
+- currentness / mergeability / review / diff hygiene;
+- regression coverage that reauthorization is hidden after healthy repair and
+  for target-specific self-lockout, but remains available for missing
+  server-level prerequisites.
 
 ## Status
 
-**IN PROGRESS — #316 deployed; canonical hub fail-closed/action-truth repair implemented; exact-head validation pending**
+**IMPLEMENTATION COMPLETE — #316 deployed; canonical hub fail-closed/action-truth repair and unified reauthorization guidance implemented; final exact-head validation pending**
 
 Branch: `fix/access-repair-fail-closed-20260924`
 
