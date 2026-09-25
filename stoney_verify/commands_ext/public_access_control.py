@@ -288,6 +288,22 @@ def scoped_is_ticket_staff(member: object) -> bool:
     return bool(_member_role_ids(member).intersection(allowed_ids))
 
 
+def scoped_interaction_is_ticket_staff(interaction: object) -> bool:
+    """Ticket-staff authority using the full Discord interaction context.
+
+    Guild-owner identity and Discord-resolved Administrator authority must be
+    checked before depending on the cached/member-shaped interaction user.
+    """
+    if interaction_is_actual_guild_owner(interaction):
+        return True
+    if interaction_has_administrator_authority(interaction):
+        return True
+    try:
+        return scoped_is_ticket_staff(getattr(interaction, "user", None))
+    except Exception:
+        return False
+
+
 def scoped_interaction_is_server_control(interaction: object) -> bool:
     if interaction_is_actual_guild_owner(interaction):
         return True
@@ -309,10 +325,7 @@ async def require_server_control(interaction: discord.Interaction) -> bool:
 
     # Staff identity is the privacy boundary. A normal member does not need a
     # recipe for which role/Discord permission would unlock server control.
-    try:
-        recognized_staff = scoped_is_ticket_staff(interaction.user)
-    except Exception:
-        recognized_staff = False
+    recognized_staff = scoped_interaction_is_ticket_staff(interaction)
     if not recognized_staff:
         await reply_once(
             interaction,
