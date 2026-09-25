@@ -712,6 +712,7 @@ async def decide_invite_message(
     source: str = "live",
     spam_burst: bool = False,
     refresh_policy: bool = False,
+    allow_contentless_trusted_advertiser: bool = False,
 ) -> InviteDecision:
     guild = getattr(message, "guild", None)
     channel = getattr(message, "channel", None)
@@ -793,16 +794,29 @@ async def decide_invite_message(
             protected_rule_enabled
             and _contentless_protected_target_match(message, settings)
         )
-        if contentless_targeted:
+        if contentless_targeted or allow_contentless_trusted_advertiser:
             decision.action = "delete"
-            decision.feature_owner = "Protected Bot/Channel Invite Rule"
-            decision.rule_id = "protected_contentless_known_advertiser"
+            decision.feature_owner = (
+                "Protected Bot/Channel Invite Rule"
+                if contentless_targeted
+                else "Invite Shield Manual Cleanup"
+            )
+            decision.rule_id = (
+                "protected_contentless_known_advertiser"
+                if contentless_targeted
+                else "manual_cleanup_contentless_known_advertiser"
+            )
             decision.reason = (
-                f"{advertiser_name} posted a non-interaction application message, Discord supplied no "
-                "message-content fields, and this exact bot/channel is explicitly protected."
+                f"{advertiser_name} posted a non-interaction application message and Discord supplied no "
+                "message-content fields. "
+                + (
+                    "This exact bot/channel is explicitly protected."
+                    if contentless_targeted
+                    else "A server manager explicitly selected this channel for Invite Shield cleanup."
+                )
             )
             decision.fix_hint = (
-                "Use the protected bot/channel controls to change this behavior. "
+                "Use the protected bot/channel controls to change live behavior. "
                 "Also verify MESSAGE_CONTENT approval in the Discord Developer Portal."
             )
         else:
@@ -1099,6 +1113,7 @@ async def scan_channel_invites(
     source: str = "scanner",
     after: datetime | None = None,
     before: datetime | None = None,
+    allow_contentless_trusted_advertisers: bool = False,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "checked": 0,
@@ -1147,7 +1162,13 @@ async def scan_channel_invites(
                 result["matched"] += 1
                 if contentless_candidate:
                     result["contentless_candidates"] = int(result.get("contentless_candidates") or 0) + 1
-                decision = await decide_invite_message(message, source=source)
+                decision = await decide_invite_message(
+                    message,
+                    source=source,
+                    allow_contentless_trusted_advertiser=bool(
+                        allow_contentless_trusted_advertisers
+                    ),
+                )
                 if not decision.should_delete:
                     result["allowed"] += 1
                     continue
