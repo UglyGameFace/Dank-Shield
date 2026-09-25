@@ -200,7 +200,6 @@ def vc_verification_overwrites(
             use_voice_activation=True,
             move_members=True,
             manage_channels=True,
-            manage_roles=True,
             send_messages=True,
             read_message_history=True,
         )
