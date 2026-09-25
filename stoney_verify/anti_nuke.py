@@ -505,6 +505,21 @@ def _role_is_managed(role: Any) -> bool:
     return bool(getattr(role, "managed", False))
 
 
+def _is_own_managed_bot_role(guild: discord.Guild, role: Any) -> bool:
+    """Return whether this is one of Dank Shield's own managed integration roles."""
+
+    if role is None or not _role_is_managed(role):
+        return False
+    role_id = _safe_int(getattr(role, "id", 0), 0)
+    if role_id <= 0:
+        return False
+    me = getattr(guild, "me", None)
+    return any(
+        _safe_int(getattr(candidate, "id", 0), 0) == role_id
+        for candidate in list(getattr(me, "roles", []) or [])
+    )
+
+
 def _role_is_below(role: Any, other: Any) -> bool:
     try:
         return bool(role < other)
@@ -1383,6 +1398,11 @@ async def _handle_role_permission_escalation(
         return
 
     guild = after.guild
+    if _is_own_managed_bot_role(guild, after):
+        # Discord OAuth reauthorization updates the bot's managed integration
+        # role. Treating that platform-owned self-role change as hostile would
+        # let Fix Access trigger AntiNuke against the human authorizing recovery.
+        return
     settings = await get_antinuke_settings(int(guild.id))
     if (
         not settings["antinuke_enabled"]
@@ -1994,6 +2014,8 @@ async def antinuke_on_guild_role_update(
     before: discord.Role,
     after: discord.Role,
 ) -> None:
+    if _is_own_managed_bot_role(after.guild, after):
+        return
     added = dangerous_permissions_added(before, after)
     if added:
         await _handle_role_permission_escalation(before, after)
