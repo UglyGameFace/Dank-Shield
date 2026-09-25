@@ -103,7 +103,7 @@ def test_ticket_health_view_exposes_manual_state_when_required_mapping_is_absent
         == "dank:tickets:contextual_repair:infrastructure:v1"
     )
 
-    assert button.label == "Manual Fix Needed"
+    assert button.label == "Repair Bot Access"
     assert button.emoji is not None
     assert button.disabled is False
 
@@ -129,7 +129,7 @@ def test_ticket_contextual_integration_never_owns_discord_overwrite_mutation() -
 
     source = inspect.getsource(repair)
     assert "set_permissions(" not in source
-    assert "contextual.repair_context(" in source
+    assert "contextual.repair_or_handoff(" in source
     assert "clear_explicit_denies" not in source
 
 
