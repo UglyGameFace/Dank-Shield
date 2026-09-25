@@ -189,7 +189,7 @@ def _required_permissions(
         voice_types += (stage,)
 
     if isinstance(target, voice_types):
-        names = ["view_channel", "manage_channels", "move_members"] if clean_mode == "full" else ["view_channel"]
+        names = ["view_channel", "manage_channels", "manage_roles", "move_members"] if clean_mode == "full" else ["view_channel"]
         if clean_feature in {"moderation", "general"}:
             names.append("move_members")
     elif isinstance(target, discord.CategoryChannel):
