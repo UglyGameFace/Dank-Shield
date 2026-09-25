@@ -256,7 +256,7 @@ def _merge_activity_coverage_targets(
         notes.append(
             f"Activity access scope: {len(planned)} channel overwrite(s) cover "
             f"{len(tuple(getattr(report, 'problems', ()) or ()))} Diagnostics gap(s). "
-            "Only Dank Shield's own existing overwrite is expanded."
+            "Only Dank Shield's own overwrite is expanded or safely created; unrelated role/member overwrites are preserved."
         )
     elif not tuple(getattr(report, "problems", ()) or ()):
         notes.append("Diagnostics activity scope is already fully accessible.")
@@ -432,22 +432,65 @@ async def preview_or_apply(
     unchanged: list[str] = []
     failed: list[str] = []
     me = repair_core._bot_member(guild)
+    bootstrap_targets = 0
 
     for item in targets:
         channel = item.channel
+        expected_overwrites = dict(item.overwrites)
         overwrite_blocker = repair_core.permission_overwrite_edit_blocker(
             guild,
             channel,
         )
+        bootstrap = None
         if overwrite_blocker:
-            manual_actions.append(
-                f"{legacy._channel_label(channel)}: {overwrite_blocker}"
+            desired_bot = expected_overwrites.get(me) if me is not None else None
+            bootstrap = repair_core.build_bot_overwrite_bootstrap_plan(
+                guild,
+                channel,
+                desired=desired_bot,
             )
-            continue
+            if bootstrap is None:
+                manual_actions.append(
+                    f"{legacy._channel_label(channel)}: {overwrite_blocker}"
+                )
+                continue
+            if me is not None:
+                expected_overwrites[me] = bootstrap.overwrite
+            bootstrap_targets += 1
 
         pending_labels: list[str] = []
         applied_labels: list[str] = []
-        for target, expected in item.overwrites.items():
+        if bootstrap is not None and me is not None:
+            bot_label = legacy._target_label(me)
+            pending_labels.append(bot_label)
+            if apply:
+                try:
+                    await channel.edit(
+                        overwrites=bootstrap.overwrites,
+                        reason="Dank Shield setup permission repair self-lockout bootstrap",
+                    )
+                    applied_labels.append(bot_label)
+                except discord.Forbidden:
+                    failed.append(
+                        f"{legacy._channel_label(channel)} → {bot_label}: "
+                        "Discord denied the safe bot-only self-lockout bootstrap."
+                    )
+                    continue
+                except Exception as exc:
+                    failed.append(
+                        f"{legacy._channel_label(channel)} → {bot_label}: {type(exc).__name__}."
+                    )
+                    continue
+
+        for target, expected in expected_overwrites.items():
+            if (
+                bootstrap is not None
+                and me is not None
+                and repair_core._same_principal(target, me)
+            ):
+                # The bulk edit above already wrote the exact bot overwrite and
+                # preserved every unrelated overwrite in the channel.
+                continue
             try:
                 current = channel.overwrites_for(target)
             except Exception:
@@ -491,6 +534,12 @@ async def preview_or_apply(
             )
         elif not pending_labels:
             unchanged.append(legacy._channel_label(channel))
+
+    if bootstrap_targets:
+        notes.append(
+            f"Self-lockout recovery: {bootstrap_targets} target(s) can restore Dank Shield's own "
+            "Manage Permissions overwrite without syncing or rewriting unrelated role/member permissions."
+        )
 
     if apply:
         if include_activity_coverage:
