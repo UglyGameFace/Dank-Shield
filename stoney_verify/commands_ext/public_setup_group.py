@@ -243,9 +243,9 @@ async def _require_setup_permission(interaction: discord.Interaction) -> bool:
         return False
 
     try:
-        from .public_access_control import scoped_is_ticket_staff
+        from .public_access_control import scoped_interaction_is_ticket_staff
 
-        recognized_staff = scoped_is_ticket_staff(interaction.user)
+        recognized_staff = scoped_interaction_is_ticket_staff(interaction)
     except Exception:
         recognized_staff = False
     if not recognized_staff:
