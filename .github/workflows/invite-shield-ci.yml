@@ -11,6 +11,7 @@ on:
       - 'tests/test_invite_live_enforcement.py'
       - 'tests/test_invite_policy_message_surface_runtime.py'
       - 'tests/test_invite_runtime_reconcile_194.py'
+      - 'tests/test_protection_invite_native_ui.py'
       - 'tests/test_startup_recovery_scaling.py'
       - 'tools/audit_invite_link_safety.py'
       - '.github/workflows/invite-shield-ci.yml'
