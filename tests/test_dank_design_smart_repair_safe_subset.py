@@ -5,6 +5,7 @@ from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
+from stoney_verify import security_stats
 from stoney_verify.commands_ext import public_design_studio as legacy
 from stoney_verify.services import server_design_plan_service as plan_service
 from stoney_verify.services import server_design_repair_confidence as confidence
@@ -121,6 +122,42 @@ def test_bot_owned_live_stats_are_removed_from_design_detection(monkeypatch) -> 
         excluded,
     )
     assert [item["channel_id"] for item in filtered] == ["902"]
+
+def test_design_protects_styled_stats_category_when_saved_category_id_is_missing(monkeypatch) -> None:
+    cfg = {
+        security_stats.SECURITY_STATS_ENABLED_KEY: True,
+        security_stats.SECURITY_STATS_INHERIT_DESIGN_KEY: True,
+        security_stats.SECURITY_STATS_CATEGORY_NAME_KEY: "DANK SHIELD STATS",
+        "server_design_studio_options": {
+            "theme_id": "gothic_clean",
+            "strength": 4,
+            "font": "fraktur",
+            "separator_id": "pipe_spaced",
+            "category_frame_id": "line",
+        },
+    }
+    prefs = security_stats.security_stats_preferences(cfg)
+    styled_name = security_stats.security_stats_category_display_name(prefs)
+    category = SimpleNamespace(id=950, name=styled_name)
+    ordinary = SimpleNamespace(id=951, name="general-chat", category_id=0, category=None)
+
+    class FakeGuild:
+        id = 54321
+        categories = [category]
+        channels = [ordinary]
+
+        @staticmethod
+        def get_channel(_channel_id: int):
+            return None
+
+    async def fake_config(guild_id: int, *, refresh: bool = False):
+        assert guild_id == 54321
+        assert refresh is False
+        return dict(cfg)
+
+    monkeypatch.setattr(plan_service, "get_guild_config", fake_config)
+    excluded = asyncio.run(plan_service._functional_design_resource_ids(FakeGuild()))
+    assert excluded == {950}
 
 def test_drift_plan_excludes_live_stats_before_detection_and_preview(monkeypatch) -> None:
     category = SimpleNamespace(id=900, name="🛡️ DANK SHIELD STATS")
