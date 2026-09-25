@@ -297,6 +297,7 @@ def _empty_totals() -> dict[str, int]:
         "failed": 0,
         "warnings": 0,
         "deferred": 0,
+        "disabled": 0,
     }
 
 
@@ -353,6 +354,7 @@ async def _reconcile_guild(
         _log(f"deferred guild={gid} reason={reason} policy=unavailable")
         return totals
     if not enabled:
+        totals["disabled"] = 1
         _LAST_GUILD_RECONCILE_AT[gid] = now
         _log(f"skipped guild={gid} reason={reason} delete_path=disabled")
         return totals
@@ -431,7 +433,7 @@ async def _reconcile_all(bot: Any, *, reason: str) -> None:
                 )
                 if int(result.get("deferred") or 0):
                     deferred.append((guild, after, before))
-                else:
+                elif not int(result.get("disabled") or 0):
                     await _persist_recovery_checkpoint(int(getattr(guild, "id", 0) or 0), before)
             except Exception as exc:
                 _log(
@@ -450,7 +452,10 @@ async def _reconcile_all(bot: Any, *, reason: str) -> None:
                         after=after,
                         before=before,
                     )
-                    if not int(retry_result.get("deferred") or 0):
+                    if (
+                        not int(retry_result.get("deferred") or 0)
+                        and not int(retry_result.get("disabled") or 0)
+                    ):
                         await _persist_recovery_checkpoint(
                             int(getattr(guild, "id", 0) or 0),
                             before,
@@ -611,11 +616,10 @@ async def _raw_message_edit_worker(
         except Exception:
             return
 
-        await reserve_recovery_discord_rest_requests(
-            1,
-            label=f"invite raw-edit fetch guild={guild_id} channel={channel_id}",
-        )
         try:
+            # This is live recovery, not startup backfill. Let discord.py own
+            # the route-aware REST limiter so a startup-history budget cannot
+            # delay enforcement of a just-edited message.
             message = await channel.fetch_message(int(message_id))
         except (discord.NotFound, discord.Forbidden):
             return
@@ -643,6 +647,12 @@ async def _raw_message_edit_worker(
 async def _raw_message_edit_listener(payload: discord.RawMessageUpdateEvent) -> None:
     try:
         if getattr(payload, "cached_message", None) is not None:
+            return
+        data = dict(getattr(payload, "data", {}) or {})
+        if not any(
+            key in data
+            for key in ("content", "embeds", "components", "attachments", "poll")
+        ):
             return
         guild_id = int(getattr(payload, "guild_id", 0) or 0)
         channel_id = int(getattr(payload, "channel_id", 0) or 0)
