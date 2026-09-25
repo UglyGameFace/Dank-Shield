@@ -269,7 +269,7 @@ def _merge_activity_coverage_targets(
         # Manage Permissions allow on the affected target before Administrator is
         # removed again. Normal non-Admin repair never manufactures this powerful
         # channel allow merely because server-level Manage Roles is effective.
-        if temporary_admin_active and getattr(expected, "manage_roles", None) is not False:
+        if temporary_admin_active:
             try:
                 from stoney_verify.services.setup_permission_policy import (
                     permissions_without_administrator,
@@ -282,6 +282,9 @@ def _merge_activity_coverage_targets(
                 if underlying is not None and not bool(
                     getattr(underlying, "manage_roles", False)
                 ):
+                    # Explicit emergency recovery: replace any bot-member deny
+                    # with an allow so removing Administrator does not re-lock
+                    # the same target. No unrelated role/member overwrite moves.
                     expected.manage_roles = True
             except Exception:
                 pass
