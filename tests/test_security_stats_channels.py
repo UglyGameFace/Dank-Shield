@@ -84,6 +84,37 @@ def test_per_counter_sections_render_requested_ticket_wrappers_exactly() -> None
     ) == "[🎫] Open Tickets: 「"
 
 
+def test_custom_value_wrapper_keeps_unmodified_design_sections_inherited() -> None:
+    prefs = security_stats.security_stats_preferences(
+        {
+            security_stats.SECURITY_STATS_INHERIT_DESIGN_KEY: True,
+            "server_design_studio_options": {
+                "theme_id": "gothic_clean",
+                "strength": 4,
+                "font": "fraktur",
+                "separator_id": "pipe_spaced",
+                "category_frame_id": "line",
+            },
+            security_stats.SECURITY_STATS_FORMAT_OVERRIDES_KEY: {
+                "open_tickets": {
+                    "value_template": "「{value}」",
+                }
+            },
+        }
+    )
+
+    state = security_stats.security_stat_format_state(prefs, "open_tickets")
+    assert state["custom_parts"] == ("value_template",)
+
+    rendered = security_stats.render_security_stat_name(
+        prefs,
+        "open_tickets",
+        "0",
+    )
+    assert rendered.endswith(": 「0」")
+    assert rendered != "🎫 Open Tickets: 「0」"
+
+
 def test_counter_format_requires_exactly_one_live_value_token() -> None:
     ok, message, cleaned = security_stats.validate_security_stat_format(
         "open_tickets",
