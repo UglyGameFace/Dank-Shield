@@ -105,6 +105,49 @@ def test_startup_invite_scan_uses_recovery_budget_but_live_scan_does_not(monkeyp
     assert reservations == [(3, "invite history guild=777 channel=778")]
 
 
+def test_contentless_onebump_still_triggers_live_recovery_sweep() -> None:
+    message = SimpleNamespace(
+        content="",
+        author=SimpleNamespace(
+            id=1028956609382199346,
+            bot=True,
+            name="OneBump",
+        ),
+        application_id=1028956609382199346,
+        application=None,
+        interaction_metadata=None,
+        embeds=[],
+        attachments=[],
+        components=[],
+        poll=None,
+    )
+
+    assert runtime.policy.extract_invite_codes_from_message(message) == []
+    assert runtime.policy.is_contentless_trusted_advertiser_candidate(message) is True
+    assert runtime._looks_invite_related(message) is True
+
+
+def test_contentless_onebump_interaction_receipt_does_not_trigger_ad_recovery() -> None:
+    message = SimpleNamespace(
+        content="",
+        author=SimpleNamespace(
+            id=1028956609382199346,
+            bot=True,
+            name="OneBump",
+        ),
+        application_id=1028956609382199346,
+        application=None,
+        interaction_metadata=SimpleNamespace(id=123),
+        embeds=[],
+        attachments=[],
+        components=[],
+        poll=None,
+    )
+
+    assert runtime.policy.is_contentless_trusted_advertiser_candidate(message) is False
+    assert runtime._looks_invite_related(message) is False
+
+
 def test_legacy_invite_runtime_bridge_stays_retired() -> None:
     guard_dir = ROOT / "stoney_verify" / "startup_guards"
     for filename in (
