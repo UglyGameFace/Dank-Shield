@@ -162,7 +162,50 @@ def test_server_control_owner_fast_path_precedes_member_type_requirement() -> No
 
     assert public_access_control.scoped_is_server_control(interaction.user)
     assert public_access_control.scoped_is_ticket_staff(interaction.user)
+    assert public_access_control.scoped_interaction_is_ticket_staff(interaction)
     assert public_access_control.scoped_interaction_is_server_control(interaction)
+
+
+def test_interaction_ticket_staff_owner_does_not_require_user_guild_attachment() -> None:
+    guild = SimpleNamespace(id=9001, owner_id=111)
+    interaction = SimpleNamespace(
+        guild=guild,
+        user=SimpleNamespace(id=111),
+        permissions=SimpleNamespace(administrator=False, manage_guild=False),
+    )
+
+    assert public_owner_authority.interaction_is_actual_guild_owner(interaction)
+    assert public_access_control.scoped_interaction_is_ticket_staff(interaction)
+
+
+def test_owner_reaches_all_staff_first_management_gates_without_member_shape(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        guild = SimpleNamespace(id=9001, owner_id=111)
+        interaction = SimpleNamespace(
+            guild=guild,
+            user=SimpleNamespace(id=111),
+            permissions=SimpleNamespace(
+                administrator=False,
+                manage_guild=False,
+                manage_channels=False,
+            ),
+        )
+
+        async def forbidden_send(*_args, **_kwargs) -> None:
+            raise AssertionError("actual guild owner must not receive a denial")
+
+        monkeypatch.setattr(public_access_control, "reply_once", forbidden_send)
+        monkeypatch.setattr(public_design_studio, "safe_send_interaction", forbidden_send)
+        monkeypatch.setattr(public_embed_group, "safe_send_interaction", forbidden_send)
+
+        assert await public_access_control.require_server_control(interaction) is True
+        assert await public_setup_group._require_setup_permission(interaction) is True
+        assert await public_design_studio._require_design_permission(interaction) is True
+        assert await public_embed_group._require_embed_permission(interaction) is True
+
+    asyncio.run(scenario())
 
 
 def test_require_server_control_never_denies_actual_owner(monkeypatch) -> None:
@@ -221,8 +264,8 @@ def test_server_control_denial_hides_permission_recipe_from_nonstaff(monkeypatch
         )
         monkeypatch.setattr(
             public_access_control,
-            "scoped_is_ticket_staff",
-            lambda _member: False,
+            "scoped_interaction_is_ticket_staff",
+            lambda _interaction: False,
         )
 
         async def capture(_interaction, payload) -> None:
@@ -259,8 +302,8 @@ def test_server_control_staff_still_gets_actionable_second_stage_guidance(monkey
         )
         monkeypatch.setattr(
             public_access_control,
-            "scoped_is_ticket_staff",
-            lambda _member: True,
+            "scoped_interaction_is_ticket_staff",
+            lambda _interaction: True,
         )
         monkeypatch.setattr(
             public_access_control,
@@ -289,8 +332,8 @@ def test_server_design_denial_is_staff_only_before_manage_channels(monkeypatch) 
 
         monkeypatch.setattr(
             public_access_control,
-            "scoped_is_ticket_staff",
-            lambda _member: False,
+            "scoped_interaction_is_ticket_staff",
+            lambda _interaction: False,
         )
 
         async def capture(_interaction, *, content="", **_kwargs) -> bool:
@@ -314,8 +357,8 @@ def test_server_design_recognized_staff_gets_native_permission_guidance(monkeypa
 
         monkeypatch.setattr(
             public_access_control,
-            "scoped_is_ticket_staff",
-            lambda _member: True,
+            "scoped_interaction_is_ticket_staff",
+            lambda _interaction: True,
         )
         monkeypatch.setattr(
             public_design_studio,
@@ -334,6 +377,28 @@ def test_server_design_recognized_staff_gets_native_permission_guidance(monkeypa
         assert "Manage Channels" in sent[0]
 
     asyncio.run(scenario())
+
+
+def test_staff_first_interaction_gates_use_interaction_authority_not_member_only_helper() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    paths = (
+        "stoney_verify/commands_ext/public_access_control.py",
+        "stoney_verify/commands_ext/public_design_studio.py",
+        "stoney_verify/commands_ext/public_diagnostics_group.py",
+        "stoney_verify/commands_ext/public_embed_group.py",
+        "stoney_verify/commands_ext/public_setup_group.py",
+        "stoney_verify/commands_ext/public_setup_overview.py",
+    )
+    for relative in paths:
+        source = (root / relative).read_text(encoding="utf-8")
+        assert "scoped_is_ticket_staff(interaction.user)" not in source
+
+    access = (root / paths[0]).read_text(encoding="utf-8")
+    assert "def scoped_interaction_is_ticket_staff(" in access
+    assert "interaction_is_actual_guild_owner(interaction)" in access
+    assert "interaction_has_administrator_authority(interaction)" in access
 
 
 def test_staff_management_entrypoints_check_staff_before_native_permission_copy() -> None:
