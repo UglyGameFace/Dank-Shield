@@ -862,12 +862,19 @@ def build_preview_embed(state: PermissionRepairState) -> discord.Embed:
     return embed
 
 
-async def _safe_defer_update(interaction: discord.Interaction) -> None:
-    try:
-        if not interaction.response.is_done():
-            await interaction.response.defer(thinking=False)
-    except Exception:
-        pass
+async def _safe_defer_update(
+    interaction: discord.Interaction,
+    *,
+    action_name: str = "specific_access_repair",
+) -> bool:
+    """Claim the component before any selected-target mutation begins."""
+    from .interaction_guard import safe_defer_interaction
+
+    return await safe_defer_interaction(
+        interaction,
+        ephemeral=True,
+        action_name=action_name,
+    )
 
 
 async def _edit_original_or_followup(
@@ -875,15 +882,17 @@ async def _edit_original_or_followup(
     *,
     embed: discord.Embed,
     view: discord.ui.View | None = None,
-) -> None:
+) -> bool:
+    first_error: Exception | None = None
     try:
         if interaction.response.is_done():
             await interaction.edit_original_response(embed=embed, view=view)
         else:
             await interaction.response.edit_message(embed=embed, view=view)
-        return
-    except Exception:
-        pass
+        return True
+    except Exception as exc:
+        first_error = exc
+
     try:
         await interaction.followup.send(
             embed=embed,
@@ -891,8 +900,28 @@ async def _edit_original_or_followup(
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
-    except Exception:
-        pass
+        return True
+    except Exception as followup_error:
+        try:
+            from .interaction_guard import log_interaction_failure
+
+            log_interaction_failure(
+                interaction,
+                followup_error,
+                stage="access_repair_render_failed",
+                action_name="specific_access_repair",
+                fix_hint=(
+                    "The repair result could not be rendered. Reopen Repair Bot Access "
+                    "and preview the target before retrying."
+                ),
+                extra={
+                    "first_error_type": type(first_error).__name__ if first_error else "",
+                    "first_error": str(first_error or "")[:300],
+                },
+            )
+        except Exception:
+            pass
+        return False
 
 
 def _actor_can_manage(interaction: discord.Interaction) -> bool:
@@ -1142,7 +1171,11 @@ class ExplicitDenyConfirmView(discord.ui.View):
                 "❌ Server owner or Manage Server, Manage Channels, or Administrator authority is required.",
                 ephemeral=True,
             )
-        await _safe_defer_update(interaction)
+        if not await _safe_defer_update(
+            interaction,
+            action_name="specific_access_repair_clear_denies",
+        ):
+            return
         result = await _run_repair(interaction, self.state, clear_explicit_denies=True)
         if result is None:
             return
@@ -1327,7 +1360,11 @@ class TargetPermissionRepairView(discord.ui.View):
                 ephemeral=True,
             )
 
-        await _safe_defer_update(interaction)
+        if not await _safe_defer_update(
+            interaction,
+            action_name="specific_access_repair_apply",
+        ):
+            return
         result = await _run_repair(interaction, self.state, clear_explicit_denies=False)
         if result is None:
             return
