@@ -197,12 +197,25 @@ def _merge_activity_coverage_targets(
                 current.manage_threads = True
             existing.overwrites[me] = current
         else:
+            # Preserve any existing bot-specific overwrite entries. Activity
+            # repair adds only the permissions required for authoritative
+            # history/thread coverage and must not erase unrelated explicit
+            # allows/denies already configured for Dank Shield.
+            try:
+                expected = channel.overwrites_for(me)
+            except Exception:
+                expected = discord.PermissionOverwrite()
+            expected.view_channel = True
+            expected.read_message_history = True
+            if isinstance(channel, (discord.TextChannel, discord.ForumChannel)):
+                expected.manage_threads = True
+
             legacy._add_target(
                 targets,
                 seen,
                 channel,
                 "Authoritative activity coverage",
-                {me: _activity_coverage_expected(channel)},
+                {me: expected},
             )
             if targets:
                 by_channel[cid] = targets[-1]
@@ -491,7 +504,7 @@ def result_embed(result: dict[str, Any]) -> discord.Embed:
     embed.add_field(
         name="Scope",
         value=(
-            "Activity access only: setup targets plus bot-only history/thread access requested from **Check Bot Access**."
+            "Full bot access: configured setup targets plus bot-only View Channel / Read Message History / Manage Threads coverage across the server."
             if activity_scope
             else "Setup channels only: saved setup targets, exact-name matches, and their managed ticket/staff children."
         ),
@@ -564,6 +577,8 @@ class PermissionRepairPreviewView(discord.ui.View):
         super().__init__(timeout=900)
         self.parent = str(parent or "security").strip().lower()
         self.include_activity_coverage = bool(include_activity_coverage)
+        if self.include_activity_coverage:
+            self.apply_fixes.label = "Fix All Safe Access"
         if guild is not None:
             button = _reauthorize_button(guild)
             if button is not None:
