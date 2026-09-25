@@ -262,15 +262,29 @@ class TicketInfrastructureRepairButton(discord.ui.Button):
             owner_id=int(interaction.user.id),
             guild=guild,
             cfg=cfg,
+            can_repair=True,
         )
         await _edit_component(interaction, embed=embed, view=view)
 
 
 class TicketPanelHealthView(discord.ui.View):
-    def __init__(self, *, owner_id: int, guild: discord.Guild, cfg: Any) -> None:
+    def __init__(
+        self,
+        *,
+        owner_id: int,
+        guild: discord.Guild,
+        cfg: Any,
+        can_repair: bool = True,
+    ) -> None:
         super().__init__(timeout=900)
         self.owner_id = int(owner_id)
-        self.add_item(TicketInfrastructureRepairButton(guild=guild, cfg=cfg, row=0))
+        repair_button = TicketInfrastructureRepairButton(guild=guild, cfg=cfg, row=0)
+        if not can_repair and not repair_button.disabled:
+            repair_button.label = "Manager Required"
+            repair_button.emoji = "🔒"
+            repair_button.style = discord.ButtonStyle.secondary
+            repair_button.disabled = True
+        self.add_item(repair_button)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) == self.owner_id:
@@ -289,10 +303,13 @@ async def _contextual_send_health(interaction: discord.Interaction) -> None:
     await panel._defer(interaction, True)
     cfg = await get_guild_config(int(guild.id), refresh=True)
     embed = await _ticket_health_embed(guild)
+    from .public_owner_authority import interaction_has_manage_guild_authority
+
     view = TicketPanelHealthView(
         owner_id=int(interaction.user.id),
         guild=guild,
         cfg=cfg,
+        can_repair=interaction_has_manage_guild_authority(interaction),
     )
     await panel._ephemeral(
         interaction,
