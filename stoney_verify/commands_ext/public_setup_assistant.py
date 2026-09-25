@@ -378,6 +378,39 @@ async def _ensure_category(guild: discord.Guild, name: str, *, overwrites: Optio
         return None
 
 
+def _preserve_existing_bot_manage_permissions(
+    guild: discord.Guild,
+    channel: Any,
+    overwrites: Optional[dict[Any, discord.PermissionOverwrite]],
+) -> Optional[dict[Any, discord.PermissionOverwrite]]:
+    if overwrites is None:
+        return None
+    copied = dict(overwrites)
+    me = getattr(guild, "me", None)
+    if me is None:
+        return copied
+
+    bot_key = None
+    for target in copied:
+        try:
+            if int(getattr(target, "id", 0) or 0) == int(getattr(me, "id", 0) or 0):
+                bot_key = target
+                break
+        except Exception:
+            continue
+    if bot_key is None:
+        return copied
+
+    try:
+        current = channel.overwrites_for(me)
+        expected = discord.PermissionOverwrite.from_pair(*copied[bot_key].pair())
+        expected.manage_roles = getattr(current, "manage_roles", None)
+        copied[bot_key] = expected
+    except Exception:
+        pass
+    return copied
+
+
 async def _ensure_text_channel(guild: discord.Guild, name: str, *, category: Optional[discord.CategoryChannel], overwrites: Optional[dict[Any, discord.PermissionOverwrite]], topic: str, created: list[str], reused: list[str], notes: list[str]) -> Optional[discord.TextChannel]:
     name = _clean_name(name, STATUS_CHANNEL_NAME)
     existing = _text_channel_by_name(guild, name)
@@ -388,7 +421,11 @@ async def _ensure_text_channel(guild: discord.Guild, name: str, *, category: Opt
             if category is not None and existing.category_id != category.id:
                 kwargs["category"] = category
             if overwrites is not None:
-                kwargs["overwrites"] = overwrites
+                kwargs["overwrites"] = _preserve_existing_bot_manage_permissions(
+                    guild,
+                    existing,
+                    overwrites,
+                )
             if topic:
                 kwargs["topic"] = topic[:1024]
             await existing.edit(**kwargs)
@@ -418,7 +455,11 @@ async def _ensure_voice_channel(guild: discord.Guild, name: str, *, category: Op
             if category is not None and existing.category_id != category.id:
                 kwargs["category"] = category
             if overwrites is not None:
-                kwargs["overwrites"] = overwrites
+                kwargs["overwrites"] = _preserve_existing_bot_manage_permissions(
+                    guild,
+                    existing,
+                    overwrites,
+                )
             await existing.edit(**kwargs)
         except Exception as e:
             notes.append(f"Reused {existing.mention}, but could not refresh permissions: {type(e).__name__}")
