@@ -101,7 +101,7 @@ Checked current official Discord Developer Documentation on 2026-09-25.
 
 ## Status
 
-**RESEARCH COMPLETE — implementation starting**
+**IMPLEMENTATION COMPLETE FOR INITIAL VALIDATION — focused/full repository validation pending**
 
 Branch: `feat/server-stats-design-format-registry-20260925`
 
@@ -130,8 +130,46 @@ Before merge:
 - Server Design continues excluding live stats resources from its own rename
   plans.
 
+## Implementation completed
+
+- Added one canonical metric registry. The public counter picker is derived from
+  it and every row names its real provider/source and capability requirements.
+- Added provider parity enforcement so a registry metric without a real value
+  provider fails validation instead of silently becoming a decorative zero.
+- Added structured per-counter format overrides:
+  - icon/prefix;
+  - label;
+  - label/value separator;
+  - value template with exactly one `{value}` token.
+- Added examples supported by the renderer such as
+  `[🎫] Open Tickets: [0]` and `[🎫] Open Tickets: 「0」`.
+- Added final Discord name validation/fallback at 1–100 characters while
+  preserving the live value.
+- Added stable-prefix recovery so wrapped values do not break owned-channel
+  rediscovery when a saved channel ID is stale.
+- Added optional Server Design inheritance:
+  - the Stats category can inherit category frame/font treatment;
+  - stable metric labels can inherit the selected font;
+  - the saved design channel separator can sit between default icon and label;
+  - dynamic numeric/status values are never font-transformed.
+- Structured per-counter formatting overrides inherited icon/label separator
+  layout while still allowing safe label font inheritance.
+- Existing enabled installations default Design Sync to Off unless explicitly
+  saved; newly enabled displays save Design Sync On by default.
+- Added a **Design Sync** control to the Server Stats center.
+- Upgraded the old label modal in place to a four-section format editor so old
+  call sites remain compatible.
+- Picker descriptions now explain each metric's source/requirements, and future
+  unavailable metrics are rejected on selection instead of silently enabled.
+- Dank Design functional-resource recovery now recognizes Server Stats by saved
+  category ID, saved counter parent, or canonical/custom/design-synced category
+  name, while still excluding the live resources from normal Design renames.
+- Added regression coverage to the existing Server Stats and Dank Design test
+  modules; no new test file was created.
+
 ## Next step
 
-Implement the canonical metric/format renderer in `security_stats.py`, then
-wire the existing Server Stats UI to structured per-counter customization and
-Design Sync. Validate focused behavior before opening the PR.
+Open a draft PR from the exact branch head, run all repository workflows, inspect
+focused/full-suite failures, and correct only same-task regressions. Then review
+the final diff for configuration compatibility, UI limits, ownership conflicts,
+and Discord 1–100-character/rate-limit constraints before marking ready.
