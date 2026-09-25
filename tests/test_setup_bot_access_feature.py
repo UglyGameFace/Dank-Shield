@@ -182,6 +182,7 @@ def test_diagnostics_repair_bot_access_includes_full_activity_scope(monkeypatch)
         open_repair,
     )
     monkeypatch.setattr(diagnostics, "_admin_or_manage_guild", lambda _interaction: True)
+    monkeypatch.setattr(diagnostics, "scoped_is_ticket_staff", lambda _user: True)
 
     interaction = type(
         "I",
