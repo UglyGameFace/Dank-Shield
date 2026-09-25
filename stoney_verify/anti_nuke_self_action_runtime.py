@@ -25,7 +25,6 @@ _HTTP_PATCH_FLAG = "_dank_antinuke_self_action_http_patched"
 _WEBHOOK_PATCH_FLAG = "_dank_antinuke_self_action_webhook_patched"
 _AUTH_TTL_SECONDS = 120.0
 _SIDE_EFFECT_TTL_SECONDS = 15.0
-_MAX_PENDING = 4096
 _REASON_BASE_LIMIT = 380
 _MARKER_RE = re.compile(r"\[DSA:([0-9a-f]{24})\]", re.IGNORECASE)
 _API_PREFIX_RE = re.compile(r"^/api/v\d+")
@@ -332,17 +331,9 @@ def _prune_pending(now: Optional[float] = None) -> None:
             continue
         if current - float(auth.completed_at) > _AUTH_TTL_SECONDS:
             _PENDING.pop(nonce, None)
-    if len(_PENDING) > _MAX_PENDING:
-        # Do not evict live in-flight requests to satisfy the soft ledger cap.
-        # Failed/cancelled requests remove themselves, and successful requests
-        # become eligible for normal TTL/cap pruning after completion.
-        completed = sorted(
-            (auth for auth in _PENDING.values() if auth.completed_at is not None),
-            key=lambda item: float(item.completed_at or item.created_at),
-        )
-        overflow = len(_PENDING) - _MAX_PENDING
-        for auth in completed[:overflow]:
-            _PENDING.pop(auth.nonce, None)
+    # Do not count-evict valid provenance. Completed receipts are naturally
+    # bounded by the short TTL, while in-flight receipts represent real
+    # outstanding Discord requests and are removed on success/failure/cancel.
 
 
 def _prune_expected_side_effects(now: Optional[float] = None) -> None:
@@ -352,18 +343,8 @@ def _prune_expected_side_effects(now: Optional[float] = None) -> None:
             continue
         if current - float(expected.completed_at) > _SIDE_EFFECT_TTL_SECONDS:
             _EXPECTED_SIDE_EFFECTS.pop(token, None)
-    if len(_EXPECTED_SIDE_EFFECTS) > _MAX_PENDING:
-        completed = sorted(
-            (
-                expected
-                for expected in _EXPECTED_SIDE_EFFECTS.values()
-                if expected.completed_at is not None
-            ),
-            key=lambda item: float(item.completed_at or item.created_at),
-        )
-        overflow = len(_EXPECTED_SIDE_EFFECTS) - _MAX_PENDING
-        for expected in completed[:overflow]:
-            _EXPECTED_SIDE_EFFECTS.pop(expected.token, None)
+    # Side-effect provenance follows the same rule: valid unexpired proof is
+    # never sacrificed merely because another guild is busy.
 
 
 def _expect_side_effect(
