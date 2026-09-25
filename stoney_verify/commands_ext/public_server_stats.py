@@ -22,27 +22,30 @@ from ..security_stats import (
     SECURITY_STATS_CATEGORY_NAME_KEY,
     SECURITY_STATS_CUSTOM_LABELS_KEY,
     SECURITY_STATS_ENABLED_KEY,
+    SECURITY_STATS_FORMAT_OVERRIDES_KEY,
+    SECURITY_STATS_INHERIT_DESIGN_KEY,
+    SECURITY_STATS_METRICS,
     SECURITY_STATS_NUMBER_STYLE_KEY,
     SECURITY_STATS_PLACEMENT_KEY,
     SECURITY_STATS_VISIBLE_KEYS_KEY,
     disable_security_stats_display,
     ensure_security_stats_display,
     refresh_security_stats_display,
+    security_stat_format_preview,
+    security_stat_format_state,
+    security_stat_metric,
+    security_stat_metric_capability,
+    security_stat_metric_description,
+    security_stats_category_display_name,
     security_stats_preferences,
+    validate_security_stat_format,
 )
 from .public_setup_group import _require_setup_permission
 
 
 _METRIC_TITLES = {
-    "status": "SpamGuard status",
-    "members": "Member count",
-    "spam_blocked": "Spam blocked",
-    "invites_blocked": "Invites blocked",
-    "timeouts_issued": "Timeouts issued",
-    "quarantines": "Quarantined",
-    "open_tickets": "Open tickets",
-    "claimed_tickets": "Claimed tickets",
-    "closed_tickets": "Closed tickets",
+    key: metric.title
+    for key, metric in SECURITY_STATS_METRICS.items()
 }
 
 
@@ -75,6 +78,8 @@ def _center_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
     category = _tracked_category(guild, cfg)
     visible = tuple(prefs["visible_keys"])
     custom_labels = dict(prefs["labels"])
+    custom_formats = dict(prefs["formats"])
+    design_sync = bool(prefs["inherit_design"])
 
     if enabled and category is not None:
         health = f"✅ Active • <#{int(category.id)}>"
@@ -100,9 +105,10 @@ def _center_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
     embed.add_field(
         name="Display",
         value=(
-            f"**Category:** {prefs['category_name']}\n"
+            f"**Category:** {security_stats_category_display_name(prefs)}\n"
             f"**Placement:** {str(prefs['placement']).title()}\n"
             f"**Numbers:** {str(prefs['number_style']).title()}\n"
+            f"**Design Sync:** {'On' if design_sync else 'Off'}\n"
             f"**Visible counters:** {len(visible)}/{len(DEFAULT_SECURITY_STATS_VISIBLE_KEYS)}"
         ),
         inline=False,
@@ -115,18 +121,20 @@ def _center_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
     embed.add_field(
         name="Customization",
         value=(
-            f"**Custom labels:** {len(custom_labels)}\n"
-            "Use **Choose Visible Counters** to hide anything you do not want. "
-            "Use **Customize a Label** for custom wording or emoji. Hidden owned counters "
-            "are removed instead of lingering as stale channels."
+            f"**Legacy custom labels:** {len(custom_labels)}\n"
+            f"**Structured counter formats:** {len(custom_formats)}\n"
+            "Use **Choose Visible Counters** to select provider-backed metrics. "
+            "Use **Customize Counter Format** to edit icon/prefix, label, separator, and "
+            "the value wrapper without disconnecting the live value source."
         ),
         inline=False,
     )
     embed.add_field(
         name="Repair behavior",
         value=(
-            "If an enabled stats category is deleted, refresh now repairs it instead of silently giving up. "
-            "The saved category name, labels, visible counters, placement, and number style are reapplied."
+            "If an enabled stats category is deleted, refresh repairs the same owned display. "
+            "Server Design never directly renames live stat resources; Design Sync reads the saved design "
+            "as a visual source while Server Stats remains the sole live-name owner."
         ),
         inline=False,
     )
