@@ -234,28 +234,34 @@ for filename in (
     if (ROOT / "startup_guards" / filename).exists():
         failures.append(f"retired legacy invite runtime guard still exists: {filename}")
 
-# Content-redacted app-card enforcement must stay narrow and centralized.
+# Content-redacted app-card enforcement must stay generic, narrow, and centralized.
 policy_source = text("stoney_verify/invite_policy_engine.py")
-if "1028956609382199346" not in policy_source:
-    failures.append("canonical invite policy is missing exact OneBump application identity")
-if "is_contentless_trusted_advertiser_candidate" not in policy_source:
-    failures.append("canonical invite policy is missing contentless advertiser candidate boundary")
-if "protected_contentless_known_advertiser" not in policy_source:
+if "1028956609382199346" in policy_source:
+    failures.append("canonical invite policy still hardcodes the OneBump application identity")
+if "is_contentless_protected_poster_candidate" not in policy_source:
+    failures.append("canonical invite policy is missing generic contentless protected-poster boundary")
+if "protected_contentless_poster" not in policy_source:
     failures.append("canonical invite policy is missing explicit-target contentless delete rule")
-if "allow_contentless_trusted_advertisers" not in policy_source:
-    failures.append("historical scanner cannot receive explicit contentless-ad cleanup authority")
+if "allow_contentless_protected_posters" not in policy_source:
+    failures.append("historical scanner cannot receive explicit contentless protected-poster authority")
 if "_SCAN_HISTORY_MAX = 2000" not in policy_source:
     failures.append("canonical invite history scanner is not bounded for deep cleanup")
 
 recovery_source = text("stoney_verify/invite_reconciliation_runtime.py")
-if "policy.is_contentless_trusted_advertiser_candidate(message)" not in recovery_source:
-    failures.append("live invite reconciliation cannot trigger on content-redacted known advertiser posts")
+if "policy.is_contentless_protected_poster_candidate(message)" not in recovery_source:
+    failures.append("live invite reconciliation cannot trigger on generic content-redacted protected posters")
+if "_INVITE_CHECKPOINT_KEY" not in recovery_source:
+    failures.append("invite reconciliation is missing its own durable checkpoint")
+if "persisted_last_heartbeat_at" in recovery_source:
+    failures.append("invite reconciliation is still incorrectly coupled to the activity heartbeat")
+if '"on_raw_message_edit"' not in recovery_source:
+    failures.append("invite reconciliation is missing uncached raw-message edit recovery")
 
 native_source = text("stoney_verify/commands_ext/public_protection_invite_ui.py")
 if "limit=1000" not in native_source:
     failures.append("Protection Center historical invite cleanup is not using the deeper bounded pass")
-if "allow_contentless_trusted_advertisers=True" not in native_source:
-    failures.append("Protection Center cleanup does not explicitly authorize known contentless advertiser cleanup")
+if "allow_contentless_protected_posters=True" not in native_source:
+    failures.append("Protection Center cleanup does not explicitly authorize protected contentless posters")
 
 print("=== Invite Link Safety Audit ===")
 if failures:
