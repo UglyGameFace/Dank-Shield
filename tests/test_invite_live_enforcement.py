@@ -236,6 +236,41 @@ def test_content_redacted_onebump_is_not_guess_deleted_without_explicit_target(
     assert message.deleted is False
 
 
+def test_contentless_onebump_respects_existing_allowed_channel_exemption(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_load(guild: Any, *, refresh: bool = False):
+        _ = guild, refresh
+        settings = _protected_onebump_settings()
+        settings["allowed_invite_channel_ids"] = ["77"]
+        return (
+            {"automod_block_invites": True, "automod_block_links": False},
+            settings,
+        )
+
+    monkeypatch.setattr(policy, "load_invite_policy", fake_load)
+
+    message = FakeMessage(
+        "",
+        bot=True,
+        author_id=1028956609382199346,
+        application_id=1028956609382199346,
+        author_name="OneBump",
+    )
+    decision = asyncio.run(
+        policy.enforce_live_invite_message(
+            message,
+            source="globals_live_enforcer",
+            refresh_policy=True,
+        )
+    )
+
+    assert decision is not None
+    assert decision.rule_id == "invite_allowed_channel"
+    assert decision.should_delete is False
+    assert message.deleted is False
+
+
 def test_spoofed_onebump_display_name_cannot_trigger_contentless_delete() -> None:
     message = FakeMessage(
         "",
