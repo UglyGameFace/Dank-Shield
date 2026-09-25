@@ -65,7 +65,7 @@ Implemented:
 
 ## Validation / results
 
-Implementation is present on the branch. Exact-head validation is still required before merge:
+Implementation is present on the branch and PR #329 is open for exact-head validation. Validation is still required before merge:
 
 - compile changed modules;
 - run invite live-enforcement tests;
@@ -94,4 +94,4 @@ Live production acceptance is still required after a validated deployment. Conte
 
 ## Next step
 
-Run exact-head validation, repair any failures, open the PR, inspect all workflow evidence, and merge only from the tested head.
+Run PR #329 exact-head validation, repair any failures, inspect all workflow evidence, and merge only from the tested head.
