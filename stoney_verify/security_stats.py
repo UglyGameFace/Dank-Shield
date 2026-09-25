@@ -383,6 +383,16 @@ def _design_context(preferences: Mapping[str, Any]) -> Dict[str, Any]:
             "options": {},
         }
     options = _mapping(preferences.get("design_options", {}))
+    if not options:
+        # Design Sync can be enabled before Server Design has ever been saved.
+        # In that state there is no owner-selected visual language to inherit.
+        return {
+            "enabled": False,
+            "font": "normal",
+            "separator": "",
+            "strength": 0,
+            "options": {},
+        }
     try:
         from stoney_verify.services import server_design_plan_service as design_plan
         from stoney_verify.services import server_design_studio as design_studio
