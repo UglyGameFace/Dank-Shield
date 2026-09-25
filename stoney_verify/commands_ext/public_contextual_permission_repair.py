@@ -362,12 +362,16 @@ class WelcomeContextRepairButton(discord.ui.Button):
 
         await welcome._ack_update(interaction)
         cfg = await get_guild_config(int(guild.id), refresh=True)
-        result = await contextual.repair_context(
+        result = await contextual.repair_or_handoff(
+            interaction,
             guild,
             _welcome_targets(guild, cfg),
             actor_id=int(interaction.user.id),
             manual_issues=_welcome_manual_issues(guild, cfg),
+            parent="security",
         )
+        if result is None:
+            return
         await welcome._refresh_center(
             interaction,
             last_action=result.summary(),
@@ -427,12 +431,16 @@ class SetupContextRepairButton(discord.ui.Button):
             guided_title=title,
             guided_explanation=explanation,
         )
-        result = await contextual.repair_context(
+        result = await contextual.repair_or_handoff(
+            interaction,
             guild,
             _setup_targets(guild, cfg),
             actor_id=int(interaction.user.id),
             manual_issues=manual_issues,
+            parent="security",
         )
+        if result is None:
+            return
         await setup._open_health_check(
             interaction,
             saved_message=result.summary(),
@@ -497,12 +505,16 @@ class VerificationContextRepairButton(discord.ui.Button):
             cfg,
             verification_only=True,
         )
-        result = await contextual.repair_context(
+        result = await contextual.repair_or_handoff(
+            interaction,
             guild,
             _setup_targets(guild, cfg, verification_only=True),
             actor_id=int(interaction.user.id),
             manual_issues=manual_issues,
+            parent="security",
         )
+        if result is None:
+            return
         cfg = await get_guild_config(int(guild.id), refresh=True)
 
         source_embed = None
