@@ -18,7 +18,7 @@ from ..members_new.activity_scope import ActivityScopeReport, audit_activity_sco
 from ..startup_diagnostics import build_startup_health_report
 from .public_setup_group import dank_group
 from .public_owner_authority import interaction_has_manage_guild_authority
-from .public_access_control import scoped_is_ticket_staff
+from .public_access_control import scoped_interaction_is_ticket_staff
 
 _REGISTERED = False
 
@@ -38,7 +38,7 @@ class DiagnosticsActionView(discord.ui.View):
         _ = button
         if interaction.user.id != self.actor_id:
             return await interaction.response.send_message("❌ This diagnostics screen belongs to another admin.", ephemeral=True)
-        if not scoped_is_ticket_staff(interaction.user):
+        if not scoped_interaction_is_ticket_staff(interaction):
             return await interaction.response.send_message("❌ Staff only.", ephemeral=True)
         if not _admin_or_manage_guild(interaction):
             return await interaction.response.send_message("❌ Server owner, Manage Server, or Administrator authority is required.", ephemeral=True)
@@ -259,7 +259,7 @@ async def diagnostics(interaction: discord.Interaction) -> None:
         )
         return
 
-    if not scoped_is_ticket_staff(interaction.user):
+    if not scoped_interaction_is_ticket_staff(interaction):
         await safe_send_interaction(
             interaction,
             content="❌ Staff only.",

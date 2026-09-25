@@ -52,17 +52,16 @@ def _env_int(name: str, default: int) -> int:
         return int(default)
 
 
-def _legacy_panel_backfill_limit() -> int:
+def _legacy_panel_backfill_wave_size() -> int:
     # Existing installations created before panel-message persistence need one
-    # bounded history lookup. New/updated panels persist their message ID and
-    # never need this recovery scan again.
-    return max(
-        1,
-        min(
-            200,
-            _env_int("DANK_BASIC_VERIFY_LEGACY_PANEL_BACKFILL_PER_START", 50),
-        ),
-    )
+    # bounded history lookup. Process those migrations in fair background waves,
+    # but never permanently skip a guild just because an earlier wave was full.
+    configured = _env_int("DANK_BASIC_VERIFY_LEGACY_PANEL_BACKFILL_PER_WAVE", 0)
+    if configured <= 0:
+        # Backward-compatible interpretation of the old per-start setting:
+        # it now controls wave size rather than becoming a permanent skip cap.
+        configured = _env_int("DANK_BASIC_VERIFY_LEGACY_PANEL_BACKFILL_PER_START", 50)
+    return max(1, min(200, configured))
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -1115,9 +1114,10 @@ async def _reconcile_basic_verify_panels_after_ready(bot: Any) -> None:
             if isinstance(guild, discord.Guild)
         }
         rows = await _discover_basic_verify_panel_rows(sorted(guilds))
-        legacy_budget = _legacy_panel_backfill_limit()
-        legacy_used = 0
+        legacy_wave_size = _legacy_panel_backfill_wave_size()
         counts: dict[str, int] = {}
+        current_rows: list[tuple[int, Mapping[str, Any]]] = []
+        legacy_rows: list[tuple[int, Mapping[str, Any]]] = []
 
         for gid, cfg in rows.items():
             guild = guilds.get(int(gid))
@@ -1139,31 +1139,61 @@ async def _reconcile_basic_verify_panels_after_ready(bot: Any) -> None:
                 getattr(getattr(guild, "me", None), "id", 0),
                 0,
             )
-            needs_legacy_rest = not (
+            proven_current = (
                 persisted_mid > 0
                 and saved_application_id > 0
                 and saved_application_id == current_application_id
                 and saved_component_id == BASIC_VERIFY_CUSTOM_ID
             )
-            allow_legacy_rest = True
-            if needs_legacy_rest:
-                if legacy_used >= legacy_budget:
-                    allow_legacy_rest = False
-                else:
-                    legacy_used += 1
+            target = current_rows if proven_current else legacy_rows
+            target.append((int(gid), cfg))
 
-            result = await _reconcile_one_basic_verify_panel(
-                bot,
-                guild,
-                cfg,
-                allow_legacy_rest=allow_legacy_rest,
-            )
+        async def reconcile_row(
+            gid: int,
+            cfg: Mapping[str, Any],
+        ) -> str:
+            guild = guilds[gid]
+            try:
+                return await _reconcile_one_basic_verify_panel(
+                    bot,
+                    guild,
+                    cfg,
+                    allow_legacy_rest=True,
+                )
+            except Exception as exc:
+                try:
+                    print(
+                        "⚠️ basic_verify panel reconciliation isolated failure "
+                        f"guild={gid} error={type(exc).__name__}: {exc}"
+                    )
+                except Exception:
+                    pass
+                return f"row_error:{type(exc).__name__}"
+
+        # Exact current-app identities bind without Discord REST. Do those first
+        # so already-migrated guilds recover immediately even when many legacy
+        # guilds still need paced Discord requests.
+        for gid, cfg in current_rows:
+            result = await reconcile_row(gid, cfg)
             counts[result] = counts.get(result, 0) + 1
+            await asyncio.sleep(0)
+
+        # Legacy migration is finite but no longer lossy. Every row is processed
+        # in background waves. Each Discord REST operation still reserves from
+        # the shared process-wide recovery budget before it executes, and
+        # discord.py remains responsible for route-specific Discord rate limits.
+        for start in range(0, len(legacy_rows), legacy_wave_size):
+            wave = legacy_rows[start : start + legacy_wave_size]
+            for gid, cfg in wave:
+                result = await reconcile_row(gid, cfg)
+                counts[result] = counts.get(result, 0) + 1
             await asyncio.sleep(0)
 
         print(
             "✅ basic_verify panel reconciliation complete "
-            f"guilds={len(rows)} legacy_rest={legacy_used} results={counts}"
+            f"guilds={len(rows)} current={len(current_rows)} "
+            f"legacy_rest={len(legacy_rows)} wave_size={legacy_wave_size} "
+            f"results={counts}"
         )
     except Exception as exc:
         try:

@@ -2,114 +2,159 @@
 
 ## Active task / desired outcome
 
-**P0-ANTINUKE-INFLIGHT-SELF-ACTION-RECEIPT-010 — prevent legitimate rate-limited bot-authored mutations from expiring their self-action proof and triggering compromise quarantine/self-ejection**
+**P0-OWNER-AUTHORITY-VERIFY-INTERACTION-011 — restore guild-owner access to staff management surfaces and make every stale Basic Verify panel eventually self-heal**
 
-Desired outcome: any protected Discord mutation issued by this running Dank Shield
-process must retain its one-time self-action proof for the entire outbound request
-lifecycle, even when discord.py/Discord rate-limit pacing keeps the request in
-flight longer than the normal post-request receipt TTL. Truly unexplained
-bot-attributed protected actions must remain fail-closed.
+Desired outcome: a real Discord guild owner must never be rejected as
+`❌ Staff only.` because an interaction user object lacks cached member/guild
+shape, and every durable Basic Verify panel must have a live current-application
+component owner after deploy/restart instead of remaining permanently deferred.
 
 ## Scope / single active task lock
 
-Only the AntiNuke self-action receipt lifecycle is active:
+Only the production interaction failures reported on 2026-09-25 are active:
 
-- preserve action/guild/target-scoped one-time DSA proof;
-- keep proof alive while the protected Discord request is still in flight;
-- begin the finite receipt TTL only after the request completes successfully;
-- remove proof on failed or cancelled requests;
-- preserve consumption if the audit event arrives before the HTTP request returns;
-- preserve durable compromise quarantine/self-ejection for genuinely unmatched
-  self-attributed protected actions;
-- cover the reported bot-authored `channel_update` / rate-limited PATCH path;
-- inspect the directly shared request-lifecycle code for the same failure mode;
-- do not weaken protected action coverage or globally exempt `channel_update`.
+- preserve the privacy boundary for ordinary non-staff users;
+- resolve guild owner / Administrator authority from the full interaction before
+  falling back to member-shaped staff-role checks;
+- use one canonical interaction-aware ticket/staff authority helper across the
+  affected management gates;
+- keep each feature's native second-stage permission requirement unchanged;
+- preserve Basic Verify's one canonical acknowledgement + role-mutation path;
+- preserve the existing `dank:basic_verify:v1` public component contract;
+- keep migrated current-application panels on the zero-REST exact-bind path;
+- repair every legacy/unproven Verify panel eventually, using the existing shared
+  recovery REST budget and discord.py's route-aware limiter;
+- never turn a startup migration batch size into a permanent skipped-guild cap;
+- cover owner-with-partial-user-shape and multi-wave legacy recovery regressions.
 
-Do not broaden into Server Stats design work, verification/ticket interaction
-failures, moderator trust policy, Spam Guard, or unrelated AntiNuke redesign.
+Do not broaden into AntiNuke, tickets redesign, Server Stats UX, moderator trust,
+or unrelated cleanup.
 
 ## Prior task closure
 
-PR #323, **Hide staff permission recipes from regular members**, merged into
-`main` as `b5a4fc5c27c1825aba8335db79fff70f8871a9df` on 2026-09-25.
+PR #324, **Prevent AntiNuke self-ejection on delayed bot-authored PATCH**, was
+merged into `main` as `e642323db703d9045c3f60f9f523e8eae3eacf68` on
+2026-09-25.
 
-Exact PR-head validation was green:
+Its exact PR head `4226c4824f7727cd8927a44169030b38247fc9e8` passed:
 
-- DS Backlog 027 Validation — success
-- Application Command Size Diagnostics — success
-- Ticket Owner Emergency Override — success
-- Dank Design Regression CI — success
-- Profile Runtime Diagnostics — success
-- Dank Shield CI — success
+- full repository suite: **2026 passed, 13 warnings**;
+- Dank Shield CI;
+- Profile Runtime Diagnostics;
+- Dank Design Regression CI;
+- Ticket Owner Emergency Override;
+- Application Command Size Diagnostics;
+- managed-category SQL and claim-first ticket security;
+- repository audits.
 
-The merge commit also has a successful Discloud commit status.
+This task branches from that merged main and does not modify AntiNuke.
 
-PR #322 had already merged immediately before #323; its Server Stats / Dank
-Design work is therefore inherited through the current `main` base.
+## Discord documentation findings
+
+Checked current official Discord Developer Documentation on 2026-09-25.
+
+- Interaction payloads carry guild/member context and resolved permissions.
+  Owner/admin decisions should therefore use the interaction's guild and
+  permission evidence instead of requiring a fully cached Member-shaped user.
+- Guilds expose `owner_id`; Discord's permission computation grants the guild
+  owner all permissions before normal role/channel permission evaluation.
+- Message buttons use a developer-defined `custom_id`, which is returned in the
+  component interaction payload and identifies the callback contract.
+- An interaction must receive its initial response within **3 seconds** or the
+  interaction token is invalidated.
+- Discord rate limits are dynamic and route-specific; applications should honor
+  Discord/discord.py pacing rather than hardcode guessed route limits.
 
 ## Findings / root cause
 
-`stoney_verify/anti_nuke_self_action_runtime.py` creates a DSA authorization
-receipt before awaiting the underlying Discord HTTP request.
+### Owner incorrectly receives `Staff only`
 
-Before this task:
+PR #323 added a staff-privacy boundary to multiple management surfaces, but
+several interaction handlers called:
 
-1. `_authorize()` stamped the request and saved `created_at`.
-2. `_prune_pending()` expired the receipt when
-   `now - created_at > 120s`.
-3. Only then did/does the wrapped code await Discord's request lifecycle.
-4. A rate-limited PATCH can therefore remain in discord.py/Discord pacing longer
-   than 120 seconds.
-5. If the eventual audit event is attributed to Dank Shield after the receipt was
-   pruned, `_audit_guard()` sees no matching proof.
-6. `anti_nuke_zero_damage_runtime` replaces the unmatched handler with the
-   durable compromise path, persists a 30-minute quarantine, and ejects the bot.
+`scoped_is_ticket_staff(interaction.user)`
 
-That makes request-start time the wrong TTL origin. The proof must not expire
-while the request that owns it is still in flight.
+before using the already-existing interaction-aware owner/permission helpers.
 
-## Execution path
+That member-only helper can fail closed when the interaction user does not expose
+the guild/member shape expected by the helper, even though
+`interaction.guild.owner_id == interaction.user.id`. The repository already
+has the correct authoritative owner path in
+`public_owner_authority.interaction_is_actual_guild_owner()` and resolved
+Administrator handling.
 
-Protected local mutation:
+### Old Basic Verify button can remain dead indefinitely
 
-`discord.py mutation -> bot.http.request wrapper -> _request_spec() ->
-_authorize() -> Discord HTTP/rate-limit pacing -> successful response ->
-_audit_guard() -> _consume()`
+The canonical Basic Verify handler already acknowledges before DB/role work, so a
+red Discord `This interaction failed` on an old visible panel points to the
+click never reaching a live callback/acknowledgement owner.
 
-False-compromise path before fix:
+The startup reconciler correctly knows how to:
 
-`_authorize(created_at) -> >120s in-flight -> _prune_pending() deletes proof ->
-Discord completes PATCH -> channel_update audit event -> _consume() misses ->
-zero-damage unmatched handler -> durable quarantine -> guild.leave()`
+- exact-bind a proven current-app/current-component message with zero REST;
+- fetch and migrate an unproven saved message;
+- repair an old custom ID in place;
+- replace a confirmed foreign-application panel;
+- repair disabled legacy panels so they answer with policy instead of timing out.
+
+However, startup legacy recovery was capped to the first 50 guilds by default.
+After that cap, rows received `allow_legacy_rest=False` and returned
+`legacy_deferred`. Reconciliation was one-shot for the process, so those guilds
+were never retried. A visually valid old panel could therefore remain permanently
+unowned.
+
+## Execution paths
+
+Owner denial before fix:
+
+`management interaction -> member-only scoped_is_ticket_staff(user) ->
+partial/non-Member user shape -> False -> Staff only`
+
+Correct owner path:
+
+`management interaction -> scoped_interaction_is_ticket_staff(interaction) ->
+interaction guild owner / resolved Administrator -> allow -> feature-native
+permission gate`
+
+Verify failure before fix:
+
+`on_ready -> one-shot panel reconcile -> first 50 legacy rows consume migration
+slots -> later row legacy_deferred -> no retry -> old message remains visible ->
+button click has no live current-app callback -> no initial response -> Discord
+red interaction failure`
+
+Correct Verify recovery:
+
+`on_ready background reconciler -> zero-REST proven panels first -> every legacy
+row processed in bounded waves -> shared process-wide recovery REST reservation
++ discord.py route limiter -> migrate/replace/bind -> normal Verify click ->
+canonical _ack() -> role mutation -> follow-up`
 
 ## Changes
 
-Branch: `fix/antinuke-inflight-self-action-receipt-20260925`
+Branch: `fix/owner-authority-verify-recovery-20260925`
 
-Implemented:
+Implemented so far:
 
-- added `completed_at` lifecycle state to self-action authorizations;
-- in-flight authorizations are no longer TTL-pruned;
-- the 120-second receipt window starts after successful request completion;
-- removed count-based eviction of valid self-action/side-effect provenance;
-  completed receipts remain TTL-bounded and in-flight receipts are tied to real
-  outstanding requests, so unrelated guild load cannot erase valid proof;
-- HTTP request failure **or cancellation** discards the authorization;
-- webhook edit/delete wrappers use the same completion/cancellation lifecycle;
-- HTTP-derived `integration_delete` and reasonless `message_delete` side-effect
-  receipts now use the same in-flight/completed lifecycle instead of aging while
-  their parent request is still rate-limited;
-- direct/manual expected side-effect receipts retain their existing immediate TTL;
-- audit events can still consume either receipt type while the request is in flight;
-- added a regression test that advances monotonic time beyond the old 120-second
-  TTL during a protected `PATCH /channels/{id}` and verifies the eventual
-  `channel_update` consumes proof without self-ejection;
-- added cancellation cleanup coverage;
-- added audit-before-HTTP-response coverage so a delayed request can consume its
-  proof while still in flight;
-- added >4096-entry regression coverage proving valid unexpired provenance is
-  retained until TTL rather than evicted by global load;
-- updated the old stale-receipt test so expiry is measured after completion.
+- added `scoped_interaction_is_ticket_staff(interaction)`;
+- owner identity and resolved Administrator authority are checked before
+  member-shaped staff-role fallback;
+- updated Server Design, Diagnostics, Embed Builder, Setup, Setup Overview, and
+  server-control second-stage staff checks to use interaction-aware authority;
+- exported the new canonical helper;
+- changed Basic Verify legacy migration from a permanent per-start cap into
+  background waves that continue until every discovered legacy row is processed;
+- current-app/current-component rows are processed first and remain zero-REST;
+- legacy Discord work continues through the existing shared recovery REST budget
+  and discord.py route-aware rate limiting;
+- reconciliation failures are isolated per guild so one malformed/deleted panel
+  cannot abort recovery for every guild ordered after it;
+- preserved the existing single Verify callback, custom ID, acknowledgement
+  boundary, role mapping, and verification policy;
+- added owner-without-member-shape regression coverage across the affected gates;
+- added regression coverage proving a legacy set larger than one wave is fully
+  reconciled with no `allow_legacy_rest=False` skips, even when one guild's
+  reconciliation raises unexpectedly.
 
 ## Validation / results
 
@@ -117,44 +162,42 @@ Pending exact-head validation.
 
 Required before completion:
 
-- compile changed Python modules;
-- focused `tests/test_antinuke_self_action_runtime.py`;
-- focused zero-damage AntiNuke tests;
-- relevant gateway/guardian AntiNuke regression tests;
+- inspect final branch diff for accidental scope changes;
+- compile all changed modules;
+- focused owner-authority tests;
+- focused Basic Verify restart/runtime tests;
+- interaction lifecycle policy tests;
+- relevant setup/public-command regression tests;
 - full `pytest tests/`;
-- repository GitHub workflows;
-- final diff inspection;
-- verify neither in-flight nor completed-but-unexpired proof is count-evicted,
-  including above the former 4096-entry threshold;
-- verify successful completed receipts still expire;
-- verify failed/cancelled requests leave no stale proof;
-- verify HTTP-derived side-effect receipts cannot expire before their parent
-  request completes and still expire after completion;
-- verify unexplained self-attributed protected actions still reach durable
-  quarantine/self-ejection.
+- standalone repository audits;
+- all GitHub workflow groups green;
+- verify non-staff still receive only `❌ Staff only.` where intended;
+- verify owner/admin still reaches second-stage feature permission logic;
+- verify current Verify panels remain zero-REST;
+- verify all legacy panels are attempted without bypassing shared REST pacing
+  and one guild failure cannot abort later rows;
+- verify the canonical Verify handler still acknowledges before any DB/role
+  mutation and duplicate mutation remains impossible.
 
 ## Cleanup / conflicts
 
-No unrelated code has been intentionally changed.
+No second Verify dispatcher, fallback business implementation, permission shim,
+or hardcoded Discord route limit has been added.
 
-The fix does not add an exemption, retry shim, second AntiNuke owner, or duplicate
-listener. It repairs the existing authoritative self-action proof lifecycle.
+The shared recovery REST budget remains authoritative for bulk migration pacing.
 
 ## Blockers / risks
 
-- Local execution is not available through the GitHub connector, so validation
-  must be driven by repository CI after the branch/PR is published.
-- The existing 120-second **post-completion** TTL remains unchanged; CI/regression
-  evidence must confirm this preserves expected one-time expiry behavior.
+Repository CI is the executable validation environment available through the
+GitHub connector. Live Discord acceptance remains necessary after deployment for
+the exact old production panel shown in the screenshot.
 
 ## Backlog
 
-Preserve previously identified unrelated follow-ups without investigating them
-inside this task, including moderator trust/re-entry behavior and trusted-role
-selection.
+Preserve unrelated existing follow-ups, including trusted-role UX, moderator
+re-entry behavior, and Server Stats modal/button redesign.
 
 ## Next step
 
-Inspect the exact branch diff, open a draft PR, run all repository workflows, fix
-only same-task regressions, then perform final cleanup/conflict review before
-marking the PR ready.
+Finish diff/test inspection, open a draft PR, run exact-head CI, fix only
+same-root regressions, then mark ready only after full validation is green.
