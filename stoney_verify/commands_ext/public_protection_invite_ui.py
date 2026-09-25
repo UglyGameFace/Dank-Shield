@@ -91,7 +91,7 @@ def invite_shield_embed(
             "**Turn Shield On / Off** preserves the original Invite Blocker toggle without leaving you trapped in this editor.\n"
             "**Watch Every Bot** protects bot invite posts server-wide.\n"
             "**Choose Watched Channel** uses Dank Shield's searchable server browser.\n"
-            "**Clean Existing Invites** scans one chosen channel through the central invite policy before deleting anything."
+            "**Clean Existing Invites** scans up to 1,000 recent messages in one chosen channel through the central invite policy before deleting anything."
         ),
         inline=False,
     )
@@ -429,16 +429,22 @@ class InviteShieldView(discord.ui.View):
 
             result = await invite_policy_engine.scan_channel_invites(
                 live,
-                limit=200,
+                limit=1000,
                 repost_mixed=False,
                 source="protection-center-native-invite-cleanup",
             )
             fresh = await load_invite_scope_settings(int(guild.id), refresh=True)
+            contentless_deleted = int(result.get("contentless_deleted", 0) or 0)
             note = (
                 f"Scanned {live.mention}: checked `{int(result.get('checked', 0) or 0)}`, "
                 f"matched `{int(result.get('matched', 0) or 0)}`, deleted `{int(result.get('deleted', 0) or 0)}`, "
                 f"allowed `{int(result.get('allowed', 0) or 0)}`, failed `{int(result.get('failed', 0) or 0)}`."
             )
+            if contentless_deleted:
+                note += (
+                    f" Protected content-redacted advertiser posts removed: "
+                    f"`{contentless_deleted}`."
+                )
             await _redraw(
                 pick_interaction,
                 author_id=self.author_id,
