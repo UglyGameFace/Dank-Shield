@@ -120,8 +120,14 @@ def test_member_wait_timer_startup_reuses_canonical_membership_authority() -> No
     assert "guild.fetch_members(limit=None)" not in block
 
 
-def test_invite_startup_recovery_uses_durable_gap_window() -> None:
-    assert "persisted_last_heartbeat_at" in INVITE
+def test_invite_startup_recovery_uses_its_own_durable_gap_window() -> None:
+    assert '_INVITE_CHECKPOINT_KEY = "invite_reconcile_checkpoint_at"' in INVITE
+    assert "persisted_last_heartbeat_at" not in INVITE
+    assert "get_guild_config(gid, force_refresh=True)" in INVITE
+    assert "_persist_recovery_checkpoint" in INVITE
+    assert "upsert_guild_config(" in INVITE
+    assert "_INITIAL_BACKFILL_SECONDS = 24 * 60 * 60" in INVITE
+    assert "_MAX_RECOVERY_GAP_SECONDS = 7 * 24 * 60 * 60" in INVITE
     assert "_recovery_window(guild)" in INVITE
     assert 'scan_kwargs["after"] = after' in INVITE
     assert 'scan_kwargs["before"] = before' in INVITE
@@ -129,6 +135,18 @@ def test_invite_startup_recovery_uses_durable_gap_window() -> None:
 
     assert 'history_kwargs["after"] = after' in POLICY
     assert 'history_kwargs["before"] = before' in POLICY
+
+
+def test_invite_live_raw_edits_are_recovered_without_startup_rest_pacing() -> None:
+    assert '"on_raw_message_edit"' in INVITE
+    assert "channel.fetch_message(int(message_id))" in INVITE
+    assert 'source="raw_message_edit_recovery"' in INVITE
+    raw_worker = _block(
+        INVITE,
+        "async def _raw_message_edit_worker(",
+        "async def _raw_message_edit_listener(",
+    )
+    assert "reserve_recovery_discord_rest_requests(" not in raw_worker
 
 
 def test_activity_pins_pre_restart_heartbeat_before_state_advances() -> None:
