@@ -331,7 +331,7 @@ def _voice_overwrites(guild: discord.Guild, *, staff_role: Optional[discord.Role
     }
     me = guild.me
     if me is not None:
-        overwrites[me] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, move_members=True, manage_channels=True, manage_roles=True)
+        overwrites[me] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, move_members=True, manage_channels=True)
     if unverified_role is not None and not unverified_role.is_default():
         overwrites[unverified_role] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=False)
     for role in (staff_role, control_role):
