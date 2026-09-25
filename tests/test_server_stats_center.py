@@ -48,6 +48,7 @@ def test_server_stats_center_exposes_management_and_customization_controls() -> 
         "Enable Stats",
         "Disable & Remove",
         "Refresh Now",
+        "Design Sync: Off",
         "Category Name",
         "Numbers: Compact",
         "Placement: Top",
@@ -62,6 +63,7 @@ def test_server_stats_center_exposes_management_and_customization_controls() -> 
         "dank_server_stats:enable",
         "dank_server_stats:disable",
         "dank_server_stats:refresh",
+        "dank_server_stats:design_sync",
         "dank_server_stats:category_name",
         "dank_server_stats:number_style",
         "dank_server_stats:placement",
@@ -77,6 +79,9 @@ def test_server_stats_center_offers_every_authoritative_counter() -> None:
     assert {str(option.value) for option in visible.options} == set(
         security_stats.DEFAULT_SECURITY_STATS_VISIBLE_KEYS
     )
+    by_key = {str(option.value): option for option in visible.options}
+    assert "GUILD_CREATE member_count" in str(by_key["members"].description)
+    assert "ticket records" in str(by_key["open_tickets"].description)
 
 
 def test_protection_legacy_stats_button_routes_to_canonical_stats_center(
