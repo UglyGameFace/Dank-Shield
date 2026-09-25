@@ -805,6 +805,39 @@ async def _spam_guard_enabled(guild_id: int) -> Optional[bool]:
         return cached
 
 
+def _metric_values(
+    *,
+    spam_guard_enabled: Optional[bool],
+    counts: Mapping[str, int],
+    member_count: Optional[int] = None,
+    ticket_counts: Optional[Mapping[str, int]] = None,
+    number_style: str = "compact",
+) -> Dict[str, str]:
+    normalized = normalize_security_stats(counts)
+    tickets = _normalize_ticket_status_counts(ticket_counts)
+    spam_status = (
+        "ONLINE" if spam_guard_enabled is True
+        else "OFFLINE" if spam_guard_enabled is False
+        else "UNKNOWN"
+    )
+    values = {
+        "status": spam_status,
+        "members": _format_live_count(member_count, number_style),
+        "spam_blocked": _format_stat_count(normalized["spam_blocked"], number_style),
+        "invites_blocked": _format_stat_count(normalized["invites_blocked"], number_style),
+        "timeouts_issued": _format_stat_count(normalized["timeouts_issued"], number_style),
+        "quarantines": _format_stat_count(normalized["quarantines"], number_style),
+        "open_tickets": _format_live_count(None if tickets is None else tickets["open_tickets"], number_style),
+        "claimed_tickets": _format_live_count(None if tickets is None else tickets["claimed_tickets"], number_style),
+        "closed_tickets": _format_live_count(None if tickets is None else tickets["closed_tickets"], number_style),
+    }
+    missing = set(SECURITY_STATS_METRICS) - set(values)
+    extra = set(values) - set(SECURITY_STATS_METRICS)
+    if missing or extra:
+        raise RuntimeError(f"Server Stats provider registry mismatch missing={sorted(missing)} extra={sorted(extra)}")
+    return values
+
+
 def _display_names(
     *,
     spam_guard_enabled: Optional[bool],
@@ -813,31 +846,18 @@ def _display_names(
     ticket_counts: Optional[Mapping[str, int]] = None,
     preferences: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, str]:
-    normalized = normalize_security_stats(counts)
-    tickets = _normalize_ticket_status_counts(ticket_counts)
     prefs = dict(preferences or {})
     number_style = str(prefs.get("number_style") or "compact")
-    spam_status = (
-        "ONLINE" if spam_guard_enabled is True
-        else "OFFLINE" if spam_guard_enabled is False
-        else "UNKNOWN"
+    values = _metric_values(
+        spam_guard_enabled=spam_guard_enabled,
+        counts=counts,
+        member_count=member_count,
+        ticket_counts=ticket_counts,
+        number_style=number_style,
     )
     return {
-        "status": f"{_stat_label(prefs, 'status')}: {spam_status}",
-        "members": f"{_stat_label(prefs, 'members')}: {_format_live_count(member_count, number_style)}",
-        "spam_blocked": f"{_stat_label(prefs, 'spam_blocked')}: {_format_stat_count(normalized['spam_blocked'], number_style)}",
-        "invites_blocked": f"{_stat_label(prefs, 'invites_blocked')}: {_format_stat_count(normalized['invites_blocked'], number_style)}",
-        "timeouts_issued": f"{_stat_label(prefs, 'timeouts_issued')}: {_format_stat_count(normalized['timeouts_issued'], number_style)}",
-        "quarantines": f"{_stat_label(prefs, 'quarantines')}: {_format_stat_count(normalized['quarantines'], number_style)}",
-        "open_tickets": (
-            f"{_stat_label(prefs, 'open_tickets')}: {_format_live_count(None if tickets is None else tickets['open_tickets'], number_style)}"
-        ),
-        "claimed_tickets": (
-            f"{_stat_label(prefs, 'claimed_tickets')}: {_format_live_count(None if tickets is None else tickets['claimed_tickets'], number_style)}"
-        ),
-        "closed_tickets": (
-            f"{_stat_label(prefs, 'closed_tickets')}: {_format_live_count(None if tickets is None else tickets['closed_tickets'], number_style)}"
-        ),
+        key: render_security_stat_name(prefs, key, values[key])
+        for key in SECURITY_STATS_METRICS
     }
 
 
@@ -963,7 +983,11 @@ def _category_has_stats_evidence(
         for channel in list(getattr(category, "voice_channels", []) or []):
             name = str(getattr(channel, "name", "") or "")
             for key, default_prefix in STAT_CHANNEL_PREFIXES.items():
-                prefixes = [default_prefix, f"{_stat_label(preferences, key)}:"]
+                prefixes = [
+                    default_prefix,
+                    f"{_stat_label(preferences, key)}:",
+                    render_security_stat_name(preferences, key, "").rstrip(),
+                ]
                 if any(name.startswith(prefix) for prefix in prefixes):
                     return True
     except Exception:
@@ -1028,8 +1052,10 @@ def _find_existing_stat_channel(
     prefixes = [STAT_CHANNEL_PREFIXES[key]]
     if preferences is not None:
         custom_prefix = f"{_stat_label(preferences, key)}:"
-        if custom_prefix not in prefixes:
-            prefixes.append(custom_prefix)
+        rendered_prefix = render_security_stat_name(preferences, key, "").rstrip()
+        for candidate in (custom_prefix, rendered_prefix):
+            if candidate and candidate not in prefixes:
+                prefixes.append(candidate)
     for channel in list(getattr(category, "voice_channels", []) or []):
         name = str(getattr(channel, "name", "") or "")
         if any(name.startswith(prefix) for prefix in prefixes):
@@ -1042,7 +1068,7 @@ async def _apply_category_preferences(
     category: discord.CategoryChannel,
     preferences: Mapping[str, Any],
 ) -> None:
-    desired_name = str(preferences.get("category_name") or SECURITY_STATS_CATEGORY_NAME)
+    desired_name = security_stats_category_display_name(preferences)
     if str(getattr(category, "name", "") or "") != desired_name:
         await category.edit(name=desired_name, reason="Apply Dank Shield server stats category name")
 
