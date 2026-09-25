@@ -206,3 +206,163 @@ def test_shared_public_management_gates_reject_partial_non_owner_state() -> None
     assert not public_setup_overview._admin_or_manage_guild(interaction)
     assert not public_diagnostics_group._admin_or_manage_guild(interaction)
     assert not public_embed_group._admin_or_manage_guild(interaction)
+
+def test_server_control_denial_hides_permission_recipe_from_nonstaff(monkeypatch) -> None:
+    async def scenario() -> None:
+        guild = SimpleNamespace(id=9001, owner_id=111)
+        user = SimpleNamespace(id=222, guild=guild)
+        interaction = SimpleNamespace(guild=guild, user=user)
+        replies: list[dict] = []
+
+        monkeypatch.setattr(
+            public_access_control,
+            "scoped_interaction_is_server_control",
+            lambda _interaction: False,
+        )
+        monkeypatch.setattr(
+            public_access_control,
+            "scoped_is_ticket_staff",
+            lambda _member: False,
+        )
+
+        async def capture(_interaction, payload) -> None:
+            replies.append(dict(payload))
+
+        monkeypatch.setattr(public_access_control, "reply_once", capture)
+
+        assert await public_access_control.require_server_control(interaction) is False
+        assert replies == [{"content": "❌ Staff only.", "ephemeral": True}]
+        denied = replies[0]["content"]
+        assert "Manage Server" not in denied
+        assert "Manage Channels" not in denied
+        assert "Administrator" not in denied
+
+    asyncio.run(scenario())
+
+
+def test_server_control_staff_still_gets_actionable_second_stage_guidance(monkeypatch) -> None:
+    async def scenario() -> None:
+        role = SimpleNamespace(id=777, mention="<@&777>")
+        guild = SimpleNamespace(
+            id=9001,
+            owner_id=111,
+            get_role=lambda role_id: role if int(role_id) == 777 else None,
+        )
+        user = SimpleNamespace(id=222, guild=guild)
+        interaction = SimpleNamespace(guild=guild, user=user)
+        replies: list[dict] = []
+
+        monkeypatch.setattr(
+            public_access_control,
+            "scoped_interaction_is_server_control",
+            lambda _interaction: False,
+        )
+        monkeypatch.setattr(
+            public_access_control,
+            "scoped_is_ticket_staff",
+            lambda _member: True,
+        )
+        monkeypatch.setattr(
+            public_access_control,
+            "configured_control_role_ids_for_guild",
+            lambda _guild_id: {777},
+        )
+
+        async def capture(_interaction, payload) -> None:
+            replies.append(dict(payload))
+
+        monkeypatch.setattr(public_access_control, "reply_once", capture)
+
+        assert await public_access_control.require_server_control(interaction) is False
+        assert len(replies) == 1
+        assert "<@&777>" in replies[0]["content"]
+        assert "Administrator" in replies[0]["content"]
+
+    asyncio.run(scenario())
+
+
+def test_server_design_denial_is_staff_only_before_manage_channels(monkeypatch) -> None:
+    async def scenario() -> None:
+        guild = SimpleNamespace(id=9001, owner_id=111)
+        interaction = SimpleNamespace(guild=guild, user=SimpleNamespace(id=222, guild=guild))
+        sent: list[str] = []
+
+        monkeypatch.setattr(
+            public_access_control,
+            "scoped_is_ticket_staff",
+            lambda _member: False,
+        )
+
+        async def capture(_interaction, *, content="", **_kwargs) -> bool:
+            sent.append(str(content))
+            return True
+
+        monkeypatch.setattr(public_design_studio, "safe_send_interaction", capture)
+
+        assert await public_design_studio._require_design_permission(interaction) is False
+        assert sent == ["❌ Staff only."]
+        assert "Manage Channels" not in sent[0]
+
+    asyncio.run(scenario())
+
+
+def test_server_design_recognized_staff_gets_native_permission_guidance(monkeypatch) -> None:
+    async def scenario() -> None:
+        guild = SimpleNamespace(id=9001, owner_id=111)
+        interaction = SimpleNamespace(guild=guild, user=SimpleNamespace(id=222, guild=guild))
+        sent: list[str] = []
+
+        monkeypatch.setattr(
+            public_access_control,
+            "scoped_is_ticket_staff",
+            lambda _member: True,
+        )
+        monkeypatch.setattr(
+            public_design_studio,
+            "_can_user_design",
+            lambda _interaction: False,
+        )
+
+        async def capture(_interaction, *, content="", **_kwargs) -> bool:
+            sent.append(str(content))
+            return True
+
+        monkeypatch.setattr(public_design_studio, "safe_send_interaction", capture)
+
+        assert await public_design_studio._require_design_permission(interaction) is False
+        assert len(sent) == 1
+        assert "Manage Channels" in sent[0]
+
+    asyncio.run(scenario())
+
+
+def test_staff_management_entrypoints_check_staff_before_native_permission_copy() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    diagnostics = (root / "stoney_verify" / "commands_ext" / "public_diagnostics_group.py").read_text(encoding="utf-8")
+    embed = (root / "stoney_verify" / "commands_ext" / "public_embed_group.py").read_text(encoding="utf-8")
+    overview = (root / "stoney_verify" / "commands_ext" / "public_setup_overview.py").read_text(encoding="utf-8")
+    surface = (root / "stoney_verify" / "commands_ext" / "public_command_surface_v2.py").read_text(encoding="utf-8")
+    hub = (root / "stoney_verify" / "commands_ext" / "public_command_hub.py").read_text(encoding="utf-8")
+
+    for source, native_text in (
+        (diagnostics, "Diagnostics require **Manage Server**"),
+        (embed, "Embed builder requires **Administrator**"),
+        (overview, "Server setup requires **Administrator**"),
+    ):
+        assert 'content="❌ Staff only."' in source
+        assert source.index('content="❌ Staff only."') < source.index(native_text)
+
+    surface_logs = surface[surface.index("async def logs("):surface.index("async def profile(", surface.index("async def logs("))]
+    assert "_require_setup_permission(interaction)" in surface_logs
+    assert "Log settings require **Manage Server**" not in surface_logs
+
+    hub_logs = hub[hub.index("async def logs("):hub.index("async def diagnostics(", hub.index("async def logs("))]
+    assert "_require_setup_permission(interaction)" in hub_logs
+    assert "Log settings require **Manage Server**" not in hub_logs
+
+    hub_design = hub[hub.index("async def design("):hub.index("async def roles(", hub.index("async def design("))]
+    assert "_admin_or_manage(interaction)" not in hub_design
+    assert "public_design_bridge" in hub_design
+
