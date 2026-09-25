@@ -373,6 +373,227 @@ def _stat_label(preferences: Mapping[str, Any], key: str) -> str:
     return metric.label
 
 
+def _design_context(preferences: Mapping[str, Any]) -> Dict[str, Any]:
+    if not bool(preferences.get("inherit_design")):
+        return {
+            "enabled": False,
+            "font": "normal",
+            "separator": "",
+            "strength": 0,
+            "options": {},
+        }
+    options = _mapping(preferences.get("design_options", {}))
+    try:
+        from stoney_verify.services import server_design_plan_service as design_plan
+        from stoney_verify.services import server_design_studio as design_studio
+
+        theme_id = str(options.get("theme_id") or "gothic_clean")
+        theme = design_studio.THEMES_BY_ID.get(
+            theme_id,
+            design_studio.THEMES_BY_ID["gothic_clean"],
+        )
+        try:
+            strength = max(1, min(5, int(options.get("strength", 4) or 4)))
+        except Exception:
+            strength = 4
+        font = str(options.get("font") or getattr(theme, "font", "normal") or "normal")
+        font = font.lower().replace("-", "_")
+        if font not in design_studio.DESIGN_FONT_STYLES:
+            font = str(getattr(theme, "font", "normal") or "normal").lower().replace("-", "_")
+        separator = ""
+        if strength >= 2:
+            separator_id = design_plan.effective_server_separator_id(options)
+            separator_spec = design_studio.SEPARATORS_BY_ID.get(separator_id)
+            separator = str(getattr(separator_spec, "value", "") or "")
+        return {
+            "enabled": True,
+            "font": font if strength >= 3 else "normal",
+            "separator": separator,
+            "strength": strength,
+            "options": options,
+        }
+    except Exception:
+        return {
+            "enabled": False,
+            "font": "normal",
+            "separator": "",
+            "strength": 0,
+            "options": options,
+        }
+
+
+def security_stats_category_display_name(preferences: Mapping[str, Any]) -> str:
+    base = _clean_channel_text(
+        preferences.get("category_name"),
+        fallback=SECURITY_STATS_CATEGORY_NAME,
+        limit=100,
+    )
+    context = _design_context(preferences)
+    if not context["enabled"]:
+        return base
+    try:
+        from stoney_verify.services import server_design_plan_service as design_plan
+        from stoney_verify.services import server_design_studio as design_studio
+
+        options = _mapping(context.get("options", {}))
+        result = design_studio.build_styled_name(
+            base,
+            kind="category",
+            theme_id=str(options.get("theme_id") or "gothic_clean"),
+            strength=int(context.get("strength") or 4),
+            icon_mode="keep_existing",
+            separator_id=design_plan.effective_server_separator_id(options),
+            category_frame_id=design_plan.effective_server_category_frame_id(options),
+            font=str(context.get("font") or "normal"),
+            exact_match=True,
+        )
+        if not result.blockers and result.after:
+            return str(result.after)[:100]
+    except Exception:
+        pass
+    return base
+
+
+def _metric_format(preferences: Mapping[str, Any], key: str) -> Dict[str, str]:
+    metric = security_stat_metric(key)
+    formats = _mapping(preferences.get("formats", {}))
+    row = _mapping(formats.get(key))
+    labels = _mapping(preferences.get("labels", {}))
+
+    if row:
+        separator = str(row.get("separator") if row.get("separator") is not None else ": ")
+        separator = separator.replace("\r", " ").replace("\n", " ")[:16]
+        return {
+            "icon": _clean_format_piece(row.get("icon"), fallback=metric.icon, limit=24),
+            "label": _clean_format_piece(row.get("label"), fallback=metric.label, limit=72),
+            "separator": separator,
+            "value_template": _normalize_value_template(row.get("value_template")),
+        }
+
+    if key in labels:
+        legacy = _clean_channel_text(
+            labels.get(key),
+            fallback=DEFAULT_SECURITY_STATS_LABELS[key],
+            limit=72,
+        ).rstrip(":").strip()
+        return {
+            "icon": "",
+            "label": legacy,
+            "separator": ": ",
+            "value_template": SECURITY_STATS_VALUE_TOKEN,
+        }
+
+    return {
+        "icon": metric.icon,
+        "label": metric.label,
+        "separator": ": ",
+        "value_template": SECURITY_STATS_VALUE_TOKEN,
+    }
+
+
+def _styled_metric_label(preferences: Mapping[str, Any], label: str) -> str:
+    context = _design_context(preferences)
+    font = str(context.get("font") or "normal")
+    if not context.get("enabled") or font == "normal":
+        return label
+    try:
+        from stoney_verify.services import server_design_studio as design_studio
+
+        styled, _subs = design_studio.transform_text_safe(
+            label,
+            font,
+            fallback_order=design_studio.fallback_ladder(font),
+        )
+        return styled or label
+    except Exception:
+        return label
+
+
+def render_security_stat_name(
+    preferences: Mapping[str, Any],
+    key: str,
+    value: Any,
+) -> str:
+    metric = security_stat_metric(key)
+    row = _metric_format(preferences, key)
+    context = _design_context(preferences)
+
+    icon = row["icon"]
+    label = _styled_metric_label(preferences, row["label"])
+    if context.get("enabled") and not _mapping(preferences.get("formats", {})).get(key):
+        icon_mode = str(_mapping(context.get("options", {})).get("icon_mode") or "replace_missing")
+        if icon_mode == "clear":
+            icon = ""
+
+    design_separator = str(context.get("separator") or "") if context.get("enabled") else ""
+    if icon and design_separator:
+        head = f"{icon} {design_separator} {label}".strip()
+    elif icon:
+        head = f"{icon} {label}".strip()
+    else:
+        head = label.strip()
+
+    rendered_value = row["value_template"].replace(SECURITY_STATS_VALUE_TOKEN, str(value), 1)
+    name = f"{head}{row['separator']}{rendered_value}".strip()
+    name = name.replace("\r", " ").replace("\n", " ").strip()
+
+    if 1 <= len(name) <= 100:
+        return name
+
+    for cut in range(min(len(label), 72), 0, -1):
+        short_label = label[:cut].rstrip()
+        if icon and design_separator:
+            short_head = f"{icon} {design_separator} {short_label}".strip()
+        elif icon:
+            short_head = f"{icon} {short_label}".strip()
+        else:
+            short_head = short_label
+        candidate = f"{short_head}{row['separator']}{rendered_value}".strip()
+        if 1 <= len(candidate) <= 100:
+            return candidate
+
+    fallback = f"{metric.icon} {metric.label}: {value}".strip()
+    return fallback[:100] or metric.label[:100]
+
+
+def security_stat_format_preview(preferences: Mapping[str, Any], key: str) -> str:
+    metric = security_stat_metric(key)
+    sample = "ONLINE" if metric.value_kind == "status" else "0"
+    return render_security_stat_name(preferences, key, sample)
+
+
+def validate_security_stat_format(
+    key: str,
+    raw: Mapping[str, Any],
+    *,
+    preferences: Optional[Mapping[str, Any]] = None,
+) -> Tuple[bool, str, Dict[str, str]]:
+    metric = security_stat_metric(key)
+    icon = _clean_format_piece(raw.get("icon"), fallback=metric.icon, limit=24)
+    label = _clean_format_piece(raw.get("label"), fallback=metric.label, limit=72)
+    separator = str(raw.get("separator") if raw.get("separator") is not None else ": ")
+    separator = separator.replace("\r", " ").replace("\n", " ")[:16]
+    value_template = str(raw.get("value_template") or SECURITY_STATS_VALUE_TOKEN).strip()
+    if value_template.count(SECURITY_STATS_VALUE_TOKEN) != 1:
+        return False, "Value format must contain exactly one `{value}` token.", {}
+    if len(value_template) > 32:
+        return False, "Value format is too long. Keep it at 32 characters or fewer.", {}
+
+    cleaned = {
+        "icon": icon,
+        "label": label,
+        "separator": separator,
+        "value_template": value_template,
+    }
+    test_preferences = dict(preferences or {})
+    formats = _mapping(test_preferences.get("formats", {}))
+    formats[key] = cleaned
+    test_preferences["formats"] = formats
+    preview = security_stat_format_preview(test_preferences, key)
+    if not (1 <= len(preview) <= 100):
+        return False, "The rendered Discord channel name must be 1–100 characters.", {}
+    return True, preview, cleaned
+
 def _format_stat_count(value: Any, number_style: str) -> str:
     if str(number_style or "").strip().lower() == "exact":
         return str(max(0, _safe_int(value, 0)))
