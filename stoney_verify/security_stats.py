@@ -154,6 +154,93 @@ def _mapping(value: Any) -> Dict[str, Any]:
     return {}
 
 
+def security_stat_metric(key: str) -> SecurityStatMetric:
+    clean = str(key or "").strip()
+    metric = SECURITY_STATS_METRICS.get(clean)
+    if metric is None:
+        raise KeyError(f"Unknown Server Stats metric: {clean}")
+    return metric
+
+
+def security_stat_metric_capability(key: str, *, guild: Optional[discord.Guild] = None) -> Dict[str, Any]:
+    metric = security_stat_metric(key)
+    missing_intents: list[str] = []
+    missing_permissions: list[str] = []
+
+    intents = getattr(bot, "intents", None)
+    for intent in (*metric.required_intents, *metric.privileged_intents):
+        if intents is not None and not bool(getattr(intents, intent, False)):
+            missing_intents.append(intent)
+
+    if guild is not None and metric.required_permissions:
+        me = getattr(guild, "me", None)
+        perms = getattr(me, "guild_permissions", None)
+        for permission in metric.required_permissions:
+            if perms is None or not bool(getattr(perms, permission, False)):
+                missing_permissions.append(permission)
+
+    return {
+        "key": metric.key,
+        "title": metric.title,
+        "provider": metric.provider,
+        "source": metric.source,
+        "required_intents": metric.required_intents,
+        "privileged_intents": metric.privileged_intents,
+        "required_permissions": metric.required_permissions,
+        "missing_intents": tuple(missing_intents),
+        "missing_permissions": tuple(missing_permissions),
+        "available": not missing_intents and not missing_permissions,
+    }
+
+
+def security_stat_metric_description(key: str) -> str:
+    metric = security_stat_metric(key)
+    requirement = ""
+    if metric.privileged_intents:
+        requirement = " • privileged intent: " + ", ".join(metric.privileged_intents)
+    elif metric.required_intents:
+        requirement = " • intent: " + ", ".join(metric.required_intents)
+    elif metric.required_permissions:
+        requirement = " • permission: " + ", ".join(metric.required_permissions)
+    return f"{metric.source}{requirement}"[:100]
+
+
+def _clean_format_piece(value: Any, *, fallback: str = "", limit: int = 72) -> str:
+    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    if not text:
+        text = str(fallback)
+    return text[: max(0, int(limit))]
+
+
+def _normalize_value_template(value: Any, *, fallback: str = SECURITY_STATS_VALUE_TOKEN) -> str:
+    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    if not text:
+        text = fallback
+    if text.count(SECURITY_STATS_VALUE_TOKEN) != 1:
+        return fallback
+    return text[:32]
+
+
+def _raw_stat_format_overrides(cfg: Any) -> Dict[str, Dict[str, str]]:
+    try:
+        raw = _mapping(cfg.get(SECURITY_STATS_FORMAT_OVERRIDES_KEY, {}))
+    except Exception:
+        raw = {}
+    out: Dict[str, Dict[str, str]] = {}
+    for key, metric in SECURITY_STATS_METRICS.items():
+        row = _mapping(raw.get(key))
+        if not row:
+            continue
+        separator = str(row.get("separator") if row.get("separator") is not None else ": ")
+        separator = separator.replace("\r", " ").replace("\n", " ")[:16]
+        out[key] = {
+            "icon": _clean_format_piece(row.get("icon"), fallback=metric.icon, limit=24),
+            "label": _clean_format_piece(row.get("label"), fallback=metric.label, limit=72),
+            "separator": separator,
+            "value_template": _normalize_value_template(row.get("value_template")),
+        }
+    return out
+
 def normalize_security_stats(value: Any) -> Dict[str, int]:
     raw = _mapping(value)
     normalized = dict(DEFAULT_SECURITY_STATS)
@@ -231,6 +318,18 @@ def security_stats_preferences(cfg: Any) -> Dict[str, Any]:
         if cleaned and cleaned != DEFAULT_SECURITY_STATS_LABELS[key]:
             labels[key] = cleaned
 
+    formats = _raw_stat_format_overrides(cfg)
+
+    try:
+        inherit_design = _safe_bool(cfg.get(SECURITY_STATS_INHERIT_DESIGN_KEY), False)
+    except Exception:
+        inherit_design = False
+
+    try:
+        design_options = _mapping(cfg.get("server_design_studio_options", {}))
+    except Exception:
+        design_options = {}
+
     try:
         number_style = str(cfg.get(SECURITY_STATS_NUMBER_STYLE_KEY, "compact") or "compact").strip().lower()
     except Exception:
@@ -249,18 +348,29 @@ def security_stats_preferences(cfg: Any) -> Dict[str, Any]:
         "category_name": category_name,
         "visible_keys": visible_keys,
         "labels": labels,
+        "formats": formats,
+        "inherit_design": inherit_design,
+        "design_options": design_options,
         "number_style": number_style,
         "placement": placement,
     }
 
 
 def _stat_label(preferences: Mapping[str, Any], key: str) -> str:
+    metric = security_stat_metric(key)
+    formats = _mapping(preferences.get("formats", {}))
+    row = _mapping(formats.get(key))
+    if row.get("label"):
+        return _clean_format_piece(row.get("label"), fallback=metric.label, limit=72)
     labels = _mapping(preferences.get("labels", {}))
-    return _clean_channel_text(
-        labels.get(key),
-        fallback=DEFAULT_SECURITY_STATS_LABELS[key],
-        limit=72,
-    ).rstrip(":").strip() or DEFAULT_SECURITY_STATS_LABELS[key]
+    if key in labels:
+        legacy = _clean_channel_text(
+            labels.get(key),
+            fallback=DEFAULT_SECURITY_STATS_LABELS[key],
+            limit=72,
+        ).rstrip(":").strip()
+        return legacy or metric.label
+    return metric.label
 
 
 def _format_stat_count(value: Any, number_style: str) -> str:
