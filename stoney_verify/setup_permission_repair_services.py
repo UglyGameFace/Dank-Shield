@@ -192,7 +192,13 @@ def _merge_activity_coverage_targets(
         manual_actions.append("Dank Shield could not resolve its bot member for activity-access repair.")
         return
 
-    report = audit_activity_scope(guild)
+    temporary_admin_active = bool(
+        getattr(getattr(me, "guild_permissions", None), "administrator", False)
+    )
+    report = audit_activity_scope(
+        guild,
+        ignore_administrator=temporary_admin_active,
+    )
     if not bool(getattr(report, "bot_member_resolved", False)):
         manual_actions.append("Dank Shield could not resolve its bot member for activity-access repair.")
         return
@@ -259,13 +265,23 @@ def _merge_activity_coverage_targets(
                 continue
             setattr(expected, attr, True)
 
-        # Persist the authority used by Fix Access whenever it is still effective.
-        # This does not grant a new server permission; it keeps the bot from being
-        # stripped of its existing Manage Roles permission by later channel drift.
-        if getattr(expected, "manage_roles", None) is None:
+        # During explicit temporary-Administrator recovery, persist a bot-member
+        # Manage Permissions allow on the affected target before Administrator is
+        # removed again. Normal non-Admin repair never manufactures this powerful
+        # channel allow merely because server-level Manage Roles is effective.
+        if temporary_admin_active and getattr(expected, "manage_roles", None) is not False:
             try:
-                effective = entry["channel"].permissions_for(me)
-                if bool(getattr(effective, "manage_roles", False)):
+                from stoney_verify.services.setup_permission_policy import (
+                    permissions_without_administrator,
+                )
+
+                underlying = permissions_without_administrator(
+                    entry["channel"],
+                    me,
+                )
+                if underlying is not None and not bool(
+                    getattr(underlying, "manage_roles", False)
+                ):
                     expected.manage_roles = True
             except Exception:
                 pass
