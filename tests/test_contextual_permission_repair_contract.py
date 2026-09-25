@@ -155,7 +155,8 @@ def test_manual_issue_is_never_erased_by_bot_permission_repair(
         ],
     )
     assert audit.healthy is False
-    assert repair.repair_button_state(audit)[0] == "Manual Fix Needed"
+    assert audit.manual_only is True
+    assert repair.repair_button_state(audit)[0] == "Repair Bot Access"
     assert repair.remaining_issue_lines(audit) == [
         "Join audience: selected channel is private; choose a public Join channel."
     ]
@@ -182,7 +183,52 @@ def test_blocked_permission_issue_is_labeled_as_manual_instead_of_fake_autofix(
         [repair.ContextualRepairTarget(10, "welcome", "Join channel")],
     )
     assert audit.repairable_count == 0
-    assert repair.repair_button_state(audit)[:2] == ("Manual Fix Needed", "⚠️")
+    assert audit.manual_only is True
+    assert repair.repair_button_state(audit)[:2] == ("Repair Bot Access", "🧭")
+
+
+def test_manual_only_context_hands_off_without_running_auto_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from stoney_verify import setup_permission_repair_services as hub
+
+    channel = FakeChannel(10, "welcome")
+    guild = FakeGuild([channel])
+    interaction = SimpleNamespace()
+    calls: list[tuple[object, str]] = []
+
+    monkeypatch.setattr(repair.discord.abc, "GuildChannel", FakeChannel)
+    monkeypatch.setattr(
+        repair.core,
+        "audit_target",
+        lambda *_args, **_kwargs: _audit(
+            channel,
+            missing=["view_channel"],
+            blockers=["manual Discord permission fix required"],
+        ),
+    )
+
+    async def open_hub(interaction_arg, *, parent="security", **_kwargs):
+        calls.append((interaction_arg, parent))
+
+    async def forbidden_repair(*_args, **_kwargs):
+        raise AssertionError("manual-only state must not run contextual auto repair")
+
+    monkeypatch.setattr(hub, "open_permission_repair", open_hub)
+    monkeypatch.setattr(repair, "repair_context", forbidden_repair)
+
+    result = asyncio.run(
+        repair.repair_or_handoff(
+            interaction,
+            guild,
+            [repair.ContextualRepairTarget(10, "welcome", "Join channel")],
+            actor_id=99,
+            parent="security",
+        )
+    )
+
+    assert result is None
+    assert calls == [(interaction, "security")]
 
 
 def test_duplicate_target_feature_pairs_are_repaired_once() -> None:

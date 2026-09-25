@@ -103,9 +103,34 @@ def test_ticket_health_view_exposes_manual_state_when_required_mapping_is_absent
         == "dank:tickets:contextual_repair:infrastructure:v1"
     )
 
-    assert button.label == "Manual Fix Needed"
+    assert button.label == "Repair Bot Access"
     assert button.emoji is not None
     assert button.disabled is False
+
+
+def test_ticket_health_hides_repair_action_from_non_manager_staff() -> None:
+    guild = SimpleNamespace(
+        id=55,
+        get_channel=lambda _channel_id: None,
+        get_role=lambda _role_id: None,
+    )
+    cfg = SimpleNamespace(ticket_category_id=0, staff_role_id=0)
+
+    view = repair.TicketPanelHealthView(
+        owner_id=9,
+        guild=guild,
+        cfg=cfg,
+        can_repair=False,
+    )
+    button = next(
+        item
+        for item in view.children
+        if str(getattr(item, "custom_id", "") or "")
+        == "dank:tickets:contextual_repair:infrastructure:v1"
+    )
+
+    assert button.label == "Manager Required"
+    assert button.disabled is True
 
 
 def test_runtime_binding_replaces_only_ticket_ui_entry_points(monkeypatch) -> None:
@@ -124,12 +149,26 @@ def test_runtime_binding_replaces_only_ticket_ui_entry_points(monkeypatch) -> No
     assert center.TicketActionCenterView is repair.ContextualTicketActionCenterView
 
 
+def test_ticket_permission_mutation_requires_setup_management_authority() -> None:
+    import inspect
+
+    infrastructure = inspect.getsource(repair.TicketInfrastructureRepairButton.callback)
+    selected = inspect.getsource(repair.SelectedTicketRepairButton.callback)
+
+    assert "public_setup_group import _require_setup_permission" in infrastructure
+    assert "await _require_setup_permission(interaction)" in infrastructure
+    assert "public_setup_group import _require_setup_permission" in selected
+    assert "await _require_setup_permission(interaction)" in selected
+    assert "contextual.repair_or_handoff(" in infrastructure
+    assert "contextual.repair_or_handoff(" in selected
+
+
 def test_ticket_contextual_integration_never_owns_discord_overwrite_mutation() -> None:
     import inspect
 
     source = inspect.getsource(repair)
     assert "set_permissions(" not in source
-    assert "contextual.repair_context(" in source
+    assert "contextual.repair_or_handoff(" in source
     assert "clear_explicit_denies" not in source
 
 

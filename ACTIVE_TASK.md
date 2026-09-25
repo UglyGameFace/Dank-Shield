@@ -71,6 +71,23 @@ though that exact target required a manual Discord permission change first.
 Current `main.py`, `app.py`, and `commands.py` do not own those as
 mandatory startup modules. The health report therefore emitted false warnings.
 
+## Merged foundation
+
+PR #314 — canonical access-repair authority, overwrite capability truth, Setup
+Check readiness truth, undo truth, and startup-diagnostics ownership — is merged
+to `main` and Discloud reports the merge deployed successfully. All exact-head
+workflow groups passed before merge.
+
+## Follow-up consolidation now active
+
+The merged audit exposed one remaining product-level inconsistency: contextual
+feature screens could render an enabled **Manual Fix Needed** control even when
+their own audit had already proven that no safe contextual mutation was
+possible. Pressing it simply reran the doomed contextual repair and re-rendered
+the same blockers.
+
+This follow-up keeps the same P0 and removes that loop.
+
 ## Repair in progress
 
 ### Canonical actor authority
@@ -143,6 +160,26 @@ The canonical generic flow is:
 
 Existing ticket/setup recovery guidance points to that same route.
 
+
+### Contextual repair handoff
+
+Setup, Verification, Welcome, Tickets, Profile/Self Roles, Modlog, and Member
+Logs now use one shared contextual decision:
+
+- healthy → disabled **Access Healthy**;
+- safe repairable gaps → **Fix Issues** repairs in place through the canonical
+  overwrite mutation owner;
+- manual-only state → **Repair Bot Access** opens the canonical repair hub
+  instead of rerunning a repair path that already knows it cannot succeed.
+
+Ticket health remains readable to configured ticket staff, but permission
+mutation now requires the canonical setup/server-management authority instead
+of treating ordinary ticket staff as channel-permission administrators.
+
+Member Logs authority now uses the canonical interaction-resolved
+channel-management helper, so guild owners are not rejected because cached
+`Member` state is incomplete.
+
 ### Undo truth
 
 A repair that changes zero overwrites no longer creates or displays an undo
@@ -195,11 +232,11 @@ startup owners.
 
 ## Status
 
-**VALIDATING — implementation frozen; exact-head CI and merge hygiene pending**
+**IN PROGRESS — #314 deployed; contextual repair handoff consolidation implemented; exact-head validation pending**
 
-Branch: `fix/canonical-access-repair-runtime-20260924`
+Branch: `fix/contextual-repair-handoff-20260924`
 
-Base: current `main` after merged PR #313.
+Base: current `main` after merged/deployed PR #314.
 
 ## Production acceptance after deploy
 
@@ -209,4 +246,8 @@ Base: current `main` after merged PR #313.
    manually restored and does not expose a fake green repair action;
 4. Setup Check and Specific Channel show the same prerequisite truth;
 5. diagnostics no longer reports retired/lazy verification guards as missing
-   startup owners.
+   startup owners;
+6. manual-only contextual screens show **Repair Bot Access** and enter the one
+   canonical hub instead of rerunning doomed safe-repair callbacks;
+7. ticket permission repair is not available to ordinary ticket staff unless
+   they also hold canonical server-management authority.

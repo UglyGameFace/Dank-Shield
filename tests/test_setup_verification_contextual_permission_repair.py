@@ -198,7 +198,7 @@ def test_setup_repair_button_uses_shared_state_contract(monkeypatch: pytest.Monk
         lambda *_args, **_kwargs: SimpleNamespace(healthy=False, repairable_count=0),
     )
     manual = integration.SetupContextRepairButton(guild=guild, cfg={}, manual_issues=["manual"])
-    assert manual.label == "Manual Fix Needed"
+    assert manual.label == "Repair Bot Access"
     assert manual.disabled is False
 
 
@@ -233,10 +233,11 @@ def test_setup_button_repairs_then_reopens_same_health_screen(monkeypatch: pytes
     async def guided(_guild):
         return "ready", "", "", ""
 
-    async def repair(_guild, targets, *, actor_id, manual_issues=()):
+    async def repair(_interaction, _guild, targets, *, actor_id, manual_issues=(), parent="security"):
         calls["repair_targets"] = tuple(targets)
         calls["actor_id"] = actor_id
         calls["manual_issues"] = tuple(manual_issues)
+        calls["parent"] = parent
         return SimpleNamespace(summary=lambda: "✅ Access re-check passed.")
 
     async def reopen(_interaction, *, saved_message="", already_deferred=False):
@@ -247,7 +248,7 @@ def test_setup_button_repairs_then_reopens_same_health_screen(monkeypatch: pytes
     monkeypatch.setattr(integration.solid, "_safe_defer_update", defer)
     monkeypatch.setattr(integration, "get_guild_config", config)
     monkeypatch.setattr(integration.setup, "_guided_setup_target", guided)
-    monkeypatch.setattr(integration.contextual, "repair_context", repair)
+    monkeypatch.setattr(integration.contextual, "repair_or_handoff", repair)
     monkeypatch.setattr(integration.setup, "_open_health_check", reopen)
     monkeypatch.setattr(integration, "_setup_manual_issues", lambda *_args, **_kwargs: [])
 
@@ -261,6 +262,7 @@ def test_setup_button_repairs_then_reopens_same_health_screen(monkeypatch: pytes
 
     assert calls["deferred"] is True
     assert calls["actor_id"] == 99
+    assert calls["parent"] == "security"
     assert calls["already_deferred"] is True
     assert calls["saved_message"] == "✅ Access re-check passed."
 
@@ -443,7 +445,7 @@ def test_structurally_complete_setup_does_not_claim_passed_when_access_is_blocke
         if getattr(child, "custom_id", "") == "dank_setup_review:contextual_repair"
     ]
     assert len(repair) == 1
-    assert repair[0].label == "Manual Fix Needed"
+    assert repair[0].label == "Repair Bot Access"
 
 
 def test_runtime_patch_covers_setup_check_and_verification_channels_without_clobbering_review_owner() -> None:

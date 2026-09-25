@@ -17,6 +17,7 @@ from stoney_verify.guild_config import get_guild_config
 from stoney_verify.welcome_card_runtime import resolve_join_card_channel
 
 from . import public_modlog_group as modlog
+from .public_owner_authority import interaction_has_channel_management_authority
 from .public_setup_group import _require_setup_permission, dank_group
 
 _PATCHED = False
@@ -282,14 +283,7 @@ def _member_routes(
 
 
 def _member_user_authorized(interaction: discord.Interaction) -> bool:
-    if interaction.guild is None:
-        return False
-    perms = getattr(interaction.user, "guild_permissions", None)
-    return bool(
-        getattr(perms, "administrator", False)
-        or getattr(perms, "manage_guild", False)
-        or getattr(perms, "manage_channels", False)
-    )
+    return interaction_has_channel_management_authority(interaction)
 
 
 async def _require_member_logs_permission(interaction: discord.Interaction) -> bool:
@@ -503,12 +497,16 @@ class ModlogHealthRepairView(discord.ui.View):
             return
         await _defer_component(interaction)
         cfg = await get_guild_config(int(guild.id), refresh=True)
-        result = await contextual.repair_context(
+        result = await contextual.repair_or_handoff(
+            interaction,
             guild,
             _modlog_targets(cfg),
             actor_id=int(interaction.user.id),
             manual_issues=_modlog_manual_issues(guild, cfg),
+            parent="logs",
         )
+        if result is None:
+            return
         cfg = await get_guild_config(int(guild.id), refresh=True)
         await interaction.edit_original_response(
             embed=_modlog_health_embed(
@@ -587,12 +585,16 @@ class MemberLogsRepairView(discord.ui.View):
             exit_reason=exit_reason,
             staff_channel=staff_channel,
         )
-        result = await contextual.repair_context(
+        result = await contextual.repair_or_handoff(
+            interaction,
             guild,
             _member_log_targets(join_channel, exit_channel, staff_channel),
             actor_id=int(interaction.user.id),
             manual_issues=manual,
+            parent="logs",
         )
+        if result is None:
+            return
         cfg = await get_guild_config(int(guild.id), refresh=True)
         await interaction.edit_original_response(
             embed=_member_logs_embed(guild, cfg, last_action=result.summary()),

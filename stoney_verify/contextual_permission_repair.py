@@ -65,6 +65,10 @@ class ContextualRepairAudit:
     def needs_attention(self) -> bool:
         return not self.healthy
 
+    @property
+    def manual_only(self) -> bool:
+        return self.needs_attention and self.repairable_count <= 0
+
 
 @dataclass
 class ContextualRepairResult:
@@ -209,7 +213,7 @@ def repair_button_state(audit: ContextualRepairAudit) -> tuple[str, str, discord
         return "Access Healthy", "✅", discord.ButtonStyle.secondary, True
     if audit.repairable_count > 0:
         return "Fix Issues", "🛠️", discord.ButtonStyle.danger, False
-    return "Manual Fix Needed", "⚠️", discord.ButtonStyle.secondary, False
+    return "Repair Bot Access", "🧭", discord.ButtonStyle.primary, False
 
 
 def remaining_issue_lines(audit: ContextualRepairAudit) -> list[str]:
@@ -226,6 +230,45 @@ def remaining_issue_lines(audit: ContextualRepairAudit) -> list[str]:
             out.append(f"{item.target.label}: still missing " + ", ".join(item.missing))
     out.extend(audit.manual_issues)
     return out
+
+
+async def repair_or_handoff(
+    interaction: discord.Interaction,
+    guild: discord.Guild,
+    targets: Iterable[ContextualRepairTarget],
+    *,
+    actor_id: int,
+    manual_issues: Iterable[str] = (),
+    parent: str = "security",
+) -> ContextualRepairResult | None:
+    """Repair safe gaps in place or hand manual-only state to one repair hub.
+
+    Contextual feature screens remain useful for the common safe case. Once the
+    audit proves there is nothing the contextual safe repair can change, do not
+    run the same doomed mutation path again. Move the administrator into the
+    canonical Repair Bot Access workflow instead.
+    """
+    normalized = normalize_targets(targets)
+    before = audit_context(
+        guild,
+        normalized,
+        manual_issues=manual_issues,
+    )
+    if before.manual_only:
+        from .setup_permission_repair_services import open_permission_repair
+
+        await open_permission_repair(
+            interaction,
+            parent=parent,
+        )
+        return None
+
+    return await repair_context(
+        guild,
+        normalized,
+        actor_id=int(actor_id),
+        manual_issues=manual_issues,
+    )
 
 
 async def repair_context(
@@ -302,5 +345,6 @@ __all__ = [
     "audit_context",
     "repair_button_state",
     "remaining_issue_lines",
+    "repair_or_handoff",
     "repair_context",
 ]

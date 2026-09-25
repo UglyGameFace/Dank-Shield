@@ -158,9 +158,9 @@ class ContextualProfileBuilderView(_ORIGINAL_PROFILE_VIEW):
             style = discord.ButtonStyle.danger
             disabled = False
         else:
-            label = "Manual Fix Needed"
-            emoji = "⚠️"
-            style = discord.ButtonStyle.secondary
+            label = "Repair Bot Access"
+            emoji = "🧭"
+            style = discord.ButtonStyle.primary
             disabled = False
 
         self.add_item(
@@ -258,12 +258,16 @@ async def contextual_builder_action(
         feature="general",
         label="Profile / self-role panel channel",
     )
-    result = await contextual.repair_context(
+    result = await contextual.repair_or_handoff(
+        interaction,
         guild,
         (target,) if target is not None else (),
         actor_id=int(interaction.user.id),
         manual_issues=_profile_manual_issues(guild),
+        parent="security",
     )
+    if result is None:
+        return True
     ready, fixable, _manual = contextual_profile_builder_status(guild, channel)
 
     try:
@@ -351,7 +355,8 @@ class SignatureAccessButton(discord.ui.Button):
         saved = set(parse_live_card_config(config).channel_ids)
         selected = set(view.pending_channel_ids or saved)
         manual = [] if selected else ["No Compact Profile Signature channels are selected yet."]
-        result = await contextual.repair_context(
+        result = await contextual.repair_or_handoff(
+            interaction,
             guild,
             _targets_for_ids(
                 guild,
@@ -360,7 +365,10 @@ class SignatureAccessButton(discord.ui.Button):
             ),
             actor_id=int(interaction.user.id),
             manual_issues=manual,
+            parent="security",
         )
+        if result is None:
+            return
         await view.refresh(
             interaction,
             config=config,
@@ -439,7 +447,8 @@ async def contextual_save_selected_channels(
     except Exception:
         pass
 
-    result = await contextual.repair_context(
+    result = await contextual.repair_or_handoff(
+        interaction,
         guild,
         _targets_for_ids(
             guild,
@@ -447,7 +456,10 @@ async def contextual_save_selected_channels(
             label_prefix="Compact signature channel",
         ),
         actor_id=int(interaction.user.id),
+        parent="security",
     )
+    if result is None:
+        return
     if result.ok:
         return await _ORIGINAL_SIGNATURE_SAVE(interaction, view, cleaned)
 
@@ -493,12 +505,16 @@ async def contextual_roles_panel_post(
                 await interaction.response.defer(ephemeral=True, thinking=True)
         except Exception:
             pass
-        result = await contextual.repair_context(
+        result = await contextual.repair_or_handoff(
+            interaction,
             guild,
             (target,) if target is not None else (),
             actor_id=int(interaction.user.id),
             manual_issues=manual,
+            parent="security",
         )
+        if result is None:
+            return
         if not result.ok:
             return await roles_center._send_ephemeral(
                 interaction,

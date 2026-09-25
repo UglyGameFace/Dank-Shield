@@ -41,7 +41,7 @@ def test_welcome_repair_covers_both_selected_event_channels() -> None:
     assert '"Private Join/Leave log"' in INTEGRATION
     assert '"welcome"' in INTEGRATION
     assert '"logs"' in INTEGRATION
-    assert "contextual.repair_context(" in INTEGRATION
+    assert "contextual.repair_or_handoff(" in INTEGRATION
     assert "actor_id=int(interaction.user.id)" in INTEGRATION
 
 
