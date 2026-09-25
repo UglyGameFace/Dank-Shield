@@ -289,6 +289,7 @@ def _private_overwrites(guild: discord.Guild, *, staff_role: Optional[discord.Ro
             embed_links=True,
             attach_files=True,
             manage_channels=True,
+            manage_roles=True,
             manage_messages=True,
             manage_threads=True,
             create_public_threads=True,
@@ -316,7 +317,7 @@ def _public_overwrites(guild: discord.Guild, *, staff_role: Optional[discord.Rol
     }
     me = guild.me
     if me is not None:
-        overwrites[me] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, embed_links=True, attach_files=True, manage_messages=True)
+        overwrites[me] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, embed_links=True, attach_files=True, manage_roles=True, manage_messages=True)
     if unverified_role is not None and not unverified_role.is_default():
         overwrites[unverified_role] = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
     for role in (staff_role, control_role):
@@ -331,7 +332,7 @@ def _voice_overwrites(guild: discord.Guild, *, staff_role: Optional[discord.Role
     }
     me = guild.me
     if me is not None:
-        overwrites[me] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, move_members=True, manage_channels=True)
+        overwrites[me] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, move_members=True, manage_channels=True, manage_roles=True)
     if unverified_role is not None and not unverified_role.is_default():
         overwrites[unverified_role] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=False)
     for role in (staff_role, control_role):
