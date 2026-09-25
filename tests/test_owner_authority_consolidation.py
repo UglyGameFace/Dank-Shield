@@ -365,4 +365,3 @@ def test_staff_management_entrypoints_check_staff_before_native_permission_copy(
     hub_design = hub[hub.index("async def design("):hub.index("async def roles(", hub.index("async def design("))]
     assert "_admin_or_manage(interaction)" not in hub_design
     assert "public_design_bridge" in hub_design
-
