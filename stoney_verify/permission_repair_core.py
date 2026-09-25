@@ -387,6 +387,8 @@ def seed_bot_overwrite_from_parent(
     guild: discord.Guild,
     target: discord.abc.GuildChannel,
     current: discord.PermissionOverwrite,
+    *,
+    include_manage_roles: bool = False,
 ) -> tuple[discord.PermissionOverwrite, list[str]]:
     """Use a known parent bot overwrite only when the child has no bot override.
 
@@ -403,6 +405,7 @@ def seed_bot_overwrite_from_parent(
     if source is None:
         return expected, []
 
+    seeded = _clone_overwrite(source)
     try:
         allow, deny = source.pair()
         copied = sorted(
@@ -411,7 +414,22 @@ def seed_bot_overwrite_from_parent(
         )
     except Exception:
         copied = []
-    return _clone_overwrite(source), copied
+
+    if not include_manage_roles:
+        # Discord restricts MANAGE_ROLES channel-overwrite grants. Parent
+        # seeding is safe-by-default and never manufactures that bit during
+        # normal repair. Explicit temporary-Administrator recovery opts in.
+        try:
+            seeded.manage_roles = getattr(current, "manage_roles", None)
+        except Exception:
+            pass
+        copied = [
+            name
+            for name in copied
+            if name not in {"manage_roles", "deny:manage_roles"}
+        ]
+
+    return seeded, copied
 
 
 def _parent_manage_permissions_hint(
@@ -850,28 +868,15 @@ async def apply_target_repair(
                 "channel_name": _safe_str(getattr(current_target, "name", "")),
                 "before": _overwrite_snapshot(current),
             }
+            temporary_admin_active = bool(
+                getattr(getattr(me, "guild_permissions", None), "administrator", False)
+            )
             seeded, inherited = seed_bot_overwrite_from_parent(
                 guild,
                 current_target,
                 current,
+                include_manage_roles=temporary_admin_active,
             )
-
-            temporary_admin_active = bool(
-                getattr(getattr(me, "guild_permissions", None), "administrator", False)
-            )
-            if not temporary_admin_active:
-                # Parent seeding is bot-only, but normal repair must not add or
-                # remove channel-level Manage Permissions. Preserve the child's
-                # current explicit value until emergency recovery is authorized.
-                try:
-                    seeded.manage_roles = getattr(current, "manage_roles", None)
-                    inherited = [
-                        name
-                        for name in inherited
-                        if name not in {"manage_roles", "deny:manage_roles"}
-                    ]
-                except Exception:
-                    pass
 
             new_overwrite, changed, preserved = _apply_missing_to_overwrite(
                 seeded,
