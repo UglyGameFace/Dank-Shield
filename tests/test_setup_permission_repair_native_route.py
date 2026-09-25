@@ -152,13 +152,33 @@ def test_permission_repair_preview_actions_keep_parent_and_scope(monkeypatch) ->
         parent="logs",
         include_activity_coverage=True,
     )
-    asyncio.run(button(view, "Apply Safe Fixes").callback(SimpleNamespace()))
+    apply_button = button(view, "Fix All Safe Access")
+    assert apply_button.custom_id == "dank_setup_permission:apply"
+    asyncio.run(apply_button.callback(SimpleNamespace()))
     asyncio.run(button(view, "Preview Again").callback(SimpleNamespace()))
 
     assert events == [
         ("apply", "logs", True),
         ("preview", "logs", True),
     ]
+
+
+def test_activity_repair_preview_copy_matches_activity_primary_action() -> None:
+    result = {
+        "applied": False,
+        "target_count": 60,
+        "changed": ["#verification — Dank Shield"],
+        "failed": [],
+        "manual_actions": [],
+        "missing_mappings": [],
+        "notes": [],
+        "unchanged": [],
+        "include_activity_coverage": True,
+    }
+
+    embed = setup_permission_repair_services.result_embed(result)
+    assert "Fix All Safe Access" in str(embed.description or "")
+    assert "Apply Safe Fixes" not in str(embed.description or "")
 
 
 def test_permission_repair_result_is_concise_and_has_no_advanced_diagnostic_dump() -> None:
