@@ -2097,7 +2097,8 @@ async def build_member_leave_embed(
                 f"@{role_name}",
             )
             role_lines.append(
-                f"{role_mention} (`{_safe_int(getattr(role, 'id', 0), 0)}`)"
+                f"{role_mention} • **{role_name}** "
+                f"(`{_safe_int(getattr(role, 'id', 0), 0)}`)"
             )
         embed.add_field(
             name="Roles At Exit",
