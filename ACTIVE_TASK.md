@@ -78,15 +78,24 @@ Check readiness truth, undo truth, and startup-diagnostics ownership — is merg
 to `main` and Discloud reports the merge deployed successfully. All exact-head
 workflow groups passed before merge.
 
-## Follow-up consolidation now active
+## Merged contextual consolidation
 
-The merged audit exposed one remaining product-level inconsistency: contextual
-feature screens could render an enabled **Manual Fix Needed** control even when
-their own audit had already proven that no safe contextual mutation was
-possible. Pressing it simply reran the doomed contextual repair and re-rendered
-the same blockers.
+PR #316 — contextual repair handoff to the canonical access hub — is merged to
+`main`, all exact-head workflows passed, and Discloud reports the merge
+deployed successfully.
 
-This follow-up keeps the same P0 and removes that loop.
+Production then reported the repair still failed.
+
+The new live failure exposed two remaining defects **inside the canonical hub
+itself**, not another feature-specific repair owner:
+
+1. the preview always rendered an enabled green **Apply Safe Fixes** button even
+   when its own result contained zero safe changes and only manual blockers;
+2. the canonical hub and Specific Channel repair used acknowledgement helpers
+   that swallowed Discord defer failures and continued execution, violating the
+   claim-first boundary used elsewhere in Dank Shield.
+
+This remains the same P0. No unrelated feature work is active.
 
 ## Repair in progress
 
@@ -187,6 +196,58 @@ token. Failed/no-op attempts are still audit-recorded, but no restore snapshot
 is manufactured. **Undo Repair** remains disabled until a real change produced
 a valid token.
 
+### Canonical hub action truth
+
+The canonical Repair Bot Access preview now derives its primary action from the
+actual preview result:
+
+- one or more safe changes available → enabled **Apply Safe Fixes**;
+- no safe changes and no blockers → disabled **Access Healthy**;
+- no safe changes but manual/error blockers remain → disabled
+  **Manual Discord Fix Required**.
+
+The preview card mirrors the same truth. It no longer tells the user to press
+Apply Safe Fixes when there is nothing safe to apply.
+
+The Reauthorize link is shown only when the preview detected missing
+server-level bot permissions. A channel/category self-lockout no longer points
+the user back to a reauthorization step that cannot remove a target-specific
+deny.
+
+### Reauthorization guidance is authoritative
+
+The canonical preview, post-repair result, and Specific Channel repair now use
+the same server-level prerequisite truth before showing **Reauthorize Dank
+Shield**. A target-specific channel/category self-lockout no longer exposes an
+OAuth reinvite that cannot remove the deny. Reauthorization is offered only
+when known server-level prerequisites are actually missing.
+
+### Claim-first repair boundary
+
+The canonical access hub now claims the interaction through
+`interaction_guard.safe_defer_interaction()` before preview/apply work. A
+failed acknowledgement stops the path before queue, REST, database, or Discord
+mutation.
+
+Specific Channel repair now uses the same claim-first helper contract for
+normal repair and explicit-deny confirmation.
+
+Render failures are no longer silently discarded. If both the original-response
+edit and follow-up fail, the interaction failure ring records a structured
+`access_repair_render_failed` event.
+
+### Repair callback diagnostics
+
+The selected-target repair View's generic error handler previously emitted:
+
+`Fix Access could not finish that interaction. Nothing was changed.`
+
+That claim was unsafe because a callback exception can occur after Discord has
+already accepted a mutation.
+
+The handler now records a structured interaction failure with an error ID and
+traceback and tells the user to re-preview before assuming the target state.
+
 ### Startup diagnostics
 
 The startup-health contract now tracks actual native boot owners:
@@ -228,15 +289,18 @@ startup owners.
 - Python compile;
 - full test suite;
 - all GitHub workflow gates;
-- currentness / mergeability / review / diff hygiene.
+- currentness / mergeability / review / diff hygiene;
+- regression coverage that reauthorization is hidden after healthy repair and
+  for target-specific self-lockout, but remains available for missing
+  server-level prerequisites.
 
 ## Status
 
-**IN PROGRESS — #314 deployed; contextual repair handoff consolidation implemented; exact-head validation pending**
+**IMPLEMENTATION COMPLETE — #316 deployed; canonical hub fail-closed/action-truth repair and unified reauthorization guidance implemented; final exact-head validation pending**
 
-Branch: `fix/contextual-repair-handoff-20260924`
+Branch: `fix/access-repair-fail-closed-20260924`
 
-Base: current `main` after merged/deployed PR #314.
+Base: current `main` after merged/deployed PR #316.
 
 ## Production acceptance after deploy
 
@@ -250,4 +314,9 @@ Base: current `main` after merged/deployed PR #314.
 6. manual-only contextual screens show **Repair Bot Access** and enter the one
    canonical hub instead of rerunning doomed safe-repair callbacks;
 7. ticket permission repair is not available to ordinary ticket staff unless
-   they also hold canonical server-management authority.
+   they also hold canonical server-management authority;
+8. a manual-only hub preview has **no enabled Apply Safe Fixes** action;
+9. a failed component acknowledgement stops the repair before mutation and
+   emits structured interaction diagnostics;
+10. a callback/render exception exposes an error ID and never claims the target
+    definitely remained unchanged without re-auditing it.

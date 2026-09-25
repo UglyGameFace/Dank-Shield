@@ -452,17 +452,33 @@ class TargetChannelPickerView(DankPickerView):
         item: discord.ui.Item[Any],
     ) -> None:
         _ = item
+        error_id = ""
+        try:
+            from .interaction_guard import log_interaction_failure
+
+            record = log_interaction_failure(
+                interaction,
+                error,
+                stage="access_repair_picker_callback_failed",
+                action_name="specific_access_repair_picker",
+                fix_hint="Reopen Repair Bot Access and choose the target again.",
+            )
+            error_id = record.error_id
+        except Exception:
+            pass
         try:
             print(
-                "[permission_repair_ui] target picker callback failed: "
+                "[permission_repair_ui] target picker callback failed "
+                f"error_id={error_id or '-'} "
                 f"{type(error).__name__}: {error}"
             )
         except Exception:
             pass
+        suffix = f" Error ID: `{error_id}`." if error_id else ""
         await _safe_ephemeral(
             interaction,
-            "⚠️ Dank Shield could not finish that picker action. Nothing was changed. "
-            "Reopen **Fix Access** and try again.",
+            "⚠️ Dank Shield could not finish that picker action. "
+            "Reopen **Repair Bot Access** and try again." + suffix,
         )
 
 
@@ -525,17 +541,38 @@ class TargetPermissionRepairView(core.TargetPermissionRepairView):
         item: discord.ui.Item[Any],
     ) -> None:
         _ = item
+        error_id = ""
+        try:
+            from .interaction_guard import log_interaction_failure
+
+            record = log_interaction_failure(
+                interaction,
+                error,
+                stage="access_repair_callback_failed",
+                action_name="specific_access_repair",
+                fix_hint=(
+                    "Reopen Repair Bot Access and preview the target before retrying. "
+                    "Do not assume a failed render means Discord made no change."
+                ),
+            )
+            error_id = record.error_id
+        except Exception:
+            pass
         try:
             print(
-                "[permission_repair_ui] Fix Access callback failed: "
+                "[permission_repair_ui] Fix Access callback failed "
+                f"error_id={error_id or '-'} "
                 f"{type(error).__name__}: {error}"
             )
         except Exception:
             pass
+        suffix = f" Error ID: `{error_id}`." if error_id else ""
         await _safe_ephemeral(
             interaction,
-            "⚠️ Fix Access could not finish that interaction. Nothing was changed. "
-            "Retry the action or reopen **Fix Access**.",
+            "⚠️ Fix Access could not finish that interaction. "
+            "Reopen **Repair Bot Access** and preview the target before retrying. "
+            "Do not assume the target is unchanged until the preview confirms it."
+            + suffix,
         )
 
 
