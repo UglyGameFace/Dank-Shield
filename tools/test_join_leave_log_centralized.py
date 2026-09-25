@@ -27,8 +27,10 @@ required_router = [
     "async def _send_leave_log_event(",
     "join_log_channel = _resolve_channel(member.guild, cfg, JOIN_LEAVE_KEYS)",
     "leave_log_channel = _resolve_channel(member.guild, cfg, JOIN_LEAVE_KEYS)",
-    "member join event duplicate suppressed",
-    "member leave event duplicate suppressed",
+    "await _send_join_log_event(member, join_log_channel)",
+    "await _send_leave_log_event(member, leave_log_channel)",
+    'event_name = "join" if joined else "leave"',
+    "member {event_name} event delivered",
     "no configured join/leave log channel",
     "canonical join result guild=",
     "canonical exit result guild=",
@@ -41,11 +43,17 @@ for marker in required_router:
 if "staff audit remains a separate route" not in router.lower():
     failures.append("router no longer documents that staff audit remains a separate route")
 
-if "join/leave log must not depend on Welcome Card Studio" not in router:
+if "operational join/leave log is an audit-style event stream" not in router:
     failures.append("router no longer documents independent operational join logging")
 
-if "join/leave log must not depend on Exit Card Studio" not in router:
+if "operational join/leave log is separate from Exit Card Studio" not in router:
     failures.append("router no longer documents independent operational leave logging")
+
+if "member join event duplicate suppressed" in router:
+    failures.append("router still suppresses operational joins when Welcome Card Studio posts")
+
+if "member leave event duplicate suppressed" in router:
+    failures.append("router still suppresses operational leaves when Exit Card Studio posts")
 
 if 'payload["exit_card_enabled"] = True' in router:
     failures.append("member-logs command still forces Exit Card Studio enabled")
@@ -103,8 +111,14 @@ for marker in legacy_bad_events:
     if marker in events:
         failures.append(f"legacy events.py still uses global join log route: {marker}")
 
-if "member_lifecycle_router_guard" not in events:
-    failures.append("events.py does not document central join/leave router ownership")
+if "Public/operational leave routing is owned by the canonical lifecycle" not in events:
+    failures.append("events.py does not document central leave-router ownership")
+
+if "await build_member_leave_embed(guild, member)" not in events:
+    failures.append("events.py no longer owns the separate detailed staff Modlog leave record")
+
+if "_send_leave_log_event(" in events or "_send_join_log_event(" in events:
+    failures.append("events.py regained a second operational join/leave sender")
 
 if fallback_path.exists():
     for marker in (

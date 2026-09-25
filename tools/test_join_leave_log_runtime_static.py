@@ -54,6 +54,8 @@ def test_ready_logs_resolved_member_lifecycle_routes() -> None:
     assert "member lifecycle routes ready" in ROUTER
     assert "members intent is disabled in code" in ROUTER
     assert "join_reason=" in ROUTER
+    assert "join_log_ready=" in ROUTER
+    assert "join_log_health=" in ROUTER
     assert "exit_reason=" in ROUTER
 
 
@@ -94,10 +96,19 @@ def test_canonical_runtime_owns_public_join_output() -> None:
     assert "welcome_card_file(image_card_member(member), cfg)" in CARD_RUNTIME
 
 
+def test_operational_log_is_not_suppressed_by_card_studios() -> None:
+    assert "member join event duplicate suppressed" not in ROUTER
+    assert "member leave event duplicate suppressed" not in ROUTER
+    assert "await _send_join_log_event(member, join_log_channel)" in ROUTER
+    assert "await _send_leave_log_event(member, leave_log_channel)" in ROUTER
+    assert "operational join/leave log is an audit-style event stream" in ROUTER
+    assert "operational join/leave log is separate from Exit Card Studio" in ROUTER
+
+
 def test_staff_join_audit_and_canonical_public_exit_stay_separate() -> None:
     assert "await _post_modlog(" in EVENTS
     assert 'event_key=f"member_join:{member.id}"' in EVENTS
-    assert "Public leave routing is owned by member_lifecycle_router_guard" in EVENTS
+    assert "Public/operational leave routing is owned by the canonical lifecycle" in EVENTS
     assert "_install_listener(_leave_listener, \"on_member_remove\")" in ROUTER
     assert "delivery = await send_live_exit_card(member)" in ROUTER
     assert "dank_shield:exit_card_runtime:v1" not in EXIT_RUNTIME
@@ -116,6 +127,7 @@ if __name__ == "__main__":
         test_setup_logs_uses_explicit_leave_route,
         test_runtime_hardening_is_loaded_but_does_not_override_router,
         test_canonical_runtime_owns_public_join_output,
+        test_operational_log_is_not_suppressed_by_card_studios,
         test_staff_join_audit_and_canonical_public_exit_stay_separate,
     ):
         test()

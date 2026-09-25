@@ -31,6 +31,7 @@ from .modlog import (
     _post_modlog,
     _get_modlog_channel,
     _audit_find_recent_ban,
+    build_member_leave_embed,
     maybe_log_member_update_diff,
     maybe_log_recent_ban,
     maybe_log_recent_kick,
@@ -1616,10 +1617,10 @@ async def on_member_remove(member: discord.Member):
         except Exception:
             pass
 
-        # Public leave routing is owned by member_lifecycle_router_guard.
-        # Keep this legacy path staff-only through modlog for compatibility.
-        embed = discord.Embed(title="📤 Member Left", color=discord.Color.blurple())
-        embed.add_field(name="User", value=f"`{member}` (`{member.id}`)", inline=False)
+        # Public/operational leave routing is owned by the canonical lifecycle
+        # router. This is the separate staff Modlog record. Restore the detailed
+        # member context here without adding another on_member_remove owner.
+        embed = await build_member_leave_embed(guild, member)
         await _post_modlog(
             guild,
             embed,
