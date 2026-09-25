@@ -9,6 +9,7 @@ import discord
 from stoney_verify import setup_activity_access, setup_permission_repair_services
 from stoney_verify.commands_ext import public_diagnostics_group as diagnostics
 from stoney_verify.commands_ext import public_setup_recommend as recommend
+from stoney_verify.commands_ext import public_setup_assistant as setup_assistant
 from stoney_verify.commands_ext import public_setup_solid as solid
 from stoney_verify.members_new.activity_scope import ActivityScopeProblem, ActivityScopeReport
 from stoney_verify.services import setup_permission_policy
@@ -283,6 +284,50 @@ def test_activity_repair_targets_authoritative_scope_only_and_preserves_bot_over
     assert expected.send_messages is False
     assert expected.manage_messages is True
     assert any("2 Diagnostics gap(s)" in note for note in notes)
+
+
+def test_setup_assistant_refresh_preserves_existing_bot_manage_permissions() -> None:
+    class Bot:
+        id = 42
+
+        def __hash__(self) -> int:
+            return hash(self.id)
+
+    me = Bot()
+    guild = SimpleNamespace(me=me)
+
+    class Channel:
+        def __init__(self, value):
+            self.value = value
+
+        def overwrites_for(self, target):
+            assert target is me
+            return discord.PermissionOverwrite(manage_roles=self.value)
+
+    baseline = {
+        me: discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+        )
+    }
+
+    preserved_allow = setup_assistant._preserve_existing_bot_manage_permissions(
+        guild,
+        Channel(True),
+        baseline,
+    )
+    assert preserved_allow is not None
+    assert preserved_allow[me].manage_roles is True
+    assert baseline[me].manage_roles is None
+
+    preserved_deny = setup_assistant._preserve_existing_bot_manage_permissions(
+        guild,
+        Channel(False),
+        baseline,
+    )
+    assert preserved_deny is not None
+    assert preserved_deny[me].manage_roles is False
+    assert baseline[me].manage_roles is None
 
 
 def test_activity_emergency_recovery_replaces_only_bot_explicit_access_denies(
