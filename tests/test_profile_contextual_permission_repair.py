@@ -9,7 +9,7 @@ from stoney_verify.commands_ext import public_setup_gate as gate
 def test_profile_contextual_integration_has_no_local_permission_mutation() -> None:
     source = inspect.getsource(repair)
     assert "set_permissions(" not in source
-    assert "contextual.repair_context(" in source
+    assert "contextual.repair_or_handoff(" in source
     assert "clear_explicit_denies" not in source
 
 
@@ -17,7 +17,7 @@ def test_profile_builder_fix_is_intercepted_by_shared_repair_owner() -> None:
     source = inspect.getsource(repair.contextual_builder_action)
     assert 'action != "fix"' in source
     assert "_ORIGINAL_BUILDER_ACTION" in source
-    assert "contextual.repair_context(" in source
+    assert "contextual.repair_or_handoff(" in source
     assert "interaction.edit_original_response(" in source
 
 
@@ -25,7 +25,7 @@ def test_profile_builder_uses_shared_three_state_button_contract() -> None:
     source = inspect.getsource(repair.ContextualProfileBuilderView)
     assert 'label = "Access Healthy"' in source
     assert 'label = "Fix Issues"' in source
-    assert 'label = "Manual Fix Needed"' in source
+    assert 'label = "Repair Bot Access"' in source
     assert "builder:fix" in source
 
 
@@ -42,7 +42,7 @@ def test_compact_profile_signatures_get_same_screen_repair_control() -> None:
     assert "SignatureAccessButton" in source
     button_source = inspect.getsource(repair.SignatureAccessButton)
     assert "repair_button_state" in button_source
-    assert "contextual.repair_context(" in button_source
+    assert "contextual.repair_or_handoff(" in button_source
     assert "view.refresh(" in button_source
 
 
@@ -50,7 +50,7 @@ def test_compact_signature_selection_repairs_exact_selection_before_save() -> No
     source = inspect.getsource(repair.contextual_save_selected_channels)
     assert "_selection_problems" in source
     assert "_targets_for_ids" in source
-    assert "contextual.repair_context(" in source
+    assert "contextual.repair_or_handoff(" in source
     assert "_ORIGINAL_SIGNATURE_SAVE" in source
     assert "selected channels were not saved" in source
 
@@ -59,7 +59,7 @@ def test_roles_center_repairs_only_selected_panel_channel_before_post() -> None:
     source = inspect.getsource(repair.contextual_roles_panel_post)
     assert 'label="Self-role panel channel"' in source
     assert "contextual.audit_context(" in source
-    assert "contextual.repair_context(" in source
+    assert "contextual.repair_or_handoff(" in source
     assert "_ORIGINAL_ROLES_POST" in source
 
 
