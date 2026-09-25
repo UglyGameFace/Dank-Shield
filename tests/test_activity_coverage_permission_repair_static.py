@@ -28,3 +28,10 @@ def test_activity_repair_preserves_existing_bot_overwrite_before_adding_access()
     assert '"Manage Threads" in required' in SOURCE
     assert "{me: expected}" in SOURCE
     assert 'for collection_name in ("channels", "threads")' in SOURCE
+
+def test_activity_repair_uses_bot_only_self_unlock_instead_of_full_category_sync():
+    assert "build_bot_overwrite_bootstrap_plan" in SOURCE
+    assert "channel.edit(" in SOURCE
+    assert "sync_permissions=True" not in SOURCE
+    assert "unrelated role/member permissions" in SOURCE
+
