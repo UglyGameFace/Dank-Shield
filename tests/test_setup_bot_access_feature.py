@@ -285,6 +285,101 @@ def test_activity_repair_targets_authoritative_scope_only_and_preserves_bot_over
     assert any("2 Diagnostics gap(s)" in note for note in notes)
 
 
+def test_activity_emergency_recovery_replaces_only_bot_explicit_access_denies(
+    monkeypatch,
+) -> None:
+    class Bot:
+        def __init__(self) -> None:
+            self.id = 42
+            self.guild_permissions = SimpleNamespace(
+                administrator=True,
+                manage_roles=True,
+            )
+
+        def __hash__(self) -> int:
+            return hash(self.id)
+
+    me = Bot()
+
+    class Channel:
+        id = 100
+        name = "locked-room"
+
+        def overwrites_for(self, target):
+            assert target is me
+            return discord.PermissionOverwrite(
+                view_channel=False,
+                read_message_history=False,
+                manage_threads=False,
+                manage_roles=False,
+            )
+
+        async def set_permissions(self, *_args, **_kwargs):
+            return None
+
+    channel = Channel()
+
+    class Guild:
+        channels = [channel]
+        threads = []
+
+        def get_channel_or_thread(self, channel_id):
+            return channel if channel_id == 100 else None
+
+    report = ActivityScopeReport(
+        total_channels=1,
+        accessible_channels=0,
+        problems=(
+            ActivityScopeProblem(
+                channel_id=100,
+                channel_name="locked-room",
+                channel_kind="text",
+                missing_permissions=(
+                    "View Channel",
+                    "Read Message History",
+                    "Manage Threads",
+                ),
+            ),
+        ),
+        bot_member_resolved=True,
+    )
+
+    monkeypatch.setattr(
+        setup_permission_repair_services.repair_core,
+        "_bot_member",
+        lambda _guild: me,
+    )
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "audit_activity_scope",
+        lambda _guild, **_kwargs: report,
+    )
+    monkeypatch.setattr(
+        setup_permission_policy,
+        "permissions_without_administrator",
+        lambda _channel, _member: SimpleNamespace(manage_roles=False),
+    )
+
+    targets: list[object] = []
+    notes: list[str] = []
+    manual: list[str] = []
+    setup_permission_repair_services._merge_activity_coverage_targets(
+        Guild(),
+        targets=targets,
+        seen=set(),
+        notes=notes,
+        manual_actions=manual,
+    )
+
+    assert manual == []
+    assert len(targets) == 1
+    expected = targets[0].overwrites[me]
+    assert expected.view_channel is True
+    assert expected.read_message_history is True
+    assert expected.manage_threads is True
+    assert expected.manage_roles is True
+
+
 def test_underlying_permission_resolver_ignores_only_admin_shortcut() -> None:
     class Role:
         def __init__(self, role_id: int, **permissions: bool) -> None:
