@@ -15,6 +15,7 @@ from ..guild_context import GuildContext, get_guild_context
 from ..interaction_guard import run_guarded_interaction, safe_send_interaction
 from .public_setup_group import dank_group
 from .public_owner_authority import interaction_has_manage_guild_authority
+from .public_access_control import scoped_is_ticket_staff
 
 _ATTACHED = False
 
@@ -190,6 +191,14 @@ async def setup_overview(interaction: discord.Interaction) -> None:
         await safe_send_interaction(
             interaction,
             content="❌ This command must be used inside a server.",
+            ephemeral=True,
+        )
+        return
+
+    if not scoped_is_ticket_staff(interaction.user):
+        await safe_send_interaction(
+            interaction,
+            content="❌ Staff only.",
             ephemeral=True,
         )
         return
