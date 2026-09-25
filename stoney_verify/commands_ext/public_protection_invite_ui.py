@@ -432,6 +432,7 @@ class InviteShieldView(discord.ui.View):
                 limit=1000,
                 repost_mixed=False,
                 source="protection-center-native-invite-cleanup",
+                allow_contentless_trusted_advertisers=True,
             )
             fresh = await load_invite_scope_settings(int(guild.id), refresh=True)
             contentless_deleted = int(result.get("contentless_deleted", 0) or 0)
