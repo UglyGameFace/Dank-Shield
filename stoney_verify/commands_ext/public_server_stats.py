@@ -283,9 +283,9 @@ class StatLabelModal(discord.ui.Modal):
         self.label_text = discord.ui.TextInput(
             label="Label",
             placeholder=metric.label,
-            default=str(row.get("label") or metric.label)[:72],
+            default=str(row.get("label") if row.get("label") is not None else metric.label)[:72],
             max_length=72,
-            required=True,
+            required=False,
         )
         self.separator_text = discord.ui.TextInput(
             label="Label → value separator",
