@@ -328,7 +328,7 @@ async def preview_or_apply(
     from stoney_verify.startup_guards import setup_permission_repair_guard as legacy
 
     blockers = _bot_blockers(guild)
-    reauthorize_recommended = bool(blockers)
+    reauthorize_recommended = repair_core.reauthorize_recommended(guild)
     hard_blockers = [
         item
         for item in blockers

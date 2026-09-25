@@ -212,6 +212,27 @@ def approved_public_permissions() -> discord.Permissions:
     return perms
 
 
+def reauthorize_recommended(guild: discord.Guild) -> bool:
+    """Show OAuth repair only when known server-level prerequisites are missing."""
+    me = _bot_member(guild)
+    if me is None:
+        return False
+    perms = getattr(me, "guild_permissions", None)
+    if perms is None:
+        return False
+    if bool(getattr(perms, "administrator", False)):
+        return False
+    return any(
+        not bool(getattr(perms, name, False))
+        for name in (
+            "manage_roles",
+            "manage_channels",
+            "view_channel",
+            "view_audit_log",
+        )
+    )
+
+
 def reauthorize_url(guild: discord.Guild) -> str:
     try:
         client_id = int(getattr(getattr(guild, "me", None), "id", 0) or 0)
@@ -1303,17 +1324,18 @@ class TargetPermissionRepairView(discord.ui.View):
 
         self.undo.disabled = not bool(state.last_token)
 
-        url = reauthorize_url(state.guild)
-        if url:
-            self.add_item(
-                discord.ui.Button(
-                    label="Reauthorize Dank Shield",
-                    emoji="🔐",
-                    style=discord.ButtonStyle.link,
-                    url=url,
-                    row=4,
+        if reauthorize_recommended(state.guild):
+            url = reauthorize_url(state.guild)
+            if url:
+                self.add_item(
+                    discord.ui.Button(
+                        label="Reauthorize Dank Shield",
+                        emoji="🔐",
+                        style=discord.ButtonStyle.link,
+                        url=url,
+                        row=4,
+                    )
                 )
-            )
 
     @discord.ui.button(
         label="Include Category Children: OFF",
