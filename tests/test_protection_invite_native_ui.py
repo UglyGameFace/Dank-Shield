@@ -160,12 +160,13 @@ def test_native_invite_ui_uses_shared_browser_and_central_cleanup_policy() -> No
     assert "startup_guards" not in source
 
 
-def test_native_cleanup_deep_scans_and_explicitly_handles_contentless_known_ads() -> None:
+def test_native_cleanup_deep_scans_and_explicitly_handles_contentless_protected_posters() -> None:
     source = Path(invite_ui.__file__).read_text(encoding="utf-8")
 
     assert "limit=1000" in source
-    assert "allow_contentless_trusted_advertisers=True" in source
-    assert "Protected content-redacted advertiser posts removed" in source
+    assert "allow_contentless_protected_posters=True" in source
+    assert "Explicitly protected content-redacted bot/app/webhook posts removed" in source
+    assert "known advertising application" not in source
 
 
 def test_native_cleanup_acknowledges_before_deep_history_scan() -> None:

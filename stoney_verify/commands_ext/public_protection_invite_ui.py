@@ -89,8 +89,8 @@ def invite_shield_embed(
         name="Modern app-card safety",
         value=(
             "Discord can withhold message content, embeds, attachments, and components when MESSAGE_CONTENT "
-            "access is unavailable. Dank Shield will only use its contentless fallback for an exact known "
-            "advertising application when the bot/channel is explicitly protected, or during a staff-selected cleanup."
+            "access is unavailable. Dank Shield never hardcodes an advertising vendor: contentless bot/app/webhook "
+            "posts are acted on only when that bot or channel is explicitly protected."
         ),
         inline=False,
     )
@@ -453,7 +453,7 @@ class InviteShieldView(discord.ui.View):
                 limit=1000,
                 repost_mixed=False,
                 source="protection-center-native-invite-cleanup",
-                allow_contentless_trusted_advertisers=True,
+                allow_contentless_protected_posters=True,
             )
             fresh = await load_invite_scope_settings(int(guild.id), refresh=True)
             contentless_deleted = int(result.get("contentless_deleted", 0) or 0)
@@ -464,7 +464,7 @@ class InviteShieldView(discord.ui.View):
             )
             if contentless_deleted:
                 note += (
-                    f" Protected content-redacted advertiser posts removed: "
+                    f" Explicitly protected content-redacted bot/app/webhook posts removed: "
                     f"`{contentless_deleted}`."
                 )
             if int(result.get("checked", 0) or 0) >= 1000:

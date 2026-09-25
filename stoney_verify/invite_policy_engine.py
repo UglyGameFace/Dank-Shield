@@ -54,14 +54,6 @@ _DECISION_TRACE: dict[tuple[int, int, int], "InviteDecision"] = {}
 _DECISION_TRACE_ORDER: list[tuple[int, int, int]] = []
 _DECISION_TRACE_LIMIT = 750
 
-# OneBump's public application/bot ID. This identity is intentionally exact:
-# display names are user-controlled and must never authorize contentless
-# deletion. The fallback below exists because Discord can redact every
-# message-content field while still delivering stable message/application
-# metadata when MESSAGE_CONTENT is unavailable.
-_KNOWN_ADVERTISING_APPLICATIONS: dict[int, str] = {
-    1028956609382199346: "OneBump",
-}
 _SCAN_HISTORY_MAX = 2000
 
 
@@ -126,23 +118,23 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
     return bool(default)
 
 
-def known_advertising_integration_name(message: Any) -> str:
-    """Return an exact known advertising integration identity, never a display-name guess."""
+def _message_sender_is_bot_application_or_webhook(message: Any) -> bool:
+    """Return True for a stable non-human sender shape without vendor hardcoding."""
 
-    author = getattr(message, "author", None)
-    author_id = int(getattr(author, "id", 0) or 0)
-    author_is_bot = bool(getattr(author, "bot", False))
-    application_id = int(getattr(message, "application_id", 0) or 0)
-    application = getattr(message, "application", None)
-    nested_application_id = int(getattr(application, "id", 0) or 0)
-
-    for identity in (application_id, nested_application_id):
-        if identity in _KNOWN_ADVERTISING_APPLICATIONS:
-            return _KNOWN_ADVERTISING_APPLICATIONS[identity]
-
-    if author_is_bot and author_id in _KNOWN_ADVERTISING_APPLICATIONS:
-        return _KNOWN_ADVERTISING_APPLICATIONS[author_id]
-    return ""
+    try:
+        author = getattr(message, "author", None)
+        if bool(getattr(author, "bot", False)):
+            return True
+        if int(getattr(message, "webhook_id", 0) or 0) > 0:
+            return True
+        if int(getattr(message, "application_id", 0) or 0) > 0:
+            return True
+        application = getattr(message, "application", None)
+        if int(getattr(application, "id", 0) or 0) > 0:
+            return True
+    except Exception:
+        return False
+    return False
 
 
 def message_content_surfaces_unavailable(message: Any) -> bool:
@@ -170,14 +162,18 @@ def message_content_surfaces_unavailable(message: Any) -> bool:
     return True
 
 
-def is_contentless_trusted_advertiser_candidate(message: Any) -> bool:
-    """Identify a content-redacted ad-bot post without trusting its display name.
+def is_contentless_protected_poster_candidate(message: Any) -> bool:
+    """Identify a content-redacted bot/app/webhook post without vendor hardcoding.
 
-    Interaction responses are deliberately excluded so a slash-command receipt
-    cannot be mistaken for an unsolicited advertising-network post.
+    This function is only an evidence-shape classifier. It does *not* authorize
+    deletion. The central policy still requires an explicit protected bot or
+    channel target before a contentless message can be removed automatically.
+
+    Interaction responses are excluded because a slash-command receipt may be a
+    legitimate success/utility response rather than an unsolicited invite ad.
     """
 
-    if not known_advertising_integration_name(message):
+    if not _message_sender_is_bot_application_or_webhook(message):
         return False
     try:
         if getattr(message, "interaction_metadata", None) is not None:
@@ -696,7 +692,7 @@ async def decide_invite_message(
     source: str = "live",
     spam_burst: bool = False,
     refresh_policy: bool = False,
-    allow_contentless_trusted_advertiser: bool = False,
+    allow_contentless_protected_poster: bool = False,
 ) -> InviteDecision:
     guild = getattr(message, "guild", None)
     channel = getattr(message, "channel", None)
@@ -717,11 +713,8 @@ async def decide_invite_message(
 
     codes = extract_invite_codes_from_message(message)
     decision.codes = list(codes)
-    advertiser_name = known_advertising_integration_name(message)
-    contentless_ad_candidate = bool(
-        advertiser_name and is_contentless_trusted_advertiser_candidate(message)
-    )
-    if not codes and not contentless_ad_candidate:
+    contentless_poster_candidate = is_contentless_protected_poster_candidate(message)
+    if not codes and not contentless_poster_candidate:
         decision.reason = "No Discord invite link was found."
         record_invite_decision(message, decision)
         return decision
@@ -803,16 +796,16 @@ async def decide_invite_message(
         record_invite_decision(message, decision)
         return decision
 
-    if contentless_ad_candidate:
+    if contentless_poster_candidate:
         decision.content_unavailable = True
-        decision.trusted_advertiser = advertiser_name
+        decision.trusted_advertiser = "protected bot/application/webhook"
         contentless_targeted = bool(
             protected_rule_enabled
             and _contentless_protected_target_match(message, settings)
         )
         manual_contentless_allowed = bool(
-            allow_contentless_trusted_advertiser
-            and (invite_shield or link_shield or protected_active)
+            allow_contentless_protected_poster
+            and protected_active
         )
         if contentless_targeted or manual_contentless_allowed:
             decision.action = "delete"
@@ -822,12 +815,12 @@ async def decide_invite_message(
                 else "Invite Shield Manual Cleanup"
             )
             decision.rule_id = (
-                "protected_contentless_known_advertiser"
+                "protected_contentless_poster"
                 if contentless_targeted
-                else "manual_cleanup_contentless_known_advertiser"
+                else "manual_cleanup_contentless_protected_poster"
             )
             decision.reason = (
-                f"{advertiser_name} posted a non-interaction application message and Discord supplied no "
+                "A bot/application/webhook posted a non-interaction message and Discord supplied no "
                 "message-content fields. "
                 + (
                     "This exact bot/channel is explicitly protected."
@@ -841,14 +834,14 @@ async def decide_invite_message(
             )
         else:
             decision.action = "log_only"
-            decision.rule_id = "known_advertiser_content_unavailable_not_targeted"
+            decision.rule_id = "content_unavailable_not_explicitly_targeted"
             decision.reason = (
-                f"{advertiser_name} posted a message whose content fields were unavailable, but no "
+                "Discord supplied no message-content fields for this bot/application/webhook post, and no "
                 "explicit protected bot/channel rule matched, so Dank Shield refused to guess-delete it."
             )
             decision.fix_hint = (
-                "Use Invite Shield > Fix This Channel or target the advertising bot explicitly, "
-                "and verify MESSAGE_CONTENT approval in the Discord Developer Portal."
+                "Use Invite Shield > Fix This Channel or explicitly target the bot/application channel. "
+                "Also verify MESSAGE_CONTENT approval in the Discord Developer Portal."
             )
         record_invite_decision(message, decision)
         return decision
@@ -1074,7 +1067,7 @@ async def enforce_live_invite_message(
     """
 
     codes = extract_invite_codes_from_message(message)
-    if not codes and not is_contentless_trusted_advertiser_candidate(message):
+    if not codes and not is_contentless_protected_poster_candidate(message):
         return None
 
     decision = await decide_invite_message(
@@ -1101,7 +1094,7 @@ async def scan_channel_invites(
     source: str = "scanner",
     after: datetime | None = None,
     before: datetime | None = None,
-    allow_contentless_trusted_advertisers: bool = False,
+    allow_contentless_protected_posters: bool = False,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "checked": 0,
@@ -1144,7 +1137,7 @@ async def scan_channel_invites(
                 if message.author == me:
                     continue
                 codes = extract_invite_codes_from_message(message)
-                contentless_candidate = is_contentless_trusted_advertiser_candidate(message)
+                contentless_candidate = is_contentless_protected_poster_candidate(message)
                 if not codes and not contentless_candidate:
                     continue
                 result["matched"] += 1
@@ -1153,8 +1146,8 @@ async def scan_channel_invites(
                 decision = await decide_invite_message(
                     message,
                     source=source,
-                    allow_contentless_trusted_advertiser=bool(
-                        allow_contentless_trusted_advertisers
+                    allow_contentless_protected_poster=bool(
+                        allow_contentless_protected_posters
                     ),
                 )
                 if not decision.should_delete:
@@ -1254,8 +1247,7 @@ __all__ = [
     "get_last_invite_decision",
     "has_discord_invite",
     "invalidate_invite_policy",
-    "is_contentless_trusted_advertiser_candidate",
-    "known_advertising_integration_name",
+    "is_contentless_protected_poster_candidate",
     "message_content_surfaces_unavailable",
     "load_invite_policy",
     "message_text",

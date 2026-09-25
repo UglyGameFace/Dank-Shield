@@ -59,6 +59,7 @@ def test_runtime_uses_central_scanner_and_has_ready_resume_recovery() -> None:
     assert '("on_resumed", _resumed_listener)' in text
     assert '("on_message", _recovery_message_listener)' in text
     assert '("on_message_edit", _recovery_edit_listener)' in text
+    assert '("on_raw_message_edit", _raw_message_edit_listener)' in text
     assert "_AUTO_HISTORY_LIMIT = 250" in text
     assert "_EVENT_HISTORY_LIMIT = 75" in text
     assert "_POLICY_RETRY_DELAY_SECONDS = 15.0" in text
@@ -105,15 +106,15 @@ def test_startup_invite_scan_uses_recovery_budget_but_live_scan_does_not(monkeyp
     assert reservations == [(3, "invite history guild=777 channel=778")]
 
 
-def test_contentless_onebump_still_triggers_live_recovery_sweep() -> None:
+def test_contentless_arbitrary_bot_still_triggers_live_recovery_sweep() -> None:
     message = SimpleNamespace(
         content="",
         author=SimpleNamespace(
-            id=1028956609382199346,
+            id=888888888888888888,
             bot=True,
-            name="OneBump",
+            name="Any Listing Bot",
         ),
-        application_id=1028956609382199346,
+        application_id=777777777777777777,
         application=None,
         interaction_metadata=None,
         embeds=[],
@@ -123,19 +124,19 @@ def test_contentless_onebump_still_triggers_live_recovery_sweep() -> None:
     )
 
     assert runtime.policy.extract_invite_codes_from_message(message) == []
-    assert runtime.policy.is_contentless_trusted_advertiser_candidate(message) is True
+    assert runtime.policy.is_contentless_protected_poster_candidate(message) is True
     assert runtime._looks_invite_related(message) is True
 
 
-def test_contentless_onebump_interaction_receipt_does_not_trigger_ad_recovery() -> None:
+def test_contentless_interaction_receipt_does_not_trigger_ad_recovery() -> None:
     message = SimpleNamespace(
         content="",
         author=SimpleNamespace(
-            id=1028956609382199346,
+            id=888888888888888888,
             bot=True,
-            name="OneBump",
+            name="Any Listing Bot",
         ),
-        application_id=1028956609382199346,
+        application_id=777777777777777777,
         application=None,
         interaction_metadata=SimpleNamespace(id=123),
         embeds=[],
@@ -144,7 +145,7 @@ def test_contentless_onebump_interaction_receipt_does_not_trigger_ad_recovery() 
         poll=None,
     )
 
-    assert runtime.policy.is_contentless_trusted_advertiser_candidate(message) is False
+    assert runtime.policy.is_contentless_protected_poster_candidate(message) is False
     assert runtime._looks_invite_related(message) is False
 
 
@@ -174,6 +175,7 @@ def test_install_is_idempotent() -> None:
 
     assert len(bot.extra_events["on_message"]) == 1
     assert len(bot.extra_events["on_message_edit"]) == 1
+    assert len(bot.extra_events["on_raw_message_edit"]) == 1
     assert len(bot.extra_events["on_ready"]) == 1
     assert len(bot.extra_events["on_resumed"]) == 1
 
@@ -220,6 +222,7 @@ def test_reconcile_guild_scans_only_channels_with_required_permissions(monkeypat
         "failed": 0,
         "warnings": 0,
         "deferred": 0,
+        "disabled": 0,
     }
 
 
@@ -379,8 +382,14 @@ def test_reconcile_all_retries_policy_unavailable_guild_once(monkeypatch) -> Non
     async def no_sleep(_delay):
         return None
 
+    checkpoints: list[tuple[int, datetime]] = []
+
+    async def persist(guild_id: int, checkpoint: datetime):
+        checkpoints.append((guild_id, checkpoint))
+
     monkeypatch.setattr(runtime, "_recovery_window", window)
     monkeypatch.setattr(runtime, "_reconcile_guild", reconcile)
+    monkeypatch.setattr(runtime, "_persist_recovery_checkpoint", persist)
     monkeypatch.setattr(runtime, "_sleep", no_sleep)
     runtime._RECONCILE_TASK = None
 
@@ -390,6 +399,7 @@ def test_reconcile_all_retries_policy_unavailable_guild_once(monkeypatch) -> Non
         ("ready", False, after, before),
         ("ready-policy-retry", True, after, before),
     ]
+    assert checkpoints == [(656, before)]
 
 
 def test_event_recovery_rescans_recent_channel_history(monkeypatch, capsys) -> None:

@@ -10,7 +10,7 @@ events. Every delete still goes through ``invite_policy_engine``.
 
 import asyncio
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import discord
@@ -35,11 +35,15 @@ _CHANNEL_SWEEP_COOLDOWN_SECONDS = 8.0
 _AUTO_HISTORY_LIMIT = 250
 _EVENT_HISTORY_LIMIT = 75
 _RECONCILE_CONCURRENCY = 2
+_INVITE_CHECKPOINT_KEY = "invite_reconcile_checkpoint_at"
+_INITIAL_BACKFILL_SECONDS = 24 * 60 * 60
+_MAX_RECOVERY_GAP_SECONDS = 7 * 24 * 60 * 60
 
 _LAST_GUILD_RECONCILE_AT: dict[int, float] = {}
 _LAST_CHANNEL_SWEEP_AT: dict[tuple[int, int], float] = {}
 _CHANNEL_SWEEP_TASKS: dict[tuple[int, int], asyncio.Task[Any]] = {}
 _RECONCILE_TASK: asyncio.Task[Any] | None = None
+_RAW_EDIT_TASKS: dict[tuple[int, int], asyncio.Task[Any]] = {}
 
 
 async def _sleep(seconds: float) -> None:
@@ -178,45 +182,92 @@ async def _scan_channel(
         }
 
 
+def _parse_checkpoint(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
 async def _recovery_window(guild: Any) -> tuple[datetime, datetime] | None:
+    """Use an invite-specific durable checkpoint, not the activity heartbeat.
+
+    The previous implementation borrowed the activity tracker checkpoint. That
+    allowed activity recovery to advance past invite messages that Invite Shield
+    had never scanned, so old external-invite posts could survive every restart.
+    """
+
     gid = int(getattr(guild, "id", 0) or 0)
     if gid <= 0:
         return None
 
+    before = discord.utils.utcnow().astimezone(timezone.utc)
+    after: datetime | None = None
     try:
-        from stoney_verify.members_new.activity_reconciliation import max_reconcile_gap_seconds
-        from stoney_verify.members_new.activity_tracker import persisted_last_heartbeat_at
+        from stoney_verify.guild_config import get_guild_config
 
-        after = await persisted_last_heartbeat_at(gid)
+        cfg = await get_guild_config(gid, force_refresh=True)
+        after = _parse_checkpoint(getattr(cfg, "get", lambda *_: None)(_INVITE_CHECKPOINT_KEY))
     except Exception as exc:
         _log(
-            f"window_unavailable guild={gid} "
+            f"checkpoint_read_failed guild={gid} "
             f"error={type(exc).__name__}: {str(exc)[:160]}"
         )
-        return None
 
     if after is None:
-        _log(f"skipped guild={gid} reason=no_durable_recovery_checkpoint")
-        return None
+        after = before - timedelta(seconds=_INITIAL_BACKFILL_SECONDS)
+        _log(
+            f"checkpoint_bootstrap guild={gid} "
+            f"lookback_seconds={_INITIAL_BACKFILL_SECONDS}"
+        )
 
-    before = discord.utils.utcnow()
     gap_seconds = (before - after).total_seconds()
     if gap_seconds < 0:
+        after = before - timedelta(seconds=_INITIAL_BACKFILL_SECONDS)
         _log(
-            f"skipped guild={gid} reason=recovery_checkpoint_in_future "
-            f"gap_seconds={int(gap_seconds)}"
+            f"checkpoint_in_future guild={gid} "
+            f"action=bootstrap lookback_seconds={_INITIAL_BACKFILL_SECONDS}"
         )
-        return None
-
-    max_gap = int(max_reconcile_gap_seconds())
-    if gap_seconds > max_gap:
+    elif gap_seconds > _MAX_RECOVERY_GAP_SECONDS:
+        after = before - timedelta(seconds=_MAX_RECOVERY_GAP_SECONDS)
         _log(
-            f"skipped guild={gid} reason=recovery_gap_exceeds_safe_limit "
-            f"gap_seconds={int(gap_seconds)} max_gap_seconds={max_gap}"
+            f"checkpoint_gap_capped guild={gid} "
+            f"gap_seconds={int(gap_seconds)} max_gap_seconds={_MAX_RECOVERY_GAP_SECONDS}"
         )
-        return None
 
     return after, before
+
+
+async def _persist_recovery_checkpoint(guild_id: int, checkpoint: datetime) -> None:
+    gid = int(guild_id)
+    if gid <= 0:
+        return
+    try:
+        from stoney_verify.guild_config import upsert_guild_config
+
+        await upsert_guild_config(
+            gid,
+            {
+                _INVITE_CHECKPOINT_KEY: checkpoint.astimezone(timezone.utc).isoformat(),
+                "__config_write_mode": "runtime_discovery",
+                "__config_write_source": "invite_reconciliation_runtime",
+            },
+        )
+        _log(
+            f"checkpoint_saved guild={gid} "
+            f"at={checkpoint.astimezone(timezone.utc).isoformat()}"
+        )
+    except Exception as exc:
+        _log(
+            f"checkpoint_write_failed guild={gid} "
+            f"error={type(exc).__name__}: {str(exc)[:160]}"
+        )
 
 
 def _channel_may_have_messages_after(channel: Any, after: datetime | None) -> bool:
@@ -246,6 +297,7 @@ def _empty_totals() -> dict[str, int]:
         "failed": 0,
         "warnings": 0,
         "deferred": 0,
+        "disabled": 0,
     }
 
 
@@ -302,6 +354,7 @@ async def _reconcile_guild(
         _log(f"deferred guild={gid} reason={reason} policy=unavailable")
         return totals
     if not enabled:
+        totals["disabled"] = 1
         _LAST_GUILD_RECONCILE_AT[gid] = now
         _log(f"skipped guild={gid} reason={reason} delete_path=disabled")
         return totals
@@ -380,6 +433,8 @@ async def _reconcile_all(bot: Any, *, reason: str) -> None:
                 )
                 if int(result.get("deferred") or 0):
                     deferred.append((guild, after, before))
+                elif not int(result.get("disabled") or 0):
+                    await _persist_recovery_checkpoint(int(getattr(guild, "id", 0) or 0), before)
             except Exception as exc:
                 _log(
                     f"guild_failed guild={getattr(guild, 'id', 0)} reason={reason} "
@@ -390,13 +445,21 @@ async def _reconcile_all(bot: Any, *, reason: str) -> None:
             await _sleep(_POLICY_RETRY_DELAY_SECONDS)
             for guild, after, before in deferred:
                 try:
-                    await _reconcile_guild(
+                    retry_result = await _reconcile_guild(
                         guild,
                         reason=f"{reason}-policy-retry",
                         force=True,
                         after=after,
                         before=before,
                     )
+                    if (
+                        not int(retry_result.get("deferred") or 0)
+                        and not int(retry_result.get("disabled") or 0)
+                    ):
+                        await _persist_recovery_checkpoint(
+                            int(getattr(guild, "id", 0) or 0),
+                            before,
+                        )
                 except Exception as exc:
                     _log(
                         f"guild_retry_failed guild={getattr(guild, 'id', 0)} reason={reason} "
@@ -497,7 +560,7 @@ def _looks_invite_related(message: Any) -> bool:
     try:
         return bool(
             policy.extract_invite_codes_from_message(message)
-            or policy.is_contentless_trusted_advertiser_candidate(message)
+            or policy.is_contentless_protected_poster_candidate(message)
         )
     except Exception:
         return False
@@ -522,6 +585,95 @@ async def _recovery_edit_listener(before: discord.Message, after: discord.Messag
             _schedule_channel_sweep(getattr(after, "channel", None), reason="edit")
     except Exception as exc:
         _log(f"edit_trigger_failed error={type(exc).__name__}: {str(exc)[:150]}")
+
+
+async def _raw_message_edit_worker(
+    *,
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+) -> None:
+    key = (channel_id, message_id)
+    try:
+        await _sleep(0.75)
+        from stoney_verify.globals import bot
+
+        guild = bot.get_guild(int(guild_id))
+        channel = bot.get_channel(int(channel_id))
+        if guild is None or not isinstance(channel, discord.TextChannel):
+            return
+        if await _guild_reconciliation_enabled(guild) is not True:
+            return
+        me = getattr(guild, "me", None)
+        if me is None:
+            return
+        try:
+            perms = channel.permissions_for(me)
+            if not bool(getattr(perms, "view_channel", False)):
+                return
+            if not bool(getattr(perms, "read_message_history", False)):
+                return
+        except Exception:
+            return
+
+        try:
+            # This is live recovery, not startup backfill. Let discord.py own
+            # the route-aware REST limiter so a startup-history budget cannot
+            # delay enforcement of a just-edited message.
+            message = await channel.fetch_message(int(message_id))
+        except (discord.NotFound, discord.Forbidden):
+            return
+
+        decision = await policy.enforce_live_invite_message(
+            message,
+            source="raw_message_edit_recovery",
+            refresh_policy=True,
+        )
+        if decision is not None:
+            _log(
+                f"raw_edit guild={guild_id} channel={channel_id} message={message_id} "
+                f"rule={decision.rule_id} action={decision.action} "
+                f"deleted={bool(decision.delete_succeeded)}"
+            )
+    except Exception as exc:
+        _log(
+            f"raw_edit_failed guild={guild_id} channel={channel_id} message={message_id} "
+            f"error={type(exc).__name__}: {str(exc)[:160]}"
+        )
+    finally:
+        _RAW_EDIT_TASKS.pop(key, None)
+
+
+async def _raw_message_edit_listener(payload: discord.RawMessageUpdateEvent) -> None:
+    try:
+        if getattr(payload, "cached_message", None) is not None:
+            return
+        data = dict(getattr(payload, "data", {}) or {})
+        if not any(
+            key in data
+            for key in ("content", "embeds", "components", "attachments", "poll")
+        ):
+            return
+        guild_id = int(getattr(payload, "guild_id", 0) or 0)
+        channel_id = int(getattr(payload, "channel_id", 0) or 0)
+        message_id = int(getattr(payload, "message_id", 0) or 0)
+        if guild_id <= 0 or channel_id <= 0 or message_id <= 0:
+            return
+        key = (channel_id, message_id)
+        existing = _RAW_EDIT_TASKS.get(key)
+        if existing is not None and not existing.done():
+            return
+        loop = asyncio.get_running_loop()
+        _RAW_EDIT_TASKS[key] = loop.create_task(
+            _raw_message_edit_worker(
+                guild_id=guild_id,
+                channel_id=channel_id,
+                message_id=message_id,
+            ),
+            name=f"dank-invite-raw-edit-{guild_id}-{channel_id}-{message_id}",
+        )
+    except Exception as exc:
+        _log(f"raw_edit_trigger_failed error={type(exc).__name__}: {str(exc)[:150]}")
 
 
 async def _ready_listener() -> None:
@@ -559,6 +711,7 @@ def install_invite_reconciliation(bot: Any) -> bool:
         bindings = (
             ("on_message", _recovery_message_listener),
             ("on_message_edit", _recovery_edit_listener),
+            ("on_raw_message_edit", _raw_message_edit_listener),
             ("on_ready", _ready_listener),
             ("on_resumed", _resumed_listener),
         )
@@ -568,9 +721,10 @@ def install_invite_reconciliation(bot: Any) -> bool:
 
         setattr(bot, marker, True)
         _log(
-            "active; ready/resume scans up to "
-            f"{_AUTO_HISTORY_LIMIT} messages per readable channel and live invite events "
-            f"rescan {_EVENT_HISTORY_LIMIT} recent messages"
+            "active; ready/resume use an invite-specific durable checkpoint, "
+            f"scan up to {_AUTO_HISTORY_LIMIT} messages per readable channel, "
+            f"live invite events rescan {_EVENT_HISTORY_LIMIT} recent messages, "
+            "and uncached raw edits are fetched directly"
         )
         return True
     except Exception as exc:
