@@ -18,6 +18,8 @@ from stoney_verify.security_stats import (
     SECURITY_STATS_CATEGORY_NAME,
     SECURITY_STATS_CHANNEL_IDS_KEY,
     SECURITY_STATS_ENABLED_KEY,
+    security_stats_category_display_name,
+    security_stats_preferences,
 )
 from stoney_verify.services import server_design_majority_layout as majority
 from stoney_verify.services import server_design_repair_confidence as repair_confidence
@@ -140,8 +142,8 @@ async def _functional_design_resource_ids(guild: Any) -> set[int]:
     Live Server Stats owns both its category and counter channels. Including
     those dynamic names in style detection makes ordinary drift look noisy and
     creates an ownership fight because the stats refresher will rename them
-    back. Resolve identity from canonical saved IDs first, with the current
-    canonical category name only as recovery when the display is enabled.
+    back. Resolve identity from canonical saved IDs first, then saved counter
+    parents, with canonical/custom/design-synced category names only as recovery.
     """
 
     guild_id = _positive_id(getattr(guild, "id", 0))
@@ -160,15 +162,18 @@ async def _functional_design_resource_ids(guild: Any) -> set[int]:
     raw_channel_ids = cfg.get(SECURITY_STATS_CHANNEL_IDS_KEY)
 
     if isinstance(raw_channel_ids, Mapping):
-        candidates = raw_channel_ids.values()
+        candidates = list(raw_channel_ids.values())
     elif isinstance(raw_channel_ids, (list, tuple, set)):
-        candidates = raw_channel_ids
+        candidates = list(raw_channel_ids)
     else:
-        candidates = ()
+        candidates = []
+
+    saved_channel_ids: list[int] = []
     for value in candidates:
         channel_id = _positive_id(value)
         if channel_id > 0:
             owned.add(channel_id)
+            saved_channel_ids.append(channel_id)
 
     category = None
     if category_id > 0:
@@ -177,9 +182,31 @@ async def _functional_design_resource_ids(guild: Any) -> set[int]:
         except Exception:
             category = None
 
+    if category is None:
+        # Saved counter IDs are stronger ownership evidence than any name and
+        # recover the parent even when the saved category ID was lost.
+        for channel_id in saved_channel_ids:
+            try:
+                channel = guild.get_channel(channel_id)
+            except Exception:
+                channel = None
+            parent = getattr(channel, "category", None)
+            parent_id = _positive_id(getattr(parent, "id", 0))
+            if parent is not None and parent_id > 0:
+                category = parent
+                category_id = parent_id
+                break
+
     if category is None and bool(cfg.get(SECURITY_STATS_ENABLED_KEY)):
+        preferences = security_stats_preferences(cfg)
+        accepted_names = {
+            SECURITY_STATS_CATEGORY_NAME,
+            str(preferences.get("category_name") or ""),
+            security_stats_category_display_name(preferences),
+        }
+        accepted_names.discard("")
         for candidate in list(getattr(guild, "categories", []) or []):
-            if str(getattr(candidate, "name", "") or "") == SECURITY_STATS_CATEGORY_NAME:
+            if str(getattr(candidate, "name", "") or "") in accepted_names:
                 category = candidate
                 category_id = _positive_id(getattr(candidate, "id", 0))
                 break

@@ -13,6 +13,7 @@ pattern. Members can see the counters but cannot connect to them.
 
 import asyncio
 import time
+from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 import discord
@@ -34,6 +35,8 @@ SECURITY_STATS_COUNTS_KEY = "security_stats_counts"
 SECURITY_STATS_CATEGORY_NAME_KEY = "security_stats_category_name"
 SECURITY_STATS_VISIBLE_KEYS_KEY = "security_stats_visible_keys"
 SECURITY_STATS_CUSTOM_LABELS_KEY = "security_stats_custom_labels"
+SECURITY_STATS_FORMAT_OVERRIDES_KEY = "security_stats_format_overrides"
+SECURITY_STATS_INHERIT_DESIGN_KEY = "security_stats_inherit_server_design"
 SECURITY_STATS_NUMBER_STYLE_KEY = "security_stats_number_style"
 SECURITY_STATS_PLACEMENT_KEY = "security_stats_category_placement"
 
@@ -52,26 +55,50 @@ DEFAULT_TICKET_STATUS_COUNTS: Dict[str, int] = {
     "closed_tickets": 0,
 }
 
-# key -> static visible prefix. Prefixes are also used to recover channels if a
-# saved channel ID is stale but the owned stats category still exists.
-STAT_CHANNEL_PREFIXES: Dict[str, str] = {
-    "status": "🛡️ SpamGuard:",
-    "members": "👥 Members:",
-    "spam_blocked": "🚫 Spam Blocked:",
-    "invites_blocked": "🔗 Invites Blocked:",
-    "timeouts_issued": "⏱️ Timeouts Issued:",
-    "quarantines": "☣️ Quarantined:",
-    "open_tickets": "🎫 Open Tickets:",
-    "claimed_tickets": "🙋 Claimed Tickets:",
-    "closed_tickets": "✅ Closed Tickets:",
+@dataclass(frozen=True)
+class SecurityStatMetric:
+    key: str
+    title: str
+    icon: str
+    label: str
+    provider: str
+    source: str
+    required_intents: tuple[str, ...] = ()
+    privileged_intents: tuple[str, ...] = ()
+    required_permissions: tuple[str, ...] = ()
+    value_kind: str = "count"
+
+
+# The public picker is generated from this registry. Adding a row here without
+# wiring a real provider into _metric_values() is a regression, not a fake zero.
+SECURITY_STATS_METRICS: Dict[str, SecurityStatMetric] = {
+    "status": SecurityStatMetric("status", "SpamGuard status", "🛡️", "SpamGuard", "spamguard_status", "Dank Shield SpamGuard settings", value_kind="status"),
+    "members": SecurityStatMetric("members", "Member count", "👥", "Members", "guild_member_count", "Discord GUILD_CREATE member_count", required_intents=("guilds",)),
+    "spam_blocked": SecurityStatMetric("spam_blocked", "Spam blocked", "🚫", "Spam Blocked", "durable_counter", "Dank Shield audited SpamGuard actions"),
+    "invites_blocked": SecurityStatMetric("invites_blocked", "Invites blocked", "🔗", "Invites Blocked", "invite_counter", "Dank Shield durable invite decisions"),
+    "timeouts_issued": SecurityStatMetric("timeouts_issued", "Timeouts issued", "⏱️", "Timeouts Issued", "durable_counter", "Dank Shield audited moderation actions"),
+    "quarantines": SecurityStatMetric("quarantines", "Quarantined", "☣️", "Quarantined", "durable_counter", "Dank Shield audited quarantine actions"),
+    "open_tickets": SecurityStatMetric("open_tickets", "Open tickets", "🎫", "Open Tickets", "ticket_status", "Dank Shield ticket records + live-channel safety floor"),
+    "claimed_tickets": SecurityStatMetric("claimed_tickets", "Claimed tickets", "🙋", "Claimed Tickets", "ticket_status", "Dank Shield ticket records"),
+    "closed_tickets": SecurityStatMetric("closed_tickets", "Closed tickets", "✅", "Closed Tickets", "ticket_status", "Dank Shield ticket records"),
 }
-DEFAULT_SECURITY_STATS_VISIBLE_KEYS = tuple(STAT_CHANNEL_PREFIXES)
+
+_SUPPORTED_METRIC_PROVIDERS = {"spamguard_status", "guild_member_count", "durable_counter", "invite_counter", "ticket_status"}
+if any(metric.provider not in _SUPPORTED_METRIC_PROVIDERS for metric in SECURITY_STATS_METRICS.values()):
+    raise RuntimeError("Server Stats metric registry contains an unimplemented provider.")
+
+STAT_CHANNEL_PREFIXES: Dict[str, str] = {
+    key: f"{metric.icon} {metric.label}:"
+    for key, metric in SECURITY_STATS_METRICS.items()
+}
+DEFAULT_SECURITY_STATS_VISIBLE_KEYS = tuple(SECURITY_STATS_METRICS)
 DEFAULT_SECURITY_STATS_LABELS: Dict[str, str] = {
-    key: prefix[:-1] if prefix.endswith(":") else prefix
-    for key, prefix in STAT_CHANNEL_PREFIXES.items()
+    key: f"{metric.icon} {metric.label}"
+    for key, metric in SECURITY_STATS_METRICS.items()
 }
 SECURITY_STATS_NUMBER_STYLES = {"compact", "exact"}
 SECURITY_STATS_PLACEMENTS = {"top", "keep", "bottom"}
+SECURITY_STATS_VALUE_TOKEN = "{value}"
 
 _STATS_LOCKS: Dict[int, asyncio.Lock] = {}
 _DISPLAY_LOCKS: Dict[int, asyncio.Lock] = {}
@@ -125,6 +152,129 @@ def _mapping(value: Any) -> Dict[str, Any]:
     except Exception:
         pass
     return {}
+
+
+def security_stat_metric(key: str) -> SecurityStatMetric:
+    clean = str(key or "").strip()
+    metric = SECURITY_STATS_METRICS.get(clean)
+    if metric is None:
+        raise KeyError(f"Unknown Server Stats metric: {clean}")
+    return metric
+
+
+def security_stat_metric_capability(key: str, *, guild: Optional[discord.Guild] = None) -> Dict[str, Any]:
+    metric = security_stat_metric(key)
+    missing_intents: list[str] = []
+    missing_permissions: list[str] = []
+
+    intents = getattr(bot, "intents", None)
+    for intent in (*metric.required_intents, *metric.privileged_intents):
+        if intents is not None and not bool(getattr(intents, intent, False)):
+            missing_intents.append(intent)
+
+    if guild is not None and metric.required_permissions:
+        me = getattr(guild, "me", None)
+        perms = getattr(me, "guild_permissions", None)
+        for permission in metric.required_permissions:
+            if perms is None or not bool(getattr(perms, permission, False)):
+                missing_permissions.append(permission)
+
+    return {
+        "key": metric.key,
+        "title": metric.title,
+        "provider": metric.provider,
+        "source": metric.source,
+        "required_intents": metric.required_intents,
+        "privileged_intents": metric.privileged_intents,
+        "required_permissions": metric.required_permissions,
+        "missing_intents": tuple(missing_intents),
+        "missing_permissions": tuple(missing_permissions),
+        "available": not missing_intents and not missing_permissions,
+    }
+
+
+def security_stat_metric_description(key: str) -> str:
+    metric = security_stat_metric(key)
+    requirement = ""
+    if metric.privileged_intents:
+        requirement = " • privileged intent: " + ", ".join(metric.privileged_intents)
+    elif metric.required_intents:
+        requirement = " • intent: " + ", ".join(metric.required_intents)
+    elif metric.required_permissions:
+        requirement = " • permission: " + ", ".join(metric.required_permissions)
+    return f"{metric.source}{requirement}"[:100]
+
+
+def _clean_format_piece(value: Any, *, fallback: str = "", limit: int = 72) -> str:
+    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    if not text:
+        text = str(fallback)
+    return text[: max(0, int(limit))]
+
+
+def _normalize_value_template(value: Any, *, fallback: str = SECURITY_STATS_VALUE_TOKEN) -> str:
+    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    if not text:
+        text = fallback
+    if text.count(SECURITY_STATS_VALUE_TOKEN) != 1:
+        return fallback
+    return text[:32]
+
+
+def _raw_stat_format_overrides(cfg: Any) -> Dict[str, Dict[str, Any]]:
+    try:
+        raw = _mapping(cfg.get(SECURITY_STATS_FORMAT_OVERRIDES_KEY, {}))
+    except Exception:
+        raw = {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for key, metric in SECURITY_STATS_METRICS.items():
+        row = _mapping(raw.get(key))
+        if not row:
+            continue
+        separator = str(row.get("separator") if row.get("separator") is not None else ": ")
+        separator = separator.replace("\r", " ").replace("\n", " ")[:16]
+        icon = _clean_format_piece(
+            row.get("icon"),
+            fallback="" if "icon" in row else metric.icon,
+            limit=24,
+        )
+        label = _clean_format_piece(
+            row.get("label"),
+            fallback="" if "label" in row else metric.label,
+            limit=72,
+        )
+        value_template = _normalize_value_template(row.get("value_template"))
+        raw_parts = row.get("custom_parts")
+        if isinstance(raw_parts, (list, tuple, set)):
+            custom_parts = tuple(
+                name
+                for name in ("icon", "label", "separator", "value_template")
+                if name in {str(item) for item in raw_parts}
+            )
+        else:
+            defaults = {
+                "icon": metric.icon,
+                "label": metric.label,
+                "separator": ": ",
+                "value_template": SECURITY_STATS_VALUE_TOKEN,
+            }
+            current = {
+                "icon": icon,
+                "label": label,
+                "separator": separator,
+                "value_template": value_template,
+            }
+            custom_parts = tuple(
+                name for name in defaults if current[name] != defaults[name]
+            )
+        out[key] = {
+            "icon": icon,
+            "label": label,
+            "separator": separator,
+            "value_template": value_template,
+            "custom_parts": custom_parts,
+        }
+    return out
 
 
 def normalize_security_stats(value: Any) -> Dict[str, int]:
@@ -204,6 +354,18 @@ def security_stats_preferences(cfg: Any) -> Dict[str, Any]:
         if cleaned and cleaned != DEFAULT_SECURITY_STATS_LABELS[key]:
             labels[key] = cleaned
 
+    formats = _raw_stat_format_overrides(cfg)
+
+    try:
+        inherit_design = _safe_bool(cfg.get(SECURITY_STATS_INHERIT_DESIGN_KEY), False)
+    except Exception:
+        inherit_design = False
+
+    try:
+        design_options = _mapping(cfg.get("server_design_studio_options", {}))
+    except Exception:
+        design_options = {}
+
     try:
         number_style = str(cfg.get(SECURITY_STATS_NUMBER_STYLE_KEY, "compact") or "compact").strip().lower()
     except Exception:
@@ -222,19 +384,301 @@ def security_stats_preferences(cfg: Any) -> Dict[str, Any]:
         "category_name": category_name,
         "visible_keys": visible_keys,
         "labels": labels,
+        "formats": formats,
+        "inherit_design": inherit_design,
+        "design_options": design_options,
         "number_style": number_style,
         "placement": placement,
     }
 
 
 def _stat_label(preferences: Mapping[str, Any], key: str) -> str:
+    metric = security_stat_metric(key)
+    formats = _mapping(preferences.get("formats", {}))
+    row = _mapping(formats.get(key))
+    if row and "label" in row:
+        return _clean_format_piece(row.get("label"), fallback="", limit=72)
     labels = _mapping(preferences.get("labels", {}))
-    return _clean_channel_text(
-        labels.get(key),
-        fallback=DEFAULT_SECURITY_STATS_LABELS[key],
-        limit=72,
-    ).rstrip(":").strip() or DEFAULT_SECURITY_STATS_LABELS[key]
+    if key in labels:
+        legacy = _clean_channel_text(
+            labels.get(key),
+            fallback=DEFAULT_SECURITY_STATS_LABELS[key],
+            limit=72,
+        ).rstrip(":").strip()
+        return legacy or metric.label
+    return metric.label
 
+
+def _design_context(preferences: Mapping[str, Any]) -> Dict[str, Any]:
+    if not bool(preferences.get("inherit_design")):
+        return {
+            "enabled": False,
+            "font": "normal",
+            "separator": "",
+            "strength": 0,
+            "options": {},
+        }
+    options = _mapping(preferences.get("design_options", {}))
+    if not options:
+        # Design Sync can be enabled before Server Design has ever been saved.
+        # In that state there is no owner-selected visual language to inherit.
+        return {
+            "enabled": False,
+            "font": "normal",
+            "separator": "",
+            "strength": 0,
+            "options": {},
+        }
+    try:
+        from stoney_verify.services import server_design_plan_service as design_plan
+        from stoney_verify.services import server_design_studio as design_studio
+
+        theme_id = str(options.get("theme_id") or "gothic_clean")
+        theme = design_studio.THEMES_BY_ID.get(
+            theme_id,
+            design_studio.THEMES_BY_ID["gothic_clean"],
+        )
+        try:
+            strength = max(1, min(5, int(options.get("strength", 4) or 4)))
+        except Exception:
+            strength = 4
+        font = str(options.get("font") or getattr(theme, "font", "normal") or "normal")
+        font = font.lower().replace("-", "_")
+        if font not in design_studio.DESIGN_FONT_STYLES:
+            font = str(getattr(theme, "font", "normal") or "normal").lower().replace("-", "_")
+        separator = ""
+        if strength >= 2:
+            separator_id = design_plan.effective_server_separator_id(options)
+            separator_spec = design_studio.SEPARATORS_BY_ID.get(separator_id)
+            separator = str(getattr(separator_spec, "value", "") or "")
+        return {
+            "enabled": True,
+            "font": font if strength >= 3 else "normal",
+            "separator": separator,
+            "strength": strength,
+            "options": options,
+        }
+    except Exception:
+        return {
+            "enabled": False,
+            "font": "normal",
+            "separator": "",
+            "strength": 0,
+            "options": options,
+        }
+
+
+def security_stats_category_display_name(preferences: Mapping[str, Any]) -> str:
+    base = _clean_channel_text(
+        preferences.get("category_name"),
+        fallback=SECURITY_STATS_CATEGORY_NAME,
+        limit=100,
+    )
+    context = _design_context(preferences)
+    if not context["enabled"]:
+        return base
+    try:
+        from stoney_verify.services import server_design_plan_service as design_plan
+        from stoney_verify.services import server_design_studio as design_studio
+
+        options = _mapping(context.get("options", {}))
+        result = design_studio.build_styled_name(
+            base,
+            kind="category",
+            theme_id=str(options.get("theme_id") or "gothic_clean"),
+            strength=int(context.get("strength") or 4),
+            icon_mode="keep_existing",
+            separator_id=design_plan.effective_server_separator_id(options),
+            category_frame_id=design_plan.effective_server_category_frame_id(options),
+            font=str(context.get("font") or "normal"),
+            exact_match=True,
+        )
+        if not result.blockers and result.after:
+            return str(result.after)[:100]
+    except Exception:
+        pass
+    return base
+
+
+def _metric_format(preferences: Mapping[str, Any], key: str) -> Dict[str, Any]:
+    metric = security_stat_metric(key)
+    formats = _mapping(preferences.get("formats", {}))
+    row = _mapping(formats.get(key))
+    labels = _mapping(preferences.get("labels", {}))
+
+    if row:
+        separator = str(row.get("separator") if row.get("separator") is not None else ": ")
+        separator = separator.replace("\r", " ").replace("\n", " ")[:16]
+        return {
+            "icon": str(row.get("icon") if row.get("icon") is not None else metric.icon),
+            "label": str(row.get("label") if row.get("label") is not None else metric.label),
+            "separator": separator,
+            "value_template": _normalize_value_template(row.get("value_template")),
+            "custom_parts": tuple(row.get("custom_parts") or ()),
+        }
+
+    if key in labels:
+        legacy = _clean_channel_text(
+            labels.get(key),
+            fallback=DEFAULT_SECURITY_STATS_LABELS[key],
+            limit=72,
+        ).rstrip(":").strip()
+        return {
+            "icon": "",
+            "label": legacy,
+            "separator": ": ",
+            "value_template": SECURITY_STATS_VALUE_TOKEN,
+            "custom_parts": ("icon", "label"),
+        }
+
+    return {
+        "icon": metric.icon,
+        "label": metric.label,
+        "separator": ": ",
+        "value_template": SECURITY_STATS_VALUE_TOKEN,
+        "custom_parts": (),
+    }
+
+
+def _styled_metric_label(preferences: Mapping[str, Any], label: str) -> str:
+    context = _design_context(preferences)
+    font = str(context.get("font") or "normal")
+    if not context.get("enabled") or font == "normal":
+        return label
+    try:
+        from stoney_verify.services import server_design_studio as design_studio
+
+        styled, _subs = design_studio.transform_text_safe(
+            label,
+            font,
+            fallback_order=design_studio.fallback_ladder(font),
+        )
+        return styled or label
+    except Exception:
+        return label
+
+
+def _metric_name_head(preferences: Mapping[str, Any], key: str) -> str:
+    row = _metric_format(preferences, key)
+    context = _design_context(preferences)
+
+    icon = row["icon"]
+    label = _styled_metric_label(preferences, row["label"])
+    custom_parts = set(row.get("custom_parts") or ())
+    icon_is_custom = "icon" in custom_parts
+    if context.get("enabled") and not icon_is_custom:
+        icon_mode = str(_mapping(context.get("options", {})).get("icon_mode") or "replace_missing")
+        if icon_mode == "clear":
+            icon = ""
+
+    design_separator = str(context.get("separator") or "") if context.get("enabled") else ""
+    if icon and design_separator and not icon_is_custom:
+        return f"{icon} {design_separator} {label}".strip()
+    if icon:
+        return f"{icon} {label}".strip()
+    return label.strip()
+
+
+def security_stat_name_prefix(preferences: Mapping[str, Any], key: str) -> str:
+    """Return the stable live-channel prefix before the changing value."""
+
+    row = _metric_format(preferences, key)
+    head = _metric_name_head(preferences, key)
+    before_value = row["value_template"].split(SECURITY_STATS_VALUE_TOKEN, 1)[0]
+    return f"{head}{row['separator']}{before_value}".strip()
+
+
+def render_security_stat_name(
+    preferences: Mapping[str, Any],
+    key: str,
+    value: Any,
+) -> str:
+    metric = security_stat_metric(key)
+    row = _metric_format(preferences, key)
+    context = _design_context(preferences)
+    head = _metric_name_head(preferences, key)
+    custom_parts = set(row.get("custom_parts") or ())
+    icon_is_custom = "icon" in custom_parts
+    design_separator = str(context.get("separator") or "") if context.get("enabled") else ""
+
+    rendered_value = row["value_template"].replace(SECURITY_STATS_VALUE_TOKEN, str(value), 1)
+    name = f"{head}{row['separator']}{rendered_value}".strip()
+    name = name.replace("\r", " ").replace("\n", " ").strip()
+
+    if 1 <= len(name) <= 100:
+        return name
+
+    for cut in range(min(len(label), 72), 0, -1):
+        short_label = label[:cut].rstrip()
+        if icon and design_separator and not icon_is_custom:
+            short_head = f"{icon} {design_separator} {short_label}".strip()
+        elif icon:
+            short_head = f"{icon} {short_label}".strip()
+        else:
+            short_head = short_label
+        candidate = f"{short_head}{row['separator']}{rendered_value}".strip()
+        if 1 <= len(candidate) <= 100:
+            return candidate
+
+    fallback = f"{metric.icon} {metric.label}: {value}".strip()
+    return fallback[:100] or metric.label[:100]
+
+
+def security_stat_format_state(
+    preferences: Mapping[str, Any],
+    key: str,
+) -> Dict[str, Any]:
+    """Return the effective editable shell for one metric."""
+
+    return dict(_metric_format(preferences, key))
+
+
+def security_stat_format_preview(preferences: Mapping[str, Any], key: str) -> str:
+    metric = security_stat_metric(key)
+    sample = "ONLINE" if metric.value_kind == "status" else "0"
+    return render_security_stat_name(preferences, key, sample)
+
+
+def validate_security_stat_format(
+    key: str,
+    raw: Mapping[str, Any],
+    *,
+    preferences: Optional[Mapping[str, Any]] = None,
+) -> Tuple[bool, str, Dict[str, Any]]:
+    metric = security_stat_metric(key)
+    icon = _clean_format_piece(raw.get("icon"), fallback="", limit=24)
+    label = _clean_format_piece(raw.get("label"), fallback="", limit=72)
+    separator = str(raw.get("separator") if raw.get("separator") is not None else ": ")
+    separator = separator.replace("\r", " ").replace("\n", " ")[:16]
+    value_template = str(raw.get("value_template") or SECURITY_STATS_VALUE_TOKEN).strip()
+    if value_template.count(SECURITY_STATS_VALUE_TOKEN) != 1:
+        return False, "Value format must contain exactly one `{value}` token.", {}
+    if len(value_template) > 32:
+        return False, "Value format is too long. Keep it at 32 characters or fewer.", {}
+
+    defaults = {
+        "icon": metric.icon,
+        "label": metric.label,
+        "separator": ": ",
+        "value_template": SECURITY_STATS_VALUE_TOKEN,
+    }
+    cleaned = {
+        "icon": icon,
+        "label": label,
+        "separator": separator,
+        "value_template": value_template,
+    }
+    cleaned["custom_parts"] = tuple(
+        name for name in defaults if cleaned[name] != defaults[name]
+    )
+    test_preferences = dict(preferences or {})
+    formats = _mapping(test_preferences.get("formats", {}))
+    formats[key] = cleaned
+    test_preferences["formats"] = formats
+    preview = security_stat_format_preview(test_preferences, key)
+    if not (1 <= len(preview) <= 100):
+        return False, "The rendered Discord channel name must be 1–100 characters.", {}
+    return True, preview, cleaned
 
 def _format_stat_count(value: Any, number_style: str) -> str:
     if str(number_style or "").strip().lower() == "exact":
@@ -447,6 +891,39 @@ async def _spam_guard_enabled(guild_id: int) -> Optional[bool]:
         return cached
 
 
+def _metric_values(
+    *,
+    spam_guard_enabled: Optional[bool],
+    counts: Mapping[str, int],
+    member_count: Optional[int] = None,
+    ticket_counts: Optional[Mapping[str, int]] = None,
+    number_style: str = "compact",
+) -> Dict[str, str]:
+    normalized = normalize_security_stats(counts)
+    tickets = _normalize_ticket_status_counts(ticket_counts)
+    spam_status = (
+        "ONLINE" if spam_guard_enabled is True
+        else "OFFLINE" if spam_guard_enabled is False
+        else "UNKNOWN"
+    )
+    values = {
+        "status": spam_status,
+        "members": _format_live_count(member_count, number_style),
+        "spam_blocked": _format_stat_count(normalized["spam_blocked"], number_style),
+        "invites_blocked": _format_stat_count(normalized["invites_blocked"], number_style),
+        "timeouts_issued": _format_stat_count(normalized["timeouts_issued"], number_style),
+        "quarantines": _format_stat_count(normalized["quarantines"], number_style),
+        "open_tickets": _format_live_count(None if tickets is None else tickets["open_tickets"], number_style),
+        "claimed_tickets": _format_live_count(None if tickets is None else tickets["claimed_tickets"], number_style),
+        "closed_tickets": _format_live_count(None if tickets is None else tickets["closed_tickets"], number_style),
+    }
+    missing = set(SECURITY_STATS_METRICS) - set(values)
+    extra = set(values) - set(SECURITY_STATS_METRICS)
+    if missing or extra:
+        raise RuntimeError(f"Server Stats provider registry mismatch missing={sorted(missing)} extra={sorted(extra)}")
+    return values
+
+
 def _display_names(
     *,
     spam_guard_enabled: Optional[bool],
@@ -455,31 +932,18 @@ def _display_names(
     ticket_counts: Optional[Mapping[str, int]] = None,
     preferences: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, str]:
-    normalized = normalize_security_stats(counts)
-    tickets = _normalize_ticket_status_counts(ticket_counts)
     prefs = dict(preferences or {})
     number_style = str(prefs.get("number_style") or "compact")
-    spam_status = (
-        "ONLINE" if spam_guard_enabled is True
-        else "OFFLINE" if spam_guard_enabled is False
-        else "UNKNOWN"
+    values = _metric_values(
+        spam_guard_enabled=spam_guard_enabled,
+        counts=counts,
+        member_count=member_count,
+        ticket_counts=ticket_counts,
+        number_style=number_style,
     )
     return {
-        "status": f"{_stat_label(prefs, 'status')}: {spam_status}",
-        "members": f"{_stat_label(prefs, 'members')}: {_format_live_count(member_count, number_style)}",
-        "spam_blocked": f"{_stat_label(prefs, 'spam_blocked')}: {_format_stat_count(normalized['spam_blocked'], number_style)}",
-        "invites_blocked": f"{_stat_label(prefs, 'invites_blocked')}: {_format_stat_count(normalized['invites_blocked'], number_style)}",
-        "timeouts_issued": f"{_stat_label(prefs, 'timeouts_issued')}: {_format_stat_count(normalized['timeouts_issued'], number_style)}",
-        "quarantines": f"{_stat_label(prefs, 'quarantines')}: {_format_stat_count(normalized['quarantines'], number_style)}",
-        "open_tickets": (
-            f"{_stat_label(prefs, 'open_tickets')}: {_format_live_count(None if tickets is None else tickets['open_tickets'], number_style)}"
-        ),
-        "claimed_tickets": (
-            f"{_stat_label(prefs, 'claimed_tickets')}: {_format_live_count(None if tickets is None else tickets['claimed_tickets'], number_style)}"
-        ),
-        "closed_tickets": (
-            f"{_stat_label(prefs, 'closed_tickets')}: {_format_live_count(None if tickets is None else tickets['closed_tickets'], number_style)}"
-        ),
+        key: render_security_stat_name(prefs, key, values[key])
+        for key in SECURITY_STATS_METRICS
     }
 
 
@@ -605,7 +1069,11 @@ def _category_has_stats_evidence(
         for channel in list(getattr(category, "voice_channels", []) or []):
             name = str(getattr(channel, "name", "") or "")
             for key, default_prefix in STAT_CHANNEL_PREFIXES.items():
-                prefixes = [default_prefix, f"{_stat_label(preferences, key)}:"]
+                prefixes = [
+                    default_prefix,
+                    f"{_stat_label(preferences, key)}:",
+                    security_stat_name_prefix(preferences, key),
+                ]
                 if any(name.startswith(prefix) for prefix in prefixes):
                     return True
     except Exception:
@@ -643,7 +1111,8 @@ def _find_owned_category(guild: discord.Guild, cfg: Any) -> Optional[discord.Cat
 
     preferences = security_stats_preferences(cfg)
     desired_name = str(preferences["category_name"])
-    accepted_names = {SECURITY_STATS_CATEGORY_NAME, desired_name}
+    styled_name = security_stats_category_display_name(preferences)
+    accepted_names = {SECURITY_STATS_CATEGORY_NAME, desired_name, styled_name}
     for category in list(getattr(guild, "categories", []) or []):
         name = str(getattr(category, "name", "") or "")
         if (
@@ -670,8 +1139,10 @@ def _find_existing_stat_channel(
     prefixes = [STAT_CHANNEL_PREFIXES[key]]
     if preferences is not None:
         custom_prefix = f"{_stat_label(preferences, key)}:"
-        if custom_prefix not in prefixes:
-            prefixes.append(custom_prefix)
+        rendered_prefix = security_stat_name_prefix(preferences, key)
+        for candidate in (custom_prefix, rendered_prefix):
+            if candidate and candidate not in prefixes:
+                prefixes.append(candidate)
     for channel in list(getattr(category, "voice_channels", []) or []):
         name = str(getattr(channel, "name", "") or "")
         if any(name.startswith(prefix) for prefix in prefixes):
@@ -684,7 +1155,7 @@ async def _apply_category_preferences(
     category: discord.CategoryChannel,
     preferences: Mapping[str, Any],
 ) -> None:
-    desired_name = str(preferences.get("category_name") or SECURITY_STATS_CATEGORY_NAME)
+    desired_name = security_stats_category_display_name(preferences)
     if str(getattr(category, "name", "") or "") != desired_name:
         await category.edit(name=desired_name, reason="Apply Dank Shield server stats category name")
 
@@ -748,6 +1219,36 @@ async def _run_coalesced_security_stats_refresh(guild_id: int) -> None:
         current = _EVENT_REFRESH_TASKS.get(gid)
         if current is asyncio.current_task():
             _EVENT_REFRESH_TASKS.pop(gid, None)
+
+
+async def request_security_stats_design_refresh(guild_id: int) -> bool:
+    """Coalesce a live Stats refresh after saved Server Design changes."""
+
+    gid = int(guild_id)
+    if gid <= 0:
+        return False
+    try:
+        cfg = await get_guild_config(gid, refresh=True)
+    except Exception:
+        return False
+    if not _stats_enabled(cfg):
+        return False
+    try:
+        if not _safe_bool(cfg.get(SECURITY_STATS_INHERIT_DESIGN_KEY), False):
+            return False
+    except Exception:
+        return False
+
+    try:
+        guild = bot.get_guild(gid)
+    except Exception:
+        guild = None
+    if guild is None:
+        return False
+
+    _ACTIVE_DISPLAY_GUILDS.add(gid)
+    _schedule_security_stats_refresh(gid)
+    return True
 
 
 def _schedule_security_stats_refresh(guild_id: int) -> None:
@@ -846,6 +1347,30 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
             return False, "❌ Dank Shield needs **Manage Roles** to keep Server Stats visible but non-joinable."
 
         cfg = await get_guild_config(gid, refresh=True)
+
+        # Existing enabled installations remain visually unchanged unless the
+        # owner opts into Design Sync. A newly enabled display inherits the
+        # current saved Server Design by default.
+        try:
+            has_design_sync_choice = (
+                isinstance(cfg, Mapping)
+                and SECURITY_STATS_INHERIT_DESIGN_KEY in cfg
+            )
+        except Exception:
+            has_design_sync_choice = False
+        if not _stats_enabled(cfg) and not has_design_sync_choice:
+            await upsert_guild_config(
+                gid,
+                {SECURITY_STATS_INHERIT_DESIGN_KEY: True},
+            )
+            if isinstance(cfg, Mapping):
+                cfg = {
+                    **dict(cfg),
+                    SECURITY_STATS_INHERIT_DESIGN_KEY: True,
+                }
+            else:
+                cfg = await get_guild_config(gid, refresh=True)
+
         preferences = security_stats_preferences(cfg)
         counts = _stats_counts(cfg)
         names = await _display_names_for_guild(
@@ -861,7 +1386,7 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
                     guild.default_role: discord.PermissionOverwrite(view_channel=True, connect=False),
                 }
                 category = await guild.create_category(
-                    str(preferences["category_name"]),
+                    security_stats_category_display_name(preferences),
                     overwrites=overwrites,
                     reason="Dank Shield Server Stats display",
                 )
@@ -937,7 +1462,8 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
 
         return (
             True,
-            f"✅ Server Stats are active in **{preferences['category_name']}** with `{len(visible_keys)}` visible counters.",
+            f"✅ Server Stats are active in **{security_stats_category_display_name(preferences)}** "
+            f"with `{len(visible_keys)}` visible counters.",
         )
 
 

@@ -2,223 +2,180 @@
 
 ## Active task / desired outcome
 
-**P0-ACCESS-REPAIR-SELF-LOCKOUT-007 — make Repair Bot Access follow Discord's documented permission model and recover already-locked channels safely**
+**P0-SERVER-STATS-DESIGN-INTEGRATION-008 — make Server Stats inherit Server Design safely and make every selectable counter provider-backed and section-customizable**
 
-Desired outcome: Diagnostics / Repair Bot Access must distinguish between
-repairable drift and a true Discord MANAGE_ROLES self-lockout. It must never
-pretend an API route can bypass Discord's permission checks. When recovery
-authority is explicitly granted, it should repair the affected Dank Shield
-overwrites in one scoped pass without rewriting unrelated member/staff access.
+Desired outcome: Server Stats remains the sole owner of its live category/counter
+channels, while optionally inheriting the server's saved Dank Design visual
+language. Server owners can customize each counter's icon/prefix, label,
+label-to-value separator, and value wrapper independently, e.g.
+`[🎫] Open Tickets: [0]` or `[🎫] Open Tickets: 「0」`, without breaking the
+live value source. Every counter exposed in the UI must have a real implemented
+provider and clear capability/source metadata.
 
 ## Scope / single active task lock
 
-Only the access-repair self-lockout path is active:
+Only Server Stats ↔ Server Design integration is active:
 
-- verify the Discord permission model against current official Discord docs;
-- remove invalid assumptions introduced by PR #319;
-- keep parent-category bot overwrite seeding only where Discord actually permits
-  overwrite edits;
-- preserve normal public installation as non-Administrator;
-- provide a clearly separated emergency recovery path for already-locked
-  channels, with Administrator treated as temporary and explicit;
-- keep AntiNuke from treating Discord's own managed Dank Shield role
-  authorization update as a hostile third-party role escalation;
-- preserve all unrelated role/member overwrites;
-- validate focused and full regression coverage before merge.
+- preserve Server Stats ownership of dynamic channel names;
+- keep Server Design from directly renaming live stats resources;
+- add opt-in design inheritance for existing installations and design inheritance
+  by default for newly enabled stats displays;
+- inherit stable visual pieces only: category frame, safe label font, and the
+  server design's channel separator between icon and label;
+- never transform the dynamic numeric/status value;
+- add per-counter structured overrides for icon/prefix, label, value separator,
+  and value template/wrapper;
+- validate fully rendered Discord channel names at 1–100 characters;
+- expose only provider-backed metrics and document their source/requirements;
+- keep refreshes coalesced/rate-limit-aware;
+- preserve existing per-server category name, visibility, labels, number style,
+  placement, and ownership IDs.
 
-Do not broaden into verification interaction failures, ticket redesign, general
-AntiNuke redesign, or test-suite consolidation.
+Do not broaden into unrelated Discord setup, permissions repair, AntiNuke,
+tickets UX, or general Server Design redesign.
+
+## Discord documentation findings
+
+Checked current official Discord Developer Documentation on 2026-09-25.
+
+1. Channel names are **1–100 characters**.
+   Source: https://docs.discord.com/developers/resources/channel
+2. Modifying a guild channel requires **MANAGE_CHANNELS**. Permission-overwrite
+   mutation has additional MANAGE_ROLES rules, but Server Stats formatting only
+   renames/repositions its owned channels.
+   Source: https://docs.discord.com/developers/resources/channel
+3. Discord rate limits are per-route and global, are subject to change, and
+   **must not be hardcoded**. Applications should honor Discord's returned
+   rate-limit headers/retry behavior.
+   Source: https://docs.discord.com/developers/topics/rate-limits
+4. `GUILD_MEMBERS`, `GUILD_PRESENCES`, and `MESSAGE_CONTENT` are privileged
+   Gateway intents. Stats depending on them must explicitly declare that
+   requirement rather than silently showing zero.
+   Source: https://docs.discord.com/developers/events/gateway
+5. `GUILD_CREATE.member_count` is the total number of guild members, so the
+   existing Member Count metric does not need a presence-derived estimate.
+   Source: https://docs.discord.com/developers/events/gateway-events#guild-create
+6. Discord exposes a Get Guild Role Member Counts endpoint for future
+   role-backed counters, which is preferable to inventing counts from an
+   incomplete member cache.
+   Source: https://docs.discord.com/developers/resources/guild
+
+## Current architecture findings
+
+- Server Stats already stores per-guild category ID, owned channel IDs, visible
+  counters, labels, number style, category placement, and category name.
+- Server Design already excludes the saved Server Stats category/counter IDs
+  from normal design detection/apply to avoid two owners renaming the same
+  resources.
+- Server Design options live under `server_design_studio_options` and include
+  theme/font/separator/category-frame settings.
+- Server Stats currently renders every counter as a hardcoded
+  `label: value` string. That is the missing integration seam.
+- Current counter keys are already finite and auditable, but the registry does
+  not explain source/capability requirements to the owner.
+
+## Planned implementation
+
+1. Add a canonical metric registry containing title, semantic icon/label,
+   provider/source description, capability requirements, and value kind.
+2. Refactor live value collection so every registry entry must map to a real
+   provider result; unknown/unimplemented keys cannot be exposed by the UI.
+3. Add saved per-counter format overrides:
+   - icon/prefix section;
+   - label;
+   - label/value separator;
+   - value template containing exactly one `{value}` token.
+4. Add safe renderer with final 1–100-character validation and readable fallback.
+5. Add Server Design inheritance:
+   - full category-frame/font treatment for the owned stats category;
+   - safe font transformation of stable counter labels;
+   - design channel separator between icon and label;
+   - dynamic values remain plain and machine-readable.
+6. Add a Server Stats **Design Sync** toggle. Existing enabled installs remain
+   visually unchanged until opted in; newly enabled displays inherit design by
+   default.
+7. Upgrade the counter picker descriptions so owners see the source and any
+   Discord intent/permission requirement before enabling a metric.
+8. Add regression coverage to existing Server Stats / Server Design test files;
+   do not create another one-off test file.
 
 ## Status
 
-**IMPLEMENTATION COMPLETE FOR REPOSITORY VALIDATION — exact-head CI running; live Discord OAuth acceptance remains required**
+**IMPLEMENTATION COMPLETE FOR INITIAL VALIDATION — focused/full repository validation pending**
 
-Branch: `fix/access-repair-emergency-recovery-20260925`
+Branch: `feat/server-stats-design-format-registry-20260925`
 
-Draft PR: **#321 — Fix Discord access repair self-lockout recovery**
+Base: current `main` after merged PR #321 and successful live access-repair
+acceptance.
 
-Base: current `main` after merged PR #319. Branch was confirmed current with `main` before final validation.
+## Validation required
 
-## Authoritative Discord documentation findings
+Before merge:
 
-Checked against the current official Discord Developer Documentation on
-2026-09-25.
+- compile all changed modules;
+- focused Server Stats tests;
+- focused Dank Design functional-resource tests;
+- full `pytest tests/`;
+- existing repository audits/workflows;
+- normal existing stats formatting remains backward-compatible when Design Sync
+  is off;
+- new displays enable Design Sync without mutating Server Design resources;
+- per-counter examples render exactly as configured;
+- final names never exceed Discord's 100-character limit;
+- no dynamic value is font-transformed;
+- hidden counters are removed only through existing owned-ID logic;
+- no counter can appear in the picker without a provider/capability registry row;
+- no privileged-intent-dependent counter silently reports zero;
+- event refresh coalescing/cooldowns remain intact;
+- Server Design continues excluding live stats resources from its own rename
+  plans.
 
-1. **Edit Channel Permissions requires MANAGE_ROLES.**
-   Discord's Channel Resource says the permission-overwrite endpoint requires
-   `MANAGE_ROLES`.
-2. **Modify Channel does not bypass that requirement.**
-   Discord says `MANAGE_CHANNELS` is required to modify a guild channel, but
-   if the request modifies permission overwrites, `MANAGE_ROLES` is also
-   required.
-3. **Syncing a child back to its category also does not bypass it.**
-   Discord's guild channel-position endpoint says `lock_permissions` requires
-   `MANAGE_ROLES`.
-4. **Administrator is the documented overwrite bypass.**
-   Discord's permission table says `ADMINISTRATOR` allows all permissions and
-   bypasses channel permission overwrites. Discord's permission-computation
-   pseudocode returns all permissions before applying channel overwrites when
-   Administrator is present.
-5. **Unsynced child channels do not inherit later category changes.**
-   Discord documents category behavior as permission syncing, not live
-   inheritance. Once a child is desynced, changes to its parent category no
-   longer update that child.
-6. **Normal channel creation must not manufacture MANAGE_ROLES overwrites.**
-   Discord's Create Guild Channel endpoint explicitly says setting
-   `MANAGE_ROLES` in channel permission overwrites is only possible for guild
-   administrators.
-7. **Bot OAuth authorization can request a permission bitfield and existing
-   authorizations can be re-approved.**
-   Discord documents the `permissions` parameter in the bot authorization
-   flow, and its OAuth documentation says existing authorizations can be
-   re-approved. For passthrough `bot` scope, authorization is always required.
-   However, the docs do **not** explicitly promise the exact mutation behavior
-   of reauthorizing a bot that is already installed in the same guild. That
-   specific existing-install recovery behavior remains a required live
-   acceptance test and must not be presented as already proven.
+## Implementation completed
 
-Official sources:
-
-- https://docs.discord.com/developers/topics/permissions
-- https://docs.discord.com/developers/resources/channel
-- https://docs.discord.com/developers/resources/guild
-- https://docs.discord.com/developers/topics/oauth2
-
-## Root cause
-
-The production screenshots show Dank Shield has server-level Manage Roles but
-some child channels/categories deny or otherwise remove effective
-Manage Permissions (Discord's client label for MANAGE_ROLES).
-
-For those targets:
-
-- `set_permissions` cannot repair the overwrite because Discord requires
-  effective MANAGE_ROLES;
-- `channel.edit(permission_overwrites=...)` cannot bypass it because Discord
-  also requires MANAGE_ROLES whenever Modify Channel changes overwrites;
-- `Sync Now` / `lock_permissions` cannot bypass it because Discord also
-  requires MANAGE_ROLES for permission syncing;
-- a correct parent-category overwrite is useful as a repair template, but an
-  already-desynced child does not automatically inherit it.
-
-Therefore a target that has already removed Dank Shield's effective
-MANAGE_ROLES is a real platform-enforced self-lockout, not merely a library
-guard.
-
-## Changes in progress
-
-- Removed the invalid idea that `MANAGE_CHANNELS` can be used as an overwrite
-  repair bypass.
-- Removed normal `manage_roles=True` channel/category baseline grants added by
-  #319; Discord documents those grants as Administrator-only during channel
-  creation.
-- Normal repair preserves any existing explicit Dank Shield Manage Permissions
-  value instead of manufacturing or clearing it.
-- Parent-category seeding remains bot-only and preserves unrelated overwrites,
-  but normal repair excludes MANAGE_ROLES from the copied template.
-- Added an underlying-permission resolver for emergency recovery so temporary
-  Administrator does not hide which channel overwrites are still broken.
-- Emergency recovery is isolated from normal installation. Its purpose is to
-  obtain documented Administrator overwrite bypass authority long enough to
-  repair Dank Shield's own affected overwrites, then explicitly remove
-  Administrator again.
-- AntiNuke guards are being added so Discord's own managed Dank Shield role
-  authorization changes are not treated as hostile third-party escalation.
-- No full `sync_permissions=True` category sync is introduced.
-
-## Important unvalidated assumption / blocker
-
-Discord documents that bot authorization requests a permission bitfield and
-that existing authorizations can be re-approved, but its public docs do not
-explicitly state the exact managed-role mutation behavior when the same bot is
-already installed in the target guild.
-
-Therefore:
-
-- the emergency OAuth recovery link may be implemented and regression-tested as
-  a request generator;
-- it must **not** be claimed production-working until live Discord acceptance
-  proves the existing installation receives Administrator as requested;
-- if Discord does not update the existing managed bot role through that flow,
-  the fallback remains owner/admin intervention in Discord, because the API
-  provides no documented self-bypass for an already-locked target.
-
-## Validation required / current evidence
-
-A superseded PR-head run reached **1997 passed / 3 failed / 9 warnings**. The
-three failures were regression-test expectation/fixture issues found while the
-implementation was still moving:
-
-- an obsolete #319 assertion still expected normal parent seeding to copy
-  `manage_roles=True`; the documented model now correctly expects it to remain
-  unchanged during normal repair;
-- one recovery-label assertion expected a display name while the canonical UI
-  helper returns a channel mention;
-- one activity-scope test omitted the required `manual_actions` accumulator.
-
-All three test issues were corrected before the final-head run.
-
-Before any merge, the **final exact head** must still prove:
-
-- committed diff whitespace passes;
-- all changed Python modules compile;
-- focused access-repair tests pass;
-- focused AntiNuke managed-role tests pass;
-- full `pytest tests/` passes;
-- all standalone repository audits pass;
-- public invite audit proves normal installation still excludes Administrator;
-- all GitHub workflow groups are green;
-- no normal setup baseline contains `manage_roles=True` channel overwrites;
-- normal setup/repair preserves an existing explicit Dank Shield Manage
-  Permissions allow or deny instead of silently changing it;
-- temporary-Administrator recovery may resolve only Dank Shield's own required
-  access denies and does not mutate unrelated role/member overwrites;
-- temporary Administrator remains visible in the UI until normal permissions
-  are restored;
-- final diff contains no unrelated, generated, secret-bearing, debug, or
-  conflict-artifact changes.
-
-Repository CI cannot prove Discord's undocumented behavior for reauthorizing an
-already-installed bot. That remains the production acceptance gate after the
-repository head is green.
-
-## Cleanup / conflicts
-
-- PR #319 is merged and its repository CI passed, but its live acceptance
-  exposed this remaining platform constraint.
-- PR #320 was closed unmerged because the task was not actually complete.
-- No new test file is being created for this fix; regression coverage is being
-  added to existing subsystem test modules.
-
-## Backlog
-
-- Test-suite organization/consolidation remains separate.
-- Verification/ticket interaction failures remain separate unless this exact
-  permission root cause directly controls them.
+- Added one canonical metric registry. The public counter picker is derived from
+  it and every row names its real provider/source and capability requirements.
+- Added provider parity enforcement so a registry metric without a real value
+  provider fails validation instead of silently becoming a decorative zero.
+- Added structured per-counter format overrides:
+  - icon/prefix;
+  - label;
+  - label/value separator;
+  - value template with exactly one `{value}` token.
+- Added examples supported by the renderer such as
+  `[🎫] Open Tickets: [0]` and `[🎫] Open Tickets: 「0」`.
+- Added final Discord name validation/fallback at 1–100 characters while
+  preserving the live value.
+- Added stable-prefix recovery so wrapped values do not break owned-channel
+  rediscovery when a saved channel ID is stale.
+- Added optional Server Design inheritance:
+  - the Stats category can inherit category frame/font treatment;
+  - stable metric labels can inherit the selected font;
+  - the saved design channel separator can sit between default icon and label;
+  - dynamic numeric/status values are never font-transformed.
+- Structured per-counter formatting is section-aware: changing only the value
+  wrapper keeps untouched design sections inherited, while a custom icon/prefix
+  becomes authoritative for that layout section.
+- Existing enabled installations default Design Sync to Off unless explicitly
+  saved; newly enabled displays save Design Sync On by default.
+- Added a **Design Sync** control to the Server Stats center.
+- Design Sync stays visually neutral until the server has actually saved a
+  Server Design; it does not impose fallback styling on untouched servers.
+- Saving Server Design requests a Server Stats refresh through the existing
+  coalesced/cooldown queue when Design Sync is active.
+- Upgraded the old label modal in place to a four-section format editor so old
+  call sites remain compatible.
+- Picker descriptions now explain each metric's source/requirements, and future
+  unavailable metrics are rejected on selection instead of silently enabled.
+- Dank Design functional-resource recovery now recognizes Server Stats by saved
+  category ID, saved counter parent, or canonical/custom/design-synced category
+  name, while still excluding the live resources from normal Design renames.
+- Added regression coverage to the existing Server Stats and Dank Design test
+  modules; no new test file was created.
 
 ## Next step
 
-Freeze runtime changes and run the full exact-head PR #321 validation suite.
-Fix only failures that are part of this access-repair root cause. If every
-repository gate passes, keep the PR draft until the live Discord acceptance
-sequence proves whether reauthorizing the already-installed bot actually
-updates its managed integration role as requested.
-
-Production acceptance sequence:
-
-1. Deploy the exact validated PR head.
-2. Open Diagnostics → Repair Bot Access on the known affected server.
-3. Confirm already self-locked targets show **Temporary Admin Recovery** rather
-   than a fake safe-fix button.
-4. Authorize the guild-pinned temporary recovery once.
-5. Press **Preview Again** and confirm the underlying  activity/access gaps are
-   still listed despite Administrator being active.
-6. Run **Fix All Safe Access** and confirm only Dank Shield's own target
-   overwrites change.
-7. Use **Restore Normal Permissions**, then Preview Again.
-8. Confirm Administrator is gone, the repaired targets remain accessible, and
-   unrelated member/staff overwrites are unchanged.
-
-If Discord does not update the existing managed bot role in steps 4 or 7, do
-not claim the OAuth recovery path works; retain the documented manual
-Administrator fallback instead.
+PR #322 is open as a draft. Freeze feature behavior and run all exact-head
+repository workflows. Inspect focused/full-suite failures and correct only
+same-task regressions. Then review the final diff for configuration
+compatibility, UI limits, ownership conflicts, and Discord
+1–100-character/rate-limit constraints before marking ready.

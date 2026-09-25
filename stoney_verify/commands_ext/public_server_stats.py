@@ -22,27 +22,30 @@ from ..security_stats import (
     SECURITY_STATS_CATEGORY_NAME_KEY,
     SECURITY_STATS_CUSTOM_LABELS_KEY,
     SECURITY_STATS_ENABLED_KEY,
+    SECURITY_STATS_FORMAT_OVERRIDES_KEY,
+    SECURITY_STATS_INHERIT_DESIGN_KEY,
+    SECURITY_STATS_METRICS,
     SECURITY_STATS_NUMBER_STYLE_KEY,
     SECURITY_STATS_PLACEMENT_KEY,
     SECURITY_STATS_VISIBLE_KEYS_KEY,
     disable_security_stats_display,
     ensure_security_stats_display,
     refresh_security_stats_display,
+    security_stat_format_preview,
+    security_stat_format_state,
+    security_stat_metric,
+    security_stat_metric_capability,
+    security_stat_metric_description,
+    security_stats_category_display_name,
     security_stats_preferences,
+    validate_security_stat_format,
 )
 from .public_setup_group import _require_setup_permission
 
 
 _METRIC_TITLES = {
-    "status": "SpamGuard status",
-    "members": "Member count",
-    "spam_blocked": "Spam blocked",
-    "invites_blocked": "Invites blocked",
-    "timeouts_issued": "Timeouts issued",
-    "quarantines": "Quarantined",
-    "open_tickets": "Open tickets",
-    "claimed_tickets": "Claimed tickets",
-    "closed_tickets": "Closed tickets",
+    key: metric.title
+    for key, metric in SECURITY_STATS_METRICS.items()
 }
 
 
@@ -75,6 +78,8 @@ def _center_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
     category = _tracked_category(guild, cfg)
     visible = tuple(prefs["visible_keys"])
     custom_labels = dict(prefs["labels"])
+    custom_formats = dict(prefs["formats"])
+    design_sync = bool(prefs["inherit_design"])
 
     if enabled and category is not None:
         health = f"✅ Active • <#{int(category.id)}>"
@@ -100,9 +105,10 @@ def _center_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
     embed.add_field(
         name="Display",
         value=(
-            f"**Category:** {prefs['category_name']}\n"
+            f"**Category:** {security_stats_category_display_name(prefs)}\n"
             f"**Placement:** {str(prefs['placement']).title()}\n"
             f"**Numbers:** {str(prefs['number_style']).title()}\n"
+            f"**Design Sync:** {'On' if design_sync else 'Off'}\n"
             f"**Visible counters:** {len(visible)}/{len(DEFAULT_SECURITY_STATS_VISIBLE_KEYS)}"
         ),
         inline=False,
@@ -115,18 +121,20 @@ def _center_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
     embed.add_field(
         name="Customization",
         value=(
-            f"**Custom labels:** {len(custom_labels)}\n"
-            "Use **Choose Visible Counters** to hide anything you do not want. "
-            "Use **Customize a Label** for custom wording or emoji. Hidden owned counters "
-            "are removed instead of lingering as stale channels."
+            f"**Legacy custom labels:** {len(custom_labels)}\n"
+            f"**Structured counter formats:** {len(custom_formats)}\n"
+            "Use **Choose Visible Counters** to select provider-backed metrics. "
+            "Use **Customize Counter Format** to edit icon/prefix, label, separator, and "
+            "the value wrapper without disconnecting the live value source."
         ),
         inline=False,
     )
     embed.add_field(
         name="Repair behavior",
         value=(
-            "If an enabled stats category is deleted, refresh now repairs it instead of silently giving up. "
-            "The saved category name, labels, visible counters, placement, and number style are reapplied."
+            "If an enabled stats category is deleted, refresh repairs the same owned display. "
+            "Server Design never directly renames live stat resources; Design Sync reads the saved design "
+            "as a visual source while Server Stats remains the sole live-name owner."
         ),
         inline=False,
     )
@@ -221,51 +229,140 @@ class CategoryNameModal(discord.ui.Modal):
 
 
 class StatLabelModal(discord.ui.Modal):
-    def __init__(self, *, key: str, current: str, owner_id: int) -> None:
+    """Structured counter-name editor kept under the legacy class name for compatibility."""
+
+    def __init__(
+        self,
+        *,
+        key: str,
+        current: str = "",
+        current_format: Optional[Mapping[str, Any]] = None,
+        owner_id: int,
+    ) -> None:
         self.key = str(key)
         self.owner_id = int(owner_id)
-        super().__init__(title=f"Customize {_METRIC_TITLES[self.key]}"[:45])
+        metric = security_stat_metric(self.key)
+        row = dict(current_format or {})
+
+        if not row:
+            legacy = str(current or "").strip().rstrip(":").strip()
+            default_combined = DEFAULT_SECURITY_STATS_LABELS[self.key]
+            if legacy and legacy != default_combined:
+                if legacy.startswith(metric.icon):
+                    legacy_label = legacy[len(metric.icon):].strip()
+                    row = {
+                        "icon": metric.icon,
+                        "label": legacy_label or metric.label,
+                        "separator": ": ",
+                        "value_template": "{value}",
+                    }
+                else:
+                    row = {
+                        "icon": "",
+                        "label": legacy,
+                        "separator": ": ",
+                        "value_template": "{value}",
+                    }
+            else:
+                row = {
+                    "icon": metric.icon,
+                    "label": metric.label,
+                    "separator": ": ",
+                    "value_template": "{value}",
+                }
+
+        super().__init__(title=f"Format {_METRIC_TITLES[self.key]}"[:45])
+
+        self.icon_text = discord.ui.TextInput(
+            label="Icon / prefix",
+            placeholder="[🎫] or 🎫",
+            default=str(row.get("icon") or "")[:24],
+            max_length=24,
+            required=False,
+        )
         self.label_text = discord.ui.TextInput(
-            label="Channel label / emoji",
-            placeholder=DEFAULT_SECURITY_STATS_LABELS[self.key],
-            default=str(current or DEFAULT_SECURITY_STATS_LABELS[self.key])[:72],
+            label="Label",
+            placeholder=metric.label,
+            default=str(row.get("label") if row.get("label") is not None else metric.label)[:72],
             max_length=72,
             required=False,
         )
-        self.add_item(self.label_text)
+        self.separator_text = discord.ui.TextInput(
+            label="Label → value separator",
+            placeholder=": ",
+            default=str(row.get("separator") if row.get("separator") is not None else ": ")[:16],
+            max_length=16,
+            required=False,
+        )
+        self.value_template = discord.ui.TextInput(
+            label="Value format — keep {value}",
+            placeholder="[{value}] or 「{value}」",
+            default=str(row.get("value_template") or "{value}")[:32],
+            max_length=32,
+            required=True,
+        )
+        for item in (
+            self.icon_text,
+            self.label_text,
+            self.separator_text,
+            self.value_template,
+        ):
+            self.add_item(item)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if int(interaction.user.id) != self.owner_id:
-            await interaction.response.send_message("❌ Open your own Server Stats panel.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Open your own Server Stats panel.",
+                ephemeral=True,
+            )
             return
         if not await _require_setup_permission(interaction):
             return
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("❌ Use this inside a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Use this inside a server.",
+                ephemeral=True,
+            )
             return
 
-        # Modal submits should update the panel that launched them instead of
-        # spawning a second stale copy of the controls.
         await interaction.response.defer()
         cfg = await get_guild_config(int(guild.id), refresh=True)
         prefs = security_stats_preferences(cfg)
+        ok, preview, cleaned = validate_security_stat_format(
+            self.key,
+            {
+                "icon": str(self.icon_text.value or ""),
+                "label": str(self.label_text.value or ""),
+                "separator": str(self.separator_text.value or ""),
+                "value_template": str(self.value_template.value or ""),
+            },
+            preferences=prefs,
+        )
+        if not ok:
+            await _render_center(interaction, content=f"❌ {preview}")
+            return
+
+        formats = dict(prefs["formats"])
+        formats[self.key] = cleaned
+
+        # Structured formatting becomes the one owner for this metric. Remove a
+        # legacy combined-label override so two saved settings cannot fight.
         labels = dict(prefs["labels"])
-        value = " ".join(str(self.label_text.value or "").replace("\n", " ").split()).strip().rstrip(":").strip()
-        if not value or value == DEFAULT_SECURITY_STATS_LABELS[self.key]:
-            labels.pop(self.key, None)
-        else:
-            labels[self.key] = value[:72]
+        labels.pop(self.key, None)
 
         await _save_preferences(
             int(guild.id),
-            {SECURITY_STATS_CUSTOM_LABELS_KEY: labels},
+            {
+                SECURITY_STATS_FORMAT_OVERRIDES_KEY: formats,
+                SECURITY_STATS_CUSTOM_LABELS_KEY: labels,
+            },
         )
         cfg = await get_guild_config(int(guild.id), refresh=True)
-        note = f"✅ **{_METRIC_TITLES[self.key]}** label saved."
+        note = f"✅ **{_METRIC_TITLES[self.key]}** format saved. Preview: `{preview}`"
         if _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False):
-            ok, result = await ensure_security_stats_display(guild)
-            note = result
+            _ok, result = await ensure_security_stats_display(guild)
+            note = f"{result}\nPreview: `{preview}`"
         await _render_center(interaction, content=note)
 
 
@@ -279,7 +376,7 @@ class VisibleStatsSelect(discord.ui.Select):
                 label=_METRIC_TITLES[key],
                 value=key,
                 default=key in current,
-                description=f"Show {_METRIC_TITLES[key].lower()} in the stats category."[:100],
+                description=security_stat_metric_description(key),
             )
             for key in DEFAULT_SECURITY_STATS_VISIBLE_KEYS
         ]
@@ -303,8 +400,28 @@ class VisibleStatsSelect(discord.ui.Select):
             await interaction.response.send_message("❌ Use this inside a server.", ephemeral=True)
             return
 
-        await interaction.response.defer()
         chosen = [key for key in DEFAULT_SECURITY_STATS_VISIBLE_KEYS if key in set(self.values)]
+        unavailable: list[str] = []
+        for key in chosen:
+            capability = security_stat_metric_capability(key, guild=guild)
+            if capability["available"]:
+                continue
+            reasons = [
+                *(f"intent {name}" for name in capability["missing_intents"]),
+                *(f"permission {name}" for name in capability["missing_permissions"]),
+            ]
+            unavailable.append(
+                f"{_METRIC_TITLES[key]} ({', '.join(reasons) or 'provider unavailable'})"
+            )
+        if unavailable:
+            await interaction.response.send_message(
+                "❌ These counters cannot be enabled on this installation yet: "
+                + "; ".join(unavailable)[:1500],
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer()
         await _save_preferences(int(guild.id), {SECURITY_STATS_VISIBLE_KEYS_KEY: chosen})
         cfg = await get_guild_config(int(guild.id), refresh=True)
         note = f"✅ Showing **{len(chosen)}** Server Stats counters."
@@ -318,17 +435,16 @@ class StatLabelSelect(discord.ui.Select):
     def __init__(self, *, owner_id: int, cfg: Any) -> None:
         self.owner_id = int(owner_id)
         prefs = security_stats_preferences(cfg)
-        labels = dict(prefs["labels"])
         options = [
             discord.SelectOption(
                 label=_METRIC_TITLES[key],
                 value=key,
-                description=str(labels.get(key) or DEFAULT_SECURITY_STATS_LABELS[key])[:100],
+                description=security_stat_format_preview(prefs, key)[:100],
             )
             for key in DEFAULT_SECURITY_STATS_VISIBLE_KEYS
         ]
         super().__init__(
-            placeholder="Customize a Label",
+            placeholder="Customize Counter Format",
             min_values=1,
             max_values=1,
             options=options,
@@ -351,7 +467,12 @@ class StatLabelSelect(discord.ui.Select):
         key = str(self.values[0])
         current = str(dict(prefs["labels"]).get(key) or DEFAULT_SECURITY_STATS_LABELS[key])
         await interaction.response.send_modal(
-            StatLabelModal(key=key, current=current, owner_id=self.owner_id)
+            StatLabelModal(
+                key=key,
+                current=current,
+                current_format=security_stat_format_state(prefs, key),
+                owner_id=self.owner_id,
+            )
         )
 
 
@@ -374,6 +495,14 @@ class ServerStatsView(discord.ui.View):
                 child.label = f"Numbers: {str(self.prefs['number_style']).title()}"
             elif custom_id == "dank_server_stats:placement":
                 child.label = f"Placement: {str(self.prefs['placement']).title()}"
+            elif custom_id == "dank_server_stats:design_sync":
+                enabled = bool(self.prefs["inherit_design"])
+                child.label = f"Design Sync: {'On' if enabled else 'Off'}"
+                child.style = (
+                    discord.ButtonStyle.success
+                    if enabled
+                    else discord.ButtonStyle.secondary
+                )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) == self.owner_id:
@@ -440,6 +569,41 @@ class ServerStatsView(discord.ui.View):
             interaction,
             content="✅ Server Stats refreshed and repaired." if changed else "ℹ️ Server Stats did not need a refresh.",
         )
+
+    @discord.ui.button(
+        label="Design Sync",
+        emoji="🎨",
+        style=discord.ButtonStyle.secondary,
+        row=0,
+        custom_id="dank_server_stats:design_sync",
+    )
+    async def design_sync(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message(
+                "❌ Use this inside a server.",
+                ephemeral=True,
+            )
+
+        await interaction.response.defer()
+        target = not bool(self.prefs["inherit_design"])
+        await _save_preferences(
+            int(guild.id),
+            {SECURITY_STATS_INHERIT_DESIGN_KEY: target},
+        )
+        cfg = await get_guild_config(int(guild.id), refresh=True)
+        note = (
+            "✅ Server Stats now inherits the saved Server Design visual language."
+            if target
+            else "✅ Server Stats Design Sync is off; its saved Stats formatting remains independent."
+        )
+        if _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False):
+            _ok, applied = await ensure_security_stats_display(guild)
+            note = f"{applied}\nDesign Sync: **{'On' if target else 'Off'}**."
+        await _render_center(interaction, content=note)
 
     @discord.ui.button(
         label="Category Name",
@@ -528,6 +692,7 @@ class ServerStatsView(discord.ui.View):
                 SECURITY_STATS_CATEGORY_NAME_KEY: SECURITY_STATS_CATEGORY_NAME,
                 SECURITY_STATS_VISIBLE_KEYS_KEY: list(DEFAULT_SECURITY_STATS_VISIBLE_KEYS),
                 SECURITY_STATS_CUSTOM_LABELS_KEY: {},
+                SECURITY_STATS_FORMAT_OVERRIDES_KEY: {},
                 SECURITY_STATS_NUMBER_STYLE_KEY: "compact",
                 SECURITY_STATS_PLACEMENT_KEY: "top",
             },
