@@ -115,6 +115,33 @@ def test_custom_value_wrapper_keeps_unmodified_design_sections_inherited() -> No
     assert rendered != "🎫 Open Tickets: 「0」"
 
 
+def test_explicit_blank_label_stays_blank_in_render_and_recovery_prefix() -> None:
+    prefs = security_stats.security_stats_preferences(
+        {
+            security_stats.SECURITY_STATS_FORMAT_OVERRIDES_KEY: {
+                "open_tickets": {
+                    "icon": "🎫",
+                    "label": "",
+                    "separator": ": ",
+                    "value_template": "{value}",
+                    "custom_parts": ["label"],
+                }
+            }
+        }
+    )
+
+    assert security_stats.render_security_stat_name(
+        prefs,
+        "open_tickets",
+        "0",
+    ) == "🎫: 0"
+    assert security_stats.security_stat_name_prefix(
+        prefs,
+        "open_tickets",
+    ) == "🎫:"
+    assert security_stats._stat_label(prefs, "open_tickets") == ""
+
+
 def test_counter_format_requires_exactly_one_live_value_token() -> None:
     ok, message, cleaned = security_stats.validate_security_stat_format(
         "open_tickets",
