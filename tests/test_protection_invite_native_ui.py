@@ -160,6 +160,14 @@ def test_native_invite_ui_uses_shared_browser_and_central_cleanup_policy() -> No
     assert "startup_guards" not in source
 
 
+def test_native_cleanup_deep_scans_and_explicitly_handles_contentless_known_ads() -> None:
+    source = Path(invite_ui.__file__).read_text(encoding="utf-8")
+
+    assert "limit=1000" in source
+    assert "allow_contentless_trusted_advertisers=True" in source
+    assert "Protected content-redacted advertiser posts removed" in source
+
+
 def test_native_editor_preserves_original_on_off_action() -> None:
     source = Path(invite_ui.__file__).read_text(encoding="utf-8")
     assert 'label="Turn Shield On / Off"' in source
