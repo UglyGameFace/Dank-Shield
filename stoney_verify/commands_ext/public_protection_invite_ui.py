@@ -85,6 +85,15 @@ def invite_shield_embed(
     embed.add_field(name="Live blocker", value=state_text, inline=False)
     embed.add_field(name="Current targeting", value=_status(scope), inline=False)
     embed.add_field(
+        name="Modern app-card safety",
+        value=(
+            "Discord can withhold message content, embeds, attachments, and components when MESSAGE_CONTENT "
+            "access is unavailable. Dank Shield will only use its contentless fallback for an exact known "
+            "advertising application when the bot/channel is explicitly protected, or during a staff-selected cleanup."
+        ),
+        inline=False,
+    )
+    embed.add_field(
         name="Fast setup",
         value=(
             "**Fix This Channel** turns Invite Shield on and protects bot invite posts in the channel where you opened this screen.\n"
@@ -446,6 +455,8 @@ class InviteShieldView(discord.ui.View):
                     f" Protected content-redacted advertiser posts removed: "
                     f"`{contentless_deleted}`."
                 )
+            if int(result.get("checked", 0) or 0) >= 1000:
+                note += " Re-run cleanup if older messages remain beyond this bounded pass."
             await _redraw(
                 pick_interaction,
                 author_id=self.author_id,
