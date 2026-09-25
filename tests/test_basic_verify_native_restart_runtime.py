@@ -733,6 +733,63 @@ def test_saved_unknown_application_panel_respects_startup_rest_cap(
     asyncio.run(scenario())
 
 
+def test_ready_reconciler_processes_every_legacy_panel_across_waves(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        calls: list[tuple[int, bool]] = []
+
+        class FakeGuild:
+            def __init__(self, guild_id: int) -> None:
+                self.id = guild_id
+                self.me = SimpleNamespace(id=42)
+
+        bot = FakeBot()
+        bot.guilds = [FakeGuild(gid) for gid in range(1, 8)]
+        rows = {
+            gid: {"verify_channel_id": str(1000 + gid)}
+            for gid in range(1, 8)
+        }
+
+        async def fake_discover(guild_ids: list[int]):
+            assert guild_ids == list(range(1, 8))
+            return rows
+
+        async def fake_reconcile(
+            _bot,
+            guild,
+            _cfg,
+            *,
+            allow_legacy_rest: bool = True,
+        ) -> str:
+            calls.append((int(guild.id), bool(allow_legacy_rest)))
+            return "migrated"
+
+        monkeypatch.setattr(runtime.discord, "Guild", FakeGuild)
+        monkeypatch.setattr(
+            runtime,
+            "_discover_basic_verify_panel_rows",
+            fake_discover,
+        )
+        monkeypatch.setattr(
+            runtime,
+            "_reconcile_one_basic_verify_panel",
+            fake_reconcile,
+        )
+        monkeypatch.setattr(
+            runtime,
+            "_legacy_panel_backfill_wave_size",
+            lambda: 2,
+        )
+
+        await runtime._reconcile_basic_verify_panels_after_ready(bot)
+
+        assert calls == [(gid, True) for gid in range(1, 8)]
+        assert runtime._RUNTIME_READY_RECONCILE_STARTED is True
+
+    asyncio.run(scenario())
+
+
 def test_legacy_current_bot_panel_is_updated_persisted_and_bound(
     monkeypatch,
 ) -> None:
