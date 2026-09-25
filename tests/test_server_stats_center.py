@@ -260,6 +260,7 @@ def test_stat_label_modal_reuses_existing_interaction_panel(monkeypatch) -> None
                             "label": "Folks",
                             "separator": ": ",
                             "value_template": "「{value}」",
+                            "custom_parts": ("icon", "label", "value_template"),
                         }
                     },
                     security_stats.SECURITY_STATS_CUSTOM_LABELS_KEY: {},
