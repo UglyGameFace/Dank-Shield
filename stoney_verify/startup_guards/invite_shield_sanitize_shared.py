@@ -7,7 +7,6 @@ For mixed invite posts, Dank Shield deletes the unsafe original and reposts a
 clean local-only summary so external server information is not preserved.
 """
 
-import re
 import time
 from typing import Any, Iterable
 
@@ -108,120 +107,6 @@ def _author_name(message: discord.Message) -> str:
         return f"{name} (`{user_id}`)" if user_id > 0 else name
     except Exception:
         return "unknown"
-
-
-def _message_search_text(message: discord.Message) -> str:
-    """Collect visible and component text for safe receipt classification only."""
-
-    parts: list[str] = []
-    try:
-        parts.append(str(getattr(message, "content", "") or ""))
-    except Exception:
-        pass
-
-    try:
-        for embed in list(getattr(message, "embeds", []) or []):
-            for attr in ("title", "description", "url"):
-                raw = getattr(embed, attr, None)
-                if raw:
-                    parts.append(str(raw))
-            for field in list(getattr(embed, "fields", []) or []):
-                parts.append(str(getattr(field, "name", "") or ""))
-                parts.append(str(getattr(field, "value", "") or ""))
-            footer = getattr(embed, "footer", None)
-            if getattr(footer, "text", None):
-                parts.append(str(footer.text))
-            author = getattr(embed, "author", None)
-            if getattr(author, "name", None):
-                parts.append(str(author.name))
-            if getattr(author, "url", None):
-                parts.append(str(author.url))
-    except Exception:
-        pass
-
-    try:
-        def walk(component: Any) -> None:
-            for attr in ("content", "url", "label", "custom_id"):
-                raw = getattr(component, attr, None)
-                if raw:
-                    parts.append(str(raw))
-            accessory = getattr(component, "accessory", None)
-            if accessory is not None:
-                walk(accessory)
-            for child in list(getattr(component, "children", []) or []):
-                walk(child)
-
-        for row in list(getattr(message, "components", []) or []):
-            walk(row)
-    except Exception:
-        pass
-
-    return "\n".join(part for part in parts if part)
-
-
-def is_trusted_bump_success_receipt(message: discord.Message) -> bool:
-    """Allow known bump-bot success receipts without allowing random server ads.
-
-    This is intentionally narrow:
-    - author must be a bot
-    - author/app text must look like OneBump or Discadus
-    - message must look like a receipt, not a featured/random server ad
-    """
-
-    try:
-        author = getattr(message, "author", None)
-        if not bool(getattr(author, "bot", False)):
-            return False
-
-        author_text = " ".join(
-            str(x or "")
-            for x in (
-                getattr(author, "name", ""),
-                getattr(author, "display_name", ""),
-                getattr(author, "global_name", ""),
-            )
-        ).casefold()
-
-        text = _message_search_text(message).casefold()
-        compact = re.sub(r"\s+", " ", text).strip()
-
-        author_id = int(getattr(author, "id", 0) or 0)
-        application_id = int(getattr(message, "application_id", 0) or 0)
-        application = getattr(message, "application", None)
-        nested_application_id = int(getattr(application, "id", 0) or 0)
-        exact_onebump = 1028956609382199346 in {
-            author_id,
-            application_id,
-            nested_application_id,
-        }
-        # Keep Discadus' existing receipt compatibility, but OneBump is bound to
-        # its public application identity so a renamed/spoofed bot cannot inherit
-        # the trusted receipt behavior.
-        trusted_sender = bool(exact_onebump or "discadus" in author_text)
-        if not trusted_sender:
-            return False
-
-        # OneBump success receipt shown after /bump.
-        if "successful bump" in compact and any(
-            marker in compact
-            for marker in (
-                "cooldown expires",
-                "server bumped",
-                "shared to",
-                "bumped:",
-            )
-        ):
-            return True
-
-        # Discadus receipt/reminder shown immediately after /bump.
-        if "time to bump" in compact and "bump" in compact and any(
-            token in compact for token in ("kaboom", "used /bump", "make an impact")
-        ):
-            return True
-
-        return False
-    except Exception:
-        return False
 
 
 async def send_mixed_invite_sanitized_notice(
