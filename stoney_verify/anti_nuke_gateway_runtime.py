@@ -303,6 +303,10 @@ async def _handle_dangerous_role_update(
     entry: Any,
     actor: Any,
 ) -> None:
+    role = getattr(entry, "target", None)
+    if anti_nuke._is_own_managed_bot_role(guild, role):  # noqa: SLF001
+        return
+
     added = anti_nuke.dangerous_permissions_added(
         getattr(entry, "before", None),
         getattr(entry, "after", None),
@@ -323,7 +327,6 @@ async def _handle_dangerous_role_update(
         actor,
         "role_update",
     )
-    role = getattr(entry, "target", None)
     rollback = "Alert-only mode: dangerous role escalation was not reverted."
     if settings["antinuke_mode"] == "contain":
         reverted = False
