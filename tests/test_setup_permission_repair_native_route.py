@@ -404,7 +404,9 @@ def test_permission_repair_self_lockout_surfaces_temporary_admin_recovery(
     assert "member/staff overwrites" in rendered
 
 
-def test_permission_repair_warns_to_remove_temporary_admin_after_repair() -> None:
+def test_permission_repair_warns_to_restore_normal_permissions_after_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     result = {
         "applied": True,
         "target_count": 46,
@@ -427,8 +429,32 @@ def test_permission_repair_warns_to_remove_temporary_admin_after_repair() -> Non
         + [f"{field.name}\n{field.value}" for field in embed.fields]
     )
     assert "Administrator currently enabled" in rendered
-    assert "remove **Administrator**" in rendered
+    assert "Restore Normal Permissions" in rendered
+    assert "remove Administrator in Server Settings" in rendered
     assert "does not require Administrator for normal operation" in rendered
+
+    guild = SimpleNamespace(id=123)
+
+    def fake_restore(guild_arg: Any, *, row: int = 1) -> discord.ui.Button:
+        assert guild_arg is guild
+        return discord.ui.Button(
+            label="Restore Normal Permissions",
+            style=discord.ButtonStyle.link,
+            url="https://example.com/normal",
+            row=row,
+        )
+
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "_restore_normal_permissions_button",
+        fake_restore,
+    )
+    view = setup_permission_repair_services.PermissionRepairResultView(
+        guild=guild,
+        include_activity_coverage=True,
+        result=result,
+    )
+    assert button(view, "Restore Normal Permissions").style == discord.ButtonStyle.link
 
 
 def test_permission_repair_result_reauthorize_matches_server_level_blockers(
