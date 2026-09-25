@@ -48,4 +48,3 @@ def test_normal_setup_writers_preserve_existing_bot_manage_permissions():
     assert "effective Manage Permissions (MANAGE_ROLES)" in DEFAULTS
     assert "_preserve_existing_bot_manage_permissions" in ASSISTANT
     assert 'expected.manage_roles = getattr(current, "manage_roles", None)' in ASSISTANT
-
