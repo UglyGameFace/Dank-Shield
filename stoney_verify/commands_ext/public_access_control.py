@@ -514,6 +514,7 @@ __all__ = [
     "install_public_access_control",
     "require_server_control",
     "scoped_interaction_is_server_control",
+    "scoped_interaction_is_ticket_staff",
     "scoped_is_server_control",
     "scoped_is_ticket_staff",
 ]
