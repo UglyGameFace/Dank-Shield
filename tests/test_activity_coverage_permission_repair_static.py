@@ -34,4 +34,3 @@ def test_activity_repair_uses_bot_only_self_unlock_instead_of_full_category_sync
     assert "channel.edit(" in SOURCE
     assert "sync_permissions=True" not in SOURCE
     assert "unrelated role/member permissions" in SOURCE
-
