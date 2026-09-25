@@ -126,22 +126,6 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
     return bool(default)
 
 
-def _message_identity_ids(message: Any) -> set[int]:
-    ids: set[int] = set()
-    for raw in (
-        getattr(getattr(message, "author", None), "id", None),
-        getattr(message, "application_id", None),
-        getattr(getattr(message, "application", None), "id", None),
-    ):
-        try:
-            value = int(raw or 0)
-        except Exception:
-            value = 0
-        if value > 0:
-            ids.add(value)
-    return ids
-
-
 def known_advertising_integration_name(message: Any) -> str:
     """Return an exact known advertising integration identity, never a display-name guess."""
 
