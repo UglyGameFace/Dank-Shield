@@ -44,17 +44,23 @@ class FakeTarget:
         return discord.PermissionOverwrite()
 
 
-def _member(*, guild_manage_roles: bool, administrator: bool = False):
-    return SimpleNamespace(
-        id=42,
-        guild_permissions=SimpleNamespace(
+class _MemberStub:
+    def __init__(self, *, guild_manage_roles: bool, administrator: bool = False) -> None:
+        self.id = 42
+        self.guild_permissions = SimpleNamespace(
             administrator=administrator,
             manage_roles=guild_manage_roles,
             manage_channels=False,
             view_channel=True,
             view_audit_log=True,
-        ),
-        top_role=SimpleNamespace(managed=True),
+        )
+        self.top_role = SimpleNamespace(managed=True)
+
+
+def _member(*, guild_manage_roles: bool, administrator: bool = False):
+    return _MemberStub(
+        guild_manage_roles=guild_manage_roles,
+        administrator=administrator,
     )
 
 
