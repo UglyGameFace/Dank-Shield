@@ -95,7 +95,11 @@ Implemented:
   requests;
 - HTTP request failure **or cancellation** discards the authorization;
 - webhook edit/delete wrappers use the same completion/cancellation lifecycle;
-- audit events can still consume the receipt while the request is in flight;
+- HTTP-derived `integration_delete` and reasonless `message_delete` side-effect
+  receipts now use the same in-flight/completed lifecycle instead of aging while
+  their parent request is still rate-limited;
+- direct/manual expected side-effect receipts retain their existing immediate TTL;
+- audit events can still consume either receipt type while the request is in flight;
 - added a regression test that advances monotonic time beyond the old 120-second
   TTL during a protected `PATCH /channels/{id}` and verifies the eventual
   `channel_update` consumes proof without self-ejection;
@@ -118,6 +122,8 @@ Required before completion:
 - verify no in-flight proof can be evicted by the soft cap;
 - verify successful completed receipts still expire;
 - verify failed/cancelled requests leave no stale proof;
+- verify HTTP-derived side-effect receipts cannot expire before their parent
+  request completes and still expire after completion;
 - verify unexplained self-attributed protected actions still reach durable
   quarantine/self-ejection.
 
