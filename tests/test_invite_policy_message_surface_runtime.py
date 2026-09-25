@@ -26,6 +26,24 @@ def _support_button():
     )
 
 
+def _text_display(content: str):
+    return SimpleNamespace(
+        content=content,
+        url=None,
+        children=[],
+        accessory=None,
+    )
+
+
+def _container(*children):
+    return SimpleNamespace(
+        content=None,
+        url=None,
+        children=list(children),
+        accessory=None,
+    )
+
+
 def _message(
     *,
     content: str,
@@ -109,6 +127,42 @@ def test_bot_custom_rich_embed_invite_remains_detectable() -> None:
             embeds=[_embed_with_remote_invite(embed_type="rich")],
         )
         assert policy.extract_invite_codes_from_message(message) == ["remotehelp"]
+    finally:
+        restore()
+
+
+def test_bot_components_v2_visible_invite_remains_detectable() -> None:
+    restore = _install_for_test()
+    try:
+        message = _message(
+            content="",
+            bot=True,
+            components=[
+                _container(
+                    _text_display("Bump result — join https://discord.gg/visiblev2"),
+                )
+            ],
+        )
+        assert policy.extract_invite_codes_from_message(message) == ["visiblev2"]
+    finally:
+        restore()
+
+
+def test_interaction_response_components_v2_visible_invite_is_detected() -> None:
+    restore = _install_for_test()
+    try:
+        message = _message(
+            content="",
+            bot=True,
+            components=[
+                _container(
+                    _text_display("Server card: https://discord.gg/appcardv2"),
+                    _support_button(),
+                )
+            ],
+            interaction_metadata=SimpleNamespace(id=999, user=SimpleNamespace(id=321)),
+        )
+        assert policy.extract_invite_codes_from_message(message) == ["appcardv2"]
     finally:
         restore()
 
