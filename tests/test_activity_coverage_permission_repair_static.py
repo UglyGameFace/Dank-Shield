@@ -42,3 +42,10 @@ def test_normal_setup_overwrites_do_not_manufacture_manage_permissions():
     assert "manage_roles=True" not in ASSISTANT
     assert "temporary_admin_active" in SOURCE
     assert "expected.manage_roles = True" in SOURCE
+
+def test_normal_setup_writers_preserve_existing_bot_manage_permissions():
+    assert 'expected.manage_roles = getattr(current, "manage_roles", None)' in DEFAULTS
+    assert "effective Manage Permissions (MANAGE_ROLES)" in DEFAULTS
+    assert "_preserve_existing_bot_manage_permissions" in ASSISTANT
+    assert 'expected.manage_roles = getattr(current, "manage_roles", None)' in ASSISTANT
+
