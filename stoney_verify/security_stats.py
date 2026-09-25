@@ -233,11 +233,46 @@ def _raw_stat_format_overrides(cfg: Any) -> Dict[str, Dict[str, str]]:
             continue
         separator = str(row.get("separator") if row.get("separator") is not None else ": ")
         separator = separator.replace("\r", " ").replace("\n", " ")[:16]
+        icon = _clean_format_piece(
+            row.get("icon"),
+            fallback="" if "icon" in row else metric.icon,
+            limit=24,
+        )
+        label = _clean_format_piece(
+            row.get("label"),
+            fallback="" if "label" in row else metric.label,
+            limit=72,
+        )
+        value_template = _normalize_value_template(row.get("value_template"))
+        raw_parts = row.get("custom_parts")
+        if isinstance(raw_parts, (list, tuple, set)):
+            custom_parts = tuple(
+                name
+                for name in ("icon", "label", "separator", "value_template")
+                if name in {str(item) for item in raw_parts}
+            )
+        else:
+            defaults = {
+                "icon": metric.icon,
+                "label": metric.label,
+                "separator": ": ",
+                "value_template": SECURITY_STATS_VALUE_TOKEN,
+            }
+            current = {
+                "icon": icon,
+                "label": label,
+                "separator": separator,
+                "value_template": value_template,
+            }
+            custom_parts = tuple(
+                name for name in defaults if current[name] != defaults[name]
+            )
         out[key] = {
-            "icon": _clean_format_piece(row.get("icon"), fallback=metric.icon, limit=24),
-            "label": _clean_format_piece(row.get("label"), fallback=metric.label, limit=72),
+            "icon": icon,
+            "label": label,
             "separator": separator,
-            "value_template": _normalize_value_template(row.get("value_template")),
+            "value_template": value_template,
+            "custom_parts": custom_parts,
         }
     return out
 
@@ -474,10 +509,11 @@ def _metric_format(preferences: Mapping[str, Any], key: str) -> Dict[str, str]:
         separator = str(row.get("separator") if row.get("separator") is not None else ": ")
         separator = separator.replace("\r", " ").replace("\n", " ")[:16]
         return {
-            "icon": _clean_format_piece(row.get("icon"), fallback=metric.icon, limit=24),
-            "label": _clean_format_piece(row.get("label"), fallback=metric.label, limit=72),
+            "icon": str(row.get("icon") if row.get("icon") is not None else metric.icon),
+            "label": str(row.get("label") if row.get("label") is not None else metric.label),
             "separator": separator,
             "value_template": _normalize_value_template(row.get("value_template")),
+            "custom_parts": tuple(row.get("custom_parts") or ()),
         }
 
     if key in labels:
@@ -491,6 +527,7 @@ def _metric_format(preferences: Mapping[str, Any], key: str) -> Dict[str, str]:
             "label": legacy,
             "separator": ": ",
             "value_template": SECURITY_STATS_VALUE_TOKEN,
+            "custom_parts": ("icon", "label"),
         }
 
     return {
@@ -498,6 +535,7 @@ def _metric_format(preferences: Mapping[str, Any], key: str) -> Dict[str, str]:
         "label": metric.label,
         "separator": ": ",
         "value_template": SECURITY_STATS_VALUE_TOKEN,
+        "custom_parts": (),
     }
 
 
@@ -525,14 +563,15 @@ def _metric_name_head(preferences: Mapping[str, Any], key: str) -> str:
 
     icon = row["icon"]
     label = _styled_metric_label(preferences, row["label"])
-    explicit_format = bool(_mapping(preferences.get("formats", {})).get(key))
-    if context.get("enabled") and not explicit_format:
+    custom_parts = set(row.get("custom_parts") or ())
+    icon_is_custom = "icon" in custom_parts
+    if context.get("enabled") and not icon_is_custom:
         icon_mode = str(_mapping(context.get("options", {})).get("icon_mode") or "replace_missing")
         if icon_mode == "clear":
             icon = ""
 
     design_separator = str(context.get("separator") or "") if context.get("enabled") else ""
-    if icon and design_separator and not explicit_format:
+    if icon and design_separator and not icon_is_custom:
         return f"{icon} {design_separator} {label}".strip()
     if icon:
         return f"{icon} {label}".strip()
@@ -557,7 +596,8 @@ def render_security_stat_name(
     row = _metric_format(preferences, key)
     context = _design_context(preferences)
     head = _metric_name_head(preferences, key)
-    explicit_format = bool(_mapping(preferences.get("formats", {})).get(key))
+    custom_parts = set(row.get("custom_parts") or ())
+    icon_is_custom = "icon" in custom_parts
     design_separator = str(context.get("separator") or "") if context.get("enabled") else ""
 
     rendered_value = row["value_template"].replace(SECURITY_STATS_VALUE_TOKEN, str(value), 1)
@@ -569,7 +609,7 @@ def render_security_stat_name(
 
     for cut in range(min(len(label), 72), 0, -1):
         short_label = label[:cut].rstrip()
-        if icon and design_separator and not explicit_format:
+        if icon and design_separator and not icon_is_custom:
             short_head = f"{icon} {design_separator} {short_label}".strip()
         elif icon:
             short_head = f"{icon} {short_label}".strip()
@@ -605,8 +645,8 @@ def validate_security_stat_format(
     preferences: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[bool, str, Dict[str, str]]:
     metric = security_stat_metric(key)
-    icon = _clean_format_piece(raw.get("icon"), fallback=metric.icon, limit=24)
-    label = _clean_format_piece(raw.get("label"), fallback=metric.label, limit=72)
+    icon = _clean_format_piece(raw.get("icon"), fallback="", limit=24)
+    label = _clean_format_piece(raw.get("label"), fallback="", limit=72)
     separator = str(raw.get("separator") if raw.get("separator") is not None else ": ")
     separator = separator.replace("\r", " ").replace("\n", " ")[:16]
     value_template = str(raw.get("value_template") or SECURITY_STATS_VALUE_TOKEN).strip()
@@ -615,12 +655,21 @@ def validate_security_stat_format(
     if len(value_template) > 32:
         return False, "Value format is too long. Keep it at 32 characters or fewer.", {}
 
+    defaults = {
+        "icon": metric.icon,
+        "label": metric.label,
+        "separator": ": ",
+        "value_template": SECURITY_STATS_VALUE_TOKEN,
+    }
     cleaned = {
         "icon": icon,
         "label": label,
         "separator": separator,
         "value_template": value_template,
     }
+    cleaned["custom_parts"] = tuple(
+        name for name in defaults if cleaned[name] != defaults[name]
+    )
     test_preferences = dict(preferences or {})
     formats = _mapping(test_preferences.get("formats", {}))
     formats[key] = cleaned
