@@ -70,4 +70,3 @@ def test_protection_center_close_removes_panel_instead_of_greying_it_out() -> No
     assert "embed=None" in block
     assert "view=None" in block
     assert "child.disabled = True" not in block
-
