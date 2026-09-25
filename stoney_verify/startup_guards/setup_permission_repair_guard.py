@@ -246,7 +246,6 @@ def _bot_post_only_overwrites(guild: discord.Guild) -> dict[Any, discord.Permiss
             read_message_history=True,
             embed_links=True,
             attach_files=True,
-            manage_roles=True,
             manage_messages=True,
         )
     }
