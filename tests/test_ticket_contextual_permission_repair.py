@@ -108,6 +108,31 @@ def test_ticket_health_view_exposes_manual_state_when_required_mapping_is_absent
     assert button.disabled is False
 
 
+def test_ticket_health_hides_repair_action_from_non_manager_staff() -> None:
+    guild = SimpleNamespace(
+        id=55,
+        get_channel=lambda _channel_id: None,
+        get_role=lambda _role_id: None,
+    )
+    cfg = SimpleNamespace(ticket_category_id=0, staff_role_id=0)
+
+    view = repair.TicketPanelHealthView(
+        owner_id=9,
+        guild=guild,
+        cfg=cfg,
+        can_repair=False,
+    )
+    button = next(
+        item
+        for item in view.children
+        if str(getattr(item, "custom_id", "") or "")
+        == "dank:tickets:contextual_repair:infrastructure:v1"
+    )
+
+    assert button.label == "Manager Required"
+    assert button.disabled is True
+
+
 def test_runtime_binding_replaces_only_ticket_ui_entry_points(monkeypatch) -> None:
     async def old_health(_interaction: Any) -> None:
         return None
