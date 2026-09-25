@@ -257,12 +257,15 @@ def _merge_activity_coverage_targets(
         for label, attr in permission_map.items():
             if label not in required:
                 continue
-            if getattr(expected, attr, None) is False:
+            if getattr(expected, attr, None) is False and not temporary_admin_active:
                 manual_actions.append(
                     f"{legacy._channel_label(entry['channel'])}: Dank Shield has an explicit "
                     f"deny for {label}. Use Specific Channel → Resolve Explicit Denies if that deny is accidental."
                 )
                 continue
+            # Emergency recovery was explicitly authorized to restore Dank
+            # Shield's own access. It may replace a conflicting bot-member deny,
+            # but never touches another role/member overwrite.
             setattr(expected, attr, True)
 
         # During explicit temporary-Administrator recovery, persist a bot-member
