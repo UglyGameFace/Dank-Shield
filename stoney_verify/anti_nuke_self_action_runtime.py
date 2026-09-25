@@ -85,6 +85,7 @@ class _ExpectedSideEffect:
     target_key: str
     source_action: str
     created_at: float
+    completed_at: Optional[float] = None
 
 
 _PENDING: dict[str, _Authorization] = {}
@@ -347,14 +348,21 @@ def _prune_pending(now: Optional[float] = None) -> None:
 def _prune_expected_side_effects(now: Optional[float] = None) -> None:
     current = time.monotonic() if now is None else float(now)
     for token, expected in list(_EXPECTED_SIDE_EFFECTS.items()):
-        if current - float(expected.created_at) > _SIDE_EFFECT_TTL_SECONDS:
+        if expected.completed_at is None:
+            continue
+        if current - float(expected.completed_at) > _SIDE_EFFECT_TTL_SECONDS:
             _EXPECTED_SIDE_EFFECTS.pop(token, None)
     if len(_EXPECTED_SIDE_EFFECTS) > _MAX_PENDING:
-        ordered = sorted(
-            _EXPECTED_SIDE_EFFECTS.values(),
-            key=lambda item: item.created_at,
+        completed = sorted(
+            (
+                expected
+                for expected in _EXPECTED_SIDE_EFFECTS.values()
+                if expected.completed_at is not None
+            ),
+            key=lambda item: float(item.completed_at or item.created_at),
         )
-        for expected in ordered[: len(_EXPECTED_SIDE_EFFECTS) - _MAX_PENDING]:
+        overflow = len(_EXPECTED_SIDE_EFFECTS) - _MAX_PENDING
+        for expected in completed[:overflow]:
             _EXPECTED_SIDE_EFFECTS.pop(expected.token, None)
 
 
@@ -365,6 +373,7 @@ def _expect_side_effect(
     related_bot_id: int = 0,
     target_key: str = "",
     source_action: str = "",
+    in_flight: bool = False,
 ) -> str:
     _prune_expected_side_effects()
     gid = _safe_int(guild_id, 0)
@@ -372,6 +381,7 @@ def _expect_side_effect(
     if gid <= 0 or not action:
         return ""
     token = secrets.token_hex(12)
+    created_at = time.monotonic()
     _EXPECTED_SIDE_EFFECTS[token] = _ExpectedSideEffect(
         token=token,
         action=action,
@@ -379,9 +389,21 @@ def _expect_side_effect(
         related_bot_id=max(0, _safe_int(related_bot_id, 0)),
         target_key=str(target_key or "").strip().lower(),
         source_action=str(source_action or "")[:80],
-        created_at=time.monotonic(),
+        created_at=created_at,
+        completed_at=None if in_flight else created_at,
     )
     return token
+
+
+def _complete_expected_side_effect(
+    token: str,
+    now: Optional[float] = None,
+) -> None:
+    expected = _EXPECTED_SIDE_EFFECTS.get(str(token or "").lower())
+    if expected is None:
+        return
+    expected.completed_at = time.monotonic() if now is None else float(now)
+    _prune_expected_side_effects(expected.completed_at)
 
 
 def _cancel_expected_side_effect(token: str) -> None:
@@ -704,6 +726,7 @@ def _patch_http(bot: discord.Client) -> bool:
                 "integration_delete",
                 related_bot_id=_target_id_from_key(spec.target_key),
                 source_action=source_action,
+                in_flight=True,
             )
             if token:
                 side_effects.append(token)
@@ -714,6 +737,7 @@ def _patch_http(bot: discord.Client) -> bool:
                 "message_delete",
                 target_key=spec.target_key,
                 source_action="local_message_delete",
+                in_flight=True,
             )
             if token:
                 side_effects.append(token)
@@ -726,6 +750,8 @@ def _patch_http(bot: discord.Client) -> bool:
                 _cancel_expected_side_effect(token)
             raise
         _complete(nonce)
+        for token in side_effects:
+            _complete_expected_side_effect(token)
         return result
 
     setattr(http, "request", guarded_request)
