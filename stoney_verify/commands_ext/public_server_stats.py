@@ -495,6 +495,14 @@ class ServerStatsView(discord.ui.View):
                 child.label = f"Numbers: {str(self.prefs['number_style']).title()}"
             elif custom_id == "dank_server_stats:placement":
                 child.label = f"Placement: {str(self.prefs['placement']).title()}"
+            elif custom_id == "dank_server_stats:design_sync":
+                enabled = bool(self.prefs["inherit_design"])
+                child.label = f"Design Sync: {'On' if enabled else 'Off'}"
+                child.style = (
+                    discord.ButtonStyle.success
+                    if enabled
+                    else discord.ButtonStyle.secondary
+                )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) == self.owner_id:
@@ -561,6 +569,41 @@ class ServerStatsView(discord.ui.View):
             interaction,
             content="✅ Server Stats refreshed and repaired." if changed else "ℹ️ Server Stats did not need a refresh.",
         )
+
+    @discord.ui.button(
+        label="Design Sync",
+        emoji="🎨",
+        style=discord.ButtonStyle.secondary,
+        row=0,
+        custom_id="dank_server_stats:design_sync",
+    )
+    async def design_sync(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message(
+                "❌ Use this inside a server.",
+                ephemeral=True,
+            )
+
+        await interaction.response.defer()
+        target = not bool(self.prefs["inherit_design"])
+        await _save_preferences(
+            int(guild.id),
+            {SECURITY_STATS_INHERIT_DESIGN_KEY: target},
+        )
+        cfg = await get_guild_config(int(guild.id), refresh=True)
+        note = (
+            "✅ Server Stats now inherits the saved Server Design visual language."
+            if target
+            else "✅ Server Stats Design Sync is off; its saved Stats formatting remains independent."
+        )
+        if _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False):
+            _ok, applied = await ensure_security_stats_display(guild)
+            note = f"{applied}\nDesign Sync: **{'On' if target else 'Off'}**."
+        await _render_center(interaction, content=note)
 
     @discord.ui.button(
         label="Category Name",
@@ -649,6 +692,7 @@ class ServerStatsView(discord.ui.View):
                 SECURITY_STATS_CATEGORY_NAME_KEY: SECURITY_STATS_CATEGORY_NAME,
                 SECURITY_STATS_VISIBLE_KEYS_KEY: list(DEFAULT_SECURITY_STATS_VISIBLE_KEYS),
                 SECURITY_STATS_CUSTOM_LABELS_KEY: {},
+                SECURITY_STATS_FORMAT_OVERRIDES_KEY: {},
                 SECURITY_STATS_NUMBER_STYLE_KEY: "compact",
                 SECURITY_STATS_PLACEMENT_KEY: "top",
             },
