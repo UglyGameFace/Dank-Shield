@@ -165,7 +165,8 @@ def test_apply_route_clears_component_defer_by_editing_original_card() -> None:
     body = _owner_source(SERVICE, "apply_permission_repair")
     owner = _owners(SERVICE)["apply_permission_repair"]
 
-    assert "await solid._safe_defer_update(interaction)" in body
+    assert "if not await _claim_repair_interaction(" in body
+    assert 'action_name="access_repair_apply"' in body
     assert "await solid._edit_or_followup(" in body
     assert "interaction.followup.send" not in body
 
