@@ -1148,17 +1148,33 @@ async def _reconcile_basic_verify_panels_after_ready(bot: Any) -> None:
             target = current_rows if proven_current else legacy_rows
             target.append((int(gid), cfg))
 
+        async def reconcile_row(
+            gid: int,
+            cfg: Mapping[str, Any],
+        ) -> str:
+            guild = guilds[gid]
+            try:
+                return await _reconcile_one_basic_verify_panel(
+                    bot,
+                    guild,
+                    cfg,
+                    allow_legacy_rest=True,
+                )
+            except Exception as exc:
+                try:
+                    print(
+                        "⚠️ basic_verify panel reconciliation isolated failure "
+                        f"guild={gid} error={type(exc).__name__}: {exc}"
+                    )
+                except Exception:
+                    pass
+                return f"row_error:{type(exc).__name__}"
+
         # Exact current-app identities bind without Discord REST. Do those first
         # so already-migrated guilds recover immediately even when many legacy
         # guilds still need paced Discord requests.
         for gid, cfg in current_rows:
-            guild = guilds[gid]
-            result = await _reconcile_one_basic_verify_panel(
-                bot,
-                guild,
-                cfg,
-                allow_legacy_rest=True,
-            )
+            result = await reconcile_row(gid, cfg)
             counts[result] = counts.get(result, 0) + 1
             await asyncio.sleep(0)
 
@@ -1169,13 +1185,7 @@ async def _reconcile_basic_verify_panels_after_ready(bot: Any) -> None:
         for start in range(0, len(legacy_rows), legacy_wave_size):
             wave = legacy_rows[start : start + legacy_wave_size]
             for gid, cfg in wave:
-                guild = guilds[gid]
-                result = await _reconcile_one_basic_verify_panel(
-                    bot,
-                    guild,
-                    cfg,
-                    allow_legacy_rest=True,
-                )
+                result = await reconcile_row(gid, cfg)
                 counts[result] = counts.get(result, 0) + 1
             await asyncio.sleep(0)
 
