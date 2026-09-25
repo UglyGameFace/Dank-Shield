@@ -2,165 +2,174 @@
 
 ## Active task / desired outcome
 
-**P0-MEMBER-LIFECYCLE-LOGGING-005 — restore detailed Modlog member exits and reliable operational join/leave logging**
+**P0-ACCESS-REPAIR-SELF-LOCKOUT-006 — make Fix Access recover bot permission drift across categories/channels without rewriting unrelated access**
 
-Desired outcome: keep one canonical operational join/leave router, restore useful
-member lifecycle detail, keep staff Modlog detail separate, make the real
-operational route repairable/diagnosable, and preserve the access-repair work
-already merged through PRs #318 and #317.
+Desired outcome: Diagnostics, Setup repair, and Specific Channel repair must safely
+restore Dank Shield access when a channel/category has lost the bot's own
+Manage Permissions authority. Unsynced child channels should reuse the known-good
+Dank Shield permissions from their parent category where safe, while custom
+member/staff/channel visibility remains untouched.
 
 ## Scope / single active task lock
 
-Only member lifecycle logging is active:
+Only the access-repair self-lockout path is active:
 
-- canonical operational join/leave delivery;
-- staff Modlog detail for ordinary member departures;
-- Member Logs route configuration, contextual access repair, and runtime health;
-- the static/runtime contracts needed to validate those paths.
+- Diagnose why category permissions can be correct while an unsynced child is
+  reported as manually blocked.
+- Repair Dank Shield's own overwrite without copying unrelated role/member
+  overwrites.
+- Reuse safe parent-category Dank Shield allows for unsynced children.
+- Apply the same rule to Diagnostics bulk repair and Specific Channel repair.
+- Keep explicit bot-member Manage Permissions denies fail-closed.
+- Preserve existing setup permission baselines so later repair passes do not
+  remove the recovered authority.
+- Add regression coverage in existing test modules rather than creating another
+  one-off test file.
 
-Do not broaden into verification, tickets, AntiNuke, general setup redesign, or
-other Modlog event families unless tracing proves they are directly required.
+Do not broaden into verification interaction failures, ticket redesign, AntiNuke,
+or general test-suite consolidation unless required by this root cause.
 
 ## Status
 
-**IMPLEMENTATION COMPLETE — #315 rebuilt on current main after merged #318/#317; final exact-head validation pending**
+**IMPLEMENTATION IN PROGRESS — root cause confirmed; bot-only bootstrap implemented; validation pending**
 
-Branch: `fix/member-lifecycle-log-detail-runtime-20260924`
+Branch: `fix/access-repair-self-lockout-bootstrap-20260924`
 
-Current base: `main` at `0a19334af1ae26abcb79f4de66ce78f6c529cf2f` after merged PR #317.
+Base: current `main` after merged PR #315
+(`c1687c99acc210feda5801e7f51b51781b8cb276`).
 
 ## Findings / root cause
 
-1. The retired historical lifecycle sender contained richer cards, but reviving
-   it would create duplicate join/remove listeners. The surviving canonical
-   router had not inherited enough of that useful detail.
-2. The ordinary voluntary-leave staff Modlog path had regressed to a minimal
-   user-only record even though the canonical member-context builder still
-   existed.
-3. Member Logs contextual repair omitted the actual operational join/leave
-   channel, so the route that records lifecycle events could remain broken while
-   the repair UI looked elsewhere.
-4. Operational lifecycle events were suppressed when Welcome/Exit Card Studio
-   posted to the same channel. The card route and audit-style event route are
-   separate products and must not replace one another.
-5. Choosing an operational join/leave route silently rewrote
-   `exit_card_channel_id`, crossing ownership into Exit Card Studio.
-6. Startup diagnostics resolved the route but did not prove View Channel,
-   Send Messages, and Embed Links readiness.
-7. The previous #315 head passed compile and the full pytest suite but failed one
-   standalone static contract because the test looked for hardcoded
-   `member join event delivered` / `member leave event delivered` strings
-   while the runtime intentionally logs both through the generic
-   `member {event_name} event delivered` helper.
+1. Discord channels can be unsynced from their parent category. The screenshot
+   case has a correct Dank Shield overwrite on the category while the child
+   channel has no equivalent Dank Shield entry.
+2. Activity repair previously started only from
+   `channel.overwrites_for(Dank Shield)` and added View Channel / Read Message
+   History / Manage Threads. It did not reuse the parent category's bot
+   permissions.
+3. Before attempting any write, both Setup/Diagnostics repair and Specific
+   Channel repair called `permission_overwrite_edit_blocker`. If effective
+   Manage Roles/Manage Permissions was already missing in the child, the repair
+   stopped and told the owner to repair Discord manually.
+4. That creates a circular failure: the repair refuses to repair the permission
+   that is preventing its normal `set_permissions` write.
+5. discord.py 2.7.1 documents `set_permissions` as requiring Manage Roles,
+   while channel `edit(overwrites=...)` is a Manage Channels operation. When
+   Manage Channels is still effective, Dank Shield can safely replace only its
+   own member overwrite while preserving the rest of the channel permission map.
+6. Blind `sync_permissions=True` is not acceptable here because Discord sync
+   makes the entire child permission set match the category and could overwrite
+   intentional custom access for members or roles.
 
 ## Execution path
 
-Join:
-`Discord on_member_join`
-→ canonical lifecycle router
-→ Welcome Card Studio delivery
-→ independently resolve configured operational join/leave log
-→ public-safe lifecycle embed
-→ operational event send.
+Diagnostics activity repair:
 
-Leave:
-`Discord on_member_remove`
-→ canonical lifecycle router sends Exit Card Studio + independent operational
-  lifecycle event
-→ existing `events.on_member_remove` separately checks kick/ban attribution
-→ only ordinary leave builds the detailed staff Modlog record.
+`/dank diagnostics`
+→ Repair Bot Access
+→ authoritative activity-scope gaps
+→ build exact affected channel targets
+→ detect Manage Permissions self-lockout
+→ plan bot-only overwrite bootstrap
+→ preserve every existing unrelated overwrite
+→ merge safe explicit allows from parent category's Dank Shield overwrite
+→ restore Dank Shield Manage Permissions
+→ apply required activity access
+→ rerun Diagnostics for coverage confirmation.
 
-Member Logs repair:
-`/dank member-logs`
-→ exact saved routes
-→ shared contextual permission-repair core
-→ post-repair lifecycle runtime-health screen.
+Specific Channel repair:
+
+Fix Access → Specific Channel
+→ audit target
+→ if direct `set_permissions` is blocked but safe bot-only bootstrap is
+  available, mark target auto-repairable instead of manual-only
+→ write the bot-only overwrite through channel edit
+→ preserve undo snapshot and normal repair history.
 
 ## Changes
 
-- Keep one canonical operational join/leave sender; retired legacy sender stays
-  unreachable from command profiles.
-- Operational join/leave embeds include identity, account creation/age, profile
-  state, member count, avatar, and membership duration on leave.
-- Add canonical detailed voluntary-leave Modlog embed with account/membership
-  history, roles at exit, and existing staff member context.
-- Keep kick/ban attribution paths unchanged and only use the ordinary-leave
-  builder after those checks fail to identify a moderation exit.
-- Include the exact operational join/leave route in Member Logs contextual
-  permission repair.
-- Stop operational route selection from rewriting Exit Card Studio's route.
-- Always emit the operational event even when the member-facing card uses the
-  same channel.
-- Expose route writability, requested Server Members intent, and canonical
-  join/leave listener registration in Member Lifecycle Routing.
-- Add the same operational route writability to startup route diagnostics.
-- Correct the centralization static test to validate the generic success logger
-  that actually owns both join and leave delivery.
-- Rebuild #315 directly on current `main`; none of its nine lifecycle code/test
-  files overlapped the #318/#317 code changes. Only this task record conflicted.
+- Added a canonical `BotOverwriteBootstrapPlan` in
+  `permission_repair_core.py`.
+- Added bot-only bootstrap planning that:
+  - requires server-level Manage Roles;
+  - requires effective Manage Channels on the target;
+  - refuses to clear an explicit bot-member Manage Roles deny;
+  - preserves every unrelated role/member overwrite;
+  - merges only explicit parent-category allows for Dank Shield;
+  - restores Dank Shield's own Manage Roles/Manage Permissions bit.
+- Specific Channel audits now treat a safely bootstrappable self-lockout as
+  repairable instead of disabling the repair button.
+- Specific Channel apply uses the safe bulk channel edit when ordinary
+  `set_permissions` is circularly blocked.
+- Setup/Diagnostics repair uses the same canonical bootstrap instead of emitting
+  a manual-action result immediately.
+- Activity-repair wording now says the bot overwrite may be safely created, not
+  only expanded.
+- Managed setup permission baselines now retain Manage Roles for Dank Shield so
+  a later repair pass does not strip the recovered repair authority.
+- Full-control target repair now includes Manage Roles.
+- Regression tests were added to the existing
+  `tests/test_access_repair_runtime_consolidation.py`; no new test file was
+  created.
 
 ## Validation required / results
 
-Previous head evidence:
+Pending exact-head validation:
 
-- Python compile: passed;
-- full `pytest tests/`: passed;
-- claim-first ticket security: passed;
-- managed-category SQL smoke: passed;
-- Application Command Size Diagnostics: passed;
-- Dank Design Regression CI: passed;
-- Profile Runtime Diagnostics: passed;
-- Ticket Owner Emergency Override: passed;
-- standalone tools: one failure only, now root-caused and corrected in
-  `tools/test_join_leave_log_centralized.py`.
-
-Final exact-head validation still required:
-
-- full unit suite;
+- Python compile for changed modules;
+- focused access-repair tests;
+- full `pytest tests/` suite;
 - standalone tool checks;
-- Python compile and diff whitespace;
 - repository audits;
-- all workflow groups;
-- currentness/mergeability/review state;
-- final diff hygiene and no conflict artifacts.
+- GitHub workflow groups;
+- final diff whitespace/hygiene;
+- verify no unrelated permission overwrite is mutated by bootstrap;
+- verify explicit bot-member Manage Roles deny stays fail-closed;
+- verify branch is current/mergeable before merge.
 
 ## Cleanup / conflicts
 
-- Rebased/squashed the lifecycle work onto current `main` instead of merging
-  22 stale commits through the newer access-repair history.
-- Preserved all current #318/#317 access-repair code.
-- No second operational lifecycle sender or listener owner is introduced.
-- Welcome Card Studio, Exit Card Studio, operational lifecycle logging, and
-  staff Modlog retain separate ownership.
-- No temporary/debug code is intentionally retained.
+- PR #315 is confirmed merged and all six workflow groups on its head passed, so
+  the previous lifecycle task is closed before this task began.
+- No open pull request existed when this branch was created.
+- No full category sync is introduced.
+- No second permission-repair owner is introduced; both UI paths use the shared
+  core bootstrap rule.
+- Existing unrelated server/channel overwrites remain authoritative.
 
 ## Blockers / risks
 
-No implementation blocker is known. Final readiness depends on the new exact-head
-CI and GitHub currentness checks.
+- The safe bootstrap depends on effective Manage Channels still being available
+  on the target. If both Manage Permissions and Manage Channels are denied, the
+  bot cannot safely mutate that target and manual Discord intervention remains
+  required.
+- Live Discord propagation still needs production acceptance after deploy.
 
 ## Backlog
 
-No additional open PR is being worked while #315 is active.
+- Test-suite organization/consolidation remains a separate backlog item. The
+  repository currently has hundreds of valid regression files, but reorganizing
+  them must not be mixed into this production permission repair.
+- Verification/ticket interaction failures remain separate unless validation
+  proves this access root cause directly controls them.
 
 ## Next step
 
-Run exact-head CI on the rebuilt branch. If every gate passes and the PR remains
-current/mergeable with no unresolved review state, mark ready and merge with
-expected-head protection.
+Run focused and full validation on the exact branch head, inspect failures for
+real regressions, correct only same-root-cause issues, then open/merge the PR
+only after all applicable gates pass.
 
 ## Production acceptance after deploy
 
-1. A normal join produces the configured member-facing join card and an
-   independent operational join event.
-2. A normal leave produces the configured member-facing exit card, an
-   independent operational leave event, and a detailed staff Modlog record.
-3. Kick/ban exits retain their existing attributed moderation records rather
-   than being mislabeled as ordinary voluntary leaves.
-4. Operational logging still occurs when the card and operational routes point
-   to the same channel.
-5. `/dank member-logs` can repair the exact operational join/leave route and
-   does not retarget Exit Card Studio.
-6. Member Lifecycle Routing reports route resolution/writability, Server
-   Members intent request state, and canonical listener registration.
-7. Startup logs include the operational route's writable/not-writable health.
+1. A category with a correct Dank Shield overwrite and an unsynced child missing
+   that bot overwrite is repaired without the owner pressing Discord Sync Now.
+2. The child receives the required Dank Shield permissions, including repair
+   authority, while unrelated role/member overwrites remain byte-for-byte
+   equivalent in meaning.
+3. Categories or standalone channels with the same self-lockout are repaired
+   through the bot-only path when Manage Channels remains available.
+4. Explicit bot-member Manage Permissions denies are not silently removed.
+5. Specific Channel and Diagnostics report the same repairability decision.
+6. Re-running repair does not remove the restored Manage Permissions authority.
+7. Targets where Discord truly blocks both repair routes still show a precise
+   manual action instead of pretending they were fixed.
