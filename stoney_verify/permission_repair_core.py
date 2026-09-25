@@ -94,7 +94,6 @@ _FULL_CHANNEL_PERMISSIONS = (
     "attach_files",
     "read_message_history",
     "manage_channels",
-    "manage_roles",
     "manage_messages",
     "manage_threads",
     "move_members",
@@ -189,7 +188,7 @@ def _required_permissions(
         voice_types += (stage,)
 
     if isinstance(target, voice_types):
-        names = ["view_channel", "manage_channels", "manage_roles", "move_members"] if clean_mode == "full" else ["view_channel"]
+        names = ["view_channel", "manage_channels", "move_members"] if clean_mode == "full" else ["view_channel"]
         if clean_feature in {"moderation", "general"}:
             names.append("move_members")
     elif isinstance(target, discord.CategoryChannel):
@@ -601,7 +600,18 @@ def audit_target(
         return report
 
     try:
-        effective = target.permissions_for(me)
+        from stoney_verify.services.setup_permission_policy import bot_channel_permissions
+
+        temporary_admin_active = bool(
+            getattr(getattr(me, "guild_permissions", None), "administrator", False)
+        )
+        effective = bot_channel_permissions(
+            target,
+            me,
+            ignore_administrator=temporary_admin_active,
+        )
+        if effective is None:
+            raise RuntimeError("permission resolution unavailable")
     except Exception:
         report.blockers.append("Dank Shield could not evaluate effective permissions for this target.")
         return report
@@ -844,17 +854,28 @@ async def apply_target_repair(
                     f"{_target_label(current_target)} — preserved explicit deny: {', '.join(preserved)}"
                 )
 
-            # If repair authority is currently effective, persist that authority
-            # on Dank Shield's own overwrite so later role/category drift is less
-            # likely to create another circular self-lockout.
+            # Temporary Administrator recovery is the explicit exception where
+            # Fix Access repairs its own Manage Permissions lockout. The normal
+            # public path never manufactures this channel-level allow merely
+            # because server-level Manage Roles is present.
             try:
-                effective = current_target.permissions_for(me)
-                if (
-                    bool(getattr(effective, "manage_roles", False))
-                    and getattr(new_overwrite, "manage_roles", None) is None
-                ):
-                    new_overwrite.manage_roles = True
-                    changed.append("manage_roles")
+                temporary_admin_active = bool(
+                    getattr(getattr(me, "guild_permissions", None), "administrator", False)
+                )
+                if temporary_admin_active:
+                    from stoney_verify.services.setup_permission_policy import (
+                        permissions_without_administrator,
+                    )
+
+                    underlying = permissions_without_administrator(
+                        current_target,
+                        me,
+                    )
+                    if underlying is not None and not bool(
+                        getattr(underlying, "manage_roles", False)
+                    ):
+                        new_overwrite.manage_roles = True
+                        changed.append("manage_roles")
             except Exception:
                 pass
 
