@@ -1146,8 +1146,8 @@ async def scan_channel_invites(
                 decision = await decide_invite_message(
                     message,
                     source=source,
-                    allow_contentless_trusted_advertiser=bool(
-                        allow_contentless_trusted_advertisers
+                    allow_contentless_protected_poster=bool(
+                        allow_contentless_protected_posters
                     ),
                 )
                 if not decision.should_delete:
