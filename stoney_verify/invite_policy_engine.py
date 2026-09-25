@@ -219,13 +219,31 @@ def clean_invite_text(value: Any) -> str:
 
 
 def _component_text(component: Any) -> list[str]:
+    """Collect sender-authored component text/URLs, including Components V2."""
+
     parts: list[str] = []
     try:
-        # Only scan actual component URLs. Labels/custom_ids are UI text and
-        # can accidentally glue words to invite codes when messages are compacted.
+        # Components V2 Text Display components carry visible message text in
+        # `content` because V2 messages do not use the legacy Message.content
+        # field. Treat that visible text as direct invite evidence.
+        value = getattr(component, "content", None)
+        if value:
+            parts.append(str(value))
+    except Exception:
+        pass
+    try:
+        # Ordinary bot/webhook messages may intentionally publish a link button.
+        # Interaction-response filtering is stricter in
+        # invite_policy_message_surface_runtime and does not consume button URLs.
         value = getattr(component, "url", None)
         if value:
             parts.append(str(value))
+    except Exception:
+        pass
+    try:
+        accessory = getattr(component, "accessory", None)
+        if accessory is not None:
+            parts.extend(_component_text(accessory))
     except Exception:
         pass
     try:
