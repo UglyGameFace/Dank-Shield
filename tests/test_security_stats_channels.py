@@ -498,6 +498,9 @@ def test_real_discord_display_creates_visible_locked_voice_channels(monkeypatch)
     assert overwrite.view_channel is True
     assert overwrite.connect is False
 
+    assert writes[0] == {
+        security_stats.SECURITY_STATS_INHERIT_DESIGN_KEY: True
+    }
     saved = writes[-1]
     assert saved[security_stats.SECURITY_STATS_ENABLED_KEY] is True
     assert saved[security_stats.SECURITY_STATS_CATEGORY_ID_KEY] == str(category.id)
@@ -1095,6 +1098,53 @@ def test_disable_without_removal_preserves_tracking_ids(monkeypatch) -> None:
     assert writes[-1][security_stats.SECURITY_STATS_CATEGORY_ID_KEY] == str(category.id)
     assert writes[-1][security_stats.SECURITY_STATS_CHANNEL_IDS_KEY] == {"members": "911"}
 
+
+
+def test_saved_server_design_requests_coalesced_stats_refresh_only_when_synced(
+    monkeypatch,
+) -> None:
+    security_stats._ACTIVE_DISPLAY_GUILDS.discard(606)
+    scheduled: list[int] = []
+    guild = SimpleNamespace(id=606)
+
+    async def synced_config(guild_id: int, refresh: bool = False):
+        assert guild_id == 606
+        assert refresh is True
+        return {
+            security_stats.SECURITY_STATS_ENABLED_KEY: True,
+            security_stats.SECURITY_STATS_INHERIT_DESIGN_KEY: True,
+        }
+
+    monkeypatch.setattr(security_stats, "get_guild_config", synced_config)
+    monkeypatch.setattr(
+        security_stats.bot,
+        "get_guild",
+        lambda guild_id: guild if int(guild_id) == 606 else None,
+    )
+    monkeypatch.setattr(
+        security_stats,
+        "_schedule_security_stats_refresh",
+        lambda guild_id: scheduled.append(int(guild_id)),
+    )
+
+    assert asyncio.run(
+        security_stats.request_security_stats_design_refresh(606)
+    ) is True
+    assert scheduled == [606]
+    assert 606 in security_stats._ACTIVE_DISPLAY_GUILDS
+
+    async def unsynced_config(guild_id: int, refresh: bool = False):
+        return {
+            security_stats.SECURITY_STATS_ENABLED_KEY: True,
+            security_stats.SECURITY_STATS_INHERIT_DESIGN_KEY: False,
+        }
+
+    monkeypatch.setattr(security_stats, "get_guild_config", unsynced_config)
+    scheduled.clear()
+    assert asyncio.run(
+        security_stats.request_security_stats_design_refresh(606)
+    ) is False
+    assert scheduled == []
 
 
 def test_enabled_security_event_schedules_coalesced_display_refresh(monkeypatch) -> None:
