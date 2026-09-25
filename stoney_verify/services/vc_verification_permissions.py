@@ -165,6 +165,22 @@ async def reconcile_vc_verification_channel(
         label = _target_label(target)
         try:
             current = channel.overwrites_for(target)
+            try:
+                me = getattr(guild, "me", None)
+                is_bot_target = bool(
+                    me is not None
+                    and int(getattr(target, "id", 0) or 0)
+                    == int(getattr(me, "id", 0) or 0)
+                )
+            except Exception:
+                is_bot_target = False
+            if is_bot_target:
+                # Voice-room reconciliation owns voice/session access, not the
+                # powerful Manage Permissions bit. Preserve the current explicit
+                # bot value and leave emergency recovery to Fix Access.
+                overwrite = discord.PermissionOverwrite.from_pair(*overwrite.pair())
+                overwrite.manage_roles = getattr(current, "manage_roles", None)
+
             if current.pair() == overwrite.pair():
                 unchanged.append(label)
                 continue
