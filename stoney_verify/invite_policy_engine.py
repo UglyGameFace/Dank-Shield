@@ -477,6 +477,34 @@ def _protected_target_match(message: discord.Message, settings: Mapping[str, Any
     return bool(author_match or channel_match)
 
 
+def _contentless_protected_target_match(
+    message: discord.Message,
+    settings: Mapping[str, Any],
+) -> bool:
+    """Use only explicit bot IDs or channel IDs for contentless deletion.
+
+    The all-bots flag by itself is intentionally insufficient here. Without
+    message content, that flag would otherwise turn a missing privileged intent
+    into permission to delete arbitrary bot messages server-wide.
+    """
+
+    author_id = str(getattr(getattr(message, "author", None), "id", "") or "")
+    application_id = str(getattr(message, "application_id", "") or "")
+    application = getattr(message, "application", None)
+    nested_application_id = str(getattr(application, "id", "") or "")
+    wanted_bots = set(_registry_setting_ids(settings, INVITE_TARGET_BOT_IDS_KEY))
+    wanted_channels = set(_registry_setting_ids(settings, INVITE_TARGET_CHANNEL_IDS_KEY))
+    identity_match = bool(
+        {
+            value
+            for value in (author_id, application_id, nested_application_id)
+            if value
+        }
+        & wanted_bots
+    )
+    channel_match = bool(wanted_channels and (_channel_ids(message) & wanted_channels))
+    return bool(identity_match or channel_match)
+
 def _protected_poster_rule_enabled(settings: Mapping[str, Any]) -> bool:
     # Explicit gate: target IDs do not override Invite Shield OFF unless this
     # registered setting resolves true through its canonical/legacy aliases.
@@ -761,13 +789,17 @@ async def decide_invite_message(
     if contentless_ad_candidate:
         decision.content_unavailable = True
         decision.trusted_advertiser = advertiser_name
-        if protected_active:
+        contentless_targeted = bool(
+            protected_rule_enabled
+            and _contentless_protected_target_match(message, settings)
+        )
+        if contentless_targeted:
             decision.action = "delete"
             decision.feature_owner = "Protected Bot/Channel Invite Rule"
             decision.rule_id = "protected_contentless_known_advertiser"
             decision.reason = (
                 f"{advertiser_name} posted a non-interaction application message, Discord supplied no "
-                "message-content fields, and this bot/channel is explicitly protected."
+                "message-content fields, and this exact bot/channel is explicitly protected."
             )
             decision.fix_hint = (
                 "Use the protected bot/channel controls to change this behavior. "
