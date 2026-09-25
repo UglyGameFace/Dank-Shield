@@ -141,10 +141,13 @@ def _message_search_text(message: discord.Message) -> str:
 
     try:
         def walk(component: Any) -> None:
-            for attr in ("url", "label", "custom_id"):
+            for attr in ("content", "url", "label", "custom_id"):
                 raw = getattr(component, attr, None)
                 if raw:
                     parts.append(str(raw))
+            accessory = getattr(component, "accessory", None)
+            if accessory is not None:
+                walk(accessory)
             for child in list(getattr(component, "children", []) or []):
                 walk(child)
 
@@ -182,7 +185,19 @@ def is_trusted_bump_success_receipt(message: discord.Message) -> bool:
         text = _message_search_text(message).casefold()
         compact = re.sub(r"\s+", " ", text).strip()
 
-        trusted_sender = any(token in author_text for token in ("onebump", "discadus"))
+        author_id = int(getattr(author, "id", 0) or 0)
+        application_id = int(getattr(message, "application_id", 0) or 0)
+        application = getattr(message, "application", None)
+        nested_application_id = int(getattr(application, "id", 0) or 0)
+        exact_onebump = 1028956609382199346 in {
+            author_id,
+            application_id,
+            nested_application_id,
+        }
+        # Keep Discadus' existing receipt compatibility, but OneBump is bound to
+        # its public application identity so a renamed/spoofed bot cannot inherit
+        # the trusted receipt behavior.
+        trusted_sender = bool(exact_onebump or "discadus" in author_text)
         if not trusted_sender:
             return False
 
