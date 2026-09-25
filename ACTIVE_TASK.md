@@ -31,13 +31,13 @@ AntiNuke redesign, or test-suite consolidation.
 
 ## Status
 
-**IMPLEMENTATION IN PROGRESS — official Discord docs verified; branch not ready to merge; exact-head validation pending**
+**IMPLEMENTATION COMPLETE FOR REPOSITORY VALIDATION — exact-head CI running; live Discord OAuth acceptance remains required**
 
 Branch: `fix/access-repair-emergency-recovery-20260925`
 
-Base: `main` after merged PR #319.
+Draft PR: **#321 — Fix Discord access repair self-lockout recovery**
 
-No PR has been opened for this branch yet.
+Base: current `main` after merged PR #319. Branch was confirmed current with `main` before final validation.
 
 ## Authoritative Discord documentation findings
 
@@ -143,26 +143,44 @@ Therefore:
   the fallback remains owner/admin intervention in Discord, because the API
   provides no documented self-bypass for an already-locked target.
 
-## Validation required
+## Validation required / current evidence
 
-Before any merge:
+A superseded PR-head run reached **1997 passed / 3 failed / 9 warnings**. The
+three failures were regression-test expectation/fixture issues found while the
+implementation was still moving:
 
-- compile all changed modules;
-- focused access-repair tests;
-- focused AntiNuke managed-role tests;
-- full `pytest tests/`;
-- existing standalone audits;
-- public invite audit must still prove normal installation excludes
-  Administrator;
-- exact-head GitHub workflow groups all green;
-- diff check for unrelated changes/conflict artifacts;
-- verify no normal setup baseline contains `manage_roles=True` channel
-  overwrites;
-- verify emergency recovery changes only Dank Shield's own overwrite and
-  preserves unrelated role/member overwrites;
-- verify normal repair never clears an existing explicit bot Manage Permissions
-  allow/deny;
-- verify Administrator cleanup warning is visible after emergency repair.
+- an obsolete #319 assertion still expected normal parent seeding to copy
+  `manage_roles=True`; the documented model now correctly expects it to remain
+  unchanged during normal repair;
+- one recovery-label assertion expected a display name while the canonical UI
+  helper returns a channel mention;
+- one activity-scope test omitted the required `manual_actions` accumulator.
+
+All three test issues were corrected before the final-head run.
+
+Before any merge, the **final exact head** must still prove:
+
+- committed diff whitespace passes;
+- all changed Python modules compile;
+- focused access-repair tests pass;
+- focused AntiNuke managed-role tests pass;
+- full `pytest tests/` passes;
+- all standalone repository audits pass;
+- public invite audit proves normal installation still excludes Administrator;
+- all GitHub workflow groups are green;
+- no normal setup baseline contains `manage_roles=True` channel overwrites;
+- normal setup/repair preserves an existing explicit Dank Shield Manage
+  Permissions allow or deny instead of silently changing it;
+- temporary-Administrator recovery may resolve only Dank Shield's own required
+  access denies and does not mutate unrelated role/member overwrites;
+- temporary Administrator remains visible in the UI until normal permissions
+  are restored;
+- final diff contains no unrelated, generated, secret-bearing, debug, or
+  conflict-artifact changes.
+
+Repository CI cannot prove Discord's undocumented behavior for reauthorizing an
+already-installed bot. That remains the production acceptance gate after the
+repository head is green.
 
 ## Cleanup / conflicts
 
@@ -180,8 +198,27 @@ Before any merge:
 
 ## Next step
 
-Finish tests against the documented permission model, run exact-head CI, inspect
-all failures, and open a draft PR only after the branch is internally coherent.
-The emergency authorization portion remains explicitly pending live Discord
-acceptance because Discord's docs do not specify the existing-install managed
-role update behavior.
+Freeze runtime changes and run the full exact-head PR #321 validation suite.
+Fix only failures that are part of this access-repair root cause. If every
+repository gate passes, keep the PR draft until the live Discord acceptance
+sequence proves whether reauthorizing the already-installed bot actually
+updates its managed integration role as requested.
+
+Production acceptance sequence:
+
+1. Deploy the exact validated PR head.
+2. Open Diagnostics → Repair Bot Access on the known affected server.
+3. Confirm already self-locked targets show **Temporary Admin Recovery** rather
+   than a fake safe-fix button.
+4. Authorize the guild-pinned temporary recovery once.
+5. Press **Preview Again** and confirm the underlying  activity/access gaps are
+   still listed despite Administrator being active.
+6. Run **Fix All Safe Access** and confirm only Dank Shield's own target
+   overwrites change.
+7. Use **Restore Normal Permissions**, then Preview Again.
+8. Confirm Administrator is gone, the repaired targets remain accessible, and
+   unrelated member/staff overwrites are unchanged.
+
+If Discord does not update the existing managed bot role in steps 4 or 7, do
+not claim the OAuth recovery path works; retain the documented manual
+Administrator fallback instead.
