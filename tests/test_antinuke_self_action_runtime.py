@@ -140,15 +140,105 @@ def test_authorization_is_action_guild_and_target_scoped() -> None:
     assert runtime._consume(guild, good, "role_delete") is False  # noqa: SLF001
 
 
-def test_stale_authorization_expires() -> None:
+def test_stale_authorization_expires_after_request_completion() -> None:
     _reset()
     spec = runtime._spec(("channel_delete",), 7, "id:90")  # noqa: SLF001
     nonce, _reason = runtime._authorize(spec, "test")  # noqa: SLF001
     created = runtime._PENDING[nonce].created_at  # noqa: SLF001
+    runtime._complete(nonce, created)  # noqa: SLF001
 
     runtime._prune_pending(created + runtime._AUTH_TTL_SECONDS + 1.0)  # noqa: SLF001
 
     assert nonce not in runtime._PENDING  # noqa: SLF001
+
+
+def test_rate_limited_channel_patch_keeps_self_proof_until_request_completes(
+    monkeypatch,
+) -> None:
+    _reset()
+    clock = [1000.0]
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: clock[0])
+
+    class RateLimitedHTTP:
+        def __init__(self) -> None:
+            self.calls: list[tuple[object, dict]] = []
+
+        async def request(self, route, *args, **kwargs):
+            _ = args
+            self.calls.append((route, dict(kwargs)))
+            assert len(runtime._PENDING) == 1  # noqa: SLF001
+            auth = next(iter(runtime._PENDING.values()))  # noqa: SLF001
+            assert auth.completed_at is None
+            clock[0] += runtime._AUTH_TTL_SECONDS + 30.0  # noqa: SLF001
+            runtime._prune_pending(clock[0])  # noqa: SLF001
+            assert auth.nonce in runtime._PENDING  # noqa: SLF001
+            return {"ok": True}
+
+    bot = FakeBot()
+    bot.http = RateLimitedHTTP()
+    guild = FakeGuild(7)
+    bot.get_channel = lambda channel_id: (
+        SimpleNamespace(id=int(channel_id), guild=guild)
+        if int(channel_id) == 90
+        else None
+    )
+    route = FakeRoute("PATCH", "/channels/90")
+
+    assert runtime._patch_http(bot) is True  # noqa: SLF001
+    asyncio.run(bot.http.request(route, reason="rate-limited stats rename"))
+
+    assert len(bot.http.calls) == 1
+    reason = bot.http.calls[0][1]["reason"]
+    assert len(runtime._PENDING) == 1  # noqa: SLF001
+    auth = next(iter(runtime._PENDING.values()))  # noqa: SLF001
+    assert auth.completed_at == clock[0]
+
+    async def should_not_read_settings(_guild_id: int):
+        raise AssertionError(
+            "rate-limited local channel PATCH must retain self-action proof"
+        )
+
+    monkeypatch.setattr(
+        anti_nuke,
+        "get_antinuke_settings",
+        should_not_read_settings,
+    )
+    event = _entry(
+        guild,
+        action="channel_update",
+        target_id=90,
+        reason=reason,
+    )
+    asyncio.run(runtime._audit_guard(bot, event))  # noqa: SLF001
+
+    assert guild.leave_calls == 0
+    assert runtime._PENDING == {}  # noqa: SLF001
+
+
+def test_cancelled_http_request_discards_inflight_authorization() -> None:
+    _reset()
+
+    class CancelledHTTP:
+        async def request(self, route, *args, **kwargs):
+            _ = route, args, kwargs
+            raise asyncio.CancelledError()
+
+    bot = FakeBot()
+    bot.http = CancelledHTTP()
+    route = FakeRoute("PATCH", "/guilds/7")
+
+    assert runtime._patch_http(bot) is True  # noqa: SLF001
+
+    async def run_cancelled() -> None:
+        try:
+            await bot.http.request(route, reason="cancel me")
+        except asyncio.CancelledError:
+            return
+        raise AssertionError("cancelled request must propagate cancellation")
+
+    asyncio.run(run_cancelled())
+
+    assert runtime._PENDING == {}  # noqa: SLF001
 
 
 def test_expected_local_message_delete_is_channel_scoped_and_one_time() -> None:
