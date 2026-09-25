@@ -495,7 +495,10 @@ def _schedule_channel_sweep(channel: Any, *, reason: str) -> None:
 
 def _looks_invite_related(message: Any) -> bool:
     try:
-        return bool(policy.extract_invite_codes_from_message(message))
+        return bool(
+            policy.extract_invite_codes_from_message(message)
+            or policy.is_contentless_trusted_advertiser_candidate(message)
+        )
     except Exception:
         return False
 

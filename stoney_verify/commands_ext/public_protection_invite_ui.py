@@ -11,6 +11,7 @@ from typing import Any
 
 import discord
 
+from ..interaction_guard import safe_defer_interaction
 from ..invite_scope_settings import (
     ALL_BOTS_KEY,
     BOT_IDS_KEY,
@@ -85,13 +86,22 @@ def invite_shield_embed(
     embed.add_field(name="Live blocker", value=state_text, inline=False)
     embed.add_field(name="Current targeting", value=_status(scope), inline=False)
     embed.add_field(
+        name="Modern app-card safety",
+        value=(
+            "Discord can withhold message content, embeds, attachments, and components when MESSAGE_CONTENT "
+            "access is unavailable. Dank Shield will only use its contentless fallback for an exact known "
+            "advertising application when the bot/channel is explicitly protected, or during a staff-selected cleanup."
+        ),
+        inline=False,
+    )
+    embed.add_field(
         name="Fast setup",
         value=(
             "**Fix This Channel** turns Invite Shield on and protects bot invite posts in the channel where you opened this screen.\n"
             "**Turn Shield On / Off** preserves the original Invite Blocker toggle without leaving you trapped in this editor.\n"
             "**Watch Every Bot** protects bot invite posts server-wide.\n"
             "**Choose Watched Channel** uses Dank Shield's searchable server browser.\n"
-            "**Clean Existing Invites** scans one chosen channel through the central invite policy before deleting anything."
+            "**Clean Existing Invites** scans up to 1,000 recent messages in one chosen channel through the central invite policy before deleting anything."
         ),
         inline=False,
     )
@@ -425,20 +435,40 @@ class InviteShieldView(discord.ui.View):
             live = guild.get_channel(int(getattr(channel, "id", 0) or 0))
             if not isinstance(live, discord.TextChannel):
                 return await _safe_ephemeral(pick_interaction, "❌ That channel disappeared or is no longer a text channel.")
+
+            # A 1,000-message history pass can easily exceed Discord's initial
+            # interaction response window. Acknowledge the picker selection
+            # before any history/REST work, then redraw the original panel.
+            if not await safe_defer_interaction(
+                pick_interaction,
+                ephemeral=False,
+                action_name="invite_shield_historical_cleanup",
+            ):
+                return
+
             from .. import invite_policy_engine
 
             result = await invite_policy_engine.scan_channel_invites(
                 live,
-                limit=200,
+                limit=1000,
                 repost_mixed=False,
                 source="protection-center-native-invite-cleanup",
+                allow_contentless_trusted_advertisers=True,
             )
             fresh = await load_invite_scope_settings(int(guild.id), refresh=True)
+            contentless_deleted = int(result.get("contentless_deleted", 0) or 0)
             note = (
                 f"Scanned {live.mention}: checked `{int(result.get('checked', 0) or 0)}`, "
                 f"matched `{int(result.get('matched', 0) or 0)}`, deleted `{int(result.get('deleted', 0) or 0)}`, "
                 f"allowed `{int(result.get('allowed', 0) or 0)}`, failed `{int(result.get('failed', 0) or 0)}`."
             )
+            if contentless_deleted:
+                note += (
+                    f" Protected content-redacted advertiser posts removed: "
+                    f"`{contentless_deleted}`."
+                )
+            if int(result.get("checked", 0) or 0) >= 1000:
+                note += " Re-run cleanup if older messages remain beyond this bounded pass."
             await _redraw(
                 pick_interaction,
                 author_id=self.author_id,

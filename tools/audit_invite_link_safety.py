@@ -234,6 +234,29 @@ for filename in (
     if (ROOT / "startup_guards" / filename).exists():
         failures.append(f"retired legacy invite runtime guard still exists: {filename}")
 
+# Content-redacted app-card enforcement must stay narrow and centralized.
+policy_source = text("stoney_verify/invite_policy_engine.py")
+if "1028956609382199346" not in policy_source:
+    failures.append("canonical invite policy is missing exact OneBump application identity")
+if "is_contentless_trusted_advertiser_candidate" not in policy_source:
+    failures.append("canonical invite policy is missing contentless advertiser candidate boundary")
+if "protected_contentless_known_advertiser" not in policy_source:
+    failures.append("canonical invite policy is missing explicit-target contentless delete rule")
+if "allow_contentless_trusted_advertisers" not in policy_source:
+    failures.append("historical scanner cannot receive explicit contentless-ad cleanup authority")
+if "_SCAN_HISTORY_MAX = 2000" not in policy_source:
+    failures.append("canonical invite history scanner is not bounded for deep cleanup")
+
+recovery_source = text("stoney_verify/invite_reconciliation_runtime.py")
+if "policy.is_contentless_trusted_advertiser_candidate(message)" not in recovery_source:
+    failures.append("live invite reconciliation cannot trigger on content-redacted known advertiser posts")
+
+native_source = text("stoney_verify/commands_ext/public_protection_invite_ui.py")
+if "limit=1000" not in native_source:
+    failures.append("Protection Center historical invite cleanup is not using the deeper bounded pass")
+if "allow_contentless_trusted_advertisers=True" not in native_source:
+    failures.append("Protection Center cleanup does not explicitly authorize known contentless advertiser cleanup")
+
 print("=== Invite Link Safety Audit ===")
 if failures:
     for item in failures:
