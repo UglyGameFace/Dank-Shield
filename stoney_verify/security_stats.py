@@ -556,6 +556,15 @@ def render_security_stat_name(
     return fallback[:100] or metric.label[:100]
 
 
+def security_stat_format_state(
+    preferences: Mapping[str, Any],
+    key: str,
+) -> Dict[str, str]:
+    """Return the effective editable shell for one metric."""
+
+    return dict(_metric_format(preferences, key))
+
+
 def security_stat_format_preview(preferences: Mapping[str, Any], key: str) -> str:
     metric = security_stat_metric(key)
     sample = "ONLINE" if metric.value_kind == "status" else "0"
@@ -1025,7 +1034,8 @@ def _find_owned_category(guild: discord.Guild, cfg: Any) -> Optional[discord.Cat
 
     preferences = security_stats_preferences(cfg)
     desired_name = str(preferences["category_name"])
-    accepted_names = {SECURITY_STATS_CATEGORY_NAME, desired_name}
+    styled_name = security_stats_category_display_name(preferences)
+    accepted_names = {SECURITY_STATS_CATEGORY_NAME, desired_name, styled_name}
     for category in list(getattr(guild, "categories", []) or []):
         name = str(getattr(category, "name", "") or "")
         if (
@@ -1230,6 +1240,30 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
             return False, "❌ Dank Shield needs **Manage Roles** to keep Server Stats visible but non-joinable."
 
         cfg = await get_guild_config(gid, refresh=True)
+
+        # Existing enabled installations remain visually unchanged unless the
+        # owner opts into Design Sync. A newly enabled display inherits the
+        # current saved Server Design by default.
+        try:
+            has_design_sync_choice = (
+                isinstance(cfg, Mapping)
+                and SECURITY_STATS_INHERIT_DESIGN_KEY in cfg
+            )
+        except Exception:
+            has_design_sync_choice = False
+        if not _stats_enabled(cfg) and not has_design_sync_choice:
+            await upsert_guild_config(
+                gid,
+                {SECURITY_STATS_INHERIT_DESIGN_KEY: True},
+            )
+            if isinstance(cfg, Mapping):
+                cfg = {
+                    **dict(cfg),
+                    SECURITY_STATS_INHERIT_DESIGN_KEY: True,
+                }
+            else:
+                cfg = await get_guild_config(gid, refresh=True)
+
         preferences = security_stats_preferences(cfg)
         counts = _stats_counts(cfg)
         names = await _display_names_for_guild(
@@ -1245,7 +1279,7 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
                     guild.default_role: discord.PermissionOverwrite(view_channel=True, connect=False),
                 }
                 category = await guild.create_category(
-                    str(preferences["category_name"]),
+                    security_stats_category_display_name(preferences),
                     overwrites=overwrites,
                     reason="Dank Shield Server Stats display",
                 )
@@ -1321,7 +1355,8 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
 
         return (
             True,
-            f"✅ Server Stats are active in **{preferences['category_name']}** with `{len(visible_keys)}` visible counters.",
+            f"✅ Server Stats are active in **{security_stats_category_display_name(preferences)}** "
+            f"with `{len(visible_keys)}` visible counters.",
         )
 
 
