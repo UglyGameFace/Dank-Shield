@@ -3,6 +3,8 @@ from pathlib import Path
 SOURCE = Path("stoney_verify/setup_permission_repair_services.py").read_text(encoding="utf-8")
 GUARD = Path("stoney_verify/startup_guards/setup_permission_repair_guard.py").read_text(encoding="utf-8")
 POLICY = Path("stoney_verify/services/setup_permission_policy.py").read_text(encoding="utf-8")
+DEFAULTS = Path("stoney_verify/commands_ext/public_setup_defaults.py").read_text(encoding="utf-8")
+ASSISTANT = Path("stoney_verify/commands_ext/public_setup_assistant.py").read_text(encoding="utf-8")
 README = Path("README.md").read_text(encoding="utf-8")
 AUDIT = Path("tools/audit_public_invite_permissions.py").read_text(encoding="utf-8")
 
@@ -36,3 +38,5 @@ def test_activity_repair_uses_parent_only_as_bot_template_and_never_full_sync():
 def test_managed_setup_bot_overwrites_preserve_repair_authority():
     assert GUARD.count("manage_roles=True") >= 3
     assert "manage_roles=True" in POLICY
+    assert DEFAULTS.count("manage_roles=True") >= 3
+    assert ASSISTANT.count("manage_roles=True") >= 3
