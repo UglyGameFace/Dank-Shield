@@ -216,13 +216,19 @@ def _merge_activity_coverage_targets(
         entry = planned.get(cid)
         if entry is None:
             try:
-                expected = channel.overwrites_for(me)
+                current = channel.overwrites_for(me)
             except Exception:
-                expected = discord.PermissionOverwrite()
+                current = discord.PermissionOverwrite()
+            expected, inherited = repair_core.seed_bot_overwrite_from_parent(
+                guild,
+                channel,
+                current,
+            )
             entry = {
                 "channel": channel,
                 "expected": expected,
                 "required": set(),
+                "inherited": inherited,
             }
             planned[cid] = entry
 
@@ -234,15 +240,35 @@ def _merge_activity_coverage_targets(
         expected = entry["expected"]
         required = entry["required"]
 
-        # Only expand Dank Shield's existing overwrite with permissions that the
-        # authoritative activity audit proved missing. No member/staff overwrite
-        # is added or rewritten in activity-only mode.
-        if "View Channel" in required:
-            expected.view_channel = True
-        if "Read Message History" in required:
-            expected.read_message_history = True
-        if "Manage Threads" in required:
-            expected.manage_threads = True
+        # Repair only Dank Shield's own overwrite. If the child has no bot-specific
+        # overwrite, its parent category can seed that one bot entry. Never perform
+        # a full Discord category sync and never clear an explicit bot deny here.
+        permission_map = {
+            "View Channel": "view_channel",
+            "Read Message History": "read_message_history",
+            "Manage Threads": "manage_threads",
+        }
+        for label, attr in permission_map.items():
+            if label not in required:
+                continue
+            if getattr(expected, attr, None) is False:
+                manual_actions.append(
+                    f"{legacy._channel_label(entry['channel'])}: Dank Shield has an explicit "
+                    f"deny for {label}. Use Specific Channel → Resolve Explicit Denies if that deny is accidental."
+                )
+                continue
+            setattr(expected, attr, True)
+
+        # Persist the authority used by Fix Access whenever it is still effective.
+        # This does not grant a new server permission; it keeps the bot from being
+        # stripped of its existing Manage Roles permission by later channel drift.
+        if getattr(expected, "manage_roles", None) is None:
+            try:
+                effective = entry["channel"].permissions_for(me)
+                if bool(getattr(effective, "manage_roles", False)):
+                    expected.manage_roles = True
+            except Exception:
+                pass
 
         legacy._add_target(
             targets,
@@ -256,7 +282,7 @@ def _merge_activity_coverage_targets(
         notes.append(
             f"Activity access scope: {len(planned)} channel overwrite(s) cover "
             f"{len(tuple(getattr(report, 'problems', ()) or ()))} Diagnostics gap(s). "
-            "Only Dank Shield's own overwrite is expanded or safely created; unrelated role/member overwrites are preserved."
+            "Only Dank Shield's own overwrite is changed. An empty child bot overwrite may be seeded from its parent category; unrelated role/member overwrites are preserved."
         )
     elif not tuple(getattr(report, "problems", ()) or ()):
         notes.append("Diagnostics activity scope is already fully accessible.")
@@ -432,65 +458,22 @@ async def preview_or_apply(
     unchanged: list[str] = []
     failed: list[str] = []
     me = repair_core._bot_member(guild)
-    bootstrap_targets = 0
 
     for item in targets:
         channel = item.channel
-        expected_overwrites = dict(item.overwrites)
         overwrite_blocker = repair_core.permission_overwrite_edit_blocker(
             guild,
             channel,
         )
-        bootstrap = None
         if overwrite_blocker:
-            desired_bot = expected_overwrites.get(me) if me is not None else None
-            bootstrap = repair_core.build_bot_overwrite_bootstrap_plan(
-                guild,
-                channel,
-                desired=desired_bot,
+            manual_actions.append(
+                f"{legacy._channel_label(channel)}: {overwrite_blocker}"
             )
-            if bootstrap is None:
-                manual_actions.append(
-                    f"{legacy._channel_label(channel)}: {overwrite_blocker}"
-                )
-                continue
-            if me is not None:
-                expected_overwrites[me] = bootstrap.overwrite
-            bootstrap_targets += 1
+            continue
 
         pending_labels: list[str] = []
         applied_labels: list[str] = []
-        if bootstrap is not None and me is not None:
-            bot_label = legacy._target_label(me)
-            pending_labels.append(bot_label)
-            if apply:
-                try:
-                    await channel.edit(
-                        overwrites=bootstrap.overwrites,
-                        reason="Dank Shield setup permission repair self-lockout bootstrap",
-                    )
-                    applied_labels.append(bot_label)
-                except discord.Forbidden:
-                    failed.append(
-                        f"{legacy._channel_label(channel)} → {bot_label}: "
-                        "Discord denied the safe bot-only self-lockout bootstrap."
-                    )
-                    continue
-                except Exception as exc:
-                    failed.append(
-                        f"{legacy._channel_label(channel)} → {bot_label}: {type(exc).__name__}."
-                    )
-                    continue
-
-        for target, expected in expected_overwrites.items():
-            if (
-                bootstrap is not None
-                and me is not None
-                and repair_core._same_principal(target, me)
-            ):
-                # The bulk edit above already wrote the exact bot overwrite and
-                # preserved every unrelated overwrite in the channel.
-                continue
+        for target, expected in item.overwrites.items():
             try:
                 current = channel.overwrites_for(target)
             except Exception:
@@ -534,12 +517,6 @@ async def preview_or_apply(
             )
         elif not pending_labels:
             unchanged.append(legacy._channel_label(channel))
-
-    if bootstrap_targets:
-        notes.append(
-            f"Self-lockout recovery: {bootstrap_targets} target(s) can restore Dank Shield's own "
-            "Manage Permissions overwrite without syncing or rewriting unrelated role/member permissions."
-        )
 
     if apply:
         if include_activity_coverage:
