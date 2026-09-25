@@ -1161,6 +1161,36 @@ async def _run_coalesced_security_stats_refresh(guild_id: int) -> None:
             _EVENT_REFRESH_TASKS.pop(gid, None)
 
 
+async def request_security_stats_design_refresh(guild_id: int) -> bool:
+    """Coalesce a live Stats refresh after saved Server Design changes."""
+
+    gid = int(guild_id)
+    if gid <= 0:
+        return False
+    try:
+        cfg = await get_guild_config(gid, refresh=True)
+    except Exception:
+        return False
+    if not _stats_enabled(cfg):
+        return False
+    try:
+        if not _safe_bool(cfg.get(SECURITY_STATS_INHERIT_DESIGN_KEY), False):
+            return False
+    except Exception:
+        return False
+
+    try:
+        guild = bot.get_guild(gid)
+    except Exception:
+        guild = None
+    if guild is None:
+        return False
+
+    _ACTIVE_DISPLAY_GUILDS.add(gid)
+    _schedule_security_stats_refresh(gid)
+    return True
+
+
 def _schedule_security_stats_refresh(guild_id: int) -> None:
     gid = int(guild_id)
     if gid <= 0 or gid not in _ACTIVE_DISPLAY_GUILDS:
