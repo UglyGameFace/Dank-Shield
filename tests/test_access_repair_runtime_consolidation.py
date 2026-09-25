@@ -158,6 +158,27 @@ def test_channel_manage_permissions_self_lockout_is_explained_before_write(monke
     assert "Manage Permissions is denied" in blocker
     assert report.blockers == [blocker]
     assert report.can_apply is False
+    assert core.emergency_recovery_needed(guild, target) is True
+
+
+def test_emergency_recovery_is_explicitly_admin_but_normal_public_permissions_are_not(monkeypatch) -> None:
+    normal = core.approved_public_permissions()
+    emergency = core.emergency_recovery_permissions()
+
+    assert normal.administrator is False
+    assert normal.manage_roles is True
+    assert emergency.administrator is True
+    assert emergency.manage_roles is True
+
+    member = _member(guild_manage_roles=True, administrator=True)
+    target = FakeTarget(manage_roles=False)
+    guild = SimpleNamespace(id=77)
+    monkeypatch.setattr(core, "_bot_member", lambda _guild: member)
+
+    # Once Administrator is actually present, channel overwrites no longer form
+    # a repair blocker and the emergency path should disappear.
+    assert core.emergency_recovery_needed(guild, target) is False
+    assert core.permission_overwrite_edit_blocker(guild, target) == ""
 
 
 def test_unsynced_child_with_good_parent_reports_exact_manual_handoff(monkeypatch) -> None:
@@ -284,7 +305,7 @@ def test_specific_channel_repair_seeds_parent_bot_template_when_discord_allows_w
     assert written.read_message_history is True
 
 
-def test_setup_repair_does_not_attempt_overwrite_write_after_channel_self_lockout(
+def test_setup_repair_offers_one_bulk_recovery_after_channel_self_lockout(
     monkeypatch,
 ) -> None:
     member = _member(guild_manage_roles=True)
@@ -328,9 +349,12 @@ def test_setup_repair_does_not_attempt_overwrite_write_after_channel_self_lockou
 
     assert result["changed"] == []
     assert target.permission_calls == []
+    assert result["emergency_recovery_recommended"] is True
+    assert result["emergency_recovery_count"] == 1
+    assert result["emergency_recovery_targets"] == ["#general"]
     assert len(result["manual_actions"]) == 1
-    assert "not synced" in result["manual_actions"][0]
-    assert "Sync Now" in result["manual_actions"][0]
+    assert "Temporary Admin Recovery" in result["manual_actions"][0]
+    assert "1 channel/category target(s)" in result["manual_actions"][0]
 
 
 def test_effective_manage_roles_allows_overwrite_repair_even_without_manage_channels(monkeypatch) -> None:
