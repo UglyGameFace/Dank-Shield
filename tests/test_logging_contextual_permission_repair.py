@@ -122,6 +122,11 @@ def test_unconfigured_optional_staff_audit_is_not_invented_as_a_channel_error() 
     assert not any("staff member-audit route" in item for item in issues)
 
 
+def test_member_logs_authority_uses_canonical_interaction_resolved_helper() -> None:
+    source = inspect.getsource(repair._member_user_authorized)
+    assert "interaction_has_channel_management_authority(interaction)" in source
+
+
 def test_logging_contextual_integration_never_owns_discord_overwrite_mutation() -> None:
     source = inspect.getsource(repair)
     assert "set_permissions(" not in source
