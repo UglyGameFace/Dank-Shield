@@ -209,7 +209,7 @@ def test_unsynced_child_with_good_parent_reports_exact_manual_handoff(monkeypatc
     assert report.can_apply is False
 
 
-def test_empty_child_bot_overwrite_can_use_parent_as_bot_only_template(monkeypatch) -> None:
+def test_empty_child_bot_overwrite_uses_parent_without_manage_roles_by_default(monkeypatch) -> None:
     member = _member(guild_manage_roles=True)
     parent = _ParentCategory(
         member,
@@ -231,10 +231,19 @@ def test_empty_child_bot_overwrite_can_use_parent_as_bot_only_template(monkeypat
     )
 
     assert seeded.view_channel is True
-    assert seeded.manage_roles is True
+    assert seeded.manage_roles is None
     assert seeded.manage_messages is True
-    assert "manage_roles" in copied
+    assert "manage_roles" not in copied
     assert "manage_messages" in copied
+
+    emergency_seeded, emergency_copied = core.seed_bot_overwrite_from_parent(
+        guild,
+        target,
+        discord.PermissionOverwrite(),
+        include_manage_roles=True,
+    )
+    assert emergency_seeded.manage_roles is True
+    assert "manage_roles" in emergency_copied
 
 
 def test_existing_child_bot_overwrite_is_not_replaced_by_parent_template(monkeypatch) -> None:
@@ -298,10 +307,84 @@ def test_specific_channel_repair_seeds_parent_bot_template_when_discord_allows_w
     assert result.failed_targets == []
     assert len(target.permission_calls) == 1
     written = target.permission_calls[0]
-    assert written.manage_roles is True
+    assert written.manage_roles is None
     assert written.manage_messages is True
     assert written.view_channel is True
     assert written.send_messages is True
+    assert written.read_message_history is True
+
+
+def test_specific_channel_emergency_recovery_resolves_bot_only_explicit_denies(
+    monkeypatch,
+) -> None:
+    member = _member(guild_manage_roles=True, administrator=True)
+    parent = _ParentCategory(
+        member,
+        discord.PermissionOverwrite(
+            view_channel=True,
+            manage_roles=True,
+            manage_messages=True,
+        ),
+    )
+    target = _RepairableChild(member, parent, manage_roles=False)
+    target.current = discord.PermissionOverwrite(
+        view_channel=False,
+        read_message_history=False,
+        manage_roles=False,
+    )
+    guild = SimpleNamespace(id=77, owner_id=999, default_role=object())
+
+    monkeypatch.setattr(core, "_bot_member", lambda _guild: member)
+    monkeypatch.setattr(core, "_target_supported", lambda _target: True)
+
+    from stoney_verify.services import setup_permission_policy
+
+    monkeypatch.setattr(
+        setup_permission_policy,
+        "bot_channel_permissions",
+        lambda _target, _member, *, ignore_administrator=False: SimpleNamespace(
+            administrator=False,
+            manage_roles=False,
+            view_channel=False,
+            send_messages=False,
+            embed_links=False,
+            attach_files=False,
+            read_message_history=False,
+            manage_channels=False,
+            manage_messages=False,
+            manage_threads=False,
+            send_messages_in_threads=False,
+            move_members=False,
+        ),
+    )
+    monkeypatch.setattr(
+        setup_permission_policy,
+        "permissions_without_administrator",
+        lambda _target, _member: SimpleNamespace(manage_roles=False),
+    )
+
+    async def record(**_kwargs):
+        return True
+
+    monkeypatch.setattr(core, "_record_repair_event", record)
+
+    result = asyncio.run(
+        core.apply_target_repair(
+            guild,
+            target,
+            actor_id=99,
+            feature="general",
+            mode="minimum",
+            include_children=False,
+        )
+    )
+
+    assert result.ok is True
+    assert result.failed_targets == []
+    assert len(target.permission_calls) == 1
+    written = target.permission_calls[0]
+    assert written.manage_roles is True
+    assert written.view_channel is True
     assert written.read_message_history is True
 
 
