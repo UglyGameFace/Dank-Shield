@@ -2,238 +2,186 @@
 
 ## Active task / desired outcome
 
-**P0-ACCESS-REPAIR-SELF-LOCKOUT-006 — make Fix Access parent-aware, preventative, and truthful across categories/channels**
+**P0-ACCESS-REPAIR-SELF-LOCKOUT-007 — make Repair Bot Access follow Discord's documented permission model and recover already-locked channels safely**
 
-Desired outcome: Diagnostics, Setup repair, and Specific Channel repair should use
-the parent category's known Dank Shield overwrite as a bot-only template when
-Discord still permits the write, preserve unrelated member/role permissions, and
-prevent future self-lockouts by retaining Dank Shield's own Manage Permissions
-authority. If a target has already removed effective Manage Permissions, the UI
-must explain the exact Discord-side manual fix instead of claiming the bot can
-bypass Discord's permission gate.
+Desired outcome: Diagnostics / Repair Bot Access must distinguish between
+repairable drift and a true Discord MANAGE_ROLES self-lockout. It must never
+pretend an API route can bypass Discord's permission checks. When recovery
+authority is explicitly granted, it should repair the affected Dank Shield
+overwrites in one scoped pass without rewriting unrelated member/staff access.
 
 ## Scope / single active task lock
 
 Only the access-repair self-lockout path is active:
 
-- explain why a correct category can coexist with an inaccessible unsynced child;
-- reuse a parent category's Dank Shield overwrite only for Dank Shield, never as
-  a full category sync;
-- automatically repair targets only while Discord grants effective Manage
-  Permissions;
-- retain Dank Shield's own Manage Permissions bit on repaired/managed targets to
-  reduce future circular lockouts;
-- keep explicit bot-member denies fail-closed in safe repair;
-- make Diagnostics bulk repair and Specific Channel report the same truth;
-- add regression coverage in existing test modules rather than another one-off
-  test file.
+- verify the Discord permission model against current official Discord docs;
+- remove invalid assumptions introduced by PR #319;
+- keep parent-category bot overwrite seeding only where Discord actually permits
+  overwrite edits;
+- preserve normal public installation as non-Administrator;
+- provide a clearly separated emergency recovery path for already-locked
+  channels, with Administrator treated as temporary and explicit;
+- keep AntiNuke from treating Discord's own managed Dank Shield role
+  authorization update as a hostile third-party role escalation;
+- preserve all unrelated role/member overwrites;
+- validate focused and full regression coverage before merge.
 
-Do not broaden into verification interaction failures, ticket redesign, AntiNuke,
-or general test-suite consolidation unless required by this root cause.
+Do not broaden into verification interaction failures, ticket redesign, general
+AntiNuke redesign, or test-suite consolidation.
 
 ## Status
 
-**MERGED + REPOSITORY VALIDATED — production Discord acceptance pending**
+**IMPLEMENTATION IN PROGRESS — official Discord docs verified; branch not ready to merge; exact-head validation pending**
 
-Implementation PR: **#319 — Make bot access repair parent-aware and self-lockout safe**
+Branch: `fix/access-repair-emergency-recovery-20260925`
 
-Validated PR head:
-`1676e342f70d27900d589db68b924c63cefb34aa`
+Base: `main` after merged PR #319.
 
-Merged to `main` as:
-`967998446982c706d67645861fd8e7fdce4d1dbe`
+No PR has been opened for this branch yet.
 
-The merge commit has no file-content differences from the validated PR head.
+## Authoritative Discord documentation findings
 
-## Findings / root cause
+Checked against the current official Discord Developer Documentation on
+2026-09-25.
 
-1. Discord channels can be synced or unsynced from their parent category. The
-   reported case has a correct Dank Shield member overwrite on the category and
-   no equivalent Dank Shield overwrite on the unsynced child.
-2. A full Discord Sync Now operation makes the child's complete permission set
-   match the category. That is too broad for automatic repair because intentional
-   channel-specific role/member permissions could be lost.
-3. Activity repair previously started only from
-   `channel.overwrites_for(Dank Shield)` and added View Channel / Read Message
-   History / Manage Threads. It did not use an otherwise-empty child's parent
-   category as a bot-only template.
-4. Setup/Diagnostics and Specific Channel both correctly stop when effective
-   Manage Roles/Manage Permissions is missing on the target, but their message
-   did not recognize that a parent category might already contain the correct
-   Dank Shield permission.
-5. The first implementation attempt tried to escape the self-lockout by calling
-   channel `edit(overwrites=...)` with Manage Channels. Current Discord API
-   documentation explicitly states that modifying permission overwrites through
-   Modify Channel also requires Manage Roles. That attempted bypass was invalid
-   and has been removed before merge.
-6. Therefore a true target-level Manage Permissions self-lockout cannot be
-   repaired by the bot itself with `set_permissions`, a bulk overwrite edit,
-   or category sync. The owner must restore that permission once. The bot can
-   then perform the remaining scoped repair.
-7. Prevention is possible: while effective Manage Permissions still exists,
-   Dank Shield can persist `manage_roles=True` on its own channel/category
-   overwrite. Managed setup baselines should do this so later @everyone/role
-   drift is less likely to cut off repair authority.
+1. **Edit Channel Permissions requires MANAGE_ROLES.**
+   Discord's Channel Resource says the permission-overwrite endpoint requires
+   `MANAGE_ROLES`.
+2. **Modify Channel does not bypass that requirement.**
+   Discord says `MANAGE_CHANNELS` is required to modify a guild channel, but
+   if the request modifies permission overwrites, `MANAGE_ROLES` is also
+   required.
+3. **Syncing a child back to its category also does not bypass it.**
+   Discord's guild channel-position endpoint says `lock_permissions` requires
+   `MANAGE_ROLES`.
+4. **Administrator is the documented overwrite bypass.**
+   Discord's permission table says `ADMINISTRATOR` allows all permissions and
+   bypasses channel permission overwrites. Discord's permission-computation
+   pseudocode returns all permissions before applying channel overwrites when
+   Administrator is present.
+5. **Unsynced child channels do not inherit later category changes.**
+   Discord documents category behavior as permission syncing, not live
+   inheritance. Once a child is desynced, changes to its parent category no
+   longer update that child.
+6. **Normal channel creation must not manufacture MANAGE_ROLES overwrites.**
+   Discord's Create Guild Channel endpoint explicitly says setting
+   `MANAGE_ROLES` in channel permission overwrites is only possible for guild
+   administrators.
+7. **Bot OAuth authorization can request a permission bitfield and existing
+   authorizations can be re-approved.**
+   Discord documents the `permissions` parameter in the bot authorization
+   flow, and its OAuth documentation says existing authorizations can be
+   re-approved. For passthrough `bot` scope, authorization is always required.
+   However, the docs do **not** explicitly promise the exact mutation behavior
+   of reauthorizing a bot that is already installed in the same guild. That
+   specific existing-install recovery behavior remains a required live
+   acceptance test and must not be presented as already proven.
 
-## Execution path
+Official sources:
 
-Diagnostics activity repair:
+- https://docs.discord.com/developers/topics/permissions
+- https://docs.discord.com/developers/resources/channel
+- https://docs.discord.com/developers/resources/guild
+- https://docs.discord.com/developers/topics/oauth2
 
-`/dank diagnostics`
-→ Repair Bot Access
-→ authoritative activity-scope gaps
-→ build exact affected channel targets
-→ if the child has no Dank Shield overwrite, seed only that bot overwrite from
-  the parent category
-→ add only required activity permissions and retained repair authority
-→ check the real Manage Permissions mutation prerequisite
-→ apply with `set_permissions` only when Discord allows it
-→ otherwise show the exact parent-aware manual handoff
-→ rerun Diagnostics after repair.
+## Root cause
 
-Specific Channel repair:
+The production screenshots show Dank Shield has server-level Manage Roles but
+some child channels/categories deny or otherwise remove effective
+Manage Permissions (Discord's client label for MANAGE_ROLES).
 
-Fix Access → Specific Channel
-→ audit target
-→ use the same shared Manage Permissions prerequisite
-→ when repairable and the child has no bot overwrite, seed Dank Shield's bot-only
-  overwrite from the parent category before adding selected missing permissions
-→ persist Manage Permissions while it is still effective
-→ preserve explicit denies unless the separate Resolve Explicit Denies flow is
-  confirmed
-→ when already self-locked, keep the repair button manual-only and explain why
-  Discord prevents the bot from applying even the known-good parent template.
+For those targets:
 
-## Changes
+- `set_permissions` cannot repair the overwrite because Discord requires
+  effective MANAGE_ROLES;
+- `channel.edit(permission_overwrites=...)` cannot bypass it because Discord
+  also requires MANAGE_ROLES whenever Modify Channel changes overwrites;
+- `Sync Now` / `lock_permissions` cannot bypass it because Discord also
+  requires MANAGE_ROLES for permission syncing;
+- a correct parent-category overwrite is useful as a repair template, but an
+  already-desynced child does not automatically inherit it.
 
-- Removed the invalid channel-edit self-lockout bypass before merge.
-- Added shared parent-category bot-overwrite discovery and bot-only seeding in
-  `permission_repair_core.py`.
-- A parent template is used only when the child has no explicit Dank Shield
-  overwrite; an existing child bot overwrite remains authoritative.
-- Specific Channel repair can seed the one Dank Shield overwrite from the parent
-  while Discord still grants Manage Permissions.
-- True self-lockouts remain blocked, but the message now detects a parent that
-  already grants Dank Shield Manage Permissions and explains:
-  - the child is unsynced/not inheriting the category;
-  - Discord will not let the bot edit or sync permission overwrites without the
-    permission it has already lost;
-  - add Dank Shield → Manage Permissions on the child, or use Sync Now only when
-    the owner intentionally wants the child's entire permission set to match the
-    category.
-- Activity repair seeds an empty child bot overwrite from its parent, preserves
-  explicit bot denies, and persists Manage Permissions when currently effective.
-- Managed setup permission baselines retain Manage Roles/Manage Permissions for
-  Dank Shield on public, staff, posting, and voice-verification targets.
-- Full-control selected-target repair includes Manage Roles.
-- Regression coverage stays in existing access/activity test modules; no new
-  test file was created.
+Therefore a target that has already removed Dank Shield's effective
+MANAGE_ROLES is a real platform-enforced self-lockout, not merely a library
+guard.
 
-## Validation required / results
+## Changes in progress
 
-Exact-head validation on
-`1676e342f70d27900d589db68b924c63cefb34aa` passed before merge:
+- Removed the invalid idea that `MANAGE_CHANNELS` can be used as an overwrite
+  repair bypass.
+- Removed normal `manage_roles=True` channel/category baseline grants added by
+  #319; Discord documents those grants as Administrator-only during channel
+  creation.
+- Normal repair preserves any existing explicit Dank Shield Manage Permissions
+  value instead of manufacturing or clearing it.
+- Parent-category seeding remains bot-only and preserves unrelated overwrites,
+  but normal repair excludes MANAGE_ROLES from the copied template.
+- Added an underlying-permission resolver for emergency recovery so temporary
+  Administrator does not hide which channel overwrites are still broken.
+- Emergency recovery is isolated from normal installation. Its purpose is to
+  obtain documented Administrator overwrite bypass authority long enough to
+  repair Dank Shield's own affected overwrites, then explicitly remove
+  Administrator again.
+- AntiNuke guards are being added so Discord's own managed Dank Shield role
+  authorization changes are not treated as hostile third-party escalation.
+- No full `sync_permissions=True` category sync is introduced.
 
-- all **7 GitHub workflow groups passed**;
-- committed diff whitespace check passed;
-- Python compile passed;
-- full unit suite passed: **1993 passed, 9 warnings**;
-- standalone tool checks passed;
-- Public Setup audit passed;
-- canonical public command surface audit passed;
-- public command/startup friction audit passed;
-- public invite/permissions audit passed;
-- Setup Safety audit passed;
-- Dank Design Smart Auto-Detect audit passed;
-- Role Truth audit passed;
-- Event Boundary audit passed;
-- Claim-first ticket security passed;
-- Managed category SQL smoke test passed;
-- Schema Authority SQL passed;
-- Application Command Size Diagnostics passed;
-- Profile Runtime Diagnostics passed;
-- Ticket Owner Emergency Override passed;
-- DS Backlog 027 Validation passed;
-- no automatic full category sync was introduced;
-- the invalid overwrite-bulk-edit bypass was removed before the validated head;
-- regression coverage verifies parent-aware/manual handoff and bot-only seeding
-  while repair authority still exists.
+## Important unvalidated assumption / blocker
 
-Post-merge repository verification:
+Discord documents that bot authorization requests a permission bitfield and
+that existing authorizations can be re-approved, but its public docs do not
+explicitly state the exact managed-role mutation behavior when the same bot is
+already installed in the target guild.
 
-- PR #319 is merged;
-- `main` is exactly merge commit
-  `967998446982c706d67645861fd8e7fdce4d1dbe`;
-- comparing the validated PR head to the merge commit shows **zero changed files**.
+Therefore:
 
-Only live Discord production acceptance remains.
+- the emergency OAuth recovery link may be implemented and regression-tested as
+  a request generator;
+- it must **not** be claimed production-working until live Discord acceptance
+  proves the existing installation receives Administrator as requested;
+- if Discord does not update the existing managed bot role through that flow,
+  the fallback remains owner/admin intervention in Discord, because the API
+  provides no documented self-bypass for an already-locked target.
+
+## Validation required
+
+Before any merge:
+
+- compile all changed modules;
+- focused access-repair tests;
+- focused AntiNuke managed-role tests;
+- full `pytest tests/`;
+- existing standalone audits;
+- public invite audit must still prove normal installation excludes
+  Administrator;
+- exact-head GitHub workflow groups all green;
+- diff check for unrelated changes/conflict artifacts;
+- verify no normal setup baseline contains `manage_roles=True` channel
+  overwrites;
+- verify emergency recovery changes only Dank Shield's own overwrite and
+  preserves unrelated role/member overwrites;
+- verify normal repair never clears an existing explicit bot Manage Permissions
+  allow/deny;
+- verify Administrator cleanup warning is visible after emergency repair.
 
 ## Cleanup / conflicts
 
-- PR #315 is confirmed merged and all six workflow groups on its head passed, so
-  the previous lifecycle task was closed before this task began.
-- No open PR existed when this branch was created.
-- No full category sync is introduced.
-- No second permission-repair owner is introduced; Setup, Diagnostics, and
-  Specific Channel continue through the shared repair core/prerequisite.
-- The invalid self-lockout bootstrap code and its tests were removed before
-  validation of the corrected head.
-- Existing unrelated server/channel overwrites remain authoritative.
-
-## Blockers / risks
-
-- Discord itself is the hard blocker once effective Manage Permissions is lost
-  on a target. The bot token cannot use the server owner's interaction
-  permissions to bypass that API requirement.
-- A one-time manual correction is therefore unavoidable for targets already in
-  that state unless the bot is granted Administrator, which this project does
-  not request as its normal public permission model.
-- Live Discord propagation still needs production acceptance after deploy.
+- PR #319 is merged and its repository CI passed, but its live acceptance
+  exposed this remaining platform constraint.
+- PR #320 was closed unmerged because the task was not actually complete.
+- No new test file is being created for this fix; regression coverage is being
+  added to existing subsystem test modules.
 
 ## Backlog
 
-- Test-suite organization/consolidation remains separate. The repository has
-  hundreds of valid regression files, but reorganizing them must not be mixed
-  into this production permission repair.
-- Verification/ticket interaction failures remain separate unless validation
-  proves this access root cause directly controls them.
+- Test-suite organization/consolidation remains separate.
+- Verification/ticket interaction failures remain separate unless this exact
+  permission root cause directly controls them.
 
 ## Next step
 
-Deploy/restart the merged `main` build, then run the production acceptance
-sequence on one known affected unsynced child such as the reported
-`#general` under its correct parent category:
-
-1. Run Diagnostics / Repair Bot Access before changing Discord manually and
-   confirm it recognizes the parent category state instead of pretending the
-   child is safely auto-fixable.
-2. If the child is already self-locked, restore only Dank Shield → Manage
-   Permissions on that child, not a full Sync Now unless the entire child
-   permission set is intentionally meant to match the category.
-3. Rerun Fix Access and confirm the remaining bot-only permissions repair.
-4. Reopen the child's Discord permission screen and confirm unrelated role/member
-   overwrites were preserved.
-5. Rerun Diagnostics and confirm that target no longer appears as an access gap.
-
-After those live checks pass, mark this task complete. Do not start the separate
-test-suite consolidation or verification/ticket work before this acceptance is
-recorded.
-
-## Production acceptance after deploy
-
-1. An unsynced child with no Dank Shield overwrite and still-valid Manage
-   Permissions can use the parent category's Dank Shield overwrite as a bot-only
-   template without changing any other role/member permission.
-2. Repair writes retain Dank Shield's Manage Permissions authority where that
-   authority is currently effective.
-3. A child already self-locked by missing Manage Permissions is not falsely
-   reported as auto-fixable.
-4. If that child's parent category already has the correct Dank Shield
-   permission, Diagnostics and Specific Channel say so and give the exact
-   minimal manual recovery path.
-5. Sync Now is presented only as an intentional full-category-permission choice,
-   never as an automatic bot repair.
-6. Explicit bot-member denies remain untouched by safe repair until the existing
-   confirmation flow is used.
-7. Re-running repair after the one-time manual permission restore completes the
-   remaining scoped bot access repair.
+Finish tests against the documented permission model, run exact-head CI, inspect
+all failures, and open a draft PR only after the branch is internally coherent.
+The emergency authorization portion remains explicitly pending live Discord
+acceptance because Discord's docs do not specify the existing-install managed
+role update behavior.
