@@ -229,51 +229,140 @@ class CategoryNameModal(discord.ui.Modal):
 
 
 class StatLabelModal(discord.ui.Modal):
-    def __init__(self, *, key: str, current: str, owner_id: int) -> None:
+    """Structured counter-name editor kept under the legacy class name for compatibility."""
+
+    def __init__(
+        self,
+        *,
+        key: str,
+        current: str = "",
+        current_format: Optional[Mapping[str, Any]] = None,
+        owner_id: int,
+    ) -> None:
         self.key = str(key)
         self.owner_id = int(owner_id)
-        super().__init__(title=f"Customize {_METRIC_TITLES[self.key]}"[:45])
-        self.label_text = discord.ui.TextInput(
-            label="Channel label / emoji",
-            placeholder=DEFAULT_SECURITY_STATS_LABELS[self.key],
-            default=str(current or DEFAULT_SECURITY_STATS_LABELS[self.key])[:72],
-            max_length=72,
+        metric = security_stat_metric(self.key)
+        row = dict(current_format or {})
+
+        if not row:
+            legacy = str(current or "").strip().rstrip(":").strip()
+            default_combined = DEFAULT_SECURITY_STATS_LABELS[self.key]
+            if legacy and legacy != default_combined:
+                if legacy.startswith(metric.icon):
+                    legacy_label = legacy[len(metric.icon):].strip()
+                    row = {
+                        "icon": metric.icon,
+                        "label": legacy_label or metric.label,
+                        "separator": ": ",
+                        "value_template": "{value}",
+                    }
+                else:
+                    row = {
+                        "icon": "",
+                        "label": legacy,
+                        "separator": ": ",
+                        "value_template": "{value}",
+                    }
+            else:
+                row = {
+                    "icon": metric.icon,
+                    "label": metric.label,
+                    "separator": ": ",
+                    "value_template": "{value}",
+                }
+
+        super().__init__(title=f"Format {_METRIC_TITLES[self.key]}"[:45])
+
+        self.icon_text = discord.ui.TextInput(
+            label="Icon / prefix",
+            placeholder="[🎫] or 🎫",
+            default=str(row.get("icon") or "")[:24],
+            max_length=24,
             required=False,
         )
-        self.add_item(self.label_text)
+        self.label_text = discord.ui.TextInput(
+            label="Label",
+            placeholder=metric.label,
+            default=str(row.get("label") or metric.label)[:72],
+            max_length=72,
+            required=True,
+        )
+        self.separator_text = discord.ui.TextInput(
+            label="Label → value separator",
+            placeholder=": ",
+            default=str(row.get("separator") if row.get("separator") is not None else ": ")[:16],
+            max_length=16,
+            required=False,
+        )
+        self.value_template = discord.ui.TextInput(
+            label="Value format — keep {value}",
+            placeholder="[{value}] or 「{value}」",
+            default=str(row.get("value_template") or "{value}")[:32],
+            max_length=32,
+            required=True,
+        )
+        for item in (
+            self.icon_text,
+            self.label_text,
+            self.separator_text,
+            self.value_template,
+        ):
+            self.add_item(item)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if int(interaction.user.id) != self.owner_id:
-            await interaction.response.send_message("❌ Open your own Server Stats panel.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Open your own Server Stats panel.",
+                ephemeral=True,
+            )
             return
         if not await _require_setup_permission(interaction):
             return
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("❌ Use this inside a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Use this inside a server.",
+                ephemeral=True,
+            )
             return
 
-        # Modal submits should update the panel that launched them instead of
-        # spawning a second stale copy of the controls.
         await interaction.response.defer()
         cfg = await get_guild_config(int(guild.id), refresh=True)
         prefs = security_stats_preferences(cfg)
+        ok, preview, cleaned = validate_security_stat_format(
+            self.key,
+            {
+                "icon": str(self.icon_text.value or ""),
+                "label": str(self.label_text.value or ""),
+                "separator": str(self.separator_text.value or ""),
+                "value_template": str(self.value_template.value or ""),
+            },
+            preferences=prefs,
+        )
+        if not ok:
+            await _render_center(interaction, content=f"❌ {preview}")
+            return
+
+        formats = dict(prefs["formats"])
+        formats[self.key] = cleaned
+
+        # Structured formatting becomes the one owner for this metric. Remove a
+        # legacy combined-label override so two saved settings cannot fight.
         labels = dict(prefs["labels"])
-        value = " ".join(str(self.label_text.value or "").replace("\n", " ").split()).strip().rstrip(":").strip()
-        if not value or value == DEFAULT_SECURITY_STATS_LABELS[self.key]:
-            labels.pop(self.key, None)
-        else:
-            labels[self.key] = value[:72]
+        labels.pop(self.key, None)
 
         await _save_preferences(
             int(guild.id),
-            {SECURITY_STATS_CUSTOM_LABELS_KEY: labels},
+            {
+                SECURITY_STATS_FORMAT_OVERRIDES_KEY: formats,
+                SECURITY_STATS_CUSTOM_LABELS_KEY: labels,
+            },
         )
         cfg = await get_guild_config(int(guild.id), refresh=True)
-        note = f"✅ **{_METRIC_TITLES[self.key]}** label saved."
+        note = f"✅ **{_METRIC_TITLES[self.key]}** format saved. Preview: `{preview}`"
         if _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False):
-            ok, result = await ensure_security_stats_display(guild)
-            note = result
+            _ok, result = await ensure_security_stats_display(guild)
+            note = f"{result}\nPreview: `{preview}`"
         await _render_center(interaction, content=note)
 
 
@@ -287,7 +376,7 @@ class VisibleStatsSelect(discord.ui.Select):
                 label=_METRIC_TITLES[key],
                 value=key,
                 default=key in current,
-                description=f"Show {_METRIC_TITLES[key].lower()} in the stats category."[:100],
+                description=security_stat_metric_description(key),
             )
             for key in DEFAULT_SECURITY_STATS_VISIBLE_KEYS
         ]
@@ -311,8 +400,28 @@ class VisibleStatsSelect(discord.ui.Select):
             await interaction.response.send_message("❌ Use this inside a server.", ephemeral=True)
             return
 
-        await interaction.response.defer()
         chosen = [key for key in DEFAULT_SECURITY_STATS_VISIBLE_KEYS if key in set(self.values)]
+        unavailable: list[str] = []
+        for key in chosen:
+            capability = security_stat_metric_capability(key, guild=guild)
+            if capability["available"]:
+                continue
+            reasons = [
+                *(f"intent {name}" for name in capability["missing_intents"]),
+                *(f"permission {name}" for name in capability["missing_permissions"]),
+            ]
+            unavailable.append(
+                f"{_METRIC_TITLES[key]} ({', '.join(reasons) or 'provider unavailable'})"
+            )
+        if unavailable:
+            await interaction.response.send_message(
+                "❌ These counters cannot be enabled on this installation yet: "
+                + "; ".join(unavailable)[:1500],
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer()
         await _save_preferences(int(guild.id), {SECURITY_STATS_VISIBLE_KEYS_KEY: chosen})
         cfg = await get_guild_config(int(guild.id), refresh=True)
         note = f"✅ Showing **{len(chosen)}** Server Stats counters."
@@ -326,17 +435,16 @@ class StatLabelSelect(discord.ui.Select):
     def __init__(self, *, owner_id: int, cfg: Any) -> None:
         self.owner_id = int(owner_id)
         prefs = security_stats_preferences(cfg)
-        labels = dict(prefs["labels"])
         options = [
             discord.SelectOption(
                 label=_METRIC_TITLES[key],
                 value=key,
-                description=str(labels.get(key) or DEFAULT_SECURITY_STATS_LABELS[key])[:100],
+                description=security_stat_format_preview(prefs, key)[:100],
             )
             for key in DEFAULT_SECURITY_STATS_VISIBLE_KEYS
         ]
         super().__init__(
-            placeholder="Customize a Label",
+            placeholder="Customize Counter Format",
             min_values=1,
             max_values=1,
             options=options,
@@ -359,7 +467,12 @@ class StatLabelSelect(discord.ui.Select):
         key = str(self.values[0])
         current = str(dict(prefs["labels"]).get(key) or DEFAULT_SECURITY_STATS_LABELS[key])
         await interaction.response.send_modal(
-            StatLabelModal(key=key, current=current, owner_id=self.owner_id)
+            StatLabelModal(
+                key=key,
+                current=current,
+                current_format=security_stat_format_state(prefs, key),
+                owner_id=self.owner_id,
+            )
         )
 
 
