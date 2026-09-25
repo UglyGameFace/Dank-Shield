@@ -491,9 +491,10 @@ def result_embed(result: dict[str, Any]) -> discord.Embed:
         )
     else:
         title = "🛠️ Permission Repair Preview"
+        action_label = "Fix All Safe Access" if activity_scope else "Apply Safe Fixes"
         summary = (
             f"Found **{len(changed)}** safe target change(s) across **{int(result.get('target_count') or 0)}** checked target(s). "
-            "Nothing changes until you press **Apply Safe Fixes**."
+            f"Nothing changes until you press **{action_label}**."
         )
 
     embed = discord.Embed(
