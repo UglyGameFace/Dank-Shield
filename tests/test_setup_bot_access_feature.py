@@ -513,14 +513,17 @@ def test_activity_repair_asks_for_underlying_scope_while_temporary_admin_is_acti
 
     targets: list[object] = []
     notes: list[str] = []
+    manual_actions: list[str] = []
     setup_permission_repair_services._merge_activity_coverage_targets(
         object(),
         targets=targets,
         seen=set(),
         notes=notes,
+        manual_actions=manual_actions,
     )
 
     assert seen == [True]
+    assert manual_actions == []
 
 
 def test_repair_button_routes_to_activity_scoped_preview_first_permission_tool(monkeypatch) -> None:
