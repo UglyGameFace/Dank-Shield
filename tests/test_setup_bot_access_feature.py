@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+from types import SimpleNamespace
 
 import discord
 
 from stoney_verify import setup_activity_access, setup_permission_repair_services
+from stoney_verify.commands_ext import public_diagnostics_group as diagnostics
 from stoney_verify.commands_ext import public_setup_recommend as recommend
 from stoney_verify.commands_ext import public_setup_solid as solid
 from stoney_verify.members_new.activity_scope import ActivityScopeProblem, ActivityScopeReport
@@ -161,6 +163,127 @@ def test_open_access_check_is_read_only_and_renders_audit_result(monkeypatch) ->
     assert interaction.guild.channels[0].mutation_attempted is False
 
 
+def test_diagnostics_repair_bot_access_includes_full_activity_scope(monkeypatch) -> None:
+    calls: list[object] = []
+
+    async def open_repair(
+        interaction,
+        *,
+        parent="security",
+        include_activity_coverage=False,
+    ) -> None:
+        calls.append((interaction, parent, include_activity_coverage))
+
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "open_permission_repair",
+        open_repair,
+    )
+    monkeypatch.setattr(diagnostics, "_admin_or_manage_guild", lambda _interaction: True)
+
+    interaction = type(
+        "I",
+        (),
+        {
+            "user": type("U", (), {"id": 123})(),
+            "response": type("R", (), {"send_message": None})(),
+        },
+    )()
+
+    view = diagnostics.DiagnosticsActionView(actor_id=123)
+    fix = _button(view, "Repair Bot Access")
+    asyncio.run(fix.callback(interaction))
+
+    assert calls == [(interaction, "logs", True)]
+
+
+def test_activity_repair_targets_authoritative_scope_only_and_preserves_bot_overwrite(
+    monkeypatch,
+) -> None:
+    class FakeChannel:
+        id = 100
+        name = "private-thread-parent"
+
+        def overwrites_for(self, _target):
+            return discord.PermissionOverwrite(
+                send_messages=False,
+                manage_messages=True,
+            )
+
+        async def set_permissions(self, *_args, **_kwargs) -> None:
+            return None
+
+    class FakeThread:
+        id = 200
+        name = "private-thread"
+        parent = None
+
+    parent = FakeChannel()
+    thread = FakeThread()
+    thread.parent = parent
+
+    class FakeGuild:
+        channels = [parent]
+        threads = [thread]
+
+        def get_channel_or_thread(self, channel_id):
+            return {100: parent, 200: thread}.get(channel_id)
+
+    me = object()
+    report = ActivityScopeReport(
+        total_channels=2,
+        accessible_channels=0,
+        problems=(
+            ActivityScopeProblem(
+                channel_id=200,
+                channel_name="private-thread",
+                channel_kind="thread",
+                missing_permissions=("View Channel", "Read Message History"),
+            ),
+            ActivityScopeProblem(
+                channel_id=100,
+                channel_name="private-thread-parent",
+                channel_kind="text",
+                missing_permissions=("Manage Threads",),
+            ),
+        ),
+        bot_member_resolved=True,
+    )
+
+    monkeypatch.setattr(
+        setup_permission_repair_services.repair_core,
+        "_bot_member",
+        lambda _guild: me,
+    )
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "audit_activity_scope",
+        lambda _guild: report,
+    )
+
+    targets, notes, mappings, manual = asyncio.run(
+        setup_permission_repair_services._build_expanded_targets(
+            FakeGuild(),
+            include_activity_coverage=True,
+        )
+    )
+
+    assert mappings == []
+    assert manual == []
+    assert len(targets) == 1
+    target = targets[0]
+    assert target.channel is parent
+    assert set(target.overwrites) == {me}
+
+    expected = target.overwrites[me]
+    assert expected.view_channel is True
+    assert expected.read_message_history is True
+    assert expected.manage_threads is True
+    assert expected.send_messages is False
+    assert expected.manage_messages is True
+    assert any("2 Diagnostics gap(s)" in note for note in notes)
+
+
 def test_repair_button_routes_to_activity_scoped_preview_first_permission_tool(monkeypatch) -> None:
     calls: list[object] = []
 
@@ -237,3 +360,55 @@ def test_activity_access_back_preserves_security_or_logs_parent(monkeypatch) -> 
     asyncio.run(_button(logs_view, "Back").callback(object()))
 
     assert events == ["security", "logs"]
+
+
+
+def test_activity_repair_filters_unrelated_global_capabilities(monkeypatch) -> None:
+    async def no_targets(_guild, *, include_activity_coverage=False):
+        assert include_activity_coverage is True
+        return [], [], [], []
+
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "_build_expanded_targets",
+        no_targets,
+    )
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "_bot_blockers",
+        lambda _guild: [
+            "Dank Shield is missing **Manage Channels** at the server level.",
+            "Dank Shield is missing **View Audit Log**; audit-backed setup checks will be less reliable.",
+        ],
+    )
+
+    healthy = asyncio.run(
+        setup_permission_repair_services.preview_or_apply(
+            object(),
+            apply=False,
+            include_activity_coverage=True,
+        )
+    )
+    assert healthy["manual_actions"] == []
+    assert healthy["notes"] == []
+    assert healthy["reauthorize_recommended"] is False
+
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "_bot_blockers",
+        lambda _guild: [
+            "Dank Shield is missing **Manage Roles** at the server level. Discord requires Manage Roles to repair channel overwrites.",
+            "Dank Shield is missing **View Audit Log**; audit-backed setup checks will be less reliable.",
+        ],
+    )
+    blocked = asyncio.run(
+        setup_permission_repair_services.preview_or_apply(
+            object(),
+            apply=False,
+            include_activity_coverage=True,
+        )
+    )
+    assert len(blocked["manual_actions"]) == 1
+    assert "Manage Roles" in blocked["manual_actions"][0]
+    assert all("View Audit Log" not in item for item in blocked["notes"])
+    assert blocked["reauthorize_recommended"] is True

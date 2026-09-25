@@ -152,7 +152,9 @@ def test_permission_repair_preview_actions_keep_parent_and_scope(monkeypatch) ->
         parent="logs",
         include_activity_coverage=True,
     )
-    asyncio.run(button(view, "Apply Safe Fixes").callback(SimpleNamespace()))
+    apply_button = button(view, "Fix All Safe Access")
+    assert apply_button.custom_id == "dank_setup_permission:apply"
+    asyncio.run(apply_button.callback(SimpleNamespace()))
     asyncio.run(button(view, "Preview Again").callback(SimpleNamespace()))
 
     assert events == [
@@ -370,3 +372,40 @@ def test_permission_repair_result_reauthorize_matches_server_level_blockers(
         getattr(child, "label", "") == "Reauthorize Dank Shield"
         for child in blocked.children
     )
+
+
+def test_activity_repair_preview_copy_matches_activity_primary_action() -> None:
+    result = {
+        "applied": False,
+        "target_count": 3,
+        "changed": ["#private-thread-parent — @Dank Shield"],
+        "failed": [],
+        "manual_actions": [],
+        "missing_mappings": [],
+        "notes": [],
+        "unchanged": [],
+        "include_activity_coverage": True,
+    }
+
+    embed = setup_permission_repair_services.result_embed(result)
+    assert "Fix All Safe Access" in str(embed.description or "")
+    assert "Apply Safe Fixes" not in str(embed.description or "")
+
+    view = setup_permission_repair_services.PermissionRepairPreviewView(
+        include_activity_coverage=True,
+        result=result,
+    )
+    apply = _component_by_id(view, "dank_setup_permission:apply")
+    assert apply.label == "Fix All Safe Access"
+    assert apply.disabled is False
+
+    manual = dict(result)
+    manual["changed"] = []
+    manual["manual_actions"] = ["#private-thread-parent: Manage Permissions is denied."]
+    manual_view = setup_permission_repair_services.PermissionRepairPreviewView(
+        include_activity_coverage=True,
+        result=manual,
+    )
+    manual_apply = _component_by_id(manual_view, "dank_setup_permission:apply")
+    assert manual_apply.label == "Manual Discord Fix Required"
+    assert manual_apply.disabled is True

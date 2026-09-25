@@ -46,7 +46,11 @@ class DiagnosticsActionView(discord.ui.View):
             open_permission_repair,
         )
 
-        await open_permission_repair(interaction, parent="security")
+        await open_permission_repair(
+            interaction,
+            parent="logs",
+            include_activity_coverage=True,
+        )
 
 
 
@@ -181,7 +185,7 @@ def _startup_diagnostics_embed(
         title="🩺 Dank Shield Diagnostics",
         description=(
             "Read-only startup-owner, guild-config, and activity-coverage health report. The report itself does **not** import or reload guards, "
-            "change setup, grant permissions, touch tickets, or mutate server config. Use **Repair Bot Access** below only when you intentionally want the separate repair workflow."
+            "change setup, grant permissions, touch tickets, or mutate server config. Use **Repair Bot Access** below to preview the exact bot-only activity gaps reported here, then apply all safe fixes in one run."
         ),
         color=color,
         timestamp=now_utc(),

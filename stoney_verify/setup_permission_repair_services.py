@@ -15,6 +15,7 @@ import unicodedata
 import discord
 
 from . import permission_repair_core as repair_core
+from .members_new.activity_scope import audit_activity_scope
 
 
 _PUBLIC_CATEGORY_ALIASES: dict[str, set[str]] = {
@@ -137,30 +138,43 @@ def _split_legacy_targets(raw: Any) -> tuple[list[Any], list[str], list[str], li
     return targets, notes, missing_mappings, manual_actions
 
 
-def _activity_coverage_channel(channel: Any) -> bool:
-    return isinstance(channel, (discord.TextChannel, discord.ForumChannel)) or callable(getattr(channel, "history", None))
+def _activity_scope_object(guild: discord.Guild, channel_id: int) -> Any | None:
+    channel_id = int(channel_id or 0)
+    if channel_id <= 0:
+        return None
+
+    getter = getattr(guild, "get_channel_or_thread", None)
+    if callable(getter):
+        try:
+            found = getter(channel_id)
+            if found is not None:
+                return found
+        except Exception:
+            pass
+
+    for collection_name in ("channels", "threads"):
+        for item in list(getattr(guild, collection_name, []) or []):
+            try:
+                if int(getattr(item, "id", 0) or 0) == channel_id:
+                    return item
+            except Exception:
+                continue
+    return None
 
 
-def _activity_coverage_expected(channel: Any) -> discord.PermissionOverwrite:
-    expected = discord.PermissionOverwrite(view_channel=True, read_message_history=True)
-    if isinstance(channel, (discord.TextChannel, discord.ForumChannel)):
-        expected.manage_threads = True
-    return expected
+def _activity_repair_channel(guild: discord.Guild, problem: Any) -> Any | None:
+    item = _activity_scope_object(guild, int(getattr(problem, "channel_id", 0) or 0))
+    if item is None:
+        return None
 
+    if str(getattr(problem, "channel_kind", "") or "").strip().lower() == "thread":
+        item = getattr(item, "parent", None)
+        if item is None:
+            return None
 
-def _activity_coverage_needs_repair(channel: Any, me: discord.Member) -> bool:
-    try:
-        permissions = channel.permissions_for(me)
-    except Exception:
-        return True
-    if not bool(getattr(permissions, "view_channel", False)):
-        return True
-    if not bool(getattr(permissions, "read_message_history", False)):
-        return True
-    return bool(
-        isinstance(channel, (discord.TextChannel, discord.ForumChannel))
-        and not getattr(permissions, "manage_threads", False)
-    )
+    if not callable(getattr(item, "set_permissions", None)):
+        return None
+    return item
 
 
 def _merge_activity_coverage_targets(
@@ -168,51 +182,86 @@ def _merge_activity_coverage_targets(
     targets: list[Any],
     seen: set[int],
     notes: list[str],
+    manual_actions: list[str],
 ) -> None:
-    """Opt-in bot-only activity repair. Member visibility is not changed."""
+    """Build bot-only repair targets directly from the authoritative activity audit."""
     from stoney_verify.startup_guards import setup_permission_repair_guard as legacy
 
-    me = legacy._bot_member(guild)
-    if not isinstance(me, discord.Member):
+    me = repair_core._bot_member(guild)
+    if me is None:
+        manual_actions.append("Dank Shield could not resolve its bot member for activity-access repair.")
         return
 
-    by_channel = {
-        int(getattr(item.channel, "id", 0) or 0): item
-        for item in targets
-        if int(getattr(item.channel, "id", 0) or 0) > 0
-    }
-    repair_count = 0
-    for channel in list(getattr(guild, "channels", []) or []):
-        if not _activity_coverage_channel(channel) or not _activity_coverage_needs_repair(channel, me):
+    report = audit_activity_scope(guild)
+    if not bool(getattr(report, "bot_member_resolved", False)):
+        manual_actions.append("Dank Shield could not resolve its bot member for activity-access repair.")
+        return
+
+    planned: dict[int, dict[str, Any]] = {}
+    unresolved: list[str] = []
+
+    for problem in tuple(getattr(report, "problems", ()) or ()):
+        channel = _activity_repair_channel(guild, problem)
+        if channel is None:
+            unresolved.append(
+                f"{getattr(problem, 'display_name', None) or getattr(problem, 'channel_name', 'unknown')}: "
+                "the audited activity target could not be mapped to a repairable channel."
+            )
             continue
+
         cid = int(getattr(channel, "id", 0) or 0)
         if cid <= 0:
             continue
-        existing = by_channel.get(cid)
-        if existing is not None:
-            current = existing.overwrites.get(me, discord.PermissionOverwrite())
-            current.view_channel = True
-            current.read_message_history = True
-            if isinstance(channel, (discord.TextChannel, discord.ForumChannel)):
-                current.manage_threads = True
-            existing.overwrites[me] = current
-        else:
-            legacy._add_target(
-                targets,
-                seen,
-                channel,
-                "Authoritative activity coverage",
-                {me: _activity_coverage_expected(channel)},
-            )
-            if targets:
-                by_channel[cid] = targets[-1]
-        repair_count += 1
 
-    if repair_count:
-        notes.append(
-            f"Activity access scope: {repair_count} channel(s) need Dank Shield bot-only "
-            "View Channel / Read Message History / Manage Threads access. Member visibility is not changed."
+        entry = planned.get(cid)
+        if entry is None:
+            try:
+                expected = channel.overwrites_for(me)
+            except Exception:
+                expected = discord.PermissionOverwrite()
+            entry = {
+                "channel": channel,
+                "expected": expected,
+                "required": set(),
+            }
+            planned[cid] = entry
+
+        required = entry["required"]
+        for name in tuple(getattr(problem, "missing_permissions", ()) or ()):
+            required.add(str(name))
+
+    for cid, entry in planned.items():
+        expected = entry["expected"]
+        required = entry["required"]
+
+        # Only expand Dank Shield's existing overwrite with permissions that the
+        # authoritative activity audit proved missing. No member/staff overwrite
+        # is added or rewritten in activity-only mode.
+        if "View Channel" in required:
+            expected.view_channel = True
+        if "Read Message History" in required:
+            expected.read_message_history = True
+        if "Manage Threads" in required:
+            expected.manage_threads = True
+
+        legacy._add_target(
+            targets,
+            seen,
+            entry["channel"],
+            "Authoritative activity coverage",
+            {me: expected},
         )
+
+    if planned:
+        notes.append(
+            f"Activity access scope: {len(planned)} channel overwrite(s) cover "
+            f"{len(tuple(getattr(report, 'problems', ()) or ()))} Diagnostics gap(s). "
+            "Only Dank Shield's own existing overwrite is expanded."
+        )
+    elif not tuple(getattr(report, "problems", ()) or ()):
+        notes.append("Diagnostics activity scope is already fully accessible.")
+
+    manual_actions.extend(unresolved)
 
 
 async def _build_expanded_targets(
@@ -220,6 +269,21 @@ async def _build_expanded_targets(
     *,
     include_activity_coverage: bool = False,
 ) -> tuple[list[Any], list[str], list[str], list[str]]:
+    if include_activity_coverage:
+        targets: list[Any] = []
+        notes: list[str] = []
+        missing_mappings: list[str] = []
+        manual_actions: list[str] = []
+        seen: set[int] = set()
+        _merge_activity_coverage_targets(
+            guild,
+            targets,
+            seen,
+            notes,
+            manual_actions,
+        )
+        return targets, notes, missing_mappings, manual_actions
+
     from stoney_verify.guild_config import get_guild_config
     from stoney_verify.startup_guards import setup_permission_repair_guard as legacy
 
@@ -308,9 +372,6 @@ async def _build_expanded_targets(
             for child in list(getattr(item.channel, "channels", []) or []):
                 legacy._add_target(targets, seen, child, f"{item.label} child channel", item.overwrites)
 
-    if include_activity_coverage:
-        _merge_activity_coverage_targets(guild, targets, seen, notes)
-
     if not targets:
         notes.append(
             "No saved or exact-name setup channels/categories were found. "
@@ -328,7 +389,17 @@ async def preview_or_apply(
     from stoney_verify.startup_guards import setup_permission_repair_guard as legacy
 
     blockers = _bot_blockers(guild)
-    reauthorize_recommended = repair_core.reauthorize_recommended(guild)
+    if include_activity_coverage:
+        blockers = [
+            item
+            for item in blockers
+            if "Manage Roles" in item or "could not resolve" in item
+        ]
+    reauthorize_recommended = (
+        any("Manage Roles" in item for item in blockers)
+        if include_activity_coverage
+        else repair_core.reauthorize_recommended(guild)
+    )
     hard_blockers = [
         item
         for item in blockers
@@ -422,19 +493,25 @@ async def preview_or_apply(
             unchanged.append(legacy._channel_label(channel))
 
     if apply:
-        try:
-            from stoney_verify.guild_config import get_guild_config
-            from stoney_verify.setup_engine import build_setup_health_report
+        if include_activity_coverage:
+            notes.insert(
+                0,
+                "Activity access repair finished. Re-run Diagnostics to confirm coverage after Discord propagates the overwrite updates.",
+            )
+        else:
+            try:
+                from stoney_verify.guild_config import get_guild_config
+                from stoney_verify.setup_engine import build_setup_health_report
 
-            cfg = await get_guild_config(guild.id, refresh=True)
-            report = build_setup_health_report(guild, cfg)
-            remaining = [item for item in report.findings if getattr(item, "repairable", False)]
-            if remaining:
-                notes.insert(0, f"Post-repair Setup Check: {len(remaining)} repairable finding(s) still remain.")
-            else:
-                notes.insert(0, "Post-repair Setup Check: no repairable findings remain.")
-        except Exception as exc:
-            notes.insert(0, f"Post-repair Setup Check could not run: {type(exc).__name__}.")
+                cfg = await get_guild_config(guild.id, refresh=True)
+                report = build_setup_health_report(guild, cfg)
+                remaining = [item for item in report.findings if getattr(item, "repairable", False)]
+                if remaining:
+                    notes.insert(0, f"Post-repair Setup Check: {len(remaining)} repairable finding(s) still remain.")
+                else:
+                    notes.insert(0, "Post-repair Setup Check: no repairable findings remain.")
+            except Exception as exc:
+                notes.insert(0, f"Post-repair Setup Check could not run: {type(exc).__name__}.")
 
     return {
         "ok": not failed and not manual_actions and not missing_mappings,
@@ -507,9 +584,10 @@ def result_embed(result: dict[str, Any]) -> discord.Embed:
         )
     elif changed:
         title = "🛠️ Permission Repair Preview"
+        action_label = "Fix All Safe Access" if activity_scope else "Apply Safe Fixes"
         summary = (
             f"Found **{len(changed)}** safe target change(s) across **{int(result.get('target_count') or 0)}** checked target(s). "
-            "Nothing changes until you press **Apply Safe Fixes**."
+            f"Nothing changes until you press **{action_label}**."
         )
     elif attention or result.get("error"):
         title = "⚠️ Manual Discord Fix Required"
@@ -532,7 +610,8 @@ def result_embed(result: dict[str, Any]) -> discord.Embed:
     embed.add_field(
         name="Scope",
         value=(
-            "Activity access only: setup targets plus bot-only history/thread access requested from **Check Bot Access**."
+            "Activity access only: Diagnostics-reported bot-only View Channel / Read Message History / Manage Threads gaps. "
+            "Member and staff overwrites are not changed."
             if activity_scope
             else "Setup channels only: saved setup targets, exact-name matches, and their managed ticket/staff children."
         ),
@@ -608,6 +687,8 @@ class PermissionRepairPreviewView(discord.ui.View):
         self.include_activity_coverage = bool(include_activity_coverage)
 
         label, style, disabled = _preview_action_state(result)
+        if self.include_activity_coverage and label == "Apply Safe Fixes":
+            label = "Fix All Safe Access"
         self.apply_fixes.label = label
         self.apply_fixes.style = style
         self.apply_fixes.disabled = disabled
