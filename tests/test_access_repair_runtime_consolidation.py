@@ -58,94 +58,60 @@ def _member(*, guild_manage_roles: bool, administrator: bool = False):
     )
 
 
-class _HashablePrincipal:
-    def __init__(self, principal_id: int, *, name: str = "principal") -> None:
-        self.id = principal_id
-        self.name = name
-
-
-class _BootstrapMember(_HashablePrincipal):
-    def __init__(self) -> None:
-        super().__init__(42, name="Dank Shield")
-        self.guild_permissions = SimpleNamespace(
-            administrator=False,
-            manage_roles=True,
-            manage_channels=True,
-            view_channel=True,
-            view_audit_log=True,
-        )
-        self.top_role = SimpleNamespace(managed=True)
-
-
-class _BootstrapParent:
-    def __init__(self, member: _BootstrapMember) -> None:
+class _ParentCategory:
+    def __init__(self, member, overwrite: discord.PermissionOverwrite) -> None:
+        self.id = 700
+        self.name = "the-lounge"
+        self.mention = "<#700>"
         self.member = member
+        self.overwrite = overwrite
 
     def overwrites_for(self, principal):
         if principal is self.member:
-            return discord.PermissionOverwrite(
-                manage_roles=True,
-                manage_messages=True,
-                view_channel=True,
-            )
+            return discord.PermissionOverwrite.from_pair(*self.overwrite.pair())
         return discord.PermissionOverwrite()
 
 
-class _BootstrapTarget:
-    def __init__(self, member: _BootstrapMember) -> None:
-        self.id = 810
+class _RepairableChild:
+    def __init__(self, member, parent: _ParentCategory, *, manage_roles: bool) -> None:
+        self.id = 701
         self.name = "general"
-        self.mention = "<#810>"
+        self.mention = "<#701>"
         self.member = member
-        self.category = _BootstrapParent(member)
-        self.other = _HashablePrincipal(99, name="Moderator")
-        self.other_overwrite = discord.PermissionOverwrite(
-            view_channel=True,
-            send_messages=False,
-        )
-        self._bot_overwrite = discord.PermissionOverwrite()
-        self.overwrites = {self.other: self.other_overwrite}
-        self.edit_calls: list[dict] = []
-        self.set_permission_calls: list[tuple] = []
+        self.category = parent
+        self.permissions_synced = False
+        self.manage_roles = manage_roles
+        self.current = discord.PermissionOverwrite()
+        self.permission_calls: list[discord.PermissionOverwrite] = []
 
     def permissions_for(self, principal):
         assert principal is self.member
-        ow = self._bot_overwrite
         return SimpleNamespace(
             administrator=False,
-            manage_roles=ow.manage_roles is True,
-            manage_channels=True,
-            view_channel=ow.view_channel is True,
-            send_messages=ow.send_messages is True,
-            embed_links=ow.embed_links is True,
-            attach_files=ow.attach_files is True,
-            read_message_history=ow.read_message_history is True,
-            manage_messages=ow.manage_messages is True,
-            manage_threads=ow.manage_threads is True,
-            send_messages_in_threads=ow.send_messages_in_threads is True,
-            move_members=ow.move_members is True,
+            manage_roles=self.manage_roles,
+            view_channel=self.current.view_channel is True,
+            send_messages=self.current.send_messages is True,
+            embed_links=self.current.embed_links is True,
+            attach_files=self.current.attach_files is True,
+            read_message_history=self.current.read_message_history is True,
+            manage_channels=False,
+            manage_messages=self.current.manage_messages is True,
+            manage_threads=self.current.manage_threads is True,
+            send_messages_in_threads=self.current.send_messages_in_threads is True,
+            move_members=False,
         )
 
     def overwrites_for(self, principal):
         if principal is self.member:
-            return discord.PermissionOverwrite.from_pair(*self._bot_overwrite.pair())
-        if principal is self.other:
-            return discord.PermissionOverwrite.from_pair(*self.other_overwrite.pair())
+            return discord.PermissionOverwrite.from_pair(*self.current.pair())
         return discord.PermissionOverwrite()
 
-    async def edit(self, *, overwrites, reason=None):
-        self.edit_calls.append(
-            {"overwrites": dict(overwrites), "reason": str(reason or "")}
-        )
-        self.overwrites = dict(overwrites)
-        self._bot_overwrite = discord.PermissionOverwrite.from_pair(
-            *self.overwrites[self.member].pair()
-        )
-        return self
-
-    async def set_permissions(self, *args, **kwargs):
-        self.set_permission_calls.append((args, kwargs))
-        raise AssertionError("self-lockout recovery should use the bot-only bulk edit path")
+    async def set_permissions(self, principal, *, overwrite=None, reason=None):
+        assert principal is self.member
+        assert overwrite is not None
+        saved = discord.PermissionOverwrite.from_pair(*overwrite.pair())
+        self.permission_calls.append(saved)
+        self.current = saved
 
 
 def test_fix_access_owner_authority_does_not_require_member_cache_shape() -> None:
@@ -188,41 +154,100 @@ def test_channel_manage_permissions_self_lockout_is_explained_before_write(monke
     assert report.can_apply is False
 
 
-def test_self_lockout_bootstrap_uses_parent_bot_allows_and_preserves_other_overwrites(monkeypatch) -> None:
+def test_unsynced_child_with_good_parent_reports_exact_manual_handoff(monkeypatch) -> None:
+    member = _member(guild_manage_roles=True)
+    parent = _ParentCategory(
+        member,
+        discord.PermissionOverwrite(
+            view_channel=True,
+            manage_roles=True,
+            manage_messages=True,
+        ),
+    )
+    target = _RepairableChild(member, parent, manage_roles=False)
     guild = SimpleNamespace(id=77, default_role=object())
-    member = _BootstrapMember()
-    target = _BootstrapTarget(member)
-    monkeypatch.setattr(core, "_bot_member", lambda _guild: member)
 
-    plan = core.build_bot_overwrite_bootstrap_plan(guild, target)
-
-    assert plan is not None
-    assert plan.overwrite.manage_roles is True
-    assert plan.overwrite.manage_messages is True
-    assert "manage_messages" in plan.inherited_permissions
-    assert plan.overwrites[target.other].pair() == target.other_overwrite.pair()
-    assert set(plan.overwrites) == {target.other, member}
-
-
-def test_specific_channel_audit_treats_safe_self_unlock_as_repairable(monkeypatch) -> None:
-    guild = SimpleNamespace(id=77, default_role=object())
-    member = _BootstrapMember()
-    target = _BootstrapTarget(member)
     monkeypatch.setattr(core, "_bot_member", lambda _guild: member)
     monkeypatch.setattr(core, "_target_supported", lambda _target: True)
 
+    blocker = core.permission_overwrite_edit_blocker(guild, target)
     report = core.audit_target(guild, target, feature="general", mode="minimum")
 
-    assert report.missing
-    assert report.blockers == []
-    assert report.can_apply is True
-    assert any("without syncing unrelated" in warning for warning in report.warnings)
+    assert "not synced" in blocker
+    assert "parent category" in blocker
+    assert "already allows Manage Permissions" in blocker
+    assert "Sync Now" in blocker
+    assert "entire permission set" in blocker
+    assert report.blockers == [blocker]
+    assert report.can_apply is False
 
 
-def test_specific_channel_apply_self_unlocks_without_set_permissions(monkeypatch) -> None:
+def test_empty_child_bot_overwrite_can_use_parent_as_bot_only_template(monkeypatch) -> None:
+    member = _member(guild_manage_roles=True)
+    parent = _ParentCategory(
+        member,
+        discord.PermissionOverwrite(
+            view_channel=True,
+            manage_roles=True,
+            manage_messages=True,
+        ),
+    )
+    target = _RepairableChild(member, parent, manage_roles=True)
+    guild = SimpleNamespace(id=77)
+
+    monkeypatch.setattr(core, "_bot_member", lambda _guild: member)
+
+    seeded, copied = core.seed_bot_overwrite_from_parent(
+        guild,
+        target,
+        discord.PermissionOverwrite(),
+    )
+
+    assert seeded.view_channel is True
+    assert seeded.manage_roles is True
+    assert seeded.manage_messages is True
+    assert "manage_roles" in copied
+    assert "manage_messages" in copied
+
+
+def test_existing_child_bot_overwrite_is_not_replaced_by_parent_template(monkeypatch) -> None:
+    member = _member(guild_manage_roles=True)
+    parent = _ParentCategory(
+        member,
+        discord.PermissionOverwrite(
+            view_channel=True,
+            manage_roles=True,
+            manage_messages=True,
+        ),
+    )
+    target = _RepairableChild(member, parent, manage_roles=True)
+    guild = SimpleNamespace(id=77)
+    current = discord.PermissionOverwrite(view_channel=False)
+
+    monkeypatch.setattr(core, "_bot_member", lambda _guild: member)
+
+    seeded, copied = core.seed_bot_overwrite_from_parent(guild, target, current)
+
+    assert seeded.view_channel is False
+    assert seeded.manage_messages is None
+    assert copied == []
+
+
+def test_specific_channel_repair_seeds_parent_bot_template_when_discord_allows_write(
+    monkeypatch,
+) -> None:
+    member = _member(guild_manage_roles=True)
+    parent = _ParentCategory(
+        member,
+        discord.PermissionOverwrite(
+            view_channel=True,
+            manage_roles=True,
+            manage_messages=True,
+        ),
+    )
+    target = _RepairableChild(member, parent, manage_roles=True)
     guild = SimpleNamespace(id=77, default_role=object())
-    member = _BootstrapMember()
-    target = _BootstrapTarget(member)
+
     monkeypatch.setattr(core, "_bot_member", lambda _guild: member)
     monkeypatch.setattr(core, "_target_supported", lambda _target: True)
 
@@ -244,24 +269,28 @@ def test_specific_channel_apply_self_unlocks_without_set_permissions(monkeypatch
 
     assert result.ok is True
     assert result.failed_targets == []
-    assert result.changed_targets
-    assert len(target.edit_calls) == 1
-    assert target.set_permission_calls == []
-    assert target._bot_overwrite.manage_roles is True
-    assert target._bot_overwrite.view_channel is True
-    assert target._bot_overwrite.send_messages is True
-    assert target.overwrites[target.other].pair() == target.other_overwrite.pair()
+    assert len(target.permission_calls) == 1
+    written = target.permission_calls[0]
+    assert written.manage_roles is True
+    assert written.manage_messages is True
+    assert written.view_channel is True
+    assert written.send_messages is True
+    assert written.read_message_history is True
 
 
-def test_setup_repair_self_unlocks_same_channel_without_full_category_sync(monkeypatch) -> None:
-    guild = SimpleNamespace(id=77, default_role=object())
-    member = _BootstrapMember()
-    target = _BootstrapTarget(member)
-    desired = discord.PermissionOverwrite(
-        view_channel=True,
-        read_message_history=True,
-        manage_threads=True,
+def test_setup_repair_does_not_attempt_overwrite_write_after_channel_self_lockout(
+    monkeypatch,
+) -> None:
+    member = _member(guild_manage_roles=True)
+    parent = _ParentCategory(
+        member,
+        discord.PermissionOverwrite(
+            view_channel=True,
+            manage_roles=True,
+        ),
     )
+    target = _RepairableChild(member, parent, manage_roles=False)
+    guild = SimpleNamespace(id=77)
 
     monkeypatch.setattr(core, "_bot_member", lambda _guild: member)
 
@@ -270,38 +299,32 @@ def test_setup_repair_self_unlocks_same_channel_without_full_category_sync(monke
         return [
             SimpleNamespace(
                 channel=target,
-                overwrites={member: desired},
+                overwrites={
+                    member: discord.PermissionOverwrite(
+                        view_channel=True,
+                        read_message_history=True,
+                        manage_threads=True,
+                        manage_roles=True,
+                    )
+                },
             )
         ], [], [], []
 
     monkeypatch.setattr(setup_repair, "_build_expanded_targets", targets)
 
-    preview = asyncio.run(
-        setup_repair.preview_or_apply(
-            guild,
-            apply=False,
-            include_activity_coverage=True,
-        )
-    )
-    assert preview["manual_actions"] == []
-    assert preview["changed"]
-    assert any("Self-lockout recovery" in note for note in preview["notes"])
-    assert target.edit_calls == []
-
-    applied = asyncio.run(
+    result = asyncio.run(
         setup_repair.preview_or_apply(
             guild,
             apply=True,
             include_activity_coverage=True,
         )
     )
-    assert applied["manual_actions"] == []
-    assert applied["failed"] == []
-    assert applied["changed"]
-    assert len(target.edit_calls) == 1
-    assert target._bot_overwrite.manage_roles is True
-    assert target._bot_overwrite.manage_messages is True
-    assert target.overwrites[target.other].pair() == target.other_overwrite.pair()
+
+    assert result["changed"] == []
+    assert target.permission_calls == []
+    assert len(result["manual_actions"]) == 1
+    assert "not synced" in result["manual_actions"][0]
+    assert "Sync Now" in result["manual_actions"][0]
 
 
 def test_effective_manage_roles_allows_overwrite_repair_even_without_manage_channels(monkeypatch) -> None:
