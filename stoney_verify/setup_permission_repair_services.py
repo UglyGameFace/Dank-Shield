@@ -229,6 +229,7 @@ def _merge_activity_coverage_targets(
                 guild,
                 channel,
                 current,
+                include_manage_roles=temporary_admin_active,
             )
             entry = {
                 "channel": channel,
