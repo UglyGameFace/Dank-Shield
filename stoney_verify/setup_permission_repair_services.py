@@ -328,6 +328,7 @@ async def preview_or_apply(
     from stoney_verify.startup_guards import setup_permission_repair_guard as legacy
 
     blockers = _bot_blockers(guild)
+    reauthorize_recommended = bool(blockers)
     hard_blockers = [
         item
         for item in blockers
@@ -346,6 +347,7 @@ async def preview_or_apply(
             "target_count": 0,
             "applied": bool(apply),
             "include_activity_coverage": bool(include_activity_coverage),
+            "reauthorize_recommended": reauthorize_recommended,
         }
 
     targets, notes, missing_mappings, manual_actions = await _build_expanded_targets(
@@ -446,6 +448,7 @@ async def preview_or_apply(
         "target_count": len(targets),
         "applied": bool(apply),
         "include_activity_coverage": bool(include_activity_coverage),
+        "reauthorize_recommended": reauthorize_recommended,
     }
 
 
@@ -457,6 +460,32 @@ def _line_list(lines: list[str], *, empty: str = "None", limit: int = 760, max_r
     if len(clean) > len(shown):
         shown.append(f"…and {len(clean) - len(shown)} more")
     return "\n".join(shown)[:limit]
+
+
+def _repair_attention(result: dict[str, Any]) -> list[str]:
+    return [
+        *list(result.get("failed") or []),
+        *list(result.get("manual_actions") or []),
+        *list(result.get("missing_mappings") or []),
+    ]
+
+
+def _preview_action_state(
+    result: dict[str, Any] | None,
+) -> tuple[str, discord.ButtonStyle, bool]:
+    """Return the one honest primary action for the canonical repair hub."""
+    if result is None:
+        return "Apply Safe Fixes", discord.ButtonStyle.success, False
+
+    changed = list(result.get("changed") or [])
+    attention = _repair_attention(result)
+    error = str(result.get("error") or "").strip()
+
+    if changed:
+        return "Apply Safe Fixes", discord.ButtonStyle.success, False
+    if attention or error:
+        return "Manual Discord Fix Required", discord.ButtonStyle.secondary, True
+    return "Access Healthy", discord.ButtonStyle.secondary, True
 
 
 def result_embed(result: dict[str, Any]) -> discord.Embed:
@@ -476,11 +505,23 @@ def result_embed(result: dict[str, Any]) -> discord.Embed:
             f"Applied **{len(changed)}** safe target change(s). "
             f"**{len(attention)}** item(s) still need attention."
         )
-    else:
+    elif changed:
         title = "🛠️ Permission Repair Preview"
         summary = (
             f"Found **{len(changed)}** safe target change(s) across **{int(result.get('target_count') or 0)}** checked target(s). "
             "Nothing changes until you press **Apply Safe Fixes**."
+        )
+    elif attention or result.get("error"):
+        title = "⚠️ Manual Discord Fix Required"
+        summary = (
+            "Dank Shield found **no safe overwrite changes it can apply itself**. "
+            "Use the exact blocker guidance below, then run the preview again."
+        )
+    else:
+        title = "✅ Bot Access Ready"
+        summary = (
+            f"Checked **{int(result.get('target_count') or 0)}** configured target(s). "
+            "No safe permission repair is needed."
         )
 
     embed = discord.Embed(
@@ -560,11 +601,20 @@ class PermissionRepairPreviewView(discord.ui.View):
         guild: discord.Guild | None = None,
         parent: str = "security",
         include_activity_coverage: bool = False,
+        result: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(timeout=900)
         self.parent = str(parent or "security").strip().lower()
         self.include_activity_coverage = bool(include_activity_coverage)
-        if guild is not None:
+
+        label, style, disabled = _preview_action_state(result)
+        self.apply_fixes.label = label
+        self.apply_fixes.style = style
+        self.apply_fixes.disabled = disabled
+
+        if guild is not None and (
+            result is None or bool(result.get("reauthorize_recommended"))
+        ):
             button = _reauthorize_button(guild)
             if button is not None:
                 self.add_item(button)
@@ -682,6 +732,30 @@ class PermissionRepairResultView(discord.ui.View):
         await _back_to_parent(interaction, self.parent)
 
 
+async def _claim_repair_interaction(
+    interaction: discord.Interaction,
+    *,
+    action_name: str,
+) -> bool:
+    from stoney_verify.interaction_guard import safe_defer_interaction
+
+    claimed = await safe_defer_interaction(
+        interaction,
+        ephemeral=True,
+        action_name=action_name,
+    )
+    if not claimed:
+        try:
+            print(
+                "❌ access_repair interaction claim failed "
+                f"action={action_name} guild={getattr(getattr(interaction, 'guild', None), 'id', 0)} "
+                f"user={getattr(getattr(interaction, 'user', None), 'id', 0)}"
+            )
+        except Exception:
+            pass
+    return claimed
+
+
 async def open_permission_repair(
     interaction: discord.Interaction,
     *,
@@ -696,7 +770,12 @@ async def open_permission_repair(
     if guild is None:
         return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
 
-    await solid._safe_defer_update(interaction)
+    if not await _claim_repair_interaction(
+        interaction,
+        action_name="access_repair_preview",
+    ):
+        return
+
     result = await preview_or_apply(
         guild,
         apply=False,
@@ -709,6 +788,7 @@ async def open_permission_repair(
             guild=guild,
             parent=parent,
             include_activity_coverage=include_activity_coverage,
+            result=result,
         ),
     )
 
@@ -728,10 +808,13 @@ async def apply_permission_repair(
     if guild is None:
         return await interaction.response.send_message("❌ This must be used inside a server.", ephemeral=True)
 
-    # Component update defer, not thinking=True. The original ephemeral card is
-    # edited when the queued job completes, so Discord cannot leave a permanent
-    # "Dank Shield is thinking…" placeholder behind.
-    await solid._safe_defer_update(interaction)
+    # Claim before queue/REST/database work. A failed acknowledgement must stop
+    # the mutation path rather than continuing behind Discord's red banner.
+    if not await _claim_repair_interaction(
+        interaction,
+        action_name="access_repair_apply",
+    ):
+        return
 
     async def job() -> dict[str, Any]:
         return await preview_or_apply(
