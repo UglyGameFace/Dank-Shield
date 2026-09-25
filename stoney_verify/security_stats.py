@@ -509,6 +509,35 @@ def _styled_metric_label(preferences: Mapping[str, Any], label: str) -> str:
         return label
 
 
+def _metric_name_head(preferences: Mapping[str, Any], key: str) -> str:
+    row = _metric_format(preferences, key)
+    context = _design_context(preferences)
+
+    icon = row["icon"]
+    label = _styled_metric_label(preferences, row["label"])
+    explicit_format = bool(_mapping(preferences.get("formats", {})).get(key))
+    if context.get("enabled") and not explicit_format:
+        icon_mode = str(_mapping(context.get("options", {})).get("icon_mode") or "replace_missing")
+        if icon_mode == "clear":
+            icon = ""
+
+    design_separator = str(context.get("separator") or "") if context.get("enabled") else ""
+    if icon and design_separator and not explicit_format:
+        return f"{icon} {design_separator} {label}".strip()
+    if icon:
+        return f"{icon} {label}".strip()
+    return label.strip()
+
+
+def security_stat_name_prefix(preferences: Mapping[str, Any], key: str) -> str:
+    """Return the stable live-channel prefix before the changing value."""
+
+    row = _metric_format(preferences, key)
+    head = _metric_name_head(preferences, key)
+    before_value = row["value_template"].split(SECURITY_STATS_VALUE_TOKEN, 1)[0]
+    return f"{head}{row['separator']}{before_value}".strip()
+
+
 def render_security_stat_name(
     preferences: Mapping[str, Any],
     key: str,
@@ -517,22 +546,9 @@ def render_security_stat_name(
     metric = security_stat_metric(key)
     row = _metric_format(preferences, key)
     context = _design_context(preferences)
-
-    icon = row["icon"]
-    label = _styled_metric_label(preferences, row["label"])
-    if context.get("enabled") and not _mapping(preferences.get("formats", {})).get(key):
-        icon_mode = str(_mapping(context.get("options", {})).get("icon_mode") or "replace_missing")
-        if icon_mode == "clear":
-            icon = ""
-
+    head = _metric_name_head(preferences, key)
     explicit_format = bool(_mapping(preferences.get("formats", {})).get(key))
     design_separator = str(context.get("separator") or "") if context.get("enabled") else ""
-    if icon and design_separator and not explicit_format:
-        head = f"{icon} {design_separator} {label}".strip()
-    elif icon:
-        head = f"{icon} {label}".strip()
-    else:
-        head = label.strip()
 
     rendered_value = row["value_template"].replace(SECURITY_STATS_VALUE_TOKEN, str(value), 1)
     name = f"{head}{row['separator']}{rendered_value}".strip()
@@ -996,7 +1012,7 @@ def _category_has_stats_evidence(
                 prefixes = [
                     default_prefix,
                     f"{_stat_label(preferences, key)}:",
-                    render_security_stat_name(preferences, key, "").rstrip(),
+                    security_stat_name_prefix(preferences, key),
                 ]
                 if any(name.startswith(prefix) for prefix in prefixes):
                     return True
@@ -1063,7 +1079,7 @@ def _find_existing_stat_channel(
     prefixes = [STAT_CHANNEL_PREFIXES[key]]
     if preferences is not None:
         custom_prefix = f"{_stat_label(preferences, key)}:"
-        rendered_prefix = render_security_stat_name(preferences, key, "").rstrip()
+        rendered_prefix = security_stat_name_prefix(preferences, key)
         for candidate in (custom_prefix, rendered_prefix):
             if candidate and candidate not in prefixes:
                 prefixes.append(candidate)
