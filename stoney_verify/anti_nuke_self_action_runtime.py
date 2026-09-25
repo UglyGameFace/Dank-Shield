@@ -25,7 +25,6 @@ _HTTP_PATCH_FLAG = "_dank_antinuke_self_action_http_patched"
 _WEBHOOK_PATCH_FLAG = "_dank_antinuke_self_action_webhook_patched"
 _AUTH_TTL_SECONDS = 120.0
 _SIDE_EFFECT_TTL_SECONDS = 15.0
-_MAX_PENDING = 4096
 _REASON_BASE_LIMIT = 380
 _MARKER_RE = re.compile(r"\[DSA:([0-9a-f]{24})\]", re.IGNORECASE)
 _API_PREFIX_RE = re.compile(r"^/api/v\d+")
@@ -73,6 +72,7 @@ class _Authorization:
     guild_id: int
     target_key: str
     created_at: float
+    completed_at: Optional[float] = None
 
 
 @dataclass
@@ -84,6 +84,7 @@ class _ExpectedSideEffect:
     target_key: str
     source_action: str
     created_at: float
+    completed_at: Optional[float] = None
 
 
 _PENDING: dict[str, _Authorization] = {}
@@ -323,26 +324,27 @@ def _request_spec(bot: discord.Client, route: Any, kwargs: Mapping[str, Any]) ->
 def _prune_pending(now: Optional[float] = None) -> None:
     current = time.monotonic() if now is None else float(now)
     for nonce, auth in list(_PENDING.items()):
-        if current - float(auth.created_at) > _AUTH_TTL_SECONDS:
+        # A protected Discord mutation can sit inside discord.py's rate-limit
+        # machinery longer than the normal post-request audit receipt window.
+        # Never expire proof while the outbound request is still in flight.
+        if auth.completed_at is None:
+            continue
+        if current - float(auth.completed_at) > _AUTH_TTL_SECONDS:
             _PENDING.pop(nonce, None)
-    if len(_PENDING) > _MAX_PENDING:
-        ordered = sorted(_PENDING.values(), key=lambda item: item.created_at)
-        for auth in ordered[: len(_PENDING) - _MAX_PENDING]:
-            _PENDING.pop(auth.nonce, None)
+    # Do not count-evict valid provenance. Completed receipts are naturally
+    # bounded by the short TTL, while in-flight receipts represent real
+    # outstanding Discord requests and are removed on success/failure/cancel.
 
 
 def _prune_expected_side_effects(now: Optional[float] = None) -> None:
     current = time.monotonic() if now is None else float(now)
     for token, expected in list(_EXPECTED_SIDE_EFFECTS.items()):
-        if current - float(expected.created_at) > _SIDE_EFFECT_TTL_SECONDS:
+        if expected.completed_at is None:
+            continue
+        if current - float(expected.completed_at) > _SIDE_EFFECT_TTL_SECONDS:
             _EXPECTED_SIDE_EFFECTS.pop(token, None)
-    if len(_EXPECTED_SIDE_EFFECTS) > _MAX_PENDING:
-        ordered = sorted(
-            _EXPECTED_SIDE_EFFECTS.values(),
-            key=lambda item: item.created_at,
-        )
-        for expected in ordered[: len(_EXPECTED_SIDE_EFFECTS) - _MAX_PENDING]:
-            _EXPECTED_SIDE_EFFECTS.pop(expected.token, None)
+    # Side-effect provenance follows the same rule: valid unexpired proof is
+    # never sacrificed merely because another guild is busy.
 
 
 def _expect_side_effect(
@@ -352,6 +354,7 @@ def _expect_side_effect(
     related_bot_id: int = 0,
     target_key: str = "",
     source_action: str = "",
+    in_flight: bool = False,
 ) -> str:
     _prune_expected_side_effects()
     gid = _safe_int(guild_id, 0)
@@ -359,6 +362,7 @@ def _expect_side_effect(
     if gid <= 0 or not action:
         return ""
     token = secrets.token_hex(12)
+    created_at = time.monotonic()
     _EXPECTED_SIDE_EFFECTS[token] = _ExpectedSideEffect(
         token=token,
         action=action,
@@ -366,9 +370,21 @@ def _expect_side_effect(
         related_bot_id=max(0, _safe_int(related_bot_id, 0)),
         target_key=str(target_key or "").strip().lower(),
         source_action=str(source_action or "")[:80],
-        created_at=time.monotonic(),
+        created_at=created_at,
+        completed_at=None if in_flight else created_at,
     )
     return token
+
+
+def _complete_expected_side_effect(
+    token: str,
+    now: Optional[float] = None,
+) -> None:
+    expected = _EXPECTED_SIDE_EFFECTS.get(str(token or "").lower())
+    if expected is None:
+        return
+    expected.completed_at = time.monotonic() if now is None else float(now)
+    _prune_expected_side_effects(expected.completed_at)
 
 
 def _cancel_expected_side_effect(token: str) -> None:
@@ -506,6 +522,14 @@ def _authorize(spec: _RequestSpec, reason: Any) -> tuple[str, str]:
     stamped = f"{base} {marker}".strip() if base else f"Dank Shield authorized action {marker}"
     _PENDING[nonce] = _Authorization(nonce, spec.actions, spec.guild_id, spec.target_key, time.monotonic())
     return nonce, stamped
+
+
+def _complete(nonce: str, now: Optional[float] = None) -> None:
+    auth = _PENDING.get(str(nonce or "").lower())
+    if auth is None:
+        return
+    auth.completed_at = time.monotonic() if now is None else float(now)
+    _prune_pending(auth.completed_at)
 
 
 def _cancel(nonce: str) -> None:
@@ -683,6 +707,7 @@ def _patch_http(bot: discord.Client) -> bool:
                 "integration_delete",
                 related_bot_id=_target_id_from_key(spec.target_key),
                 source_action=source_action,
+                in_flight=True,
             )
             if token:
                 side_effects.append(token)
@@ -693,17 +718,22 @@ def _patch_http(bot: discord.Client) -> bool:
                 "message_delete",
                 target_key=spec.target_key,
                 source_action="local_message_delete",
+                in_flight=True,
             )
             if token:
                 side_effects.append(token)
 
         try:
-            return await original(route, *args, **kwargs)
-        except Exception:
+            result = await original(route, *args, **kwargs)
+        except BaseException:
             _cancel(nonce)
             for token in side_effects:
                 _cancel_expected_side_effect(token)
             raise
+        _complete(nonce)
+        for token in side_effects:
+            _complete_expected_side_effect(token)
+        return result
 
     setattr(http, "request", guarded_request)
     setattr(http, _HTTP_PATCH_FLAG, True)
@@ -723,10 +753,12 @@ def _patch_webhook_methods(bot: discord.Client) -> bool:
         nonce, reason = _authorize(spec, kwargs.get("reason"))
         kwargs["reason"] = reason
         try:
-            return await original_delete(self, *args, **kwargs)
-        except Exception:
+            result = await original_delete(self, *args, **kwargs)
+        except BaseException:
             _cancel(nonce)
             raise
+        _complete(nonce)
+        return result
 
     async def guarded_edit(self: Any, *args: Any, **kwargs: Any) -> Any:
         guild_id = _safe_int(getattr(self, "guild_id", 0), 0)
@@ -734,10 +766,12 @@ def _patch_webhook_methods(bot: discord.Client) -> bool:
         nonce, reason = _authorize(spec, kwargs.get("reason"))
         kwargs["reason"] = reason
         try:
-            return await original_edit(self, *args, **kwargs)
-        except Exception:
+            result = await original_edit(self, *args, **kwargs)
+        except BaseException:
             _cancel(nonce)
             raise
+        _complete(nonce)
+        return result
 
     cls.delete = guarded_delete
     cls.edit = guarded_edit
