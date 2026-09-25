@@ -241,6 +241,106 @@ def test_cancelled_http_request_discards_inflight_authorization() -> None:
     assert runtime._PENDING == {}  # noqa: SLF001
 
 
+def test_inflight_channel_patch_can_be_consumed_before_http_returns(
+    monkeypatch,
+) -> None:
+    _reset()
+    clock = [3000.0]
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: clock[0])
+    guild = FakeGuild(7)
+    holder: dict[str, object] = {}
+
+    async def should_not_read_settings(_guild_id: int):
+        raise AssertionError(
+            "in-flight local audit proof must consume before compromise checks"
+        )
+
+    monkeypatch.setattr(
+        anti_nuke,
+        "get_antinuke_settings",
+        should_not_read_settings,
+    )
+
+    class AuditBeforeResponseHTTP:
+        async def request(self, route, *args, **kwargs):
+            _ = route, args
+            clock[0] += runtime._AUTH_TTL_SECONDS + 30.0  # noqa: SLF001
+            runtime._prune_pending(clock[0])  # noqa: SLF001
+            event = _entry(
+                guild,
+                action="channel_update",
+                target_id=90,
+                reason=str(kwargs["reason"]),
+            )
+            await runtime._audit_guard(holder["bot"], event)  # type: ignore[arg-type]  # noqa: SLF001
+            assert runtime._PENDING == {}  # noqa: SLF001
+            return {"ok": True}
+
+    bot = FakeBot()
+    holder["bot"] = bot
+    bot.http = AuditBeforeResponseHTTP()
+    bot.get_channel = lambda channel_id: (
+        SimpleNamespace(id=int(channel_id), guild=guild)
+        if int(channel_id) == 90
+        else None
+    )
+
+    assert runtime._patch_http(bot) is True  # noqa: SLF001
+    asyncio.run(
+        bot.http.request(
+            FakeRoute("PATCH", "/channels/90"),
+            reason="slow local rename",
+        )
+    )
+
+    assert guild.leave_calls == 0
+    assert runtime._PENDING == {}  # noqa: SLF001
+
+
+def test_valid_provenance_is_not_count_evicted_before_ttl() -> None:
+    _reset()
+    now = 4000.0
+    actions = frozenset({"channel_update"})
+
+    for index in range(4100):
+        nonce = f"{index:024x}"
+        runtime._PENDING[nonce] = runtime._Authorization(  # noqa: SLF001
+            nonce=nonce,
+            actions=actions,
+            guild_id=7,
+            target_key=f"id:{index + 1}",
+            created_at=now,
+            completed_at=now,
+        )
+        token = f"s{index}"
+        runtime._EXPECTED_SIDE_EFFECTS[token] = runtime._ExpectedSideEffect(  # noqa: SLF001
+            token=token,
+            action="integration_delete",
+            guild_id=7,
+            related_bot_id=index + 1,
+            target_key="",
+            source_action="load-test",
+            created_at=now,
+            completed_at=now,
+        )
+
+    runtime._prune_pending(now + runtime._AUTH_TTL_SECONDS - 1.0)  # noqa: SLF001
+    runtime._prune_expected_side_effects(  # noqa: SLF001
+        now + runtime._SIDE_EFFECT_TTL_SECONDS - 1.0
+    )
+
+    assert len(runtime._PENDING) == 4100  # noqa: SLF001
+    assert len(runtime._EXPECTED_SIDE_EFFECTS) == 4100  # noqa: SLF001
+
+    runtime._prune_pending(now + runtime._AUTH_TTL_SECONDS + 1.0)  # noqa: SLF001
+    runtime._prune_expected_side_effects(  # noqa: SLF001
+        now + runtime._SIDE_EFFECT_TTL_SECONDS + 1.0
+    )
+
+    assert runtime._PENDING == {}  # noqa: SLF001
+    assert runtime._EXPECTED_SIDE_EFFECTS == {}  # noqa: SLF001
+
+
 def test_expected_local_message_delete_is_channel_scoped_and_one_time() -> None:
     _reset()
     guild = FakeGuild()
