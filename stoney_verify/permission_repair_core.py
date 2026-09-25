@@ -632,6 +632,18 @@ def audit_target(
         else:
             report.repairable_missing.append(name)
 
+    # While temporary Administrator is active, expose the underlying
+    # Manage Permissions lockout as an explicit repair target. It is omitted
+    # from ordinary feature requirements because normal operation should not
+    # manufacture channel-level Manage Roles grants.
+    if (
+        temporary_admin_active
+        and not bool(getattr(effective, "manage_roles", False))
+        and "manage_roles" not in report.missing
+    ):
+        report.missing.append("manage_roles")
+        report.repairable_missing.append("manage_roles")
+
     if report.missing:
         overwrite_blocker = permission_overwrite_edit_blocker(guild, target)
         if overwrite_blocker:
@@ -843,6 +855,24 @@ async def apply_target_repair(
                 current_target,
                 current,
             )
+
+            temporary_admin_active = bool(
+                getattr(getattr(me, "guild_permissions", None), "administrator", False)
+            )
+            if not temporary_admin_active:
+                # Parent seeding is bot-only, but normal repair must not add or
+                # remove channel-level Manage Permissions. Preserve the child's
+                # current explicit value until emergency recovery is authorized.
+                try:
+                    seeded.manage_roles = getattr(current, "manage_roles", None)
+                    inherited = [
+                        name
+                        for name in inherited
+                        if name not in {"manage_roles", "deny:manage_roles"}
+                    ]
+                except Exception:
+                    pass
+
             new_overwrite, changed, preserved = _apply_missing_to_overwrite(
                 seeded,
                 report.missing,
