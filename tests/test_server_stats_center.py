@@ -243,7 +243,10 @@ def test_stat_label_modal_reuses_existing_interaction_panel(monkeypatch) -> None
             current=security_stats.DEFAULT_SECURITY_STATS_LABELS["members"],
             owner_id=1,
         )
-        modal.label_text._value = "👥 Folks"
+        modal.icon_text._value = "[👥]"
+        modal.label_text._value = "Folks"
+        modal.separator_text._value = ": "
+        modal.value_template._value = "「{value}」"
         await modal.on_submit(interaction)
 
         save_events = [payload for name, payload in events if name == "save"]
@@ -251,9 +254,15 @@ def test_stat_label_modal_reuses_existing_interaction_panel(monkeypatch) -> None
             (
                 77,
                 {
-                    security_stats.SECURITY_STATS_CUSTOM_LABELS_KEY: {
-                        "members": "👥 Folks"
-                    }
+                    security_stats.SECURITY_STATS_FORMAT_OVERRIDES_KEY: {
+                        "members": {
+                            "icon": "[👥]",
+                            "label": "Folks",
+                            "separator": ": ",
+                            "value_template": "「{value}」",
+                        }
+                    },
+                    security_stats.SECURITY_STATS_CUSTOM_LABELS_KEY: {},
                 },
             )
         ]
@@ -261,6 +270,29 @@ def test_stat_label_modal_reuses_existing_interaction_panel(monkeypatch) -> None
         assert events[-1][0] == "render"
         rendered_interaction, note = events[-1][1]
         assert rendered_interaction is interaction
-        assert note == "✅ **Member count** label saved."
+        assert note == "✅ **Member count** format saved. Preview: `[👥] Folks: 「0」`"
 
     asyncio.run(scenario())
+
+def test_counter_format_modal_exposes_each_editable_section() -> None:
+    modal = stats_ui.StatLabelModal(
+        key="open_tickets",
+        current=security_stats.DEFAULT_SECURITY_STATS_LABELS["open_tickets"],
+        owner_id=1,
+    )
+    assert [str(item.label) for item in modal.children] == [
+        "Icon / prefix",
+        "Label",
+        "Label → value separator",
+        "Value format — keep {value}",
+    ]
+
+
+def test_design_sync_button_reflects_saved_per_server_choice() -> None:
+    view = stats_ui.ServerStatsView(
+        owner_id=1,
+        cfg={security_stats.SECURITY_STATS_INHERIT_DESIGN_KEY: True},
+    )
+    button = _item(view, "dank_server_stats:design_sync")
+    assert str(button.label) == "Design Sync: On"
+    assert button.style == discord.ButtonStyle.success
