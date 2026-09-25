@@ -524,6 +524,56 @@ def test_expected_bot_removal_side_effect_expires() -> None:
     assert token not in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
 
 
+def test_rate_limited_bot_removal_keeps_derived_side_effect_until_completion(
+    monkeypatch,
+) -> None:
+    _reset()
+    clock = [2000.0]
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: clock[0])
+
+    class RateLimitedHTTP:
+        async def request(self, route, *args, **kwargs):
+            _ = route, args, kwargs
+            assert len(runtime._EXPECTED_SIDE_EFFECTS) == 1  # noqa: SLF001
+            expected = next(  # noqa: SLF001
+                iter(runtime._EXPECTED_SIDE_EFFECTS.values())  # noqa: SLF001
+            )
+            assert expected.completed_at is None
+            clock[0] += runtime._SIDE_EFFECT_TTL_SECONDS + 30.0  # noqa: SLF001
+            runtime._prune_expected_side_effects(clock[0])  # noqa: SLF001
+            assert expected.token in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
+            return {"ok": True}
+
+    bot = FakeBot()
+    bot.http = RateLimitedHTTP()
+    bot.get_user = lambda user_id: (
+        SimpleNamespace(id=444, bot=True) if int(user_id) == 444 else None
+    )
+    route = FakeRoute("DELETE", "/guilds/7/members/444")
+
+    assert runtime._patch_http(bot) is True  # noqa: SLF001
+    asyncio.run(
+        bot.http.request(
+            route,
+            reason="Dank Shield AntiNuke rollback: unauthorized bot addition",
+        )
+    )
+
+    assert len(runtime._EXPECTED_SIDE_EFFECTS) == 1  # noqa: SLF001
+    expected = next(iter(runtime._EXPECTED_SIDE_EFFECTS.values()))  # noqa: SLF001
+    assert expected.completed_at == clock[0]
+
+    runtime._prune_expected_side_effects(  # noqa: SLF001
+        clock[0] + runtime._SIDE_EFFECT_TTL_SECONDS - 1.0
+    )
+    assert expected.token in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
+
+    runtime._prune_expected_side_effects(  # noqa: SLF001
+        clock[0] + runtime._SIDE_EFFECT_TTL_SECONDS + 1.0
+    )
+    assert expected.token not in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
+
+
 def test_http_bot_kick_arms_expected_integration_cleanup(monkeypatch) -> None:
     _reset()
     bot = FakeBot()
