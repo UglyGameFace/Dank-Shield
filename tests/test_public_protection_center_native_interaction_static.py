@@ -54,3 +54,20 @@ def test_protection_center_owns_import_pack_without_startup_patch() -> None:
     assert "_merge_imported_filter_terms" in SOURCE
     assert "protection_pack_manual_import_guard" not in SOURCE
     assert "protection_import_button_patch" not in SOURCE
+
+def test_protection_center_reports_invite_delete_health_and_v2_coverage() -> None:
+    assert "def _invite_delete_health(" in SOURCE
+    assert "**Live delete access here:**" in SOURCE
+    assert "**Modern app cards:** visible Components V2 text is checked" in SOURCE
+    assert "manage_messages" in SOURCE
+
+
+def test_protection_center_close_removes_panel_instead_of_greying_it_out() -> None:
+    start = SOURCE.index("async def close_button")
+    end = SOURCE.index("@dank_group.command", start)
+    block = SOURCE[start:end]
+
+    assert "embed=None" in block
+    assert "view=None" in block
+    assert "child.disabled = True" not in block
+
