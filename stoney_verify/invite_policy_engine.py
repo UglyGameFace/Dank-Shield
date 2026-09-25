@@ -787,6 +787,38 @@ async def decide_invite_message(
     decision.protected_poster_matched = bool(protected_match)
     decision.strict_unknown_invites = bool(block_unknown_when_protected)
 
+    if str(decision.author_id) in exempt_users:
+        decision.rule_id = "exempt_user"
+        decision.reason = "Author is on the invite exempt-user list."
+        decision.fix_hint = "Remove the user from exempt users if this should be enforced."
+        decision.allowed_codes = list(codes)
+        record_invite_decision(message, decision)
+        return decision
+
+    if isinstance(author, discord.Member) and _member_has_any_role(author, exempt_roles):
+        decision.rule_id = "exempt_role"
+        decision.reason = "Author has an exempt role."
+        decision.fix_hint = "Remove the role from exempt roles if this should be enforced."
+        decision.allowed_codes = list(codes)
+        record_invite_decision(message, decision)
+        return decision
+
+    if isinstance(author, discord.Member) and _member_has_any_role(author, allowed_roles):
+        decision.rule_id = "invite_allowed_role"
+        decision.reason = "Author has an invite-allowed role."
+        decision.fix_hint = "Remove the role from invite-allowed roles if this should be enforced."
+        decision.allowed_codes = list(codes)
+        record_invite_decision(message, decision)
+        return decision
+
+    if str(decision.channel_id) in allowed_channels:
+        decision.rule_id = "invite_allowed_channel"
+        decision.reason = "Channel is on the invite allowed-channel list."
+        decision.fix_hint = "Remove the channel from invite allowed channels if this should be enforced."
+        decision.allowed_codes = list(codes)
+        record_invite_decision(message, decision)
+        return decision
+
     if contentless_ad_candidate:
         decision.content_unavailable = True
         decision.trusted_advertiser = advertiser_name
@@ -830,38 +862,6 @@ async def decide_invite_message(
                 "Use Invite Shield > Fix This Channel or target the advertising bot explicitly, "
                 "and verify MESSAGE_CONTENT approval in the Discord Developer Portal."
             )
-        record_invite_decision(message, decision)
-        return decision
-
-    if str(decision.author_id) in exempt_users:
-        decision.rule_id = "exempt_user"
-        decision.reason = "Author is on the invite exempt-user list."
-        decision.fix_hint = "Remove the user from exempt users if this should be enforced."
-        decision.allowed_codes = list(codes)
-        record_invite_decision(message, decision)
-        return decision
-
-    if isinstance(author, discord.Member) and _member_has_any_role(author, exempt_roles):
-        decision.rule_id = "exempt_role"
-        decision.reason = "Author has an exempt role."
-        decision.fix_hint = "Remove the role from exempt roles if this should be enforced."
-        decision.allowed_codes = list(codes)
-        record_invite_decision(message, decision)
-        return decision
-
-    if isinstance(author, discord.Member) and _member_has_any_role(author, allowed_roles):
-        decision.rule_id = "invite_allowed_role"
-        decision.reason = "Author has an invite-allowed role."
-        decision.fix_hint = "Remove the role from invite-allowed roles if this should be enforced."
-        decision.allowed_codes = list(codes)
-        record_invite_decision(message, decision)
-        return decision
-
-    if str(decision.channel_id) in allowed_channels:
-        decision.rule_id = "invite_allowed_channel"
-        decision.reason = "Channel is on the invite allowed-channel list."
-        decision.fix_hint = "Remove the channel from invite allowed channels if this should be enforced."
-        decision.allowed_codes = list(codes)
         record_invite_decision(message, decision)
         return decision
 
