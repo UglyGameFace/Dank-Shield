@@ -227,6 +227,20 @@ def test_permission_repair_primary_action_matches_preview_truth() -> None:
     assert manual_apply.label == "Manual Discord Fix Required"
     assert manual_apply.disabled is True
 
+    recovery = setup_permission_repair_services.PermissionRepairPreviewView(
+        result={
+            "changed": [],
+            "failed": [],
+            "manual_actions": ["1 target is already self-locked."],
+            "missing_mappings": [],
+            "error": "",
+            "emergency_recovery_recommended": True,
+        }
+    )
+    recovery_apply = _component_by_id(recovery, "dank_setup_permission:apply")
+    assert recovery_apply.label == "Recovery Access Needed"
+    assert recovery_apply.disabled is True
+
     healthy = setup_permission_repair_services.PermissionRepairPreviewView(
         result={
             "changed": [],
@@ -330,6 +344,91 @@ def test_permission_repair_apply_stops_before_queue_when_ack_claim_fails(
     asyncio.run(
         setup_permission_repair_services.apply_permission_repair(interaction)
     )
+
+
+def test_permission_repair_self_lockout_surfaces_temporary_admin_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guild = SimpleNamespace(id=123)
+    calls: list[Any] = []
+
+    def fake_emergency(guild_arg: Any, *, row: int = 1) -> discord.ui.Button:
+        calls.append(guild_arg)
+        return discord.ui.Button(
+            label="Temporary Admin Recovery",
+            style=discord.ButtonStyle.link,
+            url="https://example.com/emergency",
+            row=row,
+        )
+
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "_emergency_recovery_button",
+        fake_emergency,
+    )
+
+    result = {
+        "applied": False,
+        "target_count": 46,
+        "changed": [],
+        "unchanged": [],
+        "failed": [],
+        "manual_actions": [
+            "46 channel/category target(s) are already self-locked against Dank Shield's Manage Permissions."
+        ],
+        "missing_mappings": [],
+        "notes": [],
+        "include_activity_coverage": True,
+        "emergency_recovery_recommended": True,
+        "emergency_recovery_count": 46,
+        "temporary_admin_active": False,
+        "reauthorize_recommended": False,
+    }
+
+    view = setup_permission_repair_services.PermissionRepairPreviewView(
+        guild=guild,
+        include_activity_coverage=True,
+        result=result,
+    )
+    assert calls == [guild]
+    assert button(view, "Temporary Admin Recovery").style == discord.ButtonStyle.link
+
+    embed = setup_permission_repair_services.result_embed(result)
+    rendered = "\n".join(
+        [str(embed.title or ""), str(embed.description or "")]
+        + [f"{field.name}\n{field.value}" for field in embed.fields]
+    )
+    assert "One-Time Recovery Access Needed" in rendered
+    assert "Administrator" in rendered
+    assert "Fix All Safe Access" in rendered
+    assert "member/staff overwrites" in rendered
+
+
+def test_permission_repair_warns_to_remove_temporary_admin_after_repair() -> None:
+    result = {
+        "applied": True,
+        "target_count": 46,
+        "changed": ["#general — @Dank Shield"],
+        "unchanged": [],
+        "failed": [],
+        "manual_actions": [],
+        "missing_mappings": [],
+        "notes": [],
+        "include_activity_coverage": True,
+        "emergency_recovery_recommended": False,
+        "emergency_recovery_count": 0,
+        "temporary_admin_active": True,
+        "reauthorize_recommended": False,
+    }
+
+    embed = setup_permission_repair_services.result_embed(result)
+    rendered = "\n".join(
+        [str(embed.title or ""), str(embed.description or "")]
+        + [f"{field.name}\n{field.value}" for field in embed.fields]
+    )
+    assert "Administrator currently enabled" in rendered
+    assert "remove **Administrator**" in rendered
+    assert "does not require Administrator for normal operation" in rendered
 
 
 def test_permission_repair_result_reauthorize_matches_server_level_blockers(
