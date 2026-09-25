@@ -193,11 +193,9 @@ class DankHomeView(_OwnedView):
         button: discord.ui.Button,
     ) -> None:
         _ = button
-        if not _admin_or_manage(interaction):
-            return await _private(
-                interaction,
-                content="❌ Protection settings require **Manage Server** or **Administrator**.",
-            )
+        from .public_setup_group import _require_setup_permission
+        if not await _require_setup_permission(interaction):
+            return
         from . import public_protection_center
 
         await public_protection_center._refresh_panel(
@@ -261,11 +259,6 @@ class DankHomeView(_OwnedView):
         button: discord.ui.Button,
     ) -> None:
         _ = button
-        if not _admin_or_manage(interaction):
-            return await _private(
-                interaction,
-                content="❌ Server Design requires **Manage Server** or **Administrator**.",
-            )
         from . import public_design_bridge
 
         await public_design_bridge.open_design_studio_from_setup(interaction)
@@ -300,11 +293,9 @@ class DankHomeView(_OwnedView):
         button: discord.ui.Button,
     ) -> None:
         _ = button
-        if not _admin_or_manage(interaction):
-            return await _private(
-                interaction,
-                content="❌ Log settings require **Manage Server** or **Administrator**.",
-            )
+        from .public_setup_group import _require_setup_permission
+        if not await _require_setup_permission(interaction):
+            return
         from .public_setup_recommend import _open_advanced_logs_activity
 
         await _open_advanced_logs_activity(interaction)
