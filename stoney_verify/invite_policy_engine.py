@@ -810,7 +810,11 @@ async def decide_invite_message(
             protected_rule_enabled
             and _contentless_protected_target_match(message, settings)
         )
-        if contentless_targeted or allow_contentless_trusted_advertiser:
+        manual_contentless_allowed = bool(
+            allow_contentless_trusted_advertiser
+            and (invite_shield or link_shield or protected_active)
+        )
+        if contentless_targeted or manual_contentless_allowed:
             decision.action = "delete"
             decision.feature_owner = (
                 "Protected Bot/Channel Invite Rule"
