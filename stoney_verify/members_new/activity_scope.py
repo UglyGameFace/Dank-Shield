@@ -12,6 +12,8 @@ from typing import Any
 
 import discord
 
+from stoney_verify.services.setup_permission_policy import bot_channel_permissions
+
 
 @dataclass(frozen=True)
 class ActivityScopeProblem:
@@ -103,15 +105,30 @@ def _active_threads(guild: discord.Guild) -> list[discord.Thread]:
     return [thread for thread in list(getattr(guild, "threads", []) or []) if isinstance(thread, discord.Thread)]
 
 
-def _permissions_for(channel: Any, me: discord.Member) -> Any:
-    try:
-        return channel.permissions_for(me)
-    except Exception:
-        return None
+def _permissions_for(
+    channel: Any,
+    me: discord.Member,
+    *,
+    ignore_administrator: bool = False,
+) -> Any:
+    return bot_channel_permissions(
+        channel,
+        me,
+        ignore_administrator=ignore_administrator,
+    )
 
 
-def _missing_for_channel(channel: Any, me: discord.Member) -> tuple[str, ...]:
-    perms = _permissions_for(channel, me)
+def _missing_for_channel(
+    channel: Any,
+    me: discord.Member,
+    *,
+    ignore_administrator: bool = False,
+) -> tuple[str, ...]:
+    perms = _permissions_for(
+        channel,
+        me,
+        ignore_administrator=ignore_administrator,
+    )
     if perms is None:
         return ("View Channel", "Read Message History")
 
@@ -142,8 +159,17 @@ def _private_threads_may_exist(channel: discord.TextChannel, guild: discord.Guil
     return False
 
 
-def _manage_threads_problem(channel: Any, me: discord.Member) -> ActivityScopeProblem | None:
-    perms = _permissions_for(channel, me)
+def _manage_threads_problem(
+    channel: Any,
+    me: discord.Member,
+    *,
+    ignore_administrator: bool = False,
+) -> ActivityScopeProblem | None:
+    perms = _permissions_for(
+        channel,
+        me,
+        ignore_administrator=ignore_administrator,
+    )
     if perms is None or bool(getattr(perms, "manage_threads", False)):
         return None
     return ActivityScopeProblem(
@@ -154,7 +180,12 @@ def _manage_threads_problem(channel: Any, me: discord.Member) -> ActivityScopePr
     )
 
 
-def _private_thread_parent_problem(thread: discord.Thread, me: discord.Member) -> ActivityScopeProblem | None:
+def _private_thread_parent_problem(
+    thread: discord.Thread,
+    me: discord.Member,
+    *,
+    ignore_administrator: bool = False,
+) -> ActivityScopeProblem | None:
     try:
         if not bool(thread.is_private()):
             return None
@@ -164,11 +195,24 @@ def _private_thread_parent_problem(thread: discord.Thread, me: discord.Member) -
     parent = getattr(thread, "parent", None)
     if parent is None:
         return None
-    return _manage_threads_problem(parent, me)
+    return _manage_threads_problem(
+        parent,
+        me,
+        ignore_administrator=ignore_administrator,
+    )
 
 
-def audit_activity_scope(guild: discord.Guild) -> ActivityScopeReport:
-    """Return deterministic, read-only channel coverage for authoritative activity tracking."""
+def audit_activity_scope(
+    guild: discord.Guild,
+    *,
+    ignore_administrator: bool = False,
+) -> ActivityScopeReport:
+    """Return deterministic, read-only channel coverage for authoritative activity tracking.
+
+    During explicit emergency recovery, ignore_administrator exposes the
+    underlying overwrite state instead of allowing the temporary Administrator
+    grant to hide the channels that still need repair.
+    """
 
     me = getattr(guild, "me", None)
     if not isinstance(me, discord.Member):
@@ -182,7 +226,11 @@ def audit_activity_scope(guild: discord.Guild) -> ActivityScopeReport:
 
     for channel in channels:
         cid = _safe_channel_id(channel)
-        missing = _missing_for_channel(channel, me)
+        missing = _missing_for_channel(
+            channel,
+            me,
+            ignore_administrator=ignore_administrator,
+        )
         if missing:
             problem = ActivityScopeProblem(
                 channel_id=cid,
@@ -194,14 +242,22 @@ def audit_activity_scope(guild: discord.Guild) -> ActivityScopeReport:
             inaccessible_ids.add(cid)
 
         if isinstance(channel, discord.TextChannel) and _private_threads_may_exist(channel, guild):
-            parent_problem = _manage_threads_problem(channel, me)
+            parent_problem = _manage_threads_problem(
+                channel,
+                me,
+                ignore_administrator=ignore_administrator,
+            )
             if parent_problem is not None:
                 key = (parent_problem.channel_id, parent_problem.missing_permissions)
                 problems_by_key[key] = parent_problem
                 inaccessible_ids.add(cid)
 
         if isinstance(channel, discord.Thread):
-            parent_problem = _private_thread_parent_problem(channel, me)
+            parent_problem = _private_thread_parent_problem(
+                channel,
+                me,
+                ignore_administrator=ignore_administrator,
+            )
             if parent_problem is not None:
                 key = (parent_problem.channel_id, parent_problem.missing_permissions)
                 problems_by_key[key] = parent_problem
