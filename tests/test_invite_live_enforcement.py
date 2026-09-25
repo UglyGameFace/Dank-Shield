@@ -11,14 +11,14 @@ from stoney_verify import invite_policy_engine as policy
 
 
 class FakeMessage:
-    def __init__(self, content: str) -> None:
+    def __init__(self, content: str, *, bot: bool = False, components: list[Any] | None = None) -> None:
         self.id = 555
         self.content = content
         self.guild = SimpleNamespace(id=42)
         self.channel = SimpleNamespace(id=77, parent=None, category=None)
-        self.author = SimpleNamespace(id=99, bot=False)
+        self.author = SimpleNamespace(id=99, bot=bot)
         self.embeds: list[Any] = []
-        self.components: list[Any] = []
+        self.components: list[Any] = list(components or [])
         self.attachments: list[Any] = []
         self.deleted = False
 
@@ -76,6 +76,55 @@ def test_live_human_external_invite_is_deleted_when_invite_shield_is_on(
     assert decision.delete_succeeded is True
     assert message.deleted is True
     assert refresh_values == [True]
+
+
+def test_live_bot_components_v2_external_invite_is_deleted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_load(guild: Any, *, refresh: bool = False):
+        _ = guild, refresh
+        return (
+            {"automod_block_invites": True, "automod_block_links": False},
+            {"allow_server_invites": True},
+        )
+
+    async def fake_classify(guild: Any, code: str) -> tuple[str, str]:
+        _ = guild
+        assert code == "appcard"
+        return "external", "999"
+
+    monkeypatch.setattr(policy, "load_invite_policy", fake_load)
+    monkeypatch.setattr(policy, "_invite_code_belongs_to_guild", fake_classify)
+    monkeypatch.setattr(policy.durable_invite_stats, "record_deleted_invite_decision", _stats_ok)
+    monkeypatch.setattr(policy, "send_invite_decision_modlog", _modlog_ok)
+
+    text_display = SimpleNamespace(
+        content="Bumped server: https://discord.gg/appcard",
+        url=None,
+        children=[],
+        accessory=None,
+    )
+    container = SimpleNamespace(
+        content=None,
+        url=None,
+        children=[text_display],
+        accessory=None,
+    )
+    message = FakeMessage("", bot=True, components=[container])
+    decision = asyncio.run(
+        policy.enforce_live_invite_message(
+            message,
+            source="globals_live_enforcer",
+            refresh_policy=True,
+        )
+    )
+
+    assert decision is not None
+    assert decision.codes == ["appcard"]
+    assert decision.rule_id == "invite_shield_external_or_blocked"
+    assert decision.should_delete is True
+    assert decision.delete_succeeded is True
+    assert message.deleted is True
 
 
 def test_live_same_server_invite_remains_allowed(

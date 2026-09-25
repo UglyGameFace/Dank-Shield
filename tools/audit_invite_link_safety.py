@@ -132,6 +132,34 @@ try:
     if found:
         failures.append(f"interaction utility response inherited support invite -> {found}")
 
+    v2_text = SimpleNamespace(
+        content="Bump card: https://discord.gg/visiblev2",
+        url=None,
+        children=[],
+        accessory=None,
+    )
+    v2_container = SimpleNamespace(
+        content=None,
+        url=None,
+        children=[v2_text, support_button],
+        accessory=None,
+    )
+    app_v2 = SimpleNamespace(
+        content="",
+        author=SimpleNamespace(id=3, bot=True),
+        embeds=[rich],
+        components=[v2_container],
+        attachments=[],
+        interaction_metadata=SimpleNamespace(
+            id=999,
+            user=SimpleNamespace(id=1),
+        ),
+        interaction=None,
+    )
+    found = invite_policy.extract_invite_codes_from_message(app_v2)
+    if found != ["visiblev2"]:
+        failures.append(f"interaction visible Components V2 invite was not preserved -> {found}")
+
     app_explicit = SimpleNamespace(
         content="https://discord.gg/explicitappinvite",
         author=SimpleNamespace(id=3, bot=True),

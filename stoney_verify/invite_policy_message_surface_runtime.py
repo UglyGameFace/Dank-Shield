@@ -12,10 +12,12 @@ Two Discord behaviors matter here:
   a support-server link even though the user invoked the app for a non-invite
   action such as downloading a video.
 
-Human messages and interaction responses therefore use message content only.
-Ordinary bot/webhook messages may additionally use custom rich embeds/components
-because those automated senders can author those surfaces directly. Generated
-link/article/video previews remain ignored for every sender.
+Human messages use message content only. Application interaction responses use
+message content plus directly visible Components V2 text, while still ignoring
+support-button destinations and rich embed metadata. Ordinary bot/webhook
+messages may additionally use custom rich embeds/components because those
+automated senders can author those surfaces directly. Generated link/article/
+video previews remain ignored for every sender.
 """
 
 from typing import Any
@@ -44,6 +46,42 @@ def _interaction_response(message: Any) -> bool:
 
 def _content_text(message: Any) -> str:
     return policy.clean_invite_text(str(getattr(message, "content", "") or ""))
+
+
+def _visible_component_text(component: Any) -> list[str]:
+    """Collect only text Discord renders directly in Components V2."""
+
+    parts: list[str] = []
+    try:
+        value = getattr(component, "content", None)
+        if value:
+            parts.append(str(value))
+    except Exception:
+        pass
+    try:
+        accessory = getattr(component, "accessory", None)
+        if accessory is not None:
+            parts.extend(_visible_component_text(accessory))
+    except Exception:
+        pass
+    try:
+        for child in list(getattr(component, "children", []) or []):
+            parts.extend(_visible_component_text(child))
+    except Exception:
+        pass
+    return parts
+
+
+def _interaction_authored_text(message: Any) -> str:
+    """Read direct app-response text without treating support links as posts."""
+
+    parts: list[str] = [str(getattr(message, "content", "") or "")]
+    try:
+        for row in list(getattr(message, "components", []) or []):
+            parts.extend(_visible_component_text(row))
+    except Exception:
+        pass
+    return "\n".join(policy.clean_invite_text(part) for part in parts if part)
 
 
 def _rich_bot_text(message: Any) -> str:
@@ -97,15 +135,17 @@ def install_invite_policy_message_surface_runtime() -> bool:
         setattr(policy, _ORIGINAL_ATTR, original)
 
     def message_text(message: Any) -> str:
-        if _human_authored(message) or _interaction_response(message):
+        if _human_authored(message):
             return _content_text(message)
+        if _interaction_response(message):
+            return _interaction_authored_text(message)
         return _rich_bot_text(message)
 
     policy.message_text = message_text
     setattr(policy, _INSTALL_FLAG, True)
     print(
         "🛡️ Invite Shield message-surface guard active: "
-        "human/interaction=content-only bot-webhook=content+custom-rich"
+        "human=content-only app-response=content+visible-v2 bot-webhook=content+custom-rich-v2"
     )
     return True
 

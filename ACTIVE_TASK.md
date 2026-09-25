@@ -2,202 +2,194 @@
 
 ## Active task / desired outcome
 
-**P0-OWNER-AUTHORITY-VERIFY-INTERACTION-011 — restore guild-owner access to staff management surfaces and make every stale Basic Verify panel eventually self-heal**
+**P0-INVITE-V2-PROTECTION-012 — enforce Invite Shield on modern Discord app cards and make Protection Center report live delete health truthfully**
 
-Desired outcome: a real Discord guild owner must never be rejected as
-`❌ Staff only.` because an interaction user object lacks cached member/guild
-shape, and every durable Basic Verify panel must have a live current-application
-component owner after deploy/restart instead of remaining permanently deferred.
+Desired outcome: when Invite Shield is ON, an external Discord invite that is
+visibly posted in a normal message, bot/webhook rich surface, or Discord
+Components V2 Text Display must reach the same canonical invite-policy decision
+and be deleted when policy and Discord permissions allow it. `/dank protection`
+must also distinguish policy state from the bot's actual delete permission in
+the current channel, and closing the panel must remove the controls instead of
+leaving a disabled-looking panel behind.
 
 ## Scope / single active task lock
 
-Only the production interaction failures reported on 2026-09-25 are active:
+Only the invite-enforcement and directly related Protection Center failures
+reported on 2026-09-25 are active:
 
-- preserve the privacy boundary for ordinary non-staff users;
-- resolve guild owner / Administrator authority from the full interaction before
-  falling back to member-shaped staff-role checks;
-- use one canonical interaction-aware ticket/staff authority helper across the
-  affected management gates;
-- keep each feature's native second-stage permission requirement unchanged;
-- preserve Basic Verify's one canonical acknowledgement + role-mutation path;
-- preserve the existing `dank:basic_verify:v1` public component contract;
-- keep migrated current-application panels on the zero-REST exact-bind path;
-- repair every legacy/unproven Verify panel eventually, using the existing shared
-  recovery REST budget and discord.py's route-aware limiter;
-- never turn a startup migration batch size into a permanent skipped-guild cap;
-- cover owner-with-partial-user-shape and multi-wave legacy recovery regressions.
+- preserve `invite_policy_engine` as the sole authority that decides whether a
+  Discord invite message may be deleted;
+- recognize sender-authored Components V2 Text Display content, including nested
+  component containers/accessories;
+- preserve the existing false-positive boundary that ignores Discord-generated
+  preview metadata for humans;
+- preserve the existing application-response rule that ignores rich embed
+  metadata and support/link-button destinations unless the invite is directly
+  visible as message or Components V2 text;
+- preserve same-server invite allowances, explicit invite allowlists/exemptions,
+  and existing Link Shield / Spam Guard semantics;
+- expose current-channel View Channel / Manage Messages health in
+  `/dank protection` so “Invite Blocker ON” is not confused with Discord
+  permission readiness;
+- make Protection Center Close remove its embed/components cleanly;
+- add regression coverage for modern app-card invite text and the close/health
+  behavior.
 
-Do not broaden into AntiNuke, tickets redesign, Server Stats UX, moderator trust,
-or unrelated cleanup.
+Do not broaden into AntiNuke behavior, startup activity-recovery pacing,
+verification/ticket interactions, general Discord UI redesign, or unrelated
+permission repair.
 
 ## Prior task closure
 
-PR #324, **Prevent AntiNuke self-ejection on delayed bot-authored PATCH**, was
-merged into `main` as `e642323db703d9045c3f60f9f523e8eae3eacf68` on
-2026-09-25.
+PR #325, **Restore owner authority and self-heal stale Verify panels**, was
+merged on 2026-09-25. Its exact PR head
+`1fc726b853b1f02ff6d5f22feb88b06d54ab8d92` completed all six observed
+workflow groups successfully: Dank Shield CI, Dank Design Regression CI, Ticket
+Owner Emergency Override, DS Backlog 027 Validation, Application Command Size
+Diagnostics, and Profile Runtime Diagnostics.
 
-Its exact PR head `4226c4824f7727cd8927a44169030b38247fc9e8` passed:
+This task branches from the merged `main` head
+`8f3aea4d1f9a9dcda23854dfb93da13bcb44f61a`.
 
-- full repository suite: **2026 passed, 13 warnings**;
-- Dank Shield CI;
-- Profile Runtime Diagnostics;
-- Dank Design Regression CI;
-- Ticket Owner Emergency Override;
-- Application Command Size Diagnostics;
-- managed-category SQL and claim-first ticket security;
-- repository audits.
+## Evidence / root cause
 
-This task branches from that merged main and does not modify AntiNuke.
+Production logs prove the live enforcer itself is running and can delete invite
+messages. For example, guild `1357215261001912320` logged successful
+`invite_shield_external_or_blocked` deletes at 13:28 and 14:44.
 
-## Discord documentation findings
+The reported bump-board messages are different: their visible external
+`discord.gg` URLs remain on modern app-style cards, while no corresponding
+Invite Shield decision is emitted for those posts.
 
-Checked current official Discord Developer Documentation on 2026-09-25.
+The execution trace explains the gap:
 
-- Interaction payloads carry guild/member context and resolved permissions.
-  Owner/admin decisions should therefore use the interaction's guild and
-  permission evidence instead of requiring a fully cached Member-shaped user.
-- Guilds expose `owner_id`; Discord's permission computation grants the guild
-  owner all permissions before normal role/channel permission evaluation.
-- Message buttons use a developer-defined `custom_id`, which is returned in the
-  component interaction payload and identifies the callback contract.
-- An interaction must receive its initial response within **3 seconds** or the
-  interaction token is invalidated.
-- Discord rate limits are dynamic and route-specific; applications should honor
-  Discord/discord.py pacing rather than hardcode guessed route limits.
+1. `globals._dank_globals_live_invite_enforcer` sends every non-self guild
+   message to `invite_policy_engine.enforce_live_invite_message`.
+2. `main.py` installs `invite_policy_message_surface_runtime` before login.
+3. That runtime replaces `invite_policy_engine.message_text`.
+4. For interaction responses it previously returned legacy
+   `Message.content` only.
+5. For ordinary bot/webhook messages it delegated component inspection to
+   `_component_text`, which previously inspected component URLs/children but
+   not Text Display `content`.
+6. Discord Components V2 puts directly visible message text in Text Display
+   components rather than legacy message content/embeds.
+7. Therefore a modern app card could visibly contain
+   `https://discord.gg/<external>` while Invite Shield extracted no invite code
+   and never reached its delete decision.
 
-## Findings / root cause
+This is an extraction-boundary bug, not evidence that the canonical policy or
+delete routine is offline.
 
-### Owner incorrectly receives `Staff only`
+A second product-truth issue was visible in Protection Center: the UI could say
+Invite Blocker is ON without showing whether Dank Shield actually has
+View Channel + Manage Messages in the channel where the panel was opened.
+The existing “Permission health” block is AntiNuke-specific and does not answer
+that question.
 
-PR #323 added a staff-privacy boundary to multiple management surfaces, but
-several interaction handlers called:
+## Execution path
 
-`scoped_is_ticket_staff(interaction.user)`
+Before fix:
 
-before using the already-existing interaction-aware owner/permission helpers.
+`Discord on_message -> globals live enforcer -> enforce_live_invite_message ->
+extract_invite_codes_from_message -> patched message_text -> Components V2
+Text Display omitted -> codes=[] -> no policy decision/delete`
 
-That member-only helper can fail closed when the interaction user does not expose
-the guild/member shape expected by the helper, even though
-`interaction.guild.owner_id == interaction.user.id`. The repository already
-has the correct authoritative owner path in
-`public_owner_authority.interaction_is_actual_guild_owner()` and resolved
-Administrator handling.
+Correct path:
 
-### Old Basic Verify button can remain dead indefinitely
+`Discord on_message -> globals live enforcer -> enforce_live_invite_message ->
+patched message_text -> direct visible Components V2 text included ->
+external invite classification -> canonical Invite Shield delete decision ->
+message.delete -> durable stats/modlog`
 
-The canonical Basic Verify handler already acknowledges before DB/role work, so a
-red Discord `This interaction failed` on an old visible panel points to the
-click never reaching a live callback/acknowledgement owner.
+Interaction-response safety path:
 
-The startup reconciler correctly knows how to:
+`application response -> legacy content + directly visible V2 text only ->
+ignore rich embed metadata and button URLs -> canonical policy`
 
-- exact-bind a proven current-app/current-component message with zero REST;
-- fetch and migrate an unproven saved message;
-- repair an old custom ID in place;
-- replace a confirmed foreign-application panel;
-- repair disabled legacy panels so they answer with policy instead of timing out.
+Protection Center health path:
 
-However, startup legacy recovery was capped to the first 50 guilds by default.
-After that cap, rows received `allow_legacy_rest=False` and returned
-`legacy_deferred`. Reconciliation was one-shot for the process, so those guilds
-were never retried. A visually valid old panel could therefore remain permanently
-unowned.
-
-## Execution paths
-
-Owner denial before fix:
-
-`management interaction -> member-only scoped_is_ticket_staff(user) ->
-partial/non-Member user shape -> False -> Staff only`
-
-Correct owner path:
-
-`management interaction -> scoped_interaction_is_ticket_staff(interaction) ->
-interaction guild owner / resolved Administrator -> allow -> feature-native
-permission gate`
-
-Verify failure before fix:
-
-`on_ready -> one-shot panel reconcile -> first 50 legacy rows consume migration
-slots -> later row legacy_deferred -> no retry -> old message remains visible ->
-button click has no live current-app callback -> no initial response -> Discord
-red interaction failure`
-
-Correct Verify recovery:
-
-`on_ready background reconciler -> zero-REST proven panels first -> every legacy
-row processed in bounded waves -> shared process-wide recovery REST reservation
-+ discord.py route limiter -> migrate/replace/bind -> normal Verify click ->
-canonical _ack() -> role mutation -> follow-up`
+`/dank protection -> current interaction channel -> channel.permissions_for(
+guild.me) -> report View Channel/Manage Messages readiness separately from
+Invite Shield ON/OFF policy state`
 
 ## Changes
 
-Branch: `fix/owner-authority-verify-recovery-20260925`
+Branch: `fix/invite-shield-components-v2-20260925`
 
 Implemented so far:
 
-- added `scoped_interaction_is_ticket_staff(interaction)`;
-- owner identity and resolved Administrator authority are checked before
-  member-shaped staff-role fallback;
-- updated Server Design, Diagnostics, Embed Builder, Setup, Setup Overview, and
-  server-control second-stage staff checks to use interaction-aware authority;
-- exported the new canonical helper;
-- changed Basic Verify legacy migration from a permanent per-start cap into
-  background waves that continue until every discovered legacy row is processed;
-- current-app/current-component rows are processed first and remain zero-REST;
-- legacy Discord work continues through the existing shared recovery REST budget
-  and discord.py route-aware rate limiting;
-- reconciliation failures are isolated per guild so one malformed/deleted panel
-  cannot abort recovery for every guild ordered after it;
-- preserved the existing single Verify callback, custom ID, acknowledgement
-  boundary, role mapping, and verification policy;
-- added owner-without-member-shape regression coverage across the affected gates;
-- added regression coverage proving a legacy set larger than one wave is fully
-  reconciled with no `allow_legacy_rest=False` skips, even when one guild's
-  reconciliation raises unexpectedly.
+- extended canonical component extraction to read Components V2 Text Display
+  `content` and nested `accessory`/children;
+- kept component link-button URLs available for ordinary bot/webhook authored
+  surfaces;
+- added an application-response-specific visible-component extractor that reads
+  Text Display text but intentionally ignores support/link-button URLs and rich
+  embed metadata;
+- preserved human message content-only extraction so generated preview embeds
+  cannot become false invite evidence;
+- added regression tests for ordinary bot Components V2 invite cards and
+  interaction-response Components V2 invite cards;
+- added current-channel Invite Shield delete-access health to Protection Center;
+- documented modern-app-card coverage in Protection Center;
+- changed Protection Center Close to clear the embed and view rather than
+  disabling controls in place;
+- added static regressions for Protection Center health and close semantics.
 
 ## Validation / results
 
-Pending exact-head validation.
+Implementation is present on the task branch. Exact-head validation is still
+pending.
 
 Required before completion:
 
-- inspect final branch diff for accidental scope changes;
-- compile all changed modules;
-- focused owner-authority tests;
-- focused Basic Verify restart/runtime tests;
-- interaction lifecycle policy tests;
-- relevant setup/public-command regression tests;
-- full `pytest tests/`;
-- standalone repository audits;
-- all GitHub workflow groups green;
-- verify non-staff still receive only `❌ Staff only.` where intended;
-- verify owner/admin still reaches second-stage feature permission logic;
-- verify current Verify panels remain zero-REST;
-- verify all legacy panels are attempted without bypassing shared REST pacing
-  and one guild failure cannot abort later rows;
-- verify the canonical Verify handler still acknowledges before any DB/role
-  mutation and duplicate mutation remains impossible.
+- inspect branch diff against `main` for scope and accidental changes;
+- compile changed Python modules;
+- run Components V2 invite-surface tests;
+- run live invite-enforcement and invite-policy engine tests;
+- run Protection Center tests;
+- run existing invite safety/audit tools;
+- run the full repository test suite through the repository's normal CI;
+- confirm all GitHub workflow groups are green on the exact PR head;
+- confirm no duplicate invite listener/policy/delete implementation was added;
+- confirm existing support-button/generated-preview false-positive regressions
+  remain green;
+- confirm current-channel permission health does not claim policy OFF when only
+  Discord permissions are missing.
 
 ## Cleanup / conflicts
 
-No second Verify dispatcher, fallback business implementation, permission shim,
-or hardcoded Discord route limit has been added.
+No new invite listener, fallback delete policy, startup guard, retry loop, or
+hardcoded Discord rate-limit workaround has been added.
 
-The shared recovery REST budget remains authoritative for bulk migration pacing.
+The existing canonical ownership remains:
+
+- live ingress: `globals.py`;
+- decision/delete authority: `invite_policy_engine.py`;
+- sender-surface filtering: `invite_policy_message_surface_runtime.py`;
+- persisted invite targeting: `invite_scope_settings.py`;
+- public controls: `commands_ext/public_protection_center.py` and
+  `public_protection_invite_ui.py`.
 
 ## Blockers / risks
 
-Repository CI is the executable validation environment available through the
-GitHub connector. Live Discord acceptance remains necessary after deployment for
-the exact old production panel shown in the screenshot.
+Live Discord acceptance is still required after deployment for the exact OneBump
+Components V2 message shape shown in the production screenshot.
+
+If Discord does not deliver message/component content because the application
+lacks the privileged Message Content intent at the Developer Portal level, code
+cannot reconstruct text Discord did not provide. The bot requests the intent in
+code, and production already proves some invite content is being received; this
+remains a deployment check rather than the identified code root cause.
 
 ## Backlog
 
-Preserve unrelated existing follow-ups, including trusted-role UX, moderator
-re-entry behavior, and Server Stats modal/button redesign.
+Preserve unrelated existing follow-ups, including AntiNuke permission repair,
+startup activity-history pacing, trusted-role UX, Community Hub work, and other
+control-center redesigns.
 
 ## Next step
 
-Finish diff/test inspection, open a draft PR, run exact-head CI, fix only
-same-root regressions, then mark ready only after full validation is green.
+Inspect the exact branch diff, open a draft PR, run exact-head CI and focused
+invite/protection tests, fix only same-root regressions, then mark ready only
+after the Definition of Done has evidence.

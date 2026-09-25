@@ -400,7 +400,46 @@ def _link_policy_label(cfg: Any) -> str:
     return "⚪ Links allowed — no invite/link blocking"
 
 
-def _protection_embed(guild: discord.Guild, cfg: Any, spam: dict[str, Any], spam_source: str) -> discord.Embed:
+def _invite_delete_health(guild: discord.Guild, channel: Any | None) -> str:
+    """Describe whether live Invite Shield can delete messages here."""
+
+    me = getattr(guild, "me", None)
+    if me is None:
+        return "⚠️ bot member unavailable"
+
+    perms = None
+    try:
+        permissions_for = getattr(channel, "permissions_for", None)
+        if callable(permissions_for):
+            perms = permissions_for(me)
+    except Exception:
+        perms = None
+    if perms is None:
+        perms = getattr(me, "guild_permissions", None)
+
+    if perms is None:
+        return "⚠️ permissions unavailable"
+    if bool(getattr(perms, "administrator", False)):
+        return "✅ ready (Administrator)"
+
+    missing: list[str] = []
+    if not bool(getattr(perms, "view_channel", False)):
+        missing.append("View Channel")
+    if not bool(getattr(perms, "manage_messages", False)):
+        missing.append("Manage Messages")
+    if missing:
+        return "❌ missing " + ", ".join(missing)
+    return "✅ ready"
+
+
+def _protection_embed(
+    guild: discord.Guild,
+    cfg: Any,
+    spam: dict[str, Any],
+    spam_source: str,
+    *,
+    channel: Any | None = None,
+) -> discord.Embed:
     bad_words = _csv_items(_cfg_value(cfg, "automod_bad_words", ""))
     automod_on = _cfg_bool(cfg, "automod_enabled", False)
     spam_on = bool(spam.get("enabled"))
@@ -433,7 +472,9 @@ def _protection_embed(guild: discord.Guild, cfg: Any, spam: dict[str, Any], spam
         value=(
             f"**Policy:** {_link_policy_label(cfg)}\n"
             f"**Discord invites:** {'blocked' if _cfg_bool(cfg, 'automod_block_invites', False) else 'allowed'}\n"
-            f"**All external links:** {'blocked' if _cfg_bool(cfg, 'automod_block_links', False) else 'allowed'}"
+            f"**All external links:** {'blocked' if _cfg_bool(cfg, 'automod_block_links', False) else 'allowed'}\n"
+            f"**Live delete access here:** {_invite_delete_health(guild, channel)}\n"
+            "**Modern app cards:** visible Components V2 text is checked; generated previews/support-button URLs are ignored"
         ),
         inline=False,
     )
@@ -512,7 +553,13 @@ async def _refresh_panel(interaction: discord.Interaction, *, content: str | Non
             action_name="protection.live_stats.refresh",
             fix_hint="The Protection Center still works; check Manage Channels/Manage Roles if the live stats display stops updating.",
         )
-    embed = _protection_embed(guild, cfg, spam, spam_source)
+    embed = _protection_embed(
+        guild,
+        cfg,
+        spam,
+        spam_source,
+        channel=getattr(interaction, "channel", None),
+    )
     view = ProtectionCenterView(author_id=int(interaction.user.id), cfg=cfg, spam=spam)
 
     if interaction.response.is_done():
@@ -1857,12 +1904,11 @@ class ProtectionCenterView(discord.ui.View):
         _ = button
 
         async def action() -> None:
-            for child in self.children:
-                try:
-                    child.disabled = True
-                except Exception as exc:
-                    log_interaction_failure(interaction, exc, stage="protection_close_disable_child_failed", action_name="protection.close")
-            await interaction.response.edit_message(content="Closed Protection Center. Reopen it with `/dank protection`.", view=self)
+            await interaction.response.edit_message(
+                content="Protection Center closed. Reopen it with `/dank protection`.",
+                embed=None,
+                view=None,
+            )
 
         await _guard_protection_action(interaction, "protection.close", action, defer=False)
 
@@ -1879,7 +1925,13 @@ async def protection_center(interaction: discord.Interaction) -> None:
             return
         cfg = await get_guild_config(int(guild.id), refresh=True)
         spam, spam_source = await _load_spam_settings(int(guild.id))
-        embed = _protection_embed(guild, cfg, spam, spam_source)
+        embed = _protection_embed(
+            guild,
+            cfg,
+            spam,
+            spam_source,
+            channel=getattr(interaction, "channel", None),
+        )
         view = ProtectionCenterView(author_id=int(interaction.user.id), cfg=cfg, spam=spam)
         await safe_send_interaction(interaction, embed=embed, view=view, ephemeral=True, allowed_mentions=discord.AllowedMentions.none(), action_name="/dank protection")
 
