@@ -17,3 +17,12 @@ def test_permission_repair_can_restore_activity_coverage_only_when_opted_in():
 def test_public_permissions_include_manage_threads():
     assert "Manage Threads" in README
     assert '"Manage Threads"' in AUDIT
+
+
+
+def test_activity_repair_preserves_existing_bot_overwrite_before_adding_access():
+    assert "expected = channel.overwrites_for(me)" in SOURCE
+    assert "expected.view_channel = True" in SOURCE
+    assert "expected.read_message_history = True" in SOURCE
+    assert "expected.manage_threads = True" in SOURCE
+    assert "{me: expected}" in SOURCE
