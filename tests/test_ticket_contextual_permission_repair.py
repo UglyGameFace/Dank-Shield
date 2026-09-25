@@ -124,6 +124,20 @@ def test_runtime_binding_replaces_only_ticket_ui_entry_points(monkeypatch) -> No
     assert center.TicketActionCenterView is repair.ContextualTicketActionCenterView
 
 
+def test_ticket_permission_mutation_requires_setup_management_authority() -> None:
+    import inspect
+
+    infrastructure = inspect.getsource(repair.TicketInfrastructureRepairButton.callback)
+    selected = inspect.getsource(repair.SelectedTicketRepairButton.callback)
+
+    assert "public_setup_group import _require_setup_permission" in infrastructure
+    assert "await _require_setup_permission(interaction)" in infrastructure
+    assert "public_setup_group import _require_setup_permission" in selected
+    assert "await _require_setup_permission(interaction)" in selected
+    assert "contextual.repair_or_handoff(" in infrastructure
+    assert "contextual.repair_or_handoff(" in selected
+
+
 def test_ticket_contextual_integration_never_owns_discord_overwrite_mutation() -> None:
     import inspect
 
