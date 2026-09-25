@@ -630,6 +630,10 @@ def build_intents() -> discord.Intents:
     intents.messages = True
     intents.message_content = True
     intents.voice_states = True
+    # Discord classifies GUILD_PRESENCES as privileged. Keep it off by default
+    # so an unapproved deployment cannot disconnect with Gateway close code
+    # 4014. Community Hub presence/game aggregates are optional enrichment.
+    intents.presences = _env_bool("DANK_ENABLE_PRESENCE_INTENT", False)
     return intents
 
 
@@ -655,6 +659,7 @@ def config_summary() -> dict:
         "bot_api_bind_host": BOT_API_BIND_HOST,
         "bot_api_port": BOT_API_PORT,
         "bot_api_require_auth": BOT_API_REQUIRE_AUTH,
+        "presence_intent_requested": bool(getattr(bot.intents, "presences", False)),
         "supabase_env_present": bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY),
     }
 
