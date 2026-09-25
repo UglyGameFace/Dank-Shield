@@ -733,7 +733,7 @@ def test_saved_unknown_application_panel_respects_startup_rest_cap(
     asyncio.run(scenario())
 
 
-def test_ready_reconciler_processes_every_legacy_panel_across_waves(
+def test_ready_reconciler_processes_every_legacy_panel_across_waves_and_isolates_failures(
     monkeypatch,
 ) -> None:
     async def scenario() -> None:
@@ -762,7 +762,10 @@ def test_ready_reconciler_processes_every_legacy_panel_across_waves(
             *,
             allow_legacy_rest: bool = True,
         ) -> str:
-            calls.append((int(guild.id), bool(allow_legacy_rest)))
+            guild_id = int(guild.id)
+            calls.append((guild_id, bool(allow_legacy_rest)))
+            if guild_id == 4:
+                raise RuntimeError("one broken legacy panel")
             return "migrated"
 
         monkeypatch.setattr(runtime.discord, "Guild", FakeGuild)
