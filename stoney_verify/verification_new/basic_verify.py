@@ -52,17 +52,16 @@ def _env_int(name: str, default: int) -> int:
         return int(default)
 
 
-def _legacy_panel_backfill_limit() -> int:
+def _legacy_panel_backfill_wave_size() -> int:
     # Existing installations created before panel-message persistence need one
-    # bounded history lookup. New/updated panels persist their message ID and
-    # never need this recovery scan again.
-    return max(
-        1,
-        min(
-            200,
-            _env_int("DANK_BASIC_VERIFY_LEGACY_PANEL_BACKFILL_PER_START", 50),
-        ),
-    )
+    # bounded history lookup. Process those migrations in fair background waves,
+    # but never permanently skip a guild just because an earlier wave was full.
+    configured = _env_int("DANK_BASIC_VERIFY_LEGACY_PANEL_BACKFILL_PER_WAVE", 0)
+    if configured <= 0:
+        # Backward-compatible interpretation of the old per-start setting:
+        # it now controls wave size rather than becoming a permanent skip cap.
+        configured = _env_int("DANK_BASIC_VERIFY_LEGACY_PANEL_BACKFILL_PER_START", 50)
+    return max(1, min(200, configured))
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -1115,8 +1114,9 @@ async def _reconcile_basic_verify_panels_after_ready(bot: Any) -> None:
             if isinstance(guild, discord.Guild)
         }
         rows = await _discover_basic_verify_panel_rows(sorted(guilds))
-        legacy_budget = _legacy_panel_backfill_limit()
+        legacy_wave_size = _legacy_panel_backfill_wave_size()
         legacy_used = 0
+        legacy_in_wave = 0
         counts: dict[str, int] = {}
 
         for gid, cfg in rows.items():
@@ -1145,25 +1145,36 @@ async def _reconcile_basic_verify_panels_after_ready(bot: Any) -> None:
                 and saved_application_id == current_application_id
                 and saved_component_id == BASIC_VERIFY_CUSTOM_ID
             )
-            allow_legacy_rest = True
+
+            # Every legacy panel is eventually reconciled. The exact-message/
+            # history request path already reserves through the shared recovery
+            # REST budget, so this background worker must not convert a wave
+            # size into a permanent "never repair this guild" cap.
             if needs_legacy_rest:
-                if legacy_used >= legacy_budget:
-                    allow_legacy_rest = False
-                else:
-                    legacy_used += 1
+                legacy_used += 1
+                legacy_in_wave += 1
 
             result = await _reconcile_one_basic_verify_panel(
                 bot,
                 guild,
                 cfg,
-                allow_legacy_rest=allow_legacy_rest,
+                allow_legacy_rest=True,
             )
             counts[result] = counts.get(result, 0) + 1
-            await asyncio.sleep(0)
+
+            # Give foreground interactions regular event-loop turns during a
+            # large one-time migration. Discord REST pacing remains owned by
+            # reserve_recovery_discord_rest_requests()/discord.py.
+            if needs_legacy_rest and legacy_in_wave >= legacy_wave_size:
+                legacy_in_wave = 0
+                await asyncio.sleep(0)
+            else:
+                await asyncio.sleep(0)
 
         print(
             "✅ basic_verify panel reconciliation complete "
-            f"guilds={len(rows)} legacy_rest={legacy_used} results={counts}"
+            f"guilds={len(rows)} legacy_rest={legacy_used} "
+            f"wave_size={legacy_wave_size} results={counts}"
         )
     except Exception as exc:
         try:
