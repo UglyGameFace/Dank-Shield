@@ -73,6 +73,7 @@ class _Authorization:
     guild_id: int
     target_key: str
     created_at: float
+    completed_at: Optional[float] = None
 
 
 @dataclass
@@ -323,11 +324,23 @@ def _request_spec(bot: discord.Client, route: Any, kwargs: Mapping[str, Any]) ->
 def _prune_pending(now: Optional[float] = None) -> None:
     current = time.monotonic() if now is None else float(now)
     for nonce, auth in list(_PENDING.items()):
-        if current - float(auth.created_at) > _AUTH_TTL_SECONDS:
+        # A protected Discord mutation can sit inside discord.py's rate-limit
+        # machinery longer than the normal post-request audit receipt window.
+        # Never expire proof while the outbound request is still in flight.
+        if auth.completed_at is None:
+            continue
+        if current - float(auth.completed_at) > _AUTH_TTL_SECONDS:
             _PENDING.pop(nonce, None)
     if len(_PENDING) > _MAX_PENDING:
-        ordered = sorted(_PENDING.values(), key=lambda item: item.created_at)
-        for auth in ordered[: len(_PENDING) - _MAX_PENDING]:
+        # Do not evict live in-flight requests to satisfy the soft ledger cap.
+        # Failed/cancelled requests remove themselves, and successful requests
+        # become eligible for normal TTL/cap pruning after completion.
+        completed = sorted(
+            (auth for auth in _PENDING.values() if auth.completed_at is not None),
+            key=lambda item: float(item.completed_at or item.created_at),
+        )
+        overflow = len(_PENDING) - _MAX_PENDING
+        for auth in completed[:overflow]:
             _PENDING.pop(auth.nonce, None)
 
 
@@ -506,6 +519,14 @@ def _authorize(spec: _RequestSpec, reason: Any) -> tuple[str, str]:
     stamped = f"{base} {marker}".strip() if base else f"Dank Shield authorized action {marker}"
     _PENDING[nonce] = _Authorization(nonce, spec.actions, spec.guild_id, spec.target_key, time.monotonic())
     return nonce, stamped
+
+
+def _complete(nonce: str, now: Optional[float] = None) -> None:
+    auth = _PENDING.get(str(nonce or "").lower())
+    if auth is None:
+        return
+    auth.completed_at = time.monotonic() if now is None else float(now)
+    _prune_pending(auth.completed_at)
 
 
 def _cancel(nonce: str) -> None:
@@ -698,12 +719,14 @@ def _patch_http(bot: discord.Client) -> bool:
                 side_effects.append(token)
 
         try:
-            return await original(route, *args, **kwargs)
-        except Exception:
+            result = await original(route, *args, **kwargs)
+        except BaseException:
             _cancel(nonce)
             for token in side_effects:
                 _cancel_expected_side_effect(token)
             raise
+        _complete(nonce)
+        return result
 
     setattr(http, "request", guarded_request)
     setattr(http, _HTTP_PATCH_FLAG, True)
@@ -723,10 +746,12 @@ def _patch_webhook_methods(bot: discord.Client) -> bool:
         nonce, reason = _authorize(spec, kwargs.get("reason"))
         kwargs["reason"] = reason
         try:
-            return await original_delete(self, *args, **kwargs)
-        except Exception:
+            result = await original_delete(self, *args, **kwargs)
+        except BaseException:
             _cancel(nonce)
             raise
+        _complete(nonce)
+        return result
 
     async def guarded_edit(self: Any, *args: Any, **kwargs: Any) -> Any:
         guild_id = _safe_int(getattr(self, "guild_id", 0), 0)
@@ -734,10 +759,12 @@ def _patch_webhook_methods(bot: discord.Client) -> bool:
         nonce, reason = _authorize(spec, kwargs.get("reason"))
         kwargs["reason"] = reason
         try:
-            return await original_edit(self, *args, **kwargs)
-        except Exception:
+            result = await original_edit(self, *args, **kwargs)
+        except BaseException:
             _cancel(nonce)
             raise
+        _complete(nonce)
+        return result
 
     cls.delete = guarded_delete
     cls.edit = guarded_edit
