@@ -147,7 +147,7 @@ def test_live_bot_components_v2_external_invite_is_deleted(
     assert message.deleted is True
 
 
-def _protected_onebump_settings() -> dict[str, Any]:
+def _protected_poster_settings() -> dict[str, Any]:
     return {
         "allow_server_invites": True,
         policy.INVITE_PROTECTED_POSTER_RULE_KEY: True,
@@ -156,7 +156,7 @@ def _protected_onebump_settings() -> dict[str, Any]:
     }
 
 
-def test_content_redacted_onebump_ad_is_deleted_only_when_explicitly_protected(
+def test_content_redacted_arbitrary_bot_is_deleted_only_when_explicitly_protected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def fake_load(guild: Any, *, refresh: bool = False):
@@ -164,7 +164,7 @@ def test_content_redacted_onebump_ad_is_deleted_only_when_explicitly_protected(
         assert refresh is True
         return (
             {"automod_block_invites": True, "automod_block_links": False},
-            _protected_onebump_settings(),
+            _protected_poster_settings(),
         )
 
     monkeypatch.setattr(policy, "load_invite_policy", fake_load)
@@ -174,9 +174,9 @@ def test_content_redacted_onebump_ad_is_deleted_only_when_explicitly_protected(
     message = FakeMessage(
         "",
         bot=True,
-        author_id=1028956609382199346,
-        application_id=1028956609382199346,
-        author_name="OneBump",
+        author_id=888888888888888888,
+        application_id=777777777777777777,
+        author_name="Any Listing Bot",
     )
     decision = asyncio.run(
         policy.enforce_live_invite_message(
@@ -189,15 +189,14 @@ def test_content_redacted_onebump_ad_is_deleted_only_when_explicitly_protected(
     assert decision is not None
     assert decision.codes == []
     assert decision.content_unavailable is True
-    assert decision.trusted_advertiser == "OneBump"
-    assert decision.rule_id == "protected_contentless_known_advertiser"
+    assert decision.rule_id == "protected_contentless_poster"
     assert decision.feature_owner == "Protected Bot/Channel Invite Rule"
     assert decision.should_delete is True
     assert decision.delete_succeeded is True
     assert message.deleted is True
 
 
-def test_content_redacted_onebump_is_not_guess_deleted_without_explicit_target(
+def test_content_redacted_arbitrary_bot_is_not_guess_deleted_without_explicit_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def fake_load(guild: Any, *, refresh: bool = False):
@@ -217,9 +216,9 @@ def test_content_redacted_onebump_is_not_guess_deleted_without_explicit_target(
     message = FakeMessage(
         "",
         bot=True,
-        author_id=1028956609382199346,
-        application_id=1028956609382199346,
-        author_name="OneBump",
+        author_id=888888888888888888,
+        application_id=777777777777777777,
+        author_name="Any Listing Bot",
     )
     decision = asyncio.run(
         policy.enforce_live_invite_message(
@@ -230,18 +229,18 @@ def test_content_redacted_onebump_is_not_guess_deleted_without_explicit_target(
     )
 
     assert decision is not None
-    assert decision.rule_id == "known_advertiser_content_unavailable_not_targeted"
+    assert decision.rule_id == "content_unavailable_not_explicitly_targeted"
     assert decision.action == "log_only"
     assert decision.should_delete is False
     assert message.deleted is False
 
 
-def test_contentless_onebump_respects_existing_allowed_channel_exemption(
+def test_contentless_protected_bot_respects_existing_allowed_channel_exemption(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def fake_load(guild: Any, *, refresh: bool = False):
         _ = guild, refresh
-        settings = _protected_onebump_settings()
+        settings = _protected_poster_settings()
         settings["allowed_invite_channel_ids"] = ["77"]
         return (
             {"automod_block_invites": True, "automod_block_links": False},
@@ -253,9 +252,9 @@ def test_contentless_onebump_respects_existing_allowed_channel_exemption(
     message = FakeMessage(
         "",
         bot=True,
-        author_id=1028956609382199346,
-        application_id=1028956609382199346,
-        author_name="OneBump",
+        author_id=888888888888888888,
+        application_id=777777777777777777,
+        author_name="Any Listing Bot",
     )
     decision = asyncio.run(
         policy.enforce_live_invite_message(
@@ -271,48 +270,38 @@ def test_contentless_onebump_respects_existing_allowed_channel_exemption(
     assert message.deleted is False
 
 
-def test_spoofed_onebump_display_name_cannot_trigger_contentless_delete() -> None:
+def test_contentless_human_message_is_never_guessed_as_invite() -> None:
+    message = FakeMessage("", bot=False, author_id=123456789012345678)
+    assert policy.is_contentless_protected_poster_candidate(message) is False
+    assert asyncio.run(policy.enforce_live_invite_message(message)) is None
+    assert message.deleted is False
+
+
+def test_contentless_interaction_receipt_is_not_treated_as_unsolicited_poster() -> None:
     message = FakeMessage(
         "",
         bot=True,
         author_id=888888888888888888,
         application_id=777777777777777777,
-        author_name="OneBump",
-    )
-
-    assert policy.known_advertising_integration_name(message) == ""
-    assert policy.is_contentless_trusted_advertiser_candidate(message) is False
-    assert asyncio.run(policy.enforce_live_invite_message(message)) is None
-    assert message.deleted is False
-
-
-def test_contentless_onebump_interaction_receipt_is_not_treated_as_ad() -> None:
-    message = FakeMessage(
-        "",
-        bot=True,
-        author_id=1028956609382199346,
-        application_id=1028956609382199346,
         interaction_metadata=SimpleNamespace(id=123),
-        author_name="OneBump",
+        author_name="Any Listing Bot",
     )
 
-    assert policy.known_advertising_integration_name(message) == "OneBump"
-    assert policy.is_contentless_trusted_advertiser_candidate(message) is False
+    assert policy.is_contentless_protected_poster_candidate(message) is False
     assert asyncio.run(policy.enforce_live_invite_message(message)) is None
     assert message.deleted is False
 
 
-def test_onebump_application_owned_webhook_identity_is_enough_for_exact_match() -> None:
+def test_contentless_application_identity_is_vendor_neutral() -> None:
     message = FakeMessage(
         "",
         bot=True,
         author_id=555555555555555555,
-        application_id=1028956609382199346,
-        author_name="not-a-trusted-name",
+        application_id=777777777777777777,
+        author_name="Completely Different Bot",
     )
 
-    assert policy.known_advertising_integration_name(message) == "OneBump"
-    assert policy.is_contentless_trusted_advertiser_candidate(message) is True
+    assert policy.is_contentless_protected_poster_candidate(message) is True
 
 
 class FakeHistoryChannel:
@@ -357,16 +346,16 @@ def test_manual_contentless_cleanup_does_not_bypass_shield_off(
     message = FakeMessage(
         "",
         bot=True,
-        author_id=1028956609382199346,
-        application_id=1028956609382199346,
-        author_name="OneBump",
+        author_id=888888888888888888,
+        application_id=777777777777777777,
+        author_name="Any Listing Bot",
     )
     decision = asyncio.run(
         policy.decide_invite_message(
             message,
             source="protection-center-native-invite-cleanup",
             refresh_policy=True,
-            allow_contentless_trusted_advertiser=True,
+            allow_contentless_protected_poster=True,
         )
     )
 
@@ -375,16 +364,16 @@ def test_manual_contentless_cleanup_does_not_bypass_shield_off(
     assert message.deleted is False
 
 
-def test_manual_cleanup_deletes_historical_contentless_onebump_without_broad_live_guess(
+def test_manual_cleanup_deletes_explicitly_protected_contentless_bot_without_vendor_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     guild = SimpleNamespace(id=42, me=SimpleNamespace(id=5000, bot=True))
     message = FakeMessage(
         "",
         bot=True,
-        author_id=1028956609382199346,
-        application_id=1028956609382199346,
-        author_name="OneBump",
+        author_id=888888888888888888,
+        application_id=777777777777777777,
+        author_name="Any Listing Bot",
     )
     channel = FakeHistoryChannel(guild, [message])
     message.guild = guild
@@ -394,12 +383,7 @@ def test_manual_cleanup_deletes_historical_contentless_onebump_without_broad_liv
         _ = refresh
         return (
             {"automod_block_invites": True, "automod_block_links": False},
-            {
-                "allow_server_invites": True,
-                policy.INVITE_PROTECTED_POSTER_RULE_KEY: False,
-                policy.INVITE_TARGET_ALL_BOTS_KEY: False,
-                policy.INVITE_TARGET_CHANNEL_IDS_KEY: [],
-            },
+            _protected_poster_settings(),
         )
 
     monkeypatch.setattr(policy, "load_invite_policy", fake_load)
@@ -412,7 +396,7 @@ def test_manual_cleanup_deletes_historical_contentless_onebump_without_broad_liv
             channel,
             limit=1000,
             source="protection-center-native-invite-cleanup",
-            allow_contentless_trusted_advertisers=True,
+            allow_contentless_protected_posters=True,
         )
     )
 
