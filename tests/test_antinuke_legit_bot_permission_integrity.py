@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from stoney_verify import anti_nuke
+from stoney_verify import anti_nuke_gateway_runtime as gateway_runtime
 from stoney_verify import anti_nuke_hostile_actor_runtime as hostile
 from stoney_verify import anti_nuke_lockdown_runtime as lockdown
 from stoney_verify import anti_nuke_product_policy_runtime as product_policy
@@ -81,6 +83,78 @@ def _fake_anti_nuke():
         normalize_antinuke_settings=lambda value: dict(value or {}),
     )
     return fake, calls
+
+
+def test_own_managed_integration_role_is_not_treated_as_hostile_oauth_escalation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    role = SimpleNamespace(id=9001, name="Dank Shield", managed=True)
+    me = SimpleNamespace(id=77, roles=[role])
+    guild = SimpleNamespace(id=1, owner_id=10, me=me)
+    role.guild = guild
+
+    assert anti_nuke._is_own_managed_bot_role(guild, role) is True  # noqa: SLF001
+
+    escalation_calls: list[object] = []
+
+    async def escalation(_before, _after):
+        escalation_calls.append((_before, _after))
+
+    monkeypatch.setattr(
+        anti_nuke,
+        "_handle_role_permission_escalation",
+        escalation,
+    )
+    before = SimpleNamespace(
+        id=role.id,
+        managed=True,
+        guild=guild,
+        permissions=SimpleNamespace(administrator=False),
+    )
+    after = SimpleNamespace(
+        id=role.id,
+        managed=True,
+        guild=guild,
+        permissions=SimpleNamespace(administrator=True),
+    )
+    monkeypatch.setattr(
+        anti_nuke,
+        "dangerous_permissions_added",
+        lambda _before, _after: ["administrator"],
+    )
+
+    asyncio.run(anti_nuke.antinuke_on_guild_role_update(before, after))
+    assert escalation_calls == []
+
+
+def test_gateway_skips_own_managed_role_oauth_update_before_containment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    role = SimpleNamespace(id=9001, name="Dank Shield", managed=True)
+    guild = SimpleNamespace(
+        id=1,
+        owner_id=10,
+        me=SimpleNamespace(id=77, roles=[role]),
+    )
+    entry = SimpleNamespace(
+        target=role,
+        before=SimpleNamespace(permissions=SimpleNamespace(administrator=False)),
+        after=SimpleNamespace(permissions=SimpleNamespace(administrator=True)),
+    )
+    actor = SimpleNamespace(id=55, bot=False)
+
+    async def unexpected_settings(_guild_id):
+        raise AssertionError("self managed role guard must run before AntiNuke policy")
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", unexpected_settings)
+
+    asyncio.run(
+        gateway_runtime._handle_dangerous_role_update(  # noqa: SLF001
+            guild,
+            entry,
+            actor,
+        )
+    )
 
 
 def test_operational_bot_uses_bounded_thresholds_without_weakening_bot_add(

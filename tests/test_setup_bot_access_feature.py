@@ -9,8 +9,10 @@ import discord
 from stoney_verify import setup_activity_access, setup_permission_repair_services
 from stoney_verify.commands_ext import public_diagnostics_group as diagnostics
 from stoney_verify.commands_ext import public_setup_recommend as recommend
+from stoney_verify.commands_ext import public_setup_assistant as setup_assistant
 from stoney_verify.commands_ext import public_setup_solid as solid
 from stoney_verify.members_new.activity_scope import ActivityScopeProblem, ActivityScopeReport
+from stoney_verify.services import setup_permission_policy
 
 
 def _rows(view: discord.ui.View) -> Counter[int]:
@@ -258,7 +260,7 @@ def test_activity_repair_targets_authoritative_scope_only_and_preserves_bot_over
     monkeypatch.setattr(
         setup_permission_repair_services,
         "audit_activity_scope",
-        lambda _guild: report,
+        lambda _guild, **_kwargs: report,
     )
 
     targets, notes, mappings, manual = asyncio.run(
@@ -282,6 +284,246 @@ def test_activity_repair_targets_authoritative_scope_only_and_preserves_bot_over
     assert expected.send_messages is False
     assert expected.manage_messages is True
     assert any("2 Diagnostics gap(s)" in note for note in notes)
+
+
+def test_setup_assistant_refresh_preserves_existing_bot_manage_permissions() -> None:
+    class Bot:
+        id = 42
+
+        def __hash__(self) -> int:
+            return hash(self.id)
+
+    me = Bot()
+    guild = SimpleNamespace(me=me)
+
+    class Channel:
+        def __init__(self, value):
+            self.value = value
+
+        def overwrites_for(self, target):
+            assert target is me
+            return discord.PermissionOverwrite(manage_roles=self.value)
+
+    baseline = {
+        me: discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+        )
+    }
+
+    preserved_allow = setup_assistant._preserve_existing_bot_manage_permissions(
+        guild,
+        Channel(True),
+        baseline,
+    )
+    assert preserved_allow is not None
+    assert preserved_allow[me].manage_roles is True
+    assert baseline[me].manage_roles is None
+
+    preserved_deny = setup_assistant._preserve_existing_bot_manage_permissions(
+        guild,
+        Channel(False),
+        baseline,
+    )
+    assert preserved_deny is not None
+    assert preserved_deny[me].manage_roles is False
+    assert baseline[me].manage_roles is None
+
+
+def test_activity_emergency_recovery_replaces_only_bot_explicit_access_denies(
+    monkeypatch,
+) -> None:
+    class Bot:
+        def __init__(self) -> None:
+            self.id = 42
+            self.guild_permissions = SimpleNamespace(
+                administrator=True,
+                manage_roles=True,
+            )
+
+        def __hash__(self) -> int:
+            return hash(self.id)
+
+    me = Bot()
+
+    class Channel:
+        id = 100
+        name = "locked-room"
+
+        def overwrites_for(self, target):
+            assert target is me
+            return discord.PermissionOverwrite(
+                view_channel=False,
+                read_message_history=False,
+                manage_threads=False,
+                manage_roles=False,
+            )
+
+        async def set_permissions(self, *_args, **_kwargs):
+            return None
+
+    channel = Channel()
+
+    class Guild:
+        channels = [channel]
+        threads = []
+
+        def get_channel_or_thread(self, channel_id):
+            return channel if channel_id == 100 else None
+
+    report = ActivityScopeReport(
+        total_channels=1,
+        accessible_channels=0,
+        problems=(
+            ActivityScopeProblem(
+                channel_id=100,
+                channel_name="locked-room",
+                channel_kind="text",
+                missing_permissions=(
+                    "View Channel",
+                    "Read Message History",
+                    "Manage Threads",
+                ),
+            ),
+        ),
+        bot_member_resolved=True,
+    )
+
+    monkeypatch.setattr(
+        setup_permission_repair_services.repair_core,
+        "_bot_member",
+        lambda _guild: me,
+    )
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "audit_activity_scope",
+        lambda _guild, **_kwargs: report,
+    )
+    monkeypatch.setattr(
+        setup_permission_policy,
+        "permissions_without_administrator",
+        lambda _channel, _member: SimpleNamespace(manage_roles=False),
+    )
+
+    targets: list[object] = []
+    notes: list[str] = []
+    manual: list[str] = []
+    setup_permission_repair_services._merge_activity_coverage_targets(
+        Guild(),
+        targets=targets,
+        seen=set(),
+        notes=notes,
+        manual_actions=manual,
+    )
+
+    assert manual == []
+    assert len(targets) == 1
+    expected = targets[0].overwrites[me]
+    assert expected.view_channel is True
+    assert expected.read_message_history is True
+    assert expected.manage_threads is True
+    assert expected.manage_roles is True
+
+
+def test_underlying_permission_resolver_ignores_only_admin_shortcut() -> None:
+    class Role:
+        def __init__(self, role_id: int, **permissions: bool) -> None:
+            self.id = role_id
+            self.permissions = discord.Permissions.none()
+            for name, enabled in permissions.items():
+                setattr(self.permissions, name, enabled)
+
+    everyone = Role(1, view_channel=True, read_message_history=True)
+    bot_role = Role(
+        2,
+        administrator=True,
+        manage_roles=True,
+        view_channel=True,
+        read_message_history=True,
+        manage_threads=True,
+    )
+    member = SimpleNamespace(id=42, roles=[everyone, bot_role])
+    guild = SimpleNamespace(
+        id=1,
+        owner_id=999,
+        default_role=everyone,
+    )
+
+    class Channel:
+        def __init__(self) -> None:
+            self.guild = guild
+
+        def permissions_for(self, _member):
+            return discord.Permissions.all()
+
+        def overwrites_for(self, target):
+            if target is everyone:
+                return discord.PermissionOverwrite()
+            if target is bot_role:
+                return discord.PermissionOverwrite(manage_roles=False)
+            if target is member:
+                return discord.PermissionOverwrite(view_channel=False)
+            return discord.PermissionOverwrite()
+
+    underlying = setup_permission_policy.permissions_without_administrator(
+        Channel(),
+        member,
+    )
+
+    assert underlying is not None
+    assert underlying.administrator is False
+    assert underlying.manage_roles is False
+    assert underlying.view_channel is False
+    assert underlying.read_message_history is False
+
+
+def test_activity_repair_asks_for_underlying_scope_while_temporary_admin_is_active(
+    monkeypatch,
+) -> None:
+    member = SimpleNamespace(
+        id=42,
+        guild_permissions=SimpleNamespace(
+            administrator=True,
+            manage_roles=True,
+        ),
+    )
+    report = ActivityScopeReport(
+        total_channels=0,
+        accessible_channels=0,
+        problems=(),
+        bot_member_resolved=True,
+    )
+    seen: list[bool] = []
+
+    monkeypatch.setattr(
+        setup_permission_repair_services.repair_core,
+        "_bot_member",
+        lambda _guild: member,
+    )
+
+    def audit(_guild, *, ignore_administrator=False):
+        seen.append(bool(ignore_administrator))
+        return report
+
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "audit_activity_scope",
+        audit,
+    )
+
+    targets: list[object] = []
+    notes: list[str] = []
+    manual_actions: list[str] = []
+    setup_permission_repair_services._merge_activity_coverage_targets(
+        object(),
+        targets=targets,
+        seen=set(),
+        notes=notes,
+        manual_actions=manual_actions,
+    )
+
+    assert seen == [True]
+    assert manual_actions == []
 
 
 def test_repair_button_routes_to_activity_scoped_preview_first_permission_tool(monkeypatch) -> None:

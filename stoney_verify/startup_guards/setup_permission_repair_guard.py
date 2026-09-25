@@ -197,7 +197,7 @@ def _public_readonly_overwrites(
     }
     me = _bot_member(guild)
     if me:
-        ow[me] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, embed_links=True, attach_files=True, manage_roles=True, manage_messages=True)
+        ow[me] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, embed_links=True, attach_files=True, manage_messages=True)
     for role in (unverified_role, verified_role, resident_role):
         if role and not role.is_default():
             ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
@@ -219,7 +219,7 @@ def _staff_private_overwrites(
     ow: dict[Any, discord.PermissionOverwrite] = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
     me = _bot_member(guild)
     if me:
-        ow[me] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, embed_links=True, attach_files=True, manage_channels=True, manage_roles=True, manage_messages=True, manage_threads=True, send_messages_in_threads=True)
+        ow[me] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, embed_links=True, attach_files=True, manage_channels=True, manage_messages=True, manage_threads=True, send_messages_in_threads=True)
     for role in (staff_role, control_role):
         if role and not role.is_default():
             ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, embed_links=True, attach_files=True, manage_messages=True, manage_threads=True, send_messages_in_threads=True)
@@ -246,7 +246,6 @@ def _bot_post_only_overwrites(guild: discord.Guild) -> dict[Any, discord.Permiss
             read_message_history=True,
             embed_links=True,
             attach_files=True,
-            manage_roles=True,
             manage_messages=True,
         )
     }

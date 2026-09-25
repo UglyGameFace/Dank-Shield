@@ -94,7 +94,6 @@ _FULL_CHANNEL_PERMISSIONS = (
     "attach_files",
     "read_message_history",
     "manage_channels",
-    "manage_roles",
     "manage_messages",
     "manage_threads",
     "move_members",
@@ -189,7 +188,7 @@ def _required_permissions(
         voice_types += (stage,)
 
     if isinstance(target, voice_types):
-        names = ["view_channel", "manage_channels", "manage_roles", "move_members"] if clean_mode == "full" else ["view_channel"]
+        names = ["view_channel", "manage_channels", "move_members"] if clean_mode == "full" else ["view_channel"]
         if clean_feature in {"moderation", "general"}:
             names.append("move_members")
     elif isinstance(target, discord.CategoryChannel):
@@ -248,6 +247,74 @@ def reauthorize_url(guild: discord.Guild) -> str:
         )
     except Exception:
         return ""
+
+
+def emergency_recovery_permissions() -> discord.Permissions:
+    """Return the explicit one-time permission set used to break channel self-lockouts.
+
+    Normal/public installation remains non-Administrator. This permission set is
+    only surfaced when Discord channel overwrites have already removed effective
+    Manage Roles from Dank Shield, making normal overwrite repair impossible.
+    """
+
+    perms = approved_public_permissions()
+    try:
+        perms.administrator = True
+    except Exception:
+        pass
+    return perms
+
+
+def emergency_recovery_url(guild: discord.Guild) -> str:
+    """Build a guild-pinned OAuth URL for explicit temporary Administrator recovery."""
+
+    try:
+        client_id = int(getattr(getattr(guild, "me", None), "id", 0) or 0)
+        if client_id <= 0:
+            return ""
+        return discord.utils.oauth_url(
+            client_id,
+            permissions=emergency_recovery_permissions(),
+            guild=guild,
+            disable_guild_select=True,
+            scopes=("bot", "applications.commands"),
+        )
+    except Exception:
+        return ""
+
+
+def emergency_recovery_needed(
+    guild: discord.Guild,
+    target: discord.abc.GuildChannel,
+) -> bool:
+    """Whether a target is self-locked but recoverable after explicit Admin auth.
+
+    Discord checks permission-overwrite edits against the bot's effective
+    MANAGE_ROLES/Manage Permissions authority on the target. ADMINISTRATOR is the
+    only guild permission that bypasses channel overwrites, so an already-locked
+    target cannot be repaired by the ordinary non-Administrator bot token.
+    """
+
+    me = _bot_member(guild)
+    if me is None:
+        return False
+
+    guild_permissions = getattr(me, "guild_permissions", None)
+    if guild_permissions is None:
+        return False
+    if bool(getattr(guild_permissions, "administrator", False)):
+        return False
+    if not bool(getattr(guild_permissions, "manage_roles", False)):
+        return False
+
+    try:
+        effective = target.permissions_for(me)
+    except Exception:
+        return False
+    return not bool(
+        getattr(effective, "administrator", False)
+        or getattr(effective, "manage_roles", False)
+    )
 
 
 def _target_label(target: Any) -> str:
@@ -320,6 +387,8 @@ def seed_bot_overwrite_from_parent(
     guild: discord.Guild,
     target: discord.abc.GuildChannel,
     current: discord.PermissionOverwrite,
+    *,
+    include_manage_roles: bool = False,
 ) -> tuple[discord.PermissionOverwrite, list[str]]:
     """Use a known parent bot overwrite only when the child has no bot override.
 
@@ -336,6 +405,7 @@ def seed_bot_overwrite_from_parent(
     if source is None:
         return expected, []
 
+    seeded = _clone_overwrite(source)
     try:
         allow, deny = source.pair()
         copied = sorted(
@@ -344,7 +414,22 @@ def seed_bot_overwrite_from_parent(
         )
     except Exception:
         copied = []
-    return _clone_overwrite(source), copied
+
+    if not include_manage_roles:
+        # Discord restricts MANAGE_ROLES channel-overwrite grants. Parent
+        # seeding is safe-by-default and never manufactures that bit during
+        # normal repair. Explicit temporary-Administrator recovery opts in.
+        try:
+            seeded.manage_roles = getattr(current, "manage_roles", None)
+        except Exception:
+            pass
+        copied = [
+            name
+            for name in copied
+            if name not in {"manage_roles", "deny:manage_roles"}
+        ]
+
+    return seeded, copied
 
 
 def _parent_manage_permissions_hint(
@@ -533,7 +618,18 @@ def audit_target(
         return report
 
     try:
-        effective = target.permissions_for(me)
+        from stoney_verify.services.setup_permission_policy import bot_channel_permissions
+
+        temporary_admin_active = bool(
+            getattr(getattr(me, "guild_permissions", None), "administrator", False)
+        )
+        effective = bot_channel_permissions(
+            target,
+            me,
+            ignore_administrator=temporary_admin_active,
+        )
+        if effective is None:
+            raise RuntimeError("permission resolution unavailable")
     except Exception:
         report.blockers.append("Dank Shield could not evaluate effective permissions for this target.")
         return report
@@ -553,6 +649,18 @@ def audit_target(
             report.explicit_denies.append(name)
         else:
             report.repairable_missing.append(name)
+
+    # While temporary Administrator is active, expose the underlying
+    # Manage Permissions lockout as an explicit repair target. It is omitted
+    # from ordinary feature requirements because normal operation should not
+    # manufacture channel-level Manage Roles grants.
+    if (
+        temporary_admin_active
+        and not bool(getattr(effective, "manage_roles", False))
+        and "manage_roles" not in report.missing
+    ):
+        report.missing.append("manage_roles")
+        report.repairable_missing.append("manage_roles")
 
     if report.missing:
         overwrite_blocker = permission_overwrite_edit_blocker(guild, target)
@@ -760,15 +868,22 @@ async def apply_target_repair(
                 "channel_name": _safe_str(getattr(current_target, "name", "")),
                 "before": _overwrite_snapshot(current),
             }
+            temporary_admin_active = bool(
+                getattr(getattr(me, "guild_permissions", None), "administrator", False)
+            )
             seeded, inherited = seed_bot_overwrite_from_parent(
                 guild,
                 current_target,
                 current,
+                include_manage_roles=temporary_admin_active,
             )
+
             new_overwrite, changed, preserved = _apply_missing_to_overwrite(
                 seeded,
                 report.missing,
-                clear_explicit_denies=clear_explicit_denies,
+                clear_explicit_denies=(
+                    clear_explicit_denies or temporary_admin_active
+                ),
             )
             changed = list(dict.fromkeys([*inherited, *changed]))
             if preserved:
@@ -776,17 +891,28 @@ async def apply_target_repair(
                     f"{_target_label(current_target)} — preserved explicit deny: {', '.join(preserved)}"
                 )
 
-            # If repair authority is currently effective, persist that authority
-            # on Dank Shield's own overwrite so later role/category drift is less
-            # likely to create another circular self-lockout.
+            # Temporary Administrator recovery is the explicit exception where
+            # Fix Access repairs its own Manage Permissions lockout. The normal
+            # public path never manufactures this channel-level allow merely
+            # because server-level Manage Roles is present.
             try:
-                effective = current_target.permissions_for(me)
-                if (
-                    bool(getattr(effective, "manage_roles", False))
-                    and getattr(new_overwrite, "manage_roles", None) is None
-                ):
-                    new_overwrite.manage_roles = True
-                    changed.append("manage_roles")
+                temporary_admin_active = bool(
+                    getattr(getattr(me, "guild_permissions", None), "administrator", False)
+                )
+                if temporary_admin_active:
+                    from stoney_verify.services.setup_permission_policy import (
+                        permissions_without_administrator,
+                    )
+
+                    underlying = permissions_without_administrator(
+                        current_target,
+                        me,
+                    )
+                    if underlying is not None and not bool(
+                        getattr(underlying, "manage_roles", False)
+                    ):
+                        new_overwrite.manage_roles = True
+                        changed.append("manage_roles")
             except Exception:
                 pass
 
@@ -1000,6 +1126,24 @@ def build_preview_embed(state: PermissionRepairState) -> discord.Embed:
             value="\n".join(f"• {item}" for item in blockers)[:1024],
             inline=False,
         )
+        recovery_targets: list[discord.abc.GuildChannel] = [state.target]
+        if state.include_children and isinstance(state.target, discord.CategoryChannel):
+            recovery_targets.extend(
+                child
+                for child in list(getattr(state.target, "channels", []) or [])
+                if _target_supported(child)
+            )
+        if any(emergency_recovery_needed(state.guild, item) for item in recovery_targets):
+            embed.add_field(
+                name="One-time bulk recovery available",
+                value=(
+                    "Discord has already removed Dank Shield's effective **Manage Permissions** on this target. "
+                    "Use **Temporary Admin Recovery** once, authorize it for this server, then return here and "
+                    "run the repair again. Administrator is emergency-only and should be removed from the "
+                    "Dank Shield role immediately after the repair succeeds."
+                ),
+                inline=False,
+            )
     if warnings:
         embed.add_field(
             name="Safety notes",
@@ -1471,6 +1615,28 @@ class TargetPermissionRepairView(discord.ui.View):
                     )
                 )
 
+        recovery_targets: list[discord.abc.GuildChannel] = []
+        if state.target is not None:
+            recovery_targets.append(state.target)
+            if state.include_children and isinstance(state.target, discord.CategoryChannel):
+                recovery_targets.extend(
+                    child
+                    for child in list(getattr(state.target, "channels", []) or [])
+                    if _target_supported(child)
+                )
+        if any(emergency_recovery_needed(state.guild, item) for item in recovery_targets):
+            url = emergency_recovery_url(state.guild)
+            if url:
+                self.add_item(
+                    discord.ui.Button(
+                        label="Temporary Admin Recovery",
+                        emoji="🛟",
+                        style=discord.ButtonStyle.link,
+                        url=url,
+                        row=4,
+                    )
+                )
+
     @discord.ui.button(
         label="Include Category Children: OFF",
         emoji="🗂️",
@@ -1640,6 +1806,9 @@ __all__ = [
     "PermissionRepairState",
     "TargetPermissionRepairView",
     "approved_public_permissions",
+    "emergency_recovery_permissions",
+    "emergency_recovery_url",
+    "emergency_recovery_needed",
     "apply_target_repair",
     "audit_target",
     "audit_targets",
