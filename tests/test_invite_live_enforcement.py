@@ -280,6 +280,78 @@ def test_onebump_application_owned_webhook_identity_is_enough_for_exact_match() 
     assert policy.is_contentless_trusted_advertiser_candidate(message) is True
 
 
+class FakeHistoryChannel:
+    def __init__(self, guild: Any, messages: list[Any]) -> None:
+        self.guild = guild
+        self.id = 77
+        self.mention = "<#77>"
+        self._messages = list(messages)
+
+    def permissions_for(self, _member: Any) -> Any:
+        return SimpleNamespace(
+            read_message_history=True,
+            manage_messages=True,
+        )
+
+    def history(self, **kwargs: Any):
+        limit = int(kwargs.get("limit", len(self._messages)))
+
+        async def _iterate():
+            for message in self._messages[:limit]:
+                yield message
+
+        return _iterate()
+
+
+def test_manual_cleanup_deletes_historical_contentless_onebump_without_broad_live_guess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guild = SimpleNamespace(id=42, me=SimpleNamespace(id=5000, bot=True))
+    message = FakeMessage(
+        "",
+        bot=True,
+        author_id=1028956609382199346,
+        application_id=1028956609382199346,
+        author_name="OneBump",
+    )
+    channel = FakeHistoryChannel(guild, [message])
+    message.guild = guild
+    message.channel = channel
+
+    async def fake_load(_guild: Any, *, refresh: bool = False):
+        _ = refresh
+        return (
+            {"automod_block_invites": True, "automod_block_links": False},
+            {
+                "allow_server_invites": True,
+                policy.INVITE_PROTECTED_POSTER_RULE_KEY: False,
+                policy.INVITE_TARGET_ALL_BOTS_KEY: False,
+                policy.INVITE_TARGET_CHANNEL_IDS_KEY: [],
+            },
+        )
+
+    monkeypatch.setattr(policy, "load_invite_policy", fake_load)
+    monkeypatch.setattr(policy.discord, "TextChannel", FakeHistoryChannel)
+    monkeypatch.setattr(policy.durable_invite_stats, "record_deleted_invite_decision", _stats_ok)
+    monkeypatch.setattr(policy, "send_invite_decision_modlog", _modlog_ok)
+
+    result = asyncio.run(
+        policy.scan_channel_invites(
+            channel,
+            limit=1000,
+            source="protection-center-native-invite-cleanup",
+            allow_contentless_trusted_advertisers=True,
+        )
+    )
+
+    assert result["checked"] == 1
+    assert result["matched"] == 1
+    assert result["deleted"] == 1
+    assert result["contentless_candidates"] == 1
+    assert result["contentless_deleted"] == 1
+    assert message.deleted is True
+
+
 def test_live_same_server_invite_remains_allowed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
