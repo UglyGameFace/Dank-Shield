@@ -33,14 +33,17 @@ or general test-suite consolidation unless required by this root cause.
 
 ## Status
 
-**IMPLEMENTATION IN PROGRESS — platform constraint corrected; parent-aware/preventative implementation complete; exact-head validation pending**
+**MERGED + REPOSITORY VALIDATED — production Discord acceptance pending**
 
-Branch: `fix/access-repair-self-lockout-bootstrap-20260924`
+Implementation PR: **#319 — Make bot access repair parent-aware and self-lockout safe**
 
-Draft PR: **#319 — Repair bot permission self-lockouts safely**
+Validated PR head:
+`1676e342f70d27900d589db68b924c63cefb34aa`
 
-Base: `main` after merged PR #315
-(`c1687c99acc210feda5801e7f51b51781b8cb276`).
+Merged to `main` as:
+`967998446982c706d67645861fd8e7fdce4d1dbe`
+
+The merge commit has no file-content differences from the validated PR head.
 
 ## Findings / root cause
 
@@ -128,24 +131,42 @@ Fix Access → Specific Channel
 
 ## Validation required / results
 
-Earlier draft-head evidence is superseded because the permission-bypass approach
-was corrected after checking current Discord API documentation.
+Exact-head validation on
+`1676e342f70d27900d589db68b924c63cefb34aa` passed before merge:
 
-Required on the new exact head:
+- all **7 GitHub workflow groups passed**;
+- committed diff whitespace check passed;
+- Python compile passed;
+- full unit suite passed: **1993 passed, 9 warnings**;
+- standalone tool checks passed;
+- Public Setup audit passed;
+- canonical public command surface audit passed;
+- public command/startup friction audit passed;
+- public invite/permissions audit passed;
+- Setup Safety audit passed;
+- Dank Design Smart Auto-Detect audit passed;
+- Role Truth audit passed;
+- Event Boundary audit passed;
+- Claim-first ticket security passed;
+- Managed category SQL smoke test passed;
+- Schema Authority SQL passed;
+- Application Command Size Diagnostics passed;
+- Profile Runtime Diagnostics passed;
+- Ticket Owner Emergency Override passed;
+- DS Backlog 027 Validation passed;
+- no automatic full category sync was introduced;
+- the invalid overwrite-bulk-edit bypass was removed before the validated head;
+- regression coverage verifies parent-aware/manual handoff and bot-only seeding
+  while repair authority still exists.
 
-- committed diff whitespace;
-- Python compile for changed modules;
-- focused access-repair tests;
-- full `pytest tests/` suite;
-- standalone tool checks;
-- repository audits;
-- SQL/security workflow groups;
-- confirm no removed bootstrap symbol remains;
-- confirm no automatic `sync_permissions=True` or overwrite-bulk-edit bypass
-  remains;
-- confirm parent seeding changes only Dank Shield's overwrite;
-- confirm existing child bot overwrites and explicit denies remain authoritative;
-- currentness, mergeability, review state, and final diff hygiene.
+Post-merge repository verification:
+
+- PR #319 is merged;
+- `main` is exactly merge commit
+  `967998446982c706d67645861fd8e7fdce4d1dbe`;
+- comparing the validated PR head to the merge commit shows **zero changed files**.
+
+Only live Discord production acceptance remains.
 
 ## Cleanup / conflicts
 
@@ -179,9 +200,24 @@ Required on the new exact head:
 
 ## Next step
 
-Run exact-head CI on the corrected implementation, inspect any failure against
-the real Discord permission model, fix only same-root-cause issues, then update
-the task record with final evidence before marking PR #319 ready.
+Deploy/restart the merged `main` build, then run the production acceptance
+sequence on one known affected unsynced child such as the reported
+`#general` under its correct parent category:
+
+1. Run Diagnostics / Repair Bot Access before changing Discord manually and
+   confirm it recognizes the parent category state instead of pretending the
+   child is safely auto-fixable.
+2. If the child is already self-locked, restore only Dank Shield → Manage
+   Permissions on that child, not a full Sync Now unless the entire child
+   permission set is intentionally meant to match the category.
+3. Rerun Fix Access and confirm the remaining bot-only permissions repair.
+4. Reopen the child's Discord permission screen and confirm unrelated role/member
+   overwrites were preserved.
+5. Rerun Diagnostics and confirm that target no longer appears as an access gap.
+
+After those live checks pass, mark this task complete. Do not start the separate
+test-suite consolidation or verification/ticket work before this acceptance is
+recorded.
 
 ## Production acceptance after deploy
 
