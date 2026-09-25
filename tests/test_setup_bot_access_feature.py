@@ -7,6 +7,7 @@ import discord
 
 from stoney_verify import setup_activity_access, setup_permission_repair_services
 from stoney_verify.commands_ext import public_setup_recommend as recommend
+from stoney_verify.commands_ext import public_diagnostics_group as diagnostics
 from stoney_verify.commands_ext import public_setup_solid as solid
 from stoney_verify.members_new.activity_scope import ActivityScopeProblem, ActivityScopeReport
 
@@ -159,6 +160,49 @@ def test_open_access_check_is_read_only_and_renders_audit_result(monkeypatch) ->
     assert isinstance(captured["embed"], discord.Embed)
     assert isinstance(captured["view"], setup_activity_access.ActivityAccessView)
     assert interaction.guild.channels[0].mutation_attempted is False
+
+
+def test_diagnostics_repair_bot_access_includes_full_activity_scope(monkeypatch) -> None:
+    calls: list[object] = []
+
+    async def open_repair(
+        interaction,
+        *,
+        parent="security",
+        include_activity_coverage=False,
+    ) -> None:
+        calls.append((interaction, parent, include_activity_coverage))
+
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "open_permission_repair",
+        open_repair,
+    )
+    monkeypatch.setattr(diagnostics, "_admin_or_manage_guild", lambda _interaction: True)
+
+    interaction = type(
+        "I",
+        (),
+        {
+            "user": type("U", (), {"id": 123})(),
+            "response": type("R", (), {"send_message": None})(),
+        },
+    )()
+
+    view = diagnostics.DiagnosticsActionView(actor_id=123)
+    fix = _button(view, "Repair Bot Access")
+    asyncio.run(fix.callback(interaction))
+
+    assert calls == [(interaction, "logs", True)]
+
+
+def test_activity_scope_preview_uses_one_clear_apply_action() -> None:
+    view = setup_permission_repair_services.PermissionRepairPreviewView(
+        include_activity_coverage=True,
+    )
+    apply = _button(view, "Fix All Safe Access")
+    assert apply.custom_id == "dank_setup_permission:apply"
+    assert apply.disabled is False
 
 
 def test_repair_button_routes_to_activity_scoped_preview_first_permission_tool(monkeypatch) -> None:
