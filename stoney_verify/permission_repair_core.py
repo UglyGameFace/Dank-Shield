@@ -876,7 +876,9 @@ async def apply_target_repair(
             new_overwrite, changed, preserved = _apply_missing_to_overwrite(
                 seeded,
                 report.missing,
-                clear_explicit_denies=clear_explicit_denies,
+                clear_explicit_denies=(
+                    clear_explicit_denies or temporary_admin_active
+                ),
             )
             changed = list(dict.fromkeys([*inherited, *changed]))
             if preserved:
