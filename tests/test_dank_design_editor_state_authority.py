@@ -152,6 +152,14 @@ def test_layout_rule_saves_acknowledge_before_storage_io() -> None:
         assert block.index("await interaction.response.defer") < block.index(call)
 
 
+def test_design_save_requests_coalesced_server_stats_refresh() -> None:
+    save_start = PUBLIC_STUDIO.index("async def _save_design_options")
+    save_end = PUBLIC_STUDIO.index("def _bot_missing_manage", save_start)
+    save_block = PUBLIC_STUDIO[save_start:save_end]
+    assert "request_security_stats_design_refresh" in save_block
+    assert "await request_security_stats_design_refresh(int(guild_id))" in save_block
+
+
 def test_config_saves_invalidate_old_pending_previews() -> None:
     assert "def _invalidate_pending_for_guild" in PUBLIC_STUDIO
     save_start = PUBLIC_STUDIO.index("async def _save_design_options")
