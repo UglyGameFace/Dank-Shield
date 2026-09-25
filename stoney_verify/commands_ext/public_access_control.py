@@ -307,6 +307,19 @@ async def require_server_control(interaction: discord.Interaction) -> bool:
     if scoped_interaction_is_server_control(interaction):
         return True
 
+    # Staff identity is the privacy boundary. A normal member does not need a
+    # recipe for which role/Discord permission would unlock server control.
+    try:
+        recognized_staff = scoped_is_ticket_staff(interaction.user)
+    except Exception:
+        recognized_staff = False
+    if not recognized_staff:
+        await reply_once(
+            interaction,
+            {"content": "❌ Staff only.", "ephemeral": True},
+        )
+        return False
+
     control_ids = configured_control_role_ids_for_guild(interaction.guild.id)
     if control_ids:
         roles = [interaction.guild.get_role(rid) for rid in sorted(control_ids)]
