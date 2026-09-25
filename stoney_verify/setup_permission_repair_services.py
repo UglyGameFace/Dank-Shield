@@ -505,6 +505,26 @@ async def preview_or_apply(
                 current = channel.overwrites_for(target)
             except Exception:
                 current = discord.PermissionOverwrite()
+
+            # Normal repair does not add or remove channel-level Manage
+            # Permissions. Preserve whatever explicit bot-member value already
+            # exists. Temporary Administrator recovery is the one deliberate
+            # exception and prepares the expected overwrite earlier.
+            try:
+                is_bot_target = bool(
+                    me is not None
+                    and int(getattr(target, "id", 0) or 0)
+                    == int(getattr(me, "id", 0) or 0)
+                )
+            except Exception:
+                is_bot_target = target is me
+            if is_bot_target and not temporary_admin_active:
+                try:
+                    expected = discord.PermissionOverwrite.from_pair(*expected.pair())
+                    expected.manage_roles = getattr(current, "manage_roles", None)
+                except Exception:
+                    pass
+
             if not legacy._overwrite_changed(current, expected):
                 continue
 
