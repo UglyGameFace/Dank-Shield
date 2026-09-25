@@ -764,9 +764,10 @@ def result_embed(result: dict[str, Any]) -> discord.Embed:
         embed.add_field(
             name="⚠️ Administrator currently enabled",
             value=(
-                "Dank Shield does not require Administrator for normal operation. If you enabled it for this "
-                "emergency repair, remove **Administrator** from the Dank Shield server role immediately after "
-                "the repair is finished, then run **Preview Again** to confirm normal non-Administrator access."
+                "Dank Shield does not require Administrator for normal operation. After the repair, use "
+                "**Restore Normal Permissions** to request the standard non-Administrator permission set, then "
+                "run **Preview Again**. If Discord does not update the existing installation through that "
+                "authorization flow, remove Administrator in Server Settings before considering recovery complete."
             ),
             inline=False,
         )
@@ -788,6 +789,28 @@ def _emergency_recovery_button(guild: discord.Guild, *, row: int = 1) -> discord
     return discord.ui.Button(
         label="Temporary Admin Recovery",
         emoji="🛟",
+        style=discord.ButtonStyle.link,
+        url=url,
+        row=row,
+    )
+
+
+def _restore_normal_permissions_button(
+    guild: discord.Guild,
+    *,
+    row: int = 1,
+) -> discord.ui.Button | None:
+    try:
+        from stoney_verify.permission_repair import reauthorize_url
+
+        url = reauthorize_url(guild)
+    except Exception:
+        url = ""
+    if not url:
+        return None
+    return discord.ui.Button(
+        label="Restore Normal Permissions",
+        emoji="🧹",
         style=discord.ButtonStyle.link,
         url=url,
         row=row,
@@ -855,6 +878,14 @@ class PermissionRepairPreviewView(discord.ui.View):
             and bool(result.get("emergency_recovery_recommended"))
         ):
             button = _emergency_recovery_button(guild)
+            if button is not None:
+                self.add_item(button)
+        if (
+            guild is not None
+            and result is not None
+            and bool(result.get("temporary_admin_active"))
+        ):
+            button = _restore_normal_permissions_button(guild)
             if button is not None:
                 self.add_item(button)
 
@@ -939,6 +970,14 @@ class PermissionRepairResultView(discord.ui.View):
             and bool(result.get("emergency_recovery_recommended"))
         ):
             button = _emergency_recovery_button(guild)
+            if button is not None:
+                self.add_item(button)
+        if (
+            guild is not None
+            and result is not None
+            and bool(result.get("temporary_admin_active"))
+        ):
+            button = _restore_normal_permissions_button(guild)
             if button is not None:
                 self.add_item(button)
 
