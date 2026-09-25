@@ -250,6 +250,74 @@ def reauthorize_url(guild: discord.Guild) -> str:
         return ""
 
 
+def emergency_recovery_permissions() -> discord.Permissions:
+    """Return the explicit one-time permission set used to break channel self-lockouts.
+
+    Normal/public installation remains non-Administrator. This permission set is
+    only surfaced when Discord channel overwrites have already removed effective
+    Manage Roles from Dank Shield, making normal overwrite repair impossible.
+    """
+
+    perms = approved_public_permissions()
+    try:
+        perms.administrator = True
+    except Exception:
+        pass
+    return perms
+
+
+def emergency_recovery_url(guild: discord.Guild) -> str:
+    """Build a guild-pinned OAuth URL for explicit temporary Administrator recovery."""
+
+    try:
+        client_id = int(getattr(getattr(guild, "me", None), "id", 0) or 0)
+        if client_id <= 0:
+            return ""
+        return discord.utils.oauth_url(
+            client_id,
+            permissions=emergency_recovery_permissions(),
+            guild=guild,
+            disable_guild_select=True,
+            scopes=("bot", "applications.commands"),
+        )
+    except Exception:
+        return ""
+
+
+def emergency_recovery_needed(
+    guild: discord.Guild,
+    target: discord.abc.GuildChannel,
+) -> bool:
+    """Whether a target is self-locked but recoverable after explicit Admin auth.
+
+    Discord checks permission-overwrite edits against the bot's effective
+    MANAGE_ROLES/Manage Permissions authority on the target. ADMINISTRATOR is the
+    only guild permission that bypasses channel overwrites, so an already-locked
+    target cannot be repaired by the ordinary non-Administrator bot token.
+    """
+
+    me = _bot_member(guild)
+    if me is None:
+        return False
+
+    guild_permissions = getattr(me, "guild_permissions", None)
+    if guild_permissions is None:
+        return False
+    if bool(getattr(guild_permissions, "administrator", False)):
+        return False
+    if not bool(getattr(guild_permissions, "manage_roles", False)):
+        return False
+
+    try:
+        effective = target.permissions_for(me)
+    except Exception:
+        return False
+    return not bool(
+        getattr(effective, "administrator", False)
+        or getattr(effective, "manage_roles", False)
+    )
+
+
 def _target_label(target: Any) -> str:
     try:
         mention = getattr(target, "mention", None)
@@ -1000,6 +1068,24 @@ def build_preview_embed(state: PermissionRepairState) -> discord.Embed:
             value="\n".join(f"• {item}" for item in blockers)[:1024],
             inline=False,
         )
+        recovery_targets: list[discord.abc.GuildChannel] = [state.target]
+        if state.include_children and isinstance(state.target, discord.CategoryChannel):
+            recovery_targets.extend(
+                child
+                for child in list(getattr(state.target, "channels", []) or [])
+                if _target_supported(child)
+            )
+        if any(emergency_recovery_needed(state.guild, item) for item in recovery_targets):
+            embed.add_field(
+                name="One-time bulk recovery available",
+                value=(
+                    "Discord has already removed Dank Shield's effective **Manage Permissions** on this target. "
+                    "Use **Temporary Admin Recovery** once, authorize it for this server, then return here and "
+                    "run the repair again. Administrator is emergency-only and should be removed from the "
+                    "Dank Shield role immediately after the repair succeeds."
+                ),
+                inline=False,
+            )
     if warnings:
         embed.add_field(
             name="Safety notes",
@@ -1471,6 +1557,28 @@ class TargetPermissionRepairView(discord.ui.View):
                     )
                 )
 
+        recovery_targets: list[discord.abc.GuildChannel] = []
+        if state.target is not None:
+            recovery_targets.append(state.target)
+            if state.include_children and isinstance(state.target, discord.CategoryChannel):
+                recovery_targets.extend(
+                    child
+                    for child in list(getattr(state.target, "channels", []) or [])
+                    if _target_supported(child)
+                )
+        if any(emergency_recovery_needed(state.guild, item) for item in recovery_targets):
+            url = emergency_recovery_url(state.guild)
+            if url:
+                self.add_item(
+                    discord.ui.Button(
+                        label="Temporary Admin Recovery",
+                        emoji="🛟",
+                        style=discord.ButtonStyle.link,
+                        url=url,
+                        row=4,
+                    )
+                )
+
     @discord.ui.button(
         label="Include Category Children: OFF",
         emoji="🗂️",
@@ -1640,6 +1748,9 @@ __all__ = [
     "PermissionRepairState",
     "TargetPermissionRepairView",
     "approved_public_permissions",
+    "emergency_recovery_permissions",
+    "emergency_recovery_url",
+    "emergency_recovery_needed",
     "apply_target_repair",
     "audit_target",
     "audit_targets",
