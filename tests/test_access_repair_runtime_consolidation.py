@@ -434,7 +434,7 @@ def test_setup_repair_offers_one_bulk_recovery_after_channel_self_lockout(
     assert target.permission_calls == []
     assert result["emergency_recovery_recommended"] is True
     assert result["emergency_recovery_count"] == 1
-    assert result["emergency_recovery_targets"] == ["#general"]
+    assert result["emergency_recovery_targets"] == ["<#701>"]
     assert len(result["manual_actions"]) == 1
     assert "Temporary Admin Recovery" in result["manual_actions"][0]
     assert "1 channel/category target(s)" in result["manual_actions"][0]
