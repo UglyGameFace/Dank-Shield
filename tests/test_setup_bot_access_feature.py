@@ -363,39 +363,52 @@ def test_activity_access_back_preserves_security_or_logs_parent(monkeypatch) -> 
 
 
 
-def test_activity_repair_blockers_ignore_unrelated_global_capabilities(monkeypatch) -> None:
-    permissions = SimpleNamespace(
-        administrator=False,
-        manage_roles=True,
-        manage_channels=False,
-        view_channel=False,
-        view_audit_log=False,
-    )
-    me = SimpleNamespace(guild_permissions=permissions)
+def test_activity_repair_filters_unrelated_global_capabilities(monkeypatch) -> None:
+    async def no_targets(_guild, *, include_activity_coverage=False):
+        assert include_activity_coverage is True
+        return [], [], [], []
+
     monkeypatch.setattr(
-        setup_permission_repair_services.repair_core,
-        "_bot_member",
-        lambda _guild: me,
+        setup_permission_repair_services,
+        "_build_expanded_targets",
+        no_targets,
+    )
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "_bot_blockers",
+        lambda _guild: [
+            "Dank Shield is missing **Manage Channels** at the server level.",
+            "Dank Shield is missing **View Audit Log**; audit-backed setup checks will be less reliable.",
+        ],
     )
 
-    activity = setup_permission_repair_services._bot_blockers(
-        object(),
-        activity_only=True,
+    healthy = asyncio.run(
+        setup_permission_repair_services.preview_or_apply(
+            object(),
+            apply=False,
+            include_activity_coverage=True,
+        )
     )
-    assert activity == []
+    assert healthy["manual_actions"] == []
+    assert healthy["notes"] == []
+    assert healthy["reauthorize_recommended"] is False
 
-    setup = setup_permission_repair_services._bot_blockers(
-        object(),
-        activity_only=False,
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "_bot_blockers",
+        lambda _guild: [
+            "Dank Shield is missing **Manage Roles** at the server level. Discord requires Manage Roles to repair channel overwrites.",
+            "Dank Shield is missing **View Audit Log**; audit-backed setup checks will be less reliable.",
+        ],
     )
-    assert any("Manage Channels" in item for item in setup)
-    assert any("View Channels" in item for item in setup)
-    assert any("View Audit Log" in item for item in setup)
-
-    permissions.manage_roles = False
-    blocked = setup_permission_repair_services._bot_blockers(
-        object(),
-        activity_only=True,
+    blocked = asyncio.run(
+        setup_permission_repair_services.preview_or_apply(
+            object(),
+            apply=False,
+            include_activity_coverage=True,
+        )
     )
-    assert len(blocked) == 1
-    assert "Manage Roles" in blocked[0]
+    assert len(blocked["manual_actions"]) == 1
+    assert "Manage Roles" in blocked["manual_actions"][0]
+    assert all("View Audit Log" not in item for item in blocked["notes"])
+    assert blocked["reauthorize_recommended"] is True

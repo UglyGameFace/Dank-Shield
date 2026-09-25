@@ -98,11 +98,7 @@ def legacy_label(channel: Any) -> str:
         return str(mention or getattr(channel, "name", "unknown"))
 
 
-def _bot_blockers(
-    guild: discord.Guild,
-    *,
-    activity_only: bool = False,
-) -> list[str]:
+def _bot_blockers(guild: discord.Guild) -> list[str]:
     me = repair_core._bot_member(guild)
     if me is None:
         return ["Dank Shield could not resolve its bot member in this server."]
@@ -118,8 +114,6 @@ def _bot_blockers(
             "Dank Shield is missing **Manage Roles** at the server level. Discord requires "
             "Manage Roles (shown as Manage Permissions in channel settings) to repair channel overwrites."
         )
-    if activity_only:
-        return blockers
     if not (perms.manage_channels or perms.administrator):
         blockers.append(
             "Dank Shield is missing **Manage Channels** at the server level; ticket/channel creation "
@@ -394,10 +388,13 @@ async def preview_or_apply(
 ) -> dict[str, Any]:
     from stoney_verify.startup_guards import setup_permission_repair_guard as legacy
 
-    blockers = _bot_blockers(
-        guild,
-        activity_only=include_activity_coverage,
-    )
+    blockers = _bot_blockers(guild)
+    if include_activity_coverage:
+        blockers = [
+            item
+            for item in blockers
+            if "Manage Roles" in item or "could not resolve" in item
+        ]
     reauthorize_recommended = (
         any("Manage Roles" in item for item in blockers)
         if include_activity_coverage
