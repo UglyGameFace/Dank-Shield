@@ -338,6 +338,43 @@ class FakeHistoryChannel:
         return _iterate()
 
 
+def test_manual_contentless_cleanup_does_not_bypass_shield_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_load(guild: Any, *, refresh: bool = False):
+        _ = guild, refresh
+        return (
+            {"automod_block_invites": False, "automod_block_links": False},
+            {
+                "allow_server_invites": True,
+                policy.INVITE_PROTECTED_POSTER_RULE_KEY: False,
+                policy.INVITE_TARGET_CHANNEL_IDS_KEY: [],
+            },
+        )
+
+    monkeypatch.setattr(policy, "load_invite_policy", fake_load)
+
+    message = FakeMessage(
+        "",
+        bot=True,
+        author_id=1028956609382199346,
+        application_id=1028956609382199346,
+        author_name="OneBump",
+    )
+    decision = asyncio.run(
+        policy.decide_invite_message(
+            message,
+            source="protection-center-native-invite-cleanup",
+            refresh_policy=True,
+            allow_contentless_trusted_advertiser=True,
+        )
+    )
+
+    assert decision.action == "log_only"
+    assert decision.should_delete is False
+    assert message.deleted is False
+
+
 def test_manual_cleanup_deletes_historical_contentless_onebump_without_broad_live_guess(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
