@@ -2,123 +2,143 @@
 
 ## Active task / desired outcome
 
-**P0-STAFF-DENIAL-BOUNDARY-009 — hide native Discord permission recipes from non-staff users**
+**P0-ANTINUKE-INFLIGHT-SELF-ACTION-RECEIPT-009 — prevent legitimate rate-limited bot-authored mutations from expiring their self-action proof and triggering compromise quarantine/self-ejection**
 
-Desired outcome: when a normal member clicks or invokes a Dank Shield staff-only
-surface, the bot returns only **❌ Staff only.** Native Discord permission
-requirements such as Manage Server, Manage Channels, or Administrator are shown
-only after Dank Shield has already established that the caller is recognized
-staff for that guild.
+Desired outcome: any protected Discord mutation issued by this running Dank Shield
+process must retain its one-time self-action proof for the entire outbound request
+lifecycle, even when discord.py/Discord rate-limit pacing keeps the request in
+flight longer than the normal post-request receipt TTL. Truly unexplained
+bot-attributed protected actions must remain fail-closed.
 
 ## Scope / single active task lock
 
-Only staff-denial authority/UX is active:
+Only the AntiNuke self-action receipt lifecycle is active:
 
-- use the existing per-guild canonical staff/control truth;
-- regular members must not learn staff-tool permission recipes from denial copy;
-- server owner, Administrator, configured server-control roles, configured ticket
-  staff roles, and configured VC staff roles remain recognized staff;
-- native feature permissions remain a second gate and are still explained to
-  recognized staff when genuinely missing;
-- fix both current compact /dank home routes and legacy-compatible duplicate
-  routes so behavior cannot diverge;
-- fix shared setup and Server Design gates so direct commands/buttons match the
-  same rule;
-- audit other top-level staff management entry points that currently expose
-  Manage Server/Administrator text before staff identity is established;
-- add regression coverage to existing authority/staff test modules.
+- preserve action/guild/target-scoped one-time DSA proof;
+- keep proof alive while the protected Discord request is still in flight;
+- begin the finite receipt TTL only after the request completes successfully;
+- remove proof on failed or cancelled requests;
+- preserve consumption if the audit event arrives before the HTTP request returns;
+- preserve durable compromise quarantine/self-ejection for genuinely unmatched
+  self-attributed protected actions;
+- cover the reported bot-authored `channel_update` / rate-limited PATCH path;
+- inspect the directly shared request-lifecycle code for the same failure mode;
+- do not weaken protected action coverage or globally exempt `channel_update`.
 
-Do not mix in the separate Server Stats modal-to-buttons redesign until this
-staff-denial task is merged/validated.
+Do not broaden into Server Stats design work, verification/ticket interaction
+failures, moderator trust policy, Spam Guard, or unrelated AntiNuke redesign.
 
-## Root cause
+## Prior task closure
 
-Several public management routes check Discord native permissions first:
+PR #322, **Integrate Server Stats with Dank Design safely**, merged into `main`
+as `0dfdbc9fc2d52fc7223b9ccee59090d1977cdffb` on 2026-09-25.
 
-- Server Design reports its Manage Channels requirement directly;
-- Logs/Protection report Manage Server/Administrator directly;
-- the canonical setup gate reports server-control / Manage Server requirements;
-- Diagnostics and Embed Builder have the same ordering.
+Exact PR-head validation was green:
 
-That means a normal Verified member sees an implementation/authorization recipe
-instead of a staff-only denial. The native permission test is valid, but the
-ordering is wrong.
+- Application Command Size Diagnostics — success
+- Ticket Owner Emergency Override — success
+- Dank Design Regression CI — success
+- Profile Runtime Diagnostics — success
+- Dank Shield CI — success
 
-The repo already has canonical per-guild staff/control truth:
+The merge commit also has a successful Discloud commit status.
 
-- `scoped_is_ticket_staff(member)` recognizes owner/admin, configured ticket
-  staff, VC staff, and configured server-control roles;
-- `scoped_interaction_is_server_control(interaction)` remains the stronger setup
-  mutation authority;
-- Server Design still requires its native Manage Channels authority after staff
-  identity is established.
+## Findings / root cause
 
-## Required behavior
+`stoney_verify/anti_nuke_self_action_runtime.py` creates a DSA authorization
+receipt before awaiting the underlying Discord HTTP request.
 
-1. No guild context -> existing server-context error.
-2. Not recognized staff -> exactly `❌ Staff only.`.
-3. Recognized staff but missing the feature's native/control authority -> show
-   the precise staff-facing permission/configuration guidance.
-4. Recognized staff with required authority -> proceed unchanged.
+Before this task:
 
-## Status
+1. `_authorize()` stamped the request and saved `created_at`.
+2. `_prune_pending()` expired the receipt when
+   `now - created_at > 120s`.
+3. Only then did/does the wrapped code await Discord's request lifecycle.
+4. A rate-limited PATCH can therefore remain in discord.py/Discord pacing longer
+   than 120 seconds.
+5. If the eventual audit event is attributed to Dank Shield after the receipt was
+   pruned, `_audit_guard()` sees no matching proof.
+6. `anti_nuke_zero_damage_runtime` replaces the unmatched handler with the
+   durable compromise path, persists a 30-minute quarantine, and ejects the bot.
 
-**IMPLEMENTATION COMPLETE — PR #323 exact-head validation pending**
+That makes request-start time the wrong TTL origin. The proof must not expire
+while the request that owns it is still in flight.
 
-Branch: `fix/staff-only-denial-boundary-20260925`
+## Execution path
 
-Base: current `main` after merged PR #322.
+Protected local mutation:
 
-## Validation required
+`discord.py mutation -> bot.http.request wrapper -> _request_spec() ->
+_authorize() -> Discord HTTP/rate-limit pacing -> successful response ->
+_audit_guard() -> _consume()`
 
-Before merge:
+False-compromise path before fix:
 
-- compile changed modules;
-- focused staff/owner authority tests;
-- direct Server Design denial tests;
-- setup/server-control denial tests;
-- compact and legacy /dank home route tests/static checks;
-- diagnostics/embed management denial tests where applicable;
+`_authorize(created_at) -> >120s in-flight -> _prune_pending() deletes proof ->
+Discord completes PATCH -> channel_update audit event -> _consume() misses ->
+zero-damage unmatched handler -> durable quarantine -> guild.leave()`
+
+## Changes
+
+Branch: `fix/antinuke-inflight-self-action-receipt-20260925`
+
+Implemented:
+
+- added `completed_at` lifecycle state to self-action authorizations;
+- in-flight authorizations are no longer TTL-pruned;
+- the 120-second receipt window starts after successful request completion;
+- the soft global ledger cap evicts only completed receipts, never live in-flight
+  requests;
+- HTTP request failure **or cancellation** discards the authorization;
+- webhook edit/delete wrappers use the same completion/cancellation lifecycle;
+- audit events can still consume the receipt while the request is in flight;
+- added a regression test that advances monotonic time beyond the old 120-second
+  TTL during a protected `PATCH /channels/{id}` and verifies the eventual
+  `channel_update` consumes proof without self-ejection;
+- added cancellation cleanup coverage;
+- updated the old stale-receipt test so expiry is measured after completion.
+
+## Validation / results
+
+Pending exact-head validation.
+
+Required before completion:
+
+- compile changed Python modules;
+- focused `tests/test_antinuke_self_action_runtime.py`;
+- focused zero-damage AntiNuke tests;
+- relevant gateway/guardian AntiNuke regression tests;
 - full `pytest tests/`;
-- all repository workflow groups green;
-- verify ordinary member denial contains no Manage Server, Manage Channels,
-  Administrator, role mention, or other escalation recipe;
-- verify configured staff still receive actionable native-permission guidance;
-- verify owner/admin/control-role behavior is unchanged.
+- repository GitHub workflows;
+- final diff inspection;
+- verify no in-flight proof can be evicted by the soft cap;
+- verify successful completed receipts still expire;
+- verify failed/cancelled requests leave no stale proof;
+- verify unexplained self-attributed protected actions still reach durable
+  quarantine/self-ejection.
 
-## Backlog after this task
+## Cleanup / conflicts
 
-- Replace Server Stats modal-first counter customization with button/select-first
-  section editing. Custom text modals should remain only as an escape hatch.
+No unrelated code has been intentionally changed.
 
-## Implementation completed
+The fix does not add an exemption, retry shim, second AntiNuke owner, or duplicate
+listener. It repairs the existing authoritative self-action proof lifecycle.
 
-- Canonical server-control/setup denial now returns exactly `❌ Staff only.`
-  for callers who are not recognized staff.
-- Recognized staff who lack server-control authority still receive the existing
-  actionable configured-role / Manage Server / Administrator guidance.
-- Server Design now establishes staff identity before checking Manage Channels.
-- Compact and legacy Protection/Logs routes use the canonical setup gate instead
-  of duplicating native-permission denial strings.
-- Legacy Server Design no longer applies a competing Manage Server/Admin gate;
-  it reaches the same canonical Design permission check as the compact surface.
-- Diagnostics, Setup Overview, and Embed Builder now use staff-first denial
-  ordering.
-- Existing owner/admin/control-role/staff truth is reused; no new authority
-  resolver or hardcoded role ID was introduced.
-- Regression coverage verifies ordinary-member denial text contains no native
-  permission recipe while recognized staff still get second-stage guidance.
+## Blockers / risks
 
-## Validation evidence / pending
+- Local execution is not available through the GitHub connector, so validation
+  must be driven by repository CI after the branch/PR is published.
+- The existing 120-second **post-completion** TTL remains unchanged; CI/regression
+  evidence must confirm this preserves expected one-time expiry behavior.
 
-- First PR #323 CI attempt stopped at `git diff --check` because the expanded
-  authority test file had one extra blank line at EOF.
-- That whitespace-only failure is corrected.
-- No compile/import/runtime failure was reported by that attempt.
-- Replacement exact-head CI must still pass all repository gates before merge.
+## Backlog
+
+Preserve previously identified unrelated follow-ups without investigating them
+inside this task, including moderator trust/re-entry behavior and trusted-role
+selection.
 
 ## Next step
 
-Freeze the branch and run exact-head PR #323 validation. Fix only same-root
-failures. When green, mark the PR ready/mergeable; the Server Stats
-modal-to-buttons redesign remains the next separate task.
+Inspect the exact branch diff, open a draft PR, run all repository workflows, fix
+only same-task regressions, then perform final cleanup/conflict review before
+marking the PR ready.
