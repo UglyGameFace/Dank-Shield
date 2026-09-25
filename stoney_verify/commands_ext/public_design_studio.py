@@ -393,6 +393,21 @@ async def _save_design_options(guild_id: int, options: Mapping[str, Any]) -> boo
         clear_guild_config_cache(guild_id)
         _LAST_GOOD_OPTIONS[_guild_key(int(guild_id))] = dict(payload)
         _invalidate_pending_for_guild(int(guild_id))
+
+        # Server Stats remains the sole owner of its live channel names. When
+        # Design Sync is enabled, a design save merely asks the Stats owner to
+        # refresh through its existing coalesced/cooldown path.
+        try:
+            from stoney_verify.security_stats import (
+                request_security_stats_design_refresh,
+            )
+
+            await request_security_stats_design_refresh(int(guild_id))
+        except Exception as exc:
+            print(
+                "⚠️ public_design_studio stats design-sync refresh skipped: "
+                f"{type(exc).__name__}: {exc}"
+            )
         return True
     except Exception as exc:
         print(f"⚠️ public_design_studio config save skipped: {type(exc).__name__}: {exc}")
