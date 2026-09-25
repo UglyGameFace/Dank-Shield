@@ -83,7 +83,7 @@ def _home_embed() -> discord.Embed:
     )
     embed.add_field(
         name="Utility",
-        value="🧰 Community Tools • 📊 Server Stats • 📡 Status • 🩺 Diagnostics • 📎 Card Assets • ❓ Help",
+        value="🎮 Community Hub • 🧰 Community Tools • 📊 Server Stats • 📡 Status • 🩺 Diagnostics • 📎 Card Assets • ❓ Help",
         inline=False,
     )
     embed.add_field(
@@ -280,6 +280,12 @@ class CompactDankHomeView(_OwnedView):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
+    @discord.ui.button(label="Community Hub", emoji="🎮", style=discord.ButtonStyle.primary, custom_id="dank:home:community_hub:v1", row=3)
+    async def community_hub(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_community_hub import open_community_hub
+        await open_community_hub(interaction, replace_message=True)
+
     @discord.ui.button(label="Server Stats", emoji="📊", style=discord.ButtonStyle.secondary, custom_id="dank:home:server_stats:v1", row=3)
     async def server_stats(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -435,6 +441,8 @@ def install_compact_public_surface_v2(bot: Any, tree: Any) -> dict[str, Any]:
     global _INSTALLED
     from .public_community_tools import ensure_community_tools_runtime
     ensure_community_tools_runtime(bot)
+    from ..community_hub_runtime import ensure_community_hub_runtime
+    ensure_community_hub_runtime(bot)
 
     if _INSTALLED:
         roots = sorted(str(getattr(item, "name", "")) for item in tree.get_commands(guild=None))

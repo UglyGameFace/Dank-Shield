@@ -1,0 +1,292 @@
+name: Community Hub CI
+
+on:
+  pull_request:
+    paths:
+      - 'stoney_verify/community_hub_service.py'
+      - 'stoney_verify/community_hub_runtime.py'
+      - 'stoney_verify/commands_ext/public_community_hub.py'
+      - 'stoney_verify/commands_ext/public_command_surface_v2.py'
+      - 'stoney_verify/globals.py'
+      - 'stoney_verify/operation_queue.py'
+      - 'stoney_verify/permission_repair_core.py'
+      - 'supabase/migrations/20260925193000_community_hub.sql'
+      - 'tests/test_community_hub_contract.py'
+      - 'tools/test_community_hub_static.py'
+      - '.github/workflows/community-hub-ci.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'stoney_verify/community_hub_service.py'
+      - 'stoney_verify/community_hub_runtime.py'
+      - 'stoney_verify/commands_ext/public_community_hub.py'
+      - 'supabase/migrations/20260925193000_community_hub.sql'
+      - 'tests/test_community_hub_contract.py'
+      - 'tools/test_community_hub_static.py'
+
+permissions:
+  contents: read
+
+jobs:
+  community-hub-python:
+    name: Community Hub Python + contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          show-progress: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt
+          pip install -q pytest
+
+      - name: Diff whitespace
+        run: git diff --check "$(git merge-base origin/main HEAD)"..HEAD
+
+      - name: Compile Community Hub and integration owners
+        run: |
+          python -m py_compile             stoney_verify/community_hub_service.py             stoney_verify/community_hub_runtime.py             stoney_verify/commands_ext/public_community_hub.py             stoney_verify/commands_ext/public_command_surface_v2.py             stoney_verify/globals.py             stoney_verify/operation_queue.py             stoney_verify/permission_repair_core.py             tools/test_community_hub_static.py             tests/test_community_hub_contract.py
+
+      - name: Focused contract tests
+        run: python -m pytest -q --tb=short --disable-warnings tests/test_community_hub_contract.py
+
+      - name: Standalone static audit
+        run: python tools/test_community_hub_static.py
+
+  community-hub-sql:
+    name: Community Hub PostgreSQL smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Supabase-compatible roles
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+              if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon; end if;
+              if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated; end if;
+              if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role; end if;
+          end;
+          $$;
+          SQL
+
+      - name: Apply Community Hub migration twice
+        run: |
+          set -euo pipefail
+          for pass in 1 2; do
+            echo "Community Hub migration pass ${pass}"
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260925193000_community_hub.sql
+          done
+
+      - name: Verify security and lifecycle invariants
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+              sid uuid;
+              replay_id uuid;
+              member_rows integer;
+              ok boolean;
+              metric_value integer;
+          begin
+              if has_table_privilege('anon', 'public.dank_community_sessions', 'SELECT') then
+                  raise exception 'anon unexpectedly has Community Hub session SELECT';
+              end if;
+              if has_table_privilege('authenticated', 'public.dank_community_sessions', 'SELECT') then
+                  raise exception 'authenticated unexpectedly has Community Hub session SELECT';
+              end if;
+              if not has_table_privilege('service_role', 'public.dank_community_sessions', 'SELECT') then
+                  raise exception 'service_role missing Community Hub session SELECT';
+              end if;
+
+              perform public.community_hub_create_session(
+                  'guild-1','host-1','idem-1','Minecraft','smoke session',
+                  4,'optional','casual','public'
+              );
+              select id into sid
+              from public.dank_community_sessions
+              where guild_id='guild-1' and idempotency_key='idem-1';
+
+              if sid is null then
+                  raise exception 'create session did not persist';
+              end if;
+
+              perform public.community_hub_create_session(
+                  'guild-1','host-1','idem-1','Minecraft','smoke session',
+                  4,'optional','casual','public'
+              );
+              if (select count(*) from public.dank_community_sessions where guild_id='guild-1') <> 1 then
+                  raise exception 'idempotent create duplicated session';
+              end if;
+
+              perform public.community_hub_transition_session(
+                  sid,'guild-1','host-1','publish',false,null
+              );
+
+              perform public.community_hub_join_session(sid,'guild-1','member-2');
+              perform public.community_hub_join_session(sid,'guild-1','member-2');
+              select count(*) into member_rows
+              from public.dank_community_session_members
+              where session_id=sid and user_id='member-2';
+              if member_rows <> 1 then
+                  raise exception 'duplicate join duplicated membership';
+              end if;
+
+              perform public.community_hub_set_ready(sid,'guild-1','member-2',true);
+              perform public.community_hub_transition_session(
+                  sid,'guild-1','host-1','start',false,null
+              );
+              perform public.community_hub_transition_session(
+                  sid,'guild-1','host-1','pause',false,null
+              );
+              perform public.community_hub_transition_session(
+                  sid,'guild-1','host-1','resume',false,null
+              );
+              perform public.community_hub_transition_session(
+                  sid,'guild-1','host-1','lock',false,null
+              );
+
+              begin
+                  perform public.community_hub_join_session(sid,'guild-1','member-3');
+                  raise exception 'locked session unexpectedly accepted a join';
+              exception
+                  when others then
+                      if position('session is locked' in sqlerrm) = 0 then
+                          raise;
+                      end if;
+              end;
+
+              perform public.community_hub_transition_session(
+                  sid,'guild-1','host-1','unlock',false,null
+              );
+              perform public.community_hub_assign_member_role(
+                  sid,'guild-1','host-1','member-2','cohost',false
+              );
+              perform public.community_hub_transition_session(
+                  sid,'guild-1','host-1','begin_end',false,'smoke complete'
+              );
+              perform public.community_hub_finalize_end_session(
+                  sid,'guild-1','host-1','cleaned'
+              );
+
+              perform public.community_hub_restart_session(
+                  sid,'guild-1','host-1','replay-1'
+              );
+              select id into replay_id
+              from public.dank_community_sessions
+              where guild_id='guild-1' and idempotency_key='replay-1';
+
+              if replay_id is null or replay_id = sid then
+                  raise exception 'Play Again did not create a fresh session';
+              end if;
+              if (select parent_session_id from public.dank_community_sessions where id=replay_id) <> sid then
+                  raise exception 'Play Again did not link to its parent session';
+              end if;
+
+              perform public.community_hub_bump_metric(
+                  'guild-1',now(),'joins',2,false
+              );
+              perform public.community_hub_bump_metric(
+                  'guild-1',now(),'joins',3,false
+              );
+              select joins into metric_value
+              from public.dank_community_metrics_hourly
+              where guild_id='guild-1' and bucket_start=date_trunc('hour',now());
+              if metric_value <> 5 then
+                  raise exception 'atomic metric increment expected 5 got %', metric_value;
+              end if;
+
+              ok := public.community_hub_reserve_notification(
+                  'guild-1','notify-user',now(),5,300
+              );
+              if not ok then
+                  raise exception 'first notification reservation unexpectedly failed';
+              end if;
+              ok := public.community_hub_reserve_notification(
+                  'guild-1','notify-user',now(),5,300
+              );
+              if ok then
+                  raise exception 'notification cooldown did not block immediate duplicate';
+              end if;
+
+              insert into public.dank_community_partner_links(
+                  guild_a_id,guild_b_id,state,requested_by_guild_id,requested_by_user_id
+              ) values ('100','200','pending','100','host-1');
+
+              begin
+                  insert into public.dank_community_partner_links(
+                      guild_a_id,guild_b_id,state,requested_by_guild_id,requested_by_user_id
+                  ) values ('200','100','pending','200','host-1');
+                  raise exception 'reverse partner pair unexpectedly inserted';
+              exception
+                  when check_violation then null;
+                  when unique_violation then null;
+              end;
+          end;
+          $$;
+          SQL
+
+      - name: Verify no public function execution leaks
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+              if has_function_privilege(
+                  'anon',
+                  'public.community_hub_create_session(text,text,text,text,text,integer,text,text,text)',
+                  'EXECUTE'
+              ) then
+                  raise exception 'anon unexpectedly has Community Hub create-session EXECUTE';
+              end if;
+              if has_function_privilege(
+                  'authenticated',
+                  'public.community_hub_create_session(text,text,text,text,text,integer,text,text,text)',
+                  'EXECUTE'
+              ) then
+                  raise exception 'authenticated unexpectedly has Community Hub create-session EXECUTE';
+              end if;
+              if not has_function_privilege(
+                  'service_role',
+                  'public.community_hub_create_session(text,text,text,text,text,integer,text,text,text)',
+                  'EXECUTE'
+              ) then
+                  raise exception 'service_role missing Community Hub create-session EXECUTE';
+              end if;
+          end;
+          $$;
+          SQL

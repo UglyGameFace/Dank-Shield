@@ -152,6 +152,7 @@ def _is_explicitly_scoped_concurrency(concurrency_class: str) -> bool:
     return _safe_str(concurrency_class).strip().lower() in {
         "ticket_channel_mutation",
         "member_role_mutation",
+        "community_session_mutation",
         "scan_readonly",
         "member_sync",
     }
