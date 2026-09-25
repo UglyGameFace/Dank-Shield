@@ -91,8 +91,9 @@ Implemented:
 - added `completed_at` lifecycle state to self-action authorizations;
 - in-flight authorizations are no longer TTL-pruned;
 - the 120-second receipt window starts after successful request completion;
-- the soft global ledger cap evicts only completed receipts, never live in-flight
-  requests;
+- removed count-based eviction of valid self-action/side-effect provenance;
+  completed receipts remain TTL-bounded and in-flight receipts are tied to real
+  outstanding requests, so unrelated guild load cannot erase valid proof;
 - HTTP request failure **or cancellation** discards the authorization;
 - webhook edit/delete wrappers use the same completion/cancellation lifecycle;
 - HTTP-derived `integration_delete` and reasonless `message_delete` side-effect
@@ -104,6 +105,10 @@ Implemented:
   TTL during a protected `PATCH /channels/{id}` and verifies the eventual
   `channel_update` consumes proof without self-ejection;
 - added cancellation cleanup coverage;
+- added audit-before-HTTP-response coverage so a delayed request can consume its
+  proof while still in flight;
+- added >4096-entry regression coverage proving valid unexpired provenance is
+  retained until TTL rather than evicted by global load;
 - updated the old stale-receipt test so expiry is measured after completion.
 
 ## Validation / results
@@ -119,7 +124,8 @@ Required before completion:
 - full `pytest tests/`;
 - repository GitHub workflows;
 - final diff inspection;
-- verify no in-flight proof can be evicted by the soft cap;
+- verify neither in-flight nor completed-but-unexpired proof is count-evicted,
+  including above the former 4096-entry threshold;
 - verify successful completed receipts still expire;
 - verify failed/cancelled requests leave no stale proof;
 - verify HTTP-derived side-effect receipts cannot expire before their parent
