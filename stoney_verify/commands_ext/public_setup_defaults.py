@@ -565,17 +565,49 @@ async def _repair_existing_permissions(
     if not repair_items:
         return
 
-    can_manage, reason = _can_manage_channels(guild)
-    if not can_manage:
-        notes.append(f"Could not repair permissions on {label}: {reason}")
+    me = _bot_member(guild)
+    try:
+        effective = channel.permissions_for(me) if me is not None else None
+        can_overwrite = bool(
+            effective is not None
+            and (
+                getattr(effective, "administrator", False)
+                or getattr(effective, "manage_roles", False)
+            )
+        )
+    except Exception:
+        can_overwrite = False
+    if not can_overwrite:
+        notes.append(
+            f"Could not repair permissions on {label}: Dank Shield is missing "
+            "effective Manage Permissions (MANAGE_ROLES) on that target."
+        )
         return
 
     repaired: list[str] = []
+    me = _bot_member(guild)
     for target, expected in repair_items:
         try:
             current = channel.overwrites_for(target)
         except Exception:
             current = discord.PermissionOverwrite()
+
+        try:
+            is_bot_target = bool(
+                me is not None
+                and int(getattr(target, "id", 0) or 0)
+                == int(getattr(me, "id", 0) or 0)
+            )
+        except Exception:
+            is_bot_target = target is me
+        if is_bot_target:
+            # Normal setup owns functional access, not the powerful channel-level
+            # Manage Permissions bit. Preserve its current explicit value.
+            try:
+                expected = discord.PermissionOverwrite.from_pair(*expected.pair())
+                expected.manage_roles = getattr(current, "manage_roles", None)
+            except Exception:
+                pass
 
         if not _overwrite_changed(current, expected):
             continue
