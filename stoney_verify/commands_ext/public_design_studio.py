@@ -305,6 +305,21 @@ async def _require_design_permission(interaction: discord.Interaction) -> bool:
             action_name="design.permission.server_required",
         )
         return False
+    try:
+        from .public_access_control import scoped_is_ticket_staff
+
+        recognized_staff = scoped_is_ticket_staff(interaction.user)
+    except Exception:
+        recognized_staff = False
+    if not recognized_staff:
+        await safe_send_interaction(
+            interaction,
+            content="❌ Staff only.",
+            ephemeral=True,
+            action_name="design.permission.staff_only",
+        )
+        return False
+
     if not _can_user_design(interaction):
         await safe_send_interaction(
             interaction,
