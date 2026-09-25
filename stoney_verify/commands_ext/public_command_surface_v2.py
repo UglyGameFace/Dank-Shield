@@ -178,9 +178,9 @@ class CompactDankHomeView(_OwnedView):
     @discord.ui.button(label="Protection", emoji="🛡️", style=discord.ButtonStyle.primary, custom_id="dank:home:protection:v1", row=0)
     async def protection(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        from .public_command_hub import _admin_or_manage
-        if not _admin_or_manage(interaction):
-            return await _private(interaction, "❌ Protection settings require **Manage Server** or **Administrator**.")
+        from .public_setup_group import _require_setup_permission
+        if not await _require_setup_permission(interaction):
+            return
         from . import public_protection_center
         await public_protection_center._refresh_panel(
             interaction,
@@ -232,9 +232,9 @@ class CompactDankHomeView(_OwnedView):
     @discord.ui.button(label="Logs & Activity", emoji="🧾", style=discord.ButtonStyle.secondary, custom_id="dank:home:logs:v1", row=1)
     async def logs(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        from .public_command_hub import _admin_or_manage
-        if not _admin_or_manage(interaction):
-            return await _private(interaction, "❌ Log settings require **Manage Server** or **Administrator**.")
+        from .public_setup_group import _require_setup_permission
+        if not await _require_setup_permission(interaction):
+            return
         from .public_setup_recommend import _open_advanced_logs_activity
         await _open_advanced_logs_activity(interaction)
 
