@@ -152,11 +152,16 @@ Before merge:
   - stable metric labels can inherit the selected font;
   - the saved design channel separator can sit between default icon and label;
   - dynamic numeric/status values are never font-transformed.
-- Structured per-counter formatting overrides inherited icon/label separator
-  layout while still allowing safe label font inheritance.
+- Structured per-counter formatting is section-aware: changing only the value
+  wrapper keeps untouched design sections inherited, while a custom icon/prefix
+  becomes authoritative for that layout section.
 - Existing enabled installations default Design Sync to Off unless explicitly
   saved; newly enabled displays save Design Sync On by default.
 - Added a **Design Sync** control to the Server Stats center.
+- Design Sync stays visually neutral until the server has actually saved a
+  Server Design; it does not impose fallback styling on untouched servers.
+- Saving Server Design requests a Server Stats refresh through the existing
+  coalesced/cooldown queue when Design Sync is active.
 - Upgraded the old label modal in place to a four-section format editor so old
   call sites remain compatible.
 - Picker descriptions now explain each metric's source/requirements, and future
@@ -169,7 +174,8 @@ Before merge:
 
 ## Next step
 
-Open a draft PR from the exact branch head, run all repository workflows, inspect
-focused/full-suite failures, and correct only same-task regressions. Then review
-the final diff for configuration compatibility, UI limits, ownership conflicts,
-and Discord 1–100-character/rate-limit constraints before marking ready.
+PR #322 is open as a draft. Freeze feature behavior and run all exact-head
+repository workflows. Inspect focused/full-suite failures and correct only
+same-task regressions. Then review the final diff for configuration
+compatibility, UI limits, ownership conflicts, and Discord
+1–100-character/rate-limit constraints before marking ready.
