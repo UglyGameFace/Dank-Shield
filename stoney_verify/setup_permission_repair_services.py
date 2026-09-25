@@ -458,6 +458,11 @@ async def preview_or_apply(
     unchanged: list[str] = []
     failed: list[str] = []
     me = repair_core._bot_member(guild)
+    temporary_admin_active = bool(
+        me is not None
+        and getattr(getattr(me, "guild_permissions", None), "administrator", False)
+    )
+    emergency_recovery_targets: list[str] = []
 
     for item in targets:
         channel = item.channel
@@ -466,9 +471,12 @@ async def preview_or_apply(
             channel,
         )
         if overwrite_blocker:
-            manual_actions.append(
-                f"{legacy._channel_label(channel)}: {overwrite_blocker}"
-            )
+            if repair_core.emergency_recovery_needed(guild, channel):
+                emergency_recovery_targets.append(legacy._channel_label(channel))
+            else:
+                manual_actions.append(
+                    f"{legacy._channel_label(channel)}: {overwrite_blocker}"
+                )
             continue
 
         pending_labels: list[str] = []
@@ -518,6 +526,23 @@ async def preview_or_apply(
         elif not pending_labels:
             unchanged.append(legacy._channel_label(channel))
 
+    if emergency_recovery_targets:
+        sample = ", ".join(emergency_recovery_targets[:4])
+        more = (
+            f" and {len(emergency_recovery_targets) - 4} more"
+            if len(emergency_recovery_targets) > 4
+            else ""
+        )
+        manual_actions.insert(
+            0,
+            (
+                f"{len(emergency_recovery_targets)} channel/category target(s) are already self-locked "
+                "against Dank Shield's Manage Permissions. Discord will not accept ordinary overwrite "
+                "repair there. Use **Temporary Admin Recovery** once for this server, then press "
+                f"**Preview Again** and run the safe repair. Affected examples: {sample}{more}."
+            ),
+        )
+
     if apply:
         if include_activity_coverage:
             notes.insert(
@@ -552,6 +577,10 @@ async def preview_or_apply(
         "applied": bool(apply),
         "include_activity_coverage": bool(include_activity_coverage),
         "reauthorize_recommended": reauthorize_recommended,
+        "emergency_recovery_recommended": bool(emergency_recovery_targets),
+        "emergency_recovery_count": len(emergency_recovery_targets),
+        "emergency_recovery_targets": emergency_recovery_targets[:12],
+        "temporary_admin_active": temporary_admin_active,
     }
 
 
@@ -586,6 +615,8 @@ def _preview_action_state(
 
     if changed:
         return "Apply Safe Fixes", discord.ButtonStyle.success, False
+    if bool(result.get("emergency_recovery_recommended")):
+        return "Recovery Access Needed", discord.ButtonStyle.secondary, True
     if attention or error:
         return "Manual Discord Fix Required", discord.ButtonStyle.secondary, True
     return "Access Healthy", discord.ButtonStyle.secondary, True
@@ -601,6 +632,9 @@ def result_embed(result: dict[str, Any]) -> discord.Embed:
     unchanged = list(result.get("unchanged") or [])
     attention = [*failed, *manual, *mappings]
     activity_scope = bool(result.get("include_activity_coverage"))
+    emergency_recovery = bool(result.get("emergency_recovery_recommended"))
+    emergency_count = int(result.get("emergency_recovery_count") or 0)
+    temporary_admin_active = bool(result.get("temporary_admin_active"))
 
     if applied:
         title = "✅ Permission Repair Finished" if not attention else "⚠️ Permission Repair Partially Finished"
@@ -614,6 +648,13 @@ def result_embed(result: dict[str, Any]) -> discord.Embed:
         summary = (
             f"Found **{len(changed)}** safe target change(s) across **{int(result.get('target_count') or 0)}** checked target(s). "
             f"Nothing changes until you press **{action_label}**."
+        )
+    elif emergency_recovery:
+        title = "🔐 One-Time Recovery Access Needed"
+        summary = (
+            f"Discord has already self-locked **{emergency_count}** target(s) against Dank Shield's "
+            "normal overwrite repair. Use the temporary recovery authorization below once, then "
+            "return and press **Preview Again**."
         )
     elif attention or result.get("error"):
         title = "⚠️ Manual Discord Fix Required"
@@ -654,13 +695,35 @@ def result_embed(result: dict[str, Any]) -> discord.Embed:
             value=_line_list(attention, empty="None"),
             inline=False,
         )
+        if emergency_recovery:
+            embed.add_field(
+                name="One-time bulk recovery",
+                value=(
+                    "Press **Temporary Admin Recovery** and authorize Dank Shield for this server. Discord's "
+                    "**Administrator** permission bypasses channel overwrites, which lets Fix Access repair all "
+                    "already-locked bot overwrites in one pass. Return here, press **Preview Again**, then "
+                    "**Fix All Safe Access**. This does not change member/staff overwrites."
+                ),
+                inline=False,
+            )
+        else:
+            embed.add_field(
+                name="What to do",
+                value=(
+                    "For a blocked channel, use **Specific Channel** to inspect it. Permission-overwrite repair requires "
+                    "**Manage Roles** at the server level and **Manage Permissions** in that target. If a channel/category "
+                    "deny is blocking Manage Permissions, remove that deny or explicitly allow it for Dank Shield in Discord, "
+                    "then preview again. For missing mappings, use **Setup Plan & Server Items → Choose Roles & Channels**."
+                ),
+                inline=False,
+            )
+    if temporary_admin_active:
         embed.add_field(
-            name="What to do",
+            name="⚠️ Administrator currently enabled",
             value=(
-                "For a blocked channel, use **Specific Channel** to inspect it. Permission-overwrite repair requires "
-                "**Manage Roles** at the server level and **Manage Permissions** in that target. If a channel/category "
-                "deny is blocking Manage Permissions, remove that deny or explicitly allow it for Dank Shield in Discord, "
-                "then preview again. For missing mappings, use **Setup Plan & Server Items → Choose Roles & Channels**."
+                "Dank Shield does not require Administrator for normal operation. If you enabled it for this "
+                "emergency repair, remove **Administrator** from the Dank Shield server role immediately after "
+                "the repair is finished, then run **Preview Again** to confirm normal non-Administrator access."
             ),
             inline=False,
         )
@@ -668,6 +731,24 @@ def result_embed(result: dict[str, Any]) -> discord.Embed:
         embed.add_field(name="Notes", value=_line_list(notes, max_rows=3), inline=False)
     embed.set_footer(text=f"Already safe: {len(unchanged)} target(s) • No unrelated member/staff visibility is changed")
     return embed
+
+
+def _emergency_recovery_button(guild: discord.Guild, *, row: int = 1) -> discord.ui.Button | None:
+    try:
+        from stoney_verify.permission_repair import emergency_recovery_url
+
+        url = emergency_recovery_url(guild)
+    except Exception:
+        url = ""
+    if not url:
+        return None
+    return discord.ui.Button(
+        label="Temporary Admin Recovery",
+        emoji="🛟",
+        style=discord.ButtonStyle.link,
+        url=url,
+        row=row,
+    )
 
 
 def _reauthorize_button(guild: discord.Guild, *, row: int = 1) -> discord.ui.Button | None:
@@ -723,6 +804,14 @@ class PermissionRepairPreviewView(discord.ui.View):
             result is None or bool(result.get("reauthorize_recommended"))
         ):
             button = _reauthorize_button(guild)
+            if button is not None:
+                self.add_item(button)
+        if (
+            guild is not None
+            and result is not None
+            and bool(result.get("emergency_recovery_recommended"))
+        ):
+            button = _emergency_recovery_button(guild)
             if button is not None:
                 self.add_item(button)
 
@@ -799,6 +888,14 @@ class PermissionRepairResultView(discord.ui.View):
             result is None or bool(result.get("reauthorize_recommended"))
         ):
             button = _reauthorize_button(guild)
+            if button is not None:
+                self.add_item(button)
+        if (
+            guild is not None
+            and result is not None
+            and bool(result.get("emergency_recovery_recommended"))
+        ):
+            button = _emergency_recovery_button(guild)
             if button is not None:
                 self.add_item(button)
 
