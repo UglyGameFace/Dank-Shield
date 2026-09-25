@@ -13,6 +13,7 @@ pattern. Members can see the counters but cannot connect to them.
 
 import asyncio
 import time
+from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 import discord
@@ -34,6 +35,8 @@ SECURITY_STATS_COUNTS_KEY = "security_stats_counts"
 SECURITY_STATS_CATEGORY_NAME_KEY = "security_stats_category_name"
 SECURITY_STATS_VISIBLE_KEYS_KEY = "security_stats_visible_keys"
 SECURITY_STATS_CUSTOM_LABELS_KEY = "security_stats_custom_labels"
+SECURITY_STATS_FORMAT_OVERRIDES_KEY = "security_stats_format_overrides"
+SECURITY_STATS_INHERIT_DESIGN_KEY = "security_stats_inherit_server_design"
 SECURITY_STATS_NUMBER_STYLE_KEY = "security_stats_number_style"
 SECURITY_STATS_PLACEMENT_KEY = "security_stats_category_placement"
 
@@ -52,26 +55,50 @@ DEFAULT_TICKET_STATUS_COUNTS: Dict[str, int] = {
     "closed_tickets": 0,
 }
 
-# key -> static visible prefix. Prefixes are also used to recover channels if a
-# saved channel ID is stale but the owned stats category still exists.
-STAT_CHANNEL_PREFIXES: Dict[str, str] = {
-    "status": "🛡️ SpamGuard:",
-    "members": "👥 Members:",
-    "spam_blocked": "🚫 Spam Blocked:",
-    "invites_blocked": "🔗 Invites Blocked:",
-    "timeouts_issued": "⏱️ Timeouts Issued:",
-    "quarantines": "☣️ Quarantined:",
-    "open_tickets": "🎫 Open Tickets:",
-    "claimed_tickets": "🙋 Claimed Tickets:",
-    "closed_tickets": "✅ Closed Tickets:",
+@dataclass(frozen=True)
+class SecurityStatMetric:
+    key: str
+    title: str
+    icon: str
+    label: str
+    provider: str
+    source: str
+    required_intents: tuple[str, ...] = ()
+    privileged_intents: tuple[str, ...] = ()
+    required_permissions: tuple[str, ...] = ()
+    value_kind: str = "count"
+
+
+# The public picker is generated from this registry. Adding a row here without
+# wiring a real provider into _metric_values() is a regression, not a fake zero.
+SECURITY_STATS_METRICS: Dict[str, SecurityStatMetric] = {
+    "status": SecurityStatMetric("status", "SpamGuard status", "🛡️", "SpamGuard", "spamguard_status", "Dank Shield SpamGuard settings", value_kind="status"),
+    "members": SecurityStatMetric("members", "Member count", "👥", "Members", "guild_member_count", "Discord GUILD_CREATE member_count", required_intents=("guilds",)),
+    "spam_blocked": SecurityStatMetric("spam_blocked", "Spam blocked", "🚫", "Spam Blocked", "durable_counter", "Dank Shield audited SpamGuard actions"),
+    "invites_blocked": SecurityStatMetric("invites_blocked", "Invites blocked", "🔗", "Invites Blocked", "invite_counter", "Dank Shield durable invite decisions"),
+    "timeouts_issued": SecurityStatMetric("timeouts_issued", "Timeouts issued", "⏱️", "Timeouts Issued", "durable_counter", "Dank Shield audited moderation actions"),
+    "quarantines": SecurityStatMetric("quarantines", "Quarantined", "☣️", "Quarantined", "durable_counter", "Dank Shield audited quarantine actions"),
+    "open_tickets": SecurityStatMetric("open_tickets", "Open tickets", "🎫", "Open Tickets", "ticket_status", "Dank Shield ticket records + live-channel safety floor"),
+    "claimed_tickets": SecurityStatMetric("claimed_tickets", "Claimed tickets", "🙋", "Claimed Tickets", "ticket_status", "Dank Shield ticket records"),
+    "closed_tickets": SecurityStatMetric("closed_tickets", "Closed tickets", "✅", "Closed Tickets", "ticket_status", "Dank Shield ticket records"),
 }
-DEFAULT_SECURITY_STATS_VISIBLE_KEYS = tuple(STAT_CHANNEL_PREFIXES)
+
+_SUPPORTED_METRIC_PROVIDERS = {"spamguard_status", "guild_member_count", "durable_counter", "invite_counter", "ticket_status"}
+if any(metric.provider not in _SUPPORTED_METRIC_PROVIDERS for metric in SECURITY_STATS_METRICS.values()):
+    raise RuntimeError("Server Stats metric registry contains an unimplemented provider.")
+
+STAT_CHANNEL_PREFIXES: Dict[str, str] = {
+    key: f"{metric.icon} {metric.label}:"
+    for key, metric in SECURITY_STATS_METRICS.items()
+}
+DEFAULT_SECURITY_STATS_VISIBLE_KEYS = tuple(SECURITY_STATS_METRICS)
 DEFAULT_SECURITY_STATS_LABELS: Dict[str, str] = {
-    key: prefix[:-1] if prefix.endswith(":") else prefix
-    for key, prefix in STAT_CHANNEL_PREFIXES.items()
+    key: f"{metric.icon} {metric.label}"
+    for key, metric in SECURITY_STATS_METRICS.items()
 }
 SECURITY_STATS_NUMBER_STYLES = {"compact", "exact"}
 SECURITY_STATS_PLACEMENTS = {"top", "keep", "bottom"}
+SECURITY_STATS_VALUE_TOKEN = "{value}"
 
 _STATS_LOCKS: Dict[int, asyncio.Lock] = {}
 _DISPLAY_LOCKS: Dict[int, asyncio.Lock] = {}
