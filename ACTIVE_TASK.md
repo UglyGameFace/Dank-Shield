@@ -63,7 +63,7 @@ The repo already has canonical per-guild staff/control truth:
 
 ## Status
 
-**IMPLEMENTATION IN PROGRESS — root cause confirmed**
+**IMPLEMENTATION COMPLETE — PR #323 exact-head validation pending**
 
 Branch: `fix/staff-only-denial-boundary-20260925`
 
@@ -91,8 +91,34 @@ Before merge:
 - Replace Server Stats modal-first counter customization with button/select-first
   section editing. Custom text modals should remain only as an escape hatch.
 
+## Implementation completed
+
+- Canonical server-control/setup denial now returns exactly `❌ Staff only.`
+  for callers who are not recognized staff.
+- Recognized staff who lack server-control authority still receive the existing
+  actionable configured-role / Manage Server / Administrator guidance.
+- Server Design now establishes staff identity before checking Manage Channels.
+- Compact and legacy Protection/Logs routes use the canonical setup gate instead
+  of duplicating native-permission denial strings.
+- Legacy Server Design no longer applies a competing Manage Server/Admin gate;
+  it reaches the same canonical Design permission check as the compact surface.
+- Diagnostics, Setup Overview, and Embed Builder now use staff-first denial
+  ordering.
+- Existing owner/admin/control-role/staff truth is reused; no new authority
+  resolver or hardcoded role ID was introduced.
+- Regression coverage verifies ordinary-member denial text contains no native
+  permission recipe while recognized staff still get second-stage guidance.
+
+## Validation evidence / pending
+
+- First PR #323 CI attempt stopped at `git diff --check` because the expanded
+  authority test file had one extra blank line at EOF.
+- That whitespace-only failure is corrected.
+- No compile/import/runtime failure was reported by that attempt.
+- Replacement exact-head CI must still pass all repository gates before merge.
+
 ## Next step
 
-Implement the canonical staff-first denial order in shared setup/control and
-Server Design gates, then route duplicate home controls through those canonical
-gates and validate the ordinary-member/staff distinction.
+Freeze the branch and run exact-head PR #323 validation. Fix only same-root
+failures. When green, mark the PR ready/mergeable; the Server Stats
+modal-to-buttons redesign remains the next separate task.
