@@ -221,12 +221,12 @@ def _normalize_value_template(value: Any, *, fallback: str = SECURITY_STATS_VALU
     return text[:32]
 
 
-def _raw_stat_format_overrides(cfg: Any) -> Dict[str, Dict[str, str]]:
+def _raw_stat_format_overrides(cfg: Any) -> Dict[str, Dict[str, Any]]:
     try:
         raw = _mapping(cfg.get(SECURITY_STATS_FORMAT_OVERRIDES_KEY, {}))
     except Exception:
         raw = {}
-    out: Dict[str, Dict[str, str]] = {}
+    out: Dict[str, Dict[str, Any]] = {}
     for key, metric in SECURITY_STATS_METRICS.items():
         row = _mapping(raw.get(key))
         if not row:
@@ -499,7 +499,7 @@ def security_stats_category_display_name(preferences: Mapping[str, Any]) -> str:
     return base
 
 
-def _metric_format(preferences: Mapping[str, Any], key: str) -> Dict[str, str]:
+def _metric_format(preferences: Mapping[str, Any], key: str) -> Dict[str, Any]:
     metric = security_stat_metric(key)
     formats = _mapping(preferences.get("formats", {}))
     row = _mapping(formats.get(key))
@@ -626,7 +626,7 @@ def render_security_stat_name(
 def security_stat_format_state(
     preferences: Mapping[str, Any],
     key: str,
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     """Return the effective editable shell for one metric."""
 
     return dict(_metric_format(preferences, key))
@@ -643,7 +643,7 @@ def validate_security_stat_format(
     raw: Mapping[str, Any],
     *,
     preferences: Optional[Mapping[str, Any]] = None,
-) -> Tuple[bool, str, Dict[str, str]]:
+) -> Tuple[bool, str, Dict[str, Any]]:
     metric = security_stat_metric(key)
     icon = _clean_format_piece(raw.get("icon"), fallback="", limit=24)
     label = _clean_format_piece(raw.get("label"), fallback="", limit=72)
