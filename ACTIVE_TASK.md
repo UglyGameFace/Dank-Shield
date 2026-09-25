@@ -41,7 +41,10 @@ Current base: `main` after merged PR #318
 4. Activity-scoped repair started from the normal setup-repair target list.
    That could include role/member visibility overwrites even though the
    activity UI promises bot-only access changes.
-5. PR #317 was 11 commits behind after #318 merged and conflicted in the
+5. Activity mode also inherited unrelated setup-wide blocker notes such as
+   Manage Channels and View Audit Log, and its post-apply path ran Setup Check
+   instead of staying inside activity-repair ownership.
+6. PR #317 was 11 commits behind after #318 merged and conflicted in the
    canonical repair service. Taking either side wholesale would either lose the
    Diagnostics fix or regress #318's fail-closed/action-truth/reauthorization
    fixes.
@@ -74,6 +77,11 @@ Current base: `main` after merged PR #318
   unrelated explicit bot allows/denies.
 - Activity targets contain only Dank Shield's own overwrite; member/staff
   overwrites are not added or rewritten.
+- Activity mode requires only the server-level Manage Roles prerequisite needed
+  to edit channel overwrites; unrelated Setup-wide capability notes are not
+  injected into this repair screen.
+- Activity apply no longer runs an unrelated Setup Check afterward. It tells the
+  admin to re-run Diagnostics after Discord propagates the overwrite updates.
 - Activity preview uses **Fix All Safe Access** only when a safe action exists;
   #318's **Manual Discord Fix Required** and **Access Healthy** fail-closed
   states remain authoritative.
@@ -88,6 +96,7 @@ Pending exact-head validation:
 - authoritative active-thread → parent mapping regression;
 - existing bot overwrite preservation regression;
 - activity-only target ownership regression;
+- activity-only blocker-scope regression;
 - primary-action truth regression;
 - Python compile and diff whitespace;
 - full test suite;

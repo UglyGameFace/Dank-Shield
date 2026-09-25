@@ -98,7 +98,11 @@ def legacy_label(channel: Any) -> str:
         return str(mention or getattr(channel, "name", "unknown"))
 
 
-def _bot_blockers(guild: discord.Guild) -> list[str]:
+def _bot_blockers(
+    guild: discord.Guild,
+    *,
+    activity_only: bool = False,
+) -> list[str]:
     me = repair_core._bot_member(guild)
     if me is None:
         return ["Dank Shield could not resolve its bot member in this server."]
@@ -114,6 +118,8 @@ def _bot_blockers(guild: discord.Guild) -> list[str]:
             "Dank Shield is missing **Manage Roles** at the server level. Discord requires "
             "Manage Roles (shown as Manage Permissions in channel settings) to repair channel overwrites."
         )
+    if activity_only:
+        return blockers
     if not (perms.manage_channels or perms.administrator):
         blockers.append(
             "Dank Shield is missing **Manage Channels** at the server level; ticket/channel creation "
@@ -388,8 +394,15 @@ async def preview_or_apply(
 ) -> dict[str, Any]:
     from stoney_verify.startup_guards import setup_permission_repair_guard as legacy
 
-    blockers = _bot_blockers(guild)
-    reauthorize_recommended = repair_core.reauthorize_recommended(guild)
+    blockers = _bot_blockers(
+        guild,
+        activity_only=include_activity_coverage,
+    )
+    reauthorize_recommended = (
+        any("Manage Roles" in item for item in blockers)
+        if include_activity_coverage
+        else repair_core.reauthorize_recommended(guild)
+    )
     hard_blockers = [
         item
         for item in blockers
@@ -483,19 +496,25 @@ async def preview_or_apply(
             unchanged.append(legacy._channel_label(channel))
 
     if apply:
-        try:
-            from stoney_verify.guild_config import get_guild_config
-            from stoney_verify.setup_engine import build_setup_health_report
+        if include_activity_coverage:
+            notes.insert(
+                0,
+                "Activity access repair finished. Re-run Diagnostics to confirm coverage after Discord propagates the overwrite updates.",
+            )
+        else:
+            try:
+                from stoney_verify.guild_config import get_guild_config
+                from stoney_verify.setup_engine import build_setup_health_report
 
-            cfg = await get_guild_config(guild.id, refresh=True)
-            report = build_setup_health_report(guild, cfg)
-            remaining = [item for item in report.findings if getattr(item, "repairable", False)]
-            if remaining:
-                notes.insert(0, f"Post-repair Setup Check: {len(remaining)} repairable finding(s) still remain.")
-            else:
-                notes.insert(0, "Post-repair Setup Check: no repairable findings remain.")
-        except Exception as exc:
-            notes.insert(0, f"Post-repair Setup Check could not run: {type(exc).__name__}.")
+                cfg = await get_guild_config(guild.id, refresh=True)
+                report = build_setup_health_report(guild, cfg)
+                remaining = [item for item in report.findings if getattr(item, "repairable", False)]
+                if remaining:
+                    notes.insert(0, f"Post-repair Setup Check: {len(remaining)} repairable finding(s) still remain.")
+                else:
+                    notes.insert(0, "Post-repair Setup Check: no repairable findings remain.")
+            except Exception as exc:
+                notes.insert(0, f"Post-repair Setup Check could not run: {type(exc).__name__}.")
 
     return {
         "ok": not failed and not manual_actions and not missing_mappings,

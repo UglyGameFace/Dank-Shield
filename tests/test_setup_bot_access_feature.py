@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+from types import SimpleNamespace
 
 import discord
 
@@ -359,3 +360,42 @@ def test_activity_access_back_preserves_security_or_logs_parent(monkeypatch) -> 
     asyncio.run(_button(logs_view, "Back").callback(object()))
 
     assert events == ["security", "logs"]
+
+
+
+def test_activity_repair_blockers_ignore_unrelated_global_capabilities(monkeypatch) -> None:
+    permissions = SimpleNamespace(
+        administrator=False,
+        manage_roles=True,
+        manage_channels=False,
+        view_channel=False,
+        view_audit_log=False,
+    )
+    me = SimpleNamespace(guild_permissions=permissions)
+    monkeypatch.setattr(
+        setup_permission_repair_services.repair_core,
+        "_bot_member",
+        lambda _guild: me,
+    )
+
+    activity = setup_permission_repair_services._bot_blockers(
+        object(),
+        activity_only=True,
+    )
+    assert activity == []
+
+    setup = setup_permission_repair_services._bot_blockers(
+        object(),
+        activity_only=False,
+    )
+    assert any("Manage Channels" in item for item in setup)
+    assert any("View Channels" in item for item in setup)
+    assert any("View Audit Log" in item for item in setup)
+
+    permissions.manage_roles = False
+    blocked = setup_permission_repair_services._bot_blockers(
+        object(),
+        activity_only=True,
+    )
+    assert len(blocked) == 1
+    assert "Manage Roles" in blocked[0]
