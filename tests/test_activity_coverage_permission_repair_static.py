@@ -13,7 +13,7 @@ def test_permission_repair_can_restore_activity_coverage_only_when_opted_in():
     assert "_merge_activity_coverage_targets" in SOURCE
     assert "include_activity_coverage: bool = False" in SOURCE
     assert "if include_activity_coverage:" in SOURCE
-    assert "audit_activity_scope(guild)" in SOURCE
+    assert "ignore_administrator=temporary_admin_active" in SOURCE
     assert '"Read Message History": "read_message_history"' in SOURCE
     assert '"Manage Threads": "manage_threads"' in SOURCE
     assert "Member and staff overwrites are not changed" in SOURCE
@@ -35,8 +35,10 @@ def test_activity_repair_uses_parent_only_as_bot_template_and_never_full_sync():
     assert "self-lockout bootstrap" not in SOURCE
 
 
-def test_managed_setup_bot_overwrites_preserve_repair_authority():
-    assert GUARD.count("manage_roles=True") >= 3
-    assert "manage_roles=True" in POLICY
-    assert DEFAULTS.count("manage_roles=True") >= 3
-    assert ASSISTANT.count("manage_roles=True") >= 3
+def test_normal_setup_overwrites_do_not_manufacture_manage_permissions():
+    assert "manage_roles=True" not in GUARD
+    assert "manage_roles=True" not in POLICY
+    assert "manage_roles=True" not in DEFAULTS
+    assert "manage_roles=True" not in ASSISTANT
+    assert "temporary_admin_active" in SOURCE
+    assert "expected.manage_roles = True" in SOURCE
