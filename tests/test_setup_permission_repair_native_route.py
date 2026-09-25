@@ -163,24 +163,6 @@ def test_permission_repair_preview_actions_keep_parent_and_scope(monkeypatch) ->
     ]
 
 
-def test_activity_repair_preview_copy_matches_activity_primary_action() -> None:
-    result = {
-        "applied": False,
-        "target_count": 60,
-        "changed": ["#verification — Dank Shield"],
-        "failed": [],
-        "manual_actions": [],
-        "missing_mappings": [],
-        "notes": [],
-        "unchanged": [],
-        "include_activity_coverage": True,
-    }
-
-    embed = setup_permission_repair_services.result_embed(result)
-    assert "Fix All Safe Access" in str(embed.description or "")
-    assert "Apply Safe Fixes" not in str(embed.description or "")
-
-
 def test_permission_repair_result_is_concise_and_has_no_advanced_diagnostic_dump() -> None:
     result = {
         "applied": False,
@@ -205,3 +187,225 @@ def test_permission_repair_result_is_concise_and_has_no_advanced_diagnostic_dump
     assert "…and" in rendered
     assert "Specific Channel" in rendered
     assert len(rendered) < 3500
+
+
+def _component_by_id(view: discord.ui.View, custom_id: str) -> discord.ui.Button:
+    matches = [
+        child
+        for child in view.children
+        if isinstance(child, discord.ui.Button)
+        and str(getattr(child, "custom_id", "") or "") == custom_id
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def test_permission_repair_primary_action_matches_preview_truth() -> None:
+    safe = setup_permission_repair_services.PermissionRepairPreviewView(
+        result={
+            "changed": ["#verification — @Dank Shield"],
+            "failed": [],
+            "manual_actions": [],
+            "missing_mappings": [],
+            "error": "",
+        }
+    )
+    safe_apply = _component_by_id(safe, "dank_setup_permission:apply")
+    assert safe_apply.label == "Apply Safe Fixes"
+    assert safe_apply.disabled is False
+
+    manual = setup_permission_repair_services.PermissionRepairPreviewView(
+        result={
+            "changed": [],
+            "failed": [],
+            "manual_actions": ["#verification: Manage Permissions is denied."],
+            "missing_mappings": [],
+            "error": "",
+        }
+    )
+    manual_apply = _component_by_id(manual, "dank_setup_permission:apply")
+    assert manual_apply.label == "Manual Discord Fix Required"
+    assert manual_apply.disabled is True
+
+    healthy = setup_permission_repair_services.PermissionRepairPreviewView(
+        result={
+            "changed": [],
+            "failed": [],
+            "manual_actions": [],
+            "missing_mappings": [],
+            "error": "",
+        }
+    )
+    healthy_apply = _component_by_id(healthy, "dank_setup_permission:apply")
+    assert healthy_apply.label == "Access Healthy"
+    assert healthy_apply.disabled is True
+
+
+def test_permission_repair_embed_never_invites_apply_when_no_safe_change_exists() -> None:
+    manual = {
+        "applied": False,
+        "target_count": 1,
+        "changed": [],
+        "unchanged": [],
+        "failed": [],
+        "manual_actions": ["#verification: Manage Permissions is denied."],
+        "missing_mappings": [],
+        "notes": [],
+        "include_activity_coverage": False,
+    }
+    embed = setup_permission_repair_services.result_embed(manual)
+    assert embed.title == "⚠️ Manual Discord Fix Required"
+    assert "no safe overwrite changes" in str(embed.description or "").lower()
+    assert "press **Apply Safe Fixes**" not in str(embed.description or "")
+
+    healthy = dict(manual)
+    healthy["manual_actions"] = []
+    healthy_embed = setup_permission_repair_services.result_embed(healthy)
+    assert healthy_embed.title == "✅ Bot Access Ready"
+
+
+def test_permission_repair_open_stops_before_preview_when_ack_claim_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def allow(_interaction: Any) -> bool:
+        return True
+
+    async def reject_claim(_interaction: Any, *, action_name: str) -> bool:
+        assert action_name == "access_repair_preview"
+        return False
+
+    async def forbidden_preview(*_args, **_kwargs):
+        raise AssertionError("preview must not run after a failed interaction claim")
+
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "_claim_repair_interaction",
+        reject_claim,
+    )
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "preview_or_apply",
+        forbidden_preview,
+    )
+
+    from stoney_verify.commands_ext import public_setup_solid as solid
+
+    monkeypatch.setattr(solid, "_require_setup_permission", allow)
+    interaction = SimpleNamespace(guild=SimpleNamespace(id=123))
+
+    asyncio.run(
+        setup_permission_repair_services.open_permission_repair(interaction)
+    )
+
+
+def test_permission_repair_apply_stops_before_queue_when_ack_claim_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def allow(_interaction: Any) -> bool:
+        return True
+
+    async def reject_claim(_interaction: Any, *, action_name: str) -> bool:
+        assert action_name == "access_repair_apply"
+        return False
+
+    async def forbidden_apply(*_args, **_kwargs):
+        raise AssertionError("mutation preview/apply must not run after failed claim")
+
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "_claim_repair_interaction",
+        reject_claim,
+    )
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "preview_or_apply",
+        forbidden_apply,
+    )
+
+    from stoney_verify.commands_ext import public_setup_solid as solid
+
+    monkeypatch.setattr(solid, "_require_setup_permission", allow)
+    interaction = SimpleNamespace(guild=SimpleNamespace(id=123))
+
+    asyncio.run(
+        setup_permission_repair_services.apply_permission_repair(interaction)
+    )
+
+
+def test_permission_repair_result_reauthorize_matches_server_level_blockers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Any] = []
+
+    def fake_reauthorize(guild: Any, *, row: int = 1) -> discord.ui.Button:
+        calls.append(guild)
+        return discord.ui.Button(
+            label="Reauthorize Dank Shield",
+            style=discord.ButtonStyle.link,
+            url="https://example.com/reauthorize",
+            row=row,
+        )
+
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "_reauthorize_button",
+        fake_reauthorize,
+    )
+    guild = SimpleNamespace(id=123)
+
+    healthy = setup_permission_repair_services.PermissionRepairResultView(
+        guild=guild,
+        result={"reauthorize_recommended": False},
+    )
+    assert calls == []
+    assert all(
+        getattr(child, "label", "") != "Reauthorize Dank Shield"
+        for child in healthy.children
+    )
+
+    blocked = setup_permission_repair_services.PermissionRepairResultView(
+        guild=guild,
+        result={"reauthorize_recommended": True},
+    )
+    assert calls == [guild]
+    assert any(
+        getattr(child, "label", "") == "Reauthorize Dank Shield"
+        for child in blocked.children
+    )
+
+
+def test_activity_repair_preview_copy_matches_activity_primary_action() -> None:
+    result = {
+        "applied": False,
+        "target_count": 3,
+        "changed": ["#private-thread-parent — @Dank Shield"],
+        "failed": [],
+        "manual_actions": [],
+        "missing_mappings": [],
+        "notes": [],
+        "unchanged": [],
+        "include_activity_coverage": True,
+    }
+
+    embed = setup_permission_repair_services.result_embed(result)
+    assert "Fix All Safe Access" in str(embed.description or "")
+    assert "Apply Safe Fixes" not in str(embed.description or "")
+
+    view = setup_permission_repair_services.PermissionRepairPreviewView(
+        include_activity_coverage=True,
+        result=result,
+    )
+    apply = _component_by_id(view, "dank_setup_permission:apply")
+    assert apply.label == "Fix All Safe Access"
+    assert apply.disabled is False
+
+    manual = dict(result)
+    manual["changed"] = []
+    manual["manual_actions"] = ["#private-thread-parent: Manage Permissions is denied."]
+    manual_view = setup_permission_repair_services.PermissionRepairPreviewView(
+        include_activity_coverage=True,
+        result=manual,
+    )
+    manual_apply = _component_by_id(manual_view, "dank_setup_permission:apply")
+    assert manual_apply.label == "Manual Discord Fix Required"
+    assert manual_apply.disabled is True

@@ -9,9 +9,10 @@ def test_permission_repair_can_restore_activity_coverage_only_when_opted_in():
     assert "_merge_activity_coverage_targets" in SOURCE
     assert "include_activity_coverage: bool = False" in SOURCE
     assert "if include_activity_coverage:" in SOURCE
-    assert "read_message_history=True" in SOURCE
-    assert "expected.manage_threads = True" in SOURCE
-    assert "Member visibility is not changed" in SOURCE
+    assert "audit_activity_scope(guild)" in SOURCE
+    assert '"Read Message History" in required' in SOURCE
+    assert '"Manage Threads" in required' in SOURCE
+    assert "Member and staff overwrites are not changed" in SOURCE
 
 
 def test_public_permissions_include_manage_threads():
@@ -22,7 +23,8 @@ def test_public_permissions_include_manage_threads():
 
 def test_activity_repair_preserves_existing_bot_overwrite_before_adding_access():
     assert "expected = channel.overwrites_for(me)" in SOURCE
-    assert "expected.view_channel = True" in SOURCE
-    assert "expected.read_message_history = True" in SOURCE
-    assert "expected.manage_threads = True" in SOURCE
+    assert '"View Channel" in required' in SOURCE
+    assert '"Read Message History" in required' in SOURCE
+    assert '"Manage Threads" in required' in SOURCE
     assert "{me: expected}" in SOURCE
+    assert 'for collection_name in ("channels", "threads")' in SOURCE

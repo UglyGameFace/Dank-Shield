@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import discord
 
-from stoney_verify import permission_repair, setup_permission_repair_services
+from stoney_verify import permission_repair, permission_repair_core, setup_permission_repair_services
 from stoney_verify import guild_config, setup_engine
 from stoney_verify.startup_guards import setup_permission_repair_guard as legacy
 
@@ -70,11 +70,13 @@ def test_selected_target_mutations_use_message_update_not_permanent_thinking_pla
     deny_source = inspect.getsource(permission_repair.ExplicitDenyConfirmView.confirm)
     undo_source = inspect.getsource(permission_repair.UndoTokenModal.on_submit)
 
-    assert "await _safe_defer_update(interaction)" in fix_source
+    assert "if not await _safe_defer_update(" in fix_source
+    assert 'action_name="specific_access_repair_apply"' in fix_source
     assert "thinking=True" not in fix_source
     assert "_edit_original_or_followup" in fix_source
 
-    assert "await _safe_defer_update(interaction)" in deny_source
+    assert "if not await _safe_defer_update(" in deny_source
+    assert 'action_name="specific_access_repair_clear_denies"' in deny_source
     assert "thinking=True" not in deny_source
     assert "_edit_original_or_followup" in deny_source
 
@@ -173,3 +175,66 @@ def test_setup_permission_result_summarizes_instead_of_dumping_every_target() ->
     assert "#fix-19" not in rendered
     assert "…and" in rendered
     assert "Specific Channel" in rendered
+
+
+def test_specific_repair_callback_errors_use_structured_interaction_logging() -> None:
+    from stoney_verify import permission_repair_ui
+
+    source = inspect.getsource(permission_repair_ui.TargetPermissionRepairView.on_error)
+    assert "log_interaction_failure(" in source
+    assert 'stage="access_repair_callback_failed"' in source
+    assert "error_id" in source
+    assert "Nothing was changed" not in source
+
+
+def test_specific_channel_reauthorize_only_for_missing_server_permissions(monkeypatch) -> None:
+    guild = SimpleNamespace()
+    monkeypatch.setattr(
+        permission_repair_core,
+        "reauthorize_url",
+        lambda _guild: "https://example.com/reauthorize",
+    )
+
+    healthy_perms = SimpleNamespace(
+        administrator=False,
+        manage_roles=True,
+        manage_channels=True,
+        view_channel=True,
+        view_audit_log=True,
+    )
+    monkeypatch.setattr(
+        permission_repair_core,
+        "_bot_member",
+        lambda _guild: SimpleNamespace(guild_permissions=healthy_perms),
+    )
+    healthy_state = permission_repair.PermissionRepairState(
+        guild=guild,
+        actor_id=1,
+    )
+    healthy_view = permission_repair.TargetPermissionRepairView(healthy_state)
+    assert all(
+        getattr(child, "label", "") != "Reauthorize Dank Shield"
+        for child in healthy_view.children
+    )
+
+    missing_perms = SimpleNamespace(
+        administrator=False,
+        manage_roles=False,
+        manage_channels=True,
+        view_channel=True,
+        view_audit_log=True,
+    )
+    monkeypatch.setattr(
+        permission_repair_core,
+        "_bot_member",
+        lambda _guild: SimpleNamespace(guild_permissions=missing_perms),
+    )
+    blocked_state = permission_repair.PermissionRepairState(
+        guild=guild,
+        actor_id=1,
+    )
+    blocked_view = permission_repair.TargetPermissionRepairView(blocked_state)
+    assert any(
+        getattr(child, "label", "") == "Reauthorize Dank Shield"
+        for child in blocked_view.children
+    )

@@ -6,8 +6,8 @@ from collections import Counter
 import discord
 
 from stoney_verify import setup_activity_access, setup_permission_repair_services
-from stoney_verify.commands_ext import public_setup_recommend as recommend
 from stoney_verify.commands_ext import public_diagnostics_group as diagnostics
+from stoney_verify.commands_ext import public_setup_recommend as recommend
 from stoney_verify.commands_ext import public_setup_solid as solid
 from stoney_verify.members_new.activity_scope import ActivityScopeProblem, ActivityScopeReport
 
@@ -196,13 +196,91 @@ def test_diagnostics_repair_bot_access_includes_full_activity_scope(monkeypatch)
     assert calls == [(interaction, "logs", True)]
 
 
-def test_activity_scope_preview_uses_one_clear_apply_action() -> None:
-    view = setup_permission_repair_services.PermissionRepairPreviewView(
-        include_activity_coverage=True,
+def test_activity_repair_targets_authoritative_scope_only_and_preserves_bot_overwrite(
+    monkeypatch,
+) -> None:
+    class FakeChannel:
+        id = 100
+        name = "private-thread-parent"
+
+        def overwrites_for(self, _target):
+            return discord.PermissionOverwrite(
+                send_messages=False,
+                manage_messages=True,
+            )
+
+        async def set_permissions(self, *_args, **_kwargs) -> None:
+            return None
+
+    class FakeThread:
+        id = 200
+        name = "private-thread"
+        parent = None
+
+    parent = FakeChannel()
+    thread = FakeThread()
+    thread.parent = parent
+
+    class FakeGuild:
+        channels = [parent]
+        threads = [thread]
+
+        def get_channel_or_thread(self, channel_id):
+            return {100: parent, 200: thread}.get(channel_id)
+
+    me = object()
+    report = ActivityScopeReport(
+        total_channels=2,
+        accessible_channels=0,
+        problems=(
+            ActivityScopeProblem(
+                channel_id=200,
+                channel_name="private-thread",
+                channel_kind="thread",
+                missing_permissions=("View Channel", "Read Message History"),
+            ),
+            ActivityScopeProblem(
+                channel_id=100,
+                channel_name="private-thread-parent",
+                channel_kind="text",
+                missing_permissions=("Manage Threads",),
+            ),
+        ),
+        bot_member_resolved=True,
     )
-    apply = _button(view, "Fix All Safe Access")
-    assert apply.custom_id == "dank_setup_permission:apply"
-    assert apply.disabled is False
+
+    monkeypatch.setattr(
+        setup_permission_repair_services.repair_core,
+        "_bot_member",
+        lambda _guild: me,
+    )
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "audit_activity_scope",
+        lambda _guild: report,
+    )
+
+    targets, notes, mappings, manual = asyncio.run(
+        setup_permission_repair_services._build_expanded_targets(
+            FakeGuild(),
+            include_activity_coverage=True,
+        )
+    )
+
+    assert mappings == []
+    assert manual == []
+    assert len(targets) == 1
+    target = targets[0]
+    assert target.channel is parent
+    assert set(target.overwrites) == {me}
+
+    expected = target.overwrites[me]
+    assert expected.view_channel is True
+    assert expected.read_message_history is True
+    assert expected.manage_threads is True
+    assert expected.send_messages is False
+    assert expected.manage_messages is True
+    assert any("2 Diagnostics gap(s)" in note for note in notes)
 
 
 def test_repair_button_routes_to_activity_scoped_preview_first_permission_tool(monkeypatch) -> None:
