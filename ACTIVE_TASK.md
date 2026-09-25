@@ -147,11 +147,14 @@ Implemented so far:
 - current-app/current-component rows are processed first and remain zero-REST;
 - legacy Discord work continues through the existing shared recovery REST budget
   and discord.py route-aware rate limiting;
+- reconciliation failures are isolated per guild so one malformed/deleted panel
+  cannot abort recovery for every guild ordered after it;
 - preserved the existing single Verify callback, custom ID, acknowledgement
   boundary, role mapping, and verification policy;
 - added owner-without-member-shape regression coverage across the affected gates;
 - added regression coverage proving a legacy set larger than one wave is fully
-  reconciled with no `allow_legacy_rest=False` skips.
+  reconciled with no `allow_legacy_rest=False` skips, even when one guild's
+  reconciliation raises unexpectedly.
 
 ## Validation / results
 
@@ -171,8 +174,8 @@ Required before completion:
 - verify non-staff still receive only `❌ Staff only.` where intended;
 - verify owner/admin still reaches second-stage feature permission logic;
 - verify current Verify panels remain zero-REST;
-- verify all legacy panels are eventually migrated without bypassing shared REST
-  pacing;
+- verify all legacy panels are attempted without bypassing shared REST pacing
+  and one guild failure cannot abort later rows;
 - verify the canonical Verify handler still acknowledges before any DB/role
   mutation and duplicate mutation remains impossible.
 
