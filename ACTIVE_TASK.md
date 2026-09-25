@@ -48,44 +48,52 @@ workflow groups successfully: Dank Shield CI, Dank Design Regression CI, Ticket
 Owner Emergency Override, DS Backlog 027 Validation, Application Command Size
 Diagnostics, and Profile Runtime Diagnostics.
 
-This task branches from the merged `main` head
-`8f3aea4d1f9a9dcda23854dfb93da13bcb44f61a`.
+This continuation branches from merged `main` commit
+`0b93a5289fc4e0232cd219df0394b523b9beb726` after the first Components V2 fix proved insufficient in live production.
 
 ## Evidence / root cause
 
-Production logs prove the live enforcer itself is running and can delete invite
-messages. For example, guild `1357215261001912320` logged successful
-`invite_shield_external_or_blocked` deletes at 13:28 and 14:44.
+A new live production screenshot at 17:23 on 2026-09-25 proves the first
+Components V2 extraction fix was not sufficient: OneBump posted another
+external-server advertisement at 17:13 in the bump-board and older OneBump ads
+were still present.
 
-The reported bump-board messages are different: their visible external
-`discord.gg` URLs remain on modern app-style cards, while no corresponding
-Invite Shield decision is emitted for those posts.
+The earlier V2 traversal itself is valid for discord.py 2.7.1: Text Display
+objects expose `content`, while Container and Section components expose nested
+children/accessories. The remaining failure is one layer earlier.
 
-The execution trace explains the gap:
+Discord's current official Gateway documentation states that `MESSAGE_CONTENT`
+is privileged and controls message-content data across the APIs. Without access,
+Discord returns empty values for `content`, `embeds`, `attachments`,
+`components`, and `poll` except documented exceptions. Therefore a user can
+visibly see OneBump's server card in Discord while Dank Shield receives stable
+sender/application metadata but none of the fields from which the invite URL
+can be parsed.
 
-1. `globals._dank_globals_live_invite_enforcer` sends every non-self guild
-   message to `invite_policy_engine.enforce_live_invite_message`.
-2. `main.py` installs `invite_policy_message_surface_runtime` before login.
-3. That runtime replaces `invite_policy_engine.message_text`.
-4. For interaction responses it previously returned legacy
-   `Message.content` only.
-5. For ordinary bot/webhook messages it delegated component inspection to
-   `_component_text`, which previously inspected component URLs/children but
-   not Text Display `content`.
-6. Discord Components V2 puts directly visible message text in Text Display
-   components rather than legacy message content/embeds.
-7. Therefore a modern app card could visibly contain
-   `https://discord.gg/<external>` while Invite Shield extracted no invite code
-   and never reached its delete decision.
+The exact OneBump application/bot identity is
+`1028956609382199346`. The new fallback is intentionally identity-bound and
+does not trust display names.
 
-This is an extraction-boundary bug, not evidence that the canonical policy or
-delete routine is offline.
+A second gap explains why old posts remained: automatic recovery is deliberately
+bounded to recent restart/live windows, while the Protection Center historical
+cleanup previously inspected only 200 recent messages. A content-redacted
+OneBump post also could not trigger the delayed recovery sweep because the
+trigger itself first required invite text extraction.
 
-A second product-truth issue was visible in Protection Center: the UI could say
-Invite Blocker is ON without showing whether Dank Shield actually has
-View Channel + Manage Messages in the channel where the panel was opened.
-The existing “Permission health” block is AntiNuke-specific and does not answer
-that question.
+The corrected design keeps `invite_policy_engine` as the only delete authority.
+It does not invent invite text. Instead, when all Discord message-content
+surfaces are empty, it may recognize the exact known advertising application
+from stable metadata. Live deletion still requires the Protected Poster rule
+plus an explicit bot ID or channel ID target. The broad "all bots" flag alone is
+not enough to authorize contentless deletion. Slash-command interaction
+responses are excluded so a bump success receipt is not mistaken for an
+unsolicited ad.
+
+Staff-selected historical cleanup is a separate explicit authorization: after a
+server manager chooses a channel to clean, the central scanner may remove
+content-redacted posts from the exact known advertiser even if that channel was
+not already a protected live target. Existing allowed-channel/user/role
+exemptions still win.
 
 ## Execution path
 
@@ -115,31 +123,40 @@ Invite Shield ON/OFF policy state`
 
 ## Changes
 
-Branch: `fix/invite-shield-components-v2-20260925`
+Branch: `fix/invite-shield-onebump-contentless-20260925`
 
-Implemented so far:
+Implemented in this continuation:
 
-- extended canonical component extraction to read Components V2 Text Display
-  `content` and nested `accessory`/children;
-- kept component link-button URLs available for ordinary bot/webhook authored
-  surfaces;
-- added an application-response-specific visible-component extractor that reads
-  Text Display text but intentionally ignores support/link-button URLs and rich
-  embed metadata;
-- preserved human message content-only extraction so generated preview embeds
-  cannot become false invite evidence;
-- added regression tests for ordinary bot Components V2 invite cards and
-  interaction-response Components V2 invite cards;
-- added current-channel Invite Shield delete-access health to Protection Center;
-- documented modern-app-card coverage in Protection Center;
-- changed Protection Center Close to clear the embed and view rather than
-  disabling controls in place;
-- added static regressions for Protection Center health and close semantics.
+- added exact OneBump application identity matching using author/application IDs,
+  never the display name;
+- added a narrow content-unavailable detector covering Discord's gated
+  `content`, `embeds`, `attachments`, `components`, and `poll` surfaces;
+- contentless live deletion requires the Protected Poster rule plus an explicit
+  bot ID or channel ID target; the server-wide "all bots" flag by itself cannot
+  authorize blind deletion;
+- excluded interaction responses from the contentless advertising fallback so
+  slash-command bump receipts are preserved;
+- preserved existing allowed-user, allowed-role, and allowed-channel exemptions
+  before the fallback can delete;
+- wired the same contentless candidate into delayed live reconciliation so a
+  newly posted OneBump ad can trigger recent-channel cleanup even when no invite
+  text was delivered;
+- deepened staff-selected "Clean Existing Invites" from 200 to 1,000 recent
+  messages, with a 2,000-message hard scanner ceiling and a clear re-run notice
+  when the bounded pass is full;
+- gave staff-selected cleanup explicit authority to remove exact known
+  content-redacted advertiser posts through the canonical policy engine;
+- added contentless candidate/deletion counts to historical cleanup diagnostics;
+- updated trusted bump-receipt V2 traversal to include Text Display content and
+  nested accessories, and bound OneBump trust to its exact application identity;
+- added focused live, spoof-resistance, interaction-receipt, allowlist,
+  historical-cleanup, and reconciliation-trigger regressions;
+- expanded the invite safety audit and Protection Center text so this fallback
+  cannot silently broaden later.
 
 ## Validation / results
 
-Implementation is present on the task branch. Exact-head validation is still
-pending.
+Implementation is present on the continuation branch. Exact-head validation is still pending.
 
 Required before completion:
 
@@ -159,8 +176,7 @@ Required before completion:
 
 ## Cleanup / conflicts
 
-No new invite listener, fallback delete policy, startup guard, retry loop, or
-hardcoded Discord rate-limit workaround has been added.
+No new invite listener, startup guard, retry loop, or hardcoded Discord rate-limit workaround has been added. The new contentless fallback lives inside the existing canonical invite policy and cannot delete arbitrary contentless bot messages.
 
 The existing canonical ownership remains:
 
@@ -173,14 +189,7 @@ The existing canonical ownership remains:
 
 ## Blockers / risks
 
-Live Discord acceptance is still required after deployment for the exact OneBump
-Components V2 message shape shown in the production screenshot.
-
-If Discord does not deliver message/component content because the application
-lacks the privileged Message Content intent at the Developer Portal level, code
-cannot reconstruct text Discord did not provide. The bot requests the intent in
-code, and production already proves some invite content is being received; this
-remains a deployment check rather than the identified code root cause.
+Live Discord acceptance is still required after deployment. The new path no longer depends on reconstructing OneBump invite text when Discord withholds all message-content fields, but general invite parsing still requires approved MESSAGE_CONTENT access. The Protection Center now explains that distinction instead of pretending code-level intent configuration proves Discord granted the data.
 
 ## Backlog
 
@@ -190,6 +199,4 @@ control-center redesigns.
 
 ## Next step
 
-Inspect the exact branch diff, open a draft PR, run exact-head CI and focused
-invite/protection tests, fix only same-root regressions, then mark ready only
-after the Definition of Done has evidence.
+Inspect the exact branch diff, open a draft PR, run exact-head CI and focused invite/protection tests, inspect any failing job logs, then merge only if the exact tested head is clean.
