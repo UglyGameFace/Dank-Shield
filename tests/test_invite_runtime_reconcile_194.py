@@ -382,8 +382,14 @@ def test_reconcile_all_retries_policy_unavailable_guild_once(monkeypatch) -> Non
     async def no_sleep(_delay):
         return None
 
+    checkpoints: list[tuple[int, datetime]] = []
+
+    async def persist(guild_id: int, checkpoint: datetime):
+        checkpoints.append((guild_id, checkpoint))
+
     monkeypatch.setattr(runtime, "_recovery_window", window)
     monkeypatch.setattr(runtime, "_reconcile_guild", reconcile)
+    monkeypatch.setattr(runtime, "_persist_recovery_checkpoint", persist)
     monkeypatch.setattr(runtime, "_sleep", no_sleep)
     runtime._RECONCILE_TASK = None
 
@@ -393,6 +399,7 @@ def test_reconcile_all_retries_policy_unavailable_guild_once(monkeypatch) -> Non
         ("ready", False, after, before),
         ("ready-policy-retry", True, after, before),
     ]
+    assert checkpoints == [(656, before)]
 
 
 def test_event_recovery_rescans_recent_channel_history(monkeypatch, capsys) -> None:
