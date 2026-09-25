@@ -2,7 +2,7 @@
 
 ## Active task / desired outcome
 
-**P0-ANTINUKE-INFLIGHT-SELF-ACTION-RECEIPT-009 — prevent legitimate rate-limited bot-authored mutations from expiring their self-action proof and triggering compromise quarantine/self-ejection**
+**P0-ANTINUKE-INFLIGHT-SELF-ACTION-RECEIPT-010 — prevent legitimate rate-limited bot-authored mutations from expiring their self-action proof and triggering compromise quarantine/self-ejection**
 
 Desired outcome: any protected Discord mutation issued by this running Dank Shield
 process must retain its one-time self-action proof for the entire outbound request
@@ -30,11 +30,12 @@ failures, moderator trust policy, Spam Guard, or unrelated AntiNuke redesign.
 
 ## Prior task closure
 
-PR #322, **Integrate Server Stats with Dank Design safely**, merged into `main`
-as `0dfdbc9fc2d52fc7223b9ccee59090d1977cdffb` on 2026-09-25.
+PR #323, **Hide staff permission recipes from regular members**, merged into
+`main` as `b5a4fc5c27c1825aba8335db79fff70f8871a9df` on 2026-09-25.
 
 Exact PR-head validation was green:
 
+- DS Backlog 027 Validation — success
 - Application Command Size Diagnostics — success
 - Ticket Owner Emergency Override — success
 - Dank Design Regression CI — success
@@ -42,6 +43,9 @@ Exact PR-head validation was green:
 - Dank Shield CI — success
 
 The merge commit also has a successful Discloud commit status.
+
+PR #322 had already merged immediately before #323; its Server Stats / Dank
+Design work is therefore inherited through the current `main` base.
 
 ## Findings / root cause
 
