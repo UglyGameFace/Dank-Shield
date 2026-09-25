@@ -239,17 +239,23 @@ class TicketInfrastructureRepairButton(discord.ui.Button):
         guild = interaction.guild
         if guild is None or int(guild.id) != self.guild_id:
             return await center._private(interaction, "❌ Reopen Ticket Panel Health in this server.")
-        if not panel._staff_check(interaction):
-            return await center._private(interaction, "❌ Staff only.")
+        from .public_setup_group import _require_setup_permission
+
+        if not await _require_setup_permission(interaction):
+            return
 
         await _defer_update(interaction)
         cfg = await get_guild_config(int(guild.id), refresh=True)
-        result = await contextual.repair_context(
+        result = await contextual.repair_or_handoff(
+            interaction,
             guild,
             _ticket_config_targets(cfg),
             actor_id=int(interaction.user.id),
             manual_issues=_ticket_manual_issues(guild, cfg),
+            parent="security",
         )
+        if result is None:
+            return
         cfg = await get_guild_config(int(guild.id), refresh=True)
         embed = await _ticket_health_embed(guild, last_action=result.summary())
         view = TicketPanelHealthView(
@@ -319,7 +325,9 @@ class SelectedTicketRepairButton(discord.ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        if not await center._require_staff(interaction):
+        from .public_setup_group import _require_setup_permission
+
+        if not await _require_setup_permission(interaction):
             return
         guild = interaction.guild
         channel = self.parent_view.target(interaction)
@@ -327,11 +335,15 @@ class SelectedTicketRepairButton(discord.ui.Button):
             return await center._private(interaction, "❌ Select a live ticket channel first.")
 
         await _defer_update(interaction)
-        result = await contextual.repair_context(
+        result = await contextual.repair_or_handoff(
+            interaction,
             guild,
             _selected_ticket_targets(channel),
             actor_id=int(interaction.user.id),
+            parent="security",
         )
+        if result is None:
+            return
         embed = center._ticket_center_embed(channel)
         embed.add_field(name="Access Repair", value=result.summary()[:1024], inline=False)
         view = ContextualTicketActionCenterView(
