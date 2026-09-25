@@ -70,11 +70,13 @@ def test_selected_target_mutations_use_message_update_not_permanent_thinking_pla
     deny_source = inspect.getsource(permission_repair.ExplicitDenyConfirmView.confirm)
     undo_source = inspect.getsource(permission_repair.UndoTokenModal.on_submit)
 
-    assert "await _safe_defer_update(interaction)" in fix_source
+    assert "if not await _safe_defer_update(" in fix_source
+    assert 'action_name="specific_access_repair_apply"' in fix_source
     assert "thinking=True" not in fix_source
     assert "_edit_original_or_followup" in fix_source
 
-    assert "await _safe_defer_update(interaction)" in deny_source
+    assert "if not await _safe_defer_update(" in deny_source
+    assert 'action_name="specific_access_repair_clear_denies"' in deny_source
     assert "thinking=True" not in deny_source
     assert "_edit_original_or_followup" in deny_source
 
@@ -173,3 +175,13 @@ def test_setup_permission_result_summarizes_instead_of_dumping_every_target() ->
     assert "#fix-19" not in rendered
     assert "…and" in rendered
     assert "Specific Channel" in rendered
+
+
+def test_specific_repair_callback_errors_use_structured_interaction_logging() -> None:
+    from stoney_verify import permission_repair_ui
+
+    source = inspect.getsource(permission_repair_ui.TargetPermissionRepairView.on_error)
+    assert "log_interaction_failure(" in source
+    assert 'stage="access_repair_callback_failed"' in source
+    assert "error_id" in source
+    assert "Nothing was changed" not in source
