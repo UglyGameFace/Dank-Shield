@@ -328,3 +328,45 @@ def test_permission_repair_apply_stops_before_queue_when_ack_claim_fails(
     asyncio.run(
         setup_permission_repair_services.apply_permission_repair(interaction)
     )
+
+
+def test_permission_repair_result_reauthorize_matches_server_level_blockers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Any] = []
+
+    def fake_reauthorize(guild: Any, *, row: int = 1) -> discord.ui.Button:
+        calls.append(guild)
+        return discord.ui.Button(
+            label="Reauthorize Dank Shield",
+            style=discord.ButtonStyle.link,
+            url="https://example.com/reauthorize",
+            row=row,
+        )
+
+    monkeypatch.setattr(
+        setup_permission_repair_services,
+        "_reauthorize_button",
+        fake_reauthorize,
+    )
+    guild = SimpleNamespace(id=123)
+
+    healthy = setup_permission_repair_services.PermissionRepairResultView(
+        guild=guild,
+        result={"reauthorize_recommended": False},
+    )
+    assert calls == []
+    assert all(
+        getattr(child, "label", "") != "Reauthorize Dank Shield"
+        for child in healthy.children
+    )
+
+    blocked = setup_permission_repair_services.PermissionRepairResultView(
+        guild=guild,
+        result={"reauthorize_recommended": True},
+    )
+    assert calls == [guild]
+    assert any(
+        getattr(child, "label", "") == "Reauthorize Dank Shield"
+        for child in blocked.children
+    )

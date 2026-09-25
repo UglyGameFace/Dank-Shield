@@ -683,11 +683,14 @@ class PermissionRepairResultView(discord.ui.View):
         guild: discord.Guild | None = None,
         parent: str = "security",
         include_activity_coverage: bool = False,
+        result: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(timeout=900)
         self.parent = str(parent or "security").strip().lower()
         self.include_activity_coverage = bool(include_activity_coverage)
-        if guild is not None:
+        if guild is not None and (
+            result is None or bool(result.get("reauthorize_recommended"))
+        ):
             button = _reauthorize_button(guild)
             if button is not None:
                 self.add_item(button)
@@ -847,6 +850,7 @@ async def apply_permission_repair(
             guild=guild,
             parent=parent,
             include_activity_coverage=include_activity_coverage,
+            result=result,
         ),
     )
 
