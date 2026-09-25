@@ -216,13 +216,19 @@ def _merge_activity_coverage_targets(
         entry = planned.get(cid)
         if entry is None:
             try:
-                expected = channel.overwrites_for(me)
+                current = channel.overwrites_for(me)
             except Exception:
-                expected = discord.PermissionOverwrite()
+                current = discord.PermissionOverwrite()
+            expected, inherited = repair_core.seed_bot_overwrite_from_parent(
+                guild,
+                channel,
+                current,
+            )
             entry = {
                 "channel": channel,
                 "expected": expected,
                 "required": set(),
+                "inherited": inherited,
             }
             planned[cid] = entry
 
@@ -234,15 +240,35 @@ def _merge_activity_coverage_targets(
         expected = entry["expected"]
         required = entry["required"]
 
-        # Only expand Dank Shield's existing overwrite with permissions that the
-        # authoritative activity audit proved missing. No member/staff overwrite
-        # is added or rewritten in activity-only mode.
-        if "View Channel" in required:
-            expected.view_channel = True
-        if "Read Message History" in required:
-            expected.read_message_history = True
-        if "Manage Threads" in required:
-            expected.manage_threads = True
+        # Repair only Dank Shield's own overwrite. If the child has no bot-specific
+        # overwrite, its parent category can seed that one bot entry. Never perform
+        # a full Discord category sync and never clear an explicit bot deny here.
+        permission_map = {
+            "View Channel": "view_channel",
+            "Read Message History": "read_message_history",
+            "Manage Threads": "manage_threads",
+        }
+        for label, attr in permission_map.items():
+            if label not in required:
+                continue
+            if getattr(expected, attr, None) is False:
+                manual_actions.append(
+                    f"{legacy._channel_label(entry['channel'])}: Dank Shield has an explicit "
+                    f"deny for {label}. Use Specific Channel → Resolve Explicit Denies if that deny is accidental."
+                )
+                continue
+            setattr(expected, attr, True)
+
+        # Persist the authority used by Fix Access whenever it is still effective.
+        # This does not grant a new server permission; it keeps the bot from being
+        # stripped of its existing Manage Roles permission by later channel drift.
+        if getattr(expected, "manage_roles", None) is None:
+            try:
+                effective = entry["channel"].permissions_for(me)
+                if bool(getattr(effective, "manage_roles", False)):
+                    expected.manage_roles = True
+            except Exception:
+                pass
 
         legacy._add_target(
             targets,
@@ -256,7 +282,7 @@ def _merge_activity_coverage_targets(
         notes.append(
             f"Activity access scope: {len(planned)} channel overwrite(s) cover "
             f"{len(tuple(getattr(report, 'problems', ()) or ()))} Diagnostics gap(s). "
-            "Only Dank Shield's own existing overwrite is expanded."
+            "Only Dank Shield's own overwrite is changed. An empty child bot overwrite may be seeded from its parent category; unrelated role/member overwrites are preserved."
         )
     elif not tuple(getattr(report, "problems", ()) or ()):
         notes.append("Diagnostics activity scope is already fully accessible.")

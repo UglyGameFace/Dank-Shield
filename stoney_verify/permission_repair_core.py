@@ -94,6 +94,7 @@ _FULL_CHANNEL_PERMISSIONS = (
     "attach_files",
     "read_message_history",
     "manage_channels",
+    "manage_roles",
     "manage_messages",
     "manage_threads",
     "move_members",
@@ -188,7 +189,7 @@ def _required_permissions(
         voice_types += (stage,)
 
     if isinstance(target, voice_types):
-        names = ["view_channel", "manage_channels", "move_members"] if clean_mode == "full" else ["view_channel"]
+        names = ["view_channel", "manage_channels", "manage_roles", "move_members"] if clean_mode == "full" else ["view_channel"]
         if clean_feature in {"moderation", "general"}:
             names.append("move_members")
     elif isinstance(target, discord.CategoryChannel):
@@ -281,6 +282,110 @@ def _target_supported(target: Any) -> bool:
     return isinstance(target, supported)
 
 
+def _clone_overwrite(overwrite: discord.PermissionOverwrite) -> discord.PermissionOverwrite:
+    try:
+        return discord.PermissionOverwrite.from_pair(*overwrite.pair())
+    except Exception:
+        return discord.PermissionOverwrite()
+
+
+def _overwrite_is_empty(overwrite: discord.PermissionOverwrite) -> bool:
+    try:
+        allow, deny = overwrite.pair()
+        return not _permission_names(allow) and not _permission_names(deny)
+    except Exception:
+        return True
+
+
+def parent_bot_overwrite(
+    guild: discord.Guild,
+    target: discord.abc.GuildChannel,
+) -> tuple[Optional[Any], Optional[discord.PermissionOverwrite]]:
+    """Return the parent category's explicit Dank Shield overwrite, if present."""
+
+    me = _bot_member(guild)
+    parent = getattr(target, "category", None)
+    if me is None or parent is None:
+        return None, None
+    try:
+        overwrite = parent.overwrites_for(me)
+    except Exception:
+        return parent, None
+    if _overwrite_is_empty(overwrite):
+        return parent, None
+    return parent, _clone_overwrite(overwrite)
+
+
+def seed_bot_overwrite_from_parent(
+    guild: discord.Guild,
+    target: discord.abc.GuildChannel,
+    current: discord.PermissionOverwrite,
+) -> tuple[discord.PermissionOverwrite, list[str]]:
+    """Use a known parent bot overwrite only when the child has no bot override.
+
+    This is a bot-only template, not a Discord category sync. It never copies
+    unrelated role/member overwrites. A child that already has any explicit
+    Dank Shield overwrite remains authoritative and is not replaced.
+    """
+
+    expected = _clone_overwrite(current)
+    if not _overwrite_is_empty(current):
+        return expected, []
+
+    _parent, source = parent_bot_overwrite(guild, target)
+    if source is None:
+        return expected, []
+
+    try:
+        allow, deny = source.pair()
+        copied = sorted(
+            set(_permission_names(allow))
+            | {f"deny:{name}" for name in _permission_names(deny)}
+        )
+    except Exception:
+        copied = []
+    return _clone_overwrite(source), copied
+
+
+def _parent_manage_permissions_hint(
+    guild: discord.Guild,
+    target: discord.abc.GuildChannel,
+) -> str:
+    parent, overwrite = parent_bot_overwrite(guild, target)
+    if parent is None or overwrite is None:
+        return ""
+
+    try:
+        allow, _deny = overwrite.pair()
+        parent_allows_manage_roles = bool(getattr(allow, "manage_roles", False))
+    except Exception:
+        parent_allows_manage_roles = False
+    if not parent_allows_manage_roles:
+        return ""
+
+    parent_label = _target_label(parent)
+    synced = getattr(target, "permissions_synced", None)
+    if synced is False:
+        state = (
+            f"The parent category {parent_label} already allows Manage Permissions "
+            "for Dank Shield, but this child is **not synced** with that category."
+        )
+    else:
+        state = (
+            f"The parent category {parent_label} already allows Manage Permissions "
+            "for Dank Shield, but this target is not currently inheriting that access."
+        )
+
+    return (
+        state
+        + " Discord requires Manage Roles/Manage Permissions to modify permission "
+        "overwrites, including syncing a child back to its category, so Dank Shield "
+        "cannot apply the parent overwrite after the child has already locked it out. "
+        "In Discord, either add Dank Shield to this channel and allow Manage Permissions, "
+        "or use **Sync Now** only if you intend this channel's entire permission set to "
+        "match the category. Then rerun Fix Access."
+    )
+
 def permission_overwrite_edit_blocker(
     guild: discord.Guild,
     target: discord.abc.GuildChannel,
@@ -330,12 +435,20 @@ def permission_overwrite_edit_blocker(
     if effective_manage_roles:
         return ""
 
+    parent_hint = _parent_manage_permissions_hint(guild, target)
+    if parent_hint:
+        return (
+            "Dank Shield has Manage Roles server-wide, but **Manage Permissions is denied "
+            "in this channel**. "
+            + parent_hint
+        )
+
     return (
         "Dank Shield has Manage Roles server-wide, but **Manage Permissions is denied "
-        "in this channel/category**. That creates a Discord self-lockout: the bot "
-        "cannot edit the overwrite that is blocking its own repair. In Discord, open "
-        "this category/channel → Permissions and allow Manage Permissions for Dank "
-        "Shield (or remove the deny), then rerun Fix Access."
+        "in this channel/category**. That creates a Discord self-lockout: Discord will "
+        "not let the bot modify the permission overwrite that is blocking its own repair. "
+        "In Discord, open this category/channel → Permissions and allow Manage Permissions "
+        "for Dank Shield (or remove the deny), then rerun Fix Access."
     )
 
 
@@ -647,15 +760,36 @@ async def apply_target_repair(
                 "channel_name": _safe_str(getattr(current_target, "name", "")),
                 "before": _overwrite_snapshot(current),
             }
-            new_overwrite, changed, preserved = _apply_missing_to_overwrite(
+            seeded, inherited = seed_bot_overwrite_from_parent(
+                guild,
+                current_target,
                 current,
+            )
+            new_overwrite, changed, preserved = _apply_missing_to_overwrite(
+                seeded,
                 report.missing,
                 clear_explicit_denies=clear_explicit_denies,
             )
+            changed = list(dict.fromkeys([*inherited, *changed]))
             if preserved:
                 result.skipped_conflicts.append(
                     f"{_target_label(current_target)} — preserved explicit deny: {', '.join(preserved)}"
                 )
+
+            # If repair authority is currently effective, persist that authority
+            # on Dank Shield's own overwrite so later role/category drift is less
+            # likely to create another circular self-lockout.
+            try:
+                effective = current_target.permissions_for(me)
+                if (
+                    bool(getattr(effective, "manage_roles", False))
+                    and getattr(new_overwrite, "manage_roles", None) is None
+                ):
+                    new_overwrite.manage_roles = True
+                    changed.append("manage_roles")
+            except Exception:
+                pass
+
             if not changed:
                 continue
 
