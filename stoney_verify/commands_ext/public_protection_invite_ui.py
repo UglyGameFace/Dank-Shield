@@ -11,6 +11,7 @@ from typing import Any
 
 import discord
 
+from ..interaction_guard import safe_defer_interaction
 from ..invite_scope_settings import (
     ALL_BOTS_KEY,
     BOT_IDS_KEY,
@@ -434,6 +435,17 @@ class InviteShieldView(discord.ui.View):
             live = guild.get_channel(int(getattr(channel, "id", 0) or 0))
             if not isinstance(live, discord.TextChannel):
                 return await _safe_ephemeral(pick_interaction, "❌ That channel disappeared or is no longer a text channel.")
+
+            # A 1,000-message history pass can easily exceed Discord's initial
+            # interaction response window. Acknowledge the picker selection
+            # before any history/REST work, then redraw the original panel.
+            if not await safe_defer_interaction(
+                pick_interaction,
+                ephemeral=False,
+                action_name="invite_shield_historical_cleanup",
+            ):
+                return
+
             from .. import invite_policy_engine
 
             result = await invite_policy_engine.scan_channel_invites(
