@@ -125,7 +125,7 @@ def test_unconfigured_optional_staff_audit_is_not_invented_as_a_channel_error() 
 def test_logging_contextual_integration_never_owns_discord_overwrite_mutation() -> None:
     source = inspect.getsource(repair)
     assert "set_permissions(" not in source
-    assert "contextual.repair_context(" in source
+    assert "contextual.repair_or_handoff(" in source
     assert "clear_explicit_denies" not in source
 
 
