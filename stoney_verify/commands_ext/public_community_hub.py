@@ -3389,13 +3389,17 @@ def _partner_embed(links: list[dict[str, Any]], guild_id: int, bot: Any) -> disc
     embed = discord.Embed(
         title="🌐 Community Hub Partner Network",
         description=(
-            "Partner discovery is opt-in on both sides. Only public session summaries and explicitly enabled aggregate activity are shared. "
-            "Raw member presence never crosses server boundaries."
+            "Connect servers with a short-lived HubLink code; nobody needs to find or paste a Discord server ID. "
+            "Public session discovery is enabled only after both servers consent. Aggregate activity stays off until separately enabled."
         ),
         color=discord.Color.blurple(),
     )
     if not links:
-        embed.add_field(name="No partner links", value="Request a partner link by server ID. Dank Shield must be present in both servers.", inline=False)
+        embed.add_field(
+            name="No connected servers yet",
+            value="Create a **HubLink** and send the code to the other server's admin. If they do not have Dank Shield yet, send the install button too.",
+            inline=False,
+        )
         return embed
     for row in links[:12]:
         other_id = _safe_str(row.get("guild_b_id")) if _safe_str(row.get("guild_a_id")) == str(guild_id) else _safe_str(row.get("guild_a_id"))
@@ -3408,26 +3412,319 @@ def _partner_embed(links: list[dict[str, Any]], guild_id: int, bot: Any) -> disc
     return embed
 
 
-class PartnerRequestModal(discord.ui.Modal, title="Request Community Hub Partner"):
-    guild_id = discord.ui.TextInput(label="Partner server ID", placeholder="123456789012345678", min_length=15, max_length=22)
+def _hublink_share_embed(
+    *,
+    guild_name: str,
+    code: str,
+    expires_at: Any,
+    install_url: str,
+) -> discord.Embed:
+    try:
+        stamp = int(datetime.fromisoformat(_safe_str(expires_at).replace("Z", "+00:00")).timestamp())
+        expires = f"<t:{stamp}:R>"
+    except Exception:
+        expires = "in about 15 minutes"
+    embed = discord.Embed(
+        title="🔗 HubLink Ready",
+        description=(
+            f"Connect another server to **{guild_name}** without sharing a server ID.\n\n"
+            f"**HubLink code:** \`{code}\`\n"
+            f"**Expires:** {expires}"
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Send this to the other server's owner/admin",
+        value=(
+            "1. If Dank Shield is already there: **/dank → Community Hub → Staff Dashboard → Partner Network → Redeem HubLink**.\n"
+            "2. Enter the code and confirm the server name.\n"
+            "3. If Dank Shield is not installed yet, use **Add Dank Shield** below first, then redeem the same code."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="What connecting enables",
+        value=(
+            "Public Community Hub group discovery: **On after confirmation**\n"
+            "Aggregate/live activity sharing: **Off by default**\n"
+            "The code is one-use and the database stores only its cryptographic hash."
+        ),
+        inline=False,
+    )
+    if not install_url:
+        embed.add_field(
+            name="Install link unavailable",
+            value="Dank Shield could not build its install link from the current application identity. The HubLink code itself is still valid.",
+            inline=False,
+        )
+    return embed
+
+
+class HubLinkShareView(_OwnedView):
+    def __init__(self, owner_id: int, *, install_url: str) -> None:
+        super().__init__(owner_id)
+        if install_url:
+            self.add_item(
+                discord.ui.Button(
+                    label="Add Dank Shield",
+                    emoji="➕",
+                    style=discord.ButtonStyle.link,
+                    url=install_url,
+                    row=0,
+                )
+            )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not await super().interaction_check(interaction):
+            return False
+        if _staff_authorized(interaction):
+            return True
+        await _private(interaction, "HubLink management requires server management authority.")
+        return False
+
+    @discord.ui.button(label="Check This Server", emoji="🛠️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:hublink:readiness:v1", row=1)
+    async def readiness(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        settings = await hub.get_settings(int(interaction.guild_id or 0))
+        await _edit_private_original(
+            interaction,
+            content=None,
+            embed=_hublink_readiness_embed(interaction.guild, settings),
+            view=HubLinkReadinessView(self.owner_id, interaction.guild, settings),
+        )
+
+    @discord.ui.button(label="Partner Network", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:hublink:shareback:v1", row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        links = await hub.list_partner_links(int(interaction.guild_id or 0), active_only=False)
+        await _edit_private_original(
+            interaction,
+            content=None,
+            embed=_partner_embed(links, int(interaction.guild_id or 0), interaction.client),
+            view=PartnerAdminView(self.owner_id, links),
+        )
+
+
+class HubLinkRedeemModal(discord.ui.Modal, title="Redeem Community HubLink"):
+    code = discord.ui.TextInput(
+        label="HubLink code",
+        placeholder="DANK-ABCD-2345",
+        min_length=8,
+        max_length=20,
+    )
+
+    def __init__(self, owner_id: int) -> None:
+        super().__init__()
+        self.owner_id = int(owner_id)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await _defer_ephemeral(interaction)
+        guild_id = int(interaction.guild_id or 0)
         try:
-            target_id = int(str(self.guild_id.value).strip())
-        except Exception:
-            return await _followup(interaction, "Enter a valid Discord server ID.")
-        target = interaction.client.get_guild(target_id)
-        if target is None:
-            return await _followup(interaction, "Dank Shield must already be in the target server before a partner request can be created.")
-        try:
-            target_settings = await hub.get_settings(target_id)
-            if not bool(target_settings.get("partner_discovery_enabled")):
-                return await _followup(interaction, "The target server has not enabled Community Hub partner discovery.")
-            link = await hub.create_partner_request(int(interaction.guild_id or 0), target_id, int(interaction.user.id))
+            preview = await hub.inspect_hublink_code(
+                str(self.code.value),
+                target_guild_id=guild_id,
+            )
         except hub.CommunityHubError as exc:
             return await _followup(interaction, f"❌ {_error_text(exc)}")
-        await _followup(interaction, f"✅ Partner request created. Staff in {target.name} must approve it from their Community Hub.")
+
+        source_id = _safe_int(preview.get("source_guild_id"), 0)
+        source = interaction.client.get_guild(source_id)
+        if source is None:
+            return await _followup(
+                interaction,
+                "❌ Dank Shield is no longer connected to the server that created this HubLink. Ask that server to create a new code.",
+            )
+
+        code = hub.format_hublink_code(str(self.code.value))
+        embed = discord.Embed(
+            title="🔗 Confirm HubLink",
+            description=(
+                f"Connect **{interaction.guild.name if interaction.guild else 'this server'}** with **{source.name}**?\n\n"
+                "This confirmation enables **public Community Hub group discovery** between the two servers. "
+                "**Aggregate/live activity sharing remains off** until separately enabled."
+            ),
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(
+            name="No server IDs",
+            value="Dank Shield identified both servers from trusted Discord interactions and the one-time code.",
+            inline=False,
+        )
+        await _edit_private_original(
+            interaction,
+            content=None,
+            embed=embed,
+            view=HubLinkConfirmView(
+                self.owner_id,
+                code=code,
+                source_guild_id=source_id,
+            ),
+        )
+
+
+class HubLinkConfirmView(_OwnedView):
+    def __init__(self, owner_id: int, *, code: str, source_guild_id: int) -> None:
+        super().__init__(owner_id)
+        self.code = code
+        self.source_guild_id = int(source_guild_id)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not await super().interaction_check(interaction):
+            return False
+        if _staff_authorized(interaction):
+            return True
+        await _private(interaction, "Confirming a HubLink requires server management authority.")
+        return False
+
+    @discord.ui.button(label="Connect Servers", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank:hub:hublink:confirm:v1", row=0)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        guild_id = int(interaction.guild_id or 0)
+        source = interaction.client.get_guild(self.source_guild_id)
+        if source is None:
+            return await _followup(interaction, "❌ The source server is no longer available to Dank Shield. Ask them for a new HubLink.")
+
+        try:
+            preview = await hub.inspect_hublink_code(self.code, target_guild_id=guild_id)
+            if _safe_int(preview.get("source_guild_id"), 0) != self.source_guild_id:
+                return await _followup(interaction, "❌ That HubLink no longer points to the server you reviewed.")
+            result = await hub.redeem_hublink_code(
+                self.code,
+                target_guild_id=guild_id,
+                actor_id=int(interaction.user.id),
+            )
+        except hub.CommunityHubError as exc:
+            return await _followup(interaction, f"❌ {_error_text(exc)}")
+
+        runtime = ensure_community_hub_runtime(interaction.client)
+        runtime.invalidate_settings(guild_id)
+        runtime.invalidate_settings(self.source_guild_id)
+        settings = await hub.get_settings(guild_id)
+
+        creator_id = _safe_int(preview.get("created_by_user_id"), 0)
+        creator = source.get_member(creator_id) if creator_id > 0 else None
+        if creator is not None:
+            try:
+                await creator.send(
+                    (
+                        f"🔗 Community HubLink connected **{source.name}** with "
+                        f"**{interaction.guild.name if interaction.guild else 'another server'}**. "
+                        "Public group discovery is on; aggregate/live activity sharing remains off."
+                    ),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+                pass
+
+        await _edit_private_original(
+            interaction,
+            content=None,
+            embed=_hublink_readiness_embed(
+                interaction.guild,
+                settings,
+                connected_name=source.name,
+            ),
+            view=HubLinkReadinessView(
+                self.owner_id,
+                interaction.guild,
+                settings,
+                connected_name=source.name,
+            ),
+        )
+        await _followup(
+            interaction,
+            "✅ HubLink connected. No server IDs were needed."
+            + (" This was a safe replay of the same completed HubLink." if bool(result.get("replayed")) else ""),
+        )
+
+    @discord.ui.button(label="Cancel", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:hublink:cancel:v1", row=0)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        links = await hub.list_partner_links(int(interaction.guild_id or 0), active_only=False)
+        await _edit_private_original(
+            interaction,
+            content=None,
+            embed=_partner_embed(links, int(interaction.guild_id or 0), interaction.client),
+            view=PartnerAdminView(self.owner_id, links),
+        )
+
+
+class HubLinkReadinessView(_OwnedView):
+    def __init__(
+        self,
+        owner_id: int,
+        guild: Optional[discord.Guild],
+        settings: dict[str, Any],
+        *,
+        connected_name: str = "",
+    ) -> None:
+        super().__init__(owner_id)
+        self.connected_name = connected_name
+        report = _community_hub_readiness(guild, settings)
+        repair_url = _safe_str(report.get("reauthorize_url"))
+        if repair_url:
+            self.add_item(
+                discord.ui.Button(
+                    label="Reauthorize Dank Shield",
+                    emoji="🔐",
+                    style=discord.ButtonStyle.link,
+                    url=repair_url,
+                    row=0,
+                )
+            )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not await super().interaction_check(interaction):
+            return False
+        if _staff_authorized(interaction):
+            return True
+        await _private(interaction, "Community Hub setup checks require server management authority.")
+        return False
+
+    @discord.ui.button(label="Check Again", emoji="🔄", style=discord.ButtonStyle.primary, custom_id="dank:hub:hublink:checkagain:v1", row=1)
+    async def check_again(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        settings = await hub.get_settings(int(interaction.guild_id or 0))
+        await _edit_private_original(
+            interaction,
+            content=None,
+            embed=_hublink_readiness_embed(interaction.guild, settings, connected_name=self.connected_name),
+            view=HubLinkReadinessView(
+                self.owner_id,
+                interaction.guild,
+                settings,
+                connected_name=self.connected_name,
+            ),
+        )
+
+    @discord.ui.button(label="Open Access Repair", emoji="🧰", style=discord.ButtonStyle.secondary, custom_id="dank:hub:hublink:accessrepair:v1", row=1)
+    async def access_repair(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from stoney_verify import setup_permission_repair_services
+
+        await setup_permission_repair_services.open_permission_repair(
+            interaction,
+            parent="security",
+            include_activity_coverage=False,
+        )
+
+    @discord.ui.button(label="Partner Network", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:hublink:readyback:v1", row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        links = await hub.list_partner_links(int(interaction.guild_id or 0), active_only=False)
+        await _edit_private_original(
+            interaction,
+            content=None,
+            embed=_partner_embed(links, int(interaction.guild_id or 0), interaction.client),
+            view=PartnerAdminView(self.owner_id, links),
+        )
 
 
 class PendingPartnerSelect(discord.ui.Select):
