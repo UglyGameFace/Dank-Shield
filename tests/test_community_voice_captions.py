@@ -4,6 +4,7 @@ import asyncio
 import struct
 from pathlib import Path
 
+import stoney_verify.community_voice_captions as captions_module
 from stoney_verify.community_voice_captions import (
     CaptionEngine,
     CaptionSegment,
@@ -260,6 +261,29 @@ def test_pcm48_stereo_to_pcm16_mono_has_correct_rate_ratio() -> None:
     pcm = struct.pack("<" + ("h" * len(stereo_samples)), *stereo_samples)
     converted = pcm48_stereo_to_pcm16_mono(pcm)
     assert len(converted) == 160 * 2
+
+
+def test_gemini_live_goaway_forces_reconnect_before_next_utterance() -> None:
+    async def _run() -> None:
+        owner = GeminiLiveTranscriber("fake-key")
+        session = captions_module._GeminiLiveSpeakerSession(owner, 77)
+        session.ws = type("FakeWS", (), {"closed": False})()
+        session.connected_at = 100.0
+        session.rotate_before_next = True
+        replacement = type("FakeWS", (), {"closed": False})()
+
+        async def fake_connect() -> None:
+            session.ws = replacement
+            session.connected_at = 200.0
+            session.rotate_before_next = False
+
+        session._connect = fake_connect
+        resolved = await session._ensure_connected()
+        assert resolved is replacement
+        assert owner.live_reconnects == 1
+        assert session.rotate_before_next is False
+
+    asyncio.run(_run())
 
 
 def test_caption_output_mode_normalization() -> None:
