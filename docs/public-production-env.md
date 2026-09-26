@@ -87,7 +87,7 @@ The intentional **final** public global application-command surface is exactly *
 
 - `/dank home` — the complete mega menu for Setup, Protection, Tickets, Verification, Welcome/Exit, Members & Moderation, Design, Roles/Profiles, Logs, Server Stats, Status, Diagnostics, Card Assets, Help, and profile access.
 - `/dank purge` — the compact destructive-cleanup entrypoint that remains a direct command for explicit targeting and confirmation.
-- `/dank setup` — the guided onboarding/setup entrypoint restored for discoverability while advanced setup tools stay inside the UI. Its **Live Captions** section can select or create the ordinary-server caption output and allow all VCs, selected VCs/categories, or explicit exclusions.
+- `/dank setup` — the guided onboarding/setup entrypoint restored for discoverability while advanced setup tools stay inside the UI. Its **Live Captions** section can select/create the ordinary-server caption output, allow all VCs or selected VCs/categories/exclusions, and choose **Original**, **English**, or **Original + English** caption text. Gemini Live input defaults to automatic detection across its supported languages and code-switching.
 - `/dank upload` — the single attachment command for a Join Card background, Exit Card background, or custom card font. This remains a command because Discord buttons cannot provide an attachment field.
 
 Former roots such as `/ticket-intake`, `/ticket-category`, and `/ticket-panel` are not public autocomplete commands anymore. Their implementation modules remain loaded and their actions are available inside `/tickets`. Likewise, former `/dank` shortcuts such as status/diagnostics/welcome are reached through `/dank home` rather than separate autocomplete entries.
@@ -105,6 +105,21 @@ Dank Shield pins `opuslib-next-bundled==0.1.1`, whose platform wheels contain th
 The Discloud `ffmpeg` APT option is not used as an Opus-runtime substitute. Discloud documents that option as installing the `ffmpeg` package, not a standalone libopus contract for Python `ctypes`.
 
 Before a caption receiver is considered available, `discord.opus.is_loaded()` must be true. CI also launches a fresh Python process, loads the bundled library by full path, and constructs a real `discord.opus.Decoder()` so a missing/incompatible wheel fails before deployment.
+
+### Gemini Live transcription and language policy
+
+Live Captions use `GEMINI_API_KEY` with `gemini-3.5-transcribe-live`. Each opted-in Discord speaker owns a separate Gemini Live WebSocket so speaker isolation continues through transcription. Discord's 48 kHz stereo PCM is converted to 16 kHz mono signed-16 PCM for the Live API.
+
+Leave `DANK_COMMUNITY_CAPTION_LANGUAGE_CODES` blank for the default **Auto / all supported languages** behavior and code-switching. Server owners normally do not need to configure a language list.
+
+The shared per-server caption output policy applies to both ordinary-server and Community Hub captions:
+- **Original language** — publish the finalized transcript as spoken.
+- **English** — translate finalized non-English transcript text only.
+- **Original + English** — publish both.
+
+English conversion uses `gemini-3.1-flash-lite` on finalized text only. Audio is never submitted a second time for translation. If Live Transcribe already reports an English BCP-47 language code, the translation request is skipped entirely.
+
+Gemini Live sessions are rotated before the documented 10-minute maximum and on `goAway` before the next utterance. Translation failure must not stop original-language captions.
 
 ## Public setup flow
 
