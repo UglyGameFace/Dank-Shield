@@ -339,6 +339,8 @@ async def build_server_live_captions_embed(
             "🟣 **DAVE soak test running.** This is the bot-owner-only validation path; "
             "the global Live Captions feature remains locked for other servers."
         )
+    elif not capability.available:
+        headline = f"🔴 **Host not ready.** {capability.reason}."
     elif not enabled:
         headline = (
             "🟡 **Installed, validation locked.** The live DAVE receive path is deployed, "
@@ -349,8 +351,6 @@ async def build_server_live_captions_embed(
                 else "No voice audio is captured while this lock is active."
             )
         )
-    elif not capability.available:
-        headline = f"🔴 **Host not ready.** {capability.reason}."
     elif bool(general.get("active")):
         headline = "🟢 **General Live Captions are running in this server.**"
     elif bool(guild_status.get("active")):
@@ -371,6 +371,26 @@ async def build_server_live_captions_embed(
             "This works with ordinary Discord voice channels. It does **not** require a Community Hub gaming session."
         ),
         color=discord.Color.blurple(),
+    )
+
+    opus_source = str(capability.opus_library or "")
+    opus_label = (
+        "bundled libopus"
+        if "opuslib_next" in opus_source.replace("\\", "/")
+        else opus_source
+        if opus_source and opus_source != "already-loaded"
+        else "loaded"
+        if capability.opus_available
+        else "unavailable"
+    )
+    embed.add_field(
+        name="Host voice stack",
+        value=(
+            f"discord.py: **{capability.discord_py_version}** • "
+            f"DAVE: **{'ready' if capability.dave_available and capability.inbound_dave_decrypt_available else 'not ready'}**\n"
+            f"Opus PCM decoder: **{'ready' if capability.opus_available else 'not ready'}** • source: **{opus_label}**"
+        ),
+        inline=False,
     )
 
     if bool(general.get("active")):
