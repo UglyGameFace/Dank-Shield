@@ -115,6 +115,8 @@ class CommunityVoiceCaptionManager:
             "opted_in_user_ids": list(state.bridge.opted_in_user_ids()),
             "health": state.bridge.health.snapshot(),
             "segments_transcribed": state.engine.segments_transcribed,
+            "segments_published": state.engine.segments_published,
+            "segments_empty": state.engine.segments_empty,
             "segments_unclear": state.engine.segments_unclear,
             "queue_overflow": state.engine.queue_overflow,
             "segment_failures": state.engine.segment_failures,
