@@ -561,10 +561,11 @@ class CommunityHubRuntime:
             int(interaction.user.id),
             "publish",
         )
-        # Quick Match can pre-form a session with an explicitly opted-in member
-        # before the Discord card is published. Normalize the durable state only
-        # after publish so the existing state machine remains authoritative.
-        session = await hub.normalize_session_formation(session_id, guild_id)
+        # Only Quick Match can pre-form a session before the Discord card is
+        # published. Ordinary/manual session creation must not depend on the
+        # follow-up matchmaking RPC during a rolling schema deployment.
+        if _safe_str(session.get("idempotency_key")).startswith("quick:"):
+            session = await hub.normalize_session_formation(session_id, guild_id)
         result["session"] = session
         await hub.bump_hourly_metric(guild_id, "sessions_created", 1)
         await hub.bump_game_metric(guild_id, _safe_str(session.get("game_name"), "Game"), "sessions_created", 1)
