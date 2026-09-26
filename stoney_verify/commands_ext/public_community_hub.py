@@ -633,9 +633,9 @@ def _availability_embed(rows: list[dict[str, Any]]) -> discord.Embed:
     embed = discord.Embed(
         title="🟢 Open to Play",
         description=(
-            "Temporarily mark yourself available for a game. Your availability expires automatically. "
-            "Quick Match is a separate explicit opt-in: when enabled, Dank Shield may pair you into a new "
-            "same-game group if someone searches and no open group already exists."
+            "Temporarily mark yourself available for a game. Other members can browse your active listing, "
+            "and it expires automatically. Quick Match is a separate explicit opt-in: when enabled, Dank Shield "
+            "may pair you into a new same-game group if someone searches and no open group already exists."
         ),
         color=discord.Color.blurple(),
     )
