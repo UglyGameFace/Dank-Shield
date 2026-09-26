@@ -254,6 +254,10 @@ def test_quick_match_prefers_existing_groups_then_forms_only_opted_in_matches() 
     assert 'bot.add_listener(runtime.on_member_remove, "on_member_remove")' in runtime
 
     assert "availability_summary=availability" in ui
+    assert "class AvailableGameSelect" in ui
+    assert "def _available_players_embed" in ui
+    assert "await hub.list_available_users(guild_id, game, limit=25)" in ui
+    assert 'custom_id="dank:hub:find:availablegame:v1"' in ui
     assert 'custom_id="dank:hub:find:quick:v1"' in ui
     assert 'custom_id="dank:hub:find:available:v1"' in ui
     assert "created_match" in ui
