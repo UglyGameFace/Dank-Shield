@@ -3416,7 +3416,7 @@ def _partner_embed(links: list[dict[str, Any]], guild_id: int, bot: Any) -> disc
     for row in links[:12]:
         other_id = _safe_str(row.get("guild_b_id")) if _safe_str(row.get("guild_a_id")) == str(guild_id) else _safe_str(row.get("guild_a_id"))
         other = bot.get_guild(_safe_int(other_id))
-        name = getattr(other, "name", None) or f"Server {other_id}"
+        name = getattr(other, "name", None) or "Unavailable partner server"
         state = _safe_str(row.get("state"), "pending").title()
         requested_here = _safe_str(row.get("requested_by_guild_id")) == str(guild_id)
         suffix = " • requested here" if state == "Pending" and requested_here else ""
@@ -3440,7 +3440,7 @@ def _hublink_share_embed(
         title="🔗 HubLink Ready",
         description=(
             f"Connect another server to **{guild_name}** without sharing a server ID.\n\n"
-            f"**HubLink code:** \`{code}\`\n"
+            f"**HubLink code:** `{code}`\n"
             f"**Expires:** {expires}"
         ),
         color=discord.Color.blurple(),
@@ -3533,6 +3533,8 @@ class HubLinkRedeemModal(discord.ui.Modal, title="Redeem Community HubLink"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await _defer_ephemeral(interaction)
+        if int(getattr(interaction.user, "id", 0) or 0) != self.owner_id or not _staff_authorized(interaction):
+            return await _followup(interaction, "❌ Redeeming a HubLink requires server management authority.")
         guild_id = int(interaction.guild_id or 0)
         try:
             preview = await hub.inspect_hublink_code(
@@ -3754,7 +3756,7 @@ class PendingPartnerSelect(discord.ui.Select):
             guild = bot.get_guild(_safe_int(other_id))
             options.append(
                 discord.SelectOption(
-                    label=(getattr(guild, "name", None) or f"Server {other_id}")[:100],
+                    label=(getattr(guild, "name", None) or "Unavailable partner server")[:100],
                     value=_safe_str(row.get("id")),
                     description="Review this incoming partner request",
                 )
@@ -3877,7 +3879,7 @@ class ActivePartnerSelect(discord.ui.Select):
             guild = bot.get_guild(_safe_int(other_id))
             options.append(
                 discord.SelectOption(
-                    label=(getattr(guild, "name", None) or f"Server {other_id}")[:100],
+                    label=(getattr(guild, "name", None) or "Unavailable partner server")[:100],
                     value=_safe_str(row.get("id")),
                     description="Manage this active partner link",
                     emoji="🌐",
