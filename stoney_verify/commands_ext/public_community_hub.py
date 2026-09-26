@@ -222,8 +222,8 @@ def _hublink_readiness_embed(
             name="1. Server permissions",
             value=(
                 f"Dank Shield is missing: **{_permission_names(guild_missing)}**.\n"
-                "Tap **Reauthorize Dank Shield** below, choose this server, review the requested permissions, and authorize. "
-                "The normal repair link does **not** request Administrator."
+                "Tap **Reauthorize Dank Shield** below. Discord opens this server directly; review the requested Community Hub permissions and authorize. "
+                "The repair link does **not** request Administrator."
             )[:1024],
             inline=False,
         )
