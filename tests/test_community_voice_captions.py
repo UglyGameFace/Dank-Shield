@@ -201,6 +201,49 @@ def test_close_cancels_inflight_transcription_before_it_can_publish() -> None:
     assert published == []
 
 
+def test_revoke_user_purges_buffered_queued_and_inflight_audio() -> None:
+    published = []
+
+    async def _run() -> None:
+        transcriber = _BlockingTranscriber()
+
+        async def publish(user_id: int, text: str, confidence: float) -> None:
+            published.append((user_id, text, confidence))
+
+        engine = CaptionEngine(transcriber, publish)
+        engine.segmenter.feed(_frame(50, 1.0, 500))
+        engine.submit(_frame(50, 1.1, 600))
+        engine._spawn_segment(
+            CaptionSegment(
+                user_id=50,
+                pcm=_pcm(700),
+                started_at=1.0,
+                ended_at=2.0,
+            )
+        )
+        await asyncio.wait_for(transcriber.started.wait(), timeout=1.0)
+
+        await asyncio.wait_for(engine.revoke_user(50), timeout=1.0)
+        assert engine.segmenter.flush_all() == []
+        assert engine.queue.empty()
+        assert not engine._segment_tasks_by_user.get(50)
+        assert published == []
+
+        # A frame already scheduled onto the event loop after consent revocation
+        # must still be rejected by the engine-side block.
+        engine.submit(_frame(50, 2.0, 800))
+        assert engine.queue.empty()
+
+        # A later explicit opt-in opens only future audio again.
+        engine.allow_user(50)
+        engine.submit(_frame(50, 2.1, 900))
+        assert engine.queue.qsize() == 1
+        await engine.close()
+
+    asyncio.run(_run())
+    assert published == []
+
+
 def test_live_caption_privacy_disclosure_and_soak_gate_are_contractual() -> None:
     runtime = (ROOT / "stoney_verify" / "community_voice_caption_runtime.py").read_text(encoding="utf-8")
     ui = (ROOT / "stoney_verify" / "commands_ext" / "public_community_hub.py").read_text(encoding="utf-8")
