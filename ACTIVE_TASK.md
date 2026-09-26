@@ -58,7 +58,8 @@ Confirmed current-state gaps:
 16. The first live soak could join voice and accept self-consent but produce no visible caption. The caption engine collapsed provider/publish exceptions into an integer failure counter and exposed no safe last-error or stage diagnosis, so DAVE receive failure, consent/identity rejection, OpenAI billing/key errors, empty transcripts, and Discord publish failures were indistinguishable from the user side.
 17. The first instrumented live soak then proved the active session/consent path while reporting **0 sink frames / 0 routed frames**. The pinned PR #62 receive patch decrypts DAVE early in `reader.py` and drops packets before the sink whenever sender mapping/session decryption is unavailable; it has no passthrough, packet-sync recovery, or hardened decoder-stage behavior. The better-tested PR #54 line decrypts after per-SSRC member resolution, checks DAVE readiness, preserves packet sequence/timestamp on decrypt failure, supports transition passthrough, and prevents unresolved speakers from reaching the sink.
 18. The next live soak on the PR #54-derived fork reported **Raw UDP 141**, **DAVE ready yes**, **SessionStatus.active**, protocol **1**, epoch **44**, **6 mapped SSRCs**, but **Reader: stopped**, **sink PCM 0**, and **routed 0**. This exactly matches upstream issue #43 / PR #54 field reports where speaking triggers `OpusError: corrupted stream` and `PacketRouter.run()` tears down listening. Upstream PR #58 fixes the inbound DAVE decrypt path with guarded session/SSRC/passthrough handling, while PR #57 separately prevents one corrupt Opus frame from killing the router thread.
-19. The first soak after PR #342 then failed earlier and more deterministically: raw UDP reached **1593**, DAVE stayed active at protocol **1 / epoch 46**, **6 SSRCs** were mapped, but the receive worker stopped with **`discord.opus.OpusNotLoaded`** before the first `PacketDecoder` could create a PCM decoder. Discloud's app config only installed the `canvas` APT bundle, so the native Opus runtime was not guaranteed in the container, and Dank Shield had no explicit Opus preload/capability gate.
+19. The first soak after PR #342 then failed earlier and more deterministically: raw UDP reached **1593**, DAVE stayed active at protocol **1 / epoch 46**, **6 SSRCs** were mapped, but the receive worker stopped with **`discord.opus.OpusNotLoaded`** before the first `PacketDecoder` could create a PCM decoder. Dank Shield had no deterministic native Opus source and no explicit preload/capability gate.
+20. PR #343 correctly added a fail-closed Opus capability check but made the wrong deployment assumption: Discloud's documented `ffmpeg` APT option installs the `ffmpeg` package; it does **not** promise a standalone `libopus.so` discoverable by Python `ctypes`. The post-deploy soak failed before joining with the new explicit **native Opus runtime unavailable** error, proving that assumption false. The corrected design must supply its own known libopus binary instead of inheriting one accidentally from the host image.
 
 ## Execution path
 
@@ -87,7 +88,7 @@ PR #335 merged into `main` as `93f41dc4845f78b7858c4a89a633c31be3830e0e` from fi
 
 PR #336 merged into `main` as `cee40147ae64d547bbb9c93a790620a2c80bfbc6` from validated head `272fee22f680b8a8fef3748b1d60106ff91051a7`. Exact-head checks and post-merge Community Hub CI, Dank Shield CI, Ticket Owner Emergency Override, Supabase deployment, and Discloud deployment all completed successfully.
 
-Current branch: `feat/server-live-captions-general-20260926`
+Current branch: `fix/live-captions-bundled-opus-20260926`
 Current slice: **general server Live Captions using the same hardened per-speaker DAVE runtime**
 
 Implemented in this slice:
@@ -161,10 +162,11 @@ Implemented in the current voice-caption slice:
 - Dank Shield applies a narrow PR #57-compatible router survival patch that catches only `discord.opus.OpusError` around one decoder packet, counts/drops that corrupt frame, and continues routing subsequent packets; unexpected exceptions retain upstream fail-stop behavior;
 - voice-receive startup now registers an `after` callback that records a sanitized reader-stop reason and increments a reader-failure counter, so the soak panel can show the actual receive-worker error instead of only `Reader: stopped`;
 - the soak panel now reports corrupt Opus drops and reader failures alongside raw UDP, DAVE, SSRC, PCM, routing, and transcription telemetry;
-- Discloud now installs the `ffmpeg` APT bundle alongside `canvas`, which pulls the native multimedia runtime including the Opus shared library on Debian-based containers;
-- Live Captions now explicitly resolves/loads native Opus before declaring receive capability ready, trying an optional `DANK_OPUS_LIBRARY`, `ctypes.util.find_library("opus")`, and common Linux library names;
-- `voice_receive_capability()` now fails closed with a specific native-Opus reason instead of letting the packet reader crash later with `OpusNotLoaded`;
-- deterministic unit coverage proves native Opus discovery/loading and fail-closed behavior without depending on the GitHub runner's own libopus installation.
+- PR #343 temporarily added Discloud's `ffmpeg` APT option in an attempt to obtain libopus; live production disproved that assumption, so this slice removes that unrelated host dependency again;
+- `opuslib-next-bundled==0.1.1` is pinned as Dank Shield's deterministic native Opus source; its Linux/macOS/Windows wheels contain the shared Xiph Opus library inside `opuslib_next/_native`;
+- Live Captions resolves the bundled library path without importing the binding package, then passes that exact full path to documented `discord.opus.load_opus()`; an explicit `DANK_OPUS_LIBRARY` remains the first operator override and system discovery is only a final compatibility fallback;
+- `voice_receive_capability()` still fails closed with a specific native-Opus reason instead of letting the packet reader crash later with `OpusNotLoaded`;
+- CI now starts a fresh Python process, resolves the pinned bundled library, explicitly loads it into discord.py, verifies `discord.opus.is_loaded()`, and constructs a real `discord.opus.Decoder()` at 48 kHz stereo; this validates the actual ABI/symbol path rather than mocking the load.
 
 Still deferred after HubLink:
 - session privacy / incomplete `invite_only` behavior;
@@ -211,4 +213,4 @@ After interaction reliability is validated:
 
 ## Next step
 
-PR #338 through PR #342 are merged and deployed. Validate the native Opus deployment/runtime preload fix on the exact head, merge only after every triggered gate is green, confirm Discloud rebuilds with the new APT bundle, then rerun the real Discord soak from `/captions`. Keep the global feature gate locked until the live server proves reader listening, sink PCM, per-speaker routing, transcription, and publish. The soak must cover one speaker, overlapping speakers, reconnect/SSRC changes, epoch/key transitions, packet loss/out-of-order delivery, stop/restart, opt-out while speaking, general-session stop, and sustained operation; Community Hub lifecycle validation remains required before calling the full product production-proven. Keep `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` off until the receive soak passes.
+PR #338 through PR #343 are merged and deployed. Validate the bundled-libopus correction on the exact head, including the fresh-process real Decoder check, merge only after every triggered gate is green, confirm Discloud deploys the pinned wheel, then rerun the real Discord soak from `/captions`. Keep the global feature gate locked until the live server proves reader listening, sink PCM, per-speaker routing, transcription, and publish. The soak must cover one speaker, overlapping speakers, reconnect/SSRC changes, epoch/key transitions, packet loss/out-of-order delivery, stop/restart, opt-out while speaking, general-session stop, and sustained operation; Community Hub lifecycle validation remains required before calling the full product production-proven. Keep `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` off until the receive soak passes.

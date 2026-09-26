@@ -96,6 +96,16 @@ Advanced repair/setup aliases such as direct `/dank setup-review`, `/dank db-che
 
 Schema health should show either successful read-only readiness or exact migration guidance for missing tables/columns. It must never report that a direct database URL will auto-repair production schema.
 
+## Live Captions native audio runtime
+
+Live Captions receive DAVE-decrypted Opus frames and then decode each speaker to 48 kHz stereo PCM before segmentation/transcription. `discord.py` requires a loadable native libopus for that PCM decoder.
+
+Dank Shield pins `opuslib-next-bundled==0.1.1`, whose platform wheels contain the shared libopus binary. Runtime resolves that bundled file first and passes its full path to `discord.opus.load_opus()`. This avoids depending on incidental host packages. `DANK_OPUS_LIBRARY` is only an optional explicit operator override; normal Discloud production does not require it.
+
+The Discloud `ffmpeg` APT option is not used as an Opus-runtime substitute. Discloud documents that option as installing the `ffmpeg` package, not a standalone libopus contract for Python `ctypes`.
+
+Before a caption receiver is considered available, `discord.opus.is_loaded()` must be true. CI also launches a fresh Python process, loads the bundled library by full path, and constructs a real `discord.opus.Decoder()` so a missing/incompatible wheel fails before deployment.
+
 ## Public setup flow
 
 For each Discord server:

@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 from discord.opus import OpusError
 
 import stoney_verify.community_voice_receive as voice_receive
 from stoney_verify.community_voice_receive import (
+    BUNDLED_OPUS_DISTRIBUTION,
     PCM_FRAME_ALIGNMENT,
     PerSpeakerFrameBridge,
     VOICE_RECV_DAVE_COMMIT,
     VOICE_RECV_DAVE_SOURCE,
     _install_voice_recv_router_survival_patch,
+    bundled_opus_library_path,
     ensure_opus_loaded,
     voice_receive_capability,
     voice_receive_connection_diagnostics,
@@ -51,11 +56,38 @@ def test_voice_dependencies_are_pinned_for_dave_receive(monkeypatch) -> None:
     assert VOICE_RECV_DAVE_SOURCE == "imayhaveborkedit/discord-ext-voice-recv#58"
 
 
-def test_opus_loader_uses_discovered_native_library(monkeypatch) -> None:
+def test_opus_loader_prefers_pinned_bundled_library(monkeypatch) -> None:
     state = {"loaded": False, "attempts": []}
 
     monkeypatch.delenv("DANK_OPUS_LIBRARY", raising=False)
     monkeypatch.setattr(voice_receive.discord.opus, "is_loaded", lambda: state["loaded"])
+    monkeypatch.setattr(
+        voice_receive,
+        "bundled_opus_library_path",
+        lambda: "/venv/site-packages/opuslib_next/_native/libopus.so",
+    )
+    monkeypatch.setattr(voice_receive.ctypes.util, "find_library", lambda _name: "libopus.so.0")
+
+    def fake_load(name: str) -> None:
+        state["attempts"].append(name)
+        if name.endswith("/opuslib_next/_native/libopus.so"):
+            state["loaded"] = True
+
+    monkeypatch.setattr(voice_receive.discord.opus, "load_opus", fake_load)
+
+    ok, library = ensure_opus_loaded()
+
+    assert ok is True
+    assert library.endswith("/opuslib_next/_native/libopus.so")
+    assert state["attempts"] == ["/venv/site-packages/opuslib_next/_native/libopus.so"]
+
+
+def test_opus_loader_uses_system_fallback_when_bundle_missing(monkeypatch) -> None:
+    state = {"loaded": False, "attempts": []}
+
+    monkeypatch.delenv("DANK_OPUS_LIBRARY", raising=False)
+    monkeypatch.setattr(voice_receive.discord.opus, "is_loaded", lambda: state["loaded"])
+    monkeypatch.setattr(voice_receive, "bundled_opus_library_path", lambda: None)
     monkeypatch.setattr(
         voice_receive.ctypes.util,
         "find_library",
@@ -76,9 +108,44 @@ def test_opus_loader_uses_discovered_native_library(monkeypatch) -> None:
     assert state["attempts"] == ["libopus.so.0"]
 
 
+def test_pinned_bundled_opus_constructs_real_discord_decoder_in_fresh_process() -> None:
+    root = Path(__file__).resolve().parents[1]
+    requirements = (root / "requirements.txt").read_text(encoding="utf-8")
+    assert BUNDLED_OPUS_DISTRIBUTION in requirements
+
+    code = r"""
+from pathlib import Path
+import discord
+from stoney_verify.community_voice_receive import bundled_opus_library_path
+
+path = bundled_opus_library_path()
+assert path, "bundled libopus path was not resolved"
+assert Path(path).is_file(), path
+
+discord.opus.load_opus(path)
+assert discord.opus.is_loaded(), path
+decoder = discord.opus.Decoder()
+assert decoder.SAMPLING_RATE == 48000
+assert decoder.CHANNELS == 2
+print(path)
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "opuslib_next" in completed.stdout
+    assert "_native" in completed.stdout
+
+
 def test_opus_loader_fails_closed_when_native_library_is_absent(monkeypatch) -> None:
     monkeypatch.delenv("DANK_OPUS_LIBRARY", raising=False)
     monkeypatch.setattr(voice_receive.discord.opus, "is_loaded", lambda: False)
+    monkeypatch.setattr(voice_receive, "bundled_opus_library_path", lambda: None)
     monkeypatch.setattr(voice_receive.ctypes.util, "find_library", lambda _name: None)
     monkeypatch.setattr(
         voice_receive.discord.opus,
