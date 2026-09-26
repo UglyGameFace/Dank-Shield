@@ -426,6 +426,7 @@ async def build_server_live_captions_embed(
         if bool(general.get("soak_test")):
             health = general.get("health") if isinstance(general.get("health"), dict) else {}
             connection = general.get("receive_connection") if isinstance(general.get("receive_connection"), dict) else {}
+            provider_skipped = int(general.get("provider_skipped") or 0)
             embed.add_field(
                 name="DAVE soak telemetry",
                 value=(
