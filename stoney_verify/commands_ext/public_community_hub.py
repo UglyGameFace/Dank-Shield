@@ -3506,6 +3506,31 @@ class HubLinkShareView(_OwnedView):
             view=HubLinkReadinessView(self.owner_id, interaction.guild, settings),
         )
 
+    @discord.ui.button(label="Cancel HubLink", emoji="🗑️", style=discord.ButtonStyle.danger, custom_id="dank:hub:hublink:revoke:v1", row=1)
+    async def revoke(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        try:
+            count = await hub.revoke_hublink_codes(
+                int(interaction.guild_id or 0),
+                actor_id=int(interaction.user.id),
+            )
+        except hub.CommunityHubError as exc:
+            return await _followup(interaction, f"❌ {_error_text(exc)}")
+        links = await hub.list_partner_links(int(interaction.guild_id or 0), active_only=False)
+        await _edit_private_original(
+            interaction,
+            content=None,
+            embed=_partner_embed(links, int(interaction.guild_id or 0), interaction.client),
+            view=PartnerAdminView(self.owner_id, links),
+        )
+        await _followup(
+            interaction,
+            "✅ HubLink cancelled. The code can no longer be redeemed."
+            if count
+            else "That HubLink was already used, expired, replaced, or cancelled.",
+        )
+
     @discord.ui.button(label="Partner Network", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:hublink:shareback:v1", row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -3786,7 +3811,7 @@ class PendingPartnerSelect(discord.ui.Select):
         embed = discord.Embed(
             title="🌐 Review Partner Request",
             description=(
-                f"Request from **{getattr(other, 'name', None) or f'Server {other_id}'}**.\n\n"
+                f"Request from **{getattr(other, 'name', None) or 'Unavailable partner server'}**.\n\n"
                 "Approving allows public Community Hub session discovery and aggregate activity sharing. "
                 "It never shares raw member presence."
             ),
@@ -3910,7 +3935,7 @@ class ActivePartnerSelect(discord.ui.Select):
         embed = discord.Embed(
             title="🌐 Active Partner",
             description=(
-                f"**{getattr(other, 'name', None) or f'Server {other_id}'}** is connected to this Community Hub.\n\n"
+                f"**{getattr(other, 'name', None) or 'Unavailable partner server'}** is connected to this Community Hub.\n\n"
                 "Revoking stops future cross-server Community Hub discovery. It does not delete either server's own sessions."
             ),
             color=discord.Color.blurple(),
