@@ -8,6 +8,7 @@ import discord
 
 from stoney_verify.community_voice_caption_runtime import (
     live_captions_enabled,
+    live_captions_start_allowed,
     server_caption_scope_id,
 )
 from stoney_verify.commands_ext.public_command_surface_v2 import CompactDankHomeView
@@ -17,6 +18,7 @@ from stoney_verify.commands_ext.public_live_captions import (
     CAPTION_EXCLUDED_VOICE_CHANNELS_KEY,
     CAPTION_VOICE_SCOPE_KEY,
     ServerLiveCaptionsSetupView,
+    _bot_owner_authorized,
     _voice_allowed_by_config,
 )
 from stoney_verify.commands_ext.public_setup_start import DankSetupView
@@ -123,6 +125,32 @@ def test_live_captions_channel_picker_resolves_discord_partial_channel() -> None
     asyncio.run(select.callback(interaction))
 
     assert picked == [real_channel]
+
+
+def test_validation_lock_only_allows_explicit_general_server_soak(monkeypatch) -> None:
+    monkeypatch.delenv("DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED", raising=False)
+
+    assert live_captions_start_allowed(scope_kind="server", soak_test=False) is False
+    assert live_captions_start_allowed(scope_kind="server", soak_test=True) is True
+    assert live_captions_start_allowed(scope_kind="community_hub", soak_test=True) is False
+
+
+def test_soak_bypass_requires_actual_bot_owner_authorization() -> None:
+    class FakeClient:
+        async def is_owner(self, user) -> bool:
+            return int(user.id) == 7
+
+    owner_interaction = SimpleNamespace(
+        client=FakeClient(),
+        user=SimpleNamespace(id=7),
+    )
+    other_interaction = SimpleNamespace(
+        client=FakeClient(),
+        user=SimpleNamespace(id=8),
+    )
+
+    assert asyncio.run(_bot_owner_authorized(owner_interaction)) is True
+    assert asyncio.run(_bot_owner_authorized(other_interaction)) is False
 
 
 def test_general_live_captions_reuse_single_hardened_receiver_owner() -> None:
