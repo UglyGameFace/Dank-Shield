@@ -25,6 +25,7 @@ _HTTP_PATCH_FLAG = "_dank_antinuke_self_action_http_patched"
 _WEBHOOK_PATCH_FLAG = "_dank_antinuke_self_action_webhook_patched"
 _AUTH_TTL_SECONDS = 120.0
 _SIDE_EFFECT_TTL_SECONDS = 15.0
+_PROVENANCE_AMBIGUITY_SECONDS = 30.0
 _REASON_BASE_LIMIT = 380
 _MARKER_RE = re.compile(r"\[DSA:([0-9a-f]{24})\]", re.IGNORECASE)
 _API_PREFIX_RE = re.compile(r"^/api/v\d+")
@@ -56,6 +57,40 @@ _PROTECTED_ACTIONS = frozenset(
         "message_delete", "message_bulk_delete",
     }
 )
+
+# Every protected audit action must be classified. "local" means this process has
+# an instrumented outbound path capable of producing the action. "external-only"
+# means the current product has no legitimate local mutation path for it. Runtime
+# extensions update these sets alongside their route patches.
+_LOCAL_PROVENANCE_ACTIONS: set[str] = set(_PROTECTED_ACTIONS)
+_EXTERNAL_ONLY_PROTECTED_ACTIONS: set[str] = set()
+
+
+def _register_local_provenance_actions(actions: Iterable[str]) -> None:
+    for raw in actions:
+        action = str(raw or "").strip().lower()
+        if not action:
+            continue
+        _LOCAL_PROVENANCE_ACTIONS.add(action)
+        _EXTERNAL_ONLY_PROTECTED_ACTIONS.discard(action)
+
+
+def _register_external_only_protected_actions(actions: Iterable[str]) -> None:
+    for raw in actions:
+        action = str(raw or "").strip().lower()
+        if not action:
+            continue
+        if action not in _LOCAL_PROVENANCE_ACTIONS:
+            _EXTERNAL_ONLY_PROTECTED_ACTIONS.add(action)
+
+
+def _provenance_contract(action_name: str) -> str:
+    action = str(action_name or "").strip().lower()
+    if action in _LOCAL_PROVENANCE_ACTIONS:
+        return "local"
+    if action in _EXTERNAL_ONLY_PROTECTED_ACTIONS:
+        return "external-only"
+    return "unclassified"
 
 
 @dataclass(frozen=True)
@@ -555,6 +590,98 @@ def _entry_target_key(entry: Any, action_name: str) -> str:
     if code:
         return _code_key(code)
     return ""
+
+
+def _recent_authorization(
+    auth: _Authorization,
+    current: float,
+) -> bool:
+    if auth.completed_at is None:
+        return True
+    return current - float(auth.completed_at) <= _PROVENANCE_AMBIGUITY_SECONDS
+
+
+def _recent_side_effect(
+    expected: _ExpectedSideEffect,
+    current: float,
+) -> bool:
+    if expected.completed_at is None:
+        return True
+    return current - float(expected.completed_at) <= _PROVENANCE_AMBIGUITY_SECONDS
+
+
+def _provenance_diagnostics(
+    guild: Any,
+    entry: Any,
+    action_name: str,
+    *,
+    now: Optional[float] = None,
+) -> dict[str, Any]:
+    current = time.monotonic() if now is None else float(now)
+    _prune_pending(current)
+    _prune_expected_side_effects(current)
+
+    gid = _safe_int(getattr(guild, "id", 0), 0)
+    action = str(action_name or "").strip().lower()
+    target_key = _entry_target_key(entry, action)
+    reason = str(getattr(entry, "reason", "") or "")
+    marker_match = _MARKER_RE.search(reason)
+    marker_state = "missing"
+    if marker_match:
+        nonce = str(marker_match.group(1)).lower()
+        auth = _PENDING.get(nonce)
+        if auth is None:
+            marker_state = "unknown"
+        else:
+            marker_state = "known_unmatched"
+
+    recent_action_guild = 0
+    recent_scope = 0
+    for auth in list(_PENDING.values()):
+        if not _recent_authorization(auth, current):
+            continue
+        if action not in auth.actions:
+            continue
+        if auth.guild_id > 0 and auth.guild_id != gid:
+            continue
+        # Some globally addressed Discord routes (for example invite delete)
+        # cannot identify the guild before the request is sent. In that case a
+        # globally unique target is required before the request can count as a
+        # local candidate for this guild.
+        if (
+            auth.guild_id <= 0
+            and auth.target_key
+            and auth.target_key != target_key
+        ):
+            continue
+        recent_action_guild += 1
+        if auth.target_key and auth.target_key != target_key:
+            continue
+        recent_scope += 1
+
+    recent_side_effect_action_guild = 0
+    recent_side_effect_scope = 0
+    for expected in list(_EXPECTED_SIDE_EFFECTS.values()):
+        if not _recent_side_effect(expected, current):
+            continue
+        if expected.action != action or expected.guild_id != gid:
+            continue
+        recent_side_effect_action_guild += 1
+        if expected.target_key and expected.target_key != target_key:
+            continue
+        recent_side_effect_scope += 1
+
+    return {
+        "action": action,
+        "guild_id": gid,
+        "target_key": target_key or "none",
+        "marker_state": marker_state,
+        "contract": _provenance_contract(action),
+        "recent_action_guild_candidates": recent_action_guild,
+        "recent_scope_candidates": recent_scope,
+        "recent_side_effect_action_guild_candidates": recent_side_effect_action_guild,
+        "recent_side_effect_scope_candidates": recent_side_effect_scope,
+    }
 
 
 def _consume(guild: Any, entry: Any, action_name: str) -> bool:
