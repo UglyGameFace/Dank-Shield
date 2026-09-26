@@ -53,6 +53,7 @@ Confirmed current-state gaps:
 11. Caption opt-out stopped new receive frames but did not explicitly purge that speaker's already-buffered, queued, or in-flight caption work. General server exposure makes that privacy edge unacceptable, so revocation must clear the speaker pipeline before returning.
 12. The packet-router thread could pass the consent check immediately before opt-out and schedule its event-loop callback afterward. Without a consent generation token, a rapid opt-out/re-opt-in could make that stale pre-revocation frame look valid again.
 13. The first general-server caption UI used the text channel where staff opened the panel as its destination and had no durable owner setup for existing gaming VCs/categories. That made routing accidental instead of server-configured and gave owners no safe create/select flow for a dedicated caption output.
+14. Live production exposed a discord.py 2.7.x channel-select contract bug in the shared `DankChannelSelect`: Discord returned an `AppCommandChannel` partial for the selected `vc-chat` text channel, while the wrapper accepted only concrete `discord.abc.GuildChannel` instances. The valid selection was therefore rejected with “Pick a server channel first.”
 
 ## Execution path
 
@@ -143,6 +144,7 @@ Implemented in the current voice-caption slice:
 - opting out now blocks future frames, discards that speaker's segment buffer and queued frames, cancels their in-flight transcription tasks, and prevents scheduled pre-revocation frame delivery from publishing afterward;
 - the receive bridge now stamps accepted frames with the speaker's consent generation; a frame scheduled under an older generation is rejected even if the same user opts back in before its callback runs;
 - the default-off real-DAVE soak gate remains in place for both Community Hub and general server use.
+- post-merge live testing found and fixed the caption-output picker rejecting discord.py `AppCommandChannel` partial values; the shared picker now resolves the partial through its resolver or the interaction guild cache before applying the normal GuildChannel contract.
 
 Still deferred after HubLink:
 - session privacy / incomplete `invite_only` behavior;
@@ -189,4 +191,4 @@ After interaction reliability is validated:
 
 ## Next step
 
-Finish PR #337's general server Live Captions setup/command-surface pass, validate its exact head, and merge only when every triggered gate is green and the diff remains confined to Live Captions, its command/setup entry points, contract/docs, tests, and the task record. After merge, verify post-merge CI and Discloud deployment. Live receive still requires a real Discord DAVE soak test covering one speaker, overlapping speakers, reconnect/SSRC changes, epoch/key transitions, packet loss/out-of-order delivery, stop/restart, opt-out while speaking, Community Hub session end, general-session stop, and long-running operation. Keep `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` off until that soak test passes.
+PR #337 is merged and deployed. Validate the focused post-merge channel-picker resolution fix from live Discord testing, then merge only when its exact-head CI/regression checks are green. After merge, verify post-merge CI and Discloud deployment. Live receive still requires a real Discord DAVE soak test covering one speaker, overlapping speakers, reconnect/SSRC changes, epoch/key transitions, packet loss/out-of-order delivery, stop/restart, opt-out while speaking, Community Hub session end, general-session stop, and long-running operation. Keep `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` off until that soak test passes.
