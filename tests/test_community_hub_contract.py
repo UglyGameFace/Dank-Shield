@@ -312,14 +312,16 @@ def test_hublink_replaces_raw_server_id_partner_setup() -> None:
     assert 'custom_id="dank:hub:hublink:create:v1"' in ui
     assert 'custom_id="dank:hub:hublink:redeem:v1"' in ui
     assert 'custom_id="dank:hub:hublink:confirm:v1"' in ui
+    assert 'custom_id="dank:hub:hublink:revoke:v1"' in ui
     assert "HubLink never needs a server ID from the user." in ui
-    assert 'getattr(other, "name", None) or f"Server {other_id}"' not in ui
+    assert "Server {other_id}" not in ui
 
     assert "hashlib.sha256" in service
     assert "secrets.choice(_HUBLINK_ALPHABET)" in service
     assert "async def create_hublink_code" in service
     assert "async def inspect_hublink_code" in service
     assert "async def redeem_hublink_code" in service
+    assert "async def revoke_hublink_codes" in service
     assert "async def expire_hublink_codes" in service
     inspect = service[
         service.index("async def inspect_hublink_code"):
