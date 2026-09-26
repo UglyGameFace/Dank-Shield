@@ -206,6 +206,9 @@ def test_live_caption_privacy_disclosure_and_soak_gate_are_contractual() -> None
     ui = (ROOT / "stoney_verify" / "commands_ext" / "public_community_hub.py").read_text(encoding="utf-8")
 
     assert "DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED" in runtime
+    assert "DANK_COMMUNITY_CAPTION_MAX_ACTIVE_GUILDS" in runtime
+    assert "DANK_COMMUNITY_CAPTION_MAX_SPEAKERS" in runtime
+    assert "DANK_COMMUNITY_CAPTION_MAX_CONCURRENT_TRANSCRIPTIONS" in runtime
     assert "until the DAVE receive soak test is completed" in runtime
     assert "OpenAI's transcription API" in runtime
     assert "OpenAI's transcription API" in ui
@@ -214,3 +217,58 @@ def test_live_caption_privacy_disclosure_and_soak_gate_are_contractual() -> None
     # The privacy notice must succeed before the runtime is registered active.
     assert runtime.index("await destination.send(") < runtime.index("self._sessions[sid] = state")
     assert "captions were not started" in runtime
+
+
+class _ConcurrencyProbeTranscriber:
+    def __init__(self) -> None:
+        self.active = 0
+        self.peak = 0
+        self.release = asyncio.Event()
+        self.started_two = asyncio.Event()
+
+    async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
+        self.active += 1
+        self.peak = max(self.peak, self.active)
+        if self.active >= 2:
+            self.started_two.set()
+        try:
+            await self.release.wait()
+            return TranscriptResult("ok", 0.99, "fake", "fake")
+        finally:
+            self.active -= 1
+
+
+def test_shared_transcription_semaphore_bounds_engines_across_sessions() -> None:
+    async def _run() -> None:
+        transcriber = _ConcurrencyProbeTranscriber()
+        shared = asyncio.Semaphore(1)
+
+        async def publish(user_id: int, text: str, confidence: float) -> None:
+            return None
+
+        first = CaptionEngine(
+            transcriber,
+            publish,
+            global_transcribe_semaphore=shared,
+        )
+        second = CaptionEngine(
+            transcriber,
+            publish,
+            global_transcribe_semaphore=shared,
+        )
+        one = asyncio.create_task(
+            first._process_segment(
+                CaptionSegment(1, _pcm(30_000), 1.0, 2.0)
+            )
+        )
+        two = asyncio.create_task(
+            second._process_segment(
+                CaptionSegment(2, _pcm(30_000), 1.0, 2.0)
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert transcriber.peak == 1
+        transcriber.release.set()
+        await asyncio.gather(one, two)
+
+    asyncio.run(_run())
