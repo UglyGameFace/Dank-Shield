@@ -1,4 +1,5 @@
 discord.py[voice]==2.7.1
+opuslib-next-bundled==0.1.1
 discord-ext-voice-recv @ git+https://github.com/imayhaveborkedit/discord-ext-voice-recv.git@03dd1e2dafe85522cc458441cd5b143b136ac836
 python-dotenv>=1.0.1,<1.1.0
 supabase>=2.24.0,<3.0.0
