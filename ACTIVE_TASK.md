@@ -2,82 +2,105 @@
 
 ## Active task / desired outcome
 
-**P0-ANTINUKE-BULK-DELETE-SELF-PROOF-013 — stop legitimate Dank Shield bulk-message cleanup from being misclassified as bot-token compromise**
+**COMMUNITY-HUB-COMPLETION-RELIABILITY-014 — finish the Dank Shield Community Hub as a reliable, general-use product instead of a one-pass scaffold**
 
-Desired outcome: a `message_bulk_delete` audit event caused by this running Dank Shield process must consume a one-time, guild/channel-scoped self-action receipt even when Discord does not surface a usable audit-log reason. A truly unexplained bulk deletion attributed to the bot must still fail closed.
+Desired outcome: Community Hub interactions must acknowledge reliably, stale private Hub panels must recover without red Discord failures, the user-facing flow must match the intended plain-English experience, and missing promised Hub capabilities must be completed without weakening public-session persistence, permissions, cleanup, rate-limit safety, or privacy boundaries.
 
 ## Scope / single active task lock
 
-Only the AntiNuke self-provenance path for locally issued message deletions is active. This includes the shared reasonless-message fallback only where required to add bulk-delete parity safely. Do not broaden into Invite Shield, Spam Guard policy, channel-cleanup design, verification, tickets, or unrelated AntiNuke redesign.
+Only Community Hub completion and the interaction/runtime behavior required for Community Hub correctness are active.
+
+Included:
+- Community Hub private-menu and public-session interaction lifecycle;
+- stale/restarted Hub recovery;
+- Hub interaction acknowledgement diagnostics and regression coverage;
+- member UX: Find Players, Open to Play, Quick Match, groups/sessions, events, notifications, safety;
+- staff Hub settings/health/session/event/partner management;
+- approved partner activity/discovery behavior;
+- Hub runtime, service, SQL, and cleanup/reconciliation only where required by the Hub.
+
+Do not broaden into Invite Shield, AntiNuke policy redesign, verification, tickets, Dank Design, or unrelated cleanup.
 
 ## Prior task closure
 
-PR #329, **Fix Invite Shield missed app-card and history enforcement**, is merged into `main` as `dec4664b13ed6769937eab6bfc145a01fd54cc1e`.
+PR #330, **Prevent AntiNuke self-ejection on local bulk message cleanup**, merged into `main` as `d55ace775f1ec1f2f401dbeca9c5e72875b9537d`.
 
-Its exact head `16841f44f4ee302824d963b766aa3860cb72cd9b` completed every observed workflow successfully: Dank Shield CI, Dank Design Regression CI, Invite Shield CI, Ticket Owner Emergency Override, Schema Authority SQL, Profile Runtime Diagnostics, and Application Command Size Diagnostics.
+Its exact head `6ee520397771e4c71d0d7c84f8df6f06d5896fe4` completed every observed workflow successfully:
+- Profile Runtime Diagnostics
+- Dank Shield CI
+- Dank Design Regression CI
+- Ticket Owner Emergency Override
+- Application Command Size Diagnostics
 
-## Evidence / root cause
+The AntiNuke task therefore satisfies its repository completion gates and the active-task lock can move to Community Hub.
 
-Production reported another durable self-compromise quarantine at 21:41 on 2026-09-25, this time for `message_bulk_delete`, after the earlier delayed-`channel_update` lifecycle fix in PR #324.
+## Findings / root cause
 
-Current code proves a separate correctness gap:
+PR #326 merged the first broad Community Hub implementation, but the feature was treated as production-ready before live UX/reliability follow-through was complete.
 
-1. Local POST `/channels/{id}/messages/bulk-delete` requests receive the normal DSA marker and pending authorization.
-2. The runtime already creates a second, reason-independent expected-action receipt for local single `message_delete` because Discord audit reasons can be sparse.
-3. Local `message_bulk_delete` has no equivalent fallback. It therefore depends entirely on the audit event carrying a usable DSA marker.
-4. Dank Shield has multiple legitimate bulk-delete callers, including channel cleanup and Spam Guard.
-5. discord.py 2.7.1 models a bulk-delete audit entry with the channel as `entry.target` while `entry.extra` carries only the delete count. The existing target-key fallback reaches `entry.target`, so channel scoping is available.
-6. When the DSA marker is absent/unusable, `_audit_guard()` currently reaches the zero-damage unmatched path and persists quarantine/self-ejects even though a matching local bulk-delete request can be proven independently.
+Confirmed current-state gaps:
 
-The fix must correlate the local request rather than exempting `message_bulk_delete`.
+1. Private Community Hub views use the shared 15-minute in-memory private-menu lifetime. After timeout or a bot restart/redeploy, the old ephemeral message can remain visible while its ViewStore owner is gone.
+2. The shared component runtime can recover definitely unowned private panels, but it applies a generic recovery grace delay before claiming the interaction. For a known Community Hub custom-id namespace that is already proven unowned, that delay only consumes Discord's initial-response window.
+3. Community Hub's durable public session card is correctly persistent (`timeout=None`) and must remain separate from private-menu recovery.
+4. The existing Community Hub contract test proves helper presence and static structure but does not exercise the stale Hub recovery path end-to-end.
+5. Current partner activity is aggregate-only (groups, voice count, Open to Play count, optional online/gaming counts). It does not yet provide the chosen-partner live member experience originally requested.
+6. The merged Hub contains substantial backend/state-machine work, but the user-facing product still needs a completion pass rather than another disconnected feature layer.
 
 ## Execution path
 
-Legitimate bulk cleanup:
+Fresh private Hub click:
 
-`channel.delete_messages(...) -> HTTP POST /channels/{channel}/messages/bulk-delete -> self-action HTTP wrapper -> DSA authorization + reasonless one-time bulk receipt -> Discord audit event -> DSA marker match OR channel-scoped fallback -> consume receipt -> no compromise response`
+`/dank home -> Community Hub -> discord.py ViewStore-owned private view -> callback acknowledges -> Hub action`
 
-Unexplained bulk deletion:
+Stale private Hub click after timeout/restart:
 
-`bot-attributed message_bulk_delete -> no matching DSA authorization and no matching local reasonless receipt -> zero-damage durable quarantine/self-ejection`
+`ephemeral Hub message remains visible -> ViewStore has no owner -> shared component runtime proves owner_state=False -> Community Hub-specific safe refresh claims interaction immediately -> stale action is NOT replayed -> fresh Community Hub replaces stale panel`
+
+Durable public session click:
+
+`public session card -> globally registered CommunitySessionPublicView(timeout=None) -> normal callback -> acknowledge first -> durable session mutation`
+
+Public session controls must never be routed through private stale recovery.
 
 ## Changes
 
-Branch: `fix/antinuke-bulk-delete-self-proof-20260925`
+Branch: `fix/community-hub-completion-reliability-20260925`
 
-Implemented:
-
-- arm a one-time `message_bulk_delete` expected-action receipt whenever this process issues the protected bulk-delete REST request;
-- reuse the existing in-flight/completed lifecycle, so the fallback cannot expire while Discord/rate-limit pacing still owns the request and is cancelled if the request fails;
-- scope the fallback to guild + channel and action;
-- consume/clear the paired fallback when the stronger DSA marker succeeds;
-- do not allow a present-but-invalid DSA marker on direct message deletions to fall through to the reasonless fallback;
-- preserve existing integration-delete side-effect behavior;
-- add regressions for reasonless local bulk delete, marker-success cleanup, channel scoping, and invalid-marker fail-closed behavior.
+In progress:
+- make definitively unowned ephemeral `dank:hub:` controls recover immediately to a fresh Community Hub instead of waiting for generic private-menu grace and falling back to Dank Home;
+- preserve generic grace/recovery for unrelated private control centers;
+- add focused tests proving stale Hub recovery, no stale-action replay, and public Hub session isolation;
+- include Community Hub in the shared private-session lifecycle contract;
+- continue the same task with the remaining Hub product-completion gaps after reliability is validated.
 
 ## Validation / results
 
-Implementation is being prepared. Required before completion:
-
-- compile the changed runtime and tests;
-- run `tests/test_antinuke_self_action_runtime.py`;
-- run zero-damage, gateway, guardian, incident, lockdown, product-policy, and runtime-coordinator AntiNuke regressions;
-- run the full repository test suite through normal CI;
-- inspect the final diff for unrelated changes;
-- require all exact-head PR workflows green before merge.
+Required before completion:
+- compile all changed Python sources/tests;
+- focused interaction-guard/component-lifecycle/Community-Hub tests;
+- Community Hub CI;
+- full Dank Shield CI and relevant regression workflows;
+- exact-head workflow review;
+- final diff cleanup and duplicate-owner inspection;
+- live production acceptance for stale/restarted Hub panel recovery and fresh Hub interactions.
 
 ## Cleanup / conflicts
 
-No protected action is exempted. No second listener, retry layer, alternate AntiNuke owner, or global trust bypass is being added. The fix extends the existing authoritative self-action receipt mechanism to the bulk-delete case that lacked parity with single-message deletion.
+The fix must not add a second Community Hub business handler or replay stale actions. The shared component runtime remains the only stale-private-panel recovery owner. CommunitySessionPublicView remains the only durable public session-button owner.
 
 ## Blockers / risks
 
-The production screenshot proves the unmatched bulk-delete path fired, but no 21:41 production log excerpt is available in this conversation to identify which legitimate caller initiated that exact bulk request. The repair is caller-independent because it binds directly to the authoritative outbound REST request.
+No production log excerpt for the latest intermittent Community Hub failure is available yet, so current code inspection can prove the stale-panel timing gap but cannot claim every fresh-panel failure has the same cause. Existing component-runtime diagnostics must remain intact so any remaining fresh-panel failure produces actionable evidence instead of guesswork.
 
-## Backlog
+## Backlog inside this same active task
 
-Preserve unrelated reported issues without investigation inside this task.
+After interaction reliability is validated:
+- finish the intended partner live-activity experience using explicit per-partner authorization/privacy controls;
+- finish member-facing Hub UX/polish and remove awkward/dead-end flows;
+- verify event/session/notification discoverability from mobile;
+- run a full promised-vs-implemented Community Hub feature audit and close each real gap without creating duplicate ownership.
 
 ## Next step
 
-Publish the focused implementation, open a draft PR, run exact-head CI, repair only same-root failures, then perform final cleanup/conflict review before merge.
+Implement and test the Community Hub-specific stale recovery path on this branch, then continue the same active task through the remaining completion gaps.
