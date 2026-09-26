@@ -14,6 +14,7 @@ QUEUE = ROOT / "stoney_verify" / "operation_queue.py"
 PERMISSIONS = ROOT / "stoney_verify" / "permission_repair_core.py"
 MIGRATION = ROOT / "supabase" / "migrations" / "20260925193000_community_hub.sql"
 MATCHMAKING_MIGRATION = ROOT / "supabase" / "migrations" / "20260926044000_community_hub_matchmaking_loop.sql"
+HUBLINK_MIGRATION = ROOT / "supabase" / "migrations" / "20260926054000_community_hub_hublink.sql"
 
 
 def _text(path: Path) -> str:
@@ -294,6 +295,86 @@ def test_matchmaking_rollout_keeps_existing_hub_paths_schema_order_safe() -> Non
     assert provision_body.index(guard) < provision_body.index(
         "await hub.normalize_session_formation(session_id, guild_id)"
     )
+
+
+def test_hublink_replaces_raw_server_id_partner_setup() -> None:
+    ui = _text(UI)
+    service = _text(SERVICE)
+    runtime = _text(RUNTIME)
+    hublink = _text(HUBLINK_MIGRATION)
+    permissions = _text(PERMISSIONS)
+
+    assert "Partner server ID" not in ui
+    assert "PartnerRequestModal" not in ui
+    assert "class HubLinkRedeemModal" in ui
+    assert "class HubLinkConfirmView" in ui
+    assert "class HubLinkReadinessView" in ui
+    assert 'custom_id="dank:hub:hublink:create:v1"' in ui
+    assert 'custom_id="dank:hub:hublink:redeem:v1"' in ui
+    assert 'custom_id="dank:hub:hublink:confirm:v1"' in ui
+    assert "HubLink never needs a server ID from the user." in ui
+    assert 'getattr(other, "name", None) or f"Server {other_id}"' not in ui
+
+    assert "hashlib.sha256" in service
+    assert "secrets.choice(_HUBLINK_ALPHABET)" in service
+    assert "async def create_hublink_code" in service
+    assert "async def inspect_hublink_code" in service
+    assert "async def redeem_hublink_code" in service
+    assert "async def expire_hublink_codes" in service
+    inspect = service[
+        service.index("async def inspect_hublink_code"):
+        service.index("async def redeem_hublink_code")
+    ]
+    assert '.eq("code_hash", digest)' in inspect
+    assert '"id,source_guild_id,created_by_user_id,code_hint,state,expires_at,"' in inspect
+    assert '"code_hash"' not in inspect.split(".select(", 1)[1].split(")", 1)[0]
+
+    assert "await hub.expire_hublink_codes(limit=1000)" in runtime
+
+    assert "create table if not exists public.dank_community_hub_link_codes" in hublink
+    assert "code_hash text not null" in hublink
+    assert "plaintext" not in hublink.lower()
+    assert "community_hub_create_link_code" in hublink
+    assert "community_hub_redeem_link_code" in hublink
+    assert "community_hub_expire_link_codes" in hublink
+    assert "aggregate_activity_shared=false" in hublink
+    assert "session_discovery_shared=true" in hublink
+    assert "A server cannot HubLink to itself" in hublink
+    assert "grant execute on function public.community_hub_redeem_link_code(text,text,text)" in hublink
+
+    assert "def approved_public_permissions" in permissions
+    assert "perms.administrator = False" in permissions
+    assert "permissions=approved_public_permissions()" in ui
+    assert 'scopes=("bot", "applications.commands")' in ui
+
+
+def test_hublink_redeem_reauthorizes_modal_submit_and_keeps_activity_opt_in() -> None:
+    ui = _text(UI)
+    modal = ui[
+        ui.index("class HubLinkRedeemModal"):
+        ui.index("class HubLinkConfirmView")
+    ]
+    assert "self.owner_id" in modal
+    assert "not _staff_authorized(interaction)" in modal
+    assert "target_guild_id=guild_id" in modal
+
+    confirm = ui[
+        ui.index("class HubLinkConfirmView"):
+        ui.index("class HubLinkReadinessView")
+    ]
+    assert "await hub.inspect_hublink_code" in confirm
+    assert "await hub.redeem_hublink_code" in confirm
+    assert "actor_id=int(interaction.user.id)" in confirm
+    assert "Aggregate/live activity sharing remains off" in confirm
+
+    readiness = ui[
+        ui.index("def _community_hub_readiness"):
+        ui.index("_COMPONENT_BURSTS")
+    ]
+    assert '"configured_channel_missing"' in readiness
+    assert "Reauthorize Dank Shield" in readiness
+    assert "does **not** request Administrator" in readiness
+    assert "Settings / Edit Channel" in readiness
 
 
 def test_match_safety_is_private_and_enforced_atomically_on_join() -> None:
