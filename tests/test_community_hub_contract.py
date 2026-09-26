@@ -270,6 +270,32 @@ def test_quick_match_prefers_existing_groups_then_forms_only_opted_in_matches() 
     assert "Quick Match formed a new" in ui
 
 
+def test_matchmaking_rollout_keeps_existing_hub_paths_schema_order_safe() -> None:
+    service = _text(SERVICE)
+    runtime = _text(RUNTIME)
+
+    available_start = service.index("async def list_available_users")
+    available_end = service.index("async def availability_summary", available_start)
+    available_body = service[available_start:available_end]
+    assert '.select("*")' in available_body
+    assert '.select("user_id,game_name,play_style,mic_preference,note,expires_at,auto_match")' not in available_body
+
+    summary_start = service.index("async def availability_summary")
+    summary_end = service.index("async def set_availability_auto_match", summary_start)
+    summary_body = service[summary_start:summary_end]
+    assert '.select("*")' in summary_body
+    assert '.select("user_id,game_key,game_name,auto_match")' not in summary_body
+
+    provision_start = runtime.index("async def provision_session")
+    provision_end = runtime.index("def _track_notification_task", provision_start)
+    provision_body = runtime[provision_start:provision_end]
+    guard = 'if _safe_str(session.get("idempotency_key")).startswith("quick:"):'
+    assert guard in provision_body
+    assert provision_body.index(guard) < provision_body.index(
+        "await hub.normalize_session_formation(session_id, guild_id)"
+    )
+
+
 def test_match_safety_is_private_and_enforced_atomically_on_join() -> None:
     migration = _text(MIGRATION)
     service = _text(SERVICE)
