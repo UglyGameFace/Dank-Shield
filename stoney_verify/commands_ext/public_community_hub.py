@@ -1251,6 +1251,127 @@ def _find_players_embed(
         embed.set_footer(text=f"{len(sessions)} groups available • use the selector for the full list")
     return embed
 
+def _available_players_embed(game: str, rows: list[dict[str, Any]]) -> discord.Embed:
+    embed = discord.Embed(
+        title=f"🟢 Open to Play • {game}",
+        description=(
+            "These members explicitly marked themselves available for this game. "
+            "Quick Match still prefers an existing open group first, and only auto-pairs members whose Quick Match switch is on."
+        ),
+        color=discord.Color.blurple(),
+    )
+    if not rows:
+        embed.add_field(
+            name="Nobody else is listed right now",
+            value="Availability expires automatically, so this list only reflects active Open to Play entries.",
+            inline=False,
+        )
+        return embed
+
+    for row in rows[:12]:
+        user_id = _safe_int(row.get("user_id"), 0)
+        expires = _safe_str(row.get("expires_at"))
+        try:
+            stamp = int(datetime.fromisoformat(expires.replace("Z", "+00:00")).timestamp())
+            expires_text = f"<t:{stamp}:R>"
+        except Exception:
+            expires_text = "soon"
+        value = (
+            f"{_safe_str(row.get('play_style'), 'any').replace('_', ' ').title()} • "
+            f"Mic: {_safe_str(row.get('mic_preference'), 'optional').replace('_', ' ').title()} • "
+            f"Quick Match: {'On' if bool(row.get('auto_match')) else 'Off'} • expires {expires_text}"
+        )
+        note = _safe_str(row.get("note"))
+        if note:
+            value += f"\n{note}"
+        embed.add_field(
+            name=f"<@{user_id}>" if user_id > 0 else "Available member",
+            value=value[:1024],
+            inline=False,
+        )
+    if len(rows) > 12:
+        embed.set_footer(text=f"{len(rows)} members are Open to Play for {game}; showing the first 12.")
+    return embed
+
+
+class AvailableGameSelect(discord.ui.Select):
+    def __init__(
+        self,
+        owner_id: int,
+        availability_summary: dict[str, Any],
+        *,
+        selected_game: str = "",
+    ) -> None:
+        self.owner_id = int(owner_id)
+        games = list(availability_summary.get("top_games") or [])
+        options = [
+            discord.SelectOption(
+                label=_safe_str(row.get("name"), "Game")[:100],
+                value=_safe_str(row.get("name"), "Game")[:100],
+                description=(
+                    f"{_safe_int(row.get('count'))} available"
+                    + (
+                        f" • {_safe_int(row.get('auto_match_count'))} Quick Match"
+                        if _safe_int(row.get("auto_match_count")) > 0
+                        else ""
+                    )
+                )[:100],
+                emoji="🟢",
+                default=bool(
+                    selected_game
+                    and _safe_str(row.get("name")).casefold() == selected_game.casefold()
+                ),
+            )
+            for row in games[:25]
+            if _safe_str(row.get("name"))
+        ]
+        super().__init__(
+            placeholder="Browse Open to Play by game",
+            min_values=1,
+            max_values=1,
+            options=options or [discord.SelectOption(label="Nobody is Open to Play", value="none")],
+            disabled=not bool(options),
+            custom_id="dank:hub:find:availablegame:v1",
+            row=2,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        game = self.values[0]
+        if game == "none":
+            return
+        await _defer_update(interaction)
+        guild_id = int(interaction.guild_id or 0)
+        try:
+            rows = await hub.list_available_users(guild_id, game, limit=25)
+            sessions = await hub.list_active_sessions(guild_id, limit=25)
+            availability = await hub.availability_summary(guild_id, limit=1000)
+        except hub.CommunityHubError as exc:
+            return await _edit_private_original(
+                interaction,
+                content=f"❌ {_error_text(exc)}",
+                embed=None,
+                view=CommunityHubView(self.owner_id),
+            )
+
+        rows = [
+            row
+            for row in rows
+            if _safe_int(row.get("user_id"), 0) != int(interaction.user.id)
+        ]
+        await _edit_private_original(
+            interaction,
+            content=None,
+            embed=_available_players_embed(game, rows),
+            view=FindPlayersView(
+                self.owner_id,
+                sessions,
+                partner=False,
+                availability_summary=availability,
+                selected_game=game,
+            ),
+        )
+
+
 class SessionSelect(discord.ui.Select):
     def __init__(self, owner_id: int, sessions: list[dict[str, Any]], *, partner: bool) -> None:
         self.owner_id = int(owner_id)
@@ -1329,12 +1450,22 @@ class FindPlayersView(_OwnedView):
         *,
         partner: bool,
         availability_summary: Optional[dict[str, Any]] = None,
+        selected_game: str = "",
     ) -> None:
         super().__init__(owner_id)
         self.sessions = list(sessions)
         self.partner = bool(partner)
         self.availability_summary = dict(availability_summary or {})
+        self.selected_game = _safe_str(selected_game)
         self.add_item(SessionSelect(owner_id, sessions, partner=partner))
+        if not self.partner:
+            self.add_item(
+                AvailableGameSelect(
+                    owner_id,
+                    self.availability_summary,
+                    selected_game=self.selected_game,
+                )
+            )
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank:hub:find:refresh:v1", row=1)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
