@@ -257,6 +257,7 @@ class CaptionEngine:
         queue_size: int = 400,
         low_confidence_threshold: float = 0.72,
         unclear_threshold: float = 0.48,
+        global_transcribe_semaphore: Optional[asyncio.Semaphore] = None,
     ) -> None:
         self.transcriber = transcriber
         self.publish = publish
@@ -270,6 +271,7 @@ class CaptionEngine:
         self._segment_tasks: set[asyncio.Task[None]] = set()
         self._closed = False
         self._transcribe_semaphore = asyncio.Semaphore(3)
+        self._global_transcribe_semaphore = global_transcribe_semaphore
         self.segments_transcribed = 0
         self.segments_unclear = 0
         self.segment_failures = 0
@@ -347,53 +349,62 @@ class CaptionEngine:
                 self._spawn_segment(segment)
 
     async def _process_segment(self, segment: CaptionSegment) -> None:
-        if not segment.pcm:
+        if not segment.pcm or self._closed:
             return
         async with self._transcribe_semaphore:
-            first = await self.transcriber.transcribe(segment)
-            chosen = first
+            if self._global_transcribe_semaphore is None:
+                await self._transcribe_and_publish(segment)
+            else:
+                async with self._global_transcribe_semaphore:
+                    await self._transcribe_and_publish(segment)
 
-            if first.confidence < self.low_confidence_threshold:
-                normalized_pcm = normalize_pcm16_lossless_timing(segment.pcm)
-                if normalized_pcm != segment.pcm:
-                    second = await self.transcriber.transcribe(
-                        CaptionSegment(
-                            user_id=segment.user_id,
-                            pcm=normalized_pcm,
-                            started_at=segment.started_at,
-                            ended_at=segment.ended_at,
-                        )
+    async def _transcribe_and_publish(self, segment: CaptionSegment) -> None:
+        if self._closed:
+            return
+        first = await self.transcriber.transcribe(segment)
+        chosen = first
+
+        if first.confidence < self.low_confidence_threshold:
+            normalized_pcm = normalize_pcm16_lossless_timing(segment.pcm)
+            if normalized_pcm != segment.pcm:
+                second = await self.transcriber.transcribe(
+                    CaptionSegment(
+                        user_id=segment.user_id,
+                        pcm=normalized_pcm,
+                        started_at=segment.started_at,
+                        ended_at=segment.ended_at,
                     )
-                    agreement = SequenceMatcher(
-                        None,
-                        first.text.casefold(),
-                        second.text.casefold(),
-                    ).ratio()
-                    if (
-                        agreement < 0.55
-                        and max(first.confidence, second.confidence) < self.low_confidence_threshold
-                    ):
-                        chosen = TranscriptResult(
-                            text="[unclear audio]",
-                            confidence=max(first.confidence, second.confidence),
-                            provider=first.provider,
-                            model=first.model,
-                        )
-                    elif second.confidence > first.confidence:
-                        chosen = second
+                )
+                agreement = SequenceMatcher(
+                    None,
+                    first.text.casefold(),
+                    second.text.casefold(),
+                ).ratio()
+                if (
+                    agreement < 0.55
+                    and max(first.confidence, second.confidence) < self.low_confidence_threshold
+                ):
+                    chosen = TranscriptResult(
+                        text="[unclear audio]",
+                        confidence=max(first.confidence, second.confidence),
+                        provider=first.provider,
+                        model=first.model,
+                    )
+                elif second.confidence > first.confidence:
+                    chosen = second
 
-            self.segments_transcribed += 1
-            if self._closed or not chosen.text:
-                return
-            if chosen.confidence < self.unclear_threshold:
-                self.segments_unclear += 1
-                await self.publish(segment.user_id, "[unclear audio]", chosen.confidence)
-                return
-            if chosen.text == "[unclear audio]":
-                self.segments_unclear += 1
-            if self._closed:
-                return
-            await self.publish(segment.user_id, chosen.text[:1800], chosen.confidence)
+        self.segments_transcribed += 1
+        if self._closed or not chosen.text:
+            return
+        if chosen.confidence < self.unclear_threshold:
+            self.segments_unclear += 1
+            await self.publish(segment.user_id, "[unclear audio]", chosen.confidence)
+            return
+        if chosen.text == "[unclear audio]":
+            self.segments_unclear += 1
+        if self._closed:
+            return
+        await self.publish(segment.user_id, chosen.text[:1800], chosen.confidence)
 
 
 def openai_transcriber_from_env() -> OpenAITranscriber:
