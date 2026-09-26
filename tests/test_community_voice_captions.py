@@ -142,6 +142,32 @@ def test_low_confidence_disagreement_becomes_unclear_not_invented_text() -> None
     assert published[0][1] == "[unclear audio]"
 
 
+class _NoConfidenceGeminiLikeTranscriber:
+    async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
+        return TranscriptResult("meet at spawn", None, "gemini", "gemini-3.5-transcribe")
+
+
+def test_missing_provider_confidence_is_not_invented_or_treated_as_zero() -> None:
+    published = []
+
+    async def _run() -> None:
+        async def publish(user_id: int, text: str, confidence) -> None:
+            published.append((user_id, text, confidence))
+
+        engine = CaptionEngine(_NoConfidenceGeminiLikeTranscriber(), publish)
+        await engine._process_segment(
+            CaptionSegment(
+                user_id=29,
+                pcm=_pcm(30_000),
+                started_at=1.0,
+                ended_at=2.0,
+            )
+        )
+
+    asyncio.run(_run())
+    assert published == [(29, "meet at spawn", None)]
+
+
 class _ZeroConfidenceTranscriber:
     async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
         return TranscriptResult("possibly wrong words", 0.0, "fake", "fake")
@@ -429,6 +455,9 @@ def test_live_caption_privacy_disclosure_and_soak_gate_are_contractual() -> None
     assert "until the DAVE receive soak test is completed" in runtime
     assert "Google Gemini's transcription API" in runtime
     assert "Google Gemini's transcription API" in ui
+    assert "Gemini's **Free Tier**" in runtime
+    assert "used to improve its products" in runtime
+    assert "used to improve its products" in ui
     assert "OPENAI_API_KEY" not in runtime
     assert "api.openai.com" not in (ROOT / "stoney_verify" / "community_voice_captions.py").read_text(encoding="utf-8")
     assert "Caption My Voice" in ui
