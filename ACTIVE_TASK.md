@@ -65,24 +65,33 @@ Public session controls must never be routed through private stale recovery.
 
 ## Changes
 
-PR #332 merged the stale Community Hub interaction recovery slice.
-PR #333 merged the Open to Play → Find Players → Quick Match formation slice as `5600b50110bc5a27e88a088a50291d2990e1b53d`.
+PR #332 merged stale Community Hub interaction recovery.
+PR #333 merged the Open to Play → Find Players → Quick Match loop as `5600b50110bc5a27e88a088a50291d2990e1b53d`.
 
 Current branch: `feat/community-hub-hublink-20260926`
+Current draft PR: **#334 — Community Hub: link servers with secure HubLink codes**
 
-Current implementation slice: **HubLink server integration without server-ID entry**.
-
-Planned/active changes:
-- replace the staff-facing “Partner server ID” request flow with short-lived one-time HubLink codes;
-- derive the source and target guild IDs only from trusted Discord interactions;
-- store only a cryptographic hash of the human-readable code;
-- make redemption atomic and idempotent in PostgreSQL;
-- treat code creation as source-server consent and redemption/confirmation as target-server consent;
-- activate public partner-session discovery on successful HubLink redemption while keeping aggregate activity sharing off by default;
-- generate a normal Discord bot-install URL using the repository’s approved non-Administrator permission set when Dank Shield is not yet installed in the target server;
-- add a Community Hub readiness report that identifies missing guild/channel permissions and gives exact repair steps plus a pinned reauthorization link when possible;
-- keep the existing legacy pending-link records readable/manageable but stop asking new users for raw server IDs;
-- expire/revoke HubLink codes safely and add CI coverage for replay, expiry, self-link prevention, permission boundaries, and migration idempotency.
+Implemented in this slice:
+- removed the staff-facing raw **Partner server ID** modal from the new Partner Network path;
+- added short-lived human HubLink codes formatted as `DANK-XXXX-XXXX`, using an ambiguity-resistant alphabet;
+- plaintext codes exist only in the source admin's in-memory response; PostgreSQL stores only SHA-256 `code_hash` plus a short non-secret hint;
+- one pending code per source server, 15-minute expiry, explicit Cancel HubLink, replacement revocation, bounded expiry cleanup, and a 10/hour source creation limit;
+- source and target guild IDs come only from trusted Discord interaction context;
+- target modal submit re-authorizes owner/admin/manage-guild authority before any lookup or mutation;
+- target admin reviews the source server by name and must explicitly confirm **Connect Servers**;
+- redemption is atomic/idempotent with advisory + row locks, rejects self-linking, rejects wrong-server replay, and safely replays only for the same target;
+- successful HubLink connection activates the canonical partner pair with public session discovery on and aggregate/live activity sharing off by default;
+- existing active link sharing choices are preserved on safe replay/reconnection;
+- all user-facing partner fallbacks hide raw guild IDs;
+- source creator receives a best-effort confirmation DM after successful redemption;
+- **Add Dank Shield** uses a Community Hub-only non-Administrator OAuth permission set rather than the bot's broader moderation permission bundle;
+- Community Hub install permissions cover View Channels, Send Messages, Send Messages in Threads, Embed Links, Read Message History, Manage Threads, Manage Channels, and View Audit Log; they explicitly exclude Administrator, Kick, Ban, Moderate Members, Manage Messages, and Manage Roles;
+- guild-pinned **Reauthorize Dank Shield** opens the current server directly when server-level Hub permissions are missing;
+- readiness checks cover server-level Hub permissions, effective configured Hub-channel permissions, deleted/missing Hub channel, configured/fallback temporary voice category, and category-level Manage Channels;
+- readiness instructions include mobile navigation plus **Open Access Repair** and **Check Again**;
+- runtime retention expires stale pending HubLinks without affecting ordinary Community Hub paths during schema rollout;
+- legacy partner link review/revoke remains available for pre-HubLink records;
+- Community Hub CI applies the base, matchmaking, and HubLink migrations twice and exercises create/replacement/redeem/replay/wrong-target/self-link/expiry/privacy/privilege invariants.
 
 Still deferred after HubLink:
 - session privacy / incomplete `invite_only` behavior;
@@ -91,20 +100,25 @@ Still deferred after HubLink:
 
 ## Validation / results
 
-PR #333 completed its exact-head Community Hub, full Dank Shield, schema, profile, design, ticket-owner, and command-size gates before merge.
+Evidence obtained during PR #334 development:
+- HubLink migration already passed Community Hub PostgreSQL smoke on an earlier implementation head, including two-pass migration replay and all one-time-code invariants;
+- Schema Authority SQL passed on an earlier HubLink head;
+- Python compilation passed before the first focused-test run;
+- the first focused-test failure identified two removed privacy-copy guarantees, and the implementation restored the guarantees rather than weakening tests;
+- no raw `Partner server ID` modal or `Server {other_id}` fallback remains in the user-facing Community Hub partner code;
+- install/reauthorization has been narrowed to Community Hub-only non-Administrator permissions;
+- readiness was traced against the actual thread/voice provisioning path and now checks contextual channel/category permissions.
 
-HubLink validation requirements for this branch:
-- follow-up migration applies twice on a fresh PostgreSQL database;
-- plaintext HubLink codes never persist in the database;
-- expired/redeemed/revoked codes cannot be reused;
-- source and target guild IDs come from interaction context, never user-entered ID fields;
-- self-linking and unauthorized redemption are rejected;
-- partner link creation is atomic under concurrent redemption;
-- public session discovery is enabled only after successful mutual HubLink consent;
-- aggregate activity sharing remains disabled by default;
-- existing partner-link reads/revocation remain compatible;
-- install/repair URLs request the approved non-Administrator permission set;
-- focused Community Hub + interaction tests and full Dank Shield CI pass on the exact PR head.
+Required before merge on the final exact head:
+- Community Hub Python + interaction contract green;
+- Community Hub PostgreSQL smoke green;
+- Schema Authority SQL green;
+- full Dank Shield CI green;
+- Profile Runtime Diagnostics green;
+- Dank Design Regression CI green;
+- Ticket Owner Emergency Override green;
+- Application Command Size Diagnostics green;
+- final diff/mergeability review against current `main`.
 
 ## Cleanup / conflicts
 
@@ -124,4 +138,4 @@ After interaction reliability is validated:
 
 ## Next step
 
-Implement the HubLink persistence/RPC layer first, then wire the Discord staff UI and readiness/repair flow. Validate the exact head in Community Hub CI and full Dank Shield CI before merge. Do not start the event/privacy/live-activity slices until HubLink is complete.
+Finish exact-head validation for PR #334. If every required workflow is green and the final diff remains confined to Community Hub/permission ownership/CI/task-record scope, mark #334 ready and merge with the head SHA pinned. Only then advance this Community Hub task to the next incomplete product slice.
