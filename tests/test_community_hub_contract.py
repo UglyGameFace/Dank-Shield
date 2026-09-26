@@ -13,6 +13,7 @@ GLOBALS = ROOT / "stoney_verify" / "globals.py"
 QUEUE = ROOT / "stoney_verify" / "operation_queue.py"
 PERMISSIONS = ROOT / "stoney_verify" / "permission_repair_core.py"
 MIGRATION = ROOT / "supabase" / "migrations" / "20260925193000_community_hub.sql"
+MATCHMAKING_MIGRATION = ROOT / "supabase" / "migrations" / "20260926044000_community_hub_matchmaking_loop.sql"
 
 
 def _text(path: Path) -> str:
@@ -214,6 +215,7 @@ def test_migration_enforces_core_session_and_partner_invariants() -> None:
 
 def test_open_to_play_is_expiring_opt_in_not_presence_surveillance() -> None:
     migration = _text(MIGRATION)
+    matchmaking = _text(MATCHMAKING_MIGRATION)
     service = _text(SERVICE)
     ui = _text(UI)
     assert "class OpenToPlayModal" in ui
@@ -221,9 +223,77 @@ def test_open_to_play_is_expiring_opt_in_not_presence_surveillance() -> None:
     assert "def _availability_embed" in ui
     assert "create table if not exists public.dank_community_availability" in migration
     assert "expires_at timestamptz not null" in migration
+    assert "add column if not exists auto_match boolean not null default false" in matchmaking
     assert "async def set_availability" in service
+    assert "async def set_availability_auto_match" in service
     assert "async def delete_expired_availability" in service
-    assert "Open to Play" in ui
+    assert "Enable Quick Match" in ui
+    assert "separate explicit opt-in" in ui
+
+
+def test_quick_match_prefers_existing_groups_then_forms_only_opted_in_matches() -> None:
+    matchmaking = _text(MATCHMAKING_MIGRATION)
+    service = _text(SERVICE)
+    runtime = _text(RUNTIME)
+    ui = _text(UI)
+
+    assert "p_idempotency_key text" in matchmaking
+    assert "idempotency_key=p_idempotency_key" in matchmaking
+    assert matchmaking.index("idempotency_key=p_idempotency_key") < matchmaking.index("Existing public groups remain the preferred path")
+    assert "and a.auto_match=true" in matchmaking
+    assert "and s.id <> v_session_id" in matchmaking
+    assert "quick match candidate became unavailable" in matchmaking
+    assert "match safety exclusion prevents this match" in matchmaking
+    assert "for update of a skip locked" in matchmaking
+    assert "session.quick_match_formed" in matchmaking
+    assert "community_hub_normalize_formation" in matchmaking
+    assert "grant execute on function public.community_hub_quick_match(text,text,text,text) to service_role" in matchmaking
+
+    assert "idempotency_key: str" in service
+    assert '"p_idempotency_key": key' in service
+    assert "async def normalize_session_formation" in service
+    assert "session = await hub.normalize_session_formation(session_id, guild_id)" in runtime
+    assert "self._runtime_started_at = datetime.now(timezone.utc)" in runtime
+    assert 'state != "creating"' in runtime
+    assert "created_at >= self._runtime_started_at" in runtime
+    assert "Interrupted before Community Hub publication during a previous bot process" in runtime
+    assert 'bot.add_listener(runtime.on_member_remove, "on_member_remove")' in runtime
+
+    assert "availability_summary=availability" in ui
+    assert "class AvailableGameSelect" in ui
+    assert "def _available_players_embed" in ui
+    assert "await hub.list_available_users(guild_id, game, limit=25)" in ui
+    assert 'custom_id="dank:hub:find:availablegame:v1"' in ui
+    assert 'custom_id="dank:hub:find:quick:v1"' in ui
+    assert 'custom_id="dank:hub:find:available:v1"' in ui
+    assert "created_match" in ui
+    assert "Quick Match formed a new" in ui
+
+
+def test_matchmaking_rollout_keeps_existing_hub_paths_schema_order_safe() -> None:
+    service = _text(SERVICE)
+    runtime = _text(RUNTIME)
+
+    available_start = service.index("async def list_available_users")
+    available_end = service.index("async def availability_summary", available_start)
+    available_body = service[available_start:available_end]
+    assert '.select("*")' in available_body
+    assert '.select("user_id,game_name,play_style,mic_preference,note,expires_at,auto_match")' not in available_body
+
+    summary_start = service.index("async def availability_summary")
+    summary_end = service.index("async def set_availability_auto_match", summary_start)
+    summary_body = service[summary_start:summary_end]
+    assert '.select("*")' in summary_body
+    assert '.select("user_id,game_key,game_name,auto_match")' not in summary_body
+
+    provision_start = runtime.index("async def provision_session")
+    provision_end = runtime.index("def _track_notification_task", provision_start)
+    provision_body = runtime[provision_start:provision_end]
+    guard = 'if _safe_str(session.get("idempotency_key")).startswith("quick:"):'
+    assert guard in provision_body
+    assert provision_body.index(guard) < provision_body.index(
+        "await hub.normalize_session_formation(session_id, guild_id)"
+    )
 
 
 def test_match_safety_is_private_and_enforced_atomically_on_join() -> None:

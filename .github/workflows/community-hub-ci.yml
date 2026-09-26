@@ -12,6 +12,7 @@ on:
       - 'stoney_verify/operation_queue.py'
       - 'stoney_verify/permission_repair_core.py'
       - 'supabase/migrations/20260925193000_community_hub.sql'
+      - 'supabase/migrations/20260926044000_community_hub_matchmaking_loop.sql'
       - 'tests/test_community_hub_contract.py'
       - 'tests/test_interaction_guard.py'
       - 'tests/test_component_lifecycle_runtime_policy.py'
@@ -26,6 +27,7 @@ on:
       - 'stoney_verify/commands_ext/public_community_hub.py'
       - 'stoney_verify/interaction_guard.py'
       - 'supabase/migrations/20260925193000_community_hub.sql'
+      - 'supabase/migrations/20260926044000_community_hub_matchmaking_loop.sql'
       - 'tests/test_community_hub_contract.py'
       - 'tests/test_interaction_guard.py'
       - 'tests/test_component_lifecycle_runtime_policy.py'
@@ -115,12 +117,13 @@ jobs:
           $$;
           SQL
 
-      - name: Apply Community Hub migration twice
+      - name: Apply Community Hub migrations twice
         run: |
           set -euo pipefail
           for pass in 1 2; do
             echo "Community Hub migration pass ${pass}"
             psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260925193000_community_hub.sql
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260926044000_community_hub_matchmaking_loop.sql
           done
 
       - name: Verify security and lifecycle invariants
@@ -271,6 +274,161 @@ jobs:
           $$;
           SQL
 
+      - name: Verify Quick Match opt-in formation
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $matchmaking$
+          declare
+              result jsonb;
+              sid uuid;
+              replay jsonb;
+              normalized jsonb;
+          begin
+              -- Existing rows default to discoverable-only. They must not be
+              -- silently eligible for automatic matching after this migration.
+              insert into public.dank_community_availability(
+                  guild_id,user_id,game_key,game_name,play_style,mic_preference,note,expires_at
+              ) values (
+                  'match-guild','candidate-1','minecraft','Minecraft','casual','optional','ready to play',now()+interval '2 hours'
+              );
+
+              if (select auto_match from public.dank_community_availability
+                  where guild_id='match-guild' and user_id='candidate-1' and game_key='minecraft') then
+                  raise exception 'legacy availability unexpectedly defaulted to auto-match on';
+              end if;
+
+              result := public.community_hub_quick_match(
+                  'match-guild','requester-1','Minecraft','quick-1'
+              );
+              if result is not null then
+                  raise exception 'Quick Match used an availability row without explicit auto-match consent';
+              end if;
+
+              update public.dank_community_availability
+                 set auto_match=true
+               where guild_id='match-guild' and user_id='candidate-1' and game_key='minecraft';
+
+              result := public.community_hub_quick_match(
+                  'match-guild','requester-1','Minecraft','quick-1'
+              );
+              if coalesce((result->>'created_match')::boolean,false) is not true then
+                  raise exception 'Quick Match did not form a new opted-in match';
+              end if;
+              if result->>'match_user_id' <> 'candidate-1' then
+                  raise exception 'Quick Match selected the wrong availability candidate';
+              end if;
+
+              sid := (result->'session'->>'id')::uuid;
+              if sid is null then
+                  raise exception 'formed Quick Match did not return a session id';
+              end if;
+              if not exists (
+                  select 1 from public.dank_community_session_members
+                  where session_id=sid and user_id='candidate-1' and left_at is null and role='member'
+              ) then
+                  raise exception 'formed Quick Match did not add the opted-in member';
+              end if;
+              if (select auto_match from public.dank_community_availability
+                  where guild_id='match-guild' and user_id='candidate-1' and game_key='minecraft') then
+                  raise exception 'formed Quick Match did not claim auto-match eligibility';
+              end if;
+
+              replay := public.community_hub_quick_match(
+                  'match-guild','requester-1','Minecraft','quick-1'
+              );
+              if (replay->'session'->>'id')::uuid <> sid or coalesce((replay->>'replayed')::boolean,false) is not true then
+                  raise exception 'Quick Match idempotency did not recover the existing formed session';
+              end if;
+
+              perform public.community_hub_transition_session(
+                  sid,'match-guild','requester-1','publish',false,null
+              );
+              normalized := public.community_hub_normalize_formation(sid,'match-guild');
+              if normalized->>'state' <> 'forming' then
+                  raise exception 'pre-formed Quick Match session did not normalize to forming';
+              end if;
+
+              -- Existing open groups still win over availability-based formation.
+              perform public.community_hub_create_session(
+                  'existing-guild','host-existing','existing-1','Minecraft','existing',
+                  4,'optional','casual','public'
+              );
+              select id into sid
+              from public.dank_community_sessions
+              where guild_id='existing-guild' and idempotency_key='existing-1';
+              perform public.community_hub_transition_session(
+                  sid,'existing-guild','host-existing','publish',false,null
+              );
+              insert into public.dank_community_availability(
+                  guild_id,user_id,game_key,game_name,play_style,mic_preference,note,expires_at,auto_match
+              ) values (
+                  'existing-guild','candidate-existing','minecraft','Minecraft','casual','optional','',now()+interval '2 hours',true
+              );
+              result := public.community_hub_quick_match(
+                  'existing-guild','requester-existing','Minecraft','quick-existing'
+              );
+              if coalesce((result->>'created_match')::boolean,false) is true then
+                  raise exception 'Quick Match formed a new group instead of using an existing public group';
+              end if;
+              if (result->'session'->>'id')::uuid <> sid then
+                  raise exception 'Quick Match did not join the expected existing group';
+              end if;
+              if not (select auto_match from public.dank_community_availability
+                  where guild_id='existing-guild' and user_id='candidate-existing' and game_key='minecraft') then
+                  raise exception 'existing-group Quick Match consumed unrelated availability';
+              end if;
+
+              -- Match Safety excludes otherwise eligible automatic candidates.
+              insert into public.dank_community_availability(
+                  guild_id,user_id,game_key,game_name,play_style,mic_preference,note,expires_at,auto_match
+              ) values (
+                  'blocked-guild','candidate-blocked','minecraft','Minecraft','casual','optional','',now()+interval '2 hours',true
+              );
+              perform public.community_hub_set_match_block(
+                  'blocked-guild','requester-blocked','candidate-blocked',true
+              );
+              result := public.community_hub_quick_match(
+                  'blocked-guild','requester-blocked','Minecraft','quick-blocked'
+              );
+              if result is not null then
+                  raise exception 'Quick Match ignored Match Safety exclusion';
+              end if;
+
+              -- An availability row must not auto-pair into a second active
+              -- group for the same game, even when the guild allows multiple
+              -- active sessions per member.
+              perform public.community_hub_create_session(
+                  'busy-guild','busy-host','busy-session','Minecraft','already playing',
+                  2,'optional','casual','public'
+              );
+              select id into sid
+              from public.dank_community_sessions
+              where guild_id='busy-guild' and idempotency_key='busy-session';
+              perform public.community_hub_transition_session(
+                  sid,'busy-guild','busy-host','publish',false,null
+              );
+              perform public.community_hub_join_session(
+                  sid,'busy-guild','candidate-busy'
+              );
+              insert into public.dank_community_availability(
+                  guild_id,user_id,game_key,game_name,play_style,mic_preference,note,expires_at,auto_match
+              ) values (
+                  'busy-guild','candidate-busy','minecraft','Minecraft','casual','optional','',now()+interval '2 hours',true
+              );
+              result := public.community_hub_quick_match(
+                  'busy-guild','requester-busy','Minecraft','quick-busy'
+              );
+              if result is not null then
+                  raise exception 'Quick Match duplicated a member into a second active same-game group';
+              end if;
+              if not (select auto_match from public.dank_community_availability
+                  where guild_id='busy-guild' and user_id='candidate-busy' and game_key='minecraft') then
+                  raise exception 'ineligible same-game availability was unexpectedly claimed';
+              end if;
+          end;
+          $matchmaking$;
+          SQL
+
       - name: Verify no public function execution leaks
         run: |
           psql -v ON_ERROR_STOP=1 <<'SQL'
@@ -296,6 +454,20 @@ jobs:
                   'EXECUTE'
               ) then
                   raise exception 'service_role missing Community Hub create-session EXECUTE';
+              end if;
+              if has_function_privilege(
+                  'anon',
+                  'public.community_hub_quick_match(text,text,text,text)',
+                  'EXECUTE'
+              ) then
+                  raise exception 'anon unexpectedly has Community Hub Quick Match EXECUTE';
+              end if;
+              if not has_function_privilege(
+                  'service_role',
+                  'public.community_hub_quick_match(text,text,text,text)',
+                  'EXECUTE'
+              ) then
+                  raise exception 'service_role missing Community Hub Quick Match EXECUTE';
               end if;
           end;
           $$;
