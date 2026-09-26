@@ -163,6 +163,16 @@ def _staff_authorized(interaction: discord.Interaction) -> bool:
     )
 
 
+async def _bot_owner_authorized(interaction: discord.Interaction) -> bool:
+    checker = getattr(interaction.client, "is_owner", None)
+    if not callable(checker):
+        return False
+    try:
+        return bool(await checker(interaction.user))
+    except Exception:
+        return False
+
+
 def _current_voice_channel(interaction: discord.Interaction) -> Optional[discord.VoiceChannel]:
     channel = getattr(getattr(interaction.user, "voice", None), "channel", None)
     return channel if isinstance(channel, discord.VoiceChannel) else None
@@ -236,12 +246,23 @@ async def build_server_live_captions_embed(
     general = manager.status(general_sid)
     guild_status = manager.status_for_guild(int(guild.id))
     current_voice = _current_voice_channel(interaction)
+    soak_active = bool(general.get("active") and general.get("soak_test"))
+    bot_owner = await _bot_owner_authorized(interaction) if not enabled else False
 
-    if not enabled:
+    if soak_active:
+        headline = (
+            "🟣 **DAVE soak test running.** This is the bot-owner-only validation path; "
+            "the global Live Captions feature remains locked for other servers."
+        )
+    elif not enabled:
         headline = (
             "🟡 **Installed, validation locked.** The live DAVE receive path is deployed, "
-            "but transcription remains disabled until the real Discord soak test is completed. "
-            "No voice audio is captured while this lock is active."
+            "but normal transcription remains disabled until the real Discord soak test is completed. "
+            + (
+                "As the Dank Shield bot owner, you can press **Start / Stop Captions** to run the controlled soak test in this server."
+                if bot_owner
+                else "No voice audio is captured while this lock is active."
+            )
         )
     elif not capability.available:
         headline = f"🔴 **Host not ready.** {capability.reason}."
@@ -281,11 +302,24 @@ async def build_server_live_captions_embed(
             value=(
                 f"Voice: <#{voice_id}>\n"
                 f"Captions: <#{destination_id}>\n"
+                f"Mode: **{'DAVE soak test' if general.get('soak_test') else 'normal'}**\n"
                 f"Opted-in speakers: **{len(opted)}**\n"
                 f"Your voice: **{'opted in' if user_opted else 'not opted in'}**"
             ),
             inline=False,
         )
+        if bool(general.get("soak_test")):
+            health = general.get("health") if isinstance(general.get("health"), dict) else {}
+            embed.add_field(
+                name="DAVE soak telemetry",
+                value=(
+                    f"Frames seen: **{int(health.get('frames_seen') or 0)}** • routed: **{int(health.get('frames_routed') or 0)}**\n"
+                    f"Not consented: **{int(health.get('frames_not_consented') or 0)}** • unknown source: **{int(health.get('frames_unknown_source') or 0)}**\n"
+                    f"Identity mismatch: **{int(health.get('frames_source_mismatch') or 0)}** • malformed PCM: **{int(health.get('frames_malformed_pcm') or 0)}**\n"
+                    f"Transcribed: **{int(general.get('segments_transcribed') or 0)}** • unclear: **{int(general.get('segments_unclear') or 0)}** • failures: **{int(general.get('segment_failures') or 0)}**"
+                ),
+                inline=False,
+            )
     elif bool(guild_status.get("active")):
         voice_id = int(guild_status.get("voice_channel_id") or 0)
         scope_kind = str(guild_status.get("scope_kind") or "")
@@ -395,6 +429,15 @@ class ServerLiveCaptionsView(_OwnedView):
                 "✅ General Live Captions stopped. All speaker consent and buffered caption audio were cleared.",
             )
 
+        soak_test = False
+        if not live_captions_enabled():
+            if not await _bot_owner_authorized(interaction):
+                return await _followup(
+                    interaction,
+                    "❌ Live Captions are still globally validation-locked. Only the Dank Shield bot owner can run the controlled DAVE soak test before public enablement.",
+                )
+            soak_test = True
+
         other = manager.status_for_guild(int(guild.id))
         if bool(other.get("active")):
             return await _followup(
@@ -433,6 +476,7 @@ class ServerLiveCaptionsView(_OwnedView):
                 guild_id=int(guild.id),
                 voice_channel_id=int(voice.id),
                 destination_channel_id=int(destination.id),
+                soak_test=soak_test,
             )
         except VoiceReceiveUnavailable as exc:
             return await _followup(interaction, f"❌ {exc}")
@@ -442,10 +486,16 @@ class ServerLiveCaptionsView(_OwnedView):
             embed=await build_server_live_captions_embed(interaction),
             view=ServerLiveCaptionsView(self.owner_id),
         )
-        await _followup(
-            interaction,
-            "✅ General Live Captions started. Nobody is transcribed automatically. Each speaker must open **/captions** (or **/dank home → Live Captions**) and press **Caption My Voice**.",
-        )
+        if soak_test:
+            await _followup(
+                interaction,
+                "🧪 DAVE soak test started for this server only. The global feature is still locked. Opt your own voice in, speak normally, then use **Refresh** to inspect live receive/transcription telemetry.",
+            )
+        else:
+            await _followup(
+                interaction,
+                "✅ General Live Captions started. Nobody is transcribed automatically. Each speaker must open **/captions** (or **/dank home → Live Captions**) and press **Caption My Voice**.",
+            )
 
     @discord.ui.button(
         label="Caption My Voice",

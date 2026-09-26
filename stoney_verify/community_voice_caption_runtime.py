@@ -39,6 +39,7 @@ class CaptionRuntimeState:
     bridge: PerSpeakerFrameBridge
     engine: CaptionEngine
     scope_kind: str = "community_hub"
+    soak_test: bool = False
 
 
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -66,6 +67,12 @@ def live_captions_enabled() -> bool:
         "yes",
         "on",
     }
+
+
+def live_captions_start_allowed(*, scope_kind: str, soak_test: bool = False) -> bool:
+    if live_captions_enabled():
+        return True
+    return bool(str(scope_kind or "").strip().lower() == "server" and soak_test)
 
 
 class CommunityVoiceCaptionManager:
@@ -101,6 +108,7 @@ class CommunityVoiceCaptionManager:
             "capability": capability,
             "session_id": state.session_id,
             "scope_kind": state.scope_kind,
+            "soak_test": bool(state.soak_test),
             "guild_id": state.guild_id,
             "voice_channel_id": state.voice_channel_id,
             "destination_channel_id": state.destination_channel_id,
@@ -133,6 +141,7 @@ class CommunityVoiceCaptionManager:
         guild_id: int,
         voice_channel_id: int,
         destination_channel_id: int,
+        soak_test: bool = False,
     ) -> CaptionRuntimeState:
         gid = int(guild_id)
         return await self.start(
@@ -142,6 +151,7 @@ class CommunityVoiceCaptionManager:
                 "voice_channel_id": int(voice_channel_id),
                 "panel_channel_id": int(destination_channel_id),
                 "caption_scope": "server",
+                "soak_test": bool(soak_test),
             }
         )
 
@@ -159,12 +169,19 @@ class CommunityVoiceCaptionManager:
             if str(session.get("caption_scope") or "").strip().lower() == "server"
             else "community_hub"
         )
+        requested_soak = bool(session.get("soak_test"))
+        soak_test = bool(
+            not live_captions_enabled()
+            and live_captions_start_allowed(scope_kind=scope_kind, soak_test=requested_soak)
+        )
         scope_label = (
-            "Dank Shield Live Captions"
+            "Dank Shield Live Captions DAVE Soak Test"
+            if soak_test
+            else "Dank Shield Live Captions"
             if scope_kind == "server"
             else "Community Hub Live Captions"
         )
-        if not live_captions_enabled():
+        if not live_captions_start_allowed(scope_kind=scope_kind, soak_test=requested_soak):
             raise VoiceReceiveUnavailable(
                 "Live Captions are disabled on this host until the DAVE receive soak test is completed."
             )
@@ -289,6 +306,7 @@ class CommunityVoiceCaptionManager:
                 bridge=bridge,
                 engine=engine,
                 scope_kind=scope_kind,
+                soak_test=soak_test,
             )
             self._sessions[sid] = state
             self._guild_owner[guild_id] = sid
@@ -341,7 +359,9 @@ class CommunityVoiceCaptionManager:
         if announce and destination is not None and hasattr(destination, "send"):
             try:
                 scope_label = (
-                    "Dank Shield Live Captions"
+                    "Dank Shield Live Captions DAVE Soak Test"
+                    if state.soak_test
+                    else "Dank Shield Live Captions"
                     if state.scope_kind == "server"
                     else "Community Hub Live Captions"
                 )
@@ -388,5 +408,6 @@ __all__ = [
     "SERVER_CAPTION_SCOPE_PREFIX",
     "ensure_community_voice_caption_manager",
     "live_captions_enabled",
+    "live_captions_start_allowed",
     "server_caption_scope_id",
 ]
