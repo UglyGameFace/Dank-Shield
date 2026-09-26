@@ -12,11 +12,14 @@ No audio is written to disk by this module.
 
 import asyncio
 import ctypes.util
+import importlib.util
 import logging
 import os
+import platform
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 import discord
@@ -43,6 +46,7 @@ PCM_FRAME_ALIGNMENT = PCM_CHANNELS * PCM_SAMPLE_WIDTH
 # pinned in requirements.txt so branch movement cannot silently change runtime.
 VOICE_RECV_DAVE_COMMIT = "03dd1e2dafe85522cc458441cd5b143b136ac836"
 VOICE_RECV_DAVE_SOURCE = "imayhaveborkedit/discord-ext-voice-recv#58"
+BUNDLED_OPUS_DISTRIBUTION = "opuslib-next-bundled==0.1.1"
 
 
 class VoiceReceiveUnavailable(RuntimeError):
@@ -103,32 +107,72 @@ class VoiceReceiveHealth:
         }
 
 
+def bundled_opus_library_path() -> Optional[str]:
+    """Return the shared libopus shipped by opuslib-next-bundled without importing it."""
+
+    spec = importlib.util.find_spec("opuslib_next")
+    origin = getattr(spec, "origin", None) if spec is not None else None
+    if not origin:
+        return None
+
+    system = platform.system()
+    filename = {
+        "Linux": "libopus.so",
+        "Darwin": "libopus.dylib",
+        "Windows": "opus.dll",
+    }.get(system)
+    if not filename:
+        return None
+
+    candidate = Path(str(origin)).resolve().parent / "_native" / filename
+    return str(candidate) if candidate.is_file() else None
+
+
 def ensure_opus_loaded() -> tuple[bool, str]:
+    """Load the native Opus library required by discord.py PCM decoding.
+
+    Production prefers the pinned bundled wheel so voice decoding does not depend
+    on the hosting image's package set. DANK_OPUS_LIBRARY remains an explicit
+    operator override; system discovery is only a final compatibility fallback.
+    """
+
     if discord.opus.is_loaded():
         return True, "already-loaded"
 
     candidates: list[str] = []
+
     configured = str(os.getenv("DANK_OPUS_LIBRARY", "") or "").strip()
     if configured:
         candidates.append(configured)
 
+    bundled = bundled_opus_library_path()
+    if bundled and bundled not in candidates:
+        candidates.append(bundled)
+
     discovered = ctypes.util.find_library("opus")
-    if discovered:
+    if discovered and str(discovered) not in candidates:
         candidates.append(str(discovered))
 
     for candidate in ("libopus.so.0", "libopus.so.1", "libopus.so", "opus"):
         if candidate not in candidates:
             candidates.append(candidate)
 
+    failures: list[str] = []
     for candidate in candidates:
         try:
             discord.opus.load_opus(candidate)
-        except Exception:
+        except Exception as exc:
+            failures.append(f"{candidate}:{type(exc).__name__}")
             continue
         if discord.opus.is_loaded():
             log.info("Live Captions Opus runtime loaded library=%s", candidate)
             return True, candidate
 
+    if failures:
+        log.warning(
+            "Live Captions could not load native Opus candidates=%s",
+            ", ".join(failures[:6]),
+        )
     return False, "not-found"
 
 
@@ -539,6 +583,7 @@ def disconnect_receive_client(voice_client: Any) -> None:
 
 
 __all__ = [
+    "BUNDLED_OPUS_DISTRIBUTION",
     "HardenedPerSpeakerSink",
     "PCM_CHANNELS",
     "PCM_SAMPLE_RATE",
@@ -550,6 +595,7 @@ __all__ = [
     "VoiceReceiveCapability",
     "VoiceReceiveHealth",
     "VoiceReceiveUnavailable",
+    "bundled_opus_library_path",
     "connect_receive_client",
     "disconnect_receive_client",
     "ensure_opus_loaded",
