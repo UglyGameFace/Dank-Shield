@@ -13,6 +13,7 @@ Audio exists only in bounded in-memory buffers and WAV request bodies.
 import asyncio
 import io
 import json
+import logging
 import math
 import os
 import struct
@@ -30,6 +31,37 @@ from .community_voice_receive import (
     PCM_SAMPLE_WIDTH,
     SpeakerPCMFrame,
 )
+
+
+log = logging.getLogger(__name__)
+
+
+class CaptionTranscriptionError(RuntimeError):
+    def __init__(self, status_code: int, safe_message: str) -> None:
+        super().__init__(safe_message)
+        self.status_code = int(status_code)
+        self.safe_message = str(safe_message)
+
+
+def _transcription_error_message(status_code: int) -> str:
+    status = int(status_code)
+    if status == 400:
+        return "OpenAI rejected the transcription request (HTTP 400). Check the configured caption model/request."
+    if status == 401:
+        return "OpenAI rejected OPENAI_API_KEY (HTTP 401). Replace the host API key."
+    if status == 403:
+        return "The OpenAI API project is not permitted to use transcription (HTTP 403)."
+    if status == 429:
+        return "OpenAI transcription has no available quota or is rate-limited (HTTP 429). Check API billing/credits and project limits."
+    if 500 <= status <= 599:
+        return f"OpenAI transcription is temporarily unavailable (HTTP {status})."
+    return f"OpenAI transcription request failed (HTTP {status})."
+
+
+def _safe_segment_failure(exc: Exception) -> str:
+    if isinstance(exc, CaptionTranscriptionError):
+        return exc.safe_message
+    return f"Caption processing failed ({type(exc).__name__}). Check host logs for details."
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,8 +268,9 @@ class OpenAITranscriber:
             ) as response:
                 body = await response.text()
                 if response.status >= 400:
-                    raise RuntimeError(
-                        f"caption transcription failed HTTP {response.status}: {body[:240]}"
+                    raise CaptionTranscriptionError(
+                        int(response.status),
+                        _transcription_error_message(int(response.status)),
                     )
                 try:
                     payload = json.loads(body)
@@ -283,6 +316,7 @@ class CaptionEngine:
         self.segments_unclear = 0
         self.segment_failures = 0
         self.queue_overflow = 0
+        self.last_failure = ""
 
     def submit(self, frame: SpeakerPCMFrame) -> None:
         if self._closed or int(frame.user_id) in self._blocked_user_ids:
@@ -382,8 +416,14 @@ class CaptionEngine:
             await self._process_segment(segment)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             self.segment_failures += 1
+            self.last_failure = _safe_segment_failure(exc)[:300]
+            log.exception(
+                "Live Captions segment failure user=%s failure=%s",
+                int(segment.user_id),
+                self.last_failure,
+            )
 
     async def _run(self) -> None:
         while not self._closed:
@@ -476,6 +516,7 @@ def openai_transcriber_from_env() -> OpenAITranscriber:
 __all__ = [
     "CaptionEngine",
     "CaptionSegment",
+    "CaptionTranscriptionError",
     "OpenAITranscriber",
     "SpeechPreservingSegmenter",
     "TranscriptResult",
