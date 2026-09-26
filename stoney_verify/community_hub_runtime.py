@@ -1521,6 +1521,10 @@ class CommunityHubRuntime:
         if now - marker < 6 * 60 * 60:
             return
         self._last_retention_monotonic = now
+        try:
+            await hub.expire_hublink_codes(limit=1000)
+        except hub.CommunityHubError:
+            pass
         for guild in list(getattr(self.bot, "guilds", []) or []):
             try:
                 settings = await self.settings_for(int(guild.id))
