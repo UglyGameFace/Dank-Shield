@@ -267,7 +267,7 @@ def _soak_pipeline_diagnosis(status: dict[str, Any]) -> str:
             "1 second so the current speech segment can close and be sent for transcription."
         )
     if published <= 0 and empty > 0:
-        return "🟠 **OpenAI answered, but the transcription was empty.** Try a longer, clearly spoken sentence."
+        return "🟠 **Gemini answered, but the transcription was empty.** Try a longer, clearly spoken sentence."
     if published > 0:
         return "🟢 **DAVE receive → consent → transcription → Discord publishing is working.**"
     return "🟡 **Audio reached transcription, but no caption has published yet.** Press **Refresh** again after a short pause."
@@ -427,6 +427,7 @@ async def build_server_live_captions_embed(
             health = general.get("health") if isinstance(general.get("health"), dict) else {}
             connection = general.get("receive_connection") if isinstance(general.get("receive_connection"), dict) else {}
             provider_skipped = int(general.get("provider_skipped") or 0)
+            provider_fallbacks = int(general.get("provider_fallbacks") or 0)
             embed.add_field(
                 name="DAVE soak telemetry",
                 value=(
@@ -435,7 +436,7 @@ async def build_server_live_captions_embed(
                     f"Reader: **{'listening' if connection.get('reader_listening') else 'stopped'}** • mapped SSRCs: **{int(connection.get('mapped_ssrcs') or 0)}** • reader failures: **{int(health.get('reader_failures') or 0)}**\n"
                     f"Corrupt Opus dropped: **{int(health.get('opus_decode_drops') or 0)}** • not consented: **{int(health.get('frames_not_consented') or 0)}** • unknown source: **{int(health.get('frames_unknown_source') or 0)}** • identity mismatch: **{int(health.get('frames_source_mismatch') or 0)}**\n"
                     f"Malformed PCM: **{int(health.get('frames_malformed_pcm') or 0)}** • transcribed: **{int(general.get('segments_transcribed') or 0)}** • published: **{int(general.get('segments_published') or 0)}** • empty: **{int(general.get('segments_empty') or 0)}**\n"
-                    f"Unclear: **{int(general.get('segments_unclear') or 0)}** • failures: **{int(general.get('segment_failures') or 0)}** • provider-skipped: **{provider_skipped}**"
+                    f"Unclear: **{int(general.get('segments_unclear') or 0)}** • failures: **{int(general.get('segment_failures') or 0)}** • Gemini fallback: **{provider_fallbacks}** • provider-skipped: **{provider_skipped}**"
                 ),
                 inline=False,
             )
@@ -510,7 +511,7 @@ async def build_server_live_captions_embed(
         value=(
             "Discord speakers stay isolated before transcription. Overlapping users are not mixed together. "
             "Opting out immediately blocks new audio and purges that speaker's buffered/queued/in-flight caption audio. "
-            "Opted-in audio is sent to OpenAI's transcription API for speech-to-text; Dank Shield itself does not save it. "
+            "Opted-in audio is sent to Google Gemini's transcription API for speech-to-text; Dank Shield itself does not save it. "
             "If a microphone already captures a TV, game audio, or another person in the same room, that sound is already part "
             "of that Discord user's source stream."
         ),
@@ -682,7 +683,7 @@ class ServerLiveCaptionsView(_OwnedView):
         if enabled:
             return await _followup(
                 interaction,
-                "✅ Your voice is opted in. Speak for 2–5 seconds, then pause for about 1 second so a segment can close. Press **Refresh** to see exactly which pipeline stage is working. Your Discord speaker stream stays separate from other users before it is sent to OpenAI's transcription API. Dank Shield itself does not save the audio.",
+                "✅ Your voice is opted in. Speak for 2–5 seconds, then pause for about 1 second so a segment can close. Press **Refresh** to see exactly which pipeline stage is working. Your Discord speaker stream stays separate from other users before it is sent to Google Gemini's transcription API. Dank Shield itself does not save the audio.",
             )
         await _followup(
             interaction,
