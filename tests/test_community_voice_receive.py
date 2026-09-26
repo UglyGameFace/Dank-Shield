@@ -13,6 +13,20 @@ class _ImmediateLoop:
         callback()
 
 
+class _QueuedLoop:
+    def __init__(self) -> None:
+        self.callbacks = []
+
+    def call_soon_threadsafe(self, callback):
+        self.callbacks.append(callback)
+
+    def run_all(self) -> None:
+        callbacks = list(self.callbacks)
+        self.callbacks.clear()
+        for callback in callbacks:
+            callback()
+
+
 def test_voice_dependencies_are_pinned_for_dave_receive() -> None:
     capability = voice_receive_capability()
     assert capability.discord_py_version == "2.7.1"
@@ -102,3 +116,45 @@ def test_malformed_pcm_is_dropped_before_transcription() -> None:
     ) is False
     assert delivered == []
     assert bridge.health.frames_malformed_pcm == 1
+
+
+def test_stale_scheduled_frame_cannot_survive_opt_out_and_reopt_in() -> None:
+    delivered = []
+    loop = _QueuedLoop()
+    bridge = PerSpeakerFrameBridge(loop, delivered.append)
+    bridge.opt_in(10)
+
+    assert bridge.accept(
+        source_user_id=10,
+        mapped_user_id=10,
+        ssrc=100,
+        sequence=1,
+        rtp_timestamp=960,
+        pcm=b"\x01" * (PCM_FRAME_ALIGNMENT * 10),
+    ) is True
+    assert delivered == []
+
+    # Revoke and later re-grant consent before the already-scheduled callback
+    # runs. The old frame belongs to the old consent generation and must die.
+    bridge.opt_out(10)
+    bridge.opt_in(10)
+    loop.run_all()
+
+    assert delivered == []
+    assert bridge.health.frames_routed == 0
+    assert bridge.health.frames_not_consented == 1
+
+    # A new frame created under the new generation is allowed.
+    assert bridge.accept(
+        source_user_id=10,
+        mapped_user_id=10,
+        ssrc=100,
+        sequence=2,
+        rtp_timestamp=1920,
+        pcm=b"\x02" * (PCM_FRAME_ALIGNMENT * 10),
+    ) is True
+    loop.run_all()
+
+    assert len(delivered) == 1
+    assert delivered[0].sequence == 2
+    assert bridge.health.frames_routed == 1
