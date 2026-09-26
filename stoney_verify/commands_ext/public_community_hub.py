@@ -664,11 +664,21 @@ def _live_captions_overview_embed(
                 _safe_int(value, 0) for value in (state.get("opted_in_user_ids") or [])
             }
             voice_ready = _safe_int(session.get("voice_channel_id"), 0) > 0
+            language_mode = (
+                "Auto 85+"
+                if not state.get("language_codes")
+                else ", ".join(str(value) for value in (state.get("language_codes") or []))
+            )
+            output_mode = {
+                "english": "English",
+                "bilingual": "Original + English",
+            }.get(str(state.get("output_mode") or "original"), "Original")
             lines.append(
                 f"• **{_safe_str(session.get('game_name'), 'Gaming Session')}** — {role} • "
                 f"{'Captions running' if running else 'Captions off'} • "
                 f"{'Your voice opted in' if opted_in else 'Your voice not opted in'} • "
                 f"{'Voice room ready' if voice_ready else 'No session voice room'}"
+                + (f" • {language_mode} → {output_mode}" if running else "")
             )
         embed.add_field(name="Your groups", value="\n".join(lines)[:1024], inline=False)
 
@@ -678,15 +688,16 @@ def _live_captions_overview_embed(
             "1. Join or create a Community Hub gaming session.\n"
             "2. Host/co-host/staff opens **Manage Session → Live Captions**.\n"
             "3. Each speaker who wants transcription presses **Caption My Voice** on the session card/details.\n"
-            "4. Captions appear in the session discussion destination."
+            "4. Captions appear in the session discussion destination. Gemini Live auto-detects its 85+ supported languages and code-switching; the server's shared caption setting controls Original, English, or Original + English text."
         ),
         inline=False,
     )
     embed.add_field(
         name="Privacy",
         value=(
-            "Only opted-in speakers are routed to transcription. Opted-in audio is sent to Google Gemini's transcription API "
-            "while captions are running. This deployment uses Gemini's Free Tier, where Google states submitted content may be used to improve its products. "
+            "Only opted-in speakers are routed to transcription. Opted-in audio is streamed to Google Gemini Live Transcribe. "
+            "Gemini auto-detects supported languages; if English output is enabled, only finalized transcript text is sent for translation, not the audio again. "
+            "This deployment uses Gemini's Free Tier, where Google states submitted content may be used to improve its products. "
             "Dank Shield itself does not save the audio, and stopping captions clears speaker consent."
         ),
         inline=False,
@@ -727,8 +738,9 @@ async def _toggle_live_caption_consent(
     if enabled:
         return (
             "✅ Your voice is opted into this session's Live Captions. Dank Shield keeps your Discord audio separate "
-            "from other speakers and sends your opted-in audio to **Google Gemini's transcription API** for speech-to-text "
-            "while captions are running. This deployment uses Gemini's **Free Tier**, where Google states submitted content may be used to improve its products. "
+            "from other speakers and streams your opted-in audio to **Google Gemini Live Transcribe** for speech-to-text. "
+            "Gemini automatically detects its supported languages and code-switching. If this server enables English output, only finalized transcript text is translated; "
+            "the audio is not submitted a second time for translation. This deployment uses Gemini's **Free Tier**, where Google states submitted content may be used to improve its products. "
             "Dank Shield itself does not save the audio."
         )
     return "Live Captions are off for your voice. Your speaker consent was cleared immediately."
