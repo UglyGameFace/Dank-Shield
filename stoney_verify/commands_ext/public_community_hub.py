@@ -92,7 +92,7 @@ def _community_hub_required_permissions(settings: dict[str, Any]) -> tuple[str, 
     if bool(settings.get("auto_create_thread", True)):
         names.extend(("send_messages_in_threads", "manage_threads"))
     if bool(settings.get("auto_create_voice", True)):
-        names.extend(("manage_channels", "move_members"))
+        names.append("manage_channels")
     return tuple(dict.fromkeys(names))
 
 
@@ -106,6 +106,8 @@ def _community_hub_readiness(
             "guild_missing": ["Dank Shield is not installed in this server."],
             "channel_missing": [],
             "channel": None,
+            "category_missing": [],
+            "category": None,
             "reauthorize_url": "",
         }
 
@@ -116,6 +118,8 @@ def _community_hub_readiness(
             "guild_missing": ["Dank Shield could not resolve its server member."],
             "channel_missing": [],
             "channel": None,
+            "category_missing": [],
+            "category": None,
             "reauthorize_url": "",
         }
 
@@ -138,26 +142,56 @@ def _community_hub_readiness(
         else:
             try:
                 effective = channel.permissions_for(me)
-                channel_required = (
+                channel_required = [
                     "view_channel",
                     "send_messages",
                     "embed_links",
                     "read_message_history",
-                )
+                ]
+                if bool(settings.get("auto_create_thread", True)):
+                    channel_required.extend(("send_messages_in_threads", "manage_threads"))
                 channel_missing = [
                     name
-                    for name in channel_required
+                    for name in dict.fromkeys(channel_required)
                     if not bool(getattr(effective, "administrator", False))
                     and not bool(getattr(effective, name, False))
                 ]
             except Exception:
                 channel_missing = ["channel_permission_check"]
 
+    category = None
+    category_missing: list[str] = []
+    if bool(settings.get("auto_create_voice", True)):
+        category_id = _safe_int(settings.get("parent_category_id"), 0)
+        if category_id > 0:
+            candidate = guild.get_channel(category_id)
+            if isinstance(candidate, discord.CategoryChannel):
+                category = candidate
+            else:
+                category_missing = ["configured_category_missing"]
+        elif channel is not None:
+            candidate = getattr(channel, "category", None)
+            if isinstance(candidate, discord.CategoryChannel):
+                category = candidate
+
+        if category is not None:
+            try:
+                effective = category.permissions_for(me)
+                if (
+                    not bool(getattr(effective, "administrator", False))
+                    and not bool(getattr(effective, "manage_channels", False))
+                ):
+                    category_missing = ["manage_channels"]
+            except Exception:
+                category_missing = ["category_permission_check"]
+
     return {
-        "healthy": not missing and not channel_missing,
+        "healthy": not missing and not channel_missing and not category_missing,
         "guild_missing": missing,
         "channel_missing": channel_missing,
         "channel": channel,
+        "category_missing": category_missing,
+        "category": category,
         "reauthorize_url": reauthorize_url(guild) if missing else "",
     }
 
@@ -218,6 +252,29 @@ def _hublink_readiness_embed(
                     f"In {label}, Dank Shield is blocked from: **{_permission_names(channel_missing)}**.\n"
                     "On mobile: open the channel → tap its name → **Settings / Edit Channel** → **Permissions** → "
                     "**Dank Shield** → allow the listed items. If a category controls the channel, fix the category and sync the channel."
+                )[:1024],
+                inline=False,
+            )
+
+    category_missing = list(report.get("category_missing") or [])
+    category = report.get("category")
+    if category_missing:
+        if "configured_category_missing" in category_missing:
+            embed.add_field(
+                name="3. Temporary voice category",
+                value=(
+                    "The saved parent category for temporary Community Hub voice rooms no longer exists. "
+                    "Open **Community Hub → Staff Dashboard → Settings** and choose a valid parent category, or clear it to use the Hub channel's category."
+                ),
+                inline=False,
+            )
+        else:
+            label = getattr(category, "name", None) or "the Community Hub voice category"
+            embed.add_field(
+                name="3. Temporary voice category",
+                value=(
+                    f"In **{label}**, Dank Shield needs **Manage Channels** to create temporary game voice rooms. "
+                    "On mobile: open the category settings → **Permissions** → **Dank Shield** → allow **Manage Channels**, then run **Check Again**."
                 )[:1024],
                 inline=False,
             )
