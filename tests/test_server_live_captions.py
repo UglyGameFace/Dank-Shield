@@ -228,7 +228,7 @@ def test_soak_pipeline_diagnosis_separates_receive_from_provider_failures() -> N
     provider_failure = {
         "health": {"frames_seen": 20, "frames_routed": 20},
         "segment_failures": 1,
-        "last_failure": "OpenAI transcription has no available quota or is rate-limited (HTTP 429).",
+        "last_failure": "Gemini free-tier quota or rate limit was reached (HTTP 429 RESOURCE_EXHAUSTED).",
     }
     rendered = _soak_pipeline_diagnosis(provider_failure)
     assert "Transcription/processing failure" in rendered
@@ -236,13 +236,13 @@ def test_soak_pipeline_diagnosis_separates_receive_from_provider_failures() -> N
 
     provider_blocked = {
         "health": {"frames_seen": 20, "frames_routed": 20},
-        "provider_blocked_reason": "OpenAI API credits are exhausted (HTTP 429: credit_balance_exhausted).",
-        "provider_blocked_code": "credit_balance_exhausted",
+        "provider_blocked_reason": "Gemini free-tier quota or rate limit was reached (HTTP 429 RESOURCE_EXHAUSTED).",
+        "provider_blocked_code": "RESOURCE_EXHAUSTED",
         "segment_failures": 1,
     }
     blocked_text = _soak_pipeline_diagnosis(provider_blocked)
     assert "Transcription provider is blocked" in blocked_text
-    assert "credit_balance_exhausted" in blocked_text
+    assert "RESOURCE_EXHAUSTED" in blocked_text
 
     historical_consent = {
         "health": {"frames_seen": 65, "frames_routed": 0, "frames_not_consented": 65},
@@ -307,7 +307,7 @@ def test_general_live_captions_keep_privacy_and_physical_source_limits_visible()
 
     assert "Discord speakers stay isolated before transcription." in ui
     assert "Opting out immediately blocks new audio" in ui
-    assert "OpenAI's transcription API" in ui
+    assert "Google Gemini's transcription API" in ui
     assert "Dank Shield itself does not save it." in ui
     assert "microphone already captures a TV, game audio, or another person" in ui
 
