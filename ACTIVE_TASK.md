@@ -54,6 +54,7 @@ Confirmed current-state gaps:
 12. The packet-router thread could pass the consent check immediately before opt-out and schedule its event-loop callback afterward. Without a consent generation token, a rapid opt-out/re-opt-in could make that stale pre-revocation frame look valid again.
 13. The first general-server caption UI used the text channel where staff opened the panel as its destination and had no durable owner setup for existing gaming VCs/categories. That made routing accidental instead of server-configured and gave owners no safe create/select flow for a dedicated caption output.
 14. Live production exposed a discord.py 2.7.x channel-select contract bug in the shared `DankChannelSelect`: Discord returned an `AppCommandChannel` partial for the selected `vc-chat` text channel, while the wrapper accepted only concrete `discord.abc.GuildChannel` instances. The valid selection was therefore rejected with “Pick a server channel first.”
+15. After that picker fix deployed, the configured output saved correctly but the global DAVE validation gate made the required real Discord soak test impossible to start. A safe validation path must not require globally enabling an unproven receive stack.
 
 ## Execution path
 
@@ -145,6 +146,9 @@ Implemented in the current voice-caption slice:
 - the receive bridge now stamps accepted frames with the speaker's consent generation; a frame scheduled under an older generation is rejected even if the same user opts back in before its callback runs;
 - the default-off real-DAVE soak gate remains in place for both Community Hub and general server use.
 - post-merge live testing found and fixed the caption-output picker rejecting discord.py `AppCommandChannel` partial values; the shared picker now resolves the partial through its resolver or the interaction guild cache before applying the normal GuildChannel contract.
+- the global `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` lock remains off, but the recognized Dank Shield bot owner can now use the ordinary-server Start/Stop control to launch a controlled DAVE soak session in one server; Community Hub and non-owner callers cannot bypass the validation gate;
+- soak sessions use the same configured output, VC/category eligibility, one-receiver-per-guild lock, consent boundary, OpenAI provider, stop/cleanup path, and privacy notice as normal captions rather than a separate test implementation;
+- the Live Captions panel exposes soak telemetry while that controlled session is active: frames seen/routed/not-consented/unknown/mismatched/malformed plus transcription/unclear/failure counters.
 
 Still deferred after HubLink:
 - session privacy / incomplete `invite_only` behavior;
@@ -191,4 +195,4 @@ After interaction reliability is validated:
 
 ## Next step
 
-PR #337 is merged and deployed. Validate the focused post-merge channel-picker resolution fix from live Discord testing, then merge only when its exact-head CI/regression checks are green. After merge, verify post-merge CI and Discloud deployment. Live receive still requires a real Discord DAVE soak test covering one speaker, overlapping speakers, reconnect/SSRC changes, epoch/key transitions, packet loss/out-of-order delivery, stop/restart, opt-out while speaking, Community Hub session end, general-session stop, and long-running operation. Keep `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` off until that soak test passes.
+PR #338 is merged and live testing confirms the output-channel picker now saves correctly. Validate and merge the bot-owner-only DAVE soak path, then run the real Discord soak test from `/captions` before changing the global feature gate. The soak must cover one speaker, overlapping speakers, reconnect/SSRC changes, epoch/key transitions, packet loss/out-of-order delivery, stop/restart, opt-out while speaking, general-session stop, and sustained operation; Community Hub lifecycle validation remains required before calling the full product production-proven. Keep `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` off until the receive soak passes.
