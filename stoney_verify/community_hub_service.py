@@ -1351,7 +1351,7 @@ async def list_available_users(
         sb = _require_supabase()
         return _rows(
             sb.table("dank_community_availability")
-            .select("user_id,game_name,play_style,mic_preference,note,expires_at,auto_match")
+            .select("*")
             .eq("guild_id", gid)
             .eq("game_key", key)
             .gt("expires_at", now)
@@ -1376,7 +1376,7 @@ async def availability_summary(
         sb = _require_supabase()
         return _rows(
             sb.table("dank_community_availability")
-            .select("user_id,game_key,game_name,auto_match")
+            .select("*")
             .eq("guild_id", gid)
             .gt("expires_at", now)
             .limit(safe_limit)
