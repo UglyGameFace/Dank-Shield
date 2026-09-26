@@ -178,6 +178,56 @@ def _current_voice_channel(interaction: discord.Interaction) -> Optional[discord
     return channel if isinstance(channel, discord.VoiceChannel) else None
 
 
+def _soak_pipeline_diagnosis(status: dict[str, Any]) -> str:
+    health = status.get("health") if isinstance(status.get("health"), dict) else {}
+    frames_seen = int(health.get("frames_seen") or 0)
+    frames_routed = int(health.get("frames_routed") or 0)
+    not_consented = int(health.get("frames_not_consented") or 0)
+    unknown = int(health.get("frames_unknown_source") or 0)
+    mismatch = int(health.get("frames_source_mismatch") or 0)
+    malformed = int(health.get("frames_malformed_pcm") or 0)
+    transcribed = int(status.get("segments_transcribed") or 0)
+    published = int(status.get("segments_published") or 0)
+    empty = int(status.get("segments_empty") or 0)
+    failures = int(status.get("segment_failures") or 0)
+    last_failure = str(status.get("last_failure") or "").strip()
+
+    if failures > 0:
+        return (
+            "🔴 **Transcription/processing failure.** "
+            + (last_failure or "Check the Dank Shield host logs for the latest caption error.")
+        )
+    if frames_seen <= 0:
+        return (
+            "🔴 **No decoded voice frames reached Dank Shield.** This points to the Discord/DAVE receive layer, "
+            "not OpenAI. Speak for 2–5 seconds, pause for about 1 second, then press **Refresh**."
+        )
+    if frames_routed <= 0:
+        if unknown > 0 or mismatch > 0:
+            return (
+                "🔴 **Voice frames arrived but speaker identity could not be trusted.** "
+                f"Unknown: **{unknown}** • mismatch: **{mismatch}**. Audio is being dropped instead of mixed."
+            )
+        if not_consented > 0:
+            return (
+                "🟠 **Voice frames are arriving but consent is blocking them.** "
+                "Press **Caption My Voice**, confirm the panel says your voice is opted in, then speak again."
+            )
+        if malformed > 0:
+            return "🔴 **Voice frames arrived with invalid PCM and were dropped.**"
+        return "🟠 **Voice frames are arriving but none have reached the caption queue yet.**"
+    if transcribed <= 0:
+        return (
+            "🟡 **DAVE receive and speaker routing are working.** Speak for 2–5 seconds, then pause for about "
+            "1 second so the current speech segment can close and be sent for transcription."
+        )
+    if published <= 0 and empty > 0:
+        return "🟠 **OpenAI answered, but the transcription was empty.** Try a longer, clearly spoken sentence."
+    if published > 0:
+        return "🟢 **DAVE receive → consent → transcription → Discord publishing is working.**"
+    return "🟡 **Audio reached transcription, but no caption has published yet.** Press **Refresh** again after a short pause."
+
+
 async def _defer_update(interaction: discord.Interaction) -> None:
     if await safe_defer_interaction(
         interaction,
@@ -313,11 +363,17 @@ async def build_server_live_captions_embed(
             embed.add_field(
                 name="DAVE soak telemetry",
                 value=(
-                    f"Frames seen: **{int(health.get('frames_seen') or 0)}** • routed: **{int(health.get('frames_routed') or 0)}**\n"
+                    f"Frames seen: **{int(health.get('frames_seen') or 0)}** • routed: **{int(health.get('frames_routed') or 0)}** • queue: **{int(general.get('queue_depth') or 0)}**\n"
                     f"Not consented: **{int(health.get('frames_not_consented') or 0)}** • unknown source: **{int(health.get('frames_unknown_source') or 0)}**\n"
                     f"Identity mismatch: **{int(health.get('frames_source_mismatch') or 0)}** • malformed PCM: **{int(health.get('frames_malformed_pcm') or 0)}**\n"
-                    f"Transcribed: **{int(general.get('segments_transcribed') or 0)}** • unclear: **{int(general.get('segments_unclear') or 0)}** • failures: **{int(general.get('segment_failures') or 0)}**"
+                    f"Transcribed: **{int(general.get('segments_transcribed') or 0)}** • published: **{int(general.get('segments_published') or 0)}** • empty: **{int(general.get('segments_empty') or 0)}**\n"
+                    f"Unclear: **{int(general.get('segments_unclear') or 0)}** • failures: **{int(general.get('segment_failures') or 0)}**"
                 ),
+                inline=False,
+            )
+            embed.add_field(
+                name="Pipeline diagnosis",
+                value=_soak_pipeline_diagnosis(general),
                 inline=False,
             )
     elif bool(guild_status.get("active")):
@@ -551,7 +607,7 @@ class ServerLiveCaptionsView(_OwnedView):
         if enabled:
             return await _followup(
                 interaction,
-                "✅ Your voice is opted in. Your Discord speaker stream stays separate from other users before it is sent to OpenAI's transcription API. Dank Shield itself does not save the audio.",
+                "✅ Your voice is opted in. Speak for 2–5 seconds, then pause for about 1 second so a segment can close. Press **Refresh** to see exactly which pipeline stage is working. Your Discord speaker stream stays separate from other users before it is sent to OpenAI's transcription API. Dank Shield itself does not save the audio.",
             )
         await _followup(
             interaction,
