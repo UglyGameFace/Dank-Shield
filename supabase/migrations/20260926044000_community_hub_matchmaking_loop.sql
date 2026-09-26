@@ -25,6 +25,7 @@ declare
     v_settings public.dank_community_hub_settings%rowtype;
     v_candidate public.dank_community_availability%rowtype;
     v_candidate_active integer;
+    v_existing_match_user_id text;
     v_session jsonb;
     v_capacity integer;
 begin
@@ -36,6 +37,37 @@ begin
     end if;
     if btrim(coalesce(p_idempotency_key,'')) = '' then
         raise exception 'quick match idempotency key is required';
+    end if;
+
+    -- Recover a previously created Quick Match session before evaluating any
+    -- current availability or quota state. This makes a lost Discord response
+    -- safe to replay with the same interaction-derived key.
+    select s.id, to_jsonb(s)
+      into v_session_id, v_session
+    from public.dank_community_sessions s
+    where s.guild_id=p_guild_id
+      and s.idempotency_key=p_idempotency_key;
+
+    if v_session_id is not null then
+        if coalesce(v_session->>'host_id','') <> p_user_id then
+            raise exception 'idempotency key belongs to another session owner';
+        end if;
+        select m.user_id
+          into v_existing_match_user_id
+        from public.dank_community_session_members m
+        where m.session_id=v_session_id
+          and m.user_id <> p_user_id
+          and m.left_at is null
+          and m.role <> 'waitlist'
+        order by m.joined_at
+        limit 1;
+        return jsonb_build_object(
+            'session',v_session,
+            'role','host',
+            'created_match',true,
+            'match_user_id',v_existing_match_user_id,
+            'replayed',true
+        );
     end if;
 
     -- Existing public groups remain the preferred path.
