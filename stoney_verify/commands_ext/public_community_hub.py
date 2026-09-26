@@ -19,6 +19,7 @@ from ..community_hub_runtime import ensure_community_hub_runtime
 from ..interaction_guard import safe_defer_interaction
 from ..operation_queue import run_exclusive
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS, private_menu_lifecycle_text
+from ..permission_repair_core import approved_public_permissions, reauthorize_url
 from .public_owner_authority import (
     interaction_has_administrator_authority,
     interaction_has_manage_guild_authority,
@@ -49,6 +50,174 @@ def _staff_authorized(interaction: discord.Interaction) -> bool:
         or interaction_has_administrator_authority(interaction)
         or interaction_has_manage_guild_authority(interaction)
     )
+
+
+_HUB_PERMISSION_LABELS = {
+    "view_channel": "View Channels",
+    "send_messages": "Send Messages",
+    "send_messages_in_threads": "Send Messages in Threads",
+    "embed_links": "Embed Links",
+    "read_message_history": "Read Message History",
+    "manage_threads": "Manage Threads",
+    "manage_channels": "Manage Channels",
+    "move_members": "Move Members",
+}
+
+
+def _public_install_url(bot: Any) -> str:
+    client_id = _safe_int(
+        getattr(bot, "application_id", 0)
+        or getattr(getattr(bot, "user", None), "id", 0),
+        0,
+    )
+    if client_id <= 0:
+        return ""
+    try:
+        return discord.utils.oauth_url(
+            client_id,
+            permissions=approved_public_permissions(),
+            scopes=("bot", "applications.commands"),
+        )
+    except Exception:
+        return ""
+
+
+def _community_hub_required_permissions(settings: dict[str, Any]) -> tuple[str, ...]:
+    names = [
+        "view_channel",
+        "send_messages",
+        "embed_links",
+        "read_message_history",
+    ]
+    if bool(settings.get("auto_create_thread", True)):
+        names.extend(("send_messages_in_threads", "manage_threads"))
+    if bool(settings.get("auto_create_voice", True)):
+        names.extend(("manage_channels", "move_members"))
+    return tuple(dict.fromkeys(names))
+
+
+def _community_hub_readiness(
+    guild: Optional[discord.Guild],
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    if guild is None:
+        return {
+            "healthy": False,
+            "guild_missing": ["Dank Shield is not installed in this server."],
+            "channel_missing": [],
+            "channel": None,
+            "reauthorize_url": "",
+        }
+
+    me = getattr(guild, "me", None)
+    if me is None:
+        return {
+            "healthy": False,
+            "guild_missing": ["Dank Shield could not resolve its server member."],
+            "channel_missing": [],
+            "channel": None,
+            "reauthorize_url": "",
+        }
+
+    required = _community_hub_required_permissions(settings)
+    guild_perms = getattr(me, "guild_permissions", None)
+    admin = bool(getattr(guild_perms, "administrator", False))
+    missing = [
+        name
+        for name in required
+        if not admin and not bool(getattr(guild_perms, name, False))
+    ]
+
+    channel = None
+    channel_missing: list[str] = []
+    channel_id = _safe_int(settings.get("hub_channel_id"), 0)
+    if channel_id > 0:
+        channel = guild.get_channel(channel_id)
+        if channel is not None:
+            try:
+                effective = channel.permissions_for(me)
+                channel_required = (
+                    "view_channel",
+                    "send_messages",
+                    "embed_links",
+                    "read_message_history",
+                )
+                channel_missing = [
+                    name
+                    for name in channel_required
+                    if not bool(getattr(effective, "administrator", False))
+                    and not bool(getattr(effective, name, False))
+                ]
+            except Exception:
+                channel_missing = ["channel_permission_check"]
+
+    return {
+        "healthy": not missing and not channel_missing,
+        "guild_missing": missing,
+        "channel_missing": channel_missing,
+        "channel": channel,
+        "reauthorize_url": reauthorize_url(guild) if missing else "",
+    }
+
+
+def _permission_names(names: list[str]) -> str:
+    return ", ".join(_HUB_PERMISSION_LABELS.get(name, name.replace("_", " ").title()) for name in names)
+
+
+def _hublink_readiness_embed(
+    guild: Optional[discord.Guild],
+    settings: dict[str, Any],
+    *,
+    connected_name: str = "",
+) -> discord.Embed:
+    report = _community_hub_readiness(guild, settings)
+    title = "✅ Community Hub Ready" if report["healthy"] else "🛠️ Community Hub Setup Check"
+    description = (
+        f"HubLink connected to **{connected_name}**. "
+        if connected_name
+        else ""
+    )
+    description += (
+        "Dank Shield has the access Community Hub needs."
+        if report["healthy"]
+        else "The server link is safe, but Discord is still blocking one or more Community Hub capabilities."
+    )
+    embed = discord.Embed(title=title, description=description, color=discord.Color.blurple())
+
+    guild_missing = list(report.get("guild_missing") or [])
+    if guild_missing:
+        embed.add_field(
+            name="1. Server permissions",
+            value=(
+                f"Dank Shield is missing: **{_permission_names(guild_missing)}**.\n"
+                "Tap **Reauthorize Dank Shield** below, choose this server, review the requested permissions, and authorize. "
+                "The normal repair link does **not** request Administrator."
+            )[:1024],
+            inline=False,
+        )
+
+    channel_missing = list(report.get("channel_missing") or [])
+    channel = report.get("channel")
+    if channel_missing:
+        label = getattr(channel, "mention", None) or getattr(channel, "name", None) or "the configured Community Hub channel"
+        embed.add_field(
+            name="2. Channel access",
+            value=(
+                f"In {label}, Dank Shield is blocked from: **{_permission_names(channel_missing)}**.\n"
+                "On mobile: open the channel → tap its name → **Settings / Edit Channel** → **Permissions** → "
+                "**Dank Shield** → allow the listed items. If a category controls the channel, fix the category and sync the channel."
+            )[:1024],
+            inline=False,
+        )
+
+    if report["healthy"]:
+        embed.add_field(
+            name="Sharing defaults",
+            value="Public Community Hub groups: **On** • Aggregate/live activity: **Off** until separately enabled.",
+            inline=False,
+        )
+    embed.set_footer(text="HubLink never needs a server ID from the user.")
+    return embed
 
 
 _COMPONENT_BURSTS: dict[tuple[int, int], list[float]] = {}
