@@ -52,6 +52,7 @@ Confirmed current-state gaps:
 10. PR #336 made Community Hub captions discoverable, but general server Live Captions still did not exist: the only start path required a Community Hub session with a stored voice channel.
 11. Caption opt-out stopped new receive frames but did not explicitly purge that speaker's already-buffered, queued, or in-flight caption work. General server exposure makes that privacy edge unacceptable, so revocation must clear the speaker pipeline before returning.
 12. The packet-router thread could pass the consent check immediately before opt-out and schedule its event-loop callback afterward. Without a consent generation token, a rapid opt-out/re-opt-in could make that stale pre-revocation frame look valid again.
+13. The first general-server caption UI used the text channel where staff opened the panel as its destination and had no durable owner setup for existing gaming VCs/categories. That made routing accidental instead of server-configured and gave owners no safe create/select flow for a dedicated caption output.
 
 ## Execution path
 
@@ -130,7 +131,12 @@ Implemented in the current voice-caption slice:
 - PR #336 consent-status rendering uses the actual interaction user ID rather than assuming `list_user_sessions()` embeds a user ID that it does not return.
 - general Live Captions now have a first-class `/dank home → Live Captions` path and do not require a Community Hub gaming session;
 - the general mode reuses the same `CommunityVoiceCaptionManager`, guild receiver lock, per-speaker bridge, transcription engine, consent boundary, and feature gate instead of creating a competing receive implementation;
-- server owner/admin/Manage Server starts or stops general captions for the ordinary voice channel they are currently in; captions publish to the text channel where the session was started;
+- server owner/admin/Manage Server starts or stops general captions for the ordinary voice channel they are currently in;
+- general captions use durable per-guild setup for a dedicated output text channel rather than the text channel where staff happened to open the panel;
+- owners can select an existing caption output or let Dank Shield create/reuse a read-only **#live-captions** channel, with bot write permissions validated before the setting is saved;
+- owners can allow all ordinary VCs, select individual existing VCs, select whole existing voice categories such as gaming/squad-room categories, and explicitly exclude VCs; exclusions win;
+- the ordinary-server transcript identifies its exact source voice channel, and only one caption receiver can own a guild at a time, so users in other VCs cannot leak into or start a competing caption stream;
+- **/captions** is a first-class normal-user doorway while **/dank home → Live Captions** remains available, and **/dank setup → Live Captions** owns server configuration;
 - every participant controls only their own **Caption My Voice** consent and must be in the captioned voice channel before opting in;
 - Community Hub and general captions cannot run competing receivers in the same guild because both use the same `_guild_owner` lock;
 - general caption state/consent remains memory-only and is not written to Supabase;
@@ -183,4 +189,4 @@ After interaction reliability is validated:
 
 ## Next step
 
-Finish the general server Live Captions branch, open a focused PR, validate its exact head, and merge only when every triggered gate is green and the diff remains confined to the shared Live Captions runtime/UI/tests/task record. After merge, verify post-merge CI and Discloud deployment. Live receive still requires a real Discord DAVE soak test covering one speaker, overlapping speakers, reconnect/SSRC changes, epoch/key transitions, packet loss/out-of-order delivery, stop/restart, opt-out while speaking, Community Hub session end, general-session stop, and long-running operation. Keep `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` off until that soak test passes.
+Finish PR #337's general server Live Captions setup/command-surface pass, validate its exact head, and merge only when every triggered gate is green and the diff remains confined to Live Captions, its command/setup entry points, contract/docs, tests, and the task record. After merge, verify post-merge CI and Discloud deployment. Live receive still requires a real Discord DAVE soak test covering one speaker, overlapping speakers, reconnect/SSRC changes, epoch/key transitions, packet loss/out-of-order delivery, stop/restart, opt-out while speaking, Community Hub session end, general-session stop, and long-running operation. Keep `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` off until that soak test passes.
