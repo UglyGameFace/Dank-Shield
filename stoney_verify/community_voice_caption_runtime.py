@@ -70,7 +70,7 @@ class CommunityVoiceCaptionManager:
             "guild_id": state.guild_id,
             "voice_channel_id": state.voice_channel_id,
             "destination_channel_id": state.destination_channel_id,
-            "opted_in_user_ids": sorted(state.bridge._allowed_user_ids),
+            "opted_in_user_ids": list(state.bridge.opted_in_user_ids()),
             "health": state.bridge.health.snapshot(),
             "segments_transcribed": state.engine.segments_transcribed,
             "segments_unclear": state.engine.segments_unclear,
