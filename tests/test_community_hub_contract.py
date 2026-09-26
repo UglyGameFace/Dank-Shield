@@ -344,10 +344,20 @@ def test_hublink_replaces_raw_server_id_partner_setup() -> None:
     assert "A server cannot HubLink to itself" in hublink
     assert "grant execute on function public.community_hub_redeem_link_code(text,text,text)" in hublink
 
-    assert "def approved_public_permissions" in permissions
+    assert "def community_hub_install_permissions" in permissions
+    assert "def community_hub_oauth_url" in permissions
     assert "perms.administrator = False" in permissions
-    assert "permissions=approved_public_permissions()" in ui
-    assert 'scopes=("bot", "applications.commands")' in ui
+    hub_perm_region = permissions[
+        permissions.index("_COMMUNITY_HUB_INSTALL_PERMISSIONS"):
+        permissions.index("_APPROVED_PUBLIC_GUILD_PERMISSIONS")
+    ]
+    assert '"manage_channels"' in hub_perm_region
+    assert '"manage_threads"' in hub_perm_region
+    assert '"view_audit_log"' in hub_perm_region
+    assert '"kick_members"' not in hub_perm_region
+    assert '"ban_members"' not in hub_perm_region
+    assert '"manage_roles"' not in hub_perm_region
+    assert "community_hub_oauth_url(client_id)" in ui
 
 
 def test_hublink_redeem_reauthorizes_modal_submit_and_keeps_activity_opt_in() -> None:
