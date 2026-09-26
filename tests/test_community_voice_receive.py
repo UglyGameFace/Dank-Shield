@@ -4,7 +4,9 @@ from stoney_verify.community_voice_receive import (
     PCM_FRAME_ALIGNMENT,
     PerSpeakerFrameBridge,
     VOICE_RECV_DAVE_COMMIT,
+    VOICE_RECV_DAVE_SOURCE,
     voice_receive_capability,
+    voice_receive_connection_diagnostics,
 )
 
 
@@ -34,7 +36,44 @@ def test_voice_dependencies_are_pinned_for_dave_receive() -> None:
     assert capability.receive_extension_available is True
     assert capability.inbound_dave_decrypt_available is True
     assert capability.available is True
-    assert VOICE_RECV_DAVE_COMMIT == "bec048127f4148fd147afa3182c3771b6955dc08"
+    assert VOICE_RECV_DAVE_COMMIT == "78fcb434a3484f2abf54cf89e80e86b651e5c28d"
+    assert VOICE_RECV_DAVE_SOURCE == "jstewart0788/discord-ext-voice-recv-dave"
+
+
+def test_voice_receive_connection_diagnostics_report_dave_and_ssrc_state() -> None:
+    class _Status:
+        name = "active"
+
+    session = type(
+        "Session",
+        (),
+        {"ready": True, "status": _Status(), "epoch": 7},
+    )()
+    connection = type(
+        "Connection",
+        (),
+        {"dave_session": session, "dave_protocol_version": 1},
+    )()
+    voice_client = type(
+        "VoiceClient",
+        (),
+        {
+            "_connection": connection,
+            "_ssrc_to_id": {100: 10, 200: 20},
+            "is_listening": lambda self: True,
+        },
+    )()
+
+    result = voice_receive_connection_diagnostics(voice_client)
+    assert result == {
+        "dave_session_present": True,
+        "dave_session_ready": True,
+        "dave_session_status": "active",
+        "dave_protocol_version": 1,
+        "dave_epoch": 7,
+        "mapped_ssrcs": 2,
+        "reader_listening": True,
+    }
 
 
 def test_non_consented_audio_never_crosses_caption_boundary() -> None:

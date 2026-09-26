@@ -23,6 +23,7 @@ from .community_voice_receive import (
     connect_receive_client,
     disconnect_receive_client,
     voice_receive_capability,
+    voice_receive_connection_diagnostics,
 )
 
 
@@ -122,6 +123,7 @@ class CommunityVoiceCaptionManager:
             "segment_failures": state.engine.segment_failures,
             "queue_depth": state.engine.queue.qsize(),
             "last_failure": str(state.engine.last_failure or ""),
+            "receive_connection": voice_receive_connection_diagnostics(state.voice_client),
         }
 
     def status_for_guild(self, guild_id: int) -> dict[str, Any]:

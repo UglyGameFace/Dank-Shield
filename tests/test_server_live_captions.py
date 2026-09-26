@@ -156,13 +156,49 @@ def test_soak_bypass_requires_actual_bot_owner_authorization() -> None:
 
 def test_soak_pipeline_diagnosis_separates_receive_from_provider_failures() -> None:
     no_frames = {
-        "health": {"frames_seen": 0, "frames_routed": 0},
+        "health": {"raw_udp_packets": 0, "frames_seen": 0, "frames_routed": 0},
+        "receive_connection": {
+            "reader_listening": True,
+            "dave_session_present": True,
+            "dave_session_ready": True,
+            "mapped_ssrcs": 2,
+        },
         "segment_failures": 0,
     }
-    assert "DAVE receive layer" in _soak_pipeline_diagnosis(no_frames)
+    assert "No UDP voice packets" in _soak_pipeline_diagnosis(no_frames)
+
+    dave_not_ready = {
+        "health": {"raw_udp_packets": 20, "frames_seen": 0, "frames_routed": 0},
+        "receive_connection": {
+            "reader_listening": True,
+            "dave_session_present": True,
+            "dave_session_ready": False,
+            "mapped_ssrcs": 2,
+        },
+        "segment_failures": 0,
+    }
+    assert "DAVE session is not ready" in _soak_pipeline_diagnosis(dave_not_ready)
+
+    pre_sink_drop = {
+        "health": {"raw_udp_packets": 20, "frames_seen": 0, "frames_routed": 0},
+        "receive_connection": {
+            "reader_listening": True,
+            "dave_session_present": True,
+            "dave_session_ready": True,
+            "mapped_ssrcs": 2,
+        },
+        "segment_failures": 0,
+    }
+    assert "no PCM reached" in _soak_pipeline_diagnosis(pre_sink_drop)
 
     routed = {
-        "health": {"frames_seen": 20, "frames_routed": 20},
+        "health": {"raw_udp_packets": 20, "frames_seen": 20, "frames_routed": 20},
+        "receive_connection": {
+            "reader_listening": True,
+            "dave_session_present": True,
+            "dave_session_ready": True,
+            "mapped_ssrcs": 2,
+        },
         "segments_transcribed": 0,
         "segment_failures": 0,
     }
