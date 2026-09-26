@@ -37,9 +37,10 @@ PCM_CHANNELS = 2
 PCM_SAMPLE_WIDTH = 2
 PCM_FRAME_ALIGNMENT = PCM_CHANNELS * PCM_SAMPLE_WIDTH
 
-# Exact reviewed receive implementation. This is PR #62's head, pinned in
-# requirements.txt so upstream branch movement cannot silently change runtime.
-VOICE_RECV_DAVE_COMMIT = "bec048127f4148fd147afa3182c3771b6955dc08"
+# Exact reviewed receive implementation. This is the hardened PR #54 soft fork,
+# pinned in requirements.txt so branch movement cannot silently change runtime.
+VOICE_RECV_DAVE_COMMIT = "78fcb434a3484f2abf54cf89e80e86b651e5c28d"
+VOICE_RECV_DAVE_SOURCE = "jstewart0788/discord-ext-voice-recv-dave"
 
 
 class VoiceReceiveUnavailable(RuntimeError):
@@ -68,6 +69,7 @@ class SpeakerPCMFrame:
 
 @dataclass(slots=True)
 class VoiceReceiveHealth:
+    raw_udp_packets: int = 0
     frames_seen: int = 0
     frames_routed: int = 0
     frames_not_consented: int = 0
@@ -80,6 +82,7 @@ class VoiceReceiveHealth:
 
     def snapshot(self) -> dict[str, int]:
         return {
+            "raw_udp_packets": self.raw_udp_packets,
             "frames_seen": self.frames_seen,
             "frames_routed": self.frames_routed,
             "frames_not_consented": self.frames_not_consented,
@@ -97,9 +100,12 @@ def voice_receive_capability() -> VoiceReceiveCapability:
     inbound_dave = False
     if receive_ok:
         try:
-            from discord.ext.voice_recv.reader import AudioReader
+            from discord.ext.voice_recv import opus as voice_recv_opus
 
-            inbound_dave = callable(getattr(AudioReader, "_dave_decrypt", None))
+            inbound_dave = bool(
+                getattr(voice_recv_opus, "has_dave", False)
+                and getattr(voice_recv_opus, "PacketDecoder", None) is not None
+            )
         except Exception:
             inbound_dave = False
 
@@ -110,7 +116,7 @@ def voice_receive_capability() -> VoiceReceiveCapability:
     elif not dave_ok:
         reason = "davey is unavailable"
     elif not inbound_dave:
-        reason = "voice receive dependency does not expose inbound DAVE decryption"
+        reason = "voice receive dependency does not expose the hardened inbound DAVE decoder"
     else:
         reason = "ready"
 
@@ -122,6 +128,63 @@ def voice_receive_capability() -> VoiceReceiveCapability:
         receive_extension_available=receive_ok,
         inbound_dave_decrypt_available=inbound_dave,
     )
+
+
+def voice_receive_connection_diagnostics(voice_client: Any) -> dict[str, Any]:
+    connection = getattr(voice_client, "_connection", None)
+    session = getattr(connection, "dave_session", None) if connection is not None else None
+    status = getattr(session, "status", None) if session is not None else None
+    status_name = (
+        str(getattr(status, "name", "") or "").strip()
+        or str(status or "").strip()
+        or "none"
+    )
+    try:
+        protocol_version = int(getattr(connection, "dave_protocol_version", 0) or 0)
+    except (TypeError, ValueError):
+        protocol_version = 0
+    try:
+        epoch = int(getattr(session, "epoch", 0) or 0) if session is not None else 0
+    except (TypeError, ValueError):
+        epoch = 0
+    try:
+        mapped_ssrcs = len(getattr(voice_client, "_ssrc_to_id", {}) or {})
+    except Exception:
+        mapped_ssrcs = 0
+    try:
+        listening = bool(getattr(voice_client, "is_listening", lambda: False)())
+    except Exception:
+        listening = False
+    return {
+        "dave_session_present": session is not None,
+        "dave_session_ready": bool(getattr(session, "ready", False)) if session is not None else False,
+        "dave_session_status": status_name,
+        "dave_protocol_version": protocol_version,
+        "dave_epoch": epoch,
+        "mapped_ssrcs": mapped_ssrcs,
+        "reader_listening": listening,
+    }
+
+
+def _install_raw_udp_probe(voice_client: Any, bridge: "PerSpeakerFrameBridge") -> None:
+    connection = getattr(voice_client, "_connection", None)
+    add_listener = getattr(connection, "add_socket_listener", None)
+    remove_listener = getattr(connection, "remove_socket_listener", None)
+    if not callable(add_listener):
+        return
+
+    previous = getattr(voice_client, "_dank_caption_udp_probe", None)
+    if previous is not None and callable(remove_listener):
+        try:
+            remove_listener(previous)
+        except Exception:
+            log.debug("Live Captions could not remove previous UDP probe", exc_info=True)
+
+    def _probe(_packet_data: bytes) -> None:
+        bridge._increment("raw_udp_packets")
+
+    add_listener(_probe)
+    setattr(voice_client, "_dank_caption_udp_probe", _probe)
 
 
 class PerSpeakerFrameBridge:
@@ -330,11 +393,25 @@ async def connect_receive_client(
             "Dank Shield is already receiving audio for another caption session in this server."
         )
 
+    _install_raw_udp_probe(voice_client, bridge)
     voice_client.listen(HardenedPerSpeakerSink(bridge))
     return voice_client
 
 
 def disconnect_receive_client(voice_client: Any) -> None:
+    connection = getattr(voice_client, "_connection", None)
+    probe = getattr(voice_client, "_dank_caption_udp_probe", None)
+    remove_listener = getattr(connection, "remove_socket_listener", None)
+    if probe is not None and callable(remove_listener):
+        try:
+            remove_listener(probe)
+        except Exception:
+            log.debug("Live Captions failed to remove UDP probe cleanly", exc_info=True)
+        try:
+            delattr(voice_client, "_dank_caption_udp_probe")
+        except Exception:
+            pass
+
     try:
         if getattr(voice_client, "is_listening", lambda: False)():
             voice_client.stop_listening()
@@ -350,10 +427,12 @@ __all__ = [
     "PerSpeakerFrameBridge",
     "SpeakerPCMFrame",
     "VOICE_RECV_DAVE_COMMIT",
+    "VOICE_RECV_DAVE_SOURCE",
     "VoiceReceiveCapability",
     "VoiceReceiveHealth",
     "VoiceReceiveUnavailable",
     "connect_receive_client",
     "disconnect_receive_client",
     "voice_receive_capability",
+    "voice_receive_connection_diagnostics",
 ]
