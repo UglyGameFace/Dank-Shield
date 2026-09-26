@@ -545,6 +545,25 @@ jobs:
                       end if;
               end;
 
+              update public.dank_community_partner_links
+                 set state='revoked',
+                     aggregate_activity_shared=false,
+                     session_discovery_shared=false,
+                     updated_at=now()
+               where id=link_id;
+
+              begin
+                  perform public.community_hub_redeem_link_code(
+                      repeat('a',64),'hub-target','target-admin'
+                  );
+                  raise exception 'revoked partner relationship was reactivated by old HubLink replay';
+              exception
+                  when others then
+                      if position('already consumed and the partner link is no longer active' in sqlerrm) = 0 then
+                          raise;
+                      end if;
+              end;
+
               created := public.community_hub_create_link_code(
                   'self-source','self-admin',repeat('d',64),'D234'
               );
