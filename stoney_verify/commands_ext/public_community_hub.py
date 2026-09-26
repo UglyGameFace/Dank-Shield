@@ -686,7 +686,8 @@ def _live_captions_overview_embed(
         name="Privacy",
         value=(
             "Only opted-in speakers are routed to transcription. Opted-in audio is sent to Google Gemini's transcription API "
-            "while captions are running. Dank Shield itself does not save the audio, and stopping captions clears speaker consent."
+            "while captions are running. This deployment uses Gemini's Free Tier, where Google states submitted content may be used "
+            "to improve its products. Dank Shield itself does not save the audio, and stopping captions clears speaker consent."
         ),
         inline=False,
     )
@@ -727,7 +728,8 @@ async def _toggle_live_caption_consent(
         return (
             "✅ Your voice is opted into this session's Live Captions. Dank Shield keeps your Discord audio separate "
             "from other speakers and sends your opted-in audio to **Google Gemini's transcription API** for speech-to-text "
-            "while captions are running. Dank Shield itself does not save the audio."
+            "while captions are running. This deployment uses Gemini's **Free Tier**, where Google states submitted content may be used "
+            "to improve its products. Dank Shield itself does not save the audio."
         )
     return "Live Captions are off for your voice. Your speaker consent was cleared immediately."
 
