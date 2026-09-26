@@ -56,6 +56,33 @@ def _reset_runtime_state() -> None:
     runtime._EJECTION_IN_PROGRESS.clear()  # noqa: SLF001
     runtime._WARNED.clear()  # noqa: SLF001
     self_action._COMPROMISE_GUILDS.clear()  # noqa: SLF001
+    self_action._PENDING.clear()  # noqa: SLF001
+    self_action._EXPECTED_SIDE_EFFECTS.clear()  # noqa: SLF001
+
+
+def _healthy_self_proof_bot() -> FakeBot:
+    bot = FakeBot()
+    setattr(bot, self_action._INSTALL_FLAG, True)  # noqa: SLF001
+    setattr(bot.http, self_action._HTTP_PATCH_FLAG, True)  # noqa: SLF001
+    return bot
+
+
+def _entry(
+    guild: FakeGuild,
+    action: str,
+    *,
+    target_id: int | None = None,
+    reason: str = "",
+):
+    return SimpleNamespace(
+        guild=guild,
+        action=SimpleNamespace(name=action),
+        user=SimpleNamespace(id=55),
+        user_id=55,
+        target=(SimpleNamespace(id=target_id) if target_id is not None else None),
+        reason=reason,
+        extra=None,
+    )
 
 
 def test_self_ejection_retries_before_marking_compromise_handled(monkeypatch) -> None:
@@ -122,6 +149,8 @@ def test_self_compromise_settings_fail_closed_without_snapshot(monkeypatch) -> N
 def test_direct_webhook_http_route_is_covered_by_final_self_proof() -> None:
     original_request_spec = self_action._request_spec  # noqa: SLF001
     original_actions = self_action._PROTECTED_ACTIONS  # noqa: SLF001
+    original_local = set(self_action._LOCAL_PROVENANCE_ACTIONS)  # noqa: SLF001
+    original_external = set(self_action._EXTERNAL_ONLY_PROTECTED_ACTIONS)  # noqa: SLF001
     original_unmatched = self_action._unmatched_self_action  # noqa: SLF001
     had_flag = hasattr(self_action, runtime._SELF_FLAG)  # noqa: SLF001
     old_flag = getattr(self_action, runtime._SELF_FLAG, None)  # noqa: SLF001
@@ -139,11 +168,244 @@ def test_direct_webhook_http_route_is_covered_by_final_self_proof() -> None:
     finally:
         self_action._request_spec = original_request_spec  # noqa: SLF001
         self_action._PROTECTED_ACTIONS = original_actions  # noqa: SLF001
+        self_action._LOCAL_PROVENANCE_ACTIONS.clear()  # noqa: SLF001
+        self_action._LOCAL_PROVENANCE_ACTIONS.update(original_local)  # noqa: SLF001
+        self_action._EXTERNAL_ONLY_PROTECTED_ACTIONS.clear()  # noqa: SLF001
+        self_action._EXTERNAL_ONLY_PROTECTED_ACTIONS.update(original_external)  # noqa: SLF001
         self_action._unmatched_self_action = original_unmatched  # noqa: SLF001
         if had_flag:
             setattr(self_action, runtime._SELF_FLAG, old_flag)  # noqa: SLF001
         elif hasattr(self_action, runtime._SELF_FLAG):  # noqa: SLF001
             delattr(self_action, runtime._SELF_FLAG)  # noqa: SLF001
+
+
+def test_provenance_contract_matrix_covers_zero_damage_protected_surface() -> None:
+    original_request_spec = self_action._request_spec  # noqa: SLF001
+    original_actions = self_action._PROTECTED_ACTIONS  # noqa: SLF001
+    original_local = set(self_action._LOCAL_PROVENANCE_ACTIONS)  # noqa: SLF001
+    original_external = set(self_action._EXTERNAL_ONLY_PROTECTED_ACTIONS)  # noqa: SLF001
+    original_unmatched = self_action._unmatched_self_action  # noqa: SLF001
+    had_flag = hasattr(self_action, runtime._SELF_FLAG)  # noqa: SLF001
+    old_flag = getattr(self_action, runtime._SELF_FLAG, None)  # noqa: SLF001
+    if had_flag:
+        delattr(self_action, runtime._SELF_FLAG)  # noqa: SLF001
+
+    try:
+        assert runtime._patch_self_action() is True  # noqa: SLF001
+        classified = (
+            set(self_action._LOCAL_PROVENANCE_ACTIONS)  # noqa: SLF001
+            | set(self_action._EXTERNAL_ONLY_PROTECTED_ACTIONS)  # noqa: SLF001
+        )
+        assert set(self_action._PROTECTED_ACTIONS) <= classified  # noqa: SLF001
+        assert not (
+            set(self_action._LOCAL_PROVENANCE_ACTIONS)  # noqa: SLF001
+            & set(self_action._EXTERNAL_ONLY_PROTECTED_ACTIONS)  # noqa: SLF001
+        )
+        assert {
+            "invite_update",
+            "integration_create",
+            "integration_update",
+            "onboarding_prompt_create",
+            "onboarding_prompt_update",
+            "onboarding_prompt_delete",
+            "home_settings_create",
+            "home_settings_update",
+            "member_move",
+            "member_disconnect",
+        } <= set(self_action._EXTERNAL_ONLY_PROTECTED_ACTIONS)  # noqa: SLF001
+        assert {"onboarding_create", "onboarding_update"} <= set(
+            self_action._LOCAL_PROVENANCE_ACTIONS  # noqa: SLF001
+        )
+    finally:
+        self_action._request_spec = original_request_spec  # noqa: SLF001
+        self_action._PROTECTED_ACTIONS = original_actions  # noqa: SLF001
+        self_action._LOCAL_PROVENANCE_ACTIONS.clear()  # noqa: SLF001
+        self_action._LOCAL_PROVENANCE_ACTIONS.update(original_local)  # noqa: SLF001
+        self_action._EXTERNAL_ONLY_PROTECTED_ACTIONS.clear()  # noqa: SLF001
+        self_action._EXTERNAL_ONLY_PROTECTED_ACTIONS.update(original_external)  # noqa: SLF001
+        self_action._unmatched_self_action = original_unmatched  # noqa: SLF001
+        if had_flag:
+            setattr(self_action, runtime._SELF_FLAG, old_flag)  # noqa: SLF001
+        elif hasattr(self_action, runtime._SELF_FLAG):  # noqa: SLF001
+            delattr(self_action, runtime._SELF_FLAG)  # noqa: SLF001
+
+
+def test_self_ejection_safety_holds_when_http_proof_is_unhealthy(monkeypatch) -> None:
+    _reset_runtime_state()
+    bot = FakeBot()
+    setattr(bot, self_action._INSTALL_FLAG, True)  # noqa: SLF001
+    guild = FakeGuild()
+    incidents: list[dict] = []
+
+    async def settings(_guild_id: int):
+        return {"antinuke_enabled": True, "antinuke_mode": "contain"}
+
+    async def post(_guild, **kwargs):
+        incidents.append(kwargs)
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
+    monkeypatch.setattr(anti_nuke, "_post_incident", post)
+
+    asyncio.run(
+        runtime._unmatched_self_action(  # noqa: SLF001
+            bot,
+            guild,
+            _entry(guild, "channel_delete", target_id=90),
+            "channel_delete",
+        )
+    )
+
+    assert guild.leave_calls == 0
+    assert incidents
+    assert "Self-Provenance Safety Hold" in incidents[0]["title"]
+
+
+def test_audit_compat_action_holds_when_compat_route_proof_is_missing(
+    monkeypatch,
+) -> None:
+    _reset_runtime_state()
+    bot = _healthy_self_proof_bot()
+    guild = FakeGuild()
+    incidents: list[dict] = []
+    had_flag = hasattr(self_action, runtime._AUDIT_COMPAT_ROUTE_FLAG)  # noqa: SLF001
+    old_flag = getattr(
+        self_action,
+        runtime._AUDIT_COMPAT_ROUTE_FLAG,  # noqa: SLF001
+        None,
+    )
+    if had_flag:
+        delattr(self_action, runtime._AUDIT_COMPAT_ROUTE_FLAG)  # noqa: SLF001
+
+    async def settings(_guild_id: int):
+        return {"antinuke_enabled": True, "antinuke_mode": "contain"}
+
+    async def post(_guild, **kwargs):
+        incidents.append(kwargs)
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
+    monkeypatch.setattr(anti_nuke, "_post_incident", post)
+    try:
+        asyncio.run(
+            runtime._unmatched_self_action(  # noqa: SLF001
+                bot,
+                guild,
+                _entry(guild, "member_disconnect", target_id=90),
+                "member_disconnect",
+            )
+        )
+    finally:
+        if had_flag:
+            setattr(
+                self_action,
+                runtime._AUDIT_COMPAT_ROUTE_FLAG,  # noqa: SLF001
+                old_flag,
+            )
+        elif hasattr(self_action, runtime._AUDIT_COMPAT_ROUTE_FLAG):  # noqa: SLF001
+            delattr(self_action, runtime._AUDIT_COMPAT_ROUTE_FLAG)  # noqa: SLF001
+
+    assert guild.leave_calls == 0
+    assert incidents
+    assert "audit-compat-route-proof-unhealthy" in incidents[0]["details"]
+
+
+def test_recent_local_request_without_marker_blocks_self_ejection(monkeypatch) -> None:
+    _reset_runtime_state()
+    bot = _healthy_self_proof_bot()
+    guild = FakeGuild()
+    self_action._authorize(  # noqa: SLF001
+        self_action._spec(("channel_update",), guild.id, "id:90"),  # noqa: SLF001
+        "local rename",
+    )
+    incidents: list[dict] = []
+
+    async def settings(_guild_id: int):
+        return {"antinuke_enabled": True, "antinuke_mode": "contain"}
+
+    async def post(_guild, **kwargs):
+        incidents.append(kwargs)
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
+    monkeypatch.setattr(anti_nuke, "_post_incident", post)
+
+    asyncio.run(
+        runtime._unmatched_self_action(  # noqa: SLF001
+            bot,
+            guild,
+            _entry(guild, "channel_update", target_id=90, reason=""),
+            "channel_update",
+        )
+    )
+
+    assert guild.leave_calls == 0
+    assert incidents
+    assert "recent-local-request-without-audit-marker" in incidents[0]["details"]
+
+
+def test_known_local_marker_scope_mismatch_blocks_self_ejection(monkeypatch) -> None:
+    _reset_runtime_state()
+    bot = _healthy_self_proof_bot()
+    guild = FakeGuild()
+    _nonce, reason = self_action._authorize(  # noqa: SLF001
+        self_action._spec(("channel_update",), guild.id, "id:90"),  # noqa: SLF001
+        "local rename",
+    )
+    incidents: list[dict] = []
+
+    async def settings(_guild_id: int):
+        return {"antinuke_enabled": True, "antinuke_mode": "contain"}
+
+    async def post(_guild, **kwargs):
+        incidents.append(kwargs)
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
+    monkeypatch.setattr(anti_nuke, "_post_incident", post)
+
+    asyncio.run(
+        runtime._unmatched_self_action(  # noqa: SLF001
+            bot,
+            guild,
+            _entry(guild, "channel_update", target_id=91, reason=reason),
+            "channel_update",
+        )
+    )
+
+    assert guild.leave_calls == 0
+    assert incidents
+    assert "known-local-marker-scope-mismatch" in incidents[0]["details"]
+
+
+def test_healthy_unmatched_self_action_still_quarantines_and_ejects(monkeypatch) -> None:
+    _reset_runtime_state()
+    bot = _healthy_self_proof_bot()
+    guild = FakeGuild()
+    persisted: list[tuple[int, str]] = []
+
+    async def settings(_guild_id: int):
+        return {"antinuke_enabled": True, "antinuke_mode": "contain"}
+
+    async def persist(guild_id: int, action_name: str):
+        persisted.append((guild_id, action_name))
+        return 0
+
+    async def no_warning(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
+    monkeypatch.setattr(runtime, "_persist_quarantine", persist)
+    monkeypatch.setattr(runtime, "_warn_owner", no_warning)
+
+    asyncio.run(
+        runtime._unmatched_self_action(  # noqa: SLF001
+            bot,
+            guild,
+            _entry(guild, "channel_delete", target_id=90, reason="external"),
+            "channel_delete",
+        )
+    )
+
+    assert persisted == [(guild.id, "channel_delete")]
+    assert guild.leave_calls == 1
+    assert guild.id in self_action._COMPROMISE_GUILDS  # noqa: SLF001
 
 
 def test_guardian_final_surface_is_expanded_but_first_strike_stays_scoped() -> None:

@@ -23,6 +23,9 @@ _RAW_ACTION_NAMES = {
 
 
 def _patch_action_names() -> bool:
+    self_action._register_local_provenance_actions(  # noqa: SLF001
+        {"voice_channel_status_create", "voice_channel_status_delete"}
+    )
     if bool(getattr(guardian, _ACTION_FLAG, False)):
         return False
     guardian_original = guardian._action_name  # noqa: SLF001
@@ -67,6 +70,9 @@ def _patch_action_names() -> bool:
 
 
 def _patch_self_action_route() -> bool:
+    self_action._register_local_provenance_actions(  # noqa: SLF001
+        {"member_move", "member_disconnect"}
+    )
     if bool(getattr(self_action, _ROUTE_FLAG, False)):
         return False
     original = self_action._request_spec  # noqa: SLF001
