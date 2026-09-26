@@ -68,6 +68,24 @@ def _configured_output_channel(guild: discord.Guild, cfg: Any) -> Optional[disco
     return channel if isinstance(channel, discord.TextChannel) else None
 
 
+def _caption_output_missing_perms(
+    channel: discord.TextChannel,
+    bot_member: Optional[discord.Member],
+) -> list[str]:
+    if bot_member is None:
+        return ["Bot member unavailable"]
+    perms = channel.permissions_for(bot_member)
+    return [
+        label
+        for label, allowed in (
+            ("View Channel", perms.view_channel),
+            ("Send Messages", perms.send_messages),
+            ("Read Message History", perms.read_message_history),
+        )
+        if not allowed
+    ]
+
+
 def _voice_allowed_by_config(
     voice: discord.VoiceChannel,
     cfg: Any,
@@ -192,7 +210,7 @@ class _OwnedView(discord.ui.View):
         if int(interaction.user.id) == self.owner_id:
             return True
         await interaction.response.send_message(
-            "Open your own `/dank home` panel to control your Live Captions consent.",
+            "Open your own `/captions` panel to control your Live Captions consent.",
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -316,7 +334,7 @@ async def build_server_live_captions_embed(
         name="How it works",
         value=(
             "1. Staff joins the voice channel and presses **Start / Stop Captions**.\n"
-            "2. Each participant opens **/dank home → Live Captions**.\n"
+            "2. Each participant opens **/captions** (or **/dank home → Live Captions**).\n"
             "3. Each participant presses **Caption My Voice** for their own voice only.\n"
             "4. Captions post in the server's configured Live Captions output channel."
         ),
@@ -403,18 +421,7 @@ class ServerLiveCaptionsView(_OwnedView):
             return await _followup(interaction, f"❌ {reason}")
 
         bot_member = guild.me
-        if bot_member is None:
-            return await _followup(interaction, "❌ Dank Shield could not resolve its server member permissions.")
-        output_perms = destination.permissions_for(bot_member)
-        missing_output = [
-            label
-            for label, ok in (
-                ("View Channel", output_perms.view_channel),
-                ("Send Messages", output_perms.send_messages),
-                ("Read Message History", output_perms.read_message_history),
-            )
-            if not ok
-        ]
+        missing_output = _caption_output_missing_perms(destination, bot_member)
         if missing_output:
             return await _followup(
                 interaction,
@@ -437,7 +444,7 @@ class ServerLiveCaptionsView(_OwnedView):
         )
         await _followup(
             interaction,
-            "✅ General Live Captions started. Nobody is transcribed automatically. Each speaker must open **/dank home → Live Captions** and press **Caption My Voice**.",
+            "✅ General Live Captions started. Nobody is transcribed automatically. Each speaker must open **/captions** (or **/dank home → Live Captions**) and press **Caption My Voice**.",
         )
 
     @discord.ui.button(
@@ -680,6 +687,16 @@ class CaptionOutputPickerView(_OwnedView):
                     "Pick a normal server text channel for caption output.",
                     ephemeral=True,
                 )
+            missing = _caption_output_missing_perms(
+                channel,
+                interaction.guild.me if interaction.guild else None,
+            )
+            if missing:
+                return await interaction.response.send_message(
+                    f"Dank Shield cannot use {channel.mention} for captions yet: missing {', '.join(missing)}.",
+                    ephemeral=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
             await _defer_update(interaction)
             try:
                 await _save_caption_config(
@@ -852,6 +869,13 @@ class ServerLiveCaptionsSetupView(_OwnedView):
                 created = True
             except (discord.Forbidden, discord.HTTPException) as exc:
                 return await _followup(interaction, f"❌ Could not create #live-captions: {type(exc).__name__}: {str(exc)[:180]}")
+
+        missing = _caption_output_missing_perms(channel, guild.me)
+        if missing:
+            return await _followup(
+                interaction,
+                f"❌ Dank Shield cannot use {channel.mention} for captions yet: missing {', '.join(missing)}.",
+            )
 
         try:
             await _save_caption_config(

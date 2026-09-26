@@ -235,8 +235,13 @@ class CommunityVoiceCaptionManager:
                 suffix = ""
                 if text == "[unclear audio]":
                     suffix = " • low confidence"
+                source = (
+                    f" · <#{voice_channel_id}>"
+                    if scope_kind == "server"
+                    else ""
+                )
                 await destination.send(
-                    f"🎙️ **{safe_name} · Live Caption:** {text}{suffix}",
+                    f"🎙️ **{safe_name}{source} · Live Caption:** {text}{suffix}",
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
 
@@ -250,8 +255,14 @@ class CommunityVoiceCaptionManager:
             voice_client = await connect_receive_client(voice_channel, bridge)
 
             try:
+                source_line = (
+                    f"Voice channel: {voice_channel.mention}\n"
+                    if scope_kind == "server"
+                    else ""
+                )
                 await destination.send(
                     f"📝 **{scope_label} started.**\n"
+                    f"{source_line}"
                     "Dank Shield keeps each opted-in Discord speaker isolated before transcription. "
                     "Only members who explicitly choose **Caption My Voice** are transcribed. "
                     "Opted-in audio is sent to **OpenAI's transcription API** for speech-to-text. "
@@ -334,8 +345,13 @@ class CommunityVoiceCaptionManager:
                     if state.scope_kind == "server"
                     else "Community Hub Live Captions"
                 )
+                source = (
+                    f" Voice channel: <#{state.voice_channel_id}>."
+                    if state.scope_kind == "server"
+                    else ""
+                )
                 await destination.send(
-                    f"📝 **{scope_label} stopped.** Speaker consent was cleared.",
+                    f"📝 **{scope_label} stopped.**{source} Speaker consent was cleared.",
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
             except (discord.Forbidden, discord.NotFound, discord.HTTPException):
