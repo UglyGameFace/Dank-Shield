@@ -345,12 +345,14 @@ class _GeminiLiveSpeakerSession:
         self.user_id = int(user_id)
         self.ws: Optional[aiohttp.ClientWebSocketResponse] = None
         self.connected_at = 0.0
+        self.rotate_before_next = False
         self.lock = asyncio.Lock()
 
     async def close(self) -> None:
         ws = self.ws
         self.ws = None
         self.connected_at = 0.0
+        self.rotate_before_next = False
         if ws is not None and not ws.closed:
             try:
                 await ws.close()
@@ -399,6 +401,7 @@ class _GeminiLiveSpeakerSession:
                 if "setupComplete" in payload:
                     self.ws = ws
                     self.connected_at = time.monotonic()
+                    self.rotate_before_next = False
                     self.owner.live_connections += 1
                     return
                 self.owner._raise_ws_error(payload)
@@ -418,7 +421,7 @@ class _GeminiLiveSpeakerSession:
             self.connected_at
             and time.monotonic() - self.connected_at >= self.owner.session_refresh_seconds
         )
-        if ws is None or ws.closed or expired:
+        if ws is None or ws.closed or expired or self.rotate_before_next:
             if ws is not None:
                 self.owner.live_reconnects += 1
             await self._connect()
@@ -464,7 +467,7 @@ class _GeminiLiveSpeakerSession:
                     if "goAway" in payload:
                         # Google may warn before a Live session is rotated. Keep
                         # reading this utterance, then reconnect before the next.
-                        self.connected_at = 0.0
+                        self.rotate_before_next = True
                     content = payload.get("serverContent")
                     if not isinstance(content, dict):
                         continue
