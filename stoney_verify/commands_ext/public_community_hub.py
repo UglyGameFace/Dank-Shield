@@ -2166,6 +2166,47 @@ class SessionControlView(_OwnedView):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
+
+    @discord.ui.button(label="Live Captions", emoji="📝", style=discord.ButtonStyle.secondary, custom_id="dank:hub:manage:captions:v1", row=1)
+    async def captions(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        try:
+            session = await hub.get_session(self.session_id, guild_id=int(interaction.guild_id or 0))
+            members = await hub.list_session_members(self.session_id)
+        except hub.CommunityHubError as exc:
+            return await _followup(interaction, f"❌ {_error_text(exc)}")
+
+        mine = next(
+            (row for row in members if _safe_int(row.get("user_id"), 0) == int(interaction.user.id)),
+            None,
+        )
+        if _safe_str((mine or {}).get("role")) not in {"host", "cohost"} and not _staff_authorized(interaction):
+            return await _followup(interaction, "Only the host, a co-host, or authorized staff can control Live Captions.")
+
+        manager = ensure_community_voice_caption_manager(interaction.client)
+        status = manager.status(self.session_id)
+        try:
+            if bool(status.get("active")):
+                await manager.stop(self.session_id)
+                return await _followup(interaction, "✅ Live Captions stopped and all speaker consent was cleared.")
+
+            capability = voice_receive_capability()
+            if not capability.available:
+                return await _followup(
+                    interaction,
+                    f"❌ Live Captions are not ready on this host: {capability.reason}.",
+                )
+            await manager.start(session)
+        except VoiceReceiveUnavailable as exc:
+            return await _followup(interaction, f"❌ {exc}")
+
+        await _followup(
+            interaction,
+            "✅ Live Captions started. Each participant must press **Caption My Voice** before Dank Shield will route "
+            "their isolated speaker audio into transcription. Audio is not saved by Dank Shield.",
+        )
+
     @discord.ui.button(label="End Session", emoji="🛑", style=discord.ButtonStyle.danger, custom_id="dank:hub:manage:end:v1", row=1)
     async def end(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -2341,6 +2382,38 @@ class CommunitySessionPublicView(discord.ui.View):
             view=SessionControlView(int(interaction.user.id), session_id=sid),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
+    @discord.ui.button(label="Caption My Voice", emoji="📝", style=discord.ButtonStyle.secondary, custom_id="dank:hub:public:captionme:v1", row=1)
+    async def caption_me(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_ephemeral(interaction)
+        session = await self._resolve(interaction)
+        if session is None:
+            return
+        sid = _safe_str(session.get("id"))
+        try:
+            members = await hub.list_session_members(sid)
+        except hub.CommunityHubError as exc:
+            return await _followup(interaction, f"❌ {_error_text(exc)}")
+        if not any(_safe_int(row.get("user_id"), 0) == int(interaction.user.id) and _safe_str(row.get("role")) != "waitlist" for row in members):
+            return await _followup(interaction, "Join this group before opting your voice into Live Captions.")
+
+        manager = ensure_community_voice_caption_manager(interaction.client)
+        try:
+            enabled = await manager.toggle_consent(sid, int(interaction.user.id))
+        except VoiceReceiveUnavailable as exc:
+            return await _followup(interaction, f"❌ {exc}")
+
+        await _followup(
+            interaction,
+            (
+                "✅ Your voice is opted into this session's Live Captions. Dank Shield will keep your Discord audio "
+                "separate from other speakers and process it only while captions are running."
+            )
+            if enabled
+            else "Live Captions are off for your voice. Your speaker consent was cleared immediately.",
         )
 
     @discord.ui.button(label="Play Again", emoji="🔁", style=discord.ButtonStyle.success, custom_id="dank:hub:public:replay:v1", row=0)
