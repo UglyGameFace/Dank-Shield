@@ -83,7 +83,7 @@ def _home_embed() -> discord.Embed:
     )
     embed.add_field(
         name="Utility",
-        value="🎮 Community Hub • 🧰 Community Tools • 📊 Server Stats • 📡 Status • 🩺 Diagnostics • 📎 Card Assets • ❓ Help",
+        value="🎮 Community Hub • 📝 Live Captions • 🧰 Community Tools • 📊 Server Stats • 📡 Status • 🩺 Diagnostics • 📎 Card Assets • ❓ Help",
         inline=False,
     )
     embed.add_field(
@@ -291,6 +291,12 @@ class CompactDankHomeView(_OwnedView):
         _ = button
         from .public_server_stats import open_server_stats_center
         await open_server_stats_center(interaction)
+
+    @discord.ui.button(label="Live Captions", emoji="📝", style=discord.ButtonStyle.primary, custom_id="dank:home:live_captions:v1", row=3)
+    async def live_captions(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_live_captions import open_server_live_captions
+        await open_server_live_captions(interaction, replace_message=True)
 
     @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, custom_id="dank:home:close:v1", row=3)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
