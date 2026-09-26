@@ -538,12 +538,24 @@ async def _recover_unowned_private_component(
         if owner_state is not False:
             return False
 
-        await asyncio.sleep(PRIVATE_MENU_RECOVERY_GRACE_SECONDS)
-        if _response_done(interaction):
-            return False
-        owner_state = _view_store_component_owner_state(bot, interaction)
-        if owner_state is not False:
-            return False
+        custom_id = _safe_text(_interaction_data(interaction).get("custom_id"), limit=180)
+        is_private_community_hub = (
+            custom_id.startswith("dank:hub:")
+            and not custom_id.startswith("dank:hub:public:")
+        )
+
+        # A definitely-unowned private Community Hub control has no alternate
+        # business listener. Claim it immediately so a stale panel does not burn
+        # the interaction window waiting on the generic private-menu grace.
+        # Other private surfaces keep the grace period because some still have
+        # additive listeners outside discord.py's ViewStore.
+        if not is_private_community_hub:
+            await asyncio.sleep(PRIVATE_MENU_RECOVERY_GRACE_SECONDS)
+            if _response_done(interaction):
+                return False
+            owner_state = _view_store_component_owner_state(bot, interaction)
+            if owner_state is not False:
+                return False
 
         # Atomically claim the interaction by replacing the stale ephemeral
         # message itself. discord.py stores the replacement view under the same
@@ -551,18 +563,30 @@ async def _recover_unowned_private_component(
         # both removes the dead controls and immediately restores ViewStore
         # ownership. If another listener wins first, this response raises and
         # recovery exits without a competing message.
-        from .commands_ext.public_command_surface_v2 import (
-            replace_with_compact_dank_home,
-        )
-
         try:
-            await replace_with_compact_dank_home(
-                interaction,
-                content=(
-                    "♻️ That private Dank Shield menu expired or belonged to an older bot session. "
-                    "I refreshed the Control Center in place; the stale action was not executed."
-                ),
-            )
+            if is_private_community_hub:
+                from .commands_ext.public_community_hub import open_community_hub
+
+                await open_community_hub(
+                    interaction,
+                    replace_message=True,
+                    recovery_notice=(
+                        "♻️ That Community Hub panel expired or belonged to an older bot session. "
+                        "I refreshed Community Hub in place; the stale action was not executed."
+                    ),
+                )
+            else:
+                from .commands_ext.public_command_surface_v2 import (
+                    replace_with_compact_dank_home,
+                )
+
+                await replace_with_compact_dank_home(
+                    interaction,
+                    content=(
+                        "♻️ That private Dank Shield menu expired or belonged to an older bot session. "
+                        "I refreshed the Control Center in place; the stale action was not executed."
+                    ),
+                )
         except Exception:
             if _response_done(interaction):
                 return False
