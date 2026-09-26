@@ -263,6 +263,37 @@ def test_unowned_ephemeral_component_recovers_in_place_to_fresh_home(monkeypatch
     asyncio.run(run())
 
 
+def test_unowned_ephemeral_community_hub_component_recovers_immediately_to_fresh_hub(monkeypatch):
+    async def run() -> None:
+        from stoney_verify.commands_ext import public_community_hub
+        from stoney_verify.commands_ext.public_community_hub import CommunityHubView
+
+        interaction = FakeInteraction(ephemeral=True)
+        interaction.data["custom_id"] = "dank:hub:find:v1"
+        store = Obj(_views={}, _dynamic_items={})
+        bot = Obj(_connection=Obj(_view_store=store))
+        interaction.client = bot
+
+        async def unexpected_sleep(_seconds: float) -> None:
+            raise AssertionError("known stale Community Hub controls must recover without generic grace")
+
+        monkeypatch.setattr(guard.asyncio, "sleep", unexpected_sleep)
+        monkeypatch.setattr(public_community_hub, "ensure_community_hub_runtime", lambda _bot: None)
+
+        recovered = await guard._recover_unowned_private_component(bot, interaction)
+
+        assert recovered is True
+        assert interaction.response.done is True
+        assert len(interaction.response.edits) == 1
+        payload = interaction.response.edits[0]
+        assert "Community Hub panel expired" in payload["content"]
+        assert "stale action was not executed" in payload["content"]
+        assert isinstance(payload["view"], CommunityHubView)
+        assert interaction.followup.sent == []
+
+    asyncio.run(run())
+
+
 def test_private_recovery_loses_atomic_claim_cleanly_to_another_listener(monkeypatch):
     async def run() -> None:
         interaction = FakeInteraction(ephemeral=True)

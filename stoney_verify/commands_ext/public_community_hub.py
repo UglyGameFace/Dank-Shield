@@ -994,13 +994,14 @@ async def open_community_hub(
     interaction: discord.Interaction,
     *,
     replace_message: bool = True,
+    recovery_notice: Optional[str] = None,
 ) -> None:
     ensure_community_hub_runtime(interaction.client)
     if interaction.guild is None:
         return await _private(interaction, "Community Hub is available inside servers.")
     if replace_message:
         await interaction.response.edit_message(
-            content=None,
+            content=recovery_notice,
             embed=_hub_embed(),
             view=CommunityHubView(int(interaction.user.id)),
             allowed_mentions=discord.AllowedMentions.none(),
@@ -1008,6 +1009,7 @@ async def open_community_hub(
         return
     await _private(
         interaction,
+        content=recovery_notice or "",
         embed=_hub_embed(),
         view=CommunityHubView(int(interaction.user.id)),
     )

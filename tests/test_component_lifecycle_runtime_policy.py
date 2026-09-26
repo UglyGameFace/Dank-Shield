@@ -48,6 +48,7 @@ def test_control_center_uses_one_shared_private_session_lifetime() -> None:
         "public_verify_command_center.py",
         "public_cleanup_command_center.py",
         "public_community_tools.py",
+        "public_community_hub.py",
         "public_share_router.py",
         "public_quiet_notice.py",
         "public_server_stats.py",
@@ -82,6 +83,7 @@ def test_component_runtime_is_single_prelogin_lifecycle_owner() -> None:
     assert "_message_is_ephemeral" in guard
     assert "_recover_unowned_private_component" in guard
     assert "replace_with_compact_dank_home" in guard
+    assert "open_community_hub" in guard
     assert "stale action was not executed" in guard
 
 
@@ -92,6 +94,9 @@ def test_private_stale_recovery_never_replays_feature_business_logic() -> None:
     body = guard[start:end]
 
     assert "replace_with_compact_dank_home" in body
+    assert "open_community_hub" in body
+    assert 'custom_id.startswith("dank:hub:")' in body
+    assert 'not custom_id.startswith("dank:hub:public:")' in body
     assert "interaction.response.defer" not in body
     assert "apply_basic_verification" not in body
     assert "handle_public_ticket_panel_click" not in body
