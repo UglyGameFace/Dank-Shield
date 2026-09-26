@@ -509,6 +509,11 @@ class QuickMatchModal(discord.ui.Modal, title="Quick Match"):
             if not session or match_user_id <= 0:
                 raise hub.CommunityHubError("Quick Match formed an incomplete match result.")
 
+            if bool(result.get("replayed")) and _safe_str(session.get("state")) != "creating":
+                if _safe_str(session.get("state")) in {"open", "forming", "ready", "active", "paused"}:
+                    return result
+                raise hub.CommunityHubError("The previous Quick Match session is no longer recoverable.")
+
             try:
                 provisioned = await runtime.provision_session(interaction, session)
             except Exception:
