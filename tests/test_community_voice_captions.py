@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import struct
+from pathlib import Path
 
 from stoney_verify.community_voice_captions import (
     CaptionEngine,
@@ -11,6 +12,9 @@ from stoney_verify.community_voice_captions import (
     normalize_pcm16_lossless_timing,
 )
 from stoney_verify.community_voice_receive import SpeakerPCMFrame
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _pcm(value: int, samples: int = 1920) -> bytes:
@@ -132,3 +136,81 @@ def test_low_confidence_disagreement_becomes_unclear_not_invented_text() -> None
     asyncio.run(_run())
     assert published[0][0] == 20
     assert published[0][1] == "[unclear audio]"
+
+
+class _ZeroConfidenceTranscriber:
+    async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
+        return TranscriptResult("possibly wrong words", 0.0, "fake", "fake")
+
+
+def test_zero_confidence_is_never_published_as_certain_text() -> None:
+    published = []
+
+    async def _run() -> None:
+        async def publish(user_id: int, text: str, confidence: float) -> None:
+            published.append((user_id, text, confidence))
+
+        engine = CaptionEngine(_ZeroConfidenceTranscriber(), publish)
+        await engine._process_segment(
+            CaptionSegment(
+                user_id=30,
+                pcm=_pcm(30_000),
+                started_at=1.0,
+                ended_at=2.0,
+            )
+        )
+
+    asyncio.run(_run())
+    assert published == [(30, "[unclear audio]", 0.0)]
+
+
+class _BlockingTranscriber:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+
+    async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
+        self.started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+def test_close_cancels_inflight_transcription_before_it_can_publish() -> None:
+    published = []
+
+    async def _run() -> None:
+        transcriber = _BlockingTranscriber()
+
+        async def publish(user_id: int, text: str, confidence: float) -> None:
+            published.append((user_id, text, confidence))
+
+        engine = CaptionEngine(transcriber, publish)
+        engine._spawn_segment(
+            CaptionSegment(
+                user_id=40,
+                pcm=_pcm(900),
+                started_at=1.0,
+                ended_at=2.0,
+            )
+        )
+        await asyncio.wait_for(transcriber.started.wait(), timeout=1.0)
+        await asyncio.wait_for(engine.close(), timeout=1.0)
+        await asyncio.sleep(0)
+        assert not engine._segment_tasks
+
+    asyncio.run(_run())
+    assert published == []
+
+
+def test_live_caption_privacy_disclosure_and_soak_gate_are_contractual() -> None:
+    runtime = (ROOT / "stoney_verify" / "community_voice_caption_runtime.py").read_text(encoding="utf-8")
+    ui = (ROOT / "stoney_verify" / "commands_ext" / "public_community_hub.py").read_text(encoding="utf-8")
+
+    assert "DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED" in runtime
+    assert "until the DAVE receive soak test is completed" in runtime
+    assert "OpenAI's transcription API" in runtime
+    assert "OpenAI's transcription API" in ui
+    assert "Caption My Voice" in ui
+
+    # The privacy notice must succeed before the runtime is registered active.
+    assert runtime.index("await destination.send(") < runtime.index("self._sessions[sid] = state")
+    assert "captions were not started" in runtime
