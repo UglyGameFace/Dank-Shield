@@ -13,6 +13,7 @@ GLOBALS = ROOT / "stoney_verify" / "globals.py"
 QUEUE = ROOT / "stoney_verify" / "operation_queue.py"
 PERMISSIONS = ROOT / "stoney_verify" / "permission_repair_core.py"
 MIGRATION = ROOT / "supabase" / "migrations" / "20260925193000_community_hub.sql"
+MATCHMAKING_MIGRATION = ROOT / "supabase" / "migrations" / "20260926044000_community_hub_matchmaking_loop.sql"
 
 
 def _text(path: Path) -> str:
@@ -214,6 +215,7 @@ def test_migration_enforces_core_session_and_partner_invariants() -> None:
 
 def test_open_to_play_is_expiring_opt_in_not_presence_surveillance() -> None:
     migration = _text(MIGRATION)
+    matchmaking = _text(MATCHMAKING_MIGRATION)
     service = _text(SERVICE)
     ui = _text(UI)
     assert "class OpenToPlayModal" in ui
@@ -221,9 +223,41 @@ def test_open_to_play_is_expiring_opt_in_not_presence_surveillance() -> None:
     assert "def _availability_embed" in ui
     assert "create table if not exists public.dank_community_availability" in migration
     assert "expires_at timestamptz not null" in migration
+    assert "add column if not exists auto_match boolean not null default false" in matchmaking
     assert "async def set_availability" in service
+    assert "async def set_availability_auto_match" in service
     assert "async def delete_expired_availability" in service
-    assert "Open to Play" in ui
+    assert "Enable Quick Match" in ui
+    assert "separate explicit opt-in" in ui
+
+
+def test_quick_match_prefers_existing_groups_then_forms_only_opted_in_matches() -> None:
+    matchmaking = _text(MATCHMAKING_MIGRATION)
+    service = _text(SERVICE)
+    runtime = _text(RUNTIME)
+    ui = _text(UI)
+
+    assert "p_idempotency_key text" in matchmaking
+    assert "idempotency_key=p_idempotency_key" in matchmaking
+    assert matchmaking.index("idempotency_key=p_idempotency_key") < matchmaking.index("Existing public groups remain the preferred path")
+    assert "and a.auto_match=true" in matchmaking
+    assert "match safety exclusion prevents this match" in matchmaking
+    assert "for update of a skip locked" in matchmaking
+    assert "session.quick_match_formed" in matchmaking
+    assert "community_hub_normalize_formation" in matchmaking
+    assert "grant execute on function public.community_hub_quick_match(text,text,text,text) to service_role" in matchmaking
+
+    assert "idempotency_key: str" in service
+    assert '"p_idempotency_key": key' in service
+    assert "async def normalize_session_formation" in service
+    assert "session = await hub.normalize_session_formation(session_id, guild_id)" in runtime
+    assert 'bot.add_listener(runtime.on_member_remove, "on_member_remove")' in runtime
+
+    assert "availability_summary=availability" in ui
+    assert 'custom_id="dank:hub:find:quick:v1"' in ui
+    assert 'custom_id="dank:hub:find:available:v1"' in ui
+    assert "created_match" in ui
+    assert "Quick Match formed a new" in ui
 
 
 def test_match_safety_is_private_and_enforced_atomically_on_join() -> None:
