@@ -223,7 +223,15 @@ begin
     where guild_a_id=v_a and guild_b_id=v_b
     for update;
 
-    if found and v_link.state='active' then
+    if v_replayed then
+        if not found or v_link.state <> 'active' then
+            raise exception 'HubLink code was already consumed and the partner link is no longer active';
+        end if;
+        -- A lost Discord response may replay the same successful transaction.
+        -- Replay is idempotent only while the relationship it created remains
+        -- active; an explicit later revoke permanently kills this code.
+        null;
+    elsif found and v_link.state='active' then
         -- Preserve any sharing choices already made on an established link.
         null;
     elsif found then
