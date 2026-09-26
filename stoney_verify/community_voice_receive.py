@@ -159,6 +159,10 @@ class PerSpeakerFrameBridge:
         with self._lock:
             return int(user_id) in self._allowed_user_ids
 
+    def opted_in_user_ids(self) -> tuple[int, ...]:
+        with self._lock:
+            return tuple(sorted(self._allowed_user_ids))
+
     def _increment(self, field: str) -> None:
         with self._lock:
             setattr(self.health, field, int(getattr(self.health, field)) + 1)
