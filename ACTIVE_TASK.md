@@ -83,7 +83,8 @@ Implemented in this slice:
 - previous-process `creating` sessions are detected from the runtime start timestamp, moved into bounded cleanup, and Quick Match eligibility is restored when appropriate;
 - member departure clears active Open-to-Play rows;
 - availability embeds are bounded to eight rows with truncated notes so user data cannot exceed Discord embed limits and turn a deferred interaction into a failed edit;
-- Community Hub CI applies the base + follow-up migration twice and exercises consent, formation, replay, existing-group preference, Match Safety, duplicate same-game exclusion, and RPC privilege boundaries.
+- Community Hub CI applies the base + follow-up migration twice and exercises consent, formation, replay, existing-group preference, Match Safety, duplicate same-game exclusion, and RPC privilege boundaries;
+- normal availability reads use schema-tolerant `select("*")`, and manual session publication never calls the new normalization RPC, so an external host redeploy cannot break ordinary Hub paths while the production migration workflow is still applying the follow-up schema.
 
 Deferred until this slice is merged:
 - session privacy / incomplete `invite_only` behavior;
