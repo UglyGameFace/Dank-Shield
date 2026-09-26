@@ -293,6 +293,7 @@ class CommunityVoiceCaptionManager:
                     "Dank Shield keeps each opted-in Discord speaker isolated before transcription. "
                     "Only members who explicitly choose **Caption My Voice** are transcribed. "
                     "Opted-in audio is sent to **Google Gemini's transcription API** for speech-to-text. "
+                    "This deployment uses Gemini's **Free Tier**; Google states Free Tier submitted content may be used to improve its products. "
                     "Dank Shield keeps audio only in bounded memory while processing it and does not save the audio.",
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
