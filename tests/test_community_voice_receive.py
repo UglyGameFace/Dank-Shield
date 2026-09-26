@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import subprocess
 import sys
 import threading
@@ -15,6 +16,8 @@ from stoney_verify.community_voice_receive import (
     PerSpeakerFrameBridge,
     VOICE_RECV_DAVE_COMMIT,
     VOICE_RECV_DAVE_SOURCE,
+    _VoiceRecvBenignNoiseFilter,
+    _install_voice_recv_noise_filter,
     _install_voice_recv_router_survival_patch,
     bundled_opus_library_path,
     ensure_opus_loaded,
@@ -40,6 +43,76 @@ class _QueuedLoop:
         self.callbacks.clear()
         for callback in callbacks:
             callback()
+
+
+def _record(name: str, msg: str, args=(), *, level: int = logging.INFO) -> logging.LogRecord:
+    return logging.LogRecord(
+        name=name,
+        level=level,
+        pathname=__file__,
+        lineno=1,
+        msg=msg,
+        args=args,
+        exc_info=None,
+    )
+
+
+def test_voice_recv_noise_filter_only_rate_limits_known_benign_floods(monkeypatch) -> None:
+    times = iter([100.0, 101.0, 161.0, 200.0, 201.0])
+    monkeypatch.setattr(voice_receive.time, "monotonic", lambda: next(times))
+    filt = _VoiceRecvBenignNoiseFilter(interval_seconds=60.0)
+
+    sender_report = _record(
+        "discord.ext.voice_recv.reader",
+        "Received unexpected rtcp packet: type=200, <class 'discord.ext.voice_recv.rtp.SenderReportPacket'>",
+    )
+    assert filt.filter(sender_report) is True
+    assert filt.filter(sender_report) is False
+    assert filt.filter(sender_report) is True
+
+    seq_only = _record(
+        "discord.ext.voice_recv.gateway",
+        "WS payload has extra keys: %s",
+        ({"seq": 65},),
+    )
+    assert filt.filter(seq_only) is True
+    assert filt.filter(seq_only) is False
+
+    # Real anomalies and warnings stay fully visible.
+    unknown_ssrc = _record(
+        "discord.ext.voice_recv.reader",
+        "Received packet for unknown ssrc 18023",
+    )
+    packet_loss = _record(
+        "discord.ext.voice_recv.opus",
+        "2 packets were lost being flushed in decoder-17805",
+        level=logging.WARNING,
+    )
+    new_gateway_shape = _record(
+        "discord.ext.voice_recv.gateway",
+        "WS payload has extra keys: %s",
+        ({"seq": 66, "new_field": "x"},),
+    )
+    assert filt.filter(unknown_ssrc) is True
+    assert filt.filter(packet_loss) is True
+    assert filt.filter(new_gateway_shape) is True
+
+
+def test_voice_recv_noise_filter_installs_once_per_logger() -> None:
+    reader = logging.getLogger("discord.ext.voice_recv.reader")
+    gateway = logging.getLogger("discord.ext.voice_recv.gateway")
+
+    before_reader = sum(isinstance(item, _VoiceRecvBenignNoiseFilter) for item in reader.filters)
+    before_gateway = sum(isinstance(item, _VoiceRecvBenignNoiseFilter) for item in gateway.filters)
+
+    assert _install_voice_recv_noise_filter() is True
+    assert _install_voice_recv_noise_filter() is True
+
+    after_reader = sum(isinstance(item, _VoiceRecvBenignNoiseFilter) for item in reader.filters)
+    after_gateway = sum(isinstance(item, _VoiceRecvBenignNoiseFilter) for item in gateway.filters)
+
+    assert after_reader == max(1, before_reader)
+    assert after_gateway == max(1, before_gateway)
 
 
 def test_voice_dependencies_are_pinned_for_dave_receive(monkeypatch) -> None:
