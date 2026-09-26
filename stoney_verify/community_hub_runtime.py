@@ -136,6 +136,7 @@ class CommunityHubRuntime:
         self._presence_last_aggregate: dict[int, float] = {}
         self._presence_enabled_guilds: set[int] = set()
         self._settings_cache: dict[int, tuple[float, dict[str, Any]]] = {}
+        self._runtime_started_at = datetime.now(timezone.utc)
         self._startup_reconciled = False
 
     async def settings_for(self, guild_id: int, *, refresh: bool = False) -> dict[str, Any]:
@@ -216,22 +217,85 @@ class CommunityHubRuntime:
                 f"resources={len(resources)} recovered={recovered} missing={missing} unresolved={unresolved}"
             )
 
-        # Any session left in ENDING by a crashed process should continue cleanup
-        # rather than remain a permanent zombie.
+        # Sessions owned by the previous process must not remain zombies. An
+        # ENDING session resumes cleanup. A CREATING session whose timestamp
+        # predates this runtime is provably orphaned because the process that
+        # owned its Discord publication step is gone.
         try:
+            orphaned_creating = 0
             for guild in list(getattr(self.bot, "guilds", []) or []):
-                sessions = await hub.list_active_sessions(int(guild.id), limit=100)
+                guild_id = int(guild.id)
+                bot_actor_id = int(getattr(getattr(guild, "me", None), "id", 0) or 0)
+                sessions = await hub.list_active_sessions(guild_id, limit=100)
                 for session in sessions:
                     sid = _safe_str(session.get("id"))
-                    if session.get("state") == "ending" and sid:
+                    state = _safe_str(session.get("state"))
+                    if not sid:
+                        continue
+                    if state == "ending":
                         self.schedule_cleanup(
                             sid,
-                            int(guild.id),
-                            actor_id=int(getattr(getattr(guild, "me", None), "id", 0) or 0),
+                            guild_id,
+                            actor_id=bot_actor_id,
                             delay_seconds=5,
                         )
+                        continue
+                    if state != "creating":
+                        continue
+
+                    created_at = _parse_dt(session.get("created_at"))
+                    if created_at is None or created_at >= self._runtime_started_at:
+                        continue
+
+                    if _safe_str(session.get("idempotency_key")).startswith("quick:"):
+                        try:
+                            members = await hub.list_session_members(sid)
+                            candidate = next(
+                                (
+                                    row
+                                    for row in members
+                                    if _safe_str(row.get("role")) != "host"
+                                    and _safe_int(row.get("user_id"), 0) > 0
+                                ),
+                                None,
+                            )
+                            candidate_id = _safe_int((candidate or {}).get("user_id"), 0)
+                            if candidate_id > 0:
+                                await hub.set_availability_auto_match(
+                                    guild_id,
+                                    candidate_id,
+                                    True,
+                                    game_name=_safe_str(session.get("game_name")),
+                                )
+                        except hub.CommunityHubError:
+                            pass
+
+                    try:
+                        ended = await hub.transition_session(
+                            sid,
+                            guild_id,
+                            bot_actor_id,
+                            "begin_end",
+                            staff_override=True,
+                            reason="Interrupted before Community Hub publication during a previous bot process",
+                        )
+                        await self.refresh_session_card(ended)
+                        self.schedule_cleanup(
+                            sid,
+                            guild_id,
+                            actor_id=bot_actor_id,
+                            delay_seconds=5,
+                        )
+                        orphaned_creating += 1
+                    except hub.CommunityHubError as exc:
+                        _log(
+                            "creating-session reconcile failed "
+                            f"session={sid} error={type(exc).__name__}: {exc}"
+                        )
+            if orphaned_creating:
+                _log(f"startup reconcile orphaned_creating={orphaned_creating}")
         except Exception as exc:
-            _log(f"ending-session reconcile degraded: {type(exc).__name__}: {exc}")
+            _log(f"session-state reconcile degraded: {type(exc).__name__}: {exc}")
 
     async def _reconcile_resource(self, resource: dict[str, Any]) -> str:
         guild_id = _safe_int(resource.get("guild_id"), 0)
