@@ -1012,6 +1012,107 @@ class CaptionVoiceRulePickerView(_OwnedView):
         )
 
 
+class CaptionLanguageOutputSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, current_mode: str) -> None:
+        self.owner_id = int(owner_id)
+        mode = _caption_output_mode_label(current_mode)
+        options = [
+            discord.SelectOption(
+                label="Original language",
+                value="original",
+                description="Show Gemini's finalized transcript in the language spoken.",
+                emoji="🗣️",
+                default=current_mode == "original",
+            ),
+            discord.SelectOption(
+                label="English",
+                value="english",
+                description="Translate non-English finalized text to English only.",
+                emoji="🇺🇸",
+                default=current_mode == "english",
+            ),
+            discord.SelectOption(
+                label="Original + English",
+                value="bilingual",
+                description="Show the original transcript plus an English translation.",
+                emoji="🌐",
+                default=current_mode == "bilingual",
+            ),
+        ]
+        super().__init__(
+            placeholder=f"Caption text output: {mode}",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="dank:captions:setup:language_output:v1",
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id:
+            return await interaction.response.send_message(
+                "Open your own Live Captions setup panel.",
+                ephemeral=True,
+            )
+        if not _staff_authorized(interaction):
+            return await interaction.response.send_message(
+                "❌ Manage Server or Administrator is required.",
+                ephemeral=True,
+            )
+        await _defer_update(interaction)
+        selected = str(self.values[0] if self.values else "original")
+        try:
+            await _save_caption_config(
+                interaction,
+                {
+                    CAPTION_OUTPUT_MODE_KEY: selected,
+                    # Empty language hints intentionally mean Gemini auto-detects
+                    # across its full supported language set and code-switching.
+                    CAPTION_LANGUAGE_CODES_KEY: [],
+                },
+            )
+        except Exception as exc:
+            return await _followup(
+                interaction,
+                f"❌ Could not save caption language output: {type(exc).__name__}: {str(exc)[:180]}",
+            )
+        await _edit_original(
+            interaction,
+            embed=await build_server_live_captions_setup_embed(interaction),
+            view=ServerLiveCaptionsSetupView(self.owner_id),
+        )
+        await _followup(
+            interaction,
+            f"✅ Live Captions now use **Auto-detect 85+ languages** with **{_caption_output_mode_label(selected)}** output.",
+        )
+
+
+class CaptionLanguageOutputView(_OwnedView):
+    def __init__(self, owner_id: int, current_mode: str) -> None:
+        super().__init__(owner_id)
+        self.add_item(CaptionLanguageOutputSelect(owner_id, current_mode))
+
+    @discord.ui.button(
+        label="Back to Setup",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank:captions:setup:language_back:v1",
+        row=1,
+    )
+    async def back(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _edit_original(
+            interaction,
+            embed=await build_server_live_captions_setup_embed(interaction),
+            view=ServerLiveCaptionsSetupView(self.owner_id),
+        )
+
+
 class ServerLiveCaptionsSetupView(_OwnedView):
     @discord.ui.button(
         label="Select Output Channel",
@@ -1218,6 +1319,45 @@ class ServerLiveCaptionsSetupView(_OwnedView):
         )
 
     @discord.ui.button(
+        label="Language & Translation",
+        emoji="🌐",
+        style=discord.ButtonStyle.primary,
+        custom_id="dank:captions:setup:language:v1",
+        row=2,
+    )
+    async def language_output(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        if not _staff_authorized(interaction):
+            return await interaction.response.send_message(
+                "❌ Manage Server or Administrator is required.",
+                ephemeral=True,
+            )
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message(
+                "❌ This must be used inside a server.",
+                ephemeral=True,
+            )
+        cfg = await get_guild_config(int(guild.id), refresh=True)
+        mode = _caption_output_mode(cfg)
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="🌐 Live Captions Language & Translation",
+                description=(
+                    "Gemini Live automatically detects **85+ supported languages** and can handle code-switching. "
+                    "Choose how finalized captions are displayed. English translation uses the finalized transcript text only; "
+                    "the original audio is not sent through another translation pass."
+                ),
+                color=discord.Color.blurple(),
+            ),
+            view=CaptionLanguageOutputView(self.owner_id, mode),
+        )
+
+    @discord.ui.button(
         label="Clear Voice Rules",
         emoji="🧹",
         style=discord.ButtonStyle.danger,
@@ -1378,6 +1518,8 @@ async def open_server_live_captions_command(
 
 
 __all__ = [
+    "CaptionLanguageOutputSelect",
+    "CaptionLanguageOutputView",
     "CaptionOutputPickerView",
     "CaptionVoiceRulePickerView",
     "ServerLiveCaptionsSetupView",
