@@ -497,6 +497,10 @@ class CommunityHubRuntime:
             int(interaction.user.id),
             "publish",
         )
+        # Quick Match can pre-form a session with an explicitly opted-in member
+        # before the Discord card is published. Normalize the durable state only
+        # after publish so the existing state machine remains authoritative.
+        session = await hub.normalize_session_formation(session_id, guild_id)
         result["session"] = session
         await hub.bump_hourly_metric(guild_id, "sessions_created", 1)
         await hub.bump_game_metric(guild_id, _safe_str(session.get("game_name"), "Game"), "sessions_created", 1)
@@ -1216,6 +1220,15 @@ class CommunityHubRuntime:
                 except hub.CommunityHubError:
                     pass
 
+    async def on_member_remove(self, member: discord.Member) -> None:
+        if not _is_human(member):
+            return
+        try:
+            await hub.clear_availability(int(member.guild.id), int(member.id))
+        except hub.CommunityHubError:
+            return
+
+
     async def on_presence_update(
         self,
         before: discord.Member,
@@ -1470,6 +1483,7 @@ def ensure_community_hub_runtime(bot: Any) -> CommunityHubRuntime:
     bot.add_listener(runtime.on_ready, "on_ready")
     bot.add_listener(runtime.on_message, "on_message")
     bot.add_listener(runtime.on_voice_state_update, "on_voice_state_update")
+    bot.add_listener(runtime.on_member_remove, "on_member_remove")
     bot.add_listener(runtime.on_presence_update, "on_presence_update")
     return runtime
 
