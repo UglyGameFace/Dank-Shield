@@ -5,12 +5,14 @@ from types import SimpleNamespace
 
 from discord.opus import OpusError
 
+import stoney_verify.community_voice_receive as voice_receive
 from stoney_verify.community_voice_receive import (
     PCM_FRAME_ALIGNMENT,
     PerSpeakerFrameBridge,
     VOICE_RECV_DAVE_COMMIT,
     VOICE_RECV_DAVE_SOURCE,
     _install_voice_recv_router_survival_patch,
+    ensure_opus_loaded,
     voice_receive_capability,
     voice_receive_connection_diagnostics,
 )
@@ -35,15 +37,59 @@ class _QueuedLoop:
             callback()
 
 
-def test_voice_dependencies_are_pinned_for_dave_receive() -> None:
+def test_voice_dependencies_are_pinned_for_dave_receive(monkeypatch) -> None:
+    monkeypatch.setattr(voice_receive, "ensure_opus_loaded", lambda: (True, "test-opus"))
     capability = voice_receive_capability()
     assert capability.discord_py_version == "2.7.1"
     assert capability.dave_available is True
     assert capability.receive_extension_available is True
     assert capability.inbound_dave_decrypt_available is True
+    assert capability.opus_available is True
+    assert capability.opus_library == "test-opus"
     assert capability.available is True
     assert VOICE_RECV_DAVE_COMMIT == "03dd1e2dafe85522cc458441cd5b143b136ac836"
     assert VOICE_RECV_DAVE_SOURCE == "imayhaveborkedit/discord-ext-voice-recv#58"
+
+
+def test_opus_loader_uses_discovered_native_library(monkeypatch) -> None:
+    state = {"loaded": False, "attempts": []}
+
+    monkeypatch.delenv("DANK_OPUS_LIBRARY", raising=False)
+    monkeypatch.setattr(voice_receive.discord.opus, "is_loaded", lambda: state["loaded"])
+    monkeypatch.setattr(
+        voice_receive.ctypes.util,
+        "find_library",
+        lambda name: "libopus.so.0" if name == "opus" else None,
+    )
+
+    def fake_load(name: str) -> None:
+        state["attempts"].append(name)
+        if name == "libopus.so.0":
+            state["loaded"] = True
+
+    monkeypatch.setattr(voice_receive.discord.opus, "load_opus", fake_load)
+
+    ok, library = ensure_opus_loaded()
+
+    assert ok is True
+    assert library == "libopus.so.0"
+    assert state["attempts"] == ["libopus.so.0"]
+
+
+def test_opus_loader_fails_closed_when_native_library_is_absent(monkeypatch) -> None:
+    monkeypatch.delenv("DANK_OPUS_LIBRARY", raising=False)
+    monkeypatch.setattr(voice_receive.discord.opus, "is_loaded", lambda: False)
+    monkeypatch.setattr(voice_receive.ctypes.util, "find_library", lambda _name: None)
+    monkeypatch.setattr(
+        voice_receive.discord.opus,
+        "load_opus",
+        lambda _name: (_ for _ in ()).throw(OSError("missing")),
+    )
+
+    ok, library = ensure_opus_loaded()
+
+    assert ok is False
+    assert library == "not-found"
 
 
 def test_voice_receive_connection_diagnostics_report_dave_and_ssrc_state() -> None:
