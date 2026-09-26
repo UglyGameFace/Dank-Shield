@@ -482,10 +482,15 @@ async def quick_match(
     guild_id: int | str,
     user_id: int | str,
     game_name: str,
+    *,
+    idempotency_key: str,
 ) -> dict[str, Any] | None:
     gid = _safe_str(guild_id)
     uid = _safe_str(user_id)
     game = normalize_game_name(game_name)
+    key = _safe_str(idempotency_key)[:240]
+    if not key:
+        raise CommunityHubError("A Quick Match idempotency key is required.")
 
     def _write() -> dict[str, Any] | None:
         sb = _require_supabase()
@@ -495,6 +500,7 @@ async def quick_match(
                 "p_guild_id": gid,
                 "p_user_id": uid,
                 "p_game_name": game,
+                "p_idempotency_key": key,
             },
         ).execute()
         data = getattr(response, "data", None)
@@ -510,6 +516,25 @@ async def quick_match(
             if isinstance(data[0], dict):
                 return dict(data[0])
         return None
+
+    return await _db_call(_write)
+
+
+async def normalize_session_formation(
+    session_id: str,
+    guild_id: int | str,
+) -> dict[str, Any]:
+    sid = _uuid_text(session_id)
+    gid = _safe_str(guild_id)
+
+    def _write() -> dict[str, Any]:
+        sb = _require_supabase()
+        return _rpc_payload(
+            sb.rpc(
+                "community_hub_normalize_formation",
+                {"p_session_id": sid, "p_guild_id": gid},
+            ).execute()
+        )
 
     return await _db_call(_write)
 
@@ -1326,7 +1351,7 @@ async def list_available_users(
         sb = _require_supabase()
         return _rows(
             sb.table("dank_community_availability")
-            .select("user_id,game_name,play_style,mic_preference,note,expires_at")
+            .select("user_id,game_name,play_style,mic_preference,note,expires_at,auto_match")
             .eq("guild_id", gid)
             .eq("game_key", key)
             .gt("expires_at", now)
@@ -1351,7 +1376,7 @@ async def availability_summary(
         sb = _require_supabase()
         return _rows(
             sb.table("dank_community_availability")
-            .select("user_id,game_key,game_name")
+            .select("user_id,game_key,game_name,auto_match")
             .eq("guild_id", gid)
             .gt("expires_at", now)
             .limit(safe_limit)
@@ -1360,25 +1385,84 @@ async def availability_summary(
 
     rows = await _db_call(_read)
     users = {_safe_str(row.get("user_id")) for row in rows if row.get("user_id")}
+    auto_match_users = {
+        _safe_str(row.get("user_id"))
+        for row in rows
+        if row.get("user_id") and bool(row.get("auto_match"))
+    }
     games: dict[str, dict[str, Any]] = {}
     for row in rows:
         key = _safe_str(row.get("game_key"), "game")
         bucket = games.setdefault(
             key,
-            {"name": _safe_str(row.get("game_name"), "Game"), "users": set()},
+            {
+                "name": _safe_str(row.get("game_name"), "Game"),
+                "users": set(),
+                "auto_match_users": set(),
+            },
         )
         uid = _safe_str(row.get("user_id"))
         if uid:
             bucket["users"].add(uid)
+            if bool(row.get("auto_match")):
+                bucket["auto_match_users"].add(uid)
     top = sorted(
         (
-            {"name": value["name"], "count": len(value["users"])}
+            {
+                "name": value["name"],
+                "count": len(value["users"]),
+                "auto_match_count": len(value["auto_match_users"]),
+            }
             for value in games.values()
         ),
-        key=lambda row: row["count"],
+        key=lambda row: (row["count"], row["auto_match_count"]),
         reverse=True,
     )[:10]
-    return {"unique_users": len(users), "top_games": top}
+    return {
+        "unique_users": len(users),
+        "auto_match_users": len(auto_match_users),
+        "top_games": top,
+    }
+
+
+async def set_availability_auto_match(
+    guild_id: int | str,
+    user_id: int | str,
+    enabled: bool,
+    *,
+    game_name: str | None = None,
+) -> list[dict[str, Any]]:
+    gid = _safe_str(guild_id)
+    uid = _safe_str(user_id)
+    key = game_key(game_name) if _safe_str(game_name) else ""
+    now = utc_now_iso()
+
+    def _write() -> list[dict[str, Any]]:
+        sb = _require_supabase()
+        query = (
+            sb.table("dank_community_availability")
+            .update({"auto_match": bool(enabled), "updated_at": utc_now_iso()})
+            .eq("guild_id", gid)
+            .eq("user_id", uid)
+            .gt("expires_at", now)
+        )
+        if key:
+            query = query.eq("game_key", key)
+        return _rows(query.execute())
+
+    rows = await _db_call(_write)
+    await record_event(
+        gid,
+        "availability.auto_match",
+        actor_id=uid,
+        subject_user_id=uid,
+        metadata={
+            "enabled": bool(enabled),
+            "game_key": key or None,
+            "rows": len(rows),
+        },
+    )
+    return rows
 
 
 async def clear_availability(
