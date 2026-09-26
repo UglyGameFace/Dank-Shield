@@ -620,6 +620,8 @@ def _hub_embed() -> discord.Embed:
 def _live_captions_overview_embed(
     sessions: list[dict[str, Any]],
     manager: Any,
+    *,
+    user_id: int,
 ) -> discord.Embed:
     capability = voice_receive_capability()
     enabled = live_captions_enabled()
@@ -658,7 +660,7 @@ def _live_captions_overview_embed(
             role = _safe_str(membership.get("role"), "member").replace("_", " ").title()
             state = manager.status(sid) if sid else {"active": False, "opted_in_user_ids": []}
             running = bool(state.get("active"))
-            opted_in = int(_safe_int(membership.get("user_id"), 0)) in {
+            opted_in = int(user_id) in {
                 _safe_int(value, 0) for value in (state.get("opted_in_user_ids") or [])
             }
             voice_ready = _safe_int(session.get("voice_channel_id"), 0) > 0
@@ -1484,7 +1486,11 @@ class CommunityHubView(_OwnedView):
         await _edit_private_original(
             interaction,
             content=None,
-            embed=_live_captions_overview_embed(sessions, manager),
+            embed=_live_captions_overview_embed(
+                sessions,
+                manager,
+                user_id=int(interaction.user.id),
+            ),
             view=LiveCaptionsHomeView(self.owner_id),
         )
 
