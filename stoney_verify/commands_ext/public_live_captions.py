@@ -511,7 +511,7 @@ async def build_server_live_captions_embed(
         value=(
             "Discord speakers stay isolated before transcription. Overlapping users are not mixed together. "
             "Opting out immediately blocks new audio and purges that speaker's buffered/queued/in-flight caption audio. "
-            "Opted-in audio is sent to Google Gemini's transcription API for speech-to-text; Dank Shield itself does not save it. "
+            "Opted-in audio is sent to Google Gemini's transcription API for speech-to-text. This deployment uses Gemini's Free Tier, where Google states submitted content may be used to improve its products; Dank Shield itself does not save the audio. "
             "If a microphone already captures a TV, game audio, or another person in the same room, that sound is already part "
             "of that Discord user's source stream."
         ),
@@ -683,7 +683,7 @@ class ServerLiveCaptionsView(_OwnedView):
         if enabled:
             return await _followup(
                 interaction,
-                "✅ Your voice is opted in. Speak for 2–5 seconds, then pause for about 1 second so a segment can close. Press **Refresh** to see exactly which pipeline stage is working. Your Discord speaker stream stays separate from other users before it is sent to Google Gemini's transcription API. Dank Shield itself does not save the audio.",
+                "✅ Your voice is opted in. Speak for 2–5 seconds, then pause for about 1 second so a segment can close. Press **Refresh** to see exactly which pipeline stage is working. Your Discord speaker stream stays separate from other users before it is sent to Google Gemini's transcription API. This deployment uses Gemini's Free Tier, where Google states submitted content may be used to improve its products. Dank Shield itself does not save the audio.",
             )
         await _followup(
             interaction,
