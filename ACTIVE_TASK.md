@@ -51,6 +51,7 @@ Confirmed current-state gaps:
 9. PR #336's first discovery implementation read `membership["user_id"]`, but `list_user_sessions()` intentionally does not select that column. Consent status therefore needed to use the actual interaction user ID instead of widening persistence reads.
 10. PR #336 made Community Hub captions discoverable, but general server Live Captions still did not exist: the only start path required a Community Hub session with a stored voice channel.
 11. Caption opt-out stopped new receive frames but did not explicitly purge that speaker's already-buffered, queued, or in-flight caption work. General server exposure makes that privacy edge unacceptable, so revocation must clear the speaker pipeline before returning.
+12. The packet-router thread could pass the consent check immediately before opt-out and schedule its event-loop callback afterward. Without a consent generation token, a rapid opt-out/re-opt-in could make that stale pre-revocation frame look valid again.
 
 ## Execution path
 
@@ -134,6 +135,7 @@ Implemented in the current voice-caption slice:
 - Community Hub and general captions cannot run competing receivers in the same guild because both use the same `_guild_owner` lock;
 - general caption state/consent remains memory-only and is not written to Supabase;
 - opting out now blocks future frames, discards that speaker's segment buffer and queued frames, cancels their in-flight transcription tasks, and prevents scheduled pre-revocation frame delivery from publishing afterward;
+- the receive bridge now stamps accepted frames with the speaker's consent generation; a frame scheduled under an older generation is rejected even if the same user opts back in before its callback runs;
 - the default-off real-DAVE soak gate remains in place for both Community Hub and general server use.
 
 Still deferred after HubLink:
