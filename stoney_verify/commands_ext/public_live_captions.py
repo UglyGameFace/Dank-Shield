@@ -192,6 +192,9 @@ def _soak_pipeline_diagnosis(status: dict[str, Any]) -> str:
     unknown = int(health.get("frames_unknown_source") or 0)
     mismatch = int(health.get("frames_source_mismatch") or 0)
     malformed = int(health.get("frames_malformed_pcm") or 0)
+    opus_drops = int(health.get("opus_decode_drops") or 0)
+    reader_failures = int(health.get("reader_failures") or 0)
+    reader_error = str(connection.get("reader_error") or "").strip()
     transcribed = int(status.get("segments_transcribed") or 0)
     published = int(status.get("segments_published") or 0)
     empty = int(status.get("segments_empty") or 0)
@@ -205,7 +208,15 @@ def _soak_pipeline_diagnosis(status: dict[str, Any]) -> str:
         )
     if frames_seen <= 0:
         if not reader_listening:
-            return "🔴 **The voice receive reader is not listening.** The bot may be connected, but the receive worker is not active."
+            if reader_error:
+                return (
+                    "🔴 **The voice receive reader stopped after an error.** "
+                    f"{reader_error}"
+                )
+            return (
+                "🔴 **The voice receive reader is not listening.** "
+                f"Recorded reader failures: **{reader_failures}** • corrupt Opus drops: **{opus_drops}**."
+            )
         if raw_udp <= 0:
             return (
                 "🔴 **No UDP voice packets reached Dank Shield.** The bot joined voice, but the receive socket saw no traffic while you spoke."
@@ -390,13 +401,20 @@ async def build_server_live_captions_embed(
                 value=(
                     f"Raw UDP: **{int(health.get('raw_udp_packets') or 0)}** • sink PCM: **{int(health.get('frames_seen') or 0)}** • routed: **{int(health.get('frames_routed') or 0)}** • queue: **{int(general.get('queue_depth') or 0)}**\n"
                     f"DAVE ready: **{'yes' if connection.get('dave_session_ready') else 'no'}** • status: **{str(connection.get('dave_session_status') or 'none')[:24]}** • protocol: **{int(connection.get('dave_protocol_version') or 0)}** • epoch: **{int(connection.get('dave_epoch') or 0)}**\n"
-                    f"Reader: **{'listening' if connection.get('reader_listening') else 'stopped'}** • mapped SSRCs: **{int(connection.get('mapped_ssrcs') or 0)}**\n"
-                    f"Not consented: **{int(health.get('frames_not_consented') or 0)}** • unknown source: **{int(health.get('frames_unknown_source') or 0)}** • identity mismatch: **{int(health.get('frames_source_mismatch') or 0)}**\n"
+                    f"Reader: **{'listening' if connection.get('reader_listening') else 'stopped'}** • mapped SSRCs: **{int(connection.get('mapped_ssrcs') or 0)}** • reader failures: **{int(health.get('reader_failures') or 0)}**\n"
+                    f"Corrupt Opus dropped: **{int(health.get('opus_decode_drops') or 0)}** • not consented: **{int(health.get('frames_not_consented') or 0)}** • unknown source: **{int(health.get('frames_unknown_source') or 0)}** • identity mismatch: **{int(health.get('frames_source_mismatch') or 0)}**\n"
                     f"Malformed PCM: **{int(health.get('frames_malformed_pcm') or 0)}** • transcribed: **{int(general.get('segments_transcribed') or 0)}** • published: **{int(general.get('segments_published') or 0)}** • empty: **{int(general.get('segments_empty') or 0)}**\n"
                     f"Unclear: **{int(general.get('segments_unclear') or 0)}** • failures: **{int(general.get('segment_failures') or 0)}**"
                 ),
                 inline=False,
             )
+            reader_error = str(connection.get("reader_error") or "").strip()
+            if reader_error:
+                embed.add_field(
+                    name="Receive worker error",
+                    value=f"`{reader_error[:900]}`",
+                    inline=False,
+                )
             embed.add_field(
                 name="Pipeline diagnosis",
                 value=_soak_pipeline_diagnosis(general),
