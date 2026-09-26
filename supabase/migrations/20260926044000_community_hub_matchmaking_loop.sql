@@ -211,16 +211,17 @@ begin
                 (b.blocked_user_id=p_user_id and b.blocker_user_id=a.user_id)
             )
       )
-      and (
-          select count(*)
+      and not exists (
+          select 1
           from public.dank_community_session_members m
           join public.dank_community_sessions s on s.id=m.session_id
           where m.guild_id=p_guild_id
             and m.user_id=a.user_id
             and m.left_at is null
             and m.role <> 'waitlist'
+            and lower(btrim(s.game_name))=lower(btrim(p_game_name))
             and s.state in ('creating','open','forming','ready','active','paused','ending','interrupted','recovering')
-      ) < v_settings.max_active_sessions_per_member
+      )
     order by a.updated_at, a.user_id
     limit 1
     for update of a skip locked;
@@ -264,9 +265,11 @@ begin
       and m.user_id=v_candidate.user_id
       and m.left_at is null
       and m.role <> 'waitlist'
+      and lower(btrim(s.game_name))=lower(btrim(p_game_name))
+      and s.id <> v_session_id
       and s.state in ('creating','open','forming','ready','active','paused','ending','interrupted','recovering');
 
-    if v_candidate_active >= v_settings.max_active_sessions_per_member then
+    if v_candidate_active > 0 then
         raise exception 'quick match candidate became unavailable';
     end if;
 
