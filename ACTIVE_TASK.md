@@ -61,6 +61,7 @@ Confirmed current-state gaps:
 19. The first soak after PR #342 then failed earlier and more deterministically: raw UDP reached **1593**, DAVE stayed active at protocol **1 / epoch 46**, **6 SSRCs** were mapped, but the receive worker stopped with **`discord.opus.OpusNotLoaded`** before the first `PacketDecoder` could create a PCM decoder. Dank Shield had no deterministic native Opus source and no explicit preload/capability gate.
 20. PR #343 correctly added a fail-closed Opus capability check but made the wrong deployment assumption: Discloud's documented `ffmpeg` APT option installs the `ffmpeg` package; it does **not** promise a standalone `libopus.so` discoverable by Python `ctypes`. The post-deploy soak failed before joining with the new explicit **native Opus runtime unavailable** error, proving that assumption false. The corrected design must supply its own known libopus binary instead of inheriting one accidentally from the host image.
 21. The first soak after PR #344 proved the entire Discord receive path: bundled Opus loaded, DAVE active, reader listening, PCM reaching Dank Shield, and a caption segment was created for the opted-in user's exact Discord ID. The next failure is now external to Discord audio: OpenAI returned **HTTP 429** from `/v1/audio/transcriptions`. The prior provider wrapper discarded OpenAI's structured `error.code` / `error.type`, so temporary rate limiting, exhausted prepaid credits, and organization/project usage or spend limits were all collapsed into one vague message. The panel's earlier “consent is blocking them” diagnosis was also misleading because `frames_not_consented` is cumulative and included frames received before the user opted in.
+22. Provider direction changed by user: remove OpenAI completely and use the Google Gemini API key already configured in Discloud as `GEMINI_API_KEY`. Current Google documentation lists `gemini-3.5-transcribe` as the dedicated GA speech-to-text model with Free Tier input/output pricing, and `gemini-3.5-flash-lite` as a Free Tier audio-capable model. Recent Google developer reports show successful-but-empty `gemini-3.5-transcribe` responses on some Free Tier projects, so Dank Shield uses the dedicated model first and retries the same in-memory WAV once with Flash-Lite only when the primary response is empty. No OpenAI fallback remains. Gemini does not provide the old OpenAI token-logprob confidence field, so the engine no longer invents confidence for Gemini output; confidence-only retry/unclear logic runs only when a provider supplies a real numeric confidence.
 
 ## Execution path
 
@@ -89,7 +90,7 @@ PR #335 merged into `main` as `93f41dc4845f78b7858c4a89a633c31be3830e0e` from fi
 
 PR #336 merged into `main` as `cee40147ae64d547bbb9c93a790620a2c80bfbc6` from validated head `272fee22f680b8a8fef3748b1d60106ff91051a7`. Exact-head checks and post-merge Community Hub CI, Dank Shield CI, Ticket Owner Emergency Override, Supabase deployment, and Discloud deployment all completed successfully.
 
-Current branch: `fix/live-captions-bundled-opus-20260926`
+Current branch: `feat/live-captions-gemini-transcription-20260926`
 Current slice: **general server Live Captions using the same hardened per-speaker DAVE runtime**
 
 Implemented in this slice:
@@ -123,18 +124,18 @@ Implemented in the current voice-caption slice:
 - added speech-preserving segmentation that splits isolated speakers by packet gaps/max duration without a destructive noise gate;
 - the first transcription pass uses the untouched isolated PCM; low-confidence speech may receive a second amplitude-normalized pass that preserves every sample and timing;
 - conflicting low-confidence transcriptions resolve to `[unclear audio]` rather than fabricated speech;
-- added an optional OpenAI transcription provider using the current `/v1/audio/transcriptions` API and transcription logprobs;
+- the original provider was OpenAI `/v1/audio/transcriptions`; after the Discord/DAVE/Opus path was proven end-to-end, live testing hit provider HTTP 429 and the user chose to remove OpenAI entirely in favor of Gemini AI Studio Free Tier;
 - added host/co-host/staff **Live Captions** control plus participant **Caption My Voice** self-consent;
 - only one caption receiver may own a guild voice connection at a time;
 - ending/cleaning a Community Hub session shuts the receiver down and clears speaker consent;
 - no Chat Link API or message behavior is guessed or duplicated; cross-server text remains an external integration boundary.
 - Live Captions are default-off behind `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED`; code may deploy without exposing un-soaked DAVE receive to users;
 - caption startup fails closed if the required privacy notice cannot be posted;
-- consent/start copy explicitly states that opted-in audio is sent to OpenAI's transcription API and that Dank Shield itself does not save the audio;
+- consent/start copy now states that opted-in audio is sent to Google Gemini's transcription API, that this deployment uses Gemini Free Tier where Google states submitted content may be used to improve its products, and that Dank Shield itself does not save the audio;
 - caption shutdown cancels in-flight transcription tasks and discards queued/buffered audio so a stopped session cannot publish late captions;
 - a missing/zero transcription confidence is treated as uncertain, never as implicitly trustworthy.
 - process-wide Live Captions scale is bounded by configurable active-guild, speakers-per-session, and global transcription concurrency limits so one public deployment cannot fan out unbounded API/RAM load;
-- `.env.example` documents the default-off feature gate, provider key/model/language, and scale limits without containing any real secret.
+- `.env.example` documents the default-off feature gate, `GEMINI_API_KEY`, Gemini primary/fallback models, optional BCP-47 language hint, and scale limits without containing any real secret.
 - PR #336 imports the caption runtime/receive names used by the UI callbacks, adds a discoverable Live Captions entry/overview from Community Hub home, exposes self-consent from private session details as well as the public card, and keeps the transcription gate disabled until the real DAVE soak test passes.
 - PR #336 consent-status rendering uses the actual interaction user ID rather than assuming `list_user_sessions()` embeds a user ID that it does not return.
 - general Live Captions now have a first-class `/dank home → Live Captions` path and do not require a Community Hub gaming session;
@@ -153,10 +154,10 @@ Implemented in the current voice-caption slice:
 - the default-off real-DAVE soak gate remains in place for both Community Hub and general server use.
 - post-merge live testing found and fixed the caption-output picker rejecting discord.py `AppCommandChannel` partial values; the shared picker now resolves the partial through its resolver or the interaction guild cache before applying the normal GuildChannel contract.
 - the global `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` lock remains off, but the recognized Dank Shield bot owner can now use the ordinary-server Start/Stop control to launch a controlled DAVE soak session in one server; Community Hub and non-owner callers cannot bypass the validation gate;
-- soak sessions use the same configured output, VC/category eligibility, one-receiver-per-guild lock, consent boundary, OpenAI provider, stop/cleanup path, and privacy notice as normal captions rather than a separate test implementation;
+- soak sessions use the same configured output, VC/category eligibility, one-receiver-per-guild lock, consent boundary, Gemini provider, stop/cleanup path, and privacy notice as normal captions rather than a separate test implementation;
 - the Live Captions panel exposes soak telemetry while that controlled session is active: frames seen/routed/not-consented/unknown/mismatched/malformed plus transcription/unclear/failure counters;
-- the soak panel now diagnoses the pipeline stage instead of silently failing: no decoded DAVE frames, identity/consent rejection, routed audio awaiting segmentation, OpenAI/provider failure, empty transcript, or successful publish;
-- transcription/provider failures retain only a safe user-facing diagnosis in runtime state while full exceptions are logged server-side; common OpenAI HTTP 400/401/403/429/5xx cases are translated into actionable messages without exposing the API key or raw provider response;
+- the soak panel now diagnoses the pipeline stage instead of silently failing: no decoded DAVE frames, identity/consent rejection, routed audio awaiting segmentation, Gemini/provider failure, empty transcript, Gemini fallback use, or successful publish;
+- transcription/provider failures retain only a safe user-facing diagnosis in runtime state while full exceptions are logged server-side; Gemini HTTP/API status failures are translated into actionable messages without exposing GEMINI_API_KEY or raw provider response;
 - caption engine telemetry now distinguishes transcribed, published, and empty segments, and self-consent tells the tester to speak for 2–5 seconds, pause about one second, then refresh;
 - the DAVE capability probe now recognizes the hardened decoder-stage receive implementation instead of PR #62's removed `AudioReader._dave_decrypt` method;
 - the soak path now counts raw UDP packets before the receive dependency and reports DAVE session presence/readiness/status/protocol/epoch, mapped SSRC count, and reader-listening state so a future zero-frame result can be localized below the sink;
@@ -218,4 +219,4 @@ After interaction reliability is validated:
 
 ## Next step
 
-PR #338 through PR #344 are merged and deployed. Validate the precise OpenAI 429/provider-block diagnostics on the exact head and merge only after every triggered gate is green. The live Discord audio stack is now proven through PCM/segmentation; before rerunning transcription, fix the OpenAI API account state reported by the structured 429 code (credits, project/org spend limit, organization usage limit, or temporary rate limit). Then restart the caption session and rerun the soak. Keep the global feature gate locked until the live server proves reader listening, sink PCM, per-speaker routing, transcription, and publish. The soak must cover one speaker, overlapping speakers, reconnect/SSRC changes, epoch/key transitions, packet loss/out-of-order delivery, stop/restart, opt-out while speaking, general-session stop, and sustained operation; Community Hub lifecycle validation remains required before calling the full product production-proven. Keep `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` off until the receive soak passes.
+PR #338 through PR #345 are merged and deployed. Validate the Gemini-only provider migration on the exact head and merge only after every triggered gate is green. Discloud already has `GEMINI_API_KEY`; after deployment, restart the caption session and rerun the soak. The live Discord audio stack is already proven through PCM/segmentation, so the next proof target is Gemini primary/fallback transcription and Discord publish. Keep the global feature gate locked until the live server proves reader listening, sink PCM, per-speaker routing, transcription, and publish. The soak must cover one speaker, overlapping speakers, reconnect/SSRC changes, epoch/key transitions, packet loss/out-of-order delivery, stop/restart, opt-out while speaking, general-session stop, and sustained operation; Community Hub lifecycle validation remains required before calling the full product production-proven. Keep `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` off until the receive soak passes.
