@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-"""Runtime ownership for Community Hub live voice captions.
+"""Single-owner runtime for Dank Shield live voice captions.
 
-One caption receiver may own a guild voice connection at a time. Speaker
-consent is memory-only and must be re-established after restart. Audio is never
-persisted by Dank Shield.
+Community Hub sessions and general server voice channels share this same
+receiver owner. One caption receiver may own a guild voice connection at a
+time. Speaker consent is memory-only and must be re-established after restart.
+Audio is never persisted by Dank Shield.
 """
 
 import asyncio
@@ -37,6 +38,7 @@ class CaptionRuntimeState:
     voice_client: Any
     bridge: PerSpeakerFrameBridge
     engine: CaptionEngine
+    scope_kind: str = "community_hub"
 
 
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -45,6 +47,16 @@ def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         value = int(default)
     return max(int(minimum), min(int(maximum), value))
+
+
+SERVER_CAPTION_SCOPE_PREFIX = "server:"
+
+
+def server_caption_scope_id(guild_id: int) -> str:
+    gid = int(guild_id)
+    if gid <= 0:
+        raise ValueError("guild_id must be positive")
+    return f"{SERVER_CAPTION_SCOPE_PREFIX}{gid}"
 
 
 def live_captions_enabled() -> bool:
@@ -87,6 +99,8 @@ class CommunityVoiceCaptionManager:
         return {
             "active": True,
             "capability": capability,
+            "session_id": state.session_id,
+            "scope_kind": state.scope_kind,
             "guild_id": state.guild_id,
             "voice_channel_id": state.voice_channel_id,
             "destination_channel_id": state.destination_channel_id,
@@ -98,6 +112,39 @@ class CommunityVoiceCaptionManager:
             "segment_failures": state.engine.segment_failures,
         }
 
+    def status_for_guild(self, guild_id: int) -> dict[str, Any]:
+        gid = int(guild_id)
+        sid = self._guild_owner.get(gid)
+        if sid:
+            return self.status(sid)
+        capability = voice_receive_capability()
+        return {
+            "active": False,
+            "capability": capability,
+            "session_id": "",
+            "scope_kind": "",
+            "guild_id": gid,
+            "opted_in_user_ids": [],
+        }
+
+    async def start_server(
+        self,
+        *,
+        guild_id: int,
+        voice_channel_id: int,
+        destination_channel_id: int,
+    ) -> CaptionRuntimeState:
+        gid = int(guild_id)
+        return await self.start(
+            {
+                "id": server_caption_scope_id(gid),
+                "guild_id": gid,
+                "voice_channel_id": int(voice_channel_id),
+                "panel_channel_id": int(destination_channel_id),
+                "caption_scope": "server",
+            }
+        )
+
     async def start(self, session: dict[str, Any]) -> CaptionRuntimeState:
         sid = str(session.get("id") or "").strip()
         guild_id = int(session.get("guild_id") or 0)
@@ -107,19 +154,29 @@ class CommunityVoiceCaptionManager:
             or session.get("panel_channel_id")
             or 0
         )
+        scope_kind = (
+            "server"
+            if str(session.get("caption_scope") or "").strip().lower() == "server"
+            else "community_hub"
+        )
+        scope_label = (
+            "Dank Shield Live Captions"
+            if scope_kind == "server"
+            else "Community Hub Live Captions"
+        )
         if not live_captions_enabled():
             raise VoiceReceiveUnavailable(
                 "Live Captions are disabled on this host until the DAVE receive soak test is completed."
             )
         if not sid or guild_id <= 0:
-            raise VoiceReceiveUnavailable("Community Hub session identity is missing.")
+            raise VoiceReceiveUnavailable("Live Captions session identity is missing.")
         if voice_channel_id <= 0:
             raise VoiceReceiveUnavailable(
-                "This Community Hub session does not have a voice room to caption."
+                "This Live Captions session does not have a voice room to caption."
             )
         if destination_channel_id <= 0:
             raise VoiceReceiveUnavailable(
-                "This Community Hub session has nowhere to publish captions."
+                "This Live Captions session has nowhere to publish captions."
             )
         if not os.getenv("OPENAI_API_KEY", "").strip():
             raise VoiceReceiveUnavailable(
@@ -143,7 +200,7 @@ class CommunityVoiceCaptionManager:
             other_sid = self._guild_owner.get(guild_id)
             if other_sid and other_sid != sid:
                 raise VoiceReceiveUnavailable(
-                    "Another Community Hub session in this server already owns live captions."
+                    "Another Live Captions session in this server already owns the voice receiver."
                 )
 
             guild = self.bot.get_guild(guild_id)
@@ -152,7 +209,7 @@ class CommunityVoiceCaptionManager:
             voice_channel = guild.get_channel(voice_channel_id)
             if not isinstance(voice_channel, discord.VoiceChannel):
                 raise VoiceReceiveUnavailable(
-                    "The Community Hub voice room no longer exists."
+                    "The Live Captions voice room no longer exists."
                 )
 
             destination = (
@@ -162,7 +219,7 @@ class CommunityVoiceCaptionManager:
             )
             if destination is None or not hasattr(destination, "send"):
                 raise VoiceReceiveUnavailable(
-                    "The Community Hub caption destination no longer exists."
+                    "The Live Captions text destination no longer exists."
                 )
 
             transcriber = openai_transcriber_from_env()
@@ -178,8 +235,13 @@ class CommunityVoiceCaptionManager:
                 suffix = ""
                 if text == "[unclear audio]":
                     suffix = " • low confidence"
+                source = (
+                    f" · <#{voice_channel_id}>"
+                    if scope_kind == "server"
+                    else ""
+                )
                 await destination.send(
-                    f"🎙️ **{safe_name} · Live Caption:** {text}{suffix}",
+                    f"🎙️ **{safe_name}{source} · Live Caption:** {text}{suffix}",
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
 
@@ -193,8 +255,14 @@ class CommunityVoiceCaptionManager:
             voice_client = await connect_receive_client(voice_channel, bridge)
 
             try:
+                source_line = (
+                    f"Voice channel: {voice_channel.mention}\n"
+                    if scope_kind == "server"
+                    else ""
+                )
                 await destination.send(
-                    "📝 **Community Hub Live Captions started.**\n"
+                    f"📝 **{scope_label} started.**\n"
+                    f"{source_line}"
                     "Dank Shield keeps each opted-in Discord speaker isolated before transcription. "
                     "Only members who explicitly choose **Caption My Voice** are transcribed. "
                     "Opted-in audio is sent to **OpenAI's transcription API** for speech-to-text. "
@@ -207,7 +275,7 @@ class CommunityVoiceCaptionManager:
                     if getattr(voice_client, "is_connected", lambda: False)():
                         await voice_client.disconnect(force=False)
                 except Exception:
-                    log.exception("Community Hub failed to roll back caption voice connection")
+                    log.exception("Live Captions failed to roll back voice connection")
                 raise VoiceReceiveUnavailable(
                     "Dank Shield could not post the Live Captions privacy notice, so captions were not started."
                 ) from exc
@@ -220,6 +288,7 @@ class CommunityVoiceCaptionManager:
                 voice_client=voice_client,
                 bridge=bridge,
                 engine=engine,
+                scope_kind=scope_kind,
             )
             self._sessions[sid] = state
             self._guild_owner[guild_id] = sid
@@ -231,16 +300,18 @@ class CommunityVoiceCaptionManager:
         state = self._sessions.get(sid)
         if state is None:
             raise VoiceReceiveUnavailable(
-                "Live captions are not running for this Community Hub session."
+                "Live Captions are not running for this session."
             )
         uid = int(user_id)
         if state.bridge.is_opted_in(uid):
             state.bridge.opt_out(uid)
+            await state.engine.revoke_user(uid)
             return False
         if len(state.bridge.opted_in_user_ids()) >= self.max_speakers_per_session:
             raise VoiceReceiveUnavailable(
                 "This session has reached its configured Live Captions speaker limit."
             )
+        state.engine.allow_user(uid)
         state.bridge.opt_in(uid)
         return True
 
@@ -269,8 +340,18 @@ class CommunityVoiceCaptionManager:
             )
         if announce and destination is not None and hasattr(destination, "send"):
             try:
+                scope_label = (
+                    "Dank Shield Live Captions"
+                    if state.scope_kind == "server"
+                    else "Community Hub Live Captions"
+                )
+                source = (
+                    f" Voice channel: <#{state.voice_channel_id}>."
+                    if state.scope_kind == "server"
+                    else ""
+                )
                 await destination.send(
-                    "📝 **Community Hub Live Captions stopped.** Speaker consent was cleared.",
+                    f"📝 **{scope_label} stopped.**{source} Speaker consent was cleared.",
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
             except (discord.Forbidden, discord.NotFound, discord.HTTPException):
@@ -281,7 +362,7 @@ class CommunityVoiceCaptionManager:
             if getattr(voice_client, "is_connected", lambda: False)():
                 await voice_client.disconnect(force=False)
         except Exception:
-            log.exception("Community Hub caption voice disconnect failed session=%s", sid)
+            log.exception("Live Captions voice disconnect failed session=%s", sid)
         return True
 
     async def stop_guild(self, guild_id: int) -> bool:
@@ -304,6 +385,8 @@ def ensure_community_voice_caption_manager(bot: Any) -> CommunityVoiceCaptionMan
 __all__ = [
     "CaptionRuntimeState",
     "CommunityVoiceCaptionManager",
+    "SERVER_CAPTION_SCOPE_PREFIX",
     "ensure_community_voice_caption_manager",
     "live_captions_enabled",
+    "server_caption_scope_id",
 ]

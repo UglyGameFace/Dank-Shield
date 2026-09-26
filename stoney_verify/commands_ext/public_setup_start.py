@@ -213,7 +213,8 @@ async def _build_main_setup_payload(guild: discord.Guild, *, title: str = "🚀 
         "✨ **Auto-Fix Missing Defaults** creates only missing default roles/channels.\n"
         "✏️ **Customize Setup Names** lets you name every default group before creating it.\n"
         "🧩 **Choose Existing Items** lets you map your own roles/channels with dropdowns.\n"
-        "🗂️ **Manage Ticket Categories** lets you add/edit/delete routing categories without memorizing commands.\n\n"
+        "🗂️ **Manage Ticket Categories** lets you add/edit/delete routing categories without memorizing commands.\n"
+        "📝 **Live Captions** configures your caption output and which existing voice channels/categories may use it.\n\n"
         f"{embed.description or ''}"
     )[:4096]
     return _clean_embed(embed), DankSetupView(has_missing=bool(await _current_missing_specs(guild, public_setup_assistant)))
@@ -536,6 +537,15 @@ class DankSetupView(discord.ui.View):
         await _safe_defer_update(interaction)
         embed, view = await _build_main_setup_payload(guild, title="🩺 Dank Shield Setup Health")
         await _edit_setup_message(interaction, embed=embed, view=view)
+
+    @discord.ui.button(label="Live Captions", emoji="📝", style=discord.ButtonStyle.primary, custom_id="stoney_setup:live_captions", row=3)
+    async def live_captions(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_setup_permission(interaction):
+            return
+        from .public_live_captions import open_server_live_captions_setup
+
+        await open_server_live_captions_setup(interaction)
 
 
 class CustomizeSetupMenuView(BackToSetupView):

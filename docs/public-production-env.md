@@ -70,23 +70,24 @@ public_server_env_id_guard public mode active; deployment-level Discord IDs are 
 globals: startup summary: {'guild': 0, ...}
 globals: supabase status: state=ready ... service_role_present=True
 commands_ext registration complete. ... profile=public
-public_command_surface_v2 compact UI installed roots=['View Dank Profile', 'dank', 'mod', 'ticket', 'tickets', 'verify'] dank_children=['home', 'purge', 'setup', 'upload'] ...
+public_command_surface_v2 compact UI installed roots=['View Dank Profile', 'captions', 'dank', 'mod', 'ticket', 'tickets', 'verify'] dank_children=['home', 'purge', 'setup', 'upload'] ...
 ```
 
-The intentional **final** public global application-command surface is exactly **6** commands/items:
+The intentional **final** public global application-command surface is exactly **7** commands/items:
 
 1. `/dank` — app-style Dank Shield entry group
-2. `/mod` — one moderation/member center doorway
-3. `/ticket` — one current-ticket controls doorway
-4. `/tickets` — one ticket queues/setup/routing doorway
-5. `/verify` — one verification status/repair doorway
-6. `View Dank Profile` user context menu
+2. `/captions` — ordinary-server Live Captions, session status, and personal voice consent
+3. `/mod` — one moderation/member center doorway
+4. `/ticket` — one current-ticket controls doorway
+5. `/tickets` — one ticket queues/setup/routing doorway
+6. `/verify` — one verification status/repair doorway
+7. `View Dank Profile` user context menu
 
 `/dank` intentionally exposes only four direct children:
 
 - `/dank home` — the complete mega menu for Setup, Protection, Tickets, Verification, Welcome/Exit, Members & Moderation, Design, Roles/Profiles, Logs, Server Stats, Status, Diagnostics, Card Assets, Help, and profile access.
 - `/dank purge` — the compact destructive-cleanup entrypoint that remains a direct command for explicit targeting and confirmation.
-- `/dank setup` — the guided onboarding/setup entrypoint restored for discoverability while advanced setup tools stay inside the UI.
+- `/dank setup` — the guided onboarding/setup entrypoint restored for discoverability while advanced setup tools stay inside the UI. Its **Live Captions** section can select or create the ordinary-server caption output and allow all VCs, selected VCs/categories, or explicit exclusions.
 - `/dank upload` — the single attachment command for a Join Card background, Exit Card background, or custom card font. This remains a command because Discord buttons cannot provide an attachment field.
 
 Former roots such as `/ticket-intake`, `/ticket-category`, and `/ticket-panel` are not public autocomplete commands anymore. Their implementation modules remain loaded and their actions are available inside `/tickets`. Likewise, former `/dank` shortcuts such as status/diagnostics/welcome are reached through `/dank home` rather than separate autocomplete entries.

@@ -141,18 +141,31 @@ class PerSpeakerFrameBridge:
         self.callback = callback
         self.health = VoiceReceiveHealth()
         self._allowed_user_ids: set[int] = set()
+        self._consent_generation: dict[int, int] = {}
         self._lock = threading.RLock()
+
+    def _advance_consent_generation(self, user_id: int) -> int:
+        uid = int(user_id)
+        current = int(self._consent_generation.get(uid, 0)) + 1
+        self._consent_generation[uid] = current
+        return current
 
     def opt_in(self, user_id: int) -> None:
         with self._lock:
-            self._allowed_user_ids.add(int(user_id))
+            uid = int(user_id)
+            self._advance_consent_generation(uid)
+            self._allowed_user_ids.add(uid)
 
     def opt_out(self, user_id: int) -> None:
         with self._lock:
-            self._allowed_user_ids.discard(int(user_id))
+            uid = int(user_id)
+            self._advance_consent_generation(uid)
+            self._allowed_user_ids.discard(uid)
 
     def clear_consent(self) -> None:
         with self._lock:
+            for uid in tuple(self._allowed_user_ids):
+                self._advance_consent_generation(uid)
             self._allowed_user_ids.clear()
 
     def is_opted_in(self, user_id: int) -> bool:
@@ -185,9 +198,12 @@ class PerSpeakerFrameBridge:
         if int(source_user_id) != int(mapped_user_id):
             self._increment("frames_source_mismatch")
             return False
-        if not self.is_opted_in(int(source_user_id)):
-            self._increment("frames_not_consented")
-            return False
+        uid = int(source_user_id)
+        with self._lock:
+            if uid not in self._allowed_user_ids:
+                self._increment("frames_not_consented")
+                return False
+            consent_generation = int(self._consent_generation.get(uid, 0))
         if not pcm:
             self._increment("frames_empty")
             return False
@@ -205,14 +221,24 @@ class PerSpeakerFrameBridge:
         )
 
         def _deliver() -> None:
+            with self._lock:
+                consent_still_valid = (
+                    frame.user_id in self._allowed_user_ids
+                    and int(self._consent_generation.get(frame.user_id, 0))
+                    == consent_generation
+                )
+            if not consent_still_valid:
+                self._increment("frames_not_consented")
+                return
             try:
                 self.callback(frame)
+                self._increment("frames_routed")
             except asyncio.QueueFull:
                 self._increment("queue_overflow")
             except Exception:
                 self._increment("callback_failures")
                 log.exception(
-                    "Community Hub caption frame callback failed user=%s ssrc=%s",
+                    "Live Captions frame callback failed user=%s ssrc=%s",
                     frame.user_id,
                     frame.ssrc,
                 )
@@ -223,7 +249,6 @@ class PerSpeakerFrameBridge:
             self._increment("callback_failures")
             return False
 
-        self._increment("frames_routed")
         return True
 
 
@@ -290,7 +315,7 @@ async def connect_receive_client(
             )
         if not isinstance(existing, voice_recv.VoiceRecvClient):
             raise VoiceReceiveUnavailable(
-                "The existing Discord voice connection cannot receive Community Hub captions."
+                "The existing Discord voice connection cannot receive Live Captions."
             )
         voice_client = existing
     else:
@@ -314,7 +339,7 @@ def disconnect_receive_client(voice_client: Any) -> None:
         if getattr(voice_client, "is_listening", lambda: False)():
             voice_client.stop_listening()
     except Exception:
-        log.exception("Community Hub failed to stop voice receive cleanly")
+        log.exception("Live Captions failed to stop voice receive cleanly")
 
 
 __all__ = [

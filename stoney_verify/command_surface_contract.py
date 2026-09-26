@@ -13,6 +13,7 @@ this contract before global sync.
 # command, not a slash command, but Discord counts it in the global surface.
 PUBLIC_GLOBAL_COMMAND_NAMES: tuple[str, ...] = (
     "dank",
+    "captions",
     "mod",
     "ticket",
     "tickets",

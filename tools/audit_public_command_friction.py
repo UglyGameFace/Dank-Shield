@@ -63,6 +63,7 @@ def main() -> int:
 
     expected = (
         "dank",
+        "captions",
         "mod",
         "ticket",
         "tickets",

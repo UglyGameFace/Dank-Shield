@@ -128,6 +128,11 @@ class SpeechPreservingSegmenter:
                 ready.append(segment)
         return ready
 
+    def discard_user(self, user_id: int) -> None:
+        """Drop one speaker's buffered PCM without producing a segment."""
+
+        self._buffers.pop(int(user_id), None)
+
     def _flush_user(self, user_id: int) -> Optional[CaptionSegment]:
         buf = self._buffers.pop(int(user_id), None)
         if buf is None or not buf.chunks:
@@ -205,7 +210,7 @@ class OpenAITranscriber:
         self.language = str(language or "").strip()
         self.timeout_seconds = max(5.0, min(60.0, float(timeout_seconds)))
         if not self.api_key:
-            raise RuntimeError("OPENAI_API_KEY is required for Community Hub captions.")
+            raise RuntimeError("OPENAI_API_KEY is required for Live Captions.")
 
     async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
         form = aiohttp.FormData()
@@ -269,6 +274,8 @@ class CaptionEngine:
         self.unclear_threshold = max(0.0, min(1.0, float(unclear_threshold)))
         self._task: Optional[asyncio.Task[None]] = None
         self._segment_tasks: set[asyncio.Task[None]] = set()
+        self._segment_tasks_by_user: dict[int, set[asyncio.Task[None]]] = {}
+        self._blocked_user_ids: set[int] = set()
         self._closed = False
         self._transcribe_semaphore = asyncio.Semaphore(3)
         self._global_transcribe_semaphore = global_transcribe_semaphore
@@ -278,7 +285,7 @@ class CaptionEngine:
         self.queue_overflow = 0
 
     def submit(self, frame: SpeakerPCMFrame) -> None:
-        if self._closed:
+        if self._closed or int(frame.user_id) in self._blocked_user_ids:
             return
         try:
             self.queue.put_nowait(frame)
@@ -290,8 +297,36 @@ class CaptionEngine:
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(
                 self._run(),
-                name="dank-community-live-captions",
+                name="dank-live-captions",
             )
+
+    def allow_user(self, user_id: int) -> None:
+        self._blocked_user_ids.discard(int(user_id))
+
+    async def revoke_user(self, user_id: int) -> None:
+        """Revoke one speaker and guarantee their buffered audio cannot publish later."""
+
+        uid = int(user_id)
+        self._blocked_user_ids.add(uid)
+        self.segmenter.discard_user(uid)
+
+        retained: list[SpeakerPCMFrame] = []
+        while True:
+            try:
+                frame = self.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if int(frame.user_id) != uid:
+                retained.append(frame)
+        for frame in retained:
+            self.queue.put_nowait(frame)
+
+        pending = list(self._segment_tasks_by_user.get(uid, set()))
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self._segment_tasks_by_user.pop(uid, None)
 
     async def close(self) -> None:
         """Stop immediately without allowing buffered speech to publish later."""
@@ -310,6 +345,8 @@ class CaptionEngine:
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
         self._segment_tasks.clear()
+        self._segment_tasks_by_user.clear()
+        self._blocked_user_ids.clear()
 
         while True:
             try:
@@ -319,14 +356,26 @@ class CaptionEngine:
         self.segmenter.flush_all()
 
     def _spawn_segment(self, segment: CaptionSegment) -> None:
-        if self._closed or not segment.pcm:
+        uid = int(segment.user_id)
+        if self._closed or not segment.pcm or uid in self._blocked_user_ids:
             return
         task = asyncio.create_task(
             self._process_segment_safely(segment),
-            name=f"dank-community-caption-segment:{segment.user_id}",
+            name=f"dank-caption-segment:{uid}",
         )
         self._segment_tasks.add(task)
-        task.add_done_callback(self._segment_tasks.discard)
+        self._segment_tasks_by_user.setdefault(uid, set()).add(task)
+
+        def _done(completed: asyncio.Task[None]) -> None:
+            self._segment_tasks.discard(completed)
+            bucket = self._segment_tasks_by_user.get(uid)
+            if bucket is None:
+                return
+            bucket.discard(completed)
+            if not bucket:
+                self._segment_tasks_by_user.pop(uid, None)
+
+        task.add_done_callback(_done)
 
     async def _process_segment_safely(self, segment: CaptionSegment) -> None:
         try:
@@ -349,7 +398,11 @@ class CaptionEngine:
                 self._spawn_segment(segment)
 
     async def _process_segment(self, segment: CaptionSegment) -> None:
-        if not segment.pcm or self._closed:
+        if (
+            not segment.pcm
+            or self._closed
+            or int(segment.user_id) in self._blocked_user_ids
+        ):
             return
         async with self._transcribe_semaphore:
             if self._global_transcribe_semaphore is None:
@@ -359,9 +412,12 @@ class CaptionEngine:
                     await self._transcribe_and_publish(segment)
 
     async def _transcribe_and_publish(self, segment: CaptionSegment) -> None:
-        if self._closed:
+        uid = int(segment.user_id)
+        if self._closed or uid in self._blocked_user_ids:
             return
         first = await self.transcriber.transcribe(segment)
+        if self._closed or uid in self._blocked_user_ids:
+            return
         chosen = first
 
         if first.confidence < self.low_confidence_threshold:
@@ -375,6 +431,8 @@ class CaptionEngine:
                         ended_at=segment.ended_at,
                     )
                 )
+                if self._closed or uid in self._blocked_user_ids:
+                    return
                 agreement = SequenceMatcher(
                     None,
                     first.text.casefold(),
@@ -394,7 +452,7 @@ class CaptionEngine:
                     chosen = second
 
         self.segments_transcribed += 1
-        if self._closed or not chosen.text:
+        if self._closed or uid in self._blocked_user_ids or not chosen.text:
             return
         if chosen.confidence < self.unclear_threshold:
             self.segments_unclear += 1
@@ -402,7 +460,7 @@ class CaptionEngine:
             return
         if chosen.text == "[unclear audio]":
             self.segments_unclear += 1
-        if self._closed:
+        if self._closed or uid in self._blocked_user_ids:
             return
         await self.publish(segment.user_id, chosen.text[:1800], chosen.confidence)
 

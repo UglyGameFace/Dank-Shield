@@ -31,7 +31,7 @@ def test_ui_first_surface_has_tiny_explicit_entry_set() -> None:
         'setup_command = dank_group.get_command("setup")',
         'dank_group.add_command(setup_command)',
         'name="upload",',
-        'expected_roots = {"dank", "mod", "ticket", "tickets", "verify"}',
+        'expected_roots = {"captions", "dank", "mod", "ticket", "tickets", "verify"}',
         'dank_children != ["home", "setup", "upload"]',
         "DANK_PAYLOAD_SAFETY_LIMIT",
         "dank_payload_size(tree)",
