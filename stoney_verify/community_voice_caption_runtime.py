@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 import discord
 
-from .community_voice_captions import CaptionEngine, openai_transcriber_from_env
+from .community_voice_captions import CaptionEngine, gemini_transcriber_from_env
 from .community_voice_receive import (
     PerSpeakerFrameBridge,
     VoiceReceiveUnavailable,
@@ -122,6 +122,7 @@ class CommunityVoiceCaptionManager:
             "queue_overflow": state.engine.queue_overflow,
             "segment_failures": state.engine.segment_failures,
             "provider_skipped": state.engine.provider_skipped,
+            "provider_fallbacks": int(getattr(state.engine.transcriber, "fallback_count", 0) or 0),
             "provider_blocked_reason": str(state.engine.provider_blocked_reason or ""),
             "provider_blocked_code": str(state.engine.provider_blocked_code or ""),
             "queue_depth": state.engine.queue.qsize(),
@@ -204,9 +205,9 @@ class CommunityVoiceCaptionManager:
             raise VoiceReceiveUnavailable(
                 "This Live Captions session has nowhere to publish captions."
             )
-        if not os.getenv("OPENAI_API_KEY", "").strip():
+        if not os.getenv("GEMINI_API_KEY", "").strip():
             raise VoiceReceiveUnavailable(
-                "Live captions need OPENAI_API_KEY configured on the Dank Shield host."
+                "Live Captions need GEMINI_API_KEY configured on the Dank Shield host."
             )
 
         capability = voice_receive_capability()
@@ -248,9 +249,9 @@ class CommunityVoiceCaptionManager:
                     "The Live Captions text destination no longer exists."
                 )
 
-            transcriber = openai_transcriber_from_env()
+            transcriber = gemini_transcriber_from_env()
 
-            async def _publish(user_id: int, text: str, confidence: float) -> None:
+            async def _publish(user_id: int, text: str, confidence: Optional[float]) -> None:
                 member = guild.get_member(int(user_id))
                 display = (
                     getattr(member, "display_name", None)
@@ -291,7 +292,7 @@ class CommunityVoiceCaptionManager:
                     f"{source_line}"
                     "Dank Shield keeps each opted-in Discord speaker isolated before transcription. "
                     "Only members who explicitly choose **Caption My Voice** are transcribed. "
-                    "Opted-in audio is sent to **OpenAI's transcription API** for speech-to-text. "
+                    "Opted-in audio is sent to **Google Gemini's transcription API** for speech-to-text. "
                     "Dank Shield keeps audio only in bounded memory while processing it and does not save the audio.",
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
