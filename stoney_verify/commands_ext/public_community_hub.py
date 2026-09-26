@@ -133,7 +133,9 @@ def _community_hub_readiness(
     channel_id = _safe_int(settings.get("hub_channel_id"), 0)
     if channel_id > 0:
         channel = guild.get_channel(channel_id)
-        if channel is not None:
+        if channel is None:
+            channel_missing = ["configured_channel_missing"]
+        else:
             try:
                 effective = channel.permissions_for(me)
                 channel_required = (
@@ -199,16 +201,26 @@ def _hublink_readiness_embed(
     channel_missing = list(report.get("channel_missing") or [])
     channel = report.get("channel")
     if channel_missing:
-        label = getattr(channel, "mention", None) or getattr(channel, "name", None) or "the configured Community Hub channel"
-        embed.add_field(
-            name="2. Channel access",
-            value=(
-                f"In {label}, Dank Shield is blocked from: **{_permission_names(channel_missing)}**.\n"
-                "On mobile: open the channel → tap its name → **Settings / Edit Channel** → **Permissions** → "
-                "**Dank Shield** → allow the listed items. If a category controls the channel, fix the category and sync the channel."
-            )[:1024],
-            inline=False,
-        )
+        if "configured_channel_missing" in channel_missing:
+            embed.add_field(
+                name="2. Community Hub channel",
+                value=(
+                    "The saved Community Hub channel no longer exists or Dank Shield can no longer resolve it. "
+                    "Open **Community Hub → Staff Dashboard → Settings** and choose a valid Hub channel, then run **Check Again**."
+                ),
+                inline=False,
+            )
+        else:
+            label = getattr(channel, "mention", None) or getattr(channel, "name", None) or "the configured Community Hub channel"
+            embed.add_field(
+                name="2. Channel access",
+                value=(
+                    f"In {label}, Dank Shield is blocked from: **{_permission_names(channel_missing)}**.\n"
+                    "On mobile: open the channel → tap its name → **Settings / Edit Channel** → **Permissions** → "
+                    "**Dank Shield** → allow the listed items. If a category controls the channel, fix the category and sync the channel."
+                )[:1024],
+                inline=False,
+            )
 
     if report["healthy"]:
         embed.add_field(
@@ -3967,12 +3979,53 @@ class PartnerAdminView(_OwnedView):
         await _private(interaction, "Partner management requires server management authority.")
         return False
 
-    @discord.ui.button(label="Request Partner", emoji="➕", style=discord.ButtonStyle.primary, custom_id="dank:hub:partner:request:v1", row=1)
-    async def request(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="Create HubLink", emoji="🔗", style=discord.ButtonStyle.primary, custom_id="dank:hub:hublink:create:v1", row=1)
+    async def create_hublink(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await interaction.response.send_modal(PartnerRequestModal())
+        await _defer_update(interaction)
+        guild = interaction.guild
+        if guild is None:
+            return await _followup(interaction, "HubLink must be created inside a server.")
+        try:
+            record = await hub.create_hublink_code(
+                int(guild.id),
+                int(interaction.user.id),
+            )
+        except hub.CommunityHubError as exc:
+            return await _followup(interaction, f"❌ {_error_text(exc)}")
 
-    @discord.ui.button(label="Enable Partner Discovery", emoji="🌐", style=discord.ButtonStyle.secondary, custom_id="dank:hub:partner:enable:v1", row=1)
+        ensure_community_hub_runtime(interaction.client).invalidate_settings(int(guild.id))
+        install_url = _public_install_url(interaction.client)
+        await _edit_private_original(
+            interaction,
+            content=None,
+            embed=_hublink_share_embed(
+                guild_name=guild.name,
+                code=_safe_str(record.get("code")),
+                expires_at=record.get("expires_at"),
+                install_url=install_url,
+            ),
+            view=HubLinkShareView(self.owner_id, install_url=install_url),
+        )
+
+    @discord.ui.button(label="Redeem HubLink", emoji="✅", style=discord.ButtonStyle.success, custom_id="dank:hub:hublink:redeem:v1", row=1)
+    async def redeem_hublink(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.send_modal(HubLinkRedeemModal(self.owner_id))
+
+    @discord.ui.button(label="Check Setup", emoji="🛠️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:hublink:setup:v1", row=1)
+    async def check_setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        settings = await hub.get_settings(int(interaction.guild_id or 0))
+        await _edit_private_original(
+            interaction,
+            content=None,
+            embed=_hublink_readiness_embed(interaction.guild, settings),
+            view=HubLinkReadinessView(self.owner_id, interaction.guild, settings),
+        )
+
+    @discord.ui.button(label="Discovery On / Off", emoji="🌐", style=discord.ButtonStyle.secondary, custom_id="dank:hub:partner:enable:v1", row=1)
     async def enable(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
@@ -3983,14 +4036,12 @@ class PartnerAdminView(_OwnedView):
             actor_id=int(interaction.user.id),
         )
         ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
+        links = await hub.list_partner_links(int(interaction.guild_id or 0), active_only=False)
         await _edit_private_original(
             interaction,
             content=None,
-            embed=_partner_embed(await hub.list_partner_links(int(interaction.guild_id or 0), active_only=False), int(interaction.guild_id or 0), interaction.client),
-            view=PartnerAdminView(
-                self.owner_id,
-                await hub.list_partner_links(int(interaction.guild_id or 0), active_only=False),
-            ),
+            embed=_partner_embed(links, int(interaction.guild_id or 0), interaction.client),
+            view=PartnerAdminView(self.owner_id, links),
         )
         await _followup(interaction, f"Partner discovery is now {'enabled' if updated.get('partner_discovery_enabled') else 'disabled'}.")
 
