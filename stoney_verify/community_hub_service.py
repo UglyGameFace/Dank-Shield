@@ -1960,6 +1960,37 @@ async def redeem_hublink_code(
     return await _db_call(_write)
 
 
+async def revoke_hublink_codes(
+    guild_id: int | str,
+    *,
+    actor_id: int | str | None = None,
+) -> int:
+    gid = _safe_str(guild_id)
+    if not gid:
+        raise CommunityHubError("HubLink source server is required.")
+
+    def _write() -> int:
+        sb = _require_supabase()
+        response = (
+            sb.table("dank_community_hub_link_codes")
+            .update({"state": "revoked", "updated_at": utc_now_iso()})
+            .eq("source_guild_id", gid)
+            .eq("state", "pending")
+            .execute()
+        )
+        return len(_rows(response))
+
+    count = await _db_call(_write)
+    if count:
+        await record_event(
+            gid,
+            "partner.hublink_revoked",
+            actor_id=actor_id,
+            metadata={"revoked_codes": count},
+        )
+    return count
+
+
 async def expire_hublink_codes(*, limit: int = 500) -> int:
     safe_limit = max(1, min(5000, _safe_int(limit, 500)))
 
@@ -2300,6 +2331,7 @@ __all__ = [
     "create_hublink_code",
     "inspect_hublink_code",
     "redeem_hublink_code",
+    "revoke_hublink_codes",
     "expire_hublink_codes",
     "create_partner_request",
     "update_partner_link",
