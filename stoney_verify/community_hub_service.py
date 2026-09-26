@@ -12,7 +12,9 @@ event loop with asyncio.to_thread.
 """
 
 import asyncio
+import hashlib
 import re
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
@@ -56,6 +58,8 @@ SESSION_STATES = frozenset(
 
 _SAFE_GAME_RE = re.compile(r"[^\w\s+:#'().&/-]", re.UNICODE)
 _SAFE_NOTE_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_HUBLINK_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+_HUBLINK_LENGTH = 8
 
 
 class CommunityHubError(RuntimeError):
@@ -117,6 +121,25 @@ def game_key(value: Any) -> str:
 def normalize_notes(value: Any) -> str:
     text = _SAFE_NOTE_RE.sub("", _safe_str(value))
     return text[:500]
+
+
+def normalize_hublink_code(value: Any) -> str:
+    compact = re.sub(r"[^A-Z0-9]", "", _safe_str(value).upper())
+    if compact.startswith("DANK"):
+        compact = compact[4:]
+    if len(compact) != _HUBLINK_LENGTH or any(ch not in _HUBLINK_ALPHABET for ch in compact):
+        raise CommunityHubError("Enter a valid HubLink code, like DANK-ABCD-2345.")
+    return compact
+
+
+def format_hublink_code(value: Any) -> str:
+    compact = normalize_hublink_code(value)
+    return f"DANK-{compact[:4]}-{compact[4:]}"
+
+
+def _hublink_digest(value: Any) -> str:
+    compact = normalize_hublink_code(value)
+    return hashlib.sha256(compact.encode("ascii")).hexdigest()
 
 
 def _uuid_text(value: Any) -> str:
@@ -202,6 +225,7 @@ async def _db_call(factory) -> Any:
                 "choose a different partner server",
                 "community event is no longer accepting responses",
                 "session replay history has expired",
+                "hublink",
             )
         ):
             raise CommunityConflict(text[:300]) from exc
@@ -1831,6 +1855,131 @@ async def list_event_attendees(event_id: str) -> list[dict[str, Any]]:
 
 
 
+async def create_hublink_code(
+    guild_id: int | str,
+    actor_id: int | str,
+) -> dict[str, Any]:
+    gid = _safe_str(guild_id)
+    actor = _safe_str(actor_id)
+    if not gid or not actor:
+        raise CommunityHubError("HubLink needs a server and an authorized creator.")
+
+    compact = "".join(secrets.choice(_HUBLINK_ALPHABET) for _ in range(_HUBLINK_LENGTH))
+    display_code = format_hublink_code(compact)
+    digest = _hublink_digest(compact)
+
+    def _write() -> dict[str, Any]:
+        sb = _require_supabase()
+        return _rpc_payload(
+            sb.rpc(
+                "community_hub_create_link_code",
+                {
+                    "p_source_guild_id": gid,
+                    "p_actor_id": actor,
+                    "p_code_hash": digest,
+                    "p_code_hint": compact[-4:],
+                },
+            ).execute()
+        )
+
+    row = await _db_call(_write)
+    row["code"] = display_code
+    return row
+
+
+async def inspect_hublink_code(
+    code: str,
+    *,
+    target_guild_id: int | str,
+) -> dict[str, Any]:
+    compact = normalize_hublink_code(code)
+    digest = _hublink_digest(compact)
+    target = _safe_str(target_guild_id)
+
+    def _read() -> dict[str, Any] | None:
+        sb = _require_supabase()
+        return _one(
+            sb.table("dank_community_hub_link_codes")
+            .select(
+                "id,source_guild_id,created_by_user_id,code_hint,state,expires_at,"
+                "redeemed_at,redeemed_by_guild_id,redeemed_by_user_id,created_at"
+            )
+            .eq("code_hash", digest)
+            .limit(1)
+            .execute()
+        )
+
+    row = await _db_call(_read)
+    if not row:
+        raise CommunityConflict("HubLink code is invalid or no longer available.")
+
+    source = _safe_str(row.get("source_guild_id"))
+    state = _safe_str(row.get("state"), "pending")
+    if source == target:
+        raise CommunityConflict("A server cannot HubLink to itself.")
+    if state == "redeemed":
+        if _safe_str(row.get("redeemed_by_guild_id")) != target:
+            raise CommunityConflict("HubLink code was already redeemed by another server.")
+        return row
+    if state != "pending":
+        raise CommunityConflict("HubLink code is no longer available.")
+
+    try:
+        expires = datetime.fromisoformat(_safe_str(row.get("expires_at")).replace("Z", "+00:00"))
+    except Exception as exc:
+        raise CommunityHubError("HubLink expiry data is invalid.") from exc
+    if expires <= utc_now():
+        raise CommunityConflict("HubLink code has expired.")
+    return row
+
+
+async def redeem_hublink_code(
+    code: str,
+    *,
+    target_guild_id: int | str,
+    actor_id: int | str,
+) -> dict[str, Any]:
+    compact = normalize_hublink_code(code)
+    digest = _hublink_digest(compact)
+    target = _safe_str(target_guild_id)
+    actor = _safe_str(actor_id)
+
+    def _write() -> dict[str, Any]:
+        sb = _require_supabase()
+        return _rpc_payload(
+            sb.rpc(
+                "community_hub_redeem_link_code",
+                {
+                    "p_code_hash": digest,
+                    "p_target_guild_id": target,
+                    "p_actor_id": actor,
+                },
+            ).execute()
+        )
+
+    return await _db_call(_write)
+
+
+async def expire_hublink_codes(*, limit: int = 500) -> int:
+    safe_limit = max(1, min(5000, _safe_int(limit, 500)))
+
+    def _write() -> int:
+        sb = _require_supabase()
+        response = sb.rpc(
+            "community_hub_expire_link_codes",
+            {"p_limit": safe_limit},
+        ).execute()
+        data = getattr(response, "data", None)
+        if isinstance(data, list) and data:
+            return max(0, _safe_int(data[0], 0))
+        return max(0, _safe_int(data, 0))
+
+    try:
+        return await _db_call(_write)
+    except CommunityHubError:
+        return 0
+
+
 async def create_partner_request(
     guild_id: int | str,
     target_guild_id: int | str,
@@ -2095,6 +2244,8 @@ __all__ = [
     "CommunityConflict",
     "normalize_game_name",
     "normalize_notes",
+    "normalize_hublink_code",
+    "format_hublink_code",
     "game_key",
     "get_settings",
     "update_settings",
@@ -2146,6 +2297,10 @@ __all__ = [
     "create_event",
     "list_upcoming_events",
     "rsvp_event",
+    "create_hublink_code",
+    "inspect_hublink_code",
+    "redeem_hublink_code",
+    "expire_hublink_codes",
     "create_partner_request",
     "update_partner_link",
     "list_partner_links",
