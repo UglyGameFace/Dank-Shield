@@ -39,6 +39,14 @@ class CaptionRuntimeState:
     engine: CaptionEngine
 
 
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(str(os.getenv(name, str(default))).strip())
+    except (TypeError, ValueError):
+        value = int(default)
+    return max(int(minimum), min(int(maximum), value))
+
+
 def live_captions_enabled() -> bool:
     return str(os.getenv("DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED", "")).strip().lower() in {
         "1",
@@ -54,6 +62,18 @@ class CommunityVoiceCaptionManager:
         self._sessions: dict[str, CaptionRuntimeState] = {}
         self._guild_owner: dict[int, str] = {}
         self._lock = asyncio.Lock()
+        self.max_active_guilds = _env_int(
+            "DANK_COMMUNITY_CAPTION_MAX_ACTIVE_GUILDS", 4, 1, 100
+        )
+        self.max_speakers_per_session = _env_int(
+            "DANK_COMMUNITY_CAPTION_MAX_SPEAKERS", 8, 1, 25
+        )
+        self.max_concurrent_transcriptions = _env_int(
+            "DANK_COMMUNITY_CAPTION_MAX_CONCURRENT_TRANSCRIPTIONS", 6, 1, 100
+        )
+        self._global_transcribe_semaphore = asyncio.Semaphore(
+            self.max_concurrent_transcriptions
+        )
 
     def status(self, session_id: str) -> dict[str, Any]:
         state = self._sessions.get(str(session_id))
@@ -115,6 +135,11 @@ class CommunityVoiceCaptionManager:
             if existing is not None:
                 return existing
 
+            if len(self._sessions) >= self.max_active_guilds:
+                raise VoiceReceiveUnavailable(
+                    "This Dank Shield process is already at its configured Live Captions session limit."
+                )
+
             other_sid = self._guild_owner.get(guild_id)
             if other_sid and other_sid != sid:
                 raise VoiceReceiveUnavailable(
@@ -158,7 +183,11 @@ class CommunityVoiceCaptionManager:
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
 
-            engine = CaptionEngine(transcriber, _publish)
+            engine = CaptionEngine(
+                transcriber,
+                _publish,
+                global_transcribe_semaphore=self._global_transcribe_semaphore,
+            )
             loop = asyncio.get_running_loop()
             bridge = PerSpeakerFrameBridge(loop, engine.submit)
             voice_client = await connect_receive_client(voice_channel, bridge)
@@ -208,6 +237,10 @@ class CommunityVoiceCaptionManager:
         if state.bridge.is_opted_in(uid):
             state.bridge.opt_out(uid)
             return False
+        if len(state.bridge.opted_in_user_ids()) >= self.max_speakers_per_session:
+            raise VoiceReceiveUnavailable(
+                "This session has reached its configured Live Captions speaker limit."
+            )
         state.bridge.opt_in(uid)
         return True
 
