@@ -47,6 +47,7 @@ PCM_FRAME_ALIGNMENT = PCM_CHANNELS * PCM_SAMPLE_WIDTH
 VOICE_RECV_DAVE_COMMIT = "03dd1e2dafe85522cc458441cd5b143b136ac836"
 VOICE_RECV_DAVE_SOURCE = "imayhaveborkedit/discord-ext-voice-recv#58"
 BUNDLED_OPUS_DISTRIBUTION = "opuslib-next-bundled==0.1.1"
+_OPUS_LIBRARY_SOURCE = ""
 
 
 class VoiceReceiveUnavailable(RuntimeError):
@@ -136,8 +137,10 @@ def ensure_opus_loaded() -> tuple[bool, str]:
     operator override; system discovery is only a final compatibility fallback.
     """
 
+    global _OPUS_LIBRARY_SOURCE
+
     if discord.opus.is_loaded():
-        return True, "already-loaded"
+        return True, _OPUS_LIBRARY_SOURCE or "already-loaded"
 
     candidates: list[str] = []
 
@@ -165,6 +168,7 @@ def ensure_opus_loaded() -> tuple[bool, str]:
             failures.append(f"{candidate}:{type(exc).__name__}")
             continue
         if discord.opus.is_loaded():
+            _OPUS_LIBRARY_SOURCE = candidate
             log.info("Live Captions Opus runtime loaded library=%s", candidate)
             return True, candidate
 
