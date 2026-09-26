@@ -210,7 +210,7 @@ class OpenAITranscriber:
         self.language = str(language or "").strip()
         self.timeout_seconds = max(5.0, min(60.0, float(timeout_seconds)))
         if not self.api_key:
-            raise RuntimeError("OPENAI_API_KEY is required for Community Hub captions.")
+            raise RuntimeError("OPENAI_API_KEY is required for Live Captions.")
 
     async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
         form = aiohttp.FormData()
