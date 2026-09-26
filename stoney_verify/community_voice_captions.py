@@ -322,7 +322,8 @@ def _language_codes(value: Any) -> list[str]:
 
 
 def normalize_caption_output_mode(value: Any) -> str:
-    mode = str(value or "").strip().lower().replace("+", "_").replace(" ", "_")
+    raw = str(value or "").strip().lower().replace("+", " ").replace("_", " ")
+    mode = "_".join(raw.split())
     if mode in {"english", "english_only"}:
         return "english"
     if mode in {"bilingual", "original_english", "original_and_english", "both"}:
