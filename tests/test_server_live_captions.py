@@ -19,6 +19,7 @@ from stoney_verify.commands_ext.public_live_captions import (
     CAPTION_VOICE_SCOPE_KEY,
     ServerLiveCaptionsSetupView,
     _bot_owner_authorized,
+    _soak_pipeline_diagnosis,
     _voice_allowed_by_config,
 )
 from stoney_verify.commands_ext.public_setup_start import DankSetupView
@@ -151,6 +152,30 @@ def test_soak_bypass_requires_actual_bot_owner_authorization() -> None:
 
     assert asyncio.run(_bot_owner_authorized(owner_interaction)) is True
     assert asyncio.run(_bot_owner_authorized(other_interaction)) is False
+
+
+def test_soak_pipeline_diagnosis_separates_receive_from_provider_failures() -> None:
+    no_frames = {
+        "health": {"frames_seen": 0, "frames_routed": 0},
+        "segment_failures": 0,
+    }
+    assert "DAVE receive layer" in _soak_pipeline_diagnosis(no_frames)
+
+    routed = {
+        "health": {"frames_seen": 20, "frames_routed": 20},
+        "segments_transcribed": 0,
+        "segment_failures": 0,
+    }
+    assert "speaker routing are working" in _soak_pipeline_diagnosis(routed)
+
+    provider_failure = {
+        "health": {"frames_seen": 20, "frames_routed": 20},
+        "segment_failures": 1,
+        "last_failure": "OpenAI transcription has no available quota or is rate-limited (HTTP 429).",
+    }
+    rendered = _soak_pipeline_diagnosis(provider_failure)
+    assert "Transcription/processing failure" in rendered
+    assert "HTTP 429" in rendered
 
 
 def test_general_live_captions_reuse_single_hardened_receiver_owner() -> None:

@@ -7,6 +7,7 @@ from pathlib import Path
 from stoney_verify.community_voice_captions import (
     CaptionEngine,
     CaptionSegment,
+    CaptionTranscriptionError,
     SpeechPreservingSegmenter,
     TranscriptResult,
     normalize_pcm16_lossless_timing,
@@ -172,6 +173,64 @@ class _BlockingTranscriber:
         self.started.set()
         await asyncio.Event().wait()
         raise AssertionError("unreachable")
+
+
+class _QuotaFailingTranscriber:
+    async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
+        raise CaptionTranscriptionError(
+            429,
+            "OpenAI transcription has no available quota or is rate-limited (HTTP 429). Check API billing/credits and project limits.",
+        )
+
+
+def test_segment_failure_records_safe_provider_diagnostic() -> None:
+    async def _run() -> None:
+        async def publish(user_id: int, text: str, confidence: float) -> None:
+            raise AssertionError("failed transcription must not publish")
+
+        engine = CaptionEngine(_QuotaFailingTranscriber(), publish)
+        await engine._process_segment_safely(
+            CaptionSegment(
+                user_id=35,
+                pcm=_pcm(900),
+                started_at=1.0,
+                ended_at=2.0,
+            )
+        )
+        assert engine.segment_failures == 1
+        assert "HTTP 429" in engine.last_failure
+        assert "billing/credits" in engine.last_failure
+        assert engine.segments_published == 0
+
+    asyncio.run(_run())
+
+
+def test_empty_transcription_is_counted_separately_from_publish() -> None:
+    class _EmptyTranscriber:
+        async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
+            return TranscriptResult("", 0.99, "fake", "fake")
+
+    async def _run() -> None:
+        published = []
+
+        async def publish(user_id: int, text: str, confidence: float) -> None:
+            published.append((user_id, text, confidence))
+
+        engine = CaptionEngine(_EmptyTranscriber(), publish)
+        await engine._process_segment(
+            CaptionSegment(
+                user_id=36,
+                pcm=_pcm(900),
+                started_at=1.0,
+                ended_at=2.0,
+            )
+        )
+        assert engine.segments_transcribed == 1
+        assert engine.segments_empty == 1
+        assert engine.segments_published == 0
+        assert published == []
+
+    asyncio.run(_run())
 
 
 def test_close_cancels_inflight_transcription_before_it_can_publish() -> None:
