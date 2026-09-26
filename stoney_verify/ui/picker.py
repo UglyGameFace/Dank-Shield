@@ -354,6 +354,45 @@ class DankRoleSelect(discord.ui.RoleSelect):
         await self.on_pick(interaction, role)
 
 
+async def _resolve_selected_guild_channel(
+    interaction: discord.Interaction,
+    selected: Any,
+) -> Optional[discord.abc.GuildChannel]:
+    """Resolve Discord UI channel-select partials to cached guild channels.
+
+    discord.py channel selects can yield AppCommandChannel partial objects rather
+    than concrete GuildChannel instances. Normal Dank Shield callbacks expect the
+    concrete cached object so permission checks and type-specific handling remain
+    consistent.
+    """
+
+    if isinstance(selected, discord.abc.GuildChannel):
+        return selected
+    if selected is None:
+        return None
+
+    resolver = getattr(selected, "resolve", None)
+    if callable(resolver):
+        try:
+            resolved = resolver()
+        except Exception:
+            resolved = None
+        if isinstance(resolved, discord.abc.GuildChannel):
+            return resolved
+
+    guild = getattr(interaction, "guild", None)
+    channel_id = getattr(selected, "id", None)
+    if guild is not None and channel_id is not None:
+        try:
+            resolved = guild.get_channel(int(channel_id))
+        except Exception:
+            resolved = None
+        if isinstance(resolved, discord.abc.GuildChannel):
+            return resolved
+
+    return None
+
+
 class DankChannelSelect(discord.ui.ChannelSelect):
     """Dank Shield wrapper for Discord channel/category picking."""
 
@@ -383,9 +422,13 @@ class DankChannelSelect(discord.ui.ChannelSelect):
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         if not await _owner_check(interaction, author_id=self.author_id, allow_anyone=self.allow_anyone):
             return
-        channel = self.values[0] if self.values else None
-        if not isinstance(channel, discord.abc.GuildChannel):
-            return await _safe_ephemeral(interaction, "Pick a server channel first.")
+        selected = self.values[0] if self.values else None
+        channel = await _resolve_selected_guild_channel(interaction, selected)
+        if channel is None:
+            return await _safe_ephemeral(
+                interaction,
+                "I received that channel selection but could not resolve it from this server. Reopen the picker and try again.",
+            )
         await self.on_pick(interaction, channel)
 
 
