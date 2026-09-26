@@ -2,96 +2,82 @@
 
 ## Active task / desired outcome
 
-**P0-INVITE-V2-PROTECTION-012 — make Invite Shield reliably enforce external Discord invites across live, edited, modern-app, and missed-history surfaces**
+**P0-ANTINUKE-BULK-DELETE-SELF-PROOF-013 — stop legitimate Dank Shield bulk-message cleanup from being misclassified as bot-token compromise**
 
-Desired outcome: when Invite Shield is enabled, directly authored external Discord invites from people, bots, webhooks, rich messages, and Components V2 all reach the same canonical invite policy. Messages missed during restart/cache gaps are recovered without coupling Invite Shield to unrelated activity-history checkpoints.
+Desired outcome: a `message_bulk_delete` audit event caused by this running Dank Shield process must consume a one-time, guild/channel-scoped self-action receipt even when Discord does not surface a usable audit-log reason. A truly unexplained bulk deletion attributed to the bot must still fail closed.
 
 ## Scope / single active task lock
 
-Only Invite Shield enforcement, its recovery path, its Protection Center controls, and directly related regression coverage are active. Do not broaden into AntiNuke, verification, tickets, Community Hub, or unrelated startup work.
+Only the AntiNuke self-provenance path for locally issued message deletions is active. This includes the shared reasonless-message fallback only where required to add bulk-delete parity safely. Do not broaden into Invite Shield, Spam Guard policy, channel-cleanup design, verification, tickets, or unrelated AntiNuke redesign.
+
+## Prior task closure
+
+PR #329, **Fix Invite Shield missed app-card and history enforcement**, is merged into `main` as `dec4664b13ed6769937eab6bfc145a01fd54cc1e`.
+
+Its exact head `16841f44f4ee302824d963b766aa3860cb72cd9b` completed every observed workflow successfully: Dank Shield CI, Dank Design Regression CI, Invite Shield CI, Ticket Owner Emergency Override, Schema Authority SQL, Profile Runtime Diagnostics, and Application Command Size Diagnostics.
 
 ## Evidence / root cause
 
-Production logs prove the canonical live policy/delete path works when invite evidence reaches it: messages in guild `1357215261001912320` were classified as `invite_shield_external_or_blocked` and deleted successfully.
+Production reported another durable self-compromise quarantine at 21:41 on 2026-09-25, this time for `message_bulk_delete`, after the earlier delayed-`channel_update` lifecycle fix in PR #324.
 
-The affected messages surviving elsewhere exposed separate ingress/recovery gaps:
+Current code proves a separate correctness gap:
 
-1. **Missed history was keyed to the wrong durable clock.** Invite reconciliation borrowed the member/activity heartbeat. Activity recovery could advance that checkpoint even though Invite Shield had not inspected the same messages, permanently placing missed invite posts outside the next Invite Shield startup window.
-2. **Cache-dependent edits could be missed.** The normal `on_message_edit` path only covers cached messages. A modern application card updated after creation can require raw message edit recovery.
-3. **The previous content-redacted fallback was vendor-specific.** It hardcoded one advertising application identity. That is not acceptable for a public bot because the same Discord delivery shape can come from another bot/application/webhook.
-4. **When Discord supplies the authored invite text, the existing generalized extractor is correct.** It already covers human message content, bot-authored rich surfaces, Components V2 Text Display content, nested children/accessories, and directly authored component URLs subject to the existing human/app-response false-positive boundaries.
+1. Local POST `/channels/{id}/messages/bulk-delete` requests receive the normal DSA marker and pending authorization.
+2. The runtime already creates a second, reason-independent expected-action receipt for local single `message_delete` because Discord audit reasons can be sparse.
+3. Local `message_bulk_delete` has no equivalent fallback. It therefore depends entirely on the audit event carrying a usable DSA marker.
+4. Dank Shield has multiple legitimate bulk-delete callers, including channel cleanup and Spam Guard.
+5. discord.py 2.7.1 models a bulk-delete audit entry with the channel as `entry.target` while `entry.extra` carries only the delete count. The existing target-key fallback reaches `entry.target`, so channel scoping is available.
+6. When the DSA marker is absent/unusable, `_audit_guard()` currently reaches the zero-damage unmatched path and persists quarantine/self-ejects even though a matching local bulk-delete request can be proven independently.
 
-## Correct execution path
+The fix must correlate the local request rather than exempting `message_bulk_delete`.
 
-Live authored invite:
+## Execution path
 
-`on_message -> globals live enforcer -> invite_policy_engine.enforce_live_invite_message -> generalized extraction -> same-server/external/unknown classification -> canonical policy -> delete_message_if_allowed -> durable stats/modlog`
+Legitimate bulk cleanup:
 
-Uncached edit:
+`channel.delete_messages(...) -> HTTP POST /channels/{channel}/messages/bulk-delete -> self-action HTTP wrapper -> DSA authorization + reasonless one-time bulk receipt -> Discord audit event -> DSA marker match OR channel-scoped fallback -> consume receipt -> no compromise response`
 
-`on_raw_message_edit -> fetch exact changed message -> canonical enforce_live_invite_message -> canonical policy/delete`
+Unexplained bulk deletion:
 
-Restart recovery:
-
-`Invite Shield durable checkpoint -> bounded channel history window -> scan_channel_invites -> canonical policy/delete -> advance Invite Shield checkpoint only after completed scan`
-
-Content-redacted bot/app/webhook:
-
-`stable sender shape + no MESSAGE_CONTENT surfaces -> generic protected-poster candidate -> delete only if explicit protected bot/channel rule matches; broad all-bots alone cannot authorize blind deletion`
-
-Humans are never guess-deleted when authored content is unavailable.
+`bot-attributed message_bulk_delete -> no matching DSA authorization and no matching local reasonless receipt -> zero-damage durable quarantine/self-ejection`
 
 ## Changes
 
-Branch: `fix/invite-shield-generalized-recovery-20260925`
+Branch: `fix/antinuke-bulk-delete-self-proof-20260925`
 
 Implemented:
 
-- removed the OneBump identity table and vendor-specific content-redacted policy;
-- generic content-redacted candidate now covers bot/application/webhook sender shapes without using display names or vendor IDs;
-- content-redacted automatic deletion still requires the existing explicit protected bot/channel rule;
-- interaction responses remain excluded from contentless automatic deletion;
-- human explicit invite URLs remain handled by the normal generalized extractor;
-- allowed users/roles/channels and same-server invite behavior remain intact;
-- introduced Invite Shield's own durable `invite_reconcile_checkpoint_at`;
-- first checkpoint bootstrap performs a bounded 24-hour recovery window; stale gaps are capped at seven days;
-- checkpoint is not advanced when policy is unavailable or Invite Shield recovery is disabled;
-- added uncached `on_raw_message_edit` recovery that fetches only content-related edits and delegates to the canonical live policy;
-- live raw-edit recovery uses discord.py's route limiter and is not stalled behind startup activity-history pacing;
-- existing startup/resume scans remain under the shared recovery REST budget;
-- Protection Center wording and historical cleanup are vendor-neutral;
-- removed the unused OneBump/Discadus-specific bump receipt classifier;
-- updated safety audits and focused regressions so vendor hardcoding cannot silently return.
+- arm a one-time `message_bulk_delete` expected-action receipt whenever this process issues the protected bulk-delete REST request;
+- reuse the existing in-flight/completed lifecycle, so the fallback cannot expire while Discord/rate-limit pacing still owns the request and is cancelled if the request fails;
+- scope the fallback to guild + channel and action;
+- consume/clear the paired fallback when the stronger DSA marker succeeds;
+- do not allow a present-but-invalid DSA marker on direct message deletions to fall through to the reasonless fallback;
+- preserve existing integration-delete side-effect behavior;
+- add regressions for reasonless local bulk delete, marker-success cleanup, channel scoping, and invalid-marker fail-closed behavior.
 
 ## Validation / results
 
-Implementation is present on the branch and PR #329 is open for exact-head validation. Validation is still required before merge:
+Implementation is being prepared. Required before completion:
 
-- compile changed modules;
-- run invite live-enforcement tests;
-- run invite message-surface tests;
-- run invite reconciliation tests;
-- run startup recovery scaling tests;
-- run Protection Center tests;
-- run `tools/audit_invite_link_safety.py`;
-- inspect branch diff for accidental scope;
-- open PR and require exact-head CI before merge.
+- compile the changed runtime and tests;
+- run `tests/test_antinuke_self_action_runtime.py`;
+- run zero-damage, gateway, guardian, incident, lockdown, product-policy, and runtime-coordinator AntiNuke regressions;
+- run the full repository test suite through normal CI;
+- inspect the final diff for unrelated changes;
+- require all exact-head PR workflows green before merge.
 
 ## Cleanup / conflicts
 
-No second invite policy or direct delete authority was added. Canonical ownership remains:
-
-- live ingress: `globals.py`;
-- decision/delete authority: `invite_policy_engine.py`;
-- sender-surface filtering: `invite_policy_message_surface_runtime.py`;
-- missed-event/history recovery: `invite_reconciliation_runtime.py`;
-- persisted targeting: `invite_scope_settings.py`;
-- controls: `public_protection_invite_ui.py`.
+No protected action is exempted. No second listener, retry layer, alternate AntiNuke owner, or global trust bypass is being added. The fix extends the existing authoritative self-action receipt mechanism to the bulk-delete case that lacked parity with single-message deletion.
 
 ## Blockers / risks
 
-Live production acceptance is still required after a validated deployment. Content-redacted human messages remain fail-safe because there is no trustworthy invite evidence to classify. Content-redacted bot/app/webhook messages are only removable automatically when the server explicitly protected that bot/channel.
+The production screenshot proves the unmatched bulk-delete path fired, but no 21:41 production log excerpt is available in this conversation to identify which legitimate caller initiated that exact bulk request. The repair is caller-independent because it binds directly to the authoritative outbound REST request.
+
+## Backlog
+
+Preserve unrelated reported issues without investigation inside this task.
 
 ## Next step
 
-Run PR #329 exact-head validation, repair any failures, inspect all workflow evidence, and merge only from the tested head.
+Publish the focused implementation, open a draft PR, run exact-head CI, repair only same-root failures, then perform final cleanup/conflict review before merge.

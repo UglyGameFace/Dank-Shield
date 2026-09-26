@@ -443,6 +443,177 @@ def test_http_message_delete_without_audit_reason_is_expected_self_action(
     assert runtime._EXPECTED_SIDE_EFFECTS == {}  # noqa: SLF001
 
 
+def test_http_bulk_delete_without_audit_reason_is_expected_self_action(
+    monkeypatch,
+) -> None:
+    _reset()
+    bot = FakeBot()
+    guild = FakeGuild()
+    bot.get_channel = lambda channel_id: (
+        SimpleNamespace(id=channel_id, guild=guild)
+        if int(channel_id) == 123
+        else None
+    )
+
+    assert runtime._patch_http(bot) is True  # noqa: SLF001
+    route = FakeRoute("POST", "/channels/123/messages/bulk-delete")
+    asyncio.run(
+        bot.http.request(
+            route,
+            json={"messages": [456, 457]},
+        )
+    )
+
+    assert len(runtime._EXPECTED_SIDE_EFFECTS) == 1  # noqa: SLF001
+    expected = next(
+        iter(runtime._EXPECTED_SIDE_EFFECTS.values())  # noqa: SLF001
+    )
+    assert expected.action == "message_bulk_delete"
+    assert expected.target_key == "id:123"
+    assert expected.source_action == "local_message_bulk_delete"
+
+    async def should_not_read_settings(_guild_id: int):
+        raise AssertionError(
+            "expected local bulk cleanup must finish before compromise checks"
+        )
+
+    monkeypatch.setattr(
+        anti_nuke,
+        "get_antinuke_settings",
+        should_not_read_settings,
+    )
+    # discord.py 2.7.1 exposes the bulk-delete channel as entry.target and
+    # extra only carries the count. Keep that exact contract covered.
+    event = _entry(
+        guild,
+        action="message_bulk_delete",
+        actor_id=55,
+        target_id=123,
+        reason="",
+    )
+    asyncio.run(runtime._audit_guard(bot, event))  # noqa: SLF001
+
+    assert guild.leave_calls == 0
+    assert runtime._EXPECTED_SIDE_EFFECTS == {}  # noqa: SLF001
+
+
+def test_bulk_delete_marker_consumption_clears_fallback_receipt(
+    monkeypatch,
+) -> None:
+    _reset()
+    bot = FakeBot()
+    guild = FakeGuild()
+    bot.get_channel = lambda channel_id: (
+        SimpleNamespace(id=channel_id, guild=guild)
+        if int(channel_id) == 123
+        else None
+    )
+
+    assert runtime._patch_http(bot) is True  # noqa: SLF001
+    route = FakeRoute("POST", "/channels/123/messages/bulk-delete")
+    asyncio.run(
+        bot.http.request(
+            route,
+            json={"messages": [456, 457]},
+        )
+    )
+    reason = bot.http.calls[-1][1]["reason"]
+
+    async def should_not_read_settings(_guild_id: int):
+        raise AssertionError(
+            "bulk DSA marker must be consumed before compromise checks"
+        )
+
+    monkeypatch.setattr(
+        anti_nuke,
+        "get_antinuke_settings",
+        should_not_read_settings,
+    )
+    event = _entry(
+        guild,
+        action="message_bulk_delete",
+        actor_id=55,
+        target_id=123,
+        reason=reason,
+    )
+    asyncio.run(runtime._audit_guard(bot, event))  # noqa: SLF001
+
+    assert runtime._PENDING == {}  # noqa: SLF001
+    assert runtime._EXPECTED_SIDE_EFFECTS == {}  # noqa: SLF001
+    assert guild.leave_calls == 0
+
+
+def test_bulk_delete_reasonless_receipt_is_channel_scoped() -> None:
+    _reset()
+    guild = FakeGuild()
+    token = runtime._expect_side_effect(  # noqa: SLF001
+        guild.id,
+        "message_bulk_delete",
+        target_key="id:123",
+        source_action="local_message_bulk_delete",
+    )
+
+    wrong_channel = _entry(
+        guild,
+        action="message_bulk_delete",
+        target_id=124,
+    )
+    assert (
+        runtime._consume_expected_side_effect(  # noqa: SLF001
+            guild,
+            wrong_channel,
+            "message_bulk_delete",
+        )
+        is False
+    )
+    assert token in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
+
+    matching = _entry(
+        guild,
+        action="message_bulk_delete",
+        target_id=123,
+    )
+    assert (
+        runtime._consume_expected_side_effect(  # noqa: SLF001
+            guild,
+            matching,
+            "message_bulk_delete",
+        )
+        is True
+    )
+    assert token not in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
+
+
+def test_invalid_bulk_delete_marker_cannot_use_reasonless_fallback(
+    monkeypatch,
+) -> None:
+    _reset()
+    bot = FakeBot()
+    guild = FakeGuild()
+    token = runtime._expect_side_effect(  # noqa: SLF001
+        guild.id,
+        "message_bulk_delete",
+        target_key="id:123",
+        source_action="local_message_bulk_delete",
+    )
+    unmatched: list[str] = []
+
+    async def record_unmatched(_bot, _guild, _entry, action_name: str) -> None:
+        unmatched.append(action_name)
+
+    monkeypatch.setattr(runtime, "_unmatched_self_action", record_unmatched)
+    event = _entry(
+        guild,
+        action="message_bulk_delete",
+        target_id=123,
+        reason="[DSA:000000000000000000000000]",
+    )
+    asyncio.run(runtime._audit_guard(bot, event))  # noqa: SLF001
+
+    assert unmatched == ["message_bulk_delete"]
+    assert token in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
+
+
 def test_message_delete_marker_consumption_clears_fallback_receipt(
     monkeypatch,
 ) -> None:
