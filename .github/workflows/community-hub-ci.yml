@@ -393,6 +393,38 @@ jobs:
               if result is not null then
                   raise exception 'Quick Match ignored Match Safety exclusion';
               end if;
+
+              -- An availability row must not auto-pair into a second active
+              -- group for the same game, even when the guild allows multiple
+              -- active sessions per member.
+              perform public.community_hub_create_session(
+                  'busy-guild','busy-host','busy-session','Minecraft','already playing',
+                  2,'optional','casual','public'
+              );
+              select id into sid
+              from public.dank_community_sessions
+              where guild_id='busy-guild' and idempotency_key='busy-session';
+              perform public.community_hub_transition_session(
+                  sid,'busy-guild','busy-host','publish',false,null
+              );
+              perform public.community_hub_join_session(
+                  sid,'busy-guild','candidate-busy'
+              );
+              insert into public.dank_community_availability(
+                  guild_id,user_id,game_key,game_name,play_style,mic_preference,note,expires_at,auto_match
+              ) values (
+                  'busy-guild','candidate-busy','minecraft','Minecraft','casual','optional','',now()+interval '2 hours',true
+              );
+              result := public.community_hub_quick_match(
+                  'busy-guild','requester-busy','Minecraft','quick-busy'
+              );
+              if result is not null then
+                  raise exception 'Quick Match duplicated a member into a second active same-game group';
+              end if;
+              if not (select auto_match from public.dank_community_availability
+                  where guild_id='busy-guild' and user_id='candidate-busy' and game_key='minecraft') then
+                  raise exception 'ineligible same-game availability was unexpectedly claimed';
+              end if;
           end;
           $matchmaking$;
           SQL
