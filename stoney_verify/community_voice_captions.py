@@ -37,25 +37,84 @@ log = logging.getLogger(__name__)
 
 
 class CaptionTranscriptionError(RuntimeError):
-    def __init__(self, status_code: int, safe_message: str) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        safe_message: str,
+        *,
+        error_code: str = "",
+        error_type: str = "",
+        terminal: bool = False,
+    ) -> None:
         super().__init__(safe_message)
         self.status_code = int(status_code)
         self.safe_message = str(safe_message)
+        self.error_code = str(error_code or "").strip()
+        self.error_type = str(error_type or "").strip()
+        self.terminal = bool(terminal)
 
 
-def _transcription_error_message(status_code: int) -> str:
+_OPENAI_BILLING_429_CODES = {
+    "credit_balance_exhausted",
+    "organization_usage_limit_exceeded",
+    "organization_spend_limit_exceeded",
+    "project_spend_limit_exceeded",
+}
+
+
+def _openai_transcription_error(status_code: int, body: str) -> CaptionTranscriptionError:
     status = int(status_code)
+    error_code = ""
+    error_type = ""
+    try:
+        payload = json.loads(body)
+    except (TypeError, json.JSONDecodeError):
+        payload = {}
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(error, dict):
+        error_code = str(error.get("code") or "").strip()
+        error_type = str(error.get("type") or "").strip()
+
+    code = error_code.casefold()
+    kind = error_type.casefold()
+
     if status == 400:
-        return "OpenAI rejected the transcription request (HTTP 400). Check the configured caption model/request."
-    if status == 401:
-        return "OpenAI rejected OPENAI_API_KEY (HTTP 401). Replace the host API key."
-    if status == 403:
-        return "The OpenAI API project is not permitted to use transcription (HTTP 403)."
-    if status == 429:
-        return "OpenAI transcription has no available quota or is rate-limited (HTTP 429). Check API billing/credits and project limits."
-    if 500 <= status <= 599:
-        return f"OpenAI transcription is temporarily unavailable (HTTP {status})."
-    return f"OpenAI transcription request failed (HTTP {status})."
+        message = "OpenAI rejected the transcription request (HTTP 400). Check the configured caption model/request."
+    elif status == 401:
+        message = "OpenAI rejected OPENAI_API_KEY (HTTP 401). Replace the host API key."
+    elif status == 403:
+        message = "The OpenAI API project is not permitted to use transcription (HTTP 403)."
+    elif status == 429 and code == "credit_balance_exhausted":
+        message = "OpenAI API credits are exhausted (HTTP 429: credit_balance_exhausted). Add API credits, then restart this caption session."
+    elif status == 429 and code == "organization_usage_limit_exceeded":
+        message = "The OpenAI organization usage limit was reached (HTTP 429). Raise the approved usage limit, then restart this caption session."
+    elif status == 429 and code == "organization_spend_limit_exceeded":
+        message = "The OpenAI organization spend limit was reached (HTTP 429). Raise/remove that spend limit, then restart this caption session."
+    elif status == 429 and code == "project_spend_limit_exceeded":
+        message = "The OpenAI project spend limit was reached (HTTP 429). Raise/remove that project limit, then restart this caption session."
+    elif status == 429 and (code == "rate_limit_exceeded" or kind == "rate_limit_error"):
+        message = "OpenAI transcription is temporarily rate-limited (HTTP 429: rate_limit_exceeded). Wait briefly before testing again."
+    elif status == 429 and kind == "insufficient_quota":
+        message = "OpenAI API quota/billing is unavailable (HTTP 429: insufficient_quota). Check API credits and organization/project spend limits, then restart this caption session."
+    elif status == 429:
+        message = "OpenAI returned HTTP 429. Check the API error code, current credits, spend limits, and transcription rate limits before retrying."
+    elif 500 <= status <= 599:
+        message = f"OpenAI transcription is temporarily unavailable (HTTP {status})."
+    else:
+        message = f"OpenAI transcription request failed (HTTP {status})."
+
+    terminal = bool(
+        status in {401, 403}
+        or code in _OPENAI_BILLING_429_CODES
+        or (status == 429 and kind == "insufficient_quota")
+    )
+    return CaptionTranscriptionError(
+        status,
+        message,
+        error_code=error_code,
+        error_type=error_type,
+        terminal=terminal,
+    )
 
 
 def _safe_segment_failure(exc: Exception) -> str:
@@ -268,10 +327,7 @@ class OpenAITranscriber:
             ) as response:
                 body = await response.text()
                 if response.status >= 400:
-                    raise CaptionTranscriptionError(
-                        int(response.status),
-                        _transcription_error_message(int(response.status)),
-                    )
+                    raise _openai_transcription_error(int(response.status), body)
                 try:
                     payload = json.loads(body)
                 except json.JSONDecodeError as exc:
@@ -318,7 +374,10 @@ class CaptionEngine:
         self.segments_unclear = 0
         self.segment_failures = 0
         self.queue_overflow = 0
+        self.provider_skipped = 0
         self.last_failure = ""
+        self.provider_blocked_reason = ""
+        self.provider_blocked_code = ""
 
     def submit(self, frame: SpeakerPCMFrame) -> None:
         if self._closed or int(frame.user_id) in self._blocked_user_ids:
@@ -421,6 +480,9 @@ class CaptionEngine:
         except Exception as exc:
             self.segment_failures += 1
             self.last_failure = _safe_segment_failure(exc)[:300]
+            if isinstance(exc, CaptionTranscriptionError) and exc.terminal:
+                self.provider_blocked_reason = self.last_failure
+                self.provider_blocked_code = exc.error_code or exc.error_type or str(exc.status_code)
             log.exception(
                 "Live Captions segment failure user=%s failure=%s",
                 int(segment.user_id),
@@ -445,6 +507,9 @@ class CaptionEngine:
             or self._closed
             or int(segment.user_id) in self._blocked_user_ids
         ):
+            return
+        if self.provider_blocked_reason:
+            self.provider_skipped += 1
             return
         async with self._transcribe_semaphore:
             if self._global_transcribe_semaphore is None:
@@ -524,6 +589,7 @@ __all__ = [
     "CaptionEngine",
     "CaptionSegment",
     "CaptionTranscriptionError",
+    "_openai_transcription_error",
     "OpenAITranscriber",
     "SpeechPreservingSegmenter",
     "TranscriptResult",
