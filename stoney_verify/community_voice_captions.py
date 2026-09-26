@@ -313,6 +313,8 @@ class CaptionEngine:
         self._transcribe_semaphore = asyncio.Semaphore(3)
         self._global_transcribe_semaphore = global_transcribe_semaphore
         self.segments_transcribed = 0
+        self.segments_published = 0
+        self.segments_empty = 0
         self.segments_unclear = 0
         self.segment_failures = 0
         self.queue_overflow = 0
@@ -492,17 +494,22 @@ class CaptionEngine:
                     chosen = second
 
         self.segments_transcribed += 1
-        if self._closed or uid in self._blocked_user_ids or not chosen.text:
+        if self._closed or uid in self._blocked_user_ids:
+            return
+        if not chosen.text:
+            self.segments_empty += 1
             return
         if chosen.confidence < self.unclear_threshold:
             self.segments_unclear += 1
             await self.publish(segment.user_id, "[unclear audio]", chosen.confidence)
+            self.segments_published += 1
             return
         if chosen.text == "[unclear audio]":
             self.segments_unclear += 1
         if self._closed or uid in self._blocked_user_ids:
             return
         await self.publish(segment.user_id, chosen.text[:1800], chosen.confidence)
+        self.segments_published += 1
 
 
 def openai_transcriber_from_env() -> OpenAITranscriber:
