@@ -294,11 +294,13 @@ class CommunityVoiceCaptionManager:
         uid = int(user_id)
         if state.bridge.is_opted_in(uid):
             state.bridge.opt_out(uid)
+            await state.engine.revoke_user(uid)
             return False
         if len(state.bridge.opted_in_user_ids()) >= self.max_speakers_per_session:
             raise VoiceReceiveUnavailable(
                 "This session has reached its configured Live Captions speaker limit."
             )
+        state.engine.allow_user(uid)
         state.bridge.opt_in(uid)
         return True
 
