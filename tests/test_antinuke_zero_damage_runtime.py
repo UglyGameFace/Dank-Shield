@@ -505,4 +505,4 @@ def test_compromise_quarantine_survives_memory_reset(monkeypatch, tmp_path: Path
 
 def test_discord_py_route_contract_is_pinned() -> None:
     requirements = Path("requirements.txt").read_text(encoding="utf-8")
-    assert f"discord.py=={runtime.SUPPORTED_DISCORD_PY}" in requirements
+    assert f"discord.py[voice]=={runtime.SUPPORTED_DISCORD_PY}" in requirements

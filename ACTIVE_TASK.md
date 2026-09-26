@@ -68,8 +68,10 @@ Public session controls must never be routed through private stale recovery.
 PR #332 merged stale Community Hub interaction recovery.
 PR #333 merged the Open to Play → Find Players → Quick Match loop as `5600b50110bc5a27e88a088a50291d2990e1b53d`.
 
-Current branch: `feat/community-hub-hublink-20260926`
-Current draft PR: **#334 — Community Hub: link servers with secure HubLink codes**
+PR #334 merged HubLink into `main` as `addd2580ddff320b8e64c6d8df50dc848f4e5b65`. Post-merge Dank Shield CI and the Supabase migration deployment both completed successfully.
+
+Current branch: `feat/community-hub-cross-server-parties-20260926`
+Current slice: **Community Hub hardened per-speaker DAVE receive + opt-in Live Captions**
 
 Implemented in this slice:
 - removed the staff-facing raw **Partner server ID** modal from the new Partner Network path;
@@ -92,6 +94,28 @@ Implemented in this slice:
 - runtime retention expires stale pending HubLinks without affecting ordinary Community Hub paths during schema rollout;
 - legacy partner link review/revoke remains available for pre-HubLink records;
 - Community Hub CI applies the base, matchmaking, and HubLink migrations twice and exercises create/replacement/redeem/replay/wrong-target/self-link/expiry/privacy/privilege invariants.
+
+Implemented in the current voice-caption slice:
+- changed the pinned Discord dependency to `discord.py[voice]==2.7.1`, installing the PyNaCl + davey voice dependencies that production logs previously reported missing;
+- pinned `discord-ext-voice-recv` to reviewed inbound-DAVE PR #62 head `bec048127f4148fd147afa3182c3771b6955dc08` instead of tracking a moving branch;
+- added a Dank Shield receive boundary that requires the voice receiver's SSRC→user mapping to agree with the source user before PCM may enter captions;
+- added memory-only per-speaker consent so non-consenting users are dropped before PCM enters the caption queue;
+- added counters for unknown speakers, identity mismatches, malformed PCM, queue overflow, and callback failures;
+- added speech-preserving segmentation that splits isolated speakers by packet gaps/max duration without a destructive noise gate;
+- the first transcription pass uses the untouched isolated PCM; low-confidence speech may receive a second amplitude-normalized pass that preserves every sample and timing;
+- conflicting low-confidence transcriptions resolve to `[unclear audio]` rather than fabricated speech;
+- added an optional OpenAI transcription provider using the current `/v1/audio/transcriptions` API and transcription logprobs;
+- added host/co-host/staff **Live Captions** control plus participant **Caption My Voice** self-consent;
+- only one caption receiver may own a guild voice connection at a time;
+- ending/cleaning a Community Hub session shuts the receiver down and clears speaker consent;
+- no Chat Link API or message behavior is guessed or duplicated; cross-server text remains an external integration boundary.
+- Live Captions are default-off behind `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED`; code may deploy without exposing un-soaked DAVE receive to users;
+- caption startup fails closed if the required privacy notice cannot be posted;
+- consent/start copy explicitly states that opted-in audio is sent to OpenAI's transcription API and that Dank Shield itself does not save the audio;
+- caption shutdown cancels in-flight transcription tasks and discards queued/buffered audio so a stopped session cannot publish late captions;
+- a missing/zero transcription confidence is treated as uncertain, never as implicitly trustworthy.
+- process-wide Live Captions scale is bounded by configurable active-guild, speakers-per-session, and global transcription concurrency limits so one public deployment cannot fan out unbounded API/RAM load;
+- `.env.example` documents the default-off feature gate, provider key/model/language, and scale limits without containing any real secret.
 
 Still deferred after HubLink:
 - session privacy / incomplete `invite_only` behavior;
@@ -138,4 +162,4 @@ After interaction reliability is validated:
 
 ## Next step
 
-Finish exact-head validation for PR #334. If every required workflow is green and the final diff remains confined to Community Hub/permission ownership/CI/task-record scope, mark #334 ready and merge with the head SHA pinned. Only then advance this Community Hub task to the next incomplete product slice.
+Validate the exact voice-caption head in CI: dependency installation, Python compile, DAVE-capability contract, per-user isolation/mismatch tests, speech-preserving segmentation, low-confidence dual-pass behavior, and the full Dank Shield suite. Unit tests cannot manufacture Discord's ephemeral MLS/DAVE keys, so do not call live voice receive production-proven until a real Discord soak test covers simultaneous speakers, epoch/key changes, packet loss, disconnect/reconnect, and long-running sessions. Keep `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` off until that soak test passes.

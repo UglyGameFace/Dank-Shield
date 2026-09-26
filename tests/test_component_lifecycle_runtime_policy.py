@@ -28,7 +28,7 @@ def _custom_ids(view: discord.ui.View) -> list[str]:
 
 def test_discord_py_viewstore_contract_is_pinned_before_private_recovery() -> None:
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
-    assert "discord.py==2.7.1" in requirements
+    assert "discord.py[voice]==2.7.1" in requirements
     assert discord.__version__ == "2.7.1"
 
     source = inspect.getsource(ViewStore.dispatch_view)
