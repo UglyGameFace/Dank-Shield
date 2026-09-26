@@ -118,6 +118,8 @@ class CommunityVoiceCaptionManager:
             "segments_unclear": state.engine.segments_unclear,
             "queue_overflow": state.engine.queue_overflow,
             "segment_failures": state.engine.segment_failures,
+            "queue_depth": state.engine.queue.qsize(),
+            "last_failure": str(state.engine.last_failure or ""),
         }
 
     def status_for_guild(self, guild_id: int) -> dict[str, Any]:
