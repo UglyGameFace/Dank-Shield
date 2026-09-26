@@ -1342,9 +1342,11 @@ class ServerLiveCaptionsSetupView(_OwnedView):
                 "❌ This must be used inside a server.",
                 ephemeral=True,
             )
+        await _defer_update(interaction)
         cfg = await get_guild_config(int(guild.id), refresh=True)
         mode = _caption_output_mode(cfg)
-        await interaction.response.edit_message(
+        await _edit_original(
+            interaction,
             embed=discord.Embed(
                 title="🌐 Live Captions Language & Translation",
                 description=(
