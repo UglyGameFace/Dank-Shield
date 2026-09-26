@@ -267,10 +267,12 @@ class CaptionEngine:
         self.low_confidence_threshold = max(0.0, min(1.0, float(low_confidence_threshold)))
         self.unclear_threshold = max(0.0, min(1.0, float(unclear_threshold)))
         self._task: Optional[asyncio.Task[None]] = None
+        self._segment_tasks: set[asyncio.Task[None]] = set()
         self._closed = False
         self._transcribe_semaphore = asyncio.Semaphore(3)
         self.segments_transcribed = 0
         self.segments_unclear = 0
+        self.segment_failures = 0
         self.queue_overflow = 0
 
     def submit(self, frame: SpeakerPCMFrame) -> None:
@@ -290,9 +292,9 @@ class CaptionEngine:
             )
 
     async def close(self) -> None:
+        """Stop immediately without allowing buffered speech to publish later."""
+
         self._closed = True
-        for segment in self.segmenter.flush_all():
-            await self._process_segment(segment)
         if self._task is not None and not self._task.done():
             self._task.cancel()
             try:
@@ -300,17 +302,49 @@ class CaptionEngine:
             except asyncio.CancelledError:
                 pass
 
+        pending = list(self._segment_tasks)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self._segment_tasks.clear()
+
+        while True:
+            try:
+                self.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        self.segmenter.flush_all()
+
+    def _spawn_segment(self, segment: CaptionSegment) -> None:
+        if self._closed or not segment.pcm:
+            return
+        task = asyncio.create_task(
+            self._process_segment_safely(segment),
+            name=f"dank-community-caption-segment:{segment.user_id}",
+        )
+        self._segment_tasks.add(task)
+        task.add_done_callback(self._segment_tasks.discard)
+
+    async def _process_segment_safely(self, segment: CaptionSegment) -> None:
+        try:
+            await self._process_segment(segment)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self.segment_failures += 1
+
     async def _run(self) -> None:
         while not self._closed:
             try:
                 frame = await asyncio.wait_for(self.queue.get(), timeout=0.25)
             except asyncio.TimeoutError:
                 for segment in self.segmenter.flush_idle():
-                    asyncio.create_task(self._process_segment(segment))
+                    self._spawn_segment(segment)
                 continue
 
             for segment in self.segmenter.feed(frame):
-                asyncio.create_task(self._process_segment(segment))
+                self._spawn_segment(segment)
 
     async def _process_segment(self, segment: CaptionSegment) -> None:
         if not segment.pcm:
@@ -349,14 +383,16 @@ class CaptionEngine:
                         chosen = second
 
             self.segments_transcribed += 1
-            if not chosen.text:
+            if self._closed or not chosen.text:
                 return
-            if chosen.confidence and chosen.confidence < self.unclear_threshold:
+            if chosen.confidence < self.unclear_threshold:
                 self.segments_unclear += 1
                 await self.publish(segment.user_id, "[unclear audio]", chosen.confidence)
                 return
             if chosen.text == "[unclear audio]":
                 self.segments_unclear += 1
+            if self._closed:
+                return
             await self.publish(segment.user_id, chosen.text[:1800], chosen.confidence)
 
 
