@@ -65,14 +65,17 @@ Public session controls must never be routed through private stale recovery.
 
 ## Changes
 
-Branch: `fix/community-hub-completion-reliability-20260925`
+Reliability slice PR #332 merged as `ace943f74234d4a8078f9b21c26d608668c64f66` after all exact-head workflows passed.
 
-In progress:
-- make definitively unowned ephemeral `dank:hub:` controls recover immediately to a fresh Community Hub instead of waiting for generic private-menu grace and falling back to Dank Home;
-- preserve generic grace/recovery for unrelated private control centers;
-- add focused tests proving stale Hub recovery, no stale-action replay, and public Hub session isolation;
-- include Community Hub in the shared private-session lifecycle contract;
-- continue the same task with the remaining Hub product-completion gaps after reliability is validated.
+Current branch: `feat/community-hub-matchmaking-loop-20260926`
+
+Current implementation slice:
+- connect Open to Play to the actual Find Players / Quick Match flow;
+- keep existing availability discoverable without silently auto-enrolling members;
+- add an explicit per-availability Quick Match opt-in that defaults existing rows to off;
+- make the authoritative PostgreSQL Quick Match path join an existing group first, then safely form a new group only from an explicitly opted-in compatible availability row;
+- preserve match-safety exclusions, session quotas, creation cooldowns, restart-safe idempotency, and one authoritative session state machine;
+- expose Open-to-Play activity inside Find Players so the member flow is no longer split across disconnected menus.
 
 ## Validation / results
 
@@ -103,4 +106,4 @@ After interaction reliability is validated:
 
 ## Next step
 
-Implement and test the Community Hub-specific stale recovery path on this branch, then continue the same active task through the remaining completion gaps.
+Implement and validate the Open to Play → Find Players → Quick Match/group-formation loop, including the follow-up SQL migration, focused PostgreSQL smoke coverage, UI/service wiring, and exact-head CI. Do not start session privacy, event-management, or partner-activity redesign until this slice is complete.
