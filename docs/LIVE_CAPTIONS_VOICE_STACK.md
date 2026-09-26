@@ -13,6 +13,9 @@ The public feature gate `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` must remain off u
 - Discloud APT contract: https://docs.discloud.com/en/configurations/discloud.config/apt
 - bundled libopus distribution: https://pypi.org/project/opuslib-next-bundled/
 - discord-ext-voice-recv upstream: https://github.com/imayhaveborkedit/discord-ext-voice-recv
+- Gemini audio transcription: https://ai.google.dev/gemini-api/docs/transcribe
+- Gemini audio input / inline-data limits: https://ai.google.dev/gemini-api/docs/audio
+- Gemini API rate limits: https://ai.google.dev/gemini-api/docs/rate-limits
 
 ## Receive pipeline
 
@@ -31,7 +34,7 @@ Discord voice gateway
   -> that user's explicit Caption My Voice consent
   -> per-speaker segment buffer
   -> in-memory WAV segment
-  -> OpenAI transcription
+  -> Google Gemini transcription
   -> configured caption text channel/thread
 ```
 
@@ -132,11 +135,15 @@ A normal-server caption transcript includes its source voice-channel identity. C
 
 ## Transcription boundary
 
-Only isolated, opted-in PCM is converted to an in-memory WAV segment and sent to the configured OpenAI transcription API.
+Only isolated, opted-in PCM is converted to an in-memory WAV segment and sent to the Google Gemini API using `GEMINI_API_KEY`.
 
-The first pass uses the original PCM samples. A low-confidence retry may amplitude-normalize the same samples; it must not use a destructive speech/noise gate that can silently remove words.
+Primary model: `gemini-3.5-transcribe`. It is purpose-built for speech-to-text and is used in verbatim mode. For these short 2–8 second caption segments, the WAV is sent inline and never written to disk.
 
-Provider failures, empty transcripts, unclear results, and publishing failures remain separately observable.
+Fallback model: `gemini-3.5-flash-lite`. It is used only when the dedicated transcribe model returns a successful response with no transcript text. The fallback receives the same in-memory WAV and a strict transcription-only prompt. This fallback exists because a successful empty response must not silently discard a user's opted-in utterance.
+
+Gemini's documented transcription response does not provide the OpenAI-style token log-probability confidence used by the previous provider. Dank Shield therefore does not invent a confidence score. Confidence-only normalization/retry logic runs only for providers that actually supply a numeric confidence.
+
+Provider failures, empty transcripts, fallback use, rate/quota blocks, and publishing failures remain separately observable.
 
 ## Required observability
 
@@ -174,7 +181,7 @@ The feature gate stays off until live testing covers at least:
 12. camera/video enabled by another participant;
 13. screen share / Go Live enabled by another participant;
 14. sustained operation long enough to cross normal Discord voice keepalive and DAVE transitions;
-15. OpenAI 401/403/429/provider failure diagnostics;
+15. Gemini authentication/permission/RESOURCE_EXHAUSTED/provider failure diagnostics;
 16. output-channel permission loss and recovery;
 17. Community Hub start/end cleanup using the same receiver owner;
 18. general-server stop cleanup with no late caption publication.
