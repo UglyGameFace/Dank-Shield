@@ -29,6 +29,18 @@ except Exception:
     get_supabase = None  # type: ignore
 
 
+_COMMUNITY_HUB_INSTALL_PERMISSIONS = (
+    "view_channel",
+    "send_messages",
+    "send_messages_in_threads",
+    "embed_links",
+    "read_message_history",
+    "manage_threads",
+    "manage_channels",
+    "view_audit_log",
+)
+
+
 _APPROVED_PUBLIC_GUILD_PERMISSIONS = (
     "kick_members",
     "ban_members",
@@ -195,6 +207,51 @@ def _required_permissions(
         names = [name for name in names if name != "move_members" or clean_mode == "full"]
 
     return tuple(dict.fromkeys(name for name in names if name and name != "administrator"))
+
+
+def community_hub_install_permissions() -> discord.Permissions:
+    """Minimum non-Administrator guild permissions for the full Community Hub defaults.
+
+    This intentionally excludes moderation powers such as Kick Members, Ban
+    Members, Moderate Members, Manage Messages, and Manage Roles. Other Dank
+    Shield products can request their own access later through normal repair.
+    """
+
+    perms = discord.Permissions.none()
+    for name in _COMMUNITY_HUB_INSTALL_PERMISSIONS:
+        if hasattr(perms, name):
+            try:
+                setattr(perms, name, True)
+            except Exception:
+                pass
+    try:
+        perms.administrator = False
+    except Exception:
+        pass
+    return perms
+
+
+def community_hub_oauth_url(
+    client_id: int,
+    *,
+    guild: Optional[discord.Guild] = None,
+) -> str:
+    try:
+        cid = int(client_id)
+    except Exception:
+        return ""
+    if cid <= 0:
+        return ""
+    try:
+        return discord.utils.oauth_url(
+            cid,
+            permissions=community_hub_install_permissions(),
+            guild=guild,
+            disable_guild_select=guild is not None,
+            scopes=("bot", "applications.commands"),
+        )
+    except Exception:
+        return ""
 
 
 def approved_public_permissions() -> discord.Permissions:

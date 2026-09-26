@@ -11,6 +11,7 @@ RUNTIME = ROOT / "stoney_verify" / "community_hub_runtime.py"
 SERVICE = ROOT / "stoney_verify" / "community_hub_service.py"
 MIGRATION = ROOT / "supabase" / "migrations" / "20260925193000_community_hub.sql"
 MATCHMAKING_MIGRATION = ROOT / "supabase" / "migrations" / "20260926044000_community_hub_matchmaking_loop.sql"
+HUBLINK_MIGRATION = ROOT / "supabase" / "migrations" / "20260926054000_community_hub_hublink.sql"
 
 
 def main() -> int:
@@ -21,6 +22,7 @@ def main() -> int:
     runtime = RUNTIME.read_text(encoding="utf-8")
     migration = MIGRATION.read_text(encoding="utf-8")
     matchmaking = MATCHMAKING_MIGRATION.read_text(encoding="utf-8")
+    hublink = HUBLINK_MIGRATION.read_text(encoding="utf-8")
 
     custom_ids = re.findall(r'custom_id\s*=\s*["\']([^"\']+)["\']', ui)
     assert custom_ids, "Community Hub exposes no component custom IDs"
@@ -57,6 +59,17 @@ def main() -> int:
     assert "AvailableGameSelect" in ui
     assert "dank:hub:find:availablegame:v1" in ui
     assert "created_match" in ui
+    assert "Partner server ID" not in ui
+    assert "PartnerRequestModal" not in ui
+    assert "Create HubLink" in ui
+    assert "Redeem HubLink" in ui
+    assert "HubLinkConfirmView" in ui
+    assert "HubLinkReadinessView" in ui
+    assert "hashlib.sha256" in SERVICE.read_text(encoding="utf-8")
+    assert "dank_community_hub_link_codes" in hublink
+    assert "community_hub_redeem_link_code" in hublink
+    assert "aggregate_activity_shared=false" in hublink
+    assert "session_discovery_shared=true" in hublink
     assert "if discord_id <= 0:" in runtime
     assert "DANK_ENABLE_PRESENCE_INTENT" in (ROOT / "stoney_verify" / "globals.py").read_text(encoding="utf-8")
     assert "lambda: channel.send(" not in runtime

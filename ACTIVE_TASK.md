@@ -65,52 +65,60 @@ Public session controls must never be routed through private stale recovery.
 
 ## Changes
 
-Reliability slice PR #332 merged as `ace943f74234d4a8078f9b21c26d608668c64f66` after all exact-head workflows passed.
+PR #332 merged stale Community Hub interaction recovery.
+PR #333 merged the Open to Play → Find Players → Quick Match loop as `5600b50110bc5a27e88a088a50291d2990e1b53d`.
 
-Current branch: `feat/community-hub-matchmaking-loop-20260926`
-Current draft PR: **#333 — Community Hub: connect Open to Play with Quick Match formation**
+Current branch: `feat/community-hub-hublink-20260926`
+Current draft PR: **#334 — Community Hub: link servers with secure HubLink codes**
 
 Implemented in this slice:
-- added follow-up migration `20260926044000_community_hub_matchmaking_loop.sql`;
-- Open to Play remains expiring/discoverable, while automatic pairing is a separate `auto_match` opt-in that defaults existing and new rows to off;
-- Find Players now shows availability totals and lets members browse active Open-to-Play listings by game;
-- Quick Match still prefers an existing public group and only forms a new group from an explicitly opted-in same-game member when no open group is available;
-- PostgreSQL owns candidate selection, row locking, Match Safety checks, idempotency replay, session-creation quotas/cooldowns, and final candidate revalidation;
-- one member cannot be automatically paired into a second active session for the same game;
-- Discord provisioning for a newly formed match stays inside the same operation-queue action and does not create a second matcher or state machine;
-- pre-formed sessions normalize to `forming` only after publication;
-- successful formation consumes same-game availability, while provisioning failure restores the claimed candidate's Quick Match eligibility best-effort;
-- previous-process `creating` sessions are detected from the runtime start timestamp, moved into bounded cleanup, and Quick Match eligibility is restored when appropriate;
-- member departure clears active Open-to-Play rows;
-- availability embeds are bounded to eight rows with truncated notes so user data cannot exceed Discord embed limits and turn a deferred interaction into a failed edit;
-- Community Hub CI applies the base + follow-up migration twice and exercises consent, formation, replay, existing-group preference, Match Safety, duplicate same-game exclusion, and RPC privilege boundaries;
-- normal availability reads use schema-tolerant `select("*")`, and manual session publication never calls the new normalization RPC, so an external host redeploy cannot break ordinary Hub paths while the production migration workflow is still applying the follow-up schema.
+- removed the staff-facing raw **Partner server ID** modal from the new Partner Network path;
+- added short-lived human HubLink codes formatted as `DANK-XXXX-XXXX`, using an ambiguity-resistant alphabet;
+- plaintext codes exist only in the source admin's in-memory response; PostgreSQL stores only SHA-256 `code_hash` plus a short non-secret hint;
+- one pending code per source server, 15-minute expiry, explicit Cancel HubLink, replacement revocation, bounded expiry cleanup, and a 10/hour source creation limit;
+- source and target guild IDs come only from trusted Discord interaction context;
+- target modal submit re-authorizes owner/admin/manage-guild authority before any lookup or mutation;
+- target admin reviews the source server by name and must explicitly confirm **Connect Servers**;
+- redemption is atomic/idempotent with advisory + row locks, rejects self-linking, rejects wrong-server replay, and safely replays only for the same target;
+- successful HubLink connection activates the canonical partner pair with public session discovery on and aggregate/live activity sharing off by default;
+- existing active link sharing choices are preserved on safe replay/reconnection;
+- all user-facing partner fallbacks hide raw guild IDs;
+- source creator receives a best-effort confirmation DM after successful redemption;
+- **Add Dank Shield** uses a Community Hub-only non-Administrator OAuth permission set rather than the bot's broader moderation permission bundle;
+- Community Hub install permissions cover View Channels, Send Messages, Send Messages in Threads, Embed Links, Read Message History, Manage Threads, Manage Channels, and View Audit Log; they explicitly exclude Administrator, Kick, Ban, Moderate Members, Manage Messages, and Manage Roles;
+- guild-pinned **Reauthorize Dank Shield** opens the current server directly when server-level Hub permissions are missing;
+- readiness checks cover server-level Hub permissions, effective configured Hub-channel permissions, deleted/missing Hub channel, configured/fallback temporary voice category, and category-level Manage Channels;
+- readiness instructions include mobile navigation plus **Open Access Repair** and **Check Again**;
+- runtime retention expires stale pending HubLinks without affecting ordinary Community Hub paths during schema rollout;
+- legacy partner link review/revoke remains available for pre-HubLink records;
+- Community Hub CI applies the base, matchmaking, and HubLink migrations twice and exercises create/replacement/redeem/replay/wrong-target/self-link/expiry/privacy/privilege invariants.
 
-Deferred until this slice is merged:
+Still deferred after HubLink:
 - session privacy / incomplete `invite_only` behavior;
 - staff event edit/cancel/delete;
-- partner activity/control redesign and scale-safe caching.
+- partner live-activity redesign and scale-safe caching beyond the link/connect foundation.
 
 ## Validation / results
 
-Evidence already obtained during PR #333 development:
-- Community Hub Python + contract passed after the matchmaking implementation;
-- Community Hub PostgreSQL smoke passed after correcting the test harness delimiter;
-- the SQL smoke has proven default-off consent, opted-in formation, idempotent replay, existing-group preference, Match Safety exclusion, duplicate same-game exclusion, and service-role-only execution;
-- Schema Authority SQL has passed on matchmaking heads;
-- diff review is confined to Community Hub runtime/service/UI, its follow-up migration, focused tests/workflow, and this task record;
-- no conflict markers, debug code, generated artifacts, or obvious secret-bearing changes were found;
-- the branch remains based directly on merged PR #332 and has not absorbed unrelated main changes.
+Evidence obtained during PR #334 development:
+- HubLink migration already passed Community Hub PostgreSQL smoke on an earlier implementation head, including two-pass migration replay and all one-time-code invariants;
+- Schema Authority SQL passed on an earlier HubLink head;
+- Python compilation passed before the first focused-test run;
+- the first focused-test failure identified two removed privacy-copy guarantees, and the implementation restored the guarantees rather than weakening tests;
+- no raw `Partner server ID` modal or `Server {other_id}` fallback remains in the user-facing Community Hub partner code;
+- install/reauthorization has been narrowed to Community Hub-only non-Administrator permissions;
+- readiness was traced against the actual thread/voice provisioning path and now checks contextual channel/category permissions.
 
-Final exact-head validation is running after the latest UI safety/consent and task-record updates. Required before merge:
-- Community Hub CI green;
-- full Dank Shield CI green;
+Required before merge on the final exact head:
+- Community Hub Python + interaction contract green;
+- Community Hub PostgreSQL smoke green;
 - Schema Authority SQL green;
+- full Dank Shield CI green;
 - Profile Runtime Diagnostics green;
 - Dank Design Regression CI green;
-- Application Command Size Diagnostics green;
 - Ticket Owner Emergency Override green;
-- final PR diff/mergeability review against unchanged `main`.
+- Application Command Size Diagnostics green;
+- final diff/mergeability review against current `main`.
 
 ## Cleanup / conflicts
 
@@ -130,4 +138,4 @@ After interaction reliability is validated:
 
 ## Next step
 
-Finish exact-head validation for PR #333. If every gate is green and the final diff remains focused, mark the PR ready and merge it with the head SHA pinned. Only then advance the same Community Hub task to the next incomplete product slice.
+Finish exact-head validation for PR #334. If every required workflow is green and the final diff remains confined to Community Hub/permission ownership/CI/task-record scope, mark #334 ready and merge with the head SHA pinned. Only then advance this Community Hub task to the next incomplete product slice.

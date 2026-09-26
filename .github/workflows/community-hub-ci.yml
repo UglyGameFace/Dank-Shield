@@ -13,6 +13,7 @@ on:
       - 'stoney_verify/permission_repair_core.py'
       - 'supabase/migrations/20260925193000_community_hub.sql'
       - 'supabase/migrations/20260926044000_community_hub_matchmaking_loop.sql'
+      - 'supabase/migrations/20260926054000_community_hub_hublink.sql'
       - 'tests/test_community_hub_contract.py'
       - 'tests/test_interaction_guard.py'
       - 'tests/test_component_lifecycle_runtime_policy.py'
@@ -28,6 +29,7 @@ on:
       - 'stoney_verify/interaction_guard.py'
       - 'supabase/migrations/20260925193000_community_hub.sql'
       - 'supabase/migrations/20260926044000_community_hub_matchmaking_loop.sql'
+      - 'supabase/migrations/20260926054000_community_hub_hublink.sql'
       - 'tests/test_community_hub_contract.py'
       - 'tests/test_interaction_guard.py'
       - 'tests/test_component_lifecycle_runtime_policy.py'
@@ -124,6 +126,7 @@ jobs:
             echo "Community Hub migration pass ${pass}"
             psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260925193000_community_hub.sql
             psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260926044000_community_hub_matchmaking_loop.sql
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260926054000_community_hub_hublink.sql
           done
 
       - name: Verify security and lifecycle invariants
@@ -429,6 +432,182 @@ jobs:
           $matchmaking$;
           SQL
 
+      - name: Verify HubLink one-time server pairing
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $hublink$
+          declare
+              created jsonb;
+              redeemed jsonb;
+              replayed jsonb;
+              first_id uuid;
+              second_id uuid;
+              link_id uuid;
+              result_count integer;
+          begin
+              if exists (
+                  select 1
+                  from information_schema.columns
+                  where table_schema='public'
+                    and table_name='dank_community_hub_link_codes'
+                    and column_name in ('code','raw_code','plaintext_code')
+              ) then
+                  raise exception 'HubLink table unexpectedly stores a plaintext code column';
+              end if;
+
+              created := public.community_hub_create_link_code(
+                  'hub-source','source-admin',repeat('a',64),'A234'
+              );
+              if created ? 'code_hash' then
+                  raise exception 'HubLink create RPC leaked the code digest';
+              end if;
+              if created->>'source_guild_id' <> 'hub-source' then
+                  raise exception 'HubLink create returned wrong source server';
+              end if;
+              if not exists (
+                  select 1 from public.dank_community_hub_settings
+                  where guild_id='hub-source' and partner_discovery_enabled=true
+              ) then
+                  raise exception 'HubLink creation did not enable source partner discovery';
+              end if;
+
+              -- Creating another code for the same source invalidates the older
+              -- pending code instead of leaving multiple live invitations.
+              created := public.community_hub_create_link_code(
+                  'replace-source','replace-admin',repeat('b',64),'B234'
+              );
+              first_id := (created->>'id')::uuid;
+              created := public.community_hub_create_link_code(
+                  'replace-source','replace-admin',repeat('c',64),'C234'
+              );
+              second_id := (created->>'id')::uuid;
+              if first_id = second_id then
+                  raise exception 'HubLink replacement reused the same row';
+              end if;
+              if (select state from public.dank_community_hub_link_codes where id=first_id) <> 'revoked' then
+                  raise exception 'older HubLink was not revoked when replaced';
+              end if;
+              if (select state from public.dank_community_hub_link_codes where id=second_id) <> 'pending' then
+                  raise exception 'new HubLink is not pending';
+              end if;
+
+              redeemed := public.community_hub_redeem_link_code(
+                  repeat('a',64),'hub-target','target-admin'
+              );
+              link_id := (redeemed->'link'->>'id')::uuid;
+              if link_id is null then
+                  raise exception 'HubLink redemption did not create a partner link';
+              end if;
+              if redeemed->'link'->>'state' <> 'active' then
+                  raise exception 'HubLink redemption did not activate the partner link';
+              end if;
+              if coalesce((redeemed->'link'->>'session_discovery_shared')::boolean,false) is not true then
+                  raise exception 'HubLink did not enable public session discovery';
+              end if;
+              if coalesce((redeemed->'link'->>'aggregate_activity_shared')::boolean,false) is true then
+                  raise exception 'HubLink enabled aggregate activity without separate consent';
+              end if;
+              if not exists (
+                  select 1 from public.dank_community_hub_settings
+                  where guild_id='hub-target' and partner_discovery_enabled=true
+              ) then
+                  raise exception 'HubLink redemption did not enable target partner discovery';
+              end if;
+              if not exists (
+                  select 1 from public.dank_community_hub_link_codes
+                  where code_hash=repeat('a',64)
+                    and state='redeemed'
+                    and redeemed_by_guild_id='hub-target'
+                    and redeemed_by_user_id='target-admin'
+              ) then
+                  raise exception 'HubLink redemption state was not persisted';
+              end if;
+
+              replayed := public.community_hub_redeem_link_code(
+                  repeat('a',64),'hub-target','target-admin'
+              );
+              if coalesce((replayed->>'replayed')::boolean,false) is not true then
+                  raise exception 'same-target HubLink replay was not idempotent';
+              end if;
+              if (replayed->'link'->>'id')::uuid <> link_id then
+                  raise exception 'HubLink replay returned a different partner link';
+              end if;
+
+              begin
+                  perform public.community_hub_redeem_link_code(
+                      repeat('a',64),'wrong-target','wrong-admin'
+                  );
+                  raise exception 'redeemed HubLink was reusable by another server';
+              exception
+                  when others then
+                      if position('already redeemed by another server' in sqlerrm) = 0 then
+                          raise;
+                      end if;
+              end;
+
+              update public.dank_community_partner_links
+                 set state='revoked',
+                     aggregate_activity_shared=false,
+                     session_discovery_shared=false,
+                     updated_at=now()
+               where id=link_id;
+
+              begin
+                  perform public.community_hub_redeem_link_code(
+                      repeat('a',64),'hub-target','target-admin'
+                  );
+                  raise exception 'revoked partner relationship was reactivated by old HubLink replay';
+              exception
+                  when others then
+                      if position('already consumed and the partner link is no longer active' in sqlerrm) = 0 then
+                          raise;
+                      end if;
+              end;
+
+              created := public.community_hub_create_link_code(
+                  'self-source','self-admin',repeat('d',64),'D234'
+              );
+              begin
+                  perform public.community_hub_redeem_link_code(
+                      repeat('d',64),'self-source','self-admin'
+                  );
+                  raise exception 'HubLink allowed a server to connect to itself';
+              exception
+                  when others then
+                      if position('cannot HubLink to itself' in sqlerrm) = 0 then
+                          raise;
+                      end if;
+              end;
+
+              created := public.community_hub_create_link_code(
+                  'expire-source','expire-admin',repeat('e',64),'E234'
+              );
+              update public.dank_community_hub_link_codes
+                 set created_at=now()-interval '1 hour',
+                     expires_at=now()-interval '1 minute'
+               where code_hash=repeat('e',64);
+              begin
+                  perform public.community_hub_redeem_link_code(
+                      repeat('e',64),'expire-target','expire-target-admin'
+                  );
+                  raise exception 'expired HubLink was redeemable';
+              exception
+                  when others then
+                      if position('HubLink code has expired' in sqlerrm) = 0 then
+                          raise;
+                      end if;
+              end;
+              result_count := public.community_hub_expire_link_codes(100);
+              if result_count < 1 then
+                  raise exception 'HubLink expiry sweep did not expire the stale code';
+              end if;
+              if (select state from public.dank_community_hub_link_codes where code_hash=repeat('e',64)) <> 'expired' then
+                  raise exception 'HubLink expiry sweep did not persist expired state';
+              end if;
+          end;
+          $hublink$;
+          SQL
+
       - name: Verify no public function execution leaks
         run: |
           psql -v ON_ERROR_STOP=1 <<'SQL'
@@ -468,6 +647,41 @@ jobs:
                   'EXECUTE'
               ) then
                   raise exception 'service_role missing Community Hub Quick Match EXECUTE';
+              end if;
+              if has_table_privilege(
+                  'anon',
+                  'public.dank_community_hub_link_codes',
+                  'SELECT'
+              ) then
+                  raise exception 'anon unexpectedly has HubLink table SELECT';
+              end if;
+              if not has_table_privilege(
+                  'service_role',
+                  'public.dank_community_hub_link_codes',
+                  'SELECT'
+              ) then
+                  raise exception 'service_role missing HubLink table SELECT';
+              end if;
+              if has_function_privilege(
+                  'anon',
+                  'public.community_hub_redeem_link_code(text,text,text)',
+                  'EXECUTE'
+              ) then
+                  raise exception 'anon unexpectedly has HubLink redeem EXECUTE';
+              end if;
+              if has_function_privilege(
+                  'authenticated',
+                  'public.community_hub_redeem_link_code(text,text,text)',
+                  'EXECUTE'
+              ) then
+                  raise exception 'authenticated unexpectedly has HubLink redeem EXECUTE';
+              end if;
+              if not has_function_privilege(
+                  'service_role',
+                  'public.community_hub_redeem_link_code(text,text,text)',
+                  'EXECUTE'
+              ) then
+                  raise exception 'service_role missing HubLink redeem EXECUTE';
               end if;
           end;
           $$;
