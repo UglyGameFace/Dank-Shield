@@ -31,6 +31,31 @@ _QUARANTINE_LOCK = threading.Lock()
 _EJECTION_IN_PROGRESS: set[int] = set()
 _WARNED: set[int] = set()
 
+_EXTENDED_LOCAL_PROVENANCE_ACTIONS = frozenset({
+    "onboarding_create",
+    "onboarding_update",
+})
+_AUDIT_COMPAT_LOCAL_ACTIONS = frozenset({
+    "member_move",
+    "member_disconnect",
+    "voice_channel_status_create",
+    "voice_channel_status_delete",
+})
+_AUDIT_COMPAT_ROUTE_FLAG = "_dank_antinuke_audit_compat_route_patched"
+
+_EXTENDED_EXTERNAL_ONLY_ACTIONS = frozenset({
+    "invite_update",
+    "integration_create",
+    "integration_update",
+    "onboarding_prompt_create",
+    "onboarding_prompt_update",
+    "onboarding_prompt_delete",
+    "home_settings_create",
+    "home_settings_update",
+    "member_move",
+    "member_disconnect",
+})
+
 _Q_ACTIVE = "antinuke_compromise_quarantined"
 _Q_UNTIL = "antinuke_compromise_quarantine_until"
 _Q_ACTION = "antinuke_compromise_action"
@@ -294,6 +319,111 @@ async def _warn_owner(
         pass
 
 
+async def _post_provenance_safety_hold(
+    bot: discord.Client,
+    guild: Any,
+    entry: Any,
+    action_name: str,
+    blockers: list[str],
+    diagnostics: Mapping[str, Any],
+) -> None:
+    gid = _safe_int(getattr(guild, "id", 0), 0)
+    blocker_text = ",".join(blockers) or "unknown"
+    print(
+        "🚨 AntiNuke self-ejection safety hold "
+        f"guild={gid} action={action_name} blockers={blocker_text} "
+        f"contract={diagnostics.get('contract')} "
+        f"marker={diagnostics.get('marker_state')} "
+        f"target={diagnostics.get('target_key')} "
+        f"recent_action_guild={diagnostics.get('recent_action_guild_candidates')} "
+        f"recent_scope={diagnostics.get('recent_scope_candidates')} "
+        f"recent_side_effect={diagnostics.get('recent_side_effect_action_guild_candidates')}"
+    )
+    try:
+        await anti_nuke._post_incident(  # noqa: SLF001
+            guild,
+            title="🚨 AntiNuke Self-Provenance Safety Hold",
+            actor=getattr(entry, "user", None),
+            action_label=f"Unmatched self-attributed audit action: {action_name}",
+            target_label=str(getattr(entry, "target", None) or "Unknown"),
+            response_label=(
+                "Self-ejection was blocked because provenance was ambiguous or "
+                "the self-proof runtime contract was not healthy."
+            ),
+            details=(
+                f"Safety blockers: {blocker_text}. "
+                f"Contract={diagnostics.get('contract')}; "
+                f"marker={diagnostics.get('marker_state')}; "
+                f"target={diagnostics.get('target_key')}; "
+                "review the structured runtime log before treating this as token compromise."
+            ),
+        )
+    except Exception:
+        pass
+
+
+def _self_ejection_safety(
+    bot: discord.Client,
+    guild: Any,
+    entry: Any,
+    action_name: str,
+) -> tuple[list[str], dict[str, Any]]:
+    diagnostics = self_action._provenance_diagnostics(  # noqa: SLF001
+        guild,
+        entry,
+        action_name,
+    )
+    blockers: list[str] = []
+
+    if str(getattr(discord, "__version__", "") or "") != SUPPORTED_DISCORD_PY:
+        blockers.append("discord-py-contract-mismatch")
+    if not bool(getattr(bot, self_action._INSTALL_FLAG, False)):  # noqa: SLF001
+        blockers.append("self-action-runtime-not-installed")
+    if not bool(
+        getattr(
+            getattr(bot, "http", None),
+            self_action._HTTP_PATCH_FLAG,  # noqa: SLF001
+            False,
+        )
+    ):
+        blockers.append("self-action-http-proof-unhealthy")
+    if (
+        action_name in {"webhook_update", "webhook_delete"}
+        and not bool(
+            getattr(
+                discord.Webhook,
+                self_action._WEBHOOK_PATCH_FLAG,  # noqa: SLF001
+                False,
+            )
+        )
+    ):
+        blockers.append("webhook-self-proof-unhealthy")
+
+    contract = str(diagnostics.get("contract") or "unclassified")
+    if contract == "unclassified":
+        blockers.append("unclassified-provenance-contract")
+    if (
+        action_name in _AUDIT_COMPAT_LOCAL_ACTIONS
+        and not bool(getattr(self_action, _AUDIT_COMPAT_ROUTE_FLAG, False))
+    ):
+        blockers.append("audit-compat-route-proof-unhealthy")
+
+    marker_state = str(diagnostics.get("marker_state") or "missing")
+    if marker_state == "known_unmatched":
+        blockers.append("known-local-marker-scope-mismatch")
+    elif marker_state == "missing":
+        if int(diagnostics.get("recent_scope_candidates") or 0) > 0:
+            blockers.append("recent-local-request-without-audit-marker")
+        elif int(diagnostics.get("recent_action_guild_candidates") or 0) > 0:
+            blockers.append("recent-local-request-scope-ambiguous")
+        elif int(
+            diagnostics.get("recent_side_effect_action_guild_candidates") or 0
+        ) > 0:
+            blockers.append("recent-local-side-effect-scope-ambiguous")
+
+    return list(dict.fromkeys(blockers)), diagnostics
+
+
 async def attempt_quarantine_ejection(
     bot: discord.Client,
     guild: Any,
@@ -364,11 +494,35 @@ async def _unmatched_self_action(
         except Exception:
             pass
         return
+
+    blockers, diagnostics = _self_ejection_safety(
+        bot,
+        guild,
+        entry,
+        action_name,
+    )
+    if blockers:
+        await _post_provenance_safety_hold(
+            bot,
+            guild,
+            entry,
+            action_name,
+            blockers,
+            diagnostics,
+        )
+        return
+
     await _persist_quarantine(gid, action_name)
     await attempt_quarantine_ejection(bot, guild, action_name)
 
 
 def _patch_self_action() -> bool:
+    self_action._register_local_provenance_actions(  # noqa: SLF001
+        _EXTENDED_LOCAL_PROVENANCE_ACTIONS
+    )
+    self_action._register_external_only_protected_actions(  # noqa: SLF001
+        _EXTENDED_EXTERNAL_ONLY_ACTIONS
+    )
     if bool(getattr(self_action, _SELF_FLAG, False)):
         return False
     original = self_action._request_spec  # noqa: SLF001
