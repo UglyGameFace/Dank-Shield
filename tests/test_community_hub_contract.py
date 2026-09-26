@@ -374,9 +374,19 @@ def test_hublink_redeem_reauthorizes_modal_submit_and_keeps_activity_opt_in() ->
         ui.index("_COMPONENT_BURSTS")
     ]
     assert '"configured_channel_missing"' in readiness
+    assert '"configured_category_missing"' in readiness
+    assert 'settings.get("parent_category_id")' in readiness
+    assert "Temporary voice category" in readiness
     assert "Reauthorize Dank Shield" in readiness
     assert "does **not** request Administrator" in readiness
     assert "Settings / Edit Channel" in readiness
+
+    required_start = ui.index("def _community_hub_required_permissions")
+    required_end = ui.index("def _community_hub_readiness", required_start)
+    required = ui[required_start:required_end]
+    assert '"manage_channels"' in required
+    assert '"manage_threads"' in required
+    assert '"move_members"' not in required
 
 
 def test_match_safety_is_private_and_enforced_atomically_on_join() -> None:
