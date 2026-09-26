@@ -39,6 +39,15 @@ class CaptionRuntimeState:
     engine: CaptionEngine
 
 
+def live_captions_enabled() -> bool:
+    return str(os.getenv("DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 class CommunityVoiceCaptionManager:
     def __init__(self, bot: Any) -> None:
         self.bot = bot
@@ -66,6 +75,7 @@ class CommunityVoiceCaptionManager:
             "segments_transcribed": state.engine.segments_transcribed,
             "segments_unclear": state.engine.segments_unclear,
             "queue_overflow": state.engine.queue_overflow,
+            "segment_failures": state.engine.segment_failures,
         }
 
     async def start(self, session: dict[str, Any]) -> CaptionRuntimeState:
@@ -77,6 +87,10 @@ class CommunityVoiceCaptionManager:
             or session.get("panel_channel_id")
             or 0
         )
+        if not live_captions_enabled():
+            raise VoiceReceiveUnavailable(
+                "Live Captions are disabled on this host until the DAVE receive soak test is completed."
+            )
         if not sid or guild_id <= 0:
             raise VoiceReceiveUnavailable("Community Hub session identity is missing.")
         if voice_channel_id <= 0:
@@ -148,6 +162,27 @@ class CommunityVoiceCaptionManager:
             loop = asyncio.get_running_loop()
             bridge = PerSpeakerFrameBridge(loop, engine.submit)
             voice_client = await connect_receive_client(voice_channel, bridge)
+
+            try:
+                await destination.send(
+                    "📝 **Community Hub Live Captions started.**\n"
+                    "Dank Shield keeps each opted-in Discord speaker isolated before transcription. "
+                    "Only members who explicitly choose **Caption My Voice** are transcribed. "
+                    "Opted-in audio is sent to **OpenAI's transcription API** for speech-to-text. "
+                    "Dank Shield keeps audio only in bounded memory while processing it and does not save the audio.",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except (discord.Forbidden, discord.NotFound, discord.HTTPException) as exc:
+                disconnect_receive_client(voice_client)
+                try:
+                    if getattr(voice_client, "is_connected", lambda: False)():
+                        await voice_client.disconnect(force=False)
+                except Exception:
+                    log.exception("Community Hub failed to roll back caption voice connection")
+                raise VoiceReceiveUnavailable(
+                    "Dank Shield could not post the Live Captions privacy notice, so captions were not started."
+                ) from exc
+
             state = CaptionRuntimeState(
                 session_id=sid,
                 guild_id=guild_id,
@@ -160,14 +195,6 @@ class CommunityVoiceCaptionManager:
             self._sessions[sid] = state
             self._guild_owner[guild_id] = sid
             engine.start()
-
-            await destination.send(
-                "📝 **Community Hub Live Captions started.**\n"
-                "Dank Shield keeps each opted-in Discord speaker isolated before transcription. "
-                "Only members who explicitly choose **Caption My Voice** are transcribed. "
-                "Audio is held only in bounded memory while it is being transcribed and is not saved by Dank Shield.",
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
             return state
 
     async def toggle_consent(self, session_id: str, user_id: int) -> bool:
@@ -245,4 +272,5 @@ __all__ = [
     "CaptionRuntimeState",
     "CommunityVoiceCaptionManager",
     "ensure_community_voice_caption_manager",
+    "live_captions_enabled",
 ]
