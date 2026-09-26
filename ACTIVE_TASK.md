@@ -109,6 +109,11 @@ Implemented in the current voice-caption slice:
 - only one caption receiver may own a guild voice connection at a time;
 - ending/cleaning a Community Hub session shuts the receiver down and clears speaker consent;
 - no Chat Link API or message behavior is guessed or duplicated; cross-server text remains an external integration boundary.
+- Live Captions are default-off behind `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED`; code may deploy without exposing un-soaked DAVE receive to users;
+- caption startup fails closed if the required privacy notice cannot be posted;
+- consent/start copy explicitly states that opted-in audio is sent to OpenAI's transcription API and that Dank Shield itself does not save the audio;
+- caption shutdown cancels in-flight transcription tasks and discards queued/buffered audio so a stopped session cannot publish late captions;
+- a missing/zero transcription confidence is treated as uncertain, never as implicitly trustworthy.
 
 Still deferred after HubLink:
 - session privacy / incomplete `invite_only` behavior;
@@ -155,4 +160,4 @@ After interaction reliability is validated:
 
 ## Next step
 
-Validate the exact voice-caption head in CI: dependency installation, Python compile, DAVE-capability contract, per-user isolation/mismatch tests, speech-preserving segmentation, low-confidence dual-pass behavior, and the full Dank Shield suite. Unit tests cannot manufacture Discord's ephemeral MLS/DAVE keys, so do not call live voice receive production-proven until a real Discord soak test covers simultaneous speakers, epoch/key changes, packet loss, disconnect/reconnect, and long-running sessions.
+Validate the exact voice-caption head in CI: dependency installation, Python compile, DAVE-capability contract, per-user isolation/mismatch tests, speech-preserving segmentation, low-confidence dual-pass behavior, and the full Dank Shield suite. Unit tests cannot manufacture Discord's ephemeral MLS/DAVE keys, so do not call live voice receive production-proven until a real Discord soak test covers simultaneous speakers, epoch/key changes, packet loss, disconnect/reconnect, and long-running sessions. Keep `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` off until that soak test passes.
