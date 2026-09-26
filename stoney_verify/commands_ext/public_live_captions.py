@@ -180,8 +180,14 @@ def _current_voice_channel(interaction: discord.Interaction) -> Optional[discord
 
 def _soak_pipeline_diagnosis(status: dict[str, Any]) -> str:
     health = status.get("health") if isinstance(status.get("health"), dict) else {}
+    connection = status.get("receive_connection") if isinstance(status.get("receive_connection"), dict) else {}
+    raw_udp = int(health.get("raw_udp_packets") or 0)
     frames_seen = int(health.get("frames_seen") or 0)
     frames_routed = int(health.get("frames_routed") or 0)
+    dave_present = bool(connection.get("dave_session_present"))
+    dave_ready = bool(connection.get("dave_session_ready"))
+    mapped_ssrcs = int(connection.get("mapped_ssrcs") or 0)
+    reader_listening = bool(connection.get("reader_listening"))
     not_consented = int(health.get("frames_not_consented") or 0)
     unknown = int(health.get("frames_unknown_source") or 0)
     mismatch = int(health.get("frames_source_mismatch") or 0)
@@ -198,9 +204,27 @@ def _soak_pipeline_diagnosis(status: dict[str, Any]) -> str:
             + (last_failure or "Check the Dank Shield host logs for the latest caption error.")
         )
     if frames_seen <= 0:
+        if not reader_listening:
+            return "🔴 **The voice receive reader is not listening.** The bot may be connected, but the receive worker is not active."
+        if raw_udp <= 0:
+            return (
+                "🔴 **No UDP voice packets reached Dank Shield.** The bot joined voice, but the receive socket saw no traffic while you spoke."
+            )
+        if not dave_present:
+            return (
+                "🔴 **UDP is arriving, but Discord did not establish a DAVE session.** The receive stack cannot safely decode encrypted voice."
+            )
+        if not dave_ready:
+            return (
+                "🔴 **UDP is arriving, but the DAVE session is not ready.** The MLS/DAVE handshake or epoch setup has not completed."
+            )
+        if mapped_ssrcs <= 1:
+            return (
+                "🔴 **UDP and DAVE are active, but no remote speaker SSRC is mapped yet.** The receive gateway is not resolving the speaking user."
+            )
         return (
-            "🔴 **No decoded voice frames reached Dank Shield.** This points to the Discord/DAVE receive layer, "
-            "not OpenAI. Speak for 2–5 seconds, pause for about 1 second, then press **Refresh**."
+            "🔴 **UDP and DAVE are active, but no PCM reached the hardened speaker sink.** "
+            "The receive dependency is dropping/decode-failing before Dank Shield's per-speaker boundary."
         )
     if frames_routed <= 0:
         if unknown > 0 or mismatch > 0:
@@ -360,13 +384,15 @@ async def build_server_live_captions_embed(
         )
         if bool(general.get("soak_test")):
             health = general.get("health") if isinstance(general.get("health"), dict) else {}
+            connection = general.get("receive_connection") if isinstance(general.get("receive_connection"), dict) else {}
             embed.add_field(
                 name="DAVE soak telemetry",
                 value=(
-                    f"Frames seen: **{int(health.get('frames_seen') or 0)}** • routed: **{int(health.get('frames_routed') or 0)}** • queue: **{int(general.get('queue_depth') or 0)}**\n"
-                    f"Not consented: **{int(health.get('frames_not_consented') or 0)}** • unknown source: **{int(health.get('frames_unknown_source') or 0)}**\n"
-                    f"Identity mismatch: **{int(health.get('frames_source_mismatch') or 0)}** • malformed PCM: **{int(health.get('frames_malformed_pcm') or 0)}**\n"
-                    f"Transcribed: **{int(general.get('segments_transcribed') or 0)}** • published: **{int(general.get('segments_published') or 0)}** • empty: **{int(general.get('segments_empty') or 0)}**\n"
+                    f"Raw UDP: **{int(health.get('raw_udp_packets') or 0)}** • sink PCM: **{int(health.get('frames_seen') or 0)}** • routed: **{int(health.get('frames_routed') or 0)}** • queue: **{int(general.get('queue_depth') or 0)}**\n"
+                    f"DAVE ready: **{'yes' if connection.get('dave_session_ready') else 'no'}** • status: **{str(connection.get('dave_session_status') or 'none')[:24]}** • protocol: **{int(connection.get('dave_protocol_version') or 0)}** • epoch: **{int(connection.get('dave_epoch') or 0)}**\n"
+                    f"Reader: **{'listening' if connection.get('reader_listening') else 'stopped'}** • mapped SSRCs: **{int(connection.get('mapped_ssrcs') or 0)}**\n"
+                    f"Not consented: **{int(health.get('frames_not_consented') or 0)}** • unknown source: **{int(health.get('frames_unknown_source') or 0)}** • identity mismatch: **{int(health.get('frames_source_mismatch') or 0)}**\n"
+                    f"Malformed PCM: **{int(health.get('frames_malformed_pcm') or 0)}** • transcribed: **{int(general.get('segments_transcribed') or 0)}** • published: **{int(general.get('segments_published') or 0)}** • empty: **{int(general.get('segments_empty') or 0)}**\n"
                     f"Unclear: **{int(general.get('segments_unclear') or 0)}** • failures: **{int(general.get('segment_failures') or 0)}**"
                 ),
                 inline=False,
