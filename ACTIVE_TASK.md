@@ -114,6 +114,8 @@ Implemented in the current voice-caption slice:
 - consent/start copy explicitly states that opted-in audio is sent to OpenAI's transcription API and that Dank Shield itself does not save the audio;
 - caption shutdown cancels in-flight transcription tasks and discards queued/buffered audio so a stopped session cannot publish late captions;
 - a missing/zero transcription confidence is treated as uncertain, never as implicitly trustworthy.
+- process-wide Live Captions scale is bounded by configurable active-guild, speakers-per-session, and global transcription concurrency limits so one public deployment cannot fan out unbounded API/RAM load;
+- `.env.example` documents the default-off feature gate, provider key/model/language, and scale limits without containing any real secret.
 
 Still deferred after HubLink:
 - session privacy / incomplete `invite_only` behavior;
