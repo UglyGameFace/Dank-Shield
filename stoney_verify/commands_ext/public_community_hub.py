@@ -3402,7 +3402,8 @@ def _partner_embed(links: list[dict[str, Any]], guild_id: int, bot: Any) -> disc
         title="🌐 Community Hub Partner Network",
         description=(
             "Connect servers with a short-lived HubLink code; nobody needs to find or paste a Discord server ID. "
-            "Public session discovery is enabled only after both servers consent. Aggregate activity stays off until separately enabled."
+            "Public session discovery is enabled only after both servers consent. Aggregate activity stays off until separately enabled. "
+            "Raw member presence never crosses server boundaries."
         ),
         color=discord.Color.blurple(),
     )
@@ -3676,7 +3677,8 @@ class HubLinkConfirmView(_OwnedView):
         )
         await _followup(
             interaction,
-            "✅ HubLink connected. No server IDs were needed."
+            "✅ HubLink connected. No server IDs were needed. "
+            "Aggregate/live activity sharing remains off until separately enabled."
             + (" This was a safe replay of the same completed HubLink." if bool(result.get("replayed")) else ""),
         )
 
