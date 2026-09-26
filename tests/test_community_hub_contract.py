@@ -49,6 +49,9 @@ def test_live_captions_are_discoverable_from_community_hub_home_and_session_deta
     assert "ensure_community_voice_caption_manager" in source
     assert "live_captions_enabled" in source
     assert "voice_receive_capability" in source
+    assert "user_id: int," in source
+    assert "int(user_id) in {" in source
+    assert 'membership.get("user_id")' not in source
 
 def test_interactions_use_shared_fail_closed_acknowledgement() -> None:
     source = _text(UI)
