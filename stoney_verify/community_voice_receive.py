@@ -212,7 +212,7 @@ class PerSpeakerFrameBridge:
             except Exception:
                 self._increment("callback_failures")
                 log.exception(
-                    "Community Hub caption frame callback failed user=%s ssrc=%s",
+                    "Live Captions frame callback failed user=%s ssrc=%s",
                     frame.user_id,
                     frame.ssrc,
                 )
@@ -290,7 +290,7 @@ async def connect_receive_client(
             )
         if not isinstance(existing, voice_recv.VoiceRecvClient):
             raise VoiceReceiveUnavailable(
-                "The existing Discord voice connection cannot receive Community Hub captions."
+                "The existing Discord voice connection cannot receive Live Captions."
             )
         voice_client = existing
     else:
@@ -314,7 +314,7 @@ def disconnect_receive_client(voice_client: Any) -> None:
         if getattr(voice_client, "is_listening", lambda: False)():
             voice_client.stop_listening()
     except Exception:
-        log.exception("Community Hub failed to stop voice receive cleanly")
+        log.exception("Live Captions failed to stop voice receive cleanly")
 
 
 __all__ = [
