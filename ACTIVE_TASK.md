@@ -55,6 +55,7 @@ Confirmed current-state gaps:
 13. The first general-server caption UI used the text channel where staff opened the panel as its destination and had no durable owner setup for existing gaming VCs/categories. That made routing accidental instead of server-configured and gave owners no safe create/select flow for a dedicated caption output.
 14. Live production exposed a discord.py 2.7.x channel-select contract bug in the shared `DankChannelSelect`: Discord returned an `AppCommandChannel` partial for the selected `vc-chat` text channel, while the wrapper accepted only concrete `discord.abc.GuildChannel` instances. The valid selection was therefore rejected with “Pick a server channel first.”
 15. After that picker fix deployed, the configured output saved correctly but the global DAVE validation gate made the required real Discord soak test impossible to start. A safe validation path must not require globally enabling an unproven receive stack.
+16. The first live soak could join voice and accept self-consent but produce no visible caption. The caption engine collapsed provider/publish exceptions into an integer failure counter and exposed no safe last-error or stage diagnosis, so DAVE receive failure, consent/identity rejection, OpenAI billing/key errors, empty transcripts, and Discord publish failures were indistinguishable from the user side.
 
 ## Execution path
 
@@ -148,7 +149,10 @@ Implemented in the current voice-caption slice:
 - post-merge live testing found and fixed the caption-output picker rejecting discord.py `AppCommandChannel` partial values; the shared picker now resolves the partial through its resolver or the interaction guild cache before applying the normal GuildChannel contract.
 - the global `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` lock remains off, but the recognized Dank Shield bot owner can now use the ordinary-server Start/Stop control to launch a controlled DAVE soak session in one server; Community Hub and non-owner callers cannot bypass the validation gate;
 - soak sessions use the same configured output, VC/category eligibility, one-receiver-per-guild lock, consent boundary, OpenAI provider, stop/cleanup path, and privacy notice as normal captions rather than a separate test implementation;
-- the Live Captions panel exposes soak telemetry while that controlled session is active: frames seen/routed/not-consented/unknown/mismatched/malformed plus transcription/unclear/failure counters.
+- the Live Captions panel exposes soak telemetry while that controlled session is active: frames seen/routed/not-consented/unknown/mismatched/malformed plus transcription/unclear/failure counters;
+- the soak panel now diagnoses the pipeline stage instead of silently failing: no decoded DAVE frames, identity/consent rejection, routed audio awaiting segmentation, OpenAI/provider failure, empty transcript, or successful publish;
+- transcription/provider failures retain only a safe user-facing diagnosis in runtime state while full exceptions are logged server-side; common OpenAI HTTP 400/401/403/429/5xx cases are translated into actionable messages without exposing the API key or raw provider response;
+- caption engine telemetry now distinguishes transcribed, published, and empty segments, and self-consent tells the tester to speak for 2–5 seconds, pause about one second, then refresh.
 
 Still deferred after HubLink:
 - session privacy / incomplete `invite_only` behavior;
@@ -195,4 +199,4 @@ After interaction reliability is validated:
 
 ## Next step
 
-PR #338 is merged and live testing confirms the output-channel picker now saves correctly. Validate and merge the bot-owner-only DAVE soak path, then run the real Discord soak test from `/captions` before changing the global feature gate. The soak must cover one speaker, overlapping speakers, reconnect/SSRC changes, epoch/key transitions, packet loss/out-of-order delivery, stop/restart, opt-out while speaking, general-session stop, and sustained operation; Community Hub lifecycle validation remains required before calling the full product production-proven. Keep `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` off until the receive soak passes.
+PR #338 and PR #339 are merged and deployed. Validate the live-soak pipeline diagnostics fix, then rerun the real Discord soak from `/captions` and use the reported stage/error to fix the actual failing receive or transcription layer before changing the global feature gate. The soak must cover one speaker, overlapping speakers, reconnect/SSRC changes, epoch/key transitions, packet loss/out-of-order delivery, stop/restart, opt-out while speaking, general-session stop, and sustained operation; Community Hub lifecycle validation remains required before calling the full product production-proven. Keep `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` off until the receive soak passes.
