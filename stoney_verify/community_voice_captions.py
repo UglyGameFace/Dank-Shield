@@ -11,10 +11,10 @@ Audio exists only in bounded in-memory buffers and WAV request bodies.
 """
 
 import asyncio
+import base64
 import io
 import json
 import logging
-import math
 import os
 import struct
 import time
@@ -54,68 +54,56 @@ class CaptionTranscriptionError(RuntimeError):
         self.terminal = bool(terminal)
 
 
-_OPENAI_BILLING_429_CODES = {
-    "credit_balance_exhausted",
-    "organization_usage_limit_exceeded",
-    "organization_spend_limit_exceeded",
-    "project_spend_limit_exceeded",
-}
-
-
-def _openai_transcription_error(status_code: int, body: str) -> CaptionTranscriptionError:
+def _gemini_transcription_error(status_code: int, body: str) -> CaptionTranscriptionError:
     status = int(status_code)
-    error_code = ""
-    error_type = ""
+    provider_status = ""
+    provider_message = ""
     try:
         payload = json.loads(body)
     except (TypeError, json.JSONDecodeError):
         payload = {}
     error = payload.get("error") if isinstance(payload, dict) else None
     if isinstance(error, dict):
-        error_code = str(error.get("code") or "").strip()
-        error_type = str(error.get("type") or "").strip()
+        provider_status = str(error.get("status") or "").strip()
+        provider_message = str(error.get("message") or "").strip()
 
-    code = error_code.casefold()
-    kind = error_type.casefold()
+    code = provider_status or str(status)
+    kind = provider_status.casefold()
 
-    if status == 400:
-        message = "OpenAI rejected the transcription request (HTTP 400). Check the configured caption model/request."
-    elif status == 401:
-        message = "OpenAI rejected OPENAI_API_KEY (HTTP 401). Replace the host API key."
-    elif status == 403:
-        message = "The OpenAI API project is not permitted to use transcription (HTTP 403)."
-    elif status == 429 and code == "credit_balance_exhausted":
-        message = "OpenAI API credits are exhausted (HTTP 429: credit_balance_exhausted). Add API credits, then restart this caption session."
-    elif status == 429 and code == "organization_usage_limit_exceeded":
-        message = "The OpenAI organization usage limit was reached (HTTP 429). Raise the approved usage limit, then restart this caption session."
-    elif status == 429 and code == "organization_spend_limit_exceeded":
-        message = "The OpenAI organization spend limit was reached (HTTP 429). Raise/remove that spend limit, then restart this caption session."
-    elif status == 429 and code == "project_spend_limit_exceeded":
-        message = "The OpenAI project spend limit was reached (HTTP 429). Raise/remove that project limit, then restart this caption session."
-    elif status == 429 and (code == "rate_limit_exceeded" or kind == "rate_limit_error"):
-        message = "OpenAI transcription is temporarily rate-limited (HTTP 429: rate_limit_exceeded). Wait briefly before testing again."
-    elif status == 429 and kind == "insufficient_quota":
-        message = "OpenAI API quota/billing is unavailable (HTTP 429: insufficient_quota). Check API credits and organization/project spend limits, then restart this caption session."
-    elif status == 429:
-        message = "OpenAI returned HTTP 429. Check the API error code, current credits, spend limits, and transcription rate limits before retrying."
-    elif 500 <= status <= 599:
-        message = f"OpenAI transcription is temporarily unavailable (HTTP {status})."
+    if status in {400, 422} or kind == "invalid_argument":
+        message = "Gemini rejected the transcription request. Check the configured caption model and audio request."
+    elif status in {401, 403} or kind in {"unauthenticated", "permission_denied"}:
+        message = "Gemini rejected GEMINI_API_KEY or this AI Studio project is not permitted to use the caption model."
+    elif status == 404 or kind == "not_found":
+        message = "The configured Gemini caption model is unavailable to this AI Studio project."
+    elif status == 429 or kind == "resource_exhausted":
+        message = (
+            "Gemini free-tier quota or rate limit was reached (HTTP 429 RESOURCE_EXHAUSTED). "
+            "Check this AI Studio project's active model limits, then restart the caption session after quota is available."
+        )
+    elif 500 <= status <= 599 or kind in {"internal", "unavailable"}:
+        message = f"Gemini transcription is temporarily unavailable (HTTP {status})."
     else:
-        message = f"OpenAI transcription request failed (HTTP {status})."
+        message = f"Gemini transcription request failed (HTTP {status})."
 
     terminal = bool(
-        status in {401, 403}
-        or code in _OPENAI_BILLING_429_CODES
-        or (status == 429 and kind == "insufficient_quota")
+        status in {401, 403, 404, 429}
+        or kind in {"unauthenticated", "permission_denied", "not_found", "resource_exhausted"}
     )
+    if provider_message:
+        log.warning(
+            "Gemini transcription provider error status=%s provider_status=%s message=%s",
+            status,
+            provider_status or "-",
+            provider_message[:500],
+        )
     return CaptionTranscriptionError(
         status,
         message,
-        error_code=error_code,
-        error_type=error_type,
+        error_code=code,
+        error_type=provider_status,
         terminal=terminal,
     )
-
 
 def _safe_segment_failure(exc: Exception) -> str:
     if isinstance(exc, CaptionTranscriptionError):
@@ -134,7 +122,7 @@ class CaptionSegment:
 @dataclass(frozen=True, slots=True)
 class TranscriptResult:
     text: str
-    confidence: float
+    confidence: Optional[float]
     provider: str
     model: str
 
@@ -269,76 +257,128 @@ def normalize_pcm16_lossless_timing(pcm: bytes, *, target_peak: int = 26_000) ->
     return struct.pack("<" + ("h" * count), *normalized)
 
 
-def _confidence_from_logprobs(payload: dict[str, Any]) -> float:
-    rows = payload.get("logprobs")
-    if not isinstance(rows, list) or not rows:
-        return 0.0
-    values: list[float] = []
-    for row in rows:
-        if not isinstance(row, dict):
+
+def _gemini_text_from_generate_content(payload: dict[str, Any]) -> str:
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, list):
+        return ""
+    chunks: list[str] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
             continue
-        try:
-            values.append(float(row.get("logprob")))
-        except (TypeError, ValueError):
+        content = candidate.get("content")
+        parts = content.get("parts") if isinstance(content, dict) else None
+        if not isinstance(parts, list):
             continue
-    if not values:
-        return 0.0
-    mean_logprob = sum(values) / len(values)
-    return max(0.0, min(1.0, math.exp(mean_logprob)))
+        for part in parts:
+            if not isinstance(part, dict) or bool(part.get("thought")):
+                continue
+            text = str(part.get("text") or "").strip()
+            if text:
+                chunks.append(text)
+    return "\n".join(chunks).strip()
 
 
-class OpenAITranscriber:
+class GeminiTranscriber:
+    API_ROOT = "https://generativelanguage.googleapis.com/v1beta/models"
+
     def __init__(
         self,
         api_key: str,
         *,
-        model: str = "gpt-4o-transcribe",
+        model: str = "gemini-3.5-transcribe",
+        fallback_model: str = "gemini-3.5-flash-lite",
         language: str = "",
         timeout_seconds: float = 30.0,
     ) -> None:
         self.api_key = str(api_key or "").strip()
-        self.model = str(model or "gpt-4o-transcribe").strip()
+        self.model = str(model or "gemini-3.5-transcribe").strip()
+        self.fallback_model = str(fallback_model or "").strip()
         self.language = str(language or "").strip()
         self.timeout_seconds = max(5.0, min(60.0, float(timeout_seconds)))
+        self.fallback_count = 0
         if not self.api_key:
-            raise RuntimeError("OPENAI_API_KEY is required for Live Captions.")
+            raise RuntimeError("GEMINI_API_KEY is required for Live Captions.")
 
-    async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
-        form = aiohttp.FormData()
-        form.add_field(
-            "file",
-            pcm16_to_wav(segment.pcm),
-            filename=f"speaker-{segment.user_id}.wav",
-            content_type="audio/wav",
+    def _request_body(self, wav_data: bytes, *, model: str) -> dict[str, Any]:
+        encoded = base64.b64encode(wav_data).decode("ascii")
+        audio_part = {
+            "inlineData": {
+                "mimeType": "audio/wav",
+                "data": encoded,
+            }
+        }
+        if model == self.model:
+            transcription_config: dict[str, Any] = {"mode": "VERBATIM"}
+            if self.language:
+                transcription_config["languageCodes"] = [self.language]
+            return {
+                "contents": [{"role": "user", "parts": [audio_part]}],
+                "generationConfig": {
+                    "audioTranscriptionConfig": transcription_config,
+                },
+            }
+
+        prompt = (
+            "Transcribe only the spoken words in this audio. "
+            "Return only the transcript text, with natural punctuation. "
+            "Do not describe sounds, identify the speaker, add labels, summarize, or answer the speech."
         )
-        form.add_field("model", self.model)
-        form.add_field("response_format", "json")
-        form.add_field("temperature", "0")
-        form.add_field("include[]", "logprobs")
         if self.language:
-            form.add_field("language", self.language)
+            prompt += f" The expected spoken language is {self.language}."
+        return {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": prompt},
+                        audio_part,
+                    ],
+                }
+            ],
+            "generationConfig": {
+                "thinkingConfig": {"thinkingLevel": "minimal"},
+                "responseMimeType": "text/plain",
+                "maxOutputTokens": 1024,
+            },
+        }
 
+    async def _generate(self, wav_data: bytes, *, model: str) -> str:
         timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
+        url = f"{self.API_ROOT}/{model}:generateContent"
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(
-                "https://api.openai.com/v1/audio/transcriptions",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                data=form,
+                url,
+                headers={
+                    "x-goog-api-key": self.api_key,
+                    "Content-Type": "application/json",
+                },
+                json=self._request_body(wav_data, model=model),
             ) as response:
                 body = await response.text()
                 if response.status >= 400:
-                    raise _openai_transcription_error(int(response.status), body)
+                    raise _gemini_transcription_error(int(response.status), body)
                 try:
                     payload = json.loads(body)
                 except json.JSONDecodeError as exc:
-                    raise RuntimeError("caption transcription returned invalid JSON") from exc
+                    raise RuntimeError("Gemini caption transcription returned invalid JSON") from exc
+        return _gemini_text_from_generate_content(payload)
 
-        text = str(payload.get("text") or "").strip()
+    async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
+        wav_data = pcm16_to_wav(segment.pcm)
+        text = await self._generate(wav_data, model=self.model)
+        used_model = self.model
+
+        if not text and self.fallback_model and self.fallback_model != self.model:
+            self.fallback_count += 1
+            text = await self._generate(wav_data, model=self.fallback_model)
+            used_model = self.fallback_model
+
         return TranscriptResult(
             text=text,
-            confidence=_confidence_from_logprobs(payload),
-            provider="openai",
-            model=self.model,
+            confidence=None,
+            provider="gemini",
+            model=used_model,
         )
 
 
@@ -346,7 +386,7 @@ class CaptionEngine:
     def __init__(
         self,
         transcriber: Any,
-        publish: Callable[[int, str, float], Awaitable[None]],
+        publish: Callable[[int, str, Optional[float]], Awaitable[None]],
         *,
         queue_size: int = 400,
         low_confidence_threshold: float = 0.72,
@@ -527,7 +567,7 @@ class CaptionEngine:
             return
         chosen = first
 
-        if first.confidence < self.low_confidence_threshold:
+        if first.confidence is not None and first.confidence < self.low_confidence_threshold:
             normalized_pcm = normalize_pcm16_lossless_timing(segment.pcm)
             if normalized_pcm != segment.pcm:
                 second = await self.transcriber.transcribe(
@@ -547,6 +587,7 @@ class CaptionEngine:
                 ).ratio()
                 if (
                     agreement < 0.55
+                    and second.confidence is not None
                     and max(first.confidence, second.confidence) < self.low_confidence_threshold
                 ):
                     chosen = TranscriptResult(
@@ -555,7 +596,7 @@ class CaptionEngine:
                         provider=first.provider,
                         model=first.model,
                     )
-                elif second.confidence > first.confidence:
+                elif second.confidence is not None and second.confidence > first.confidence:
                     chosen = second
 
         self.segments_transcribed += 1
@@ -564,7 +605,7 @@ class CaptionEngine:
         if not chosen.text:
             self.segments_empty += 1
             return
-        if chosen.confidence < self.unclear_threshold:
+        if chosen.confidence is not None and chosen.confidence < self.unclear_threshold:
             self.segments_unclear += 1
             await self.publish(segment.user_id, "[unclear audio]", chosen.confidence)
             self.segments_published += 1
@@ -577,10 +618,14 @@ class CaptionEngine:
         self.segments_published += 1
 
 
-def openai_transcriber_from_env() -> OpenAITranscriber:
-    return OpenAITranscriber(
-        os.getenv("OPENAI_API_KEY", ""),
-        model=os.getenv("DANK_COMMUNITY_CAPTION_MODEL", "gpt-4o-transcribe"),
+def gemini_transcriber_from_env() -> GeminiTranscriber:
+    return GeminiTranscriber(
+        os.getenv("GEMINI_API_KEY", ""),
+        model=os.getenv("DANK_COMMUNITY_CAPTION_MODEL", "gemini-3.5-transcribe"),
+        fallback_model=os.getenv(
+            "DANK_COMMUNITY_CAPTION_FALLBACK_MODEL",
+            "gemini-3.5-flash-lite",
+        ),
         language=os.getenv("DANK_COMMUNITY_CAPTION_LANGUAGE", ""),
     )
 
@@ -589,11 +634,12 @@ __all__ = [
     "CaptionEngine",
     "CaptionSegment",
     "CaptionTranscriptionError",
-    "_openai_transcription_error",
-    "OpenAITranscriber",
+    "GeminiTranscriber",
     "SpeechPreservingSegmenter",
     "TranscriptResult",
+    "_gemini_text_from_generate_content",
+    "_gemini_transcription_error",
+    "gemini_transcriber_from_env",
     "normalize_pcm16_lossless_timing",
-    "openai_transcriber_from_env",
     "pcm16_to_wav",
 ]
