@@ -54,6 +54,8 @@ def main() -> int:
     assert "p_idempotency_key text" in matchmaking
     assert "community_hub_normalize_formation" in matchmaking
     assert "Enable Quick Match" in ui
+    assert "AvailableGameSelect" in ui
+    assert "dank:hub:find:availablegame:v1" in ui
     assert "created_match" in ui
     assert "if discord_id <= 0:" in runtime
     assert "DANK_ENABLE_PRESENCE_INTENT" in (ROOT / "stoney_verify" / "globals.py").read_text(encoding="utf-8")
