@@ -67,6 +67,7 @@ STALE_TOP_LEVEL_MOVES = {
 
 BORING_PUBLIC_TARGET = {
     "dank",
+    "captions",
     "mod",
     "ticket",
     "tickets",
@@ -193,6 +194,7 @@ def _overview_embed() -> discord.Embed:
         embed,
         "What the command groups mean",
         "`/dank` setup, overview, protection, help, cleanup, members, welcome, roles, modlog, embed\n"
+        "`/captions` ordinary-server Live Captions and personal voice consent\n"
         "`/ticket` actions for the current ticket\n"
         "`/tickets` server-wide ticket management\n"
         "`/ticket-panel` public Create Ticket panel tools\n"

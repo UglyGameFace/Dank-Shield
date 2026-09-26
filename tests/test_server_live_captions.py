@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from stoney_verify.community_voice_caption_runtime import (
     live_captions_enabled,
     server_caption_scope_id,
 )
 from stoney_verify.commands_ext.public_command_surface_v2 import CompactDankHomeView
+from stoney_verify.commands_ext.public_live_captions import (
+    CAPTION_ALLOWED_VOICE_CATEGORIES_KEY,
+    CAPTION_ALLOWED_VOICE_CHANNELS_KEY,
+    CAPTION_EXCLUDED_VOICE_CHANNELS_KEY,
+    CAPTION_VOICE_SCOPE_KEY,
+    ServerLiveCaptionsSetupView,
+    _voice_allowed_by_config,
+)
+from stoney_verify.commands_ext.public_setup_start import DankSetupView
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +44,53 @@ def test_general_live_captions_are_first_class_on_dank_home() -> None:
     assert 'custom_id="dank:home:live_captions:v1"' in source
     assert "open_server_live_captions" in source
     assert "📝 Live Captions" in source
+
+
+def test_general_live_caption_setup_is_reachable_and_supports_existing_server_vcs() -> None:
+    setup_labels = _labels(ServerLiveCaptionsSetupView(1))
+    assert {
+        "Select Output Channel",
+        "Create #live-captions",
+        "Toggle All / Selected",
+        "Add Allowed VC",
+        "Add Voice Category",
+        "Exclude VC",
+    }.issubset(setup_labels)
+    assert "Live Captions" in _labels(DankSetupView(has_missing=True))
+
+
+def test_voice_scope_rules_keep_unrelated_vcs_out() -> None:
+    voice = SimpleNamespace(id=101, category_id=501)
+    other_voice = SimpleNamespace(id=202, category_id=502)
+
+    allowed, _ = _voice_allowed_by_config(voice, {CAPTION_VOICE_SCOPE_KEY: "all"})
+    assert allowed is True
+
+    allowed, reason = _voice_allowed_by_config(
+        voice,
+        {
+            CAPTION_VOICE_SCOPE_KEY: "all",
+            CAPTION_EXCLUDED_VOICE_CHANNELS_KEY: ["101"],
+        },
+    )
+    assert allowed is False
+    assert "excluded" in reason.lower()
+
+    selected = {
+        CAPTION_VOICE_SCOPE_KEY: "selected",
+        CAPTION_ALLOWED_VOICE_CHANNELS_KEY: ["101"],
+        CAPTION_ALLOWED_VOICE_CATEGORIES_KEY: [],
+    }
+    assert _voice_allowed_by_config(voice, selected)[0] is True
+    assert _voice_allowed_by_config(other_voice, selected)[0] is False
+
+    by_category = {
+        CAPTION_VOICE_SCOPE_KEY: "selected",
+        CAPTION_ALLOWED_VOICE_CHANNELS_KEY: [],
+        CAPTION_ALLOWED_VOICE_CATEGORIES_KEY: ["501"],
+    }
+    assert _voice_allowed_by_config(voice, by_category)[0] is True
+    assert _voice_allowed_by_config(other_voice, by_category)[0] is False
 
 
 def test_general_live_captions_reuse_single_hardened_receiver_owner() -> None:

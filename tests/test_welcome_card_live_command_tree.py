@@ -16,7 +16,7 @@ from stoney_verify.commands_ext.public_setup_group import dank_group
 
 
 EXPECTED_DANK_CHILDREN = {"home", "purge", "setup", "upload"}
-EXPECTED_GLOBAL_ROOTS = {"dank", "mod", "ticket", "tickets", "verify"}
+EXPECTED_GLOBAL_ROOTS = {"captions", "dank", "mod", "ticket", "tickets", "verify"}
 
 
 def _child_names(group: Any) -> set[str]:
@@ -56,7 +56,7 @@ def test_final_compacted_tree_is_small_and_idempotent() -> None:
 
 def test_final_fast_doorways_are_commands_not_subcommand_groups() -> None:
     _final_imported_tree()
-    for name in ("mod", "ticket", "tickets", "verify"):
+    for name in ("captions", "mod", "ticket", "tickets", "verify"):
         command = commands_module.bot.tree.get_command(name, guild=None)
         assert isinstance(command, app_commands.Command)
         assert not isinstance(command, app_commands.Group)
