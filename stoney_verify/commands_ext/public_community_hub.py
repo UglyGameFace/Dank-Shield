@@ -16,6 +16,11 @@ import discord
 
 from .. import community_hub_service as hub
 from ..community_hub_runtime import ensure_community_hub_runtime
+from ..community_voice_caption_runtime import (
+    ensure_community_voice_caption_manager,
+    live_captions_enabled,
+)
+from ..community_voice_receive import VoiceReceiveUnavailable, voice_receive_capability
 from ..interaction_guard import safe_defer_interaction
 from ..operation_queue import run_exclusive
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS, private_menu_lifecycle_text
@@ -593,6 +598,14 @@ def _hub_embed() -> discord.Embed:
         inline=False,
     )
     embed.add_field(
+        name="Live Captions",
+        value=(
+            "Optional per-speaker voice-to-text for Community Hub voice sessions. Each participant controls whether "
+            "their own isolated voice may be transcribed; Dank Shield never opts a speaker in automatically."
+        ),
+        inline=False,
+    )
+    embed.add_field(
         name="Privacy",
         value=(
             "Community Pulse uses aggregate activity. Dank Shield does not keep a long-term per-member presence or game-history dossier."
@@ -602,6 +615,121 @@ def _hub_embed() -> discord.Embed:
     embed.add_field(name="Control lifetime", value=private_menu_lifecycle_text(), inline=False)
     return embed
 
+
+
+def _live_captions_overview_embed(
+    sessions: list[dict[str, Any]],
+    manager: Any,
+    *,
+    user_id: int,
+) -> discord.Embed:
+    capability = voice_receive_capability()
+    enabled = live_captions_enabled()
+
+    if not enabled:
+        status = (
+            "🟡 **Installed, validation locked.** Live transcription is disabled on this host until the real Discord "
+            "DAVE receive soak test is completed. No voice audio is captured while this lock is active."
+        )
+    elif not capability.available:
+        status = f"🔴 **Host not ready.** {capability.reason}."
+    else:
+        status = "🟢 **Ready on this host.** A host/co-host/staff member can start captions from a session's Manage screen."
+
+    embed = discord.Embed(
+        title="📝 Community Hub Live Captions",
+        description=(
+            f"{status}\n\n"
+            "Live Captions keep each Discord speaker on a separate audio stream before speech-to-text. "
+            "A participant must explicitly press **Caption My Voice** before their audio can enter transcription."
+        ),
+        color=discord.Color.blurple(),
+    )
+
+    if not sessions:
+        embed.add_field(
+            name="Your groups",
+            value="You are not in an active Community Hub group. Join a group or start a gaming session first.",
+            inline=False,
+        )
+    else:
+        lines: list[str] = []
+        for session in sessions[:8]:
+            sid = _safe_str(session.get("id"))
+            membership = session.get("membership") if isinstance(session.get("membership"), dict) else {}
+            role = _safe_str(membership.get("role"), "member").replace("_", " ").title()
+            state = manager.status(sid) if sid else {"active": False, "opted_in_user_ids": []}
+            running = bool(state.get("active"))
+            opted_in = int(user_id) in {
+                _safe_int(value, 0) for value in (state.get("opted_in_user_ids") or [])
+            }
+            voice_ready = _safe_int(session.get("voice_channel_id"), 0) > 0
+            lines.append(
+                f"• **{_safe_str(session.get('game_name'), 'Gaming Session')}** — {role} • "
+                f"{'Captions running' if running else 'Captions off'} • "
+                f"{'Your voice opted in' if opted_in else 'Your voice not opted in'} • "
+                f"{'Voice room ready' if voice_ready else 'No session voice room'}"
+            )
+        embed.add_field(name="Your groups", value="\n".join(lines)[:1024], inline=False)
+
+    embed.add_field(
+        name="How to use it",
+        value=(
+            "1. Join or create a Community Hub gaming session.\n"
+            "2. Host/co-host/staff opens **Manage Session → Live Captions**.\n"
+            "3. Each speaker who wants transcription presses **Caption My Voice** on the session card/details.\n"
+            "4. Captions appear in the session discussion destination."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Privacy",
+        value=(
+            "Only opted-in speakers are routed to transcription. Opted-in audio is sent to OpenAI's transcription API "
+            "while captions are running. Dank Shield itself does not save the audio, and stopping captions clears speaker consent."
+        ),
+        inline=False,
+    )
+    return embed
+
+
+
+
+
+async def _toggle_live_caption_consent(
+    interaction: discord.Interaction,
+    session_id: str,
+) -> str:
+    sid = _safe_str(session_id)
+    try:
+        members = await hub.list_session_members(sid)
+    except hub.CommunityHubError as exc:
+        return f"❌ {_error_text(exc)}"
+
+    mine = next(
+        (
+            row
+            for row in members
+            if _safe_int(row.get("user_id"), 0) == int(interaction.user.id)
+        ),
+        None,
+    )
+    if mine is None or _safe_str(mine.get("role")) == "waitlist":
+        return "Join this group before opting your voice into Live Captions."
+
+    manager = ensure_community_voice_caption_manager(interaction.client)
+    try:
+        enabled = await manager.toggle_consent(sid, int(interaction.user.id))
+    except VoiceReceiveUnavailable as exc:
+        return f"❌ {exc}"
+
+    if enabled:
+        return (
+            "✅ Your voice is opted into this session's Live Captions. Dank Shield keeps your Discord audio separate "
+            "from other speakers and sends your opted-in audio to **OpenAI's transcription API** for speech-to-text "
+            "while captions are running. Dank Shield itself does not save the audio."
+        )
+    return "Live Captions are off for your voice. Your speaker consent was cleared immediately."
 
 class StartSessionModal(discord.ui.Modal, title="Start a Gaming Session"):
     game = discord.ui.TextInput(
@@ -1336,6 +1464,36 @@ class CommunityHubView(_OwnedView):
             view=FindPlayersView(self.owner_id, sessions, partner=True),
         )
 
+    @discord.ui.button(label="Live Captions", emoji="📝", style=discord.ButtonStyle.secondary, custom_id="dank:hub:captions:v1", row=1)
+    async def live_captions(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        try:
+            sessions = await hub.list_user_sessions(
+                int(interaction.guild_id or 0),
+                int(interaction.user.id),
+                active_only=True,
+                limit=25,
+            )
+        except hub.CommunityHubError as exc:
+            return await _edit_private_original(
+                interaction,
+                content=f"❌ {_error_text(exc)}",
+                embed=None,
+                view=CommunityHubView(self.owner_id),
+            )
+        manager = ensure_community_voice_caption_manager(interaction.client)
+        await _edit_private_original(
+            interaction,
+            content=None,
+            embed=_live_captions_overview_embed(
+                sessions,
+                manager,
+                user_id=int(interaction.user.id),
+            ),
+            view=LiveCaptionsHomeView(self.owner_id),
+        )
+
     @discord.ui.button(label="Staff Dashboard", emoji="🛠️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:staff:v1", row=2)
     async def staff(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -1836,6 +1994,42 @@ class MyGroupsView(_OwnedView):
         await interaction.response.edit_message(embed=_hub_embed(), view=CommunityHubView(self.owner_id), allowed_mentions=discord.AllowedMentions.none())
 
 
+class LiveCaptionsHomeView(_OwnedView):
+    @discord.ui.button(label="My Groups", emoji="👥", style=discord.ButtonStyle.primary, custom_id="dank:hub:captions:groups:v1", row=0)
+    async def groups(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        try:
+            sessions = await hub.list_user_sessions(
+                int(interaction.guild_id or 0),
+                int(interaction.user.id),
+                active_only=True,
+                limit=25,
+            )
+        except hub.CommunityHubError as exc:
+            return await _followup(interaction, f"❌ {_error_text(exc)}")
+        await _edit_private_original(
+            interaction,
+            content=None,
+            embed=_my_groups_embed(sessions),
+            view=MyGroupsView(self.owner_id, sessions),
+        )
+
+    @discord.ui.button(label="Start Gaming Session", emoji="➕", style=discord.ButtonStyle.success, custom_id="dank:hub:captions:start:v1", row=0)
+    async def start(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.send_modal(StartSessionModal())
+
+    @discord.ui.button(label="Community Hub", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:captions:back:v1", row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.edit_message(
+            embed=_hub_embed(),
+            view=CommunityHubView(self.owner_id),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
 class ReportSessionModal(discord.ui.Modal, title="Report Community Hub Session"):
     reason = discord.ui.TextInput(
         label="Reason",
@@ -1950,6 +2144,13 @@ class SessionDetailView(_OwnedView):
         await _edit_private_original(interaction, content=None, embed=build_session_embed(session, members), view=self)
         await ensure_community_hub_runtime(interaction.client).refresh_session_card(session)
         await _followup(interaction, "✅ Ready." if new_ready else "Ready status cleared.")
+
+    @discord.ui.button(label="Caption My Voice", emoji="📝", style=discord.ButtonStyle.secondary, custom_id="dank:hub:detail:captionme:v1", row=1)
+    async def caption_me(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_ephemeral(interaction)
+        message = await _toggle_live_caption_consent(interaction, self.session_id)
+        await _followup(interaction, message)
 
     @discord.ui.button(label="Manage Session", emoji="🎛️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:detail:manage:v1", row=1)
     async def manage(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2392,30 +2593,8 @@ class CommunitySessionPublicView(discord.ui.View):
         session = await self._resolve(interaction)
         if session is None:
             return
-        sid = _safe_str(session.get("id"))
-        try:
-            members = await hub.list_session_members(sid)
-        except hub.CommunityHubError as exc:
-            return await _followup(interaction, f"❌ {_error_text(exc)}")
-        if not any(_safe_int(row.get("user_id"), 0) == int(interaction.user.id) and _safe_str(row.get("role")) != "waitlist" for row in members):
-            return await _followup(interaction, "Join this group before opting your voice into Live Captions.")
-
-        manager = ensure_community_voice_caption_manager(interaction.client)
-        try:
-            enabled = await manager.toggle_consent(sid, int(interaction.user.id))
-        except VoiceReceiveUnavailable as exc:
-            return await _followup(interaction, f"❌ {exc}")
-
-        await _followup(
-            interaction,
-            (
-                "✅ Your voice is opted into this session's Live Captions. Dank Shield keeps your Discord audio "
-                "separate from other speakers and sends your opted-in audio to **OpenAI's transcription API** for "
-                "speech-to-text while captions are running. Dank Shield itself does not save the audio."
-            )
-            if enabled
-            else "Live Captions are off for your voice. Your speaker consent was cleared immediately.",
-        )
+        message = await _toggle_live_caption_consent(interaction, _safe_str(session.get("id")))
+        await _followup(interaction, message)
 
     @discord.ui.button(label="Play Again", emoji="🔁", style=discord.ButtonStyle.success, custom_id="dank:hub:public:replay:v1", row=0)
     async def replay(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

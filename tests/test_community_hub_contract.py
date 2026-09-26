@@ -34,6 +34,25 @@ def test_public_ui_uses_clear_language_not_lfg_jargon() -> None:
     assert re.search(r"\bLFG\b", source, re.IGNORECASE) is None
 
 
+
+
+def test_live_captions_are_discoverable_from_community_hub_home_and_session_details() -> None:
+    source = _text(UI)
+    assert 'label="Live Captions"' in source
+    assert 'custom_id="dank:hub:captions:v1"' in source
+    assert "Community Hub Live Captions" in source
+    assert "Installed, validation locked." in source
+    assert "No voice audio is captured while this lock is active." in source
+    assert 'custom_id="dank:hub:detail:captionme:v1"' in source
+    assert 'custom_id="dank:hub:public:captionme:v1"' in source
+    assert "def _toggle_live_caption_consent(" in source
+    assert "ensure_community_voice_caption_manager" in source
+    assert "live_captions_enabled" in source
+    assert "voice_receive_capability" in source
+    assert "user_id: int," in source
+    assert "int(user_id) in {" in source
+    assert 'membership.get("user_id")' not in source
+
 def test_interactions_use_shared_fail_closed_acknowledgement() -> None:
     source = _text(UI)
     assert "from ..interaction_guard import safe_defer_interaction" in source

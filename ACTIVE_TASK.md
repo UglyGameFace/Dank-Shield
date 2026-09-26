@@ -46,6 +46,9 @@ Confirmed current-state gaps:
 4. The existing Community Hub contract test proves helper presence and static structure but does not exercise the stale Hub recovery path end-to-end.
 5. Current partner activity is aggregate-only (groups, voice count, Open to Play count, optional online/gaming counts). It does not yet provide the chosen-partner live member experience originally requested.
 6. The merged Hub contains substantial backend/state-machine work, but the user-facing product still needs a completion pass rather than another disconnected feature layer.
+7. PR #335 merged the Live Captions backend, but the Community Hub home exposed no discoverability path; host controls were only reachable through a session's Manage flow and participant consent only from the public session card.
+8. The merged caption callbacks referenced the caption manager / voice receive capability / exception names without importing them into `public_community_hub.py`, so pressing the controls could raise `NameError` even though Python compilation passed.
+9. PR #336's first discovery implementation read `membership["user_id"]`, but `list_user_sessions()` intentionally does not select that column. Consent status therefore needed to use the actual interaction user ID instead of widening persistence reads.
 
 ## Execution path
 
@@ -70,7 +73,10 @@ PR #333 merged the Open to Play → Find Players → Quick Match loop as `5600b5
 
 PR #334 merged HubLink into `main` as `addd2580ddff320b8e64c6d8df50dc848f4e5b65`. Post-merge Dank Shield CI and the Supabase migration deployment both completed successfully.
 
-Current branch: `feat/community-hub-cross-server-parties-20260926`
+PR #335 merged into `main` as `93f41dc4845f78b7858c4a89a633c31be3830e0e` from final head `47fc75c52f692065a18ccd5cbd8ad469ff61d085`. Its exact-head required workflows were green, post-merge Community Hub CI and Dank Shield CI were green, Supabase migration deployment was green, and Discloud reported `discloud/commit: success`.
+
+Current branch: `fix/community-hub-live-captions-discovery-20260926`
+Current draft PR: **#336 — Community Hub: make Live Captions visible and reachable**
 Current slice: **Community Hub hardened per-speaker DAVE receive + opt-in Live Captions**
 
 Implemented in this slice:
@@ -116,6 +122,8 @@ Implemented in the current voice-caption slice:
 - a missing/zero transcription confidence is treated as uncertain, never as implicitly trustworthy.
 - process-wide Live Captions scale is bounded by configurable active-guild, speakers-per-session, and global transcription concurrency limits so one public deployment cannot fan out unbounded API/RAM load;
 - `.env.example` documents the default-off feature gate, provider key/model/language, and scale limits without containing any real secret.
+- PR #336 imports the caption runtime/receive names used by the UI callbacks, adds a discoverable Live Captions entry/overview from Community Hub home, exposes self-consent from private session details as well as the public card, and keeps the transcription gate disabled until the real DAVE soak test passes.
+- PR #336 consent-status rendering uses the actual interaction user ID rather than assuming `list_user_sessions()` embeds a user ID that it does not return.
 
 Still deferred after HubLink:
 - session privacy / incomplete `invite_only` behavior;
@@ -133,16 +141,14 @@ Evidence obtained during PR #334 development:
 - install/reauthorization has been narrowed to Community Hub-only non-Administrator permissions;
 - readiness was traced against the actual thread/voice provisioning path and now checks contextual channel/category permissions.
 
-Required before merge on the final exact head:
-- Community Hub Python + interaction contract green;
-- Community Hub PostgreSQL smoke green;
-- Schema Authority SQL green;
-- full Dank Shield CI green;
-- Profile Runtime Diagnostics green;
-- Dank Design Regression CI green;
-- Ticket Owner Emergency Override green;
-- Application Command Size Diagnostics green;
-- final diff/mergeability review against current `main`.
+PR #335 final-head validation completed green for Community Hub CI, Dank Shield CI, Profile Runtime Diagnostics, Dank Design Regression CI, Ticket Owner Emergency Override, and Application Command Size Diagnostics. The merge commit also completed Community Hub CI, Dank Shield CI, Ticket Owner Emergency Override, Supabase migration deployment, and Discloud deployment successfully.
+
+PR #336 head `0af6f6d66b7809a78f307b463c53cc3c406e3d3d` completed Community Hub CI, Dank Shield CI, Ticket Owner Emergency Override, and Application Command Size Diagnostics successfully before final review found the consent-status identity bug. The corrected exact head must rerun all workflows triggered by the final diff before merge.
+
+Required before merging PR #336:
+- every workflow triggered on the corrected exact head green;
+- final diff/mergeability review against current `main`;
+- no re-enabling of `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` before the real Discord DAVE soak test.
 
 ## Cleanup / conflicts
 
@@ -162,4 +168,4 @@ After interaction reliability is validated:
 
 ## Next step
 
-Validate the exact voice-caption head in CI: dependency installation, Python compile, DAVE-capability contract, per-user isolation/mismatch tests, speech-preserving segmentation, low-confidence dual-pass behavior, and the full Dank Shield suite. Unit tests cannot manufacture Discord's ephemeral MLS/DAVE keys, so do not call live voice receive production-proven until a real Discord soak test covers simultaneous speakers, epoch/key changes, packet loss, disconnect/reconnect, and long-running sessions. Keep `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` off until that soak test passes.
+Validate the corrected exact head of PR #336, review the final diff against current `main`, and merge only if every triggered gate is green and the head has not moved unexpectedly. After merge, verify post-merge CI and Discloud deployment. Live receive still requires a real Discord DAVE soak test covering one speaker, overlapping speakers, reconnect/SSRC changes, epoch/key transitions, packet loss/out-of-order delivery, stop/restart/opt-out/session-end cleanup, and long-running operation. Keep `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` off until that soak test passes.
