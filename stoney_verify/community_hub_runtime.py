@@ -933,6 +933,12 @@ class CommunityHubRuntime:
             reason=reason,
         )
         await self.refresh_session_card(session)
+        try:
+            from .community_voice_caption_runtime import ensure_community_voice_caption_manager
+
+            await ensure_community_voice_caption_manager(self.bot).stop(session_id, announce=True)
+        except Exception as exc:
+            _log(f"caption shutdown degraded session={session_id} error={type(exc).__name__}: {exc}")
         settings = await self.settings_for(guild_id)
         self.schedule_cleanup(
             session_id,
@@ -1039,6 +1045,12 @@ class CommunityHubRuntime:
         actor_id: int,
     ) -> None:
         session_before = await hub.get_session(session_id, guild_id=guild_id)
+        try:
+            from .community_voice_caption_runtime import ensure_community_voice_caption_manager
+
+            await ensure_community_voice_caption_manager(self.bot).stop(session_id, announce=False)
+        except Exception as exc:
+            _log(f"caption cleanup degraded session={session_id} error={type(exc).__name__}: {exc}")
         if session_before.get("state") == "cleaned":
             return
         if session_before.get("state") not in {"ending", "ended", "archived", "failed"}:
