@@ -56,6 +56,7 @@ Confirmed current-state gaps:
 14. Live production exposed a discord.py 2.7.x channel-select contract bug in the shared `DankChannelSelect`: Discord returned an `AppCommandChannel` partial for the selected `vc-chat` text channel, while the wrapper accepted only concrete `discord.abc.GuildChannel` instances. The valid selection was therefore rejected with “Pick a server channel first.”
 15. After that picker fix deployed, the configured output saved correctly but the global DAVE validation gate made the required real Discord soak test impossible to start. A safe validation path must not require globally enabling an unproven receive stack.
 16. The first live soak could join voice and accept self-consent but produce no visible caption. The caption engine collapsed provider/publish exceptions into an integer failure counter and exposed no safe last-error or stage diagnosis, so DAVE receive failure, consent/identity rejection, OpenAI billing/key errors, empty transcripts, and Discord publish failures were indistinguishable from the user side.
+17. The first instrumented live soak then proved the active session/consent path while reporting **0 sink frames / 0 routed frames**. The pinned PR #62 receive patch decrypts DAVE early in `reader.py` and drops packets before the sink whenever sender mapping/session decryption is unavailable; it has no passthrough, packet-sync recovery, or hardened decoder-stage behavior. The better-tested PR #54 line decrypts after per-SSRC member resolution, checks DAVE readiness, preserves packet sequence/timestamp on decrypt failure, supports transition passthrough, and prevents unresolved speakers from reaching the sink.
 
 ## Execution path
 
@@ -111,7 +112,7 @@ Implemented in this slice:
 
 Implemented in the current voice-caption slice:
 - changed the pinned Discord dependency to `discord.py[voice]==2.7.1`, installing the PyNaCl + davey voice dependencies that production logs previously reported missing;
-- pinned `discord-ext-voice-recv` to reviewed inbound-DAVE PR #62 head `bec048127f4148fd147afa3182c3771b6955dc08` instead of tracking a moving branch;
+- the first implementation pinned inbound-DAVE PR #62 head `bec048127f4148fd147afa3182c3771b6955dc08`; the real soak produced zero sink frames, so the receive dependency is now switched to the audited hardened PR #54 soft fork `jstewart0788/discord-ext-voice-recv-dave` at exact SHA `78fcb434a3484f2abf54cf89e80e86b651e5c28d`;
 - added a Dank Shield receive boundary that requires the voice receiver's SSRC→user mapping to agree with the source user before PCM may enter captions;
 - added memory-only per-speaker consent so non-consenting users are dropped before PCM enters the caption queue;
 - added counters for unknown speakers, identity mismatches, malformed PCM, queue overflow, and callback failures;
@@ -152,7 +153,9 @@ Implemented in the current voice-caption slice:
 - the Live Captions panel exposes soak telemetry while that controlled session is active: frames seen/routed/not-consented/unknown/mismatched/malformed plus transcription/unclear/failure counters;
 - the soak panel now diagnoses the pipeline stage instead of silently failing: no decoded DAVE frames, identity/consent rejection, routed audio awaiting segmentation, OpenAI/provider failure, empty transcript, or successful publish;
 - transcription/provider failures retain only a safe user-facing diagnosis in runtime state while full exceptions are logged server-side; common OpenAI HTTP 400/401/403/429/5xx cases are translated into actionable messages without exposing the API key or raw provider response;
-- caption engine telemetry now distinguishes transcribed, published, and empty segments, and self-consent tells the tester to speak for 2–5 seconds, pause about one second, then refresh.
+- caption engine telemetry now distinguishes transcribed, published, and empty segments, and self-consent tells the tester to speak for 2–5 seconds, pause about one second, then refresh;
+- the DAVE capability probe now recognizes the hardened decoder-stage receive implementation instead of PR #62's removed `AudioReader._dave_decrypt` method;
+- the soak path now counts raw UDP packets before the receive dependency and reports DAVE session presence/readiness/status/protocol/epoch, mapped SSRC count, and reader-listening state so a future zero-frame result can be localized below the sink.
 
 Still deferred after HubLink:
 - session privacy / incomplete `invite_only` behavior;
@@ -199,4 +202,4 @@ After interaction reliability is validated:
 
 ## Next step
 
-PR #338 and PR #339 are merged and deployed. Validate the live-soak pipeline diagnostics fix, then rerun the real Discord soak from `/captions` and use the reported stage/error to fix the actual failing receive or transcription layer before changing the global feature gate. The soak must cover one speaker, overlapping speakers, reconnect/SSRC changes, epoch/key transitions, packet loss/out-of-order delivery, stop/restart, opt-out while speaking, general-session stop, and sustained operation; Community Hub lifecycle validation remains required before calling the full product production-proven. Keep `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` off until the receive soak passes.
+PR #338, PR #339, and PR #340 are merged and deployed. Validate the hardened DAVE receive-stack replacement and low-level UDP/DAVE telemetry, then rerun the real Discord soak from `/captions`. Keep the global feature gate locked until sink PCM, per-speaker routing, transcription, and publish are proven on the live server. The soak must cover one speaker, overlapping speakers, reconnect/SSRC changes, epoch/key transitions, packet loss/out-of-order delivery, stop/restart, opt-out while speaking, general-session stop, and sustained operation; Community Hub lifecycle validation remains required before calling the full product production-proven. Keep `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` off until the receive soak passes.
