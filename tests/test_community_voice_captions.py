@@ -8,7 +8,9 @@ from stoney_verify.community_voice_captions import (
     CaptionEngine,
     CaptionSegment,
     CaptionTranscriptionError,
-    _openai_transcription_error,
+    GeminiTranscriber,
+    _gemini_text_from_generate_content,
+    _gemini_transcription_error,
     SpeechPreservingSegmenter,
     TranscriptResult,
     normalize_pcm16_lossless_timing,
@@ -176,25 +178,80 @@ class _BlockingTranscriber:
         raise AssertionError("unreachable")
 
 
-def test_openai_429_billing_error_is_terminal_and_precise() -> None:
-    exc = _openai_transcription_error(
+def test_gemini_resource_exhausted_is_terminal_for_current_session() -> None:
+    exc = _gemini_transcription_error(
         429,
-        '{"error":{"type":"insufficient_quota","code":"credit_balance_exhausted","message":"secret provider text"}}',
+        '{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"secret provider detail"}}',
     )
     assert exc.terminal is True
-    assert exc.error_code == "credit_balance_exhausted"
-    assert "credits are exhausted" in exc.safe_message
-    assert "secret provider text" not in exc.safe_message
+    assert exc.error_code == "RESOURCE_EXHAUSTED"
+    assert "free-tier quota or rate limit" in exc.safe_message
+    assert "secret provider detail" not in exc.safe_message
 
 
-def test_openai_429_rate_limit_is_not_terminal() -> None:
-    exc = _openai_transcription_error(
-        429,
-        '{"error":{"type":"rate_limit_error","code":"rate_limit_exceeded"}}',
+def test_gemini_server_error_is_retryable() -> None:
+    exc = _gemini_transcription_error(
+        503,
+        '{"error":{"code":503,"status":"UNAVAILABLE","message":"backend detail"}}',
     )
     assert exc.terminal is False
-    assert exc.error_code == "rate_limit_exceeded"
-    assert "temporarily rate-limited" in exc.safe_message
+    assert "temporarily unavailable" in exc.safe_message
+    assert "backend detail" not in exc.safe_message
+
+
+def test_gemini_generate_content_text_ignores_thought_parts() -> None:
+    payload = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"thought": True, "text": "internal reasoning"},
+                        {"text": "hello from voice"},
+                    ]
+                }
+            }
+        ]
+    }
+    assert _gemini_text_from_generate_content(payload) == "hello from voice"
+
+
+def test_gemini_transcriber_falls_back_only_on_empty_primary() -> None:
+    async def _run() -> None:
+        transcriber = GeminiTranscriber(
+            "fake-key",
+            model="gemini-3.5-transcribe",
+            fallback_model="gemini-3.5-flash-lite",
+        )
+        calls = []
+
+        async def fake_generate(wav_data: bytes, *, model: str) -> str:
+            assert wav_data.startswith(b"RIFF")
+            calls.append(model)
+            return "" if model == "gemini-3.5-transcribe" else "meet at spawn"
+
+        transcriber._generate = fake_generate
+        result = await transcriber.transcribe(
+            CaptionSegment(31, _pcm(900), 1.0, 2.0)
+        )
+        assert result.text == "meet at spawn"
+        assert result.provider == "gemini"
+        assert result.model == "gemini-3.5-flash-lite"
+        assert result.confidence is None
+        assert transcriber.fallback_count == 1
+        assert calls == ["gemini-3.5-transcribe", "gemini-3.5-flash-lite"]
+
+    asyncio.run(_run())
+
+
+def test_gemini_request_uses_inline_wav_and_no_disk_file_contract() -> None:
+    transcriber = GeminiTranscriber("fake-key", language="en-US")
+    body = transcriber._request_body(b"RIFFfake", model="gemini-3.5-transcribe")
+    part = body["contents"][0]["parts"][0]["inlineData"]
+    assert part["mimeType"] == "audio/wav"
+    assert part["data"]
+    cfg = body["generationConfig"]["audioTranscriptionConfig"]
+    assert cfg["mode"] == "VERBATIM"
+    assert cfg["languageCodes"] == ["en-US"]
 
 
 class _TerminalQuotaTranscriber:
@@ -205,9 +262,9 @@ class _TerminalQuotaTranscriber:
         self.calls += 1
         raise CaptionTranscriptionError(
             429,
-            "OpenAI API credits are exhausted (HTTP 429: credit_balance_exhausted). Add API credits, then restart this caption session.",
-            error_code="credit_balance_exhausted",
-            error_type="insufficient_quota",
+            "Gemini free-tier quota or rate limit was reached (HTTP 429 RESOURCE_EXHAUSTED). Check this AI Studio project's active model limits, then restart the caption session after quota is available.",
+            error_code="RESOURCE_EXHAUSTED",
+            error_type="RESOURCE_EXHAUSTED",
             terminal=True,
         )
 
@@ -227,8 +284,8 @@ def test_terminal_provider_error_blocks_repeat_requests_for_session() -> None:
         assert transcriber.calls == 1
         assert engine.segment_failures == 1
         assert engine.provider_skipped == 1
-        assert engine.provider_blocked_code == "credit_balance_exhausted"
-        assert "credits are exhausted" in engine.provider_blocked_reason
+        assert engine.provider_blocked_code == "RESOURCE_EXHAUSTED"
+        assert "free-tier quota or rate limit" in engine.provider_blocked_reason
 
     asyncio.run(_run())
 
@@ -237,7 +294,7 @@ class _QuotaFailingTranscriber:
     async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
         raise CaptionTranscriptionError(
             429,
-            "OpenAI transcription has no available quota or is rate-limited (HTTP 429). Check API billing/credits and project limits.",
+            "Gemini free-tier quota or rate limit was reached (HTTP 429 RESOURCE_EXHAUSTED).",
         )
 
 
@@ -257,7 +314,7 @@ def test_segment_failure_records_safe_provider_diagnostic() -> None:
         )
         assert engine.segment_failures == 1
         assert "HTTP 429" in engine.last_failure
-        assert "billing/credits" in engine.last_failure
+        assert "RESOURCE_EXHAUSTED" in engine.last_failure
         assert engine.segments_published == 0
 
     asyncio.run(_run())
@@ -370,8 +427,10 @@ def test_live_caption_privacy_disclosure_and_soak_gate_are_contractual() -> None
     assert "DANK_COMMUNITY_CAPTION_MAX_SPEAKERS" in runtime
     assert "DANK_COMMUNITY_CAPTION_MAX_CONCURRENT_TRANSCRIPTIONS" in runtime
     assert "until the DAVE receive soak test is completed" in runtime
-    assert "OpenAI's transcription API" in runtime
-    assert "OpenAI's transcription API" in ui
+    assert "Google Gemini's transcription API" in runtime
+    assert "Google Gemini's transcription API" in ui
+    assert "OPENAI_API_KEY" not in runtime
+    assert "api.openai.com" not in (ROOT / "stoney_verify" / "community_voice_captions.py").read_text(encoding="utf-8")
     assert "Caption My Voice" in ui
 
     # The privacy notice must succeed before the runtime is registered active.
