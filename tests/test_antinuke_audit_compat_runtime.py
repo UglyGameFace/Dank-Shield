@@ -29,6 +29,8 @@ def test_raw_voice_status_audit_values_are_named_and_guarded() -> None:
     old_weights = dict(guardian._PANIC_WEIGHTS)  # noqa: SLF001
     old_panic_actions = guardian._PANIC_ACTIONS  # noqa: SLF001
     old_protected = self_action._PROTECTED_ACTIONS  # noqa: SLF001
+    old_local = set(self_action._LOCAL_PROVENANCE_ACTIONS)  # noqa: SLF001
+    old_external = set(self_action._EXTERNAL_ONLY_PROTECTED_ACTIONS)  # noqa: SLF001
     had_flag = hasattr(guardian, runtime._ACTION_FLAG)  # noqa: SLF001
     old_flag = getattr(guardian, runtime._ACTION_FLAG, None)  # noqa: SLF001
     if had_flag:
@@ -42,6 +44,8 @@ def test_raw_voice_status_audit_values_are_named_and_guarded() -> None:
         assert guardian._action_name(deleted) == "voice_channel_status_delete"  # noqa: SLF001
         assert "voice_channel_status_create" in guardian._ACTIONS  # noqa: SLF001
         assert "voice_channel_status_delete" in self_action._PROTECTED_ACTIONS  # noqa: SLF001
+        assert "voice_channel_status_create" in self_action._LOCAL_PROVENANCE_ACTIONS  # noqa: SLF001
+        assert "voice_channel_status_delete" in self_action._LOCAL_PROVENANCE_ACTIONS  # noqa: SLF001
     finally:
         guardian._action_name = old_guardian_name  # noqa: SLF001
         self_action._action_name = old_self_name  # noqa: SLF001
@@ -51,6 +55,10 @@ def test_raw_voice_status_audit_values_are_named_and_guarded() -> None:
         guardian._PANIC_WEIGHTS.update(old_weights)  # noqa: SLF001
         guardian._PANIC_ACTIONS = old_panic_actions  # noqa: SLF001
         self_action._PROTECTED_ACTIONS = old_protected  # noqa: SLF001
+        self_action._LOCAL_PROVENANCE_ACTIONS.clear()  # noqa: SLF001
+        self_action._LOCAL_PROVENANCE_ACTIONS.update(old_local)  # noqa: SLF001
+        self_action._EXTERNAL_ONLY_PROTECTED_ACTIONS.clear()  # noqa: SLF001
+        self_action._EXTERNAL_ONLY_PROTECTED_ACTIONS.update(old_external)  # noqa: SLF001
         if had_flag:
             setattr(guardian, runtime._ACTION_FLAG, old_flag)  # noqa: SLF001
         elif hasattr(guardian, runtime._ACTION_FLAG):  # noqa: SLF001
@@ -59,6 +67,8 @@ def test_raw_voice_status_audit_values_are_named_and_guarded() -> None:
 
 def test_voice_status_local_request_gets_self_action_spec() -> None:
     original = self_action._request_spec  # noqa: SLF001
+    old_local = set(self_action._LOCAL_PROVENANCE_ACTIONS)  # noqa: SLF001
+    old_external = set(self_action._EXTERNAL_ONLY_PROTECTED_ACTIONS)  # noqa: SLF001
     had_flag = hasattr(self_action, runtime._ROUTE_FLAG)  # noqa: SLF001
     old_flag = getattr(self_action, runtime._ROUTE_FLAG, None)  # noqa: SLF001
     if had_flag:
@@ -82,8 +92,19 @@ def test_voice_status_local_request_gets_self_action_spec() -> None:
         )
         assert deleted is not None
         assert deleted.actions == frozenset({"voice_channel_status_delete"})
+        assert {"member_move", "member_disconnect"} <= set(
+            self_action._LOCAL_PROVENANCE_ACTIONS  # noqa: SLF001
+        )
+        assert not (
+            {"member_move", "member_disconnect"}
+            & set(self_action._EXTERNAL_ONLY_PROTECTED_ACTIONS)  # noqa: SLF001
+        )
     finally:
         self_action._request_spec = original  # noqa: SLF001
+        self_action._LOCAL_PROVENANCE_ACTIONS.clear()  # noqa: SLF001
+        self_action._LOCAL_PROVENANCE_ACTIONS.update(old_local)  # noqa: SLF001
+        self_action._EXTERNAL_ONLY_PROTECTED_ACTIONS.clear()  # noqa: SLF001
+        self_action._EXTERNAL_ONLY_PROTECTED_ACTIONS.update(old_external)  # noqa: SLF001
         if had_flag:
             setattr(self_action, runtime._ROUTE_FLAG, old_flag)  # noqa: SLF001
         elif hasattr(self_action, runtime._ROUTE_FLAG):  # noqa: SLF001
