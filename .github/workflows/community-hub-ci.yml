@@ -9,6 +9,7 @@ on:
       - 'stoney_verify/community_voice_captions.py'
       - 'stoney_verify/community_voice_caption_runtime.py'
       - 'stoney_verify/commands_ext/public_community_hub.py'
+      - 'stoney_verify/commands_ext/public_live_captions.py'
       - 'stoney_verify/commands_ext/public_command_surface_v2.py'
       - 'stoney_verify/interaction_guard.py'
       - 'stoney_verify/globals.py'
@@ -20,6 +21,7 @@ on:
       - 'tests/test_community_hub_contract.py'
       - 'tests/test_community_voice_receive.py'
       - 'tests/test_community_voice_captions.py'
+      - 'tests/test_server_live_captions.py'
       - 'tests/test_interaction_guard.py'
       - 'tests/test_component_lifecycle_runtime_policy.py'
       - 'tools/test_community_hub_static.py'
@@ -35,6 +37,8 @@ on:
       - 'stoney_verify/community_voice_captions.py'
       - 'stoney_verify/community_voice_caption_runtime.py'
       - 'stoney_verify/commands_ext/public_community_hub.py'
+      - 'stoney_verify/commands_ext/public_live_captions.py'
+      - 'stoney_verify/commands_ext/public_command_surface_v2.py'
       - 'stoney_verify/interaction_guard.py'
       - 'supabase/migrations/20260925193000_community_hub.sql'
       - 'supabase/migrations/20260926044000_community_hub_matchmaking_loop.sql'
@@ -42,6 +46,7 @@ on:
       - 'tests/test_community_hub_contract.py'
       - 'tests/test_community_voice_receive.py'
       - 'tests/test_community_voice_captions.py'
+      - 'tests/test_server_live_captions.py'
       - 'tests/test_interaction_guard.py'
       - 'tests/test_component_lifecycle_runtime_policy.py'
       - 'tools/test_community_hub_static.py'
@@ -78,7 +83,7 @@ jobs:
 
       - name: Compile Community Hub and integration owners
         run: |
-          python -m py_compile             stoney_verify/community_hub_service.py             stoney_verify/community_hub_runtime.py             stoney_verify/community_voice_receive.py             stoney_verify/community_voice_captions.py             stoney_verify/community_voice_caption_runtime.py             stoney_verify/commands_ext/public_community_hub.py             stoney_verify/commands_ext/public_command_surface_v2.py             stoney_verify/interaction_guard.py             stoney_verify/globals.py             stoney_verify/operation_queue.py             stoney_verify/permission_repair_core.py             tools/test_community_hub_static.py             tests/test_community_hub_contract.py             tests/test_interaction_guard.py             tests/test_component_lifecycle_runtime_policy.py
+          python -m py_compile             stoney_verify/community_hub_service.py             stoney_verify/community_hub_runtime.py             stoney_verify/community_voice_receive.py             stoney_verify/community_voice_captions.py             stoney_verify/community_voice_caption_runtime.py             stoney_verify/commands_ext/public_community_hub.py             stoney_verify/commands_ext/public_live_captions.py             stoney_verify/commands_ext/public_command_surface_v2.py             stoney_verify/interaction_guard.py             stoney_verify/globals.py             stoney_verify/operation_queue.py             stoney_verify/permission_repair_core.py             tools/test_community_hub_static.py             tests/test_community_hub_contract.py             tests/test_server_live_captions.py             tests/test_interaction_guard.py             tests/test_component_lifecycle_runtime_policy.py
 
       - name: Focused Community Hub and interaction lifecycle tests
         run: |
@@ -86,6 +91,7 @@ jobs:
             tests/test_community_hub_contract.py \
             tests/test_community_voice_receive.py \
             tests/test_community_voice_captions.py \
+            tests/test_server_live_captions.py \
             tests/test_interaction_guard.py \
             tests/test_component_lifecycle_runtime_policy.py
 
