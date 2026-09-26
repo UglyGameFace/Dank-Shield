@@ -37,10 +37,10 @@ PCM_CHANNELS = 2
 PCM_SAMPLE_WIDTH = 2
 PCM_FRAME_ALIGNMENT = PCM_CHANNELS * PCM_SAMPLE_WIDTH
 
-# Exact reviewed receive implementation. This is the hardened PR #54 soft fork,
+# Exact reviewed receive implementation. This is upstream PR #58's head,
 # pinned in requirements.txt so branch movement cannot silently change runtime.
-VOICE_RECV_DAVE_COMMIT = "78fcb434a3484f2abf54cf89e80e86b651e5c28d"
-VOICE_RECV_DAVE_SOURCE = "jstewart0788/discord-ext-voice-recv-dave"
+VOICE_RECV_DAVE_COMMIT = "03dd1e2dafe85522cc458441cd5b143b136ac836"
+VOICE_RECV_DAVE_SOURCE = "imayhaveborkedit/discord-ext-voice-recv#58"
 
 
 class VoiceReceiveUnavailable(RuntimeError):
@@ -70,6 +70,8 @@ class SpeakerPCMFrame:
 @dataclass(slots=True)
 class VoiceReceiveHealth:
     raw_udp_packets: int = 0
+    opus_decode_drops: int = 0
+    reader_failures: int = 0
     frames_seen: int = 0
     frames_routed: int = 0
     frames_not_consented: int = 0
@@ -83,6 +85,8 @@ class VoiceReceiveHealth:
     def snapshot(self) -> dict[str, int]:
         return {
             "raw_udp_packets": self.raw_udp_packets,
+            "opus_decode_drops": self.opus_decode_drops,
+            "reader_failures": self.reader_failures,
             "frames_seen": self.frames_seen,
             "frames_routed": self.frames_routed,
             "frames_not_consented": self.frames_not_consented,
@@ -102,9 +106,10 @@ def voice_receive_capability() -> VoiceReceiveCapability:
         try:
             from discord.ext.voice_recv import opus as voice_recv_opus
 
+            packet_decoder = getattr(voice_recv_opus, "PacketDecoder", None)
             inbound_dave = bool(
-                getattr(voice_recv_opus, "has_dave", False)
-                and getattr(voice_recv_opus, "PacketDecoder", None) is not None
+                packet_decoder is not None
+                and callable(getattr(packet_decoder, "_dave_decrypt", None))
             )
         except Exception:
             inbound_dave = False
@@ -116,7 +121,7 @@ def voice_receive_capability() -> VoiceReceiveCapability:
     elif not dave_ok:
         reason = "davey is unavailable"
     elif not inbound_dave:
-        reason = "voice receive dependency does not expose the hardened inbound DAVE decoder"
+        reason = "voice receive dependency does not expose the guarded inbound DAVE decoder"
     else:
         reason = "ready"
 
@@ -163,7 +168,68 @@ def voice_receive_connection_diagnostics(voice_client: Any) -> dict[str, Any]:
         "dave_epoch": epoch,
         "mapped_ssrcs": mapped_ssrcs,
         "reader_listening": listening,
+        "reader_error": str(getattr(voice_client, "_dank_caption_reader_error", "") or "")[:240],
     }
+
+
+def _safe_reader_error(error: Optional[BaseException]) -> str:
+    if error is None:
+        return ""
+    name = type(error).__name__
+    message = str(error).strip()
+    if message:
+        return f"{name}: {message}"[:240]
+    return name[:240]
+
+
+def _install_voice_recv_router_survival_patch() -> bool:
+    """Keep one corrupt Opus packet from killing the entire receive reader.
+
+    Upstream issue #43 and PR #57 document PacketRouter's fail-stop behavior:
+    decoder.pop_data() can raise OpusError for a single malformed/corrupt frame,
+    and PacketRouter.run() then tears down listening for the whole voice session.
+    We catch only OpusError here. Unexpected exceptions retain upstream fail-stop
+    behavior so real implementation bugs are still visible.
+    """
+
+    if voice_recv is None:
+        return False
+
+    try:
+        from discord.ext.voice_recv.router import PacketRouter
+        from discord.opus import OpusError
+    except Exception:
+        return False
+
+    if bool(getattr(PacketRouter, "_dank_opus_survival_patch", False)):
+        return True
+
+    def _do_run(self: Any) -> None:
+        while not self._end_thread.is_set():
+            self.waiter.wait()
+            with self._lock:
+                for decoder in self.waiter.items:
+                    try:
+                        data = decoder.pop_data()
+                    except OpusError as exc:
+                        bridge = getattr(self.sink, "bridge", None)
+                        if bridge is not None:
+                            try:
+                                bridge._increment("opus_decode_drops")
+                            except Exception:
+                                pass
+                        log.debug(
+                            "Live Captions dropped corrupt Opus packet ssrc=%s error=%s",
+                            getattr(decoder, "ssrc", "?"),
+                            exc,
+                        )
+                        continue
+                    if data is not None:
+                        self.sink.write(data.source, data)
+
+    PacketRouter._do_run = _do_run
+    setattr(PacketRouter, "_dank_opus_survival_patch", True)
+    return True
 
 
 def _install_raw_udp_probe(voice_client: Any, bridge: "PerSpeakerFrameBridge") -> None:
@@ -393,8 +459,23 @@ async def connect_receive_client(
             "Dank Shield is already receiving audio for another caption session in this server."
         )
 
+    if not _install_voice_recv_router_survival_patch():
+        raise VoiceReceiveUnavailable(
+            "voice receive router survival patch could not be installed"
+        )
+
     _install_raw_udp_probe(voice_client, bridge)
-    voice_client.listen(HardenedPerSpeakerSink(bridge))
+
+    def _after_reader(error: Optional[Exception]) -> None:
+        if error is None:
+            return
+        bridge._increment("reader_failures")
+        safe_error = _safe_reader_error(error)
+        setattr(voice_client, "_dank_caption_reader_error", safe_error)
+        log.error("Live Captions receive reader stopped: %s", safe_error)
+
+    setattr(voice_client, "_dank_caption_reader_error", "")
+    voice_client.listen(HardenedPerSpeakerSink(bridge), after=_after_reader)
     return voice_client
 
 

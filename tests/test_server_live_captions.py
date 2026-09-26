@@ -167,6 +167,27 @@ def test_soak_pipeline_diagnosis_separates_receive_from_provider_failures() -> N
     }
     assert "No UDP voice packets" in _soak_pipeline_diagnosis(no_frames)
 
+    stopped_reader = {
+        "health": {
+            "raw_udp_packets": 141,
+            "frames_seen": 0,
+            "frames_routed": 0,
+            "opus_decode_drops": 1,
+            "reader_failures": 1,
+        },
+        "receive_connection": {
+            "reader_listening": False,
+            "reader_error": "OpusError: corrupted stream",
+            "dave_session_present": True,
+            "dave_session_ready": True,
+            "mapped_ssrcs": 6,
+        },
+        "segment_failures": 0,
+    }
+    stopped_text = _soak_pipeline_diagnosis(stopped_reader)
+    assert "reader stopped after an error" in stopped_text
+    assert "OpusError: corrupted stream" in stopped_text
+
     dave_not_ready = {
         "health": {"raw_udp_packets": 20, "frames_seen": 0, "frames_routed": 0},
         "receive_connection": {

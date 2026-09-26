@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import threading
+from types import SimpleNamespace
+
+from discord.opus import OpusError
+
 from stoney_verify.community_voice_receive import (
     PCM_FRAME_ALIGNMENT,
     PerSpeakerFrameBridge,
     VOICE_RECV_DAVE_COMMIT,
     VOICE_RECV_DAVE_SOURCE,
+    _install_voice_recv_router_survival_patch,
     voice_receive_capability,
     voice_receive_connection_diagnostics,
 )
@@ -36,8 +42,8 @@ def test_voice_dependencies_are_pinned_for_dave_receive() -> None:
     assert capability.receive_extension_available is True
     assert capability.inbound_dave_decrypt_available is True
     assert capability.available is True
-    assert VOICE_RECV_DAVE_COMMIT == "78fcb434a3484f2abf54cf89e80e86b651e5c28d"
-    assert VOICE_RECV_DAVE_SOURCE == "jstewart0788/discord-ext-voice-recv-dave"
+    assert VOICE_RECV_DAVE_COMMIT == "03dd1e2dafe85522cc458441cd5b143b136ac836"
+    assert VOICE_RECV_DAVE_SOURCE == "imayhaveborkedit/discord-ext-voice-recv#58"
 
 
 def test_voice_receive_connection_diagnostics_report_dave_and_ssrc_state() -> None:
@@ -73,7 +79,69 @@ def test_voice_receive_connection_diagnostics_report_dave_and_ssrc_state() -> No
         "dave_epoch": 7,
         "mapped_ssrcs": 2,
         "reader_listening": True,
+        "reader_error": "",
     }
+
+
+def test_router_drops_corrupt_opus_packet_without_stopping_reader() -> None:
+    from discord.ext.voice_recv.router import PacketRouter
+
+    assert _install_voice_recv_router_survival_patch() is True
+
+    delivered = []
+    bridge = PerSpeakerFrameBridge(_ImmediateLoop(), delivered.append)
+
+    class _OnePassEnd:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def is_set(self) -> bool:
+            self.calls += 1
+            return self.calls > 1
+
+    class _Waiter:
+        def __init__(self, items) -> None:
+            self.items = items
+
+        def wait(self) -> None:
+            return None
+
+    class _BadDecoder:
+        ssrc = 100
+
+        def pop_data(self):
+            exc = OpusError.__new__(OpusError)
+            Exception.__init__(exc, "corrupted stream")
+            exc.code = -4
+            raise exc
+
+    class _GoodDecoder:
+        ssrc = 200
+
+        def pop_data(self):
+            return SimpleNamespace(source=SimpleNamespace(id=20))
+
+    class _Sink:
+        def __init__(self) -> None:
+            self.bridge = bridge
+            self.writes = []
+
+        def write(self, source, data) -> None:
+            self.writes.append((source, data))
+
+    sink = _Sink()
+    fake_router = SimpleNamespace(
+        _end_thread=_OnePassEnd(),
+        waiter=_Waiter([_BadDecoder(), _GoodDecoder()]),
+        _lock=threading.RLock(),
+        sink=sink,
+    )
+
+    PacketRouter._do_run(fake_router)
+
+    assert bridge.health.opus_decode_drops == 1
+    assert len(sink.writes) == 1
+    assert sink.writes[0][0].id == 20
 
 
 def test_non_consented_audio_never_crosses_caption_boundary() -> None:
