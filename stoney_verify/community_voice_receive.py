@@ -11,7 +11,9 @@ No audio is written to disk by this module.
 """
 
 import asyncio
+import ctypes.util
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -55,6 +57,8 @@ class VoiceReceiveCapability:
     dave_available: bool
     receive_extension_available: bool
     inbound_dave_decrypt_available: bool
+    opus_available: bool
+    opus_library: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +103,37 @@ class VoiceReceiveHealth:
         }
 
 
+def ensure_opus_loaded() -> tuple[bool, str]:
+    if discord.opus.is_loaded():
+        return True, "already-loaded"
+
+    candidates: list[str] = []
+    configured = str(os.getenv("DANK_OPUS_LIBRARY", "") or "").strip()
+    if configured:
+        candidates.append(configured)
+
+    discovered = ctypes.util.find_library("opus")
+    if discovered:
+        candidates.append(str(discovered))
+
+    for candidate in ("libopus.so.0", "libopus.so.1", "libopus.so", "opus"):
+        if candidate not in candidates:
+            candidates.append(candidate)
+
+    for candidate in candidates:
+        try:
+            discord.opus.load_opus(candidate)
+        except Exception:
+            continue
+        if discord.opus.is_loaded():
+            log.info("Live Captions Opus runtime loaded library=%s", candidate)
+            return True, candidate
+
+    return False, "not-found"
+
+
 def voice_receive_capability() -> VoiceReceiveCapability:
+    opus_ok, opus_library = ensure_opus_loaded()
     receive_ok = voice_recv is not None
     inbound_dave = False
     if receive_ok:
@@ -115,8 +149,10 @@ def voice_receive_capability() -> VoiceReceiveCapability:
             inbound_dave = False
 
     dave_ok = davey is not None
-    available = bool(receive_ok and dave_ok and inbound_dave)
-    if not receive_ok:
+    available = bool(receive_ok and dave_ok and inbound_dave and opus_ok)
+    if not opus_ok:
+        reason = "native Opus runtime is unavailable; install/load libopus before Live Captions starts"
+    elif not receive_ok:
         reason = "discord-ext-voice-recv is unavailable"
     elif not dave_ok:
         reason = "davey is unavailable"
@@ -132,6 +168,8 @@ def voice_receive_capability() -> VoiceReceiveCapability:
         dave_available=dave_ok,
         receive_extension_available=receive_ok,
         inbound_dave_decrypt_available=inbound_dave,
+        opus_available=opus_ok,
+        opus_library=opus_library,
     )
 
 
@@ -514,6 +552,7 @@ __all__ = [
     "VoiceReceiveUnavailable",
     "connect_receive_client",
     "disconnect_receive_client",
+    "ensure_opus_loaded",
     "voice_receive_capability",
     "voice_receive_connection_diagnostics",
 ]
