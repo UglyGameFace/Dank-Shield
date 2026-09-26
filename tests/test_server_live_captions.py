@@ -16,8 +16,12 @@ from stoney_verify.commands_ext.public_live_captions import (
     CAPTION_ALLOWED_VOICE_CATEGORIES_KEY,
     CAPTION_ALLOWED_VOICE_CHANNELS_KEY,
     CAPTION_EXCLUDED_VOICE_CHANNELS_KEY,
+    CAPTION_LANGUAGE_CODES_KEY,
+    CAPTION_OUTPUT_MODE_KEY,
     CAPTION_VOICE_SCOPE_KEY,
+    CaptionLanguageOutputView,
     ServerLiveCaptionsSetupView,
+    _caption_output_mode,
     _bot_owner_authorized,
     _soak_pipeline_diagnosis,
     _voice_allowed_by_config,
@@ -62,8 +66,28 @@ def test_general_live_caption_setup_is_reachable_and_supports_existing_server_vc
         "Add Allowed VC",
         "Add Voice Category",
         "Exclude VC",
+        "Language & Translation",
     }.issubset(setup_labels)
     assert "Live Captions" in _labels(DankSetupView(has_missing=True))
+
+
+def test_caption_language_output_modes_are_owner_configurable() -> None:
+    assert _caption_output_mode({}) == "original"
+    assert _caption_output_mode({CAPTION_OUTPUT_MODE_KEY: "english"}) == "english"
+    assert _caption_output_mode({CAPTION_OUTPUT_MODE_KEY: "bilingual"}) == "bilingual"
+
+    view = CaptionLanguageOutputView(7, "original")
+    select = next(item for item in view.children if isinstance(item, discord.ui.Select))
+    assert {option.value for option in select.options} == {"original", "english", "bilingual"}
+
+    ui = _text(GENERAL_UI)
+    runtime = _text(RUNTIME)
+    assert CAPTION_LANGUAGE_CODES_KEY == "live_captions_language_codes"
+    assert "Auto-detect 85+ languages" in ui
+    assert "original audio is not sent through another translation pass" in ui
+    assert 'caption_cfg.get("live_captions_output_mode", "original")' in runtime
+    assert 'caption_cfg.get("live_captions_language_codes") or []' in runtime
+    assert 'if output_mode in {"english", "bilingual"}' in runtime
 
 
 def test_voice_scope_rules_keep_unrelated_vcs_out() -> None:
@@ -308,6 +332,8 @@ def test_general_live_captions_keep_privacy_and_physical_source_limits_visible()
     assert "Discord speakers stay isolated before transcription." in ui
     assert "Opting out immediately blocks new audio" in ui
     assert "Google Gemini's transcription API" in ui
+    assert "Gemini Live automatically detects its supported languages" in ui
+    assert "finalized transcript text is translated" in ui
     assert "Dank Shield itself does not save the audio." in ui
     assert "microphone already captures a TV, game audio, or another person" in ui
 
