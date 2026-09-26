@@ -308,7 +308,7 @@ def test_general_live_captions_keep_privacy_and_physical_source_limits_visible()
     assert "Discord speakers stay isolated before transcription." in ui
     assert "Opting out immediately blocks new audio" in ui
     assert "Google Gemini's transcription API" in ui
-    assert "Dank Shield itself does not save it." in ui
+    assert "Dank Shield itself does not save the audio." in ui
     assert "microphone already captures a TV, game audio, or another person" in ui
 
 
