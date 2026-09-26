@@ -224,13 +224,12 @@ class _ConcurrencyProbeTranscriber:
         self.active = 0
         self.peak = 0
         self.release = asyncio.Event()
-        self.started_two = asyncio.Event()
+        self.started = asyncio.Event()
 
     async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
         self.active += 1
         self.peak = max(self.peak, self.active)
-        if self.active >= 2:
-            self.started_two.set()
+        self.started.set()
         try:
             await self.release.wait()
             return TranscriptResult("ok", 0.99, "fake", "fake")
@@ -266,7 +265,8 @@ def test_shared_transcription_semaphore_bounds_engines_across_sessions() -> None
                 CaptionSegment(2, _pcm(30_000), 1.0, 2.0)
             )
         )
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(transcriber.started.wait(), timeout=1.0)
+        await asyncio.sleep(0)
         assert transcriber.peak == 1
         transcriber.release.set()
         await asyncio.gather(one, two)
