@@ -342,6 +342,8 @@ def test_hublink_replaces_raw_server_id_partner_setup() -> None:
     assert "aggregate_activity_shared=false" in hublink
     assert "session_discovery_shared=true" in hublink
     assert "A server cannot HubLink to itself" in hublink
+    assert "HubLink code was already consumed and the partner link is no longer active" in hublink
+    assert "an explicit later revoke permanently kills this code" in hublink
     assert "grant execute on function public.community_hub_redeem_link_code(text,text,text)" in hublink
 
     assert "def community_hub_install_permissions" in permissions
