@@ -277,7 +277,7 @@ jobs:
       - name: Verify Quick Match opt-in formation
         run: |
           psql -v ON_ERROR_STOP=1 <<'SQL'
-          do $
+          do $matchmaking$
           declare
               result jsonb;
               sid uuid;
@@ -394,7 +394,7 @@ jobs:
                   raise exception 'Quick Match ignored Match Safety exclusion';
               end if;
           end;
-          $;
+          $matchmaking$;
           SQL
 
       - name: Verify no public function execution leaks
