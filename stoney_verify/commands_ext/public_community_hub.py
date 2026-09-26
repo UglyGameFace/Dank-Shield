@@ -647,14 +647,14 @@ def _availability_embed(rows: list[dict[str, Any]]) -> discord.Embed:
         )
         return embed
 
-    for row in rows[:10]:
+    for row in rows[:8]:
         expires = _safe_str(row.get("expires_at"))
         try:
             stamp = int(datetime.fromisoformat(expires.replace("Z", "+00:00")).timestamp())
             expires_text = f"<t:{stamp}:R>"
         except Exception:
             expires_text = "soon"
-        note = _safe_str(row.get("note"))
+        note = _safe_str(row.get("note"))[:240]
         value = (
             f"{_safe_str(row.get('play_style'), 'any').replace('_', ' ').title()} • "
             f"Mic: {_safe_str(row.get('mic_preference'), 'optional').replace('_', ' ').title()} • "
@@ -668,6 +668,8 @@ def _availability_embed(rows: list[dict[str, Any]]) -> discord.Embed:
             value=value[:1024],
             inline=False,
         )
+    if len(rows) > 8:
+        embed.set_footer(text=f"{len(rows)} active Open to Play entries • showing the first 8.")
     return embed
 
 
@@ -1268,7 +1270,7 @@ def _available_players_embed(game: str, rows: list[dict[str, Any]]) -> discord.E
         )
         return embed
 
-    for row in rows[:12]:
+    for row in rows[:8]:
         user_id = _safe_int(row.get("user_id"), 0)
         expires = _safe_str(row.get("expires_at"))
         try:
@@ -1281,7 +1283,7 @@ def _available_players_embed(game: str, rows: list[dict[str, Any]]) -> discord.E
             f"Mic: {_safe_str(row.get('mic_preference'), 'optional').replace('_', ' ').title()} • "
             f"Quick Match: {'On' if bool(row.get('auto_match')) else 'Off'} • expires {expires_text}"
         )
-        note = _safe_str(row.get("note"))
+        note = _safe_str(row.get("note"))[:240]
         if note:
             value += f"\n{note}"
         embed.add_field(
@@ -1289,8 +1291,8 @@ def _available_players_embed(game: str, rows: list[dict[str, Any]]) -> discord.E
             value=value[:1024],
             inline=False,
         )
-    if len(rows) > 12:
-        embed.set_footer(text=f"{len(rows)} members are Open to Play for {game}; showing the first 12.")
+    if len(rows) > 8:
+        embed.set_footer(text=f"{len(rows)} members are Open to Play for {game}; showing the first 8.")
     return embed
 
 
