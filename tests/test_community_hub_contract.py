@@ -241,6 +241,8 @@ def test_quick_match_prefers_existing_groups_then_forms_only_opted_in_matches() 
     assert "idempotency_key=p_idempotency_key" in matchmaking
     assert matchmaking.index("idempotency_key=p_idempotency_key") < matchmaking.index("Existing public groups remain the preferred path")
     assert "and a.auto_match=true" in matchmaking
+    assert "and s.id <> v_session_id" in matchmaking
+    assert "quick match candidate became unavailable" in matchmaking
     assert "match safety exclusion prevents this match" in matchmaking
     assert "for update of a skip locked" in matchmaking
     assert "session.quick_match_formed" in matchmaking
@@ -251,6 +253,10 @@ def test_quick_match_prefers_existing_groups_then_forms_only_opted_in_matches() 
     assert '"p_idempotency_key": key' in service
     assert "async def normalize_session_formation" in service
     assert "session = await hub.normalize_session_formation(session_id, guild_id)" in runtime
+    assert "self._runtime_started_at = datetime.now(timezone.utc)" in runtime
+    assert 'state != "creating"' in runtime
+    assert "created_at >= self._runtime_started_at" in runtime
+    assert "Interrupted before Community Hub publication during a previous bot process" in runtime
     assert 'bot.add_listener(runtime.on_member_remove, "on_member_remove")' in runtime
 
     assert "availability_summary=availability" in ui
