@@ -8,6 +8,7 @@ from stoney_verify.community_voice_captions import (
     CaptionEngine,
     CaptionSegment,
     CaptionTranscriptionError,
+    _openai_transcription_error,
     SpeechPreservingSegmenter,
     TranscriptResult,
     normalize_pcm16_lossless_timing,
@@ -173,6 +174,63 @@ class _BlockingTranscriber:
         self.started.set()
         await asyncio.Event().wait()
         raise AssertionError("unreachable")
+
+
+def test_openai_429_billing_error_is_terminal_and_precise() -> None:
+    exc = _openai_transcription_error(
+        429,
+        '{"error":{"type":"insufficient_quota","code":"credit_balance_exhausted","message":"secret provider text"}}',
+    )
+    assert exc.terminal is True
+    assert exc.error_code == "credit_balance_exhausted"
+    assert "credits are exhausted" in exc.safe_message
+    assert "secret provider text" not in exc.safe_message
+
+
+def test_openai_429_rate_limit_is_not_terminal() -> None:
+    exc = _openai_transcription_error(
+        429,
+        '{"error":{"type":"rate_limit_error","code":"rate_limit_exceeded"}}',
+    )
+    assert exc.terminal is False
+    assert exc.error_code == "rate_limit_exceeded"
+    assert "temporarily rate-limited" in exc.safe_message
+
+
+class _TerminalQuotaTranscriber:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
+        self.calls += 1
+        raise CaptionTranscriptionError(
+            429,
+            "OpenAI API credits are exhausted (HTTP 429: credit_balance_exhausted). Add API credits, then restart this caption session.",
+            error_code="credit_balance_exhausted",
+            error_type="insufficient_quota",
+            terminal=True,
+        )
+
+
+def test_terminal_provider_error_blocks_repeat_requests_for_session() -> None:
+    async def _run() -> None:
+        async def publish(user_id: int, text: str, confidence: float) -> None:
+            raise AssertionError("quota failure must not publish")
+
+        transcriber = _TerminalQuotaTranscriber()
+        engine = CaptionEngine(transcriber, publish)
+        segment = CaptionSegment(user_id=34, pcm=_pcm(900), started_at=1.0, ended_at=2.0)
+
+        await engine._process_segment_safely(segment)
+        await engine._process_segment_safely(segment)
+
+        assert transcriber.calls == 1
+        assert engine.segment_failures == 1
+        assert engine.provider_skipped == 1
+        assert engine.provider_blocked_code == "credit_balance_exhausted"
+        assert "credits are exhausted" in engine.provider_blocked_reason
+
+    asyncio.run(_run())
 
 
 class _QuotaFailingTranscriber:

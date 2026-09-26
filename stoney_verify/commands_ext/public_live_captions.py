@@ -199,8 +199,12 @@ def _soak_pipeline_diagnosis(status: dict[str, Any]) -> str:
     published = int(status.get("segments_published") or 0)
     empty = int(status.get("segments_empty") or 0)
     failures = int(status.get("segment_failures") or 0)
+    provider_skipped = int(status.get("provider_skipped") or 0)
+    provider_blocked_reason = str(status.get("provider_blocked_reason") or "").strip()
     last_failure = str(status.get("last_failure") or "").strip()
 
+    if provider_blocked_reason:
+        return "🔴 **Transcription provider is blocked.** " + provider_blocked_reason
     if failures > 0:
         return (
             "🔴 **Transcription/processing failure.** "
@@ -244,8 +248,14 @@ def _soak_pipeline_diagnosis(status: dict[str, Any]) -> str:
                 f"Unknown: **{unknown}** • mismatch: **{mismatch}**. Audio is being dropped instead of mixed."
             )
         if not_consented > 0:
+            opted = status.get("opted_in_user_ids")
+            if isinstance(opted, (list, tuple)) and opted:
+                return (
+                    "🟠 **PCM is arriving. The not-consented count is cumulative and includes frames from before opt-in.** "
+                    "At least one speaker is opted in now; speak again and refresh. If transcription starts, this counter is historical rather than a current consent failure."
+                )
             return (
-                "🟠 **Voice frames are arriving but consent is blocking them.** "
+                "🟠 **Voice frames are arriving but no speaker is currently opted in.** "
                 "Press **Caption My Voice**, confirm the panel says your voice is opted in, then speak again."
             )
         if malformed > 0:
@@ -416,6 +426,7 @@ async def build_server_live_captions_embed(
         if bool(general.get("soak_test")):
             health = general.get("health") if isinstance(general.get("health"), dict) else {}
             connection = general.get("receive_connection") if isinstance(general.get("receive_connection"), dict) else {}
+            provider_skipped = int(general.get("provider_skipped") or 0)
             embed.add_field(
                 name="DAVE soak telemetry",
                 value=(
@@ -424,7 +435,7 @@ async def build_server_live_captions_embed(
                     f"Reader: **{'listening' if connection.get('reader_listening') else 'stopped'}** • mapped SSRCs: **{int(connection.get('mapped_ssrcs') or 0)}** • reader failures: **{int(health.get('reader_failures') or 0)}**\n"
                     f"Corrupt Opus dropped: **{int(health.get('opus_decode_drops') or 0)}** • not consented: **{int(health.get('frames_not_consented') or 0)}** • unknown source: **{int(health.get('frames_unknown_source') or 0)}** • identity mismatch: **{int(health.get('frames_source_mismatch') or 0)}**\n"
                     f"Malformed PCM: **{int(health.get('frames_malformed_pcm') or 0)}** • transcribed: **{int(general.get('segments_transcribed') or 0)}** • published: **{int(general.get('segments_published') or 0)}** • empty: **{int(general.get('segments_empty') or 0)}**\n"
-                    f"Unclear: **{int(general.get('segments_unclear') or 0)}** • failures: **{int(general.get('segment_failures') or 0)}**"
+                    f"Unclear: **{int(general.get('segments_unclear') or 0)}** • failures: **{int(general.get('segment_failures') or 0)}** • provider-skipped: **{provider_skipped}**"
                 ),
                 inline=False,
             )

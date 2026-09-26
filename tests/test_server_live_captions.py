@@ -234,6 +234,31 @@ def test_soak_pipeline_diagnosis_separates_receive_from_provider_failures() -> N
     assert "Transcription/processing failure" in rendered
     assert "HTTP 429" in rendered
 
+    provider_blocked = {
+        "health": {"frames_seen": 20, "frames_routed": 20},
+        "provider_blocked_reason": "OpenAI API credits are exhausted (HTTP 429: credit_balance_exhausted).",
+        "provider_blocked_code": "credit_balance_exhausted",
+        "segment_failures": 1,
+    }
+    blocked_text = _soak_pipeline_diagnosis(provider_blocked)
+    assert "Transcription provider is blocked" in blocked_text
+    assert "credit_balance_exhausted" in blocked_text
+
+    historical_consent = {
+        "health": {"frames_seen": 65, "frames_routed": 0, "frames_not_consented": 65},
+        "receive_connection": {
+            "reader_listening": True,
+            "dave_session_present": True,
+            "dave_session_ready": True,
+            "mapped_ssrcs": 4,
+        },
+        "opted_in_user_ids": [123],
+        "segment_failures": 0,
+    }
+    consent_text = _soak_pipeline_diagnosis(historical_consent)
+    assert "cumulative" in consent_text
+    assert "before opt-in" in consent_text
+
 
 def test_general_live_captions_reuse_single_hardened_receiver_owner() -> None:
     ui = _text(GENERAL_UI)
