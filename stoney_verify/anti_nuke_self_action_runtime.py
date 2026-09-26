@@ -674,10 +674,28 @@ async def _audit_guard(bot: discord.Client, entry: Any) -> None:
     if _bot_id(bot) <= 0 or _actor_id(entry) != _bot_id(bot):
         return
     if _consume(guild, entry, action_name):
-        if action_name == "message_delete":
+        if action_name in {"message_delete", "message_bulk_delete"}:
+            # Message audit reasons can be sparse. Clear the paired fallback
+            # receipt when the stronger DSA marker succeeds so it cannot mask a
+            # later unrelated delete in the same channel.
             _consume_expected_side_effect(guild, entry, action_name)
         return
-    if _consume_expected_side_effect(guild, entry, action_name):
+
+    # Discord can surface message deletion audit entries without a usable reason.
+    # Only direct message-delete actions may use the one-time local-request
+    # fallback, and never when a DSA marker is present but invalid. A mismatched
+    # marker is stronger evidence that this process did not authorize the event.
+    reason_has_marker = bool(
+        _MARKER_RE.search(str(getattr(entry, "reason", "") or ""))
+    )
+    allow_reasonless_fallback = (
+        action_name not in {"message_delete", "message_bulk_delete"}
+        or not reason_has_marker
+    )
+    if (
+        allow_reasonless_fallback
+        and _consume_expected_side_effect(guild, entry, action_name)
+    ):
         return
     await _unmatched_self_action(bot, guild, entry, action_name)
 
@@ -712,12 +730,20 @@ def _patch_http(bot: discord.Client) -> bool:
             if token:
                 side_effects.append(token)
 
-        if "message_delete" in spec.actions:
+        message_delete_action = next(
+            (
+                action
+                for action in ("message_delete", "message_bulk_delete")
+                if action in spec.actions
+            ),
+            "",
+        )
+        if message_delete_action:
             token = _expect_side_effect(
                 spec.guild_id,
-                "message_delete",
+                message_delete_action,
                 target_key=spec.target_key,
-                source_action="local_message_delete",
+                source_action=f"local_{message_delete_action}",
                 in_flight=True,
             )
             if token:
