@@ -19,7 +19,7 @@ from ..community_hub_runtime import ensure_community_hub_runtime
 from ..interaction_guard import safe_defer_interaction
 from ..operation_queue import run_exclusive
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS, private_menu_lifecycle_text
-from ..permission_repair_core import approved_public_permissions, reauthorize_url
+from ..permission_repair_core import community_hub_oauth_url
 from .public_owner_authority import (
     interaction_has_administrator_authority,
     interaction_has_manage_guild_authority,
@@ -60,7 +60,7 @@ _HUB_PERMISSION_LABELS = {
     "read_message_history": "Read Message History",
     "manage_threads": "Manage Threads",
     "manage_channels": "Manage Channels",
-    "move_members": "Move Members",
+    "view_audit_log": "View Audit Log",
 }
 
 
@@ -70,16 +70,7 @@ def _public_install_url(bot: Any) -> str:
         or getattr(getattr(bot, "user", None), "id", 0),
         0,
     )
-    if client_id <= 0:
-        return ""
-    try:
-        return discord.utils.oauth_url(
-            client_id,
-            permissions=approved_public_permissions(),
-            scopes=("bot", "applications.commands"),
-        )
-    except Exception:
-        return ""
+    return community_hub_oauth_url(client_id)
 
 
 def _community_hub_required_permissions(settings: dict[str, Any]) -> tuple[str, ...]:
@@ -88,6 +79,7 @@ def _community_hub_required_permissions(settings: dict[str, Any]) -> tuple[str, 
         "send_messages",
         "embed_links",
         "read_message_history",
+        "view_audit_log",
     ]
     if bool(settings.get("auto_create_thread", True)):
         names.extend(("send_messages_in_threads", "manage_threads"))
@@ -192,7 +184,11 @@ def _community_hub_readiness(
         "channel": channel,
         "category_missing": category_missing,
         "category": category,
-        "reauthorize_url": reauthorize_url(guild) if missing else "",
+        "reauthorize_url": (
+            community_hub_oauth_url(_safe_int(getattr(me, "id", 0), 0), guild=guild)
+            if missing
+            else ""
+        ),
     }
 
 
