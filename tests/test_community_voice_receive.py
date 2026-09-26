@@ -110,7 +110,10 @@ def test_router_drops_corrupt_opus_packet_without_stopping_reader() -> None:
         ssrc = 100
 
         def pop_data(self):
-            raise OpusError(-4)
+            exc = OpusError.__new__(OpusError)
+            Exception.__init__(exc, "corrupted stream")
+            exc.code = -4
+            raise exc
 
     class _GoodDecoder:
         ssrc = 200
