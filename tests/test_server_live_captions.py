@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+
+import discord
 
 from stoney_verify.community_voice_caption_runtime import (
     live_captions_enabled,
@@ -17,6 +20,7 @@ from stoney_verify.commands_ext.public_live_captions import (
     _voice_allowed_by_config,
 )
 from stoney_verify.commands_ext.public_setup_start import DankSetupView
+from stoney_verify.ui.picker import DankChannelSelect
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -91,6 +95,34 @@ def test_voice_scope_rules_keep_unrelated_vcs_out() -> None:
     }
     assert _voice_allowed_by_config(voice, by_category)[0] is True
     assert _voice_allowed_by_config(other_voice, by_category)[0] is False
+
+
+
+
+
+def test_live_captions_channel_picker_resolves_discord_partial_channel() -> None:
+    real_channel = object.__new__(discord.TextChannel)
+    partial_channel = SimpleNamespace(id=321, resolve=lambda: real_channel)
+    picked: list[object] = []
+
+    async def on_pick(_interaction, channel) -> None:
+        picked.append(channel)
+
+    select = DankChannelSelect(
+        author_id=7,
+        on_pick=on_pick,
+        placeholder="Choose caption output",
+        channel_types=[discord.ChannelType.text],
+    )
+    select._values = [partial_channel]
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=7),
+        guild=None,
+    )
+
+    asyncio.run(select.callback(interaction))
+
+    assert picked == [real_channel]
 
 
 def test_general_live_captions_reuse_single_hardened_receiver_owner() -> None:
