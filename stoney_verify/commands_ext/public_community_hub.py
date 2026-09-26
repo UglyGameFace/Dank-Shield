@@ -2203,8 +2203,8 @@ class SessionControlView(_OwnedView):
 
         await _followup(
             interaction,
-            "✅ Live Captions started. Each participant must press **Caption My Voice** before Dank Shield will route "
-            "their isolated speaker audio into transcription. Audio is not saved by Dank Shield.",
+            "✅ Live Captions started. Each participant must press **Caption My Voice** before their isolated speaker "
+            "audio is sent to **OpenAI's transcription API** for speech-to-text. Dank Shield itself does not save the audio.",
         )
 
     @discord.ui.button(label="End Session", emoji="🛑", style=discord.ButtonStyle.danger, custom_id="dank:hub:manage:end:v1", row=1)
@@ -2409,8 +2409,9 @@ class CommunitySessionPublicView(discord.ui.View):
         await _followup(
             interaction,
             (
-                "✅ Your voice is opted into this session's Live Captions. Dank Shield will keep your Discord audio "
-                "separate from other speakers and process it only while captions are running."
+                "✅ Your voice is opted into this session's Live Captions. Dank Shield keeps your Discord audio "
+                "separate from other speakers and sends your opted-in audio to **OpenAI's transcription API** for "
+                "speech-to-text while captions are running. Dank Shield itself does not save the audio."
             )
             if enabled
             else "Live Captions are off for your voice. Your speaker consent was cleared immediately.",
