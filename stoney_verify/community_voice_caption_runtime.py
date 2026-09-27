@@ -11,6 +11,7 @@ Audio is never persisted by Dank Shield.
 import asyncio
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -46,6 +47,10 @@ class CaptionRuntimeState:
     engine: CaptionEngine
     scope_kind: str = "community_hub"
     soak_test: bool = False
+    receive_recoveries: int = 0
+    receive_recovery_failures: int = 0
+    last_receive_recovery_reason: str = ""
+    last_receive_recovery_at: float = 0.0
 
 
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -89,6 +94,8 @@ class CommunityVoiceCaptionManager:
         # Per-user spoken-language hints are memory-only, like caption consent.
         # Empty/missing means Gemini automatic multilingual detection.
         self._user_language_hints: dict[int, str] = {}
+        self._receive_probe_tasks: dict[tuple[str, int], asyncio.Task[Any]] = {}
+        self._receive_recovery_locks: dict[str, asyncio.Lock] = {}
         self._lock = asyncio.Lock()
         self.max_active_guilds = _env_int(
             "DANK_COMMUNITY_CAPTION_MAX_ACTIVE_GUILDS", 4, 1, 100
@@ -157,6 +164,14 @@ class CommunityVoiceCaptionManager:
             "provider_fallbacks": int(getattr(state.engine.transcriber, "fallback_count", 0) or 0),
             "provider_live_connections": int(getattr(state.engine.transcriber, "live_connections", 0) or 0),
             "provider_live_reconnects": int(getattr(state.engine.transcriber, "live_reconnects", 0) or 0),
+            "receive_recoveries": int(state.receive_recoveries),
+            "receive_recovery_failures": int(state.receive_recovery_failures),
+            "last_receive_recovery_reason": str(state.last_receive_recovery_reason or ""),
+            "last_receive_recovery_age_seconds": (
+                max(0.0, time.monotonic() - float(state.last_receive_recovery_at))
+                if state.last_receive_recovery_at
+                else None
+            ),
             "language_hint_mismatches": int(getattr(state.engine.transcriber, "language_hint_mismatches", 0) or 0),
             "language_codes": list(getattr(state.engine.transcriber, "language_codes", []) or []),
             "output_mode": str(getattr(state.engine, "output_mode", "original") or "original"),
@@ -211,6 +226,212 @@ class CommunityVoiceCaptionManager:
                         uid,
                     )
         return code
+
+    def _schedule_receive_probe(self, session_id: str, user_id: int) -> None:
+        sid = str(session_id)
+        uid = int(user_id)
+        key = (sid, uid)
+
+        existing = self._receive_probe_tasks.get(key)
+        if existing is not None and not existing.done():
+            return
+
+        state = self._sessions.get(sid)
+        if state is None or not state.bridge.is_opted_in(uid):
+            return
+
+        baseline = state.bridge.health.snapshot()
+        expected_voice_client = state.voice_client
+        task = asyncio.create_task(
+            self._verify_receive_after_speaking(
+                sid,
+                uid,
+                expected_voice_client,
+                baseline,
+            ),
+            name=f"live-captions-receive-probe:{sid}:{uid}",
+        )
+        self._receive_probe_tasks[key] = task
+
+        def _done(done: asyncio.Task[Any]) -> None:
+            if self._receive_probe_tasks.get(key) is done:
+                self._receive_probe_tasks.pop(key, None)
+            try:
+                done.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                log.exception(
+                    "Live Captions receive probe failed session=%s user=%s",
+                    sid,
+                    uid,
+                )
+
+        task.add_done_callback(_done)
+
+    async def _verify_receive_after_speaking(
+        self,
+        session_id: str,
+        user_id: int,
+        expected_voice_client: Any,
+        baseline: dict[str, int],
+    ) -> None:
+        # A real Discord speech burst produces many 20ms RTP/PCM frames. Give
+        # the media path enough time to advance before deciding it is stalled.
+        await asyncio.sleep(2.5)
+
+        sid = str(session_id)
+        uid = int(user_id)
+        state = self._sessions.get(sid)
+        if (
+            state is None
+            or state.voice_client is not expected_voice_client
+            or not state.bridge.is_opted_in(uid)
+        ):
+            return
+
+        current = state.bridge.health.snapshot()
+        frames_delta = int(current.get("frames_seen") or 0) - int(
+            baseline.get("frames_seen") or 0
+        )
+        if frames_delta > 0:
+            return
+
+        connection = voice_receive_connection_diagnostics(state.voice_client)
+        if not bool(connection.get("reader_listening")):
+            reason = "Discord signaled an opted-in speaker, but the receive reader stopped before PCM arrived."
+        elif not bool(connection.get("dave_session_ready")):
+            # An MLS/DAVE transition can legitimately pause media briefly. Let
+            # the next speaking signal re-check instead of forcing a reconnect
+            # while the session is still negotiating.
+            return
+        elif int(connection.get("mapped_ssrcs") or 0) <= 0:
+            return
+        else:
+            raw_delta = int(current.get("raw_udp_packets") or 0) - int(
+                baseline.get("raw_udp_packets") or 0
+            )
+            reason = (
+                "Discord signaled an opted-in speaker but no PCM arrived "
+                f"after 2.5s (UDP delta={max(0, raw_delta)})."
+            )
+
+        await self._recover_receive_transport(
+            sid,
+            expected_voice_client=expected_voice_client,
+            reason=reason,
+        )
+
+    async def _recover_receive_transport(
+        self,
+        session_id: str,
+        *,
+        expected_voice_client: Any,
+        reason: str,
+    ) -> bool:
+        sid = str(session_id)
+        lock = self._receive_recovery_locks.setdefault(sid, asyncio.Lock())
+
+        async with lock:
+            state = self._sessions.get(sid)
+            if state is None or state.voice_client is not expected_voice_client:
+                return False
+
+            now = time.monotonic()
+            if (
+                state.last_receive_recovery_at
+                and now - state.last_receive_recovery_at < 20.0
+            ):
+                return False
+            if state.receive_recoveries >= 2:
+                state.last_receive_recovery_reason = (
+                    "Automatic receive recovery limit reached; stop/start captions for a fresh session."
+                )
+                return False
+
+            guild = self.bot.get_guild(state.guild_id)
+            voice_channel = (
+                guild.get_channel(state.voice_channel_id)
+                if guild is not None
+                else None
+            )
+            if not isinstance(voice_channel, discord.VoiceChannel):
+                state.receive_recovery_failures += 1
+                state.last_receive_recovery_reason = (
+                    "Receive recovery could not resolve the configured voice channel."
+                )
+                return False
+
+            opted_users = tuple(state.bridge.opted_in_user_ids())
+            old_voice_client = state.voice_client
+            old_bridge = state.bridge
+            old_bridge.set_speaking_callback(None)
+
+            log.warning(
+                "Live Captions receive transport stalled; rebuilding voice receive session=%s guild=%s channel=%s reason=%s",
+                sid,
+                state.guild_id,
+                state.voice_channel_id,
+                reason,
+            )
+
+            try:
+                disconnect_receive_client(old_voice_client)
+                try:
+                    if getattr(old_voice_client, "is_connected", lambda: False)():
+                        await old_voice_client.disconnect(force=True)
+                except Exception:
+                    log.warning(
+                        "Live Captions old voice transport disconnect failed during recovery session=%s",
+                        sid,
+                        exc_info=True,
+                    )
+
+                loop = asyncio.get_running_loop()
+                new_bridge = PerSpeakerFrameBridge(loop, state.engine.submit)
+                for uid in opted_users:
+                    new_bridge.opt_in(uid)
+                new_bridge.set_speaking_callback(
+                    lambda uid, _sid=sid: self._schedule_receive_probe(_sid, uid)
+                )
+
+                new_voice_client = await connect_receive_client(
+                    voice_channel,
+                    new_bridge,
+                )
+            except Exception as exc:
+                state.receive_recovery_failures += 1
+                state.last_receive_recovery_at = time.monotonic()
+                state.last_receive_recovery_reason = (
+                    f"Receive transport recovery failed: {type(exc).__name__}: {str(exc)[:180]}"
+                )
+                log.exception(
+                    "Live Captions receive transport recovery failed session=%s",
+                    sid,
+                )
+                return False
+
+            state.bridge = new_bridge
+            state.voice_client = new_voice_client
+            state.receive_recoveries += 1
+            state.last_receive_recovery_at = time.monotonic()
+            state.last_receive_recovery_reason = reason
+            log.warning(
+                "Live Captions receive transport recovered session=%s guild=%s recoveries=%s",
+                sid,
+                state.guild_id,
+                state.receive_recoveries,
+            )
+            return True
+
+    def _cancel_receive_probes(self, session_id: str) -> None:
+        sid = str(session_id)
+        for key, task in tuple(self._receive_probe_tasks.items()):
+            if key[0] != sid:
+                continue
+            self._receive_probe_tasks.pop(key, None)
+            if not task.done():
+                task.cancel()
 
     async def start_server(
         self,
@@ -408,6 +629,9 @@ class CommunityVoiceCaptionManager:
             )
             self._sessions[sid] = state
             self._guild_owner[guild_id] = sid
+            bridge.set_speaking_callback(
+                lambda uid, _sid=sid: self._schedule_receive_probe(_sid, uid)
+            )
             engine.start()
             return state
 
@@ -444,6 +668,9 @@ class CommunityVoiceCaptionManager:
             if self._guild_owner.get(state.guild_id) == sid:
                 self._guild_owner.pop(state.guild_id, None)
 
+        self._cancel_receive_probes(sid)
+        self._receive_recovery_locks.pop(sid, None)
+        state.bridge.set_speaking_callback(None)
         state.bridge.clear_consent()
         try:
             await state.engine.close()
