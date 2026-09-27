@@ -622,15 +622,12 @@ class _GeminiLiveSpeakerSession:
                 "setup": {
                     "model": f"models/{self.owner.model}",
                     "generationConfig": {"responseModalities": ["TEXT"]},
-                    # Hybrid VAD: Google detects speech start with its prefix
-                    # buffer; Dank Shield sends audioStreamEnd at our isolated
-                    # per-speaker silence boundary.
+                    # Discord has already isolated this speaker and the local
+                    # segmenter owns the end-of-utterance boundary. Keep Gemini
+                    # in documented manual-VAD mode while still streaming every
+                    # PCM frame as it arrives.
                     "realtimeInputConfig": {
-                        "automaticActivityDetection": {
-                            "disabled": False,
-                            "prefixPaddingMs": 100,
-                            "silenceDurationMs": 1500,
-                        }
+                        "automaticActivityDetection": {"disabled": True}
                     },
                     "inputAudioTranscription": transcription_config,
                 }
@@ -696,7 +693,14 @@ class _GeminiLiveSpeakerSession:
             pcm16 = self._resampler.feed(pcm48_stereo)
             if not pcm16:
                 return
-            self.utterance_active = True
+            if not self.utterance_active:
+                # Manual VAD has no server-side pre-speech buffer. Signal the
+                # turn before the first streamed PCM chunk so the first syllable
+                # is part of the same activity window.
+                self._clear_final_queue()
+                await ws.send_json({"realtimeInput": {"activityStart": {}}})
+                self.owner.activity_starts += 1
+                self.utterance_active = True
             await ws.send_json(
                 {
                     "realtimeInput": {
@@ -720,8 +724,8 @@ class _GeminiLiveSpeakerSession:
                     provider="gemini-live",
                     model=self.owner.model,
                 )
-            await ws.send_json({"realtimeInput": {"audioStreamEnd": True}})
-            self.owner.audio_stream_ends += 1
+            await ws.send_json({"realtimeInput": {"activityEnd": {}}})
+            self.owner.activity_ends += 1
 
         try:
             result = await asyncio.wait_for(
@@ -755,7 +759,8 @@ class _GeminiLiveSpeakerSession:
         """Compatibility path for tests/repair tooling, not the production path."""
 
         # Replay at 20 ms cadence instead of blasting buffered audio into a Live
-        # endpoint. Production CaptionEngine streams frames as they arrive.
+        # endpoint. Production CaptionEngine streams frames as they arrive and
+        # uses the same activityStart/activityEnd manual-VAD contract.
         frame_bytes = int(PCM_SAMPLE_RATE * PCM_CHANNELS * PCM_SAMPLE_WIDTH * 0.02)
         for offset in range(0, len(pcm48_stereo), frame_bytes):
             await self.stream_pcm(pcm48_stereo[offset : offset + frame_bytes])
@@ -805,7 +810,8 @@ class GeminiLiveTranscriber:
         self.live_reconnects = 0
         self.audio_chunks_sent = 0
         self.audio_bytes_sent = 0
-        self.audio_stream_ends = 0
+        self.activity_starts = 0
+        self.activity_ends = 0
         self.interim_transcript_events = 0
         self.final_transcript_events = 0
         self.language_hint_mismatches = 0
