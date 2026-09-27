@@ -50,7 +50,9 @@ def test_live_captions_are_discoverable_from_community_hub_home_and_session_deta
     assert "live_captions_enabled" in source
     assert "voice_receive_capability" in source
     assert "/captions → My Language" in source
-    assert "hint applies only to your voice" in source
+    assert "Auto-Caption My Voice" in source
+    assert "remembered consent" in source
+    assert "per server" in source
     assert "user_id: int," in source
     assert "int(user_id) in {" in source
     assert 'membership.get("user_id")' not in source
