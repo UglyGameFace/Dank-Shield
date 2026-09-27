@@ -803,6 +803,11 @@ class GeminiLiveTranscriber:
         self._http_session: Optional[aiohttp.ClientSession] = None
         self.live_connections = 0
         self.live_reconnects = 0
+        self.audio_chunks_sent = 0
+        self.audio_bytes_sent = 0
+        self.audio_stream_ends = 0
+        self.interim_transcript_events = 0
+        self.final_transcript_events = 0
         self.language_hint_mismatches = 0
         self.fallback_count = 0
         if not self.api_key:
@@ -895,14 +900,20 @@ class GeminiLiveTranscriber:
             status = int(error.get("code") or 0)
             raise _gemini_transcription_error(status, json.dumps({"error": error}))
 
-    async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
-        uid = int(segment.user_id)
-        self._last_audio_rms_dbfs[uid] = pcm16_rms_dbfs(segment.pcm)
+    def _session_for_user(self, user_id: int) -> _GeminiLiveSpeakerSession:
+        uid = int(user_id)
         session = self._sessions.get(uid)
         if session is None:
             session = _GeminiLiveSpeakerSession(self, uid)
             self._sessions[uid] = session
-        result = await session.transcribe(segment.pcm)
+        return session
+
+    def _validate_result(
+        self,
+        user_id: int,
+        result: TranscriptResult,
+    ) -> TranscriptResult:
+        uid = int(user_id)
         if result.language_code:
             self._last_detected_language_code[uid] = result.language_code
 
@@ -913,7 +924,9 @@ class GeminiLiveTranscriber:
                 for code in expected_codes
                 if str(code).strip()
             }
-            detected_family = str(result.language_code).split("-", 1)[0].casefold()
+            detected_family = (
+                str(result.language_code).split("-", 1)[0].casefold()
+            )
             if detected_family and detected_family not in expected_families:
                 self.language_hint_mismatches += 1
                 return TranscriptResult(
@@ -924,6 +937,33 @@ class GeminiLiveTranscriber:
                     language_code=result.language_code,
                 )
         return result
+
+    async def stream_frame(self, frame: SpeakerPCMFrame) -> None:
+        uid = int(frame.user_id)
+        self._last_audio_rms_dbfs[uid] = pcm16_rms_dbfs(frame.pcm)
+        session = self._session_for_user(uid)
+        await session.stream_pcm(frame.pcm)
+
+    async def finish_segment(self, segment: CaptionSegment) -> TranscriptResult:
+        uid = int(segment.user_id)
+        self._last_audio_rms_dbfs[uid] = pcm16_rms_dbfs(segment.pcm)
+        session = self._session_for_user(uid)
+        result = await session.finalize()
+        return self._validate_result(uid, result)
+
+    async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
+        """Compatibility path for tests/repair callers.
+
+        Production CaptionEngine streams each Discord PCM frame immediately and
+        calls finish_segment() only when the local speech boundary closes.
+        """
+
+        uid = int(segment.user_id)
+        self._last_audio_rms_dbfs[uid] = pcm16_rms_dbfs(segment.pcm)
+        session = self._session_for_user(uid)
+        result = await session.transcribe_buffered(segment.pcm)
+        return self._validate_result(uid, result)
+
 
     async def close_user(self, user_id: int) -> None:
         uid = int(user_id)
