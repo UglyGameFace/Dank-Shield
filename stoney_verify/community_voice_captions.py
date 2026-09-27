@@ -155,10 +155,15 @@ class SpeechPreservingSegmenter:
         silence_gap_seconds: float = 0.75,
         max_segment_seconds: float = 8.0,
         hard_flush_on_max: bool = True,
+        idle_flush_grace_seconds: float = 0.0,
     ) -> None:
         self.silence_gap_seconds = max(0.35, min(2.0, float(silence_gap_seconds)))
         self.max_segment_seconds = max(2.0, min(15.0, float(max_segment_seconds)))
         self.hard_flush_on_max = bool(hard_flush_on_max)
+        self.idle_flush_grace_seconds = max(
+            0.0,
+            min(0.75, float(idle_flush_grace_seconds)),
+        )
         self._buffers: dict[int, _SpeakerBuffer] = {}
 
     @property
@@ -252,10 +257,11 @@ class SpeechPreservingSegmenter:
     def flush_idle(self, now: Optional[float] = None) -> list[CaptionSegment]:
         current = time.monotonic() if now is None else float(now)
         ready: list[CaptionSegment] = []
+        idle_threshold = self.silence_gap_seconds + self.idle_flush_grace_seconds
         for user_id, buf in list(self._buffers.items()):
             if not buf.chunks:
                 continue
-            if current - buf.last_frame_at >= self.silence_gap_seconds:
+            if current - buf.last_frame_at >= idle_threshold:
                 segment = self._flush_user(user_id)
                 if segment is not None:
                     ready.append(segment)
@@ -1307,6 +1313,11 @@ class CaptionEngine:
         )
         self.segmenter = SpeechPreservingSegmenter(
             hard_flush_on_max=not realtime_turn_streaming,
+            # Give a late Discord packet a brief chance to arrive before an
+            # idle-only flush. If it does arrive, the RTP clock can distinguish
+            # transport jitter from genuine media silence. Buffered callers keep
+            # their historical zero-grace behavior.
+            idle_flush_grace_seconds=0.25 if realtime_turn_streaming else 0.0,
         )
         self.low_confidence_threshold = max(0.0, min(1.0, float(low_confidence_threshold)))
         self.unclear_threshold = max(0.0, min(1.0, float(unclear_threshold)))
