@@ -536,15 +536,20 @@ class _GeminiLiveSpeakerSession:
 
         if len(b) < 8:
             stable = a == b
+        elif a == b:
+            stable = True
         else:
             similarity = SequenceMatcher(None, a, b).ratio()
-            shorter, longer = sorted((a, b), key=len)
-            prefix_stable = bool(
-                longer.startswith(shorter)
-                and len(shorter) >= 8
-                and len(shorter) / max(1, len(longer)) >= 0.80
+            growing_hypothesis = bool(
+                b.startswith(a)
+                and len(a) >= 8
+                and len(a) / max(1, len(b)) >= 0.80
             )
-            stable = similarity >= 0.90 or prefix_stable
+            small_revision = bool(
+                similarity >= 0.94
+                and len(b) >= int(len(a) * 0.95)
+            )
+            stable = growing_hypothesis or small_revision
         if not stable:
             return None
 
