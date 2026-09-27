@@ -878,43 +878,203 @@ async def build_server_live_captions_embed(
     return embed
 
 
-class CaptionLanguageHintModal(discord.ui.Modal):
-    def __init__(self, *, owner_id: int, current_hint: str) -> None:
-        super().__init__(title="My Caption Language", timeout=300)
-        self.owner_id = int(owner_id)
-        self.language = discord.ui.TextInput(
-            label="Spoken language",
-            placeholder="Auto, English, Spanish, en-US, fr-FR…",
-            default=str(current_hint or "Auto")[:35],
-            required=True,
-            max_length=35,
-        )
-        self.add_item(self.language)
 
-    async def on_submit(self, interaction: discord.Interaction) -> None:
+class CaptionLanguageGroupSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, current_hint: str) -> None:
+        self.owner_id = int(owner_id)
+        self.current_hint = str(current_hint or "")
+        current_group = _caption_language_group_for_code(self.current_hint)
+        options = [
+            discord.SelectOption(
+                label="Auto · All Supported Languages",
+                value="__auto__",
+                description="Automatic detection + code-switching across Gemini's supported languages.",
+                emoji="✨",
+                default=not bool(self.current_hint),
+            )
+        ]
+        for key, group in _CAPTION_LANGUAGE_GROUPS.items():
+            options.append(
+                discord.SelectOption(
+                    label=str(group["label"]),
+                    value=key,
+                    description=str(group["description"])[:100],
+                    emoji=str(group["emoji"]),
+                    default=key == current_group,
+                )
+            )
+        super().__init__(
+            placeholder="Choose Auto or a language group",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="dank:captions:server:language_group:v1",
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
         if int(interaction.user.id) != self.owner_id:
             return await interaction.response.send_message(
                 "Open your own /captions panel to set your spoken language.",
                 ephemeral=True,
             )
-        try:
-            code = _normalize_personal_language_hint(self.language.value)
-        except ValueError as exc:
-            return await interaction.response.send_message(
-                f"❌ {exc}",
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
+
+        selected = str(self.values[0])
+        manager = ensure_community_voice_caption_manager(interaction.client)
+        if selected == "__auto__":
+            await _defer_update(interaction)
+            await manager.set_user_language_hint(int(interaction.user.id), "")
+            await _edit_original(
+                interaction,
+                embed=await build_server_live_captions_embed(interaction),
+                view=ServerLiveCaptionsView(self.owner_id),
+            )
+            return await _followup(
+                interaction,
+                "✅ Your caption language is now **Auto · all supported languages**. Gemini can detect supported languages and code-switching for your voice.",
             )
 
+        if selected not in _CAPTION_LANGUAGE_GROUPS:
+            return await interaction.response.send_message(
+                "❌ That language group is no longer available. Reopen /captions and try again.",
+                ephemeral=True,
+            )
+
+        await _defer_update(interaction)
+        await _edit_original(
+            interaction,
+            embed=_caption_language_picker_embed(
+                current_hint=self.current_hint,
+                group_key=selected,
+            ),
+            view=CaptionLanguageChoiceView(
+                self.owner_id,
+                selected,
+                self.current_hint,
+            ),
+        )
+
+
+class CaptionLanguageGroupView(_OwnedView):
+    def __init__(self, owner_id: int, current_hint: str) -> None:
+        super().__init__(owner_id)
+        self.add_item(CaptionLanguageGroupSelect(owner_id, current_hint))
+
+    @discord.ui.button(
+        label="Back",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank:captions:server:language_groups_back:v1",
+        row=1,
+    )
+    async def back(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _edit_original(
+            interaction,
+            embed=await build_server_live_captions_embed(interaction),
+            view=ServerLiveCaptionsView(self.owner_id),
+        )
+
+
+class CaptionLanguageChoiceSelect(discord.ui.Select):
+    def __init__(
+        self,
+        owner_id: int,
+        group_key: str,
+        current_hint: str,
+    ) -> None:
+        self.owner_id = int(owner_id)
+        self.group_key = str(group_key)
+        group = _CAPTION_LANGUAGE_GROUPS[self.group_key]
+        options = [
+            discord.SelectOption(
+                label=label,
+                value=code,
+                description=f"Use {code} as your personal Gemini recognition hint.",
+                default=str(current_hint or "") == code,
+            )
+            for label, code in group["options"]
+        ]
+        super().__init__(
+            placeholder=f"Choose from {group['label']}",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id=f"dank:captions:server:language_choice:{self.group_key}:v1"[:100],
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id:
+            return await interaction.response.send_message(
+                "Open your own /captions panel to set your spoken language.",
+                ephemeral=True,
+            )
+
+        code = str(self.values[0])
+        if code not in _SUPPORTED_CAPTION_LANGUAGE_CODES:
+            return await interaction.response.send_message(
+                "❌ That language is no longer in the supported transcription list.",
+                ephemeral=True,
+            )
+
+        await _defer_update(interaction)
         manager = ensure_community_voice_caption_manager(interaction.client)
         await manager.set_user_language_hint(int(interaction.user.id), code)
-        await interaction.response.send_message(
+        await _edit_original(
+            interaction,
+            embed=await build_server_live_captions_embed(interaction),
+            view=ServerLiveCaptionsView(self.owner_id),
+        )
+        await _followup(
+            interaction,
             (
                 f"✅ Your Live Captions language is now **{_personal_language_label(code)}**. "
-                "If you are already opted in, only your Gemini speaker session reconnects with the new hint."
+                "Only your Gemini speaker session reconnects with this accuracy hint."
             ),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
+class CaptionLanguageChoiceView(_OwnedView):
+    def __init__(
+        self,
+        owner_id: int,
+        group_key: str,
+        current_hint: str,
+    ) -> None:
+        super().__init__(owner_id)
+        self.current_hint = str(current_hint or "")
+        self.add_item(
+            CaptionLanguageChoiceSelect(
+                owner_id,
+                group_key,
+                current_hint,
+            )
+        )
+
+    @discord.ui.button(
+        label="Language Groups",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank:captions:server:language_choices_back:v1",
+        row=1,
+    )
+    async def back(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _edit_original(
+            interaction,
+            embed=_caption_language_picker_embed(current_hint=self.current_hint),
+            view=CaptionLanguageGroupView(self.owner_id, self.current_hint),
         )
 
 
@@ -1102,11 +1262,11 @@ class ServerLiveCaptionsView(_OwnedView):
         _ = button
         manager = ensure_community_voice_caption_manager(interaction.client)
         current = manager.user_language_hint(int(interaction.user.id))
-        await interaction.response.send_modal(
-            CaptionLanguageHintModal(
-                owner_id=int(interaction.user.id),
-                current_hint=current,
-            )
+        await _defer_update(interaction)
+        await _edit_original(
+            interaction,
+            embed=_caption_language_picker_embed(current_hint=current),
+            view=CaptionLanguageGroupView(int(interaction.user.id), current),
         )
 
     @discord.ui.button(
