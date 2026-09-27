@@ -600,8 +600,8 @@ def _hub_embed() -> discord.Embed:
     embed.add_field(
         name="Live Captions",
         value=(
-            "Optional per-speaker voice-to-text for Community Hub voice sessions. Each participant controls whether "
-            "their own isolated voice may be transcribed; Dank Shield never opts a speaker in automatically."
+            "Optional per-speaker voice-to-text for Community Hub voice sessions. Each participant explicitly controls "
+            "their own isolated voice. If they enabled remembered auto-caption for this server, Dank Shield restores that consent automatically when they join an active captioned session."
         ),
         inline=False,
     )
@@ -641,7 +641,7 @@ def _live_captions_overview_embed(
         description=(
             f"{status}\n\n"
             "Live Captions keep each Discord speaker on a separate audio stream before speech-to-text. "
-            "A participant must explicitly press **Caption My Voice** before their audio can enter transcription."
+            "A participant explicitly enables **Auto-Caption My Voice** once for this server; that remembered consent is then restored automatically in ordinary or Community Hub caption sessions until the member turns it off."
         ),
         color=discord.Color.blurple(),
     )
@@ -687,8 +687,8 @@ def _live_captions_overview_embed(
         value=(
             "1. Join or create a Community Hub gaming session.\n"
             "2. Host/co-host/staff opens **Manage Session → Live Captions**.\n"
-            "3. Each speaker who wants transcription presses **Caption My Voice** on the session card/details.\n"
-            "4. **/captions → My Language** optionally gives Gemini a personal accuracy hint such as English; Auto still supports all listed languages and code-switching. The hint applies only to that speaker and is shared with Community Hub captions.\n"
+            "3. Each speaker explicitly enables **Auto-Caption My Voice** once for this server. If already enabled, Dank Shield restores it automatically for the active session.\n"
+            "4. **/captions → My Language** saves a per-server accuracy hint such as English; Auto still supports all listed languages and code-switching.\n"
             "5. Captions appear in the session discussion destination; the server's shared caption setting controls Original, English, or Original + English text."
         ),
         inline=False,
@@ -696,11 +696,10 @@ def _live_captions_overview_embed(
     embed.add_field(
         name="Privacy",
         value=(
-            "Only opted-in speakers are routed to transcription. Opted-in audio is streamed to Google Gemini Live Transcribe. "
-            "Auto language detection remains available to every speaker; an optional **My Language** hint is per-speaker and does not change anyone else's recognition. "
-            "If English output is enabled, only finalized transcript text is sent for translation, not the audio again. "
-            "This deployment uses Gemini's Free Tier, where Google states submitted content may be used to improve its products. "
-            "Dank Shield itself does not save the audio, and stopping captions clears speaker consent."
+            "Only members who explicitly enabled auto-caption for this server are routed to transcription. That consent and the optional **My Language** hint are remembered per server; raw audio is never persisted. "
+            "Leaving the captioned VC or stopping the session immediately clears active audio admission and buffered/in-flight audio, while the remembered preference remains until the member turns it off. "
+            "Opted-in audio is streamed to Google Gemini Live Transcribe. If English output is enabled, only finalized transcript text is translated. "
+            "This deployment uses Gemini's Free Tier, where Google states Free Tier submitted content may be used to improve its products."
         ),
         inline=False,
     )
@@ -739,13 +738,11 @@ async def _toggle_live_caption_consent(
 
     if enabled:
         return (
-            "✅ Your voice is opted into this session's Live Captions. Dank Shield keeps your Discord audio separate "
-            "from other speakers and streams your opted-in audio to **Google Gemini Live Transcribe** for speech-to-text. "
-            "Gemini automatically detects its supported languages and code-switching. For better recognition when you know what you will speak, use **/captions → My Language**; that hint applies only to your voice and also applies here in Community Hub. "
-            "If this server enables English output, only finalized transcript text is translated; the audio is not submitted a second time for translation. This deployment uses Gemini's **Free Tier**, where Google states submitted content may be used to improve its products. "
-            "Dank Shield itself does not save the audio."
+            "✅ **Auto-caption is ON and remembered for this server.** Dank Shield keeps your Discord audio separate from other speakers and automatically restores your consent when you join an active ordinary or Community Hub captioned VC. "
+            "Your saved **/captions → My Language** choice is reused automatically. Opted-in audio is streamed to **Google Gemini Live Transcribe**; if English output is enabled, only finalized transcript text is translated. "
+            "This deployment uses Gemini's **Free Tier**, where Google states Free Tier submitted content may be used to improve its products. Dank Shield does not save the audio. Use the caption control again to revoke remembered consent."
         )
-    return "Live Captions are off for your voice. Your speaker consent was cleared immediately."
+    return "✅ Auto-caption is OFF for this server. Your remembered consent was revoked and active/buffered/in-flight caption audio was cleared immediately."
 
 class StartSessionModal(discord.ui.Modal, title="Start a Gaming Session"):
     game = discord.ui.TextInput(
@@ -2161,7 +2158,7 @@ class SessionDetailView(_OwnedView):
         await ensure_community_hub_runtime(interaction.client).refresh_session_card(session)
         await _followup(interaction, "✅ Ready." if new_ready else "Ready status cleared.")
 
-    @discord.ui.button(label="Caption My Voice", emoji="📝", style=discord.ButtonStyle.secondary, custom_id="dank:hub:detail:captionme:v1", row=1)
+    @discord.ui.button(label="Auto-Caption My Voice", emoji="📝", style=discord.ButtonStyle.secondary, custom_id="dank:hub:detail:captionme:v1", row=1)
     async def caption_me(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_ephemeral(interaction)
@@ -2602,7 +2599,7 @@ class CommunitySessionPublicView(discord.ui.View):
         )
 
 
-    @discord.ui.button(label="Caption My Voice", emoji="📝", style=discord.ButtonStyle.secondary, custom_id="dank:hub:public:captionme:v1", row=1)
+    @discord.ui.button(label="Auto-Caption My Voice", emoji="📝", style=discord.ButtonStyle.secondary, custom_id="dank:hub:public:captionme:v1", row=1)
     async def caption_me(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_ephemeral(interaction)
