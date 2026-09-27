@@ -615,6 +615,10 @@ class _GeminiLiveSpeakerSession:
         async with self._connect_lock:
             current = self.ws
             pending_finals = bool(self._pending_finals)
+            receiver_healthy = bool(
+                self._receiver_task is not None
+                and not self._receiver_task.done()
+            )
             expired = bool(
                 self.connected_at
                 and time.monotonic() - self.connected_at
@@ -625,6 +629,7 @@ class _GeminiLiveSpeakerSession:
             if (
                 current is not None
                 and not current.closed
+                and receiver_healthy
                 and not expired
                 and not (
                     self.rotate_before_next
@@ -716,6 +721,10 @@ class _GeminiLiveSpeakerSession:
     async def _ensure_connected(self) -> aiohttp.ClientWebSocketResponse:
         ws = self.ws
         pending_finals = bool(self._pending_finals)
+        receiver_healthy = bool(
+            self._receiver_task is not None
+            and not self._receiver_task.done()
+        )
         expired = bool(
             self.connected_at
             and time.monotonic() - self.connected_at
@@ -728,7 +737,8 @@ class _GeminiLiveSpeakerSession:
             and not self.utterance_active
             and not pending_finals
         )
-        if ws is None or ws.closed or expired or rotate_now:
+        receiver_dead = bool(ws is not None and not ws.closed and not receiver_healthy)
+        if ws is None or ws.closed or expired or rotate_now or receiver_dead:
             if ws is not None:
                 self.owner.live_reconnects += 1
             await self._connect()
