@@ -83,7 +83,7 @@ def test_general_live_caption_setup_is_reachable_and_supports_existing_server_vc
 
 def test_member_live_caption_panel_exposes_dropdown_language_accuracy_control() -> None:
     labels = _labels(ServerLiveCaptionsView(7))
-    assert "Caption My Voice" in labels
+    assert "Auto-Caption My Voice" in labels
     assert "My Language" in labels
     assert "Refresh" in labels
 
@@ -487,6 +487,95 @@ def test_receive_transport_recovery_preserves_consent_with_fresh_bridge(monkeypa
     asyncio.run(_run())
 
 
+def test_remembered_auto_caption_restores_at_session_start() -> None:
+    async def _run() -> None:
+        manager = CommunityVoiceCaptionManager(SimpleNamespace())
+        state = SimpleNamespace(guild_id=1)
+        voice_channel = SimpleNamespace(
+            members=[
+                SimpleNamespace(id=7, bot=False),
+                SimpleNamespace(id=8, bot=False),
+                SimpleNamespace(id=9, bot=True),
+            ]
+        )
+        enabled = []
+
+        async def prefs(guild_id, user_id, *, refresh=False):
+            assert guild_id == 1
+            return {
+                "auto_opt_in": int(user_id) == 7,
+                "language_code": "en-US" if int(user_id) == 7 else "",
+            }
+
+        async def enable(state_arg, user_id, *, refresh_preferences=False):
+            assert state_arg is state
+            enabled.append(int(user_id))
+
+        manager.preferences_for_user = prefs
+        manager._enable_user_for_state = enable
+
+        restored = await manager._restore_auto_opt_ins(state, voice_channel)
+        assert restored == 1
+        assert enabled == [7]
+
+    asyncio.run(_run())
+
+
+def test_remembered_auto_caption_follows_target_voice_join_and_leave() -> None:
+    async def _run() -> None:
+        manager = CommunityVoiceCaptionManager(SimpleNamespace())
+        state = SimpleNamespace(guild_id=1, voice_channel_id=44)
+        manager._guild_owner[1] = "server:1"
+        manager._sessions["server:1"] = state
+        actions = []
+
+        async def prefs(guild_id, user_id, *, refresh=False):
+            return {"auto_opt_in": True, "language_code": "en-US"}
+
+        async def enable(state_arg, user_id, *, refresh_preferences=False):
+            actions.append(("enable", int(user_id)))
+
+        async def disable(state_arg, user_id):
+            actions.append(("disable", int(user_id)))
+
+        manager.preferences_for_user = prefs
+        manager._enable_user_for_state = enable
+        manager._disable_user_for_state = disable
+
+        guild = SimpleNamespace(id=1)
+        member = SimpleNamespace(id=7, bot=False, guild=guild)
+        empty = SimpleNamespace(channel=None)
+        target = SimpleNamespace(channel=SimpleNamespace(id=44))
+
+        await manager.handle_voice_state_update(member, empty, target)
+        await manager.handle_voice_state_update(member, target, empty)
+
+        assert actions == [("enable", 7), ("disable", 7)]
+
+    asyncio.run(_run())
+
+
+def test_auto_caption_preference_can_be_saved_while_no_session_is_running() -> None:
+    async def _run() -> None:
+        manager = CommunityVoiceCaptionManager(SimpleNamespace())
+        writes = []
+
+        async def write(guild_id, user_id, *, auto_opt_in=None, language_code=None):
+            writes.append((guild_id, user_id, auto_opt_in, language_code))
+            return {
+                "auto_opt_in": bool(auto_opt_in),
+                "language_code": "",
+                "storage_available": True,
+            }
+
+        manager._write_preferences = write
+        enabled = await manager.set_auto_caption_preference(1, 7, True)
+        assert enabled is True
+        assert writes == [(1, 7, True, None)]
+
+    asyncio.run(_run())
+
+
 def test_general_live_captions_reuse_single_hardened_receiver_owner() -> None:
     ui = _text(GENERAL_UI)
     runtime = _text(RUNTIME)
@@ -503,13 +592,32 @@ def test_general_live_captions_reuse_single_hardened_receiver_owner() -> None:
 
     assert "self._guild_owner" in runtime
     assert "self._user_language_hints" in runtime
+    assert "self._auto_opt_in" in runtime
+    assert "preferences_for_user" in runtime
+    assert "set_auto_caption_preference" in runtime
     assert "set_user_language_hint" in runtime
     assert "set_user_language_codes" in runtime
     assert "Another Live Captions session in this server already owns the voice receiver." in runtime
     assert '"caption_scope": "server"' in runtime
 
 
-def test_general_caption_scope_is_memory_only_and_collision_resistant() -> None:
+def test_live_caption_preferences_are_persisted_without_audio_persistence() -> None:
+    runtime = _text(RUNTIME)
+    events = (ROOT / "stoney_verify" / "events.py").read_text(encoding="utf-8")
+    profile = (ROOT / "stoney_verify" / "profile_card_service.py").read_text(encoding="utf-8")
+
+    assert 'LIVE_CAPTION_AUTO_OPT_IN_KEY = "live_captions_auto_opt_in"' in profile
+    assert 'LIVE_CAPTION_LANGUAGE_CODE_KEY = "live_captions_language_code"' in profile
+    assert "upsert_live_caption_preferences" in profile
+    assert "dank_profile_guild_settings" in profile
+    assert "handle_voice_state_update" in runtime
+    assert "caption_manager.handle_voice_state_update" in events
+    assert "_restore_auto_opt_ins(state, voice_channel)" in runtime
+    assert "prepare_user" in runtime
+    assert "Audio is never persisted by Dank Shield." in runtime
+
+
+def test_general_caption_session_scope_is_memory_only_and_collision_resistant() -> None:
     assert server_caption_scope_id(123456789) == "server:123456789"
     ui = _text(GENERAL_UI)
     assert "supabase" not in ui.casefold()
@@ -517,19 +625,23 @@ def test_general_caption_scope_is_memory_only_and_collision_resistant() -> None:
     assert "database" not in ui.casefold()
 
 
-def test_general_live_captions_require_staff_to_start_but_self_consent_only() -> None:
+def test_general_live_captions_require_staff_to_start_but_member_auto_consent_is_durable() -> None:
     ui = _text(GENERAL_UI)
+    runtime = _text(RUNTIME)
 
     assert "interaction_is_actual_guild_owner" in ui
     assert "interaction_has_administrator_authority" in ui
     assert "interaction_has_manage_guild_authority" in ui
     assert "Only the server owner, an administrator, or someone with Manage Server" in ui
 
-    assert 'label="Caption My Voice"' in ui
-    assert "int(interaction.user.id)" in ui
-    assert "target_voice_id" in ui
-    assert "Join <#{target_voice_id}> before opting your voice" in ui
-    assert "Nobody is transcribed automatically." in ui
+    assert 'label="Auto-Caption My Voice"' in ui
+    assert "set_auto_caption_preference" in ui
+    assert "remembered for this server" in ui
+    assert "restored automatically" in ui
+    assert "_restore_auto_opt_ins" in runtime
+    assert "handle_voice_state_update" in runtime
+    assert "_enable_user_for_state" in runtime
+    assert "raw audio and live audio buffers" in runtime
 
 
 def test_general_live_captions_keep_privacy_and_physical_source_limits_visible() -> None:
@@ -537,14 +649,12 @@ def test_general_live_captions_keep_privacy_and_physical_source_limits_visible()
 
     assert "Discord speakers stay isolated before transcription." in ui
     assert "My Language" in ui
-    assert "personal language hint" in ui
-    assert "Opting out immediately blocks new audio" in ui
+    assert "save a personal language hint" in ui
+    assert "remembered per server only after that member explicitly chooses them" in ui
+    assert "Turning auto-caption off immediately blocks new audio" in ui
     assert "Google Gemini's transcription API" in ui
-    assert "My Language" in ui
-    assert "defaults to Auto for all supported languages" in ui
-    assert "accuracy hint without changing anybody else's captions" in ui
     assert "finalized transcript text is translated" in ui
-    assert "Dank Shield itself does not save the audio." in ui
+    assert "does not save the audio" in ui
     assert "microphone already captures a TV, game audio, or another person" in ui
 
 
