@@ -703,6 +703,46 @@ async def build_server_live_captions_embed(
     return embed
 
 
+class CaptionLanguageHintModal(discord.ui.Modal):
+    def __init__(self, *, owner_id: int, current_hint: str) -> None:
+        super().__init__(title="My Caption Language", timeout=300)
+        self.owner_id = int(owner_id)
+        self.language = discord.ui.TextInput(
+            label="Spoken language",
+            placeholder="Auto, English, Spanish, en-US, fr-FR…",
+            default=str(current_hint or "Auto")[:35],
+            required=True,
+            max_length=35,
+        )
+        self.add_item(self.language)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id:
+            return await interaction.response.send_message(
+                "Open your own /captions panel to set your spoken language.",
+                ephemeral=True,
+            )
+        try:
+            code = _normalize_personal_language_hint(self.language.value)
+        except ValueError as exc:
+            return await interaction.response.send_message(
+                f"❌ {exc}",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+        manager = ensure_community_voice_caption_manager(interaction.client)
+        await manager.set_user_language_hint(int(interaction.user.id), code)
+        await interaction.response.send_message(
+            (
+                f"✅ Your Live Captions language is now **{_personal_language_label(code)}**. "
+                "If you are already opted in, only your Gemini speaker session reconnects with the new hint."
+            ),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
 class ServerLiveCaptionsView(_OwnedView):
     @discord.ui.button(
         label="Start / Stop Captions",
@@ -865,11 +905,33 @@ class ServerLiveCaptionsView(_OwnedView):
         if enabled:
             return await _followup(
                 interaction,
-                "✅ Your voice is opted in. Dank Shield keeps your Discord speaker stream separate and Gemini Live automatically detects its supported languages, including code-switching. If this server enables English output, only finalized transcript text is translated; the audio is not submitted a second time for translation. This deployment uses Gemini's Free Tier, where Google states submitted content may be used to improve its products. Dank Shield itself does not save the audio.",
+                "✅ Your voice is opted in. Dank Shield keeps your Discord speaker stream separate. **My Language** defaults to Auto for all supported languages; setting the language you actually speak gives Gemini an accuracy hint without changing anybody else's captions. If this server enables English output, only finalized transcript text is translated; the audio is not submitted a second time for translation. This deployment uses Gemini's Free Tier, where Google states submitted content may be used to improve its products. Dank Shield itself does not save the audio.",
             )
         await _followup(
             interaction,
             "✅ Your voice is opted out. New audio is blocked and your buffered/queued/in-flight caption audio was purged.",
+        )
+
+    @discord.ui.button(
+        label="My Language",
+        emoji="🌐",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank:captions:server:language:v1",
+        row=0,
+    )
+    async def my_language(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        manager = ensure_community_voice_caption_manager(interaction.client)
+        current = manager.user_language_hint(int(interaction.user.id))
+        await interaction.response.send_modal(
+            CaptionLanguageHintModal(
+                owner_id=int(interaction.user.id),
+                current_hint=current,
+            )
         )
 
     @discord.ui.button(
