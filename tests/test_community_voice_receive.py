@@ -18,6 +18,7 @@ from stoney_verify.community_voice_receive import (
     VOICE_RECV_DAVE_SOURCE,
     _VoiceRecvBenignNoiseFilter,
     _install_voice_recv_noise_filter,
+    _install_voice_recv_opus_plc_patch,
     _install_voice_recv_router_survival_patch,
     bundled_opus_library_path,
     ensure_opus_loaded,
@@ -267,6 +268,65 @@ def test_voice_receive_connection_diagnostics_report_dave_and_ssrc_state() -> No
         "reader_listening": True,
         "reader_error": "",
     }
+
+
+def test_opus_plc_recovers_one_isolated_corrupt_real_frame() -> None:
+    from discord.ext.voice_recv.opus import PacketDecoder
+
+    assert _install_voice_recv_opus_plc_patch() is True
+
+    delivered = []
+    bridge = PerSpeakerFrameBridge(_ImmediateLoop(), delivered.append)
+
+    def _corrupt_error() -> OpusError:
+        exc = OpusError.__new__(OpusError)
+        Exception.__init__(exc, "corrupted stream")
+        exc.code = -4
+        return exc
+
+    class _Codec:
+        def __init__(self) -> None:
+            self.real_attempts = 0
+
+        def decode(self, data, *, fec=False):
+            if data is None:
+                return b"plc-pcm"
+            self.real_attempts += 1
+            if self.real_attempts <= 2:
+                raise _corrupt_error()
+            return b"real-pcm"
+
+    fake = SimpleNamespace(
+        _decoder=_Codec(),
+        _buffer=SimpleNamespace(peek_next=lambda: None),
+        sink=SimpleNamespace(bridge=bridge),
+        ssrc=100,
+    )
+    packet = SimpleNamespace(decrypted_data=b"corrupt-opus")
+
+    recovered_packet, recovered_pcm = PacketDecoder._decode_packet(fake, packet)
+    assert recovered_packet is packet
+    assert recovered_pcm == b"plc-pcm"
+    assert bridge.health.opus_plc_recoveries == 1
+    assert bridge.health.opus_decode_drops == 0
+
+    # A second consecutive corrupt real frame must not turn into a long run of
+    # synthetic PLC audio. It falls through for the router survival patch to
+    # drop, preserving the existing fail-soft behavior.
+    try:
+        PacketDecoder._decode_packet(fake, packet)
+    except OpusError:
+        pass
+    else:
+        raise AssertionError("consecutive corrupt Opus frame must not be PLC-concealed")
+
+    assert bridge.health.opus_plc_recoveries == 1
+
+    # A successfully decoded real frame resets the consecutive-PLC guard.
+    decoded_packet, decoded_pcm = PacketDecoder._decode_packet(fake, packet)
+    assert decoded_packet is packet
+    assert decoded_pcm == b"real-pcm"
+    assert getattr(fake, "_dank_plc_consecutive", 99) == 0
 
 
 def test_router_drops_corrupt_opus_packet_without_stopping_reader() -> None:
