@@ -134,6 +134,179 @@ _CAPTION_LANGUAGE_ALIASES = {
 }
 
 
+# Discord String Selects support at most 25 options, so the complete Gemini
+# language set is split into human-readable groups. CI asserts exact coverage.
+_CAPTION_LANGUAGE_GROUPS: dict[str, dict[str, Any]] = {
+    "english_western_europe": {
+        "label": "English & Western Europe",
+        "emoji": "🌍",
+        "description": "English, French, German, Spanish, Portuguese, Nordic and nearby languages.",
+        "options": (
+            ("English (United States)", "en-US"),
+            ("English (Great Britain)", "en-GB"),
+            ("Catalan", "ca-ES"),
+            ("Danish", "da-DK"),
+            ("Dutch", "nl-NL"),
+            ("Finnish", "fi-FI"),
+            ("French", "fr-FR"),
+            ("Galician", "gl-ES"),
+            ("German", "de-DE"),
+            ("Icelandic", "is-IS"),
+            ("Italian", "it-IT"),
+            ("Maltese", "mt-MT"),
+            ("Norwegian", "nb-NO"),
+            ("Portuguese (Brazil)", "pt-BR"),
+            ("Portuguese (Portugal)", "pt-PT"),
+            ("Spanish (Latin America)", "es-419"),
+            ("Spanish (United States)", "es-US"),
+            ("Swedish", "sv-SE"),
+        ),
+    },
+    "eastern_europe": {
+        "label": "Central & Eastern Europe",
+        "emoji": "🗺️",
+        "description": "Slavic, Baltic, Balkan and neighboring European languages.",
+        "options": (
+            ("Belarusian", "be-BY"),
+            ("Bosnian", "bs-BA"),
+            ("Bulgarian", "bg-BG"),
+            ("Bulgarian (Aromanian)", "rup-BG"),
+            ("Croatian", "hr-HR"),
+            ("Czech", "cs-CZ"),
+            ("Estonian", "et-EE"),
+            ("Greek", "el-GR"),
+            ("Hungarian", "hu-HU"),
+            ("Latvian", "lv-LV"),
+            ("Lithuanian", "lt-LT"),
+            ("Macedonian", "mk-MK"),
+            ("Polish", "pl-PL"),
+            ("Romanian", "ro-RO"),
+            ("Russian", "ru-RU"),
+            ("Serbian", "sr-RS"),
+            ("Slovak", "sk-SK"),
+            ("Slovenian", "sl-SI"),
+            ("Ukrainian", "uk-UA"),
+        ),
+    },
+    "caucasus_central_asia": {
+        "label": "Caucasus & Central Asia",
+        "emoji": "🏔️",
+        "description": "Armenian, Georgian, Turkic and Central Asian languages.",
+        "options": (
+            ("Armenian", "hy-AM"),
+            ("Azerbaijani", "az-AZ"),
+            ("Georgian", "ka-GE"),
+            ("Kazakh", "kk-KZ"),
+            ("Kyrgyz", "ky-KG"),
+            ("Mongolian", "mn-MN"),
+            ("Tajik", "tg-TJ"),
+            ("Turkish", "tr-TR"),
+            ("Uzbek", "uz-UZ"),
+        ),
+    },
+    "middle_east_africa": {
+        "label": "Middle East & Africa",
+        "emoji": "🌍",
+        "description": "Arabic, Hebrew, Persian and supported African languages.",
+        "options": (
+            ("Afrikaans", "af-ZA"),
+            ("Amharic", "am-ET"),
+            ("Arabic (Egypt)", "ar-EG"),
+            ("Farsi", "fa-IR"),
+            ("Hausa", "ha-NG"),
+            ("Hebrew", "he-IL"),
+            ("Kabuverdianu", "kea-CV"),
+            ("Lingala", "ln-CD"),
+            ("Swahili (Kenya)", "sw-KE"),
+        ),
+    },
+    "south_asia": {
+        "label": "South Asia",
+        "emoji": "🌏",
+        "description": "Indian subcontinent languages and English (India).",
+        "options": (
+            ("Assamese", "as-IN"),
+            ("Bengali (Bangladesh)", "bn-BD"),
+            ("Bengali (India)", "bn-IN"),
+            ("English (India)", "en-IN"),
+            ("Gujarati", "gu-IN"),
+            ("Hindi", "hi-IN"),
+            ("Kannada", "kn-IN"),
+            ("Malayalam", "ml-IN"),
+            ("Marathi", "mr-IN"),
+            ("Nepali", "ne-NP"),
+            ("Oriya", "or-IN"),
+            ("Punjabi", "pa-IN"),
+            ("Punjabi (Gurmukhi script)", "pa-Guru-IN"),
+            ("Sindhi (Arabic script)", "sd-Arab-IN"),
+            ("Telugu", "te-IN"),
+        ),
+    },
+    "east_southeast_asia": {
+        "label": "East & Southeast Asia",
+        "emoji": "🌏",
+        "description": "Chinese, Japanese, Korean and Southeast Asian languages.",
+        "options": (
+            ("Burmese", "my-MM"),
+            ("Cantonese (Traditional)", "yue-Hant-HK"),
+            ("Cebuano", "ceb"),
+            ("Central Khmer", "km-KH"),
+            ("Filipino", "fil-PH"),
+            ("Indonesian", "id-ID"),
+            ("Japanese", "ja-JP"),
+            ("Javanese", "jv-ID"),
+            ("Korean", "ko-KR"),
+            ("Malay", "ms-MY"),
+            ("Mandarin Chinese (Simplified)", "cmn-Hans-CN"),
+            ("Thai", "th-TH"),
+            ("Vietnamese", "vi-VN"),
+        ),
+    },
+}
+
+
+def _caption_language_group_for_code(code: str) -> str:
+    target = str(code or "").strip()
+    for key, group in _CAPTION_LANGUAGE_GROUPS.items():
+        for _label, option_code in group["options"]:
+            if option_code == target:
+                return key
+    return ""
+
+
+def _caption_language_picker_embed(
+    *,
+    current_hint: str,
+    group_key: str = "",
+) -> discord.Embed:
+    if group_key:
+        group = _CAPTION_LANGUAGE_GROUPS[group_key]
+        description = (
+            f"Choose your spoken language from **{group['label']}**. "
+            "This accuracy hint applies only to your voice. Other speakers keep their own language settings."
+        )
+        title = f"🌐 My Caption Language · {group['label']}"
+    else:
+        description = (
+            "Choose **Auto** for Gemini's full supported multilingual/code-switching mode, "
+            "or choose a language group and then your spoken language for stronger recognition. "
+            "This setting affects only your voice."
+        )
+        title = "🌐 My Caption Language"
+
+    embed = discord.Embed(
+        title=title,
+        description=description,
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Current",
+        value=f"**{_personal_language_label(current_hint)}**",
+        inline=False,
+    )
+    return embed
+
+
 def _normalize_personal_language_hint(value: Any) -> str:
     raw = " ".join(str(value or "").replace("_", "-").strip().split())
     folded = raw.casefold()
