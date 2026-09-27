@@ -641,6 +641,32 @@ def test_gemini_live_timeout_rejects_unstable_interim_hypotheses() -> None:
     asyncio.run(_run())
 
 
+def test_gemini_live_stable_interim_rejects_language_family_flip() -> None:
+    owner = GeminiLiveTranscriber("fake-key")
+    session = captions_module._GeminiLiveSpeakerSession(owner, 97)
+    session._record_interim(
+        {"text": "meet me at the spawn point", "languageCode": "en-US"}
+    )
+    session._record_interim(
+        {"text": "meet me at the spawn point", "languageCode": "es-ES"}
+    )
+
+    assert session._stable_interim_candidate() is None
+
+
+def test_gemini_live_stable_interim_rejects_material_shrink() -> None:
+    owner = GeminiLiveTranscriber("fake-key")
+    session = captions_module._GeminiLiveSpeakerSession(owner, 98)
+    session._record_interim(
+        {"text": "meet me at the spawn point tonight", "languageCode": "en-US"}
+    )
+    session._record_interim(
+        {"text": "meet me at the spawn point", "languageCode": "en-US"}
+    )
+
+    assert session._stable_interim_candidate() is None
+
+
 def test_gemini_live_authoritative_final_always_beats_stable_interim() -> None:
     async def _run() -> None:
         owner = GeminiLiveTranscriber("fake-key")
