@@ -507,6 +507,7 @@ def _soak_pipeline_diagnosis(status: dict[str, Any]) -> str:
     health = status.get("health") if isinstance(status.get("health"), dict) else {}
     connection = status.get("receive_connection") if isinstance(status.get("receive_connection"), dict) else {}
     raw_udp = int(health.get("raw_udp_packets") or 0)
+    speaking_signals = int(health.get("gateway_speaking_signals") or 0)
     frames_seen = int(health.get("frames_seen") or 0)
     frames_routed = int(health.get("frames_routed") or 0)
     dave_present = bool(connection.get("dave_session_present"))
@@ -526,6 +527,9 @@ def _soak_pipeline_diagnosis(status: dict[str, Any]) -> str:
     failures = int(status.get("segment_failures") or 0)
     provider_skipped = int(status.get("provider_skipped") or 0)
     provider_blocked_reason = str(status.get("provider_blocked_reason") or "").strip()
+    receive_recoveries = int(status.get("receive_recoveries") or 0)
+    receive_recovery_failures = int(status.get("receive_recovery_failures") or 0)
+    recovery_reason = str(status.get("last_receive_recovery_reason") or "").strip()
     last_failure = str(status.get("last_failure") or "").strip()
 
     if provider_blocked_reason:
@@ -536,6 +540,21 @@ def _soak_pipeline_diagnosis(status: dict[str, Any]) -> str:
             + (last_failure or "Check the Dank Shield host logs for the latest caption error.")
         )
     if frames_seen <= 0:
+        if receive_recovery_failures > 0:
+            return (
+                "🔴 **The Discord voice media transport stalled and automatic recovery failed.** "
+                + (recovery_reason or "Stop/start captions once to create a completely fresh voice session.")
+            )
+        if receive_recoveries > 0:
+            return (
+                f"🟠 **Dank Shield automatically rebuilt the stalled Discord voice receive transport ({receive_recoveries}×).** "
+                "Speak again for a few seconds; this panel is now measuring the fresh receive connection."
+            )
+        if speaking_signals > 0 and reader_listening and dave_ready and mapped_ssrcs > 0:
+            return (
+                "🟠 **Discord signaled that an opted-in user started speaking, but no PCM arrived.** "
+                "Dank Shield is automatically checking/rebuilding the stalled UDP receive transport instead of leaving this session stuck."
+            )
         if not reader_listening:
             if reader_error:
                 return (
@@ -775,6 +794,8 @@ async def build_server_live_captions_embed(
             provider_skipped = int(general.get("provider_skipped") or 0)
             provider_live_connections = int(general.get("provider_live_connections") or 0)
             provider_live_reconnects = int(general.get("provider_live_reconnects") or 0)
+            receive_recoveries = int(general.get("receive_recoveries") or 0)
+            receive_recovery_failures = int(general.get("receive_recovery_failures") or 0)
             language_hint_mismatches = int(general.get("language_hint_mismatches") or 0)
             translation_requests = int(general.get("translation_requests") or 0)
             translation_failures = int(general.get("translation_failures") or 0)
@@ -783,6 +804,7 @@ async def build_server_live_captions_embed(
                 name="DAVE soak telemetry",
                 value=(
                     f"Raw UDP: **{int(health.get('raw_udp_packets') or 0)}** • sink PCM: **{int(health.get('frames_seen') or 0)}** • routed: **{int(health.get('frames_routed') or 0)}** • queue: **{int(general.get('queue_depth') or 0)}**\n"
+                    f"Gateway speaking signals: **{int(health.get('gateway_speaking_signals') or 0)}** • receive recoveries: **{receive_recoveries}** • recovery failures: **{receive_recovery_failures}**\n"
                     f"DAVE ready: **{'yes' if connection.get('dave_session_ready') else 'no'}** • status: **{str(connection.get('dave_session_status') or 'none')[:24]}** • protocol: **{int(connection.get('dave_protocol_version') or 0)}** • epoch: **{int(connection.get('dave_epoch') or 0)}**\n"
                     f"Reader: **{'listening' if connection.get('reader_listening') else 'stopped'}** • mapped SSRCs: **{int(connection.get('mapped_ssrcs') or 0)}** • reader failures: **{int(health.get('reader_failures') or 0)}**\n"
                     f"Corrupt Opus dropped: **{int(health.get('opus_decode_drops') or 0)}** • not consented: **{int(health.get('frames_not_consented') or 0)}** • unknown source: **{int(health.get('frames_unknown_source') or 0)}** • identity mismatch: **{int(health.get('frames_source_mismatch') or 0)}**\n"
