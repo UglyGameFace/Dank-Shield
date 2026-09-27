@@ -778,6 +778,12 @@ async def build_server_live_captions_embed(
                 f"\nYour last audio: **{level_text}**"
                 + (f" • Gemini detected: **{detected_language}**" if detected_language else "")
             )
+        accuracy_hint = (
+            "\nAccuracy tip: **Auto** is best for multilingual/code-switching speech. "
+            "If you usually speak one language, **My Language** gives Gemini a stronger recognition hint."
+            if not str(personal_hint or "").strip()
+            else ""
+        )
         embed.add_field(
             name="Current session",
             value=(
@@ -791,6 +797,7 @@ async def build_server_live_captions_embed(
                 f"Opted-in speakers: **{len(opted)}**\n"
                 f"Your voice right now: **{'active' if user_opted else 'inactive'}**"
                 f"{diagnostic_line}"
+                f"{accuracy_hint}"
             ),
             inline=False,
         )
@@ -805,6 +812,7 @@ async def build_server_live_captions_embed(
             provider_activity_ends = int(general.get("provider_activity_ends") or 0)
             provider_interim_events = int(general.get("provider_interim_events") or 0)
             provider_final_events = int(general.get("provider_final_events") or 0)
+            provider_interim_timeout_fallbacks = int(general.get("provider_interim_timeout_fallbacks") or 0)
             receive_recoveries = int(general.get("receive_recoveries") or 0)
             receive_recovery_failures = int(general.get("receive_recovery_failures") or 0)
             language_hint_mismatches = int(general.get("language_hint_mismatches") or 0)
@@ -823,7 +831,7 @@ async def build_server_live_captions_embed(
                     f"Unclear: **{int(general.get('segments_unclear') or 0)}** • failures: **{int(general.get('segment_failures') or 0)}** • provider-skipped: **{provider_skipped}**\n"
                     f"Gemini Live connections: **{provider_live_connections}** • reconnects: **{provider_live_reconnects}** • audio chunks: **{provider_audio_chunks}**\n"
                     f"Gemini manual VAD: starts **{provider_activity_starts}** • ends **{provider_activity_ends}**\n"
-                    f"Gemini transcript events: interim **{provider_interim_events}** • final **{provider_final_events}** • language-hint mismatches: **{language_hint_mismatches}**\n"
+                    f"Gemini transcript events: interim **{provider_interim_events}** • final **{provider_final_events}** • stable-timeout recoveries **{provider_interim_timeout_fallbacks}** • language-hint mismatches: **{language_hint_mismatches}**\n"
                     f"Translations: **{translation_requests}** • translation skipped: **{translation_skipped}** • translation failures: **{translation_failures}**"
                 ),
                 inline=False,
