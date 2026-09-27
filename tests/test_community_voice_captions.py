@@ -33,12 +33,22 @@ def _pcm(value: int, samples: int = 1920) -> bytes:
     return struct.pack("<" + ("h" * samples), *([value] * samples))
 
 
-def _frame(user_id: int, at: float, value: int) -> SpeakerPCMFrame:
+def _frame(
+    user_id: int,
+    at: float,
+    value: int,
+    *,
+    rtp_timestamp: int | None = None,
+) -> SpeakerPCMFrame:
     return SpeakerPCMFrame(
         user_id=user_id,
         ssrc=user_id * 10,
         sequence=1,
-        rtp_timestamp=960,
+        rtp_timestamp=(
+            int(round(float(at) * 48_000.0)) & 0xFFFFFFFF
+            if rtp_timestamp is None
+            else int(rtp_timestamp) & 0xFFFFFFFF
+        ),
         pcm=_pcm(value),
         received_at=at,
     )
@@ -68,6 +78,63 @@ def test_gap_flush_preserves_all_samples_from_previous_utterance() -> None:
     flushed = segmenter.feed(later)
     assert len(flushed) == 1
     assert flushed[0].pcm == first.pcm + second.pcm
+
+
+def test_arrival_jitter_does_not_fake_a_speech_gap_when_rtp_is_contiguous() -> None:
+    segmenter = SpeechPreservingSegmenter(
+        silence_gap_seconds=0.5,
+        max_segment_seconds=8,
+    )
+    first = _frame(10, 1.0, 111, rtp_timestamp=48_000)
+    # One second late in wall-clock time, but only the next 20 ms of Discord
+    # media. This is transport jitter, not one second of spoken silence.
+    delayed_next = _frame(10, 2.0, 222, rtp_timestamp=48_960)
+
+    assert segmenter.feed(first) == []
+    assert segmenter.feed(delayed_next) == []
+    flushed = segmenter.flush_all()
+    assert len(flushed) == 1
+    assert flushed[0].pcm == first.pcm + delayed_next.pcm
+
+
+def test_realtime_segmenter_compacts_long_speech_without_forcing_a_boundary() -> None:
+    segmenter = SpeechPreservingSegmenter(
+        silence_gap_seconds=0.5,
+        max_segment_seconds=2.0,
+        hard_flush_on_max=False,
+    )
+
+    # 101 x 20 ms frames exceed the local two-second PCM cap, but realtime
+    # Gemini has already received them. The memory rollover must not become an
+    # activityEnd or transcript boundary.
+    for index in range(101):
+        at = 1.0 + (index * 0.02)
+        assert segmenter.feed(_frame(10, at, 111)) == []
+
+    later = _frame(10, 4.0, 222)
+    flushed = segmenter.feed(later)
+    assert len(flushed) == 1
+    assert flushed[0].user_id == 10
+    assert 0 < len(flushed[0].pcm) < segmenter.max_segment_bytes
+
+
+def test_realtime_idle_flush_grace_absorbs_short_transport_stalls() -> None:
+    segmenter = SpeechPreservingSegmenter(
+        silence_gap_seconds=0.5,
+        max_segment_seconds=8,
+        hard_flush_on_max=False,
+        idle_flush_grace_seconds=0.25,
+    )
+    first = _frame(10, 1.0, 111, rtp_timestamp=48_000)
+    assert segmenter.feed(first) == []
+
+    # Realtime mode deliberately waits slightly beyond the base VAD threshold
+    # before an idle-only seal. That gives a delayed packet time to arrive and
+    # let its RTP timestamp prove that the media itself was contiguous.
+    assert segmenter.flush_idle(now=1.70) == []
+    flushed = segmenter.flush_idle(now=1.76)
+    assert len(flushed) == 1
+    assert flushed[0].pcm == first.pcm
 
 
 def test_normalization_changes_gain_not_sample_count_or_timing() -> None:
