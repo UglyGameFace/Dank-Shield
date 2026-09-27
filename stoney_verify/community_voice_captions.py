@@ -965,6 +965,12 @@ class GeminiLiveTranscriber:
         return self._validate_result(uid, result)
 
 
+    async def prepare_user(self, user_id: int) -> None:
+        """Establish the speaker's Live socket before PCM is admitted."""
+
+        session = self._session_for_user(int(user_id))
+        await session._ensure_connected()
+
     async def close_user(self, user_id: int) -> None:
         uid = int(user_id)
         session = self._sessions.pop(uid, None)
@@ -1110,6 +1116,7 @@ class CaptionEngine:
         self._segment_tasks: set[asyncio.Task[None]] = set()
         self._segment_tasks_by_user: dict[int, set[asyncio.Task[None]]] = {}
         self._blocked_user_ids: set[int] = set()
+        self._stream_failures_by_user: dict[int, Exception] = {}
         self._closed = False
         self._transcribe_semaphore = asyncio.Semaphore(3)
         self._global_transcribe_semaphore = global_transcribe_semaphore
@@ -1148,6 +1155,7 @@ class CaptionEngine:
 
         uid = int(user_id)
         self._blocked_user_ids.add(uid)
+        self._stream_failures_by_user.pop(uid, None)
         self.segmenter.discard_user(uid)
 
         retained: list[SpeakerPCMFrame] = []
@@ -1194,6 +1202,7 @@ class CaptionEngine:
         self._segment_tasks.clear()
         self._segment_tasks_by_user.clear()
         self._blocked_user_ids.clear()
+        self._stream_failures_by_user.clear()
 
         while True:
             try:
@@ -1249,6 +1258,7 @@ class CaptionEngine:
             )
 
     async def _run(self) -> None:
+        stream_frame = getattr(self.transcriber, "stream_frame", None)
         while not self._closed:
             try:
                 frame = await asyncio.wait_for(self.queue.get(), timeout=0.25)
@@ -1256,6 +1266,34 @@ class CaptionEngine:
                 for segment in self.segmenter.flush_idle():
                     self._spawn_segment(segment)
                 continue
+
+            uid = int(frame.user_id)
+            if (
+                callable(stream_frame)
+                and uid not in self._blocked_user_ids
+                and not self.provider_blocked_reason
+            ):
+                try:
+                    # This is the production Live path: send each isolated
+                    # Discord PCM frame at arrival time. Do not buffer a whole
+                    # utterance and replay it later.
+                    await stream_frame(frame)
+                except Exception as exc:
+                    if uid not in self._stream_failures_by_user:
+                        self._stream_failures_by_user[uid] = exc
+                        self.last_failure = _safe_segment_failure(exc)[:300]
+                        log.warning(
+                            "Live Captions realtime stream failed user=%s failure=%s",
+                            uid,
+                            self.last_failure,
+                        )
+                    if isinstance(exc, CaptionTranscriptionError) and exc.terminal:
+                        self.provider_blocked_reason = self.last_failure
+                        self.provider_blocked_code = (
+                            exc.error_code
+                            or exc.error_type
+                            or str(exc.status_code)
+                        )
 
             for segment in self.segmenter.feed(frame):
                 self._spawn_segment(segment)
@@ -1267,6 +1305,16 @@ class CaptionEngine:
             or int(segment.user_id) in self._blocked_user_ids
         ):
             return
+        uid = int(segment.user_id)
+        stream_failure = self._stream_failures_by_user.pop(uid, None)
+        if stream_failure is not None:
+            close_user = getattr(self.transcriber, "close_user", None)
+            if callable(close_user):
+                try:
+                    await close_user(uid)
+                except Exception:
+                    pass
+            raise stream_failure
         if self.provider_blocked_reason:
             self.provider_skipped += 1
             return
@@ -1281,12 +1329,20 @@ class CaptionEngine:
         uid = int(segment.user_id)
         if self._closed or uid in self._blocked_user_ids:
             return
-        first = await self.transcriber.transcribe(segment)
+        finish_segment = getattr(self.transcriber, "finish_segment", None)
+        if callable(finish_segment):
+            first = await finish_segment(segment)
+        else:
+            first = await self.transcriber.transcribe(segment)
         if self._closed or uid in self._blocked_user_ids:
             return
         chosen = first
 
-        if first.confidence is not None and first.confidence < self.low_confidence_threshold:
+        if (
+            not callable(finish_segment)
+            and first.confidence is not None
+            and first.confidence < self.low_confidence_threshold
+        ):
             normalized_pcm = normalize_pcm16_lossless_timing(segment.pcm)
             if normalized_pcm != segment.pcm:
                 second = await self.transcriber.transcribe(
