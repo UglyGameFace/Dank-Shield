@@ -448,6 +448,7 @@ def test_receive_transport_recovery_preserves_consent_with_fresh_bridge(monkeypa
             receive_recovery_failures=0,
             last_receive_recovery_reason="",
             last_receive_recovery_at=0.0,
+            receive_recovery_window=[],
         )
         manager._sessions[state.session_id] = state
 
