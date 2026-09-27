@@ -347,7 +347,7 @@ def test_gemini_live_supports_per_speaker_language_hints_without_affecting_other
 
 def test_explicit_english_hint_rejects_unrelated_detected_language() -> None:
     class FakeSession:
-        async def transcribe(self, pcm: bytes) -> TranscriptResult:
+        async def transcribe_buffered(self, pcm: bytes) -> TranscriptResult:
             assert pcm
             return TranscriptResult(
                 "तो बात",
@@ -356,6 +356,9 @@ def test_explicit_english_hint_rejects_unrelated_detected_language() -> None:
                 "gemini-3.5-transcribe-live",
                 "hi-IN",
             )
+
+        async def close(self) -> None:
+            return None
 
     async def _run() -> None:
         transcriber = GeminiLiveTranscriber("fake-key")
@@ -372,7 +375,252 @@ def test_explicit_english_hint_rejects_unrelated_detected_language() -> None:
     asyncio.run(_run())
 
 
-def test_gemini_live_uses_manual_vad_for_presegmented_discord_utterances() -> None:
+def test_streaming_resampler_converts_each_discord_20ms_frame_to_16khz() -> None:
+    resampler = captions_module._StreamingPCM48To16Mono()
+    # _pcm() is 1920 signed-16 samples = 960 stereo frames = 20ms at 48kHz.
+    converted = resampler.feed(_pcm(1200))
+    # 20ms at 16kHz mono = 320 signed-16 samples = 640 bytes.
+    assert len(converted) == 640
+
+
+def test_caption_engine_streams_frames_before_local_segment_finalization() -> None:
+    events = []
+    published = []
+
+    class StreamingTranscriber:
+        async def stream_frame(self, frame: SpeakerPCMFrame) -> None:
+            events.append(("stream", frame.user_id, frame.pcm))
+
+        async def seal_segment(self, segment: CaptionSegment):
+            events.append(("seal", segment.user_id, segment.pcm))
+            return ("sealed", segment.user_id)
+
+        async def finish_sealed_segment(self, segment: CaptionSegment, token) -> TranscriptResult:
+            assert token == ("sealed", segment.user_id)
+            events.append(("finish", segment.user_id, segment.pcm))
+            return TranscriptResult(
+                "realtime speech",
+                None,
+                "gemini-live",
+                "gemini-3.5-transcribe-live",
+                "en-US",
+            )
+
+        async def close(self) -> None:
+            return None
+
+    class OneFrameSegmenter:
+        def feed(self, frame: SpeakerPCMFrame):
+            events.append(("segment", frame.user_id, frame.pcm))
+            return [
+                CaptionSegment(
+                    frame.user_id,
+                    frame.pcm,
+                    frame.received_at,
+                    frame.received_at,
+                )
+            ]
+
+        def flush_idle(self):
+            return []
+
+        def flush_all(self):
+            return []
+
+        def discard_user(self, user_id: int):
+            return None
+
+    async def _run() -> None:
+        async def publish(user_id: int, text: str, confidence) -> None:
+            published.append((user_id, text, confidence))
+
+        engine = CaptionEngine(StreamingTranscriber(), publish)
+        engine.segmenter = OneFrameSegmenter()
+        engine.start()
+        engine.submit(_frame(91, 1.0, 777))
+        for _ in range(20):
+            if published:
+                break
+            await asyncio.sleep(0.01)
+        await engine.close()
+
+    asyncio.run(_run())
+    kinds = [event[0] for event in events]
+    assert kinds.index("stream") < kinds.index("seal")
+    assert kinds.index("seal") < kinds.index("finish")
+    assert published == [(91, "realtime speech", None)]
+
+
+def test_caption_engine_seals_previous_turn_before_first_post_gap_frame() -> None:
+    events = []
+
+    class StreamingTranscriber:
+        async def stream_frame(self, frame: SpeakerPCMFrame) -> None:
+            events.append(("stream", frame.received_at))
+
+        async def seal_segment(self, segment: CaptionSegment):
+            events.append(("seal", segment.ended_at))
+            return ("sealed", segment.ended_at)
+
+        async def finish_sealed_segment(self, segment: CaptionSegment, token) -> TranscriptResult:
+            assert token == ("sealed", segment.ended_at)
+            return TranscriptResult(
+                "",
+                None,
+                "gemini-live",
+                "gemini-3.5-transcribe-live",
+                "en-US",
+            )
+
+        async def close(self) -> None:
+            return None
+
+    async def _run() -> None:
+        async def publish(user_id: int, text: str, confidence) -> None:
+            raise AssertionError("empty finalized text must not publish")
+
+        engine = CaptionEngine(StreamingTranscriber(), publish)
+        engine.start()
+        # Queue both frames immediately so wall-clock idle flushing cannot hide
+        # the timestamp gap boundary under test.
+        engine.submit(_frame(91, 1.0, 777))
+        engine.submit(_frame(91, 2.0, 888))
+        for _ in range(20):
+            if len([event for event in events if event[0] == "stream"]) >= 2:
+                break
+            await asyncio.sleep(0.01)
+        await engine.close()
+
+    asyncio.run(_run())
+    assert events[:3] == [
+        ("stream", 1.0),
+        ("seal", 1.0),
+        ("stream", 2.0),
+    ]
+
+
+def test_gemini_live_streams_manual_vad_start_audio_end_without_replay() -> None:
+    async def _run() -> None:
+        owner = GeminiLiveTranscriber("fake-key")
+        session = captions_module._GeminiLiveSpeakerSession(owner, 92)
+
+        class FakeWS:
+            closed = False
+
+            def __init__(self) -> None:
+                self.sent = []
+
+            async def send_json(self, payload) -> None:
+                self.sent.append(payload)
+
+        ws = FakeWS()
+        session.ws = ws
+        session.connected_at = captions_module.time.monotonic()
+        session._receiver_task = type(
+            "HealthyReceiver",
+            (),
+            {"done": lambda self: False},
+        )()
+
+        await session.stream_pcm(_pcm(1200))
+        waiter = await session.seal_utterance()
+        await session._push_final_event(
+            TranscriptResult(
+                "done",
+                None,
+                "gemini-live",
+                owner.model,
+                "en-US",
+            )
+        )
+        result = await session.wait_for_final(waiter)
+
+        assert result.text == "done"
+        assert ws.sent[0] == {"realtimeInput": {"activityStart": {}}}
+        assert "audio" in ws.sent[1]["realtimeInput"]
+        assert ws.sent[-1] == {"realtimeInput": {"activityEnd": {}}}
+        assert len(ws.sent) == 3
+        assert owner.activity_starts == 1
+        assert owner.activity_ends == 1
+
+    asyncio.run(_run())
+
+
+def test_gemini_live_maps_overlapping_finalized_turns_fifo() -> None:
+    async def _run() -> None:
+        owner = GeminiLiveTranscriber("fake-key")
+        session = captions_module._GeminiLiveSpeakerSession(owner, 93)
+
+        class FakeWS:
+            closed = False
+
+            def __init__(self) -> None:
+                self.sent = []
+
+            async def send_json(self, payload) -> None:
+                self.sent.append(payload)
+
+        ws = FakeWS()
+        session.ws = ws
+        session.connected_at = captions_module.time.monotonic()
+        session._receiver_task = type(
+            "HealthyReceiver",
+            (),
+            {"done": lambda self: False},
+        )()
+
+        await session.stream_pcm(_pcm(1000))
+        first_waiter = await session.seal_utterance()
+        await session.stream_pcm(_pcm(2000))
+        second_waiter = await session.seal_utterance()
+
+        first = TranscriptResult(
+            "first turn",
+            None,
+            "gemini-live",
+            owner.model,
+            "en-US",
+        )
+        second = TranscriptResult(
+            "second turn",
+            None,
+            "gemini-live",
+            owner.model,
+            "en-US",
+        )
+        await session._push_final_event(first)
+        await session._push_final_event(second)
+
+        first_result = await session.wait_for_final(first_waiter)
+        second_result = await session.wait_for_final(second_waiter)
+        assert first_result.text == "first turn"
+        assert second_result.text == "second turn"
+
+        kinds = [
+            "start"
+            if payload.get("realtimeInput", {}).get("activityStart") == {}
+            else "end"
+            if payload.get("realtimeInput", {}).get("activityEnd") == {}
+            else "audio"
+            for payload in ws.sent
+        ]
+        assert kinds == ["start", "audio", "end", "start", "audio", "end"]
+
+    asyncio.run(_run())
+
+
+def test_production_live_path_does_not_buffer_whole_utterance_before_send() -> None:
+    source = (
+        ROOT / "stoney_verify" / "community_voice_captions.py"
+    ).read_text(encoding="utf-8")
+    engine_block = source.split("class CaptionEngine", 1)[1]
+    assert "await stream_frame(frame)" in engine_block
+    assert "await self._seal_and_spawn(segment)" in engine_block
+    assert "float(segment.ended_at) < float(frame.received_at)" in engine_block
+    assert "activityEnd must be on the wire before a post-gap frame" in engine_block
+
+
+def test_gemini_live_uses_manual_vad_while_streaming_realtime_audio() -> None:
     source = (ROOT / "stoney_verify" / "community_voice_captions.py").read_text(encoding="utf-8")
     session_block = source.split("class _GeminiLiveSpeakerSession", 1)[1].split("class GeminiLiveTranscriber", 1)[0]
 
@@ -401,6 +649,39 @@ def test_gemini_live_goaway_forces_reconnect_before_next_utterance() -> None:
         assert resolved is replacement
         assert owner.live_reconnects == 1
         assert session.rotate_before_next is False
+
+    asyncio.run(_run())
+
+
+def test_gemini_live_dead_receiver_forces_reconnect_before_next_audio() -> None:
+    async def _run() -> None:
+        owner = GeminiLiveTranscriber("fake-key")
+        session = captions_module._GeminiLiveSpeakerSession(owner, 78)
+        stale = type("FakeWS", (), {"closed": False})()
+        session.ws = stale
+        session.connected_at = captions_module.time.monotonic()
+        session._receiver_task = type(
+            "DoneReceiver",
+            (),
+            {"done": lambda self: True},
+        )()
+        replacement = type("FakeWS", (), {"closed": False})()
+        healthy_receiver = type(
+            "HealthyReceiver",
+            (),
+            {"done": lambda self: False},
+        )()
+
+        async def fake_connect() -> None:
+            session.ws = replacement
+            session.connected_at = captions_module.time.monotonic()
+            session._receiver_task = healthy_receiver
+
+        session._connect = fake_connect
+        resolved = await session._ensure_connected()
+        assert resolved is replacement
+        assert owner.live_reconnects == 1
+        assert session._receiver_task is healthy_receiver
 
     asyncio.run(_run())
 

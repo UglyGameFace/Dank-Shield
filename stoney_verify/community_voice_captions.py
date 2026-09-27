@@ -12,6 +12,7 @@ Audio exists only in bounded in-memory buffers and WAV request bodies.
 
 import asyncio
 import base64
+from collections import deque
 import io
 import json
 import logging
@@ -322,6 +323,50 @@ def _design_downsample_fir(
 _PCM48_TO_16_FIR = _design_downsample_fir()
 
 
+class _StreamingPCM48To16Mono:
+    """Stateful 48 kHz stereo -> 16 kHz mono FIR decimator.
+
+    Live Transcribe expects audio as it is produced, not a several-second burst.
+    Keeping FIR history per Discord speaker avoids introducing a filter edge at
+    every 20 ms Discord PCM frame.
+    """
+
+    def __init__(self) -> None:
+        self._coeffs = _PCM48_TO_16_FIR
+        self._history = deque(
+            [0.0] * len(self._coeffs),
+            maxlen=len(self._coeffs),
+        )
+        self._phase = 0
+
+    def reset(self) -> None:
+        self._history.clear()
+        self._history.extend([0.0] * len(self._coeffs))
+        self._phase = 0
+
+    def feed(self, pcm: bytes) -> bytes:
+        usable = len(pcm) - (len(pcm) % 4)
+        if usable <= 0:
+            return b""
+
+        samples = struct.unpack("<" + ("h" * (usable // 2)), pcm[:usable])
+        out: list[int] = []
+        for offset in range(0, len(samples), 2):
+            mono = (int(samples[offset]) + int(samples[offset + 1])) / 2.0
+            self._history.append(mono)
+            if self._phase == 0:
+                # FIR coefficients are symmetric, so oldest->newest history can
+                # be multiplied directly by the symmetric kernel.
+                acc = sum(
+                    coefficient * sample
+                    for coefficient, sample in zip(self._coeffs, self._history)
+                )
+                out.append(max(-32768, min(32767, int(round(acc)))))
+            self._phase = (self._phase + 1) % 3
+
+        return struct.pack("<" + ("h" * len(out)), *out) if out else b""
+
+
 def pcm48_stereo_to_pcm16_mono(pcm: bytes) -> bytes:
     """Convert Discord 48kHz stereo s16le PCM to Gemini's 16kHz mono s16le.
 
@@ -427,135 +472,216 @@ class _GeminiLiveSpeakerSession:
         self.ws: Optional[aiohttp.ClientWebSocketResponse] = None
         self.connected_at = 0.0
         self.rotate_before_next = False
-        self.lock = asyncio.Lock()
+        self.utterance_active = False
+        self._connect_lock = asyncio.Lock()
+        self._send_lock = asyncio.Lock()
+        self._receiver_task: Optional[asyncio.Task[None]] = None
+        self._final_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=16)
+        self._pending_finals: deque[asyncio.Future[Any]] = deque()
+        self._resampler = _StreamingPCM48To16Mono()
+
+    def _clear_final_queue(self) -> None:
+        while True:
+            try:
+                self._final_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+    def _cancel_pending_finals(self) -> None:
+        while self._pending_finals:
+            waiter = self._pending_finals.popleft()
+            if not waiter.done():
+                waiter.cancel()
+
+    def _resolve_pending_final(self, value: Any) -> bool:
+        while self._pending_finals:
+            waiter = self._pending_finals.popleft()
+            if waiter.done():
+                continue
+            if isinstance(value, Exception):
+                waiter.set_exception(value)
+            else:
+                waiter.set_result(value)
+            return True
+        return False
+
+    def _fail_pending_finals(self, exc: Exception) -> bool:
+        delivered = False
+        while self._pending_finals:
+            waiter = self._pending_finals.popleft()
+            if waiter.done():
+                continue
+            waiter.set_exception(exc)
+            delivered = True
+        return delivered
 
     async def close(self) -> None:
+        receiver = self._receiver_task
+        self._receiver_task = None
+        if receiver is not None and not receiver.done():
+            receiver.cancel()
+            try:
+                await receiver
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+
         ws = self.ws
         self.ws = None
         self.connected_at = 0.0
         self.rotate_before_next = False
+        self.utterance_active = False
+        self._resampler.reset()
+        self._cancel_pending_finals()
+        self._clear_final_queue()
         if ws is not None and not ws.closed:
             try:
                 await ws.close()
             except Exception:
                 pass
 
-    async def _connect(self) -> None:
-        await self.close()
-        http = await self.owner._http()
-        url = f"{self.WS_URL}?key={self.owner.api_key}"
-        try:
-            ws = await http.ws_connect(
-                url,
-                heartbeat=20.0,
-                autoping=True,
-                receive_timeout=self.owner.timeout_seconds,
-                max_msg_size=2 * 1024 * 1024,
-            )
-        except Exception:
-            raise CaptionTranscriptionError(
-                0,
-                "Gemini Live transcription could not open its WebSocket session.",
-            ) from None
-
-        language_codes = self.owner.language_codes_for_user(self.user_id)
-        transcription_config: dict[str, Any] = {
-            "languageCodes": list(language_codes),
-            "mode": self.owner.mode,
-        }
-        if self.owner.custom_vocabulary:
-            transcription_config["customVocabulary"] = list(self.owner.custom_vocabulary)
-
-        setup = {
-            "setup": {
-                "model": f"models/{self.owner.model}",
-                "generationConfig": {"responseModalities": ["TEXT"]},
-                # Dank Shield has already isolated and segmented one Discord
-                # speaker before Gemini sees this audio. Use Google's documented
-                # manual-VAD mode for this buffered utterance so finalization is
-                # explicit and deterministic.
-                "realtimeInputConfig": {
-                    "automaticActivityDetection": {"disabled": True}
-                },
-                "inputAudioTranscription": transcription_config,
-            }
-        }
-        try:
-            await ws.send_json(setup)
-            while True:
-                msg = await asyncio.wait_for(
-                    ws.receive(),
-                    timeout=self.owner.timeout_seconds,
-                )
-                payload = self.owner._ws_payload(msg)
-                if "setupComplete" in payload:
-                    self.ws = ws
-                    self.connected_at = time.monotonic()
-                    self.rotate_before_next = False
-                    self.owner.live_connections += 1
-                    return
-                self.owner._raise_ws_error(payload)
-        except CaptionTranscriptionError:
-            await ws.close()
-            raise
-        except asyncio.TimeoutError:
-            await ws.close()
-            raise CaptionTranscriptionError(
-                0,
-                "Gemini Live transcription timed out waiting for setupComplete.",
-            ) from None
-        except Exception:
-            await ws.close()
-            raise CaptionTranscriptionError(
-                0,
-                "Gemini Live transcription failed while processing its session setup response.",
-            ) from None
-
-    async def _ensure_connected(self) -> aiohttp.ClientWebSocketResponse:
-        ws = self.ws
-        expired = bool(
-            self.connected_at
-            and time.monotonic() - self.connected_at >= self.owner.session_refresh_seconds
-        )
-        if ws is None or ws.closed or expired or self.rotate_before_next:
-            if ws is not None:
-                self.owner.live_reconnects += 1
-            await self._connect()
-        assert self.ws is not None
-        return self.ws
-
-    async def transcribe(self, pcm: bytes) -> TranscriptResult:
-        async with self.lock:
-            ws = await self._ensure_connected()
-            pcm16 = pcm48_stereo_to_pcm16_mono(pcm)
-            if not pcm16:
-                return TranscriptResult(
-                    text="",
-                    confidence=None,
-                    provider="gemini-live",
-                    model=self.owner.model,
-                )
-
+    async def _push_final_event(self, value: Any) -> None:
+        # Production streaming seals each local utterance before the next turn
+        # starts, so finalized events can be mapped FIFO to an exact waiter.
+        # The bounded queue remains as a compatibility fallback for unexpected
+        # provider events that arrive without an active sealed turn.
+        if self._resolve_pending_final(value):
+            return
+        if self._final_queue.full():
             try:
-                # The local segmenter has already established a single-speaker
-                # utterance boundary. In manual VAD mode Google requires
-                # activityStart before audio and activityEnd when speech ends.
-                await ws.send_json({"realtimeInput": {"activityStart": {}}})
-                chunk_bytes = 1280  # 40 ms at 16 kHz mono signed-16 PCM.
-                for offset in range(0, len(pcm16), chunk_bytes):
-                    chunk = pcm16[offset : offset + chunk_bytes]
-                    await ws.send_json(
-                        {
-                            "realtimeInput": {
-                                "audio": {
-                                    "data": base64.b64encode(chunk).decode("ascii"),
-                                    "mimeType": "audio/pcm;rate=16000",
-                                }
-                            }
-                        }
-                    )
-                await ws.send_json({"realtimeInput": {"activityEnd": {}}})
+                self._final_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+        try:
+            self._final_queue.put_nowait(value)
+        except asyncio.QueueFull:
+            pass
 
+    async def _receive_loop(
+        self,
+        ws: aiohttp.ClientWebSocketResponse,
+    ) -> None:
+        try:
+            while self.ws is ws and not ws.closed:
+                msg = await ws.receive()
+                payload = self.owner._ws_payload(msg)
+                self.owner._raise_ws_error(payload)
+
+                if "goAway" in payload:
+                    # Finish the current utterance on this connection, then
+                    # rotate before the next speaker turn.
+                    self.rotate_before_next = True
+
+                content = payload.get("serverContent")
+                if not isinstance(content, dict):
+                    continue
+
+                interim = content.get("interimInputTranscription")
+                if isinstance(interim, dict):
+                    self.owner.interim_transcript_events += 1
+
+                final = content.get("inputTranscription")
+                if not isinstance(final, dict):
+                    continue
+
+                text = str(final.get("text") or "").strip()
+                language_code = str(final.get("languageCode") or "").strip()
+                self.owner.final_transcript_events += 1
+                await self._push_final_event(
+                    TranscriptResult(
+                        text=text,
+                        confidence=None,
+                        provider="gemini-live",
+                        model=self.owner.model,
+                        language_code=language_code,
+                    )
+                )
+        except asyncio.CancelledError:
+            raise
+        except CaptionTranscriptionError as exc:
+            if self.ws is ws and not self._fail_pending_finals(exc):
+                await self._push_final_event(exc)
+        except Exception:
+            if self.ws is ws:
+                exc = CaptionTranscriptionError(
+                    0,
+                    "Gemini Live transcription receive loop failed.",
+                )
+                if not self._fail_pending_finals(exc):
+                    await self._push_final_event(exc)
+
+    async def _connect(self) -> None:
+        async with self._connect_lock:
+            current = self.ws
+            pending_finals = bool(self._pending_finals)
+            receiver_healthy = bool(
+                self._receiver_task is not None
+                and not self._receiver_task.done()
+            )
+            expired = bool(
+                self.connected_at
+                and time.monotonic() - self.connected_at
+                >= self.owner.session_refresh_seconds
+                and not self.utterance_active
+                and not pending_finals
+            )
+            if (
+                current is not None
+                and not current.closed
+                and receiver_healthy
+                and not expired
+                and not (
+                    self.rotate_before_next
+                    and not self.utterance_active
+                    and not pending_finals
+                )
+            ):
+                return
+
+            await self.close()
+            http = await self.owner._http()
+            url = f"{self.WS_URL}?key={self.owner.api_key}"
+            try:
+                ws = await http.ws_connect(
+                    url,
+                    heartbeat=20.0,
+                    autoping=True,
+                    receive_timeout=None,
+                    max_msg_size=2 * 1024 * 1024,
+                )
+            except Exception:
+                raise CaptionTranscriptionError(
+                    0,
+                    "Gemini Live transcription could not open its WebSocket session.",
+                ) from None
+
+            language_codes = self.owner.language_codes_for_user(self.user_id)
+            transcription_config: dict[str, Any] = {
+                "languageCodes": list(language_codes),
+                "mode": self.owner.mode,
+            }
+            if self.owner.custom_vocabulary:
+                transcription_config["customVocabulary"] = list(
+                    self.owner.custom_vocabulary
+                )
+
+            setup = {
+                "setup": {
+                    "model": f"models/{self.owner.model}",
+                    "generationConfig": {"responseModalities": ["TEXT"]},
+                    # Discord has already isolated this speaker and the local
+                    # segmenter owns the end-of-utterance boundary. Keep Gemini
+                    # in documented manual-VAD mode while still streaming every
+                    # PCM frame as it arrives.
+                    "realtimeInputConfig": {
+                        "automaticActivityDetection": {"disabled": True}
+                    },
+                    "inputAudioTranscription": transcription_config,
+                }
+            }
+            try:
+                await ws.send_json(setup)
                 while True:
                     msg = await asyncio.wait_for(
                         ws.receive(),
@@ -563,40 +689,189 @@ class _GeminiLiveSpeakerSession:
                     )
                     payload = self.owner._ws_payload(msg)
                     self.owner._raise_ws_error(payload)
-                    if "goAway" in payload:
-                        # Google may warn before a Live session is rotated. Keep
-                        # reading this utterance, then reconnect before the next.
-                        self.rotate_before_next = True
-                    content = payload.get("serverContent")
-                    if not isinstance(content, dict):
-                        continue
-                    final = content.get("inputTranscription")
-                    if not isinstance(final, dict):
-                        continue
-                    text = str(final.get("text") or "").strip()
-                    language_code = str(final.get("languageCode") or "").strip()
-                    return TranscriptResult(
-                        text=text,
+                    if "setupComplete" in payload:
+                        self.ws = ws
+                        self.connected_at = time.monotonic()
+                        self.rotate_before_next = False
+                        self.utterance_active = False
+                        self._resampler.reset()
+                        self._clear_final_queue()
+                        self.owner.live_connections += 1
+                        self._receiver_task = asyncio.create_task(
+                            self._receive_loop(ws),
+                            name=f"gemini-live-recv:{self.user_id}",
+                        )
+                        return
+            except CaptionTranscriptionError:
+                await ws.close()
+                raise
+            except asyncio.TimeoutError:
+                await ws.close()
+                raise CaptionTranscriptionError(
+                    0,
+                    "Gemini Live transcription timed out waiting for setupComplete.",
+                ) from None
+            except Exception:
+                await ws.close()
+                raise CaptionTranscriptionError(
+                    0,
+                    "Gemini Live transcription failed while processing its session setup response.",
+                ) from None
+
+    async def _ensure_connected(self) -> aiohttp.ClientWebSocketResponse:
+        ws = self.ws
+        pending_finals = bool(self._pending_finals)
+        receiver_healthy = bool(
+            self._receiver_task is not None
+            and not self._receiver_task.done()
+        )
+        expired = bool(
+            self.connected_at
+            and time.monotonic() - self.connected_at
+            >= self.owner.session_refresh_seconds
+            and not self.utterance_active
+            and not pending_finals
+        )
+        rotate_now = bool(
+            self.rotate_before_next
+            and not self.utterance_active
+            and not pending_finals
+        )
+        receiver_dead = bool(ws is not None and not ws.closed and not receiver_healthy)
+        if ws is None or ws.closed or expired or rotate_now or receiver_dead:
+            if ws is not None:
+                self.owner.live_reconnects += 1
+            await self._connect()
+        assert self.ws is not None
+        return self.ws
+
+    async def stream_pcm(self, pcm48_stereo: bytes) -> None:
+        if not pcm48_stereo:
+            return
+        async with self._send_lock:
+            ws = await self._ensure_connected()
+            pcm16 = self._resampler.feed(pcm48_stereo)
+            if not pcm16:
+                return
+            if not self.utterance_active:
+                # Manual VAD has no server-side pre-speech buffer. Signal the
+                # turn before the first streamed PCM chunk so the first syllable
+                # is part of the same activity window.
+                self._clear_final_queue()
+                await ws.send_json({"realtimeInput": {"activityStart": {}}})
+                self.owner.activity_starts += 1
+                self.utterance_active = True
+            await ws.send_json(
+                {
+                    "realtimeInput": {
+                        "audio": {
+                            "data": base64.b64encode(pcm16).decode("ascii"),
+                            "mimeType": "audio/pcm;rate=16000",
+                        }
+                    }
+                }
+            )
+            self.owner.audio_chunks_sent += 1
+            self.owner.audio_bytes_sent += len(pcm16)
+
+    async def seal_utterance(self) -> asyncio.Future[Any]:
+        """End the current manual-VAD activity without waiting for its transcript.
+
+        This lets the next Discord speech burst start streaming immediately after
+        activityEnd while the receive loop resolves the previous turn's dedicated
+        future. Per-turn futures prevent concurrent finalized transcripts from
+        being consumed by the wrong segment task.
+        """
+
+        loop = asyncio.get_running_loop()
+        async with self._send_lock:
+            ws = await self._ensure_connected()
+            waiter: asyncio.Future[Any] = loop.create_future()
+            if not self.utterance_active:
+                waiter.set_result(
+                    TranscriptResult(
+                        text="",
                         confidence=None,
                         provider="gemini-live",
                         model=self.owner.model,
-                        language_code=language_code,
                     )
-            except CaptionTranscriptionError:
-                await self.close()
-                raise
-            except asyncio.TimeoutError:
-                await self.close()
-                raise CaptionTranscriptionError(
-                    0,
-                    "Gemini Live transcription timed out waiting for a finalized transcript.",
-                ) from None
+                )
+                return waiter
+
+            self._pending_finals.append(waiter)
+            try:
+                await ws.send_json({"realtimeInput": {"activityEnd": {}}})
             except Exception:
-                await self.close()
-                raise CaptionTranscriptionError(
-                    0,
-                    "Gemini Live transcription connection failed while processing audio.",
-                ) from None
+                try:
+                    self._pending_finals.remove(waiter)
+                except ValueError:
+                    pass
+                waiter.cancel()
+                raise
+
+            self.owner.activity_ends += 1
+            self.utterance_active = False
+            self._resampler.reset()
+            return waiter
+
+    async def wait_for_final(
+        self,
+        waiter: asyncio.Future[Any],
+    ) -> TranscriptResult:
+        try:
+            result = await asyncio.wait_for(
+                asyncio.shield(waiter),
+                timeout=self.owner.timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            try:
+                self._pending_finals.remove(waiter)
+            except ValueError:
+                pass
+            if not waiter.done():
+                waiter.cancel()
+            # A connected socket that accepted audio but stopped producing final
+            # events is not trustworthy for the next turn. Reconnect cleanly.
+            await self.close()
+            raise CaptionTranscriptionError(
+                0,
+                "Gemini Live transcription timed out waiting for a finalized transcript.",
+            ) from None
+        except CaptionTranscriptionError:
+            await self.close()
+            raise
+        except Exception:
+            await self.close()
+            raise
+
+        if isinstance(result, Exception):
+            await self.close()
+            raise result
+        if not isinstance(result, TranscriptResult):
+            await self.close()
+            raise CaptionTranscriptionError(
+                0,
+                "Gemini Live transcription returned an invalid finalized event.",
+            )
+        return result
+
+    async def finalize(self) -> TranscriptResult:
+        """Compatibility path that seals and then waits for one finalized turn."""
+
+        waiter = await self.seal_utterance()
+        return await self.wait_for_final(waiter)
+
+    async def transcribe_buffered(self, pcm48_stereo: bytes) -> TranscriptResult:
+        """Compatibility path for tests/repair tooling, not the production path."""
+
+        # Replay at 20 ms cadence instead of blasting buffered audio into a Live
+        # endpoint. Production CaptionEngine streams frames as they arrive and
+        # uses the same activityStart/activityEnd manual-VAD contract.
+        frame_bytes = int(PCM_SAMPLE_RATE * PCM_CHANNELS * PCM_SAMPLE_WIDTH * 0.02)
+        for offset in range(0, len(pcm48_stereo), frame_bytes):
+            await self.stream_pcm(pcm48_stereo[offset : offset + frame_bytes])
+            await asyncio.sleep(0.02)
+        return await self.finalize()
 
 
 class GeminiLiveTranscriber:
@@ -639,6 +914,12 @@ class GeminiLiveTranscriber:
         self._http_session: Optional[aiohttp.ClientSession] = None
         self.live_connections = 0
         self.live_reconnects = 0
+        self.audio_chunks_sent = 0
+        self.audio_bytes_sent = 0
+        self.activity_starts = 0
+        self.activity_ends = 0
+        self.interim_transcript_events = 0
+        self.final_transcript_events = 0
         self.language_hint_mismatches = 0
         self.fallback_count = 0
         if not self.api_key:
@@ -731,14 +1012,20 @@ class GeminiLiveTranscriber:
             status = int(error.get("code") or 0)
             raise _gemini_transcription_error(status, json.dumps({"error": error}))
 
-    async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
-        uid = int(segment.user_id)
-        self._last_audio_rms_dbfs[uid] = pcm16_rms_dbfs(segment.pcm)
+    def _session_for_user(self, user_id: int) -> _GeminiLiveSpeakerSession:
+        uid = int(user_id)
         session = self._sessions.get(uid)
         if session is None:
             session = _GeminiLiveSpeakerSession(self, uid)
             self._sessions[uid] = session
-        result = await session.transcribe(segment.pcm)
+        return session
+
+    def _validate_result(
+        self,
+        user_id: int,
+        result: TranscriptResult,
+    ) -> TranscriptResult:
+        uid = int(user_id)
         if result.language_code:
             self._last_detected_language_code[uid] = result.language_code
 
@@ -749,7 +1036,9 @@ class GeminiLiveTranscriber:
                 for code in expected_codes
                 if str(code).strip()
             }
-            detected_family = str(result.language_code).split("-", 1)[0].casefold()
+            detected_family = (
+                str(result.language_code).split("-", 1)[0].casefold()
+            )
             if detected_family and detected_family not in expected_families:
                 self.language_hint_mismatches += 1
                 return TranscriptResult(
@@ -760,6 +1049,60 @@ class GeminiLiveTranscriber:
                     language_code=result.language_code,
                 )
         return result
+
+    async def stream_frame(self, frame: SpeakerPCMFrame) -> None:
+        uid = int(frame.user_id)
+        self._last_audio_rms_dbfs[uid] = pcm16_rms_dbfs(frame.pcm)
+        session = self._session_for_user(uid)
+        await session.stream_pcm(frame.pcm)
+
+    async def seal_segment(
+        self,
+        segment: CaptionSegment,
+    ) -> tuple[_GeminiLiveSpeakerSession, asyncio.Future[Any]]:
+        """Send activityEnd now and return an exact turn token for later await."""
+
+        uid = int(segment.user_id)
+        self._last_audio_rms_dbfs[uid] = pcm16_rms_dbfs(segment.pcm)
+        session = self._session_for_user(uid)
+        waiter = await session.seal_utterance()
+        return session, waiter
+
+    async def finish_sealed_segment(
+        self,
+        segment: CaptionSegment,
+        token: tuple[_GeminiLiveSpeakerSession, asyncio.Future[Any]],
+    ) -> TranscriptResult:
+        uid = int(segment.user_id)
+        session, waiter = token
+        result = await session.wait_for_final(waiter)
+        return self._validate_result(uid, result)
+
+    async def finish_segment(self, segment: CaptionSegment) -> TranscriptResult:
+        """Compatibility path for callers that do not pre-seal the turn."""
+
+        token = await self.seal_segment(segment)
+        return await self.finish_sealed_segment(segment, token)
+
+    async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
+        """Compatibility path for tests/repair callers.
+
+        Production CaptionEngine streams each Discord PCM frame immediately and
+        calls finish_segment() only when the local speech boundary closes.
+        """
+
+        uid = int(segment.user_id)
+        self._last_audio_rms_dbfs[uid] = pcm16_rms_dbfs(segment.pcm)
+        session = self._session_for_user(uid)
+        result = await session.transcribe_buffered(segment.pcm)
+        return self._validate_result(uid, result)
+
+
+    async def prepare_user(self, user_id: int) -> None:
+        """Establish the speaker's Live socket before PCM is admitted."""
+
+        session = self._session_for_user(int(user_id))
+        await session._ensure_connected()
 
     async def close_user(self, user_id: int) -> None:
         uid = int(user_id)
@@ -906,6 +1249,7 @@ class CaptionEngine:
         self._segment_tasks: set[asyncio.Task[None]] = set()
         self._segment_tasks_by_user: dict[int, set[asyncio.Task[None]]] = {}
         self._blocked_user_ids: set[int] = set()
+        self._stream_failures_by_user: dict[int, Exception] = {}
         self._closed = False
         self._transcribe_semaphore = asyncio.Semaphore(3)
         self._global_transcribe_semaphore = global_transcribe_semaphore
@@ -944,6 +1288,7 @@ class CaptionEngine:
 
         uid = int(user_id)
         self._blocked_user_ids.add(uid)
+        self._stream_failures_by_user.pop(uid, None)
         self.segmenter.discard_user(uid)
 
         retained: list[SpeakerPCMFrame] = []
@@ -990,6 +1335,7 @@ class CaptionEngine:
         self._segment_tasks.clear()
         self._segment_tasks_by_user.clear()
         self._blocked_user_ids.clear()
+        self._stream_failures_by_user.clear()
 
         while True:
             try:
@@ -1005,12 +1351,17 @@ class CaptionEngine:
             except Exception:
                 log.debug("Live Captions transcription provider cleanup failed", exc_info=True)
 
-    def _spawn_segment(self, segment: CaptionSegment) -> None:
+    def _spawn_segment(
+        self,
+        segment: CaptionSegment,
+        *,
+        sealed_token: Any = None,
+    ) -> None:
         uid = int(segment.user_id)
         if self._closed or not segment.pcm or uid in self._blocked_user_ids:
             return
         task = asyncio.create_task(
-            self._process_segment_safely(segment),
+            self._process_segment_safely(segment, sealed_token),
             name=f"dank-caption-segment:{uid}",
         )
         self._segment_tasks.add(task)
@@ -1027,9 +1378,13 @@ class CaptionEngine:
 
         task.add_done_callback(_done)
 
-    async def _process_segment_safely(self, segment: CaptionSegment) -> None:
+    async def _process_segment_safely(
+        self,
+        segment: CaptionSegment,
+        sealed_token: Any = None,
+    ) -> None:
         try:
-            await self._process_segment(segment)
+            await self._process_segment(segment, sealed_token)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1044,45 +1399,212 @@ class CaptionEngine:
                 self.last_failure,
             )
 
+    async def _stream_frame_safely(
+        self,
+        frame: SpeakerPCMFrame,
+        stream_frame: Any,
+    ) -> bool:
+        uid = int(frame.user_id)
+        if (
+            not callable(stream_frame)
+            or uid in self._blocked_user_ids
+            or self.provider_blocked_reason
+        ):
+            return False
+        try:
+            # Production sends each isolated Discord PCM frame at arrival time.
+            # Segment bookkeeping may run first only to discover whether a prior
+            # activity must be sealed before this frame can begin a new turn.
+            await stream_frame(frame)
+            return True
+        except Exception as exc:
+            if uid not in self._stream_failures_by_user:
+                self._stream_failures_by_user[uid] = exc
+                self.last_failure = _safe_segment_failure(exc)[:300]
+                log.warning(
+                    "Live Captions realtime stream failed user=%s failure=%s",
+                    uid,
+                    self.last_failure,
+                )
+            if isinstance(exc, CaptionTranscriptionError) and exc.terminal:
+                self.provider_blocked_reason = self.last_failure
+                self.provider_blocked_code = (
+                    exc.error_code
+                    or exc.error_type
+                    or str(exc.status_code)
+                )
+            return False
+
+    async def _seal_and_spawn(self, segment: CaptionSegment) -> bool:
+        uid = int(segment.user_id)
+        if self._closed or not segment.pcm or uid in self._blocked_user_ids:
+            return False
+        if self.provider_blocked_reason:
+            self._spawn_segment(segment)
+            return True
+
+        seal_segment = getattr(self.transcriber, "seal_segment", None)
+        finish_sealed_segment = getattr(
+            self.transcriber,
+            "finish_sealed_segment",
+            None,
+        )
+        if not callable(seal_segment) or not callable(finish_sealed_segment):
+            self._spawn_segment(segment)
+            return True
+
+        try:
+            # activityEnd must be on the wire before a post-gap frame is allowed
+            # to open the next activity. Waiting for inputTranscription happens
+            # later in the segment task, so realtime streaming never stalls here.
+            token = await seal_segment(segment)
+        except Exception as exc:
+            if uid not in self._stream_failures_by_user:
+                self._stream_failures_by_user[uid] = exc
+            self.last_failure = _safe_segment_failure(exc)[:300]
+            if isinstance(exc, CaptionTranscriptionError) and exc.terminal:
+                self.provider_blocked_reason = self.last_failure
+                self.provider_blocked_code = (
+                    exc.error_code
+                    or exc.error_type
+                    or str(exc.status_code)
+                )
+            # feed(frame) may already have opened the next local buffer while
+            # discovering a gap. Do not later publish audio that was never sent.
+            self.segmenter.discard_user(uid)
+            close_user = getattr(self.transcriber, "close_user", None)
+            if callable(close_user):
+                try:
+                    await close_user(uid)
+                except Exception:
+                    pass
+            self._spawn_segment(segment)
+            return False
+
+        self._spawn_segment(segment, sealed_token=token)
+        return True
+
     async def _run(self) -> None:
+        stream_frame = getattr(self.transcriber, "stream_frame", None)
+        seal_segment = getattr(self.transcriber, "seal_segment", None)
+        finish_sealed_segment = getattr(
+            self.transcriber,
+            "finish_sealed_segment",
+            None,
+        )
+        ordered_live_stream = bool(
+            callable(stream_frame)
+            and callable(seal_segment)
+            and callable(finish_sealed_segment)
+        )
+
         while not self._closed:
             try:
                 frame = await asyncio.wait_for(self.queue.get(), timeout=0.25)
             except asyncio.TimeoutError:
                 for segment in self.segmenter.flush_idle():
+                    if ordered_live_stream:
+                        await self._seal_and_spawn(segment)
+                    else:
+                        self._spawn_segment(segment)
+                continue
+
+            if not ordered_live_stream:
+                await self._stream_frame_safely(frame, stream_frame)
+                for segment in self.segmenter.feed(frame):
                     self._spawn_segment(segment)
                 continue
 
-            for segment in self.segmenter.feed(frame):
-                self._spawn_segment(segment)
+            # Feed first only to classify boundaries. A segment ending before
+            # this frame is the previous utterance after a packet/speech gap and
+            # must be sealed before this frame reaches Gemini. A segment ending
+            # on this frame hit the max-duration boundary and is sealed after the
+            # frame is streamed.
+            ready = self.segmenter.feed(frame)
+            before_frame = [
+                segment
+                for segment in ready
+                if float(segment.ended_at) < float(frame.received_at)
+            ]
+            after_frame = [
+                segment
+                for segment in ready
+                if float(segment.ended_at) >= float(frame.received_at)
+            ]
 
-    async def _process_segment(self, segment: CaptionSegment) -> None:
+            boundary_ok = True
+            for segment in before_frame:
+                if not await self._seal_and_spawn(segment):
+                    boundary_ok = False
+            if not boundary_ok:
+                continue
+
+            await self._stream_frame_safely(frame, stream_frame)
+
+            for segment in after_frame:
+                await self._seal_and_spawn(segment)
+
+    async def _process_segment(
+        self,
+        segment: CaptionSegment,
+        sealed_token: Any = None,
+    ) -> None:
         if (
             not segment.pcm
             or self._closed
             or int(segment.user_id) in self._blocked_user_ids
         ):
             return
+        uid = int(segment.user_id)
+        stream_failure = self._stream_failures_by_user.pop(uid, None)
+        if stream_failure is not None:
+            close_user = getattr(self.transcriber, "close_user", None)
+            if callable(close_user):
+                try:
+                    await close_user(uid)
+                except Exception:
+                    pass
+            raise stream_failure
         if self.provider_blocked_reason:
             self.provider_skipped += 1
             return
         async with self._transcribe_semaphore:
             if self._global_transcribe_semaphore is None:
-                await self._transcribe_and_publish(segment)
+                await self._transcribe_and_publish(segment, sealed_token)
             else:
                 async with self._global_transcribe_semaphore:
-                    await self._transcribe_and_publish(segment)
+                    await self._transcribe_and_publish(segment, sealed_token)
 
-    async def _transcribe_and_publish(self, segment: CaptionSegment) -> None:
+    async def _transcribe_and_publish(
+        self,
+        segment: CaptionSegment,
+        sealed_token: Any = None,
+    ) -> None:
         uid = int(segment.user_id)
         if self._closed or uid in self._blocked_user_ids:
             return
-        first = await self.transcriber.transcribe(segment)
+        finish_sealed_segment = getattr(
+            self.transcriber,
+            "finish_sealed_segment",
+            None,
+        )
+        finish_segment = getattr(self.transcriber, "finish_segment", None)
+        if sealed_token is not None and callable(finish_sealed_segment):
+            first = await finish_sealed_segment(segment, sealed_token)
+        elif callable(finish_segment):
+            first = await finish_segment(segment)
+        else:
+            first = await self.transcriber.transcribe(segment)
         if self._closed or uid in self._blocked_user_ids:
             return
         chosen = first
 
-        if first.confidence is not None and first.confidence < self.low_confidence_threshold:
+        if (
+            sealed_token is None
+            and not callable(finish_segment)
+            and first.confidence is not None
+            and first.confidence < self.low_confidence_threshold
+        ):
             normalized_pcm = normalize_pcm16_lossless_timing(segment.pcm)
             if normalized_pcm != segment.pcm:
                 second = await self.transcriber.transcribe(

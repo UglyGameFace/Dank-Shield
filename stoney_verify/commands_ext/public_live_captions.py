@@ -684,6 +684,13 @@ async def build_server_live_captions_embed(
     general_sid = server_caption_scope_id(int(guild.id))
     general = manager.status(general_sid)
     guild_status = manager.status_for_guild(int(guild.id))
+    user_id = int(interaction.user.id)
+    user_prefs = await manager.preferences_for_user(
+        int(guild.id),
+        user_id,
+    )
+    personal_hint = str(user_prefs.get("language_code") or "")
+    remembered_auto = bool(user_prefs.get("auto_opt_in"))
     current_voice = _current_voice_channel(interaction)
     soak_active = bool(general.get("active") and general.get("soak_test"))
     bot_owner = await _bot_owner_authorized(interaction) if not enabled else False
@@ -755,9 +762,7 @@ async def build_server_live_captions_embed(
             for value in (general.get("opted_in_user_ids") or [])
             if str(value).isdigit()
         }
-        user_id = int(interaction.user.id)
         user_opted = user_id in opted
-        personal_hint = manager.user_language_hint(user_id)
         detected_map = general.get("speaker_detected_languages") if isinstance(general.get("speaker_detected_languages"), dict) else {}
         level_map = general.get("speaker_audio_rms_dbfs") if isinstance(general.get("speaker_audio_rms_dbfs"), dict) else {}
         detected_language = str(detected_map.get(str(user_id)) or "")
@@ -782,8 +787,9 @@ async def build_server_live_captions_embed(
                 f"Languages: **{'Auto-detect 85+ + code-switching' if not general.get('language_codes') else ', '.join(general.get('language_codes') or [])}**\n"
                 f"Text output: **{_caption_output_mode_label(str(general.get('output_mode') or 'original'))}**\n"
                 f"Your language: **{_personal_language_label(personal_hint)}**\n"
+                f"Auto-caption preference: **{'ON · remembered for this server' if remembered_auto else 'OFF'}**\n"
                 f"Opted-in speakers: **{len(opted)}**\n"
-                f"Your voice: **{'opted in' if user_opted else 'not opted in'}**"
+                f"Your voice right now: **{'active' if user_opted else 'inactive'}**"
                 f"{diagnostic_line}"
             ),
             inline=False,
@@ -794,6 +800,11 @@ async def build_server_live_captions_embed(
             provider_skipped = int(general.get("provider_skipped") or 0)
             provider_live_connections = int(general.get("provider_live_connections") or 0)
             provider_live_reconnects = int(general.get("provider_live_reconnects") or 0)
+            provider_audio_chunks = int(general.get("provider_audio_chunks_sent") or 0)
+            provider_activity_starts = int(general.get("provider_activity_starts") or 0)
+            provider_activity_ends = int(general.get("provider_activity_ends") or 0)
+            provider_interim_events = int(general.get("provider_interim_events") or 0)
+            provider_final_events = int(general.get("provider_final_events") or 0)
             receive_recoveries = int(general.get("receive_recoveries") or 0)
             receive_recovery_failures = int(general.get("receive_recovery_failures") or 0)
             language_hint_mismatches = int(general.get("language_hint_mismatches") or 0)
@@ -810,7 +821,9 @@ async def build_server_live_captions_embed(
                     f"Corrupt Opus dropped: **{int(health.get('opus_decode_drops') or 0)}** • not consented: **{int(health.get('frames_not_consented') or 0)}** • unknown source: **{int(health.get('frames_unknown_source') or 0)}** • identity mismatch: **{int(health.get('frames_source_mismatch') or 0)}**\n"
                     f"Malformed PCM: **{int(health.get('frames_malformed_pcm') or 0)}** • transcribed: **{int(general.get('segments_transcribed') or 0)}** • published: **{int(general.get('segments_published') or 0)}** • empty: **{int(general.get('segments_empty') or 0)}**\n"
                     f"Unclear: **{int(general.get('segments_unclear') or 0)}** • failures: **{int(general.get('segment_failures') or 0)}** • provider-skipped: **{provider_skipped}**\n"
-                    f"Gemini Live connections: **{provider_live_connections}** • reconnects: **{provider_live_reconnects}** • language-hint mismatches: **{language_hint_mismatches}**\n"
+                    f"Gemini Live connections: **{provider_live_connections}** • reconnects: **{provider_live_reconnects}** • audio chunks: **{provider_audio_chunks}**\n"
+                    f"Gemini manual VAD: starts **{provider_activity_starts}** • ends **{provider_activity_ends}**\n"
+                    f"Gemini transcript events: interim **{provider_interim_events}** • final **{provider_final_events}** • language-hint mismatches: **{language_hint_mismatches}**\n"
                     f"Translations: **{translation_requests}** • translation skipped: **{translation_skipped}** • translation failures: **{translation_failures}**"
                 ),
                 inline=False,
@@ -875,12 +888,21 @@ async def build_server_live_captions_embed(
     )
 
     embed.add_field(
+        name="Your remembered preference",
+        value=(
+            f"Auto-caption: **{'ON' if remembered_auto else 'OFF'}** for this server\n"
+            f"Language: **{_personal_language_label(personal_hint)}**\n"
+            "Turn auto-caption on once and Dank Shield will automatically activate your voice whenever Live Captions is running in a voice channel you join. Turn it off at any time to revoke that remembered consent."
+        ),
+        inline=False,
+    )
+    embed.add_field(
         name="How it works",
         value=(
-            "1. Staff joins the voice channel and presses **Start / Stop Captions**.\n"
-            "2. Each participant opens **/captions** (or **/dank home → Live Captions**).\n"
-            "3. Each participant presses **Caption My Voice** for their own voice only.\n"
-            "4. Captions post in the server's configured Live Captions output channel."
+            "1. Staff starts Live Captions in a voice channel.\n"
+            "2. Each participant explicitly enables **Auto-Caption My Voice** once for that server.\n"
+            "3. Dank Shield remembers that choice and automatically activates that member whenever they join the active captioned VC.\n"
+            "4. Leaving the VC or stopping captions immediately clears active audio; the remembered preference stays until the member turns it off."
         ),
         inline=False,
     )
@@ -888,9 +910,10 @@ async def build_server_live_captions_embed(
         name="Speaker isolation & privacy",
         value=(
             "Discord speakers stay isolated before transcription. Overlapping users are not mixed together. "
-            "Each participant can keep **My Language** on Auto or provide a personal language hint for better recognition. "
-            "Opting out immediately blocks new audio and purges that speaker's buffered/queued/in-flight caption audio. "
-            "Opted-in audio is sent to Google Gemini's transcription API for speech-to-text. This deployment uses Gemini's Free Tier, where Google states submitted content may be used to improve its products; Dank Shield itself does not save the audio. "
+            "Each participant can keep **My Language** on Auto or save a personal language hint for better recognition. "
+            "Auto-caption consent and the language hint are remembered per server only after that member explicitly chooses them. "
+            "Turning auto-caption off immediately blocks new audio and purges that speaker's buffered/queued/in-flight caption audio. "
+            "Opted-in audio is sent to Google Gemini's transcription API for speech-to-text. If this server enables English output, only finalized transcript text is translated; the audio is not submitted a second time for translation. This deployment uses Gemini's Free Tier, where Google states submitted content may be used to improve its products; Dank Shield itself does not save the audio. "
             "If a microphone already captures a TV, game audio, or another person in the same room, that sound is already part "
             "of that Discord user's source stream."
         ),
@@ -945,7 +968,13 @@ class CaptionLanguageGroupSelect(discord.ui.Select):
         manager = ensure_community_voice_caption_manager(interaction.client)
         if selected == "__auto__":
             await _defer_update(interaction)
-            await manager.set_user_language_hint(int(interaction.user.id), "")
+            if interaction.guild is None:
+                return await _followup(interaction, "Live Captions language preferences can only be changed inside a server.")
+            await manager.set_user_language_hint(
+                int(interaction.guild.id),
+                int(interaction.user.id),
+                "",
+            )
             await _edit_original(
                 interaction,
                 embed=await build_server_live_captions_embed(interaction),
@@ -1046,8 +1075,14 @@ class CaptionLanguageChoiceSelect(discord.ui.Select):
             )
 
         await _defer_update(interaction)
+        if interaction.guild is None:
+            return await _followup(interaction, "Live Captions language preferences can only be changed inside a server.")
         manager = ensure_community_voice_caption_manager(interaction.client)
-        await manager.set_user_language_hint(int(interaction.user.id), code)
+        await manager.set_user_language_hint(
+            int(interaction.guild.id),
+            int(interaction.user.id),
+            code,
+        )
         await _edit_original(
             interaction,
             embed=await build_server_live_captions_embed(interaction),
@@ -1137,7 +1172,7 @@ class ServerLiveCaptionsView(_OwnedView):
             )
             return await _followup(
                 interaction,
-                "✅ General Live Captions stopped. All speaker consent and buffered caption audio were cleared.",
+                "✅ General Live Captions stopped. Active audio admission and buffered caption audio were cleared. Members' remembered auto-caption preferences remain until they turn them off.",
             )
 
         soak_test = False
@@ -1200,16 +1235,16 @@ class ServerLiveCaptionsView(_OwnedView):
         if soak_test:
             await _followup(
                 interaction,
-                "🧪 DAVE soak test started for this server only. The global feature is still locked. Opt your own voice in, speak normally, then use **Refresh** to inspect live receive/transcription telemetry.",
+                "🧪 DAVE soak test started for this server only. The global feature is still locked. Remembered auto-caption members already in this VC are restored automatically. If yours is off, enable **Auto-Caption My Voice** once, speak normally, then use **Refresh**.",
             )
         else:
             await _followup(
                 interaction,
-                "✅ General Live Captions started. Nobody is transcribed automatically. Each speaker must open **/captions** (or **/dank home → Live Captions**) and press **Caption My Voice**.",
+                "✅ General Live Captions started. Members who previously enabled **Auto-Caption My Voice** for this server are restored automatically when they are in the captioned VC. Everyone else remains excluded until they explicitly enable it.",
             )
 
     @discord.ui.button(
-        label="Caption My Voice",
+        label="Auto-Caption My Voice",
         emoji="📝",
         style=discord.ButtonStyle.secondary,
         custom_id="dank:captions:server:consent:v1",
@@ -1224,33 +1259,26 @@ class ServerLiveCaptionsView(_OwnedView):
         await _defer_update(interaction)
         guild = interaction.guild
         if guild is None:
-            return await _followup(interaction, "Live Captions can only run inside a server.")
+            return await _followup(
+                interaction,
+                "Live Captions preferences can only be changed inside a server.",
+            )
 
         manager = ensure_community_voice_caption_manager(interaction.client)
-        sid = server_caption_scope_id(int(guild.id))
-        status = manager.status(sid)
-        if not bool(status.get("active")):
-            other = manager.status_for_guild(int(guild.id))
-            if bool(other.get("active")) and str(other.get("scope_kind") or "") == "community_hub":
-                return await _followup(
-                    interaction,
-                    "Community Hub Live Captions are running instead. Use that Community Hub session's **Caption My Voice** control.",
-                )
-            return await _followup(
-                interaction,
-                "General Live Captions are not running in this server right now.",
-            )
-
-        voice = _current_voice_channel(interaction)
-        target_voice_id = int(status.get("voice_channel_id") or 0)
-        if voice is None or int(voice.id) != target_voice_id:
-            return await _followup(
-                interaction,
-                f"Join <#{target_voice_id}> before opting your voice into this caption session.",
-            )
+        uid = int(interaction.user.id)
+        prefs = await manager.preferences_for_user(
+            int(guild.id),
+            uid,
+            refresh=True,
+        )
+        desired = not bool(prefs.get("auto_opt_in"))
 
         try:
-            enabled = await manager.toggle_consent(sid, int(interaction.user.id))
+            enabled = await manager.set_auto_caption_preference(
+                int(guild.id),
+                uid,
+                desired,
+            )
         except VoiceReceiveUnavailable as exc:
             return await _followup(interaction, f"❌ {exc}")
 
@@ -1262,11 +1290,11 @@ class ServerLiveCaptionsView(_OwnedView):
         if enabled:
             return await _followup(
                 interaction,
-                "✅ Your voice is opted in. Dank Shield keeps your Discord speaker stream separate. **My Language** defaults to Auto for all supported languages; setting the language you actually speak gives Gemini an accuracy hint without changing anybody else's captions. If this server enables English output, only finalized transcript text is translated; the audio is not submitted a second time for translation. This deployment uses Gemini's Free Tier, where Google states submitted content may be used to improve its products. Dank Shield itself does not save the audio.",
+                "✅ **Auto-Caption My Voice is ON for this server and remembered.** When Live Captions is running, Dank Shield automatically activates your voice after you join the captioned VC. Your speaker stream stays isolated and your saved **My Language** hint is reused. Opted-in audio is sent to Google Gemini's Free Tier transcription service; Dank Shield does not save the audio. Press **Auto-Caption My Voice** again at any time to revoke this remembered consent.",
             )
         await _followup(
             interaction,
-            "✅ Your voice is opted out. New audio is blocked and your buffered/queued/in-flight caption audio was purged.",
+            "✅ **Auto-Caption My Voice is OFF for this server.** Your remembered consent was revoked. Any active, buffered, queued, or in-flight caption audio for your voice was cleared.",
         )
 
     @discord.ui.button(
@@ -1283,7 +1311,16 @@ class ServerLiveCaptionsView(_OwnedView):
     ) -> None:
         _ = button
         manager = ensure_community_voice_caption_manager(interaction.client)
-        current = manager.user_language_hint(int(interaction.user.id))
+        if interaction.guild is None:
+            return await interaction.response.send_message(
+                "Live Captions language preferences can only be changed inside a server.",
+                ephemeral=True,
+            )
+        prefs = await manager.preferences_for_user(
+            int(interaction.guild.id),
+            int(interaction.user.id),
+        )
+        current = str(prefs.get("language_code") or "")
         await _defer_update(interaction)
         await _edit_original(
             interaction,

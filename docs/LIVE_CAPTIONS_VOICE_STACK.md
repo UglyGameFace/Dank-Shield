@@ -32,12 +32,11 @@ Discord voice gateway
   -> per-SSRC Opus decoder
   -> 48 kHz / stereo / signed 16-bit PCM
   -> Dank Shield SSRC + source-user agreement
-  -> that user's explicit Caption My Voice consent
-  -> per-speaker segment buffer
-  -> 48 kHz stereo PCM segment
-  -> 16 kHz mono signed-16 PCM conversion
-  -> that speaker's persistent Gemini Live Transcribe WebSocket
-  -> finalized transcript + detected BCP-47 language code
+  -> that user's explicit remembered Auto-Caption consent + active VC admission
+  -> stateful per-speaker 48 kHz stereo -> 16 kHz mono FIR conversion
+  -> each Discord PCM frame streams immediately to that speaker's persistent Gemini Live Transcribe WebSocket
+  -> local per-speaker silence boundary sends activityEnd
+  -> finalized inputTranscription + detected BCP-47 language code
   -> optional text-only English translation
   -> configured caption text channel/thread
 ```
@@ -125,19 +124,23 @@ A PCM frame is eligible for captioning only when all of these are true:
 
 Unknown or mismatched identity is dropped. Dank Shield does not guess a speaker from timing, display name, speaking events, channel order, or another user's nearby packets.
 
-## Consent and memory lifetime
+## Consent, remembered preference, and audio lifetime
 
-Consent is per Discord user and memory-only.
+Live Captions requires explicit per-member consent. A member may enable **Auto-Caption My Voice** once for a Discord server. That boolean preference and the member's optional language hint are persisted in the existing per-guild member settings record so they survive caption restarts and bot redeploys.
 
-Opt-out:
+Remembered consent is not active audio capture by itself. Dank Shield only admits that member's voice when a caption session is running and the member is in that session's target voice channel. On join/start, the remembered preference is restored automatically. Leaving the target VC or stopping the caption session immediately ends runtime audio admission.
+
+Turning **Auto-Caption My Voice** off:
+- persists the revocation for that server;
 - blocks future frames immediately;
 - advances the user's consent generation so callbacks scheduled under older consent are invalid;
 - removes buffered and queued segments for that user;
-- cancels in-flight transcription tasks for that user.
+- cancels in-flight transcription tasks for that user;
+- closes that speaker's Gemini Live session.
 
-Stopping a session clears all consent, queued audio, segment buffers, and in-flight transcription work.
+Stopping a session clears runtime admission, queued audio, segment buffers, and in-flight transcription work. It does **not** silently erase the member's remembered per-server preference.
 
-Dank Shield itself does not persist raw audio.
+Dank Shield itself does not persist raw audio or PCM buffers.
 
 ## Guild / voice-channel isolation
 
@@ -151,13 +154,15 @@ A normal-server caption transcript includes its source voice-channel identity. C
 
 Only isolated, opted-in PCM crosses the transcription boundary. Discord receive produces 48 kHz stereo signed-16 PCM. Dank Shield first downmixes stereo, applies a deterministic low-pass FIR below the 16 kHz target Nyquist limit, then decimates by three to 16 kHz mono signed-16 PCM. This avoids folding high-frequency mic/game noise back into the speech band during resampling.
 
-Primary model: `gemini-3.5-transcribe-live`. Each opted-in Discord speaker owns a separate persistent WebSocket. Dank Shield uses Google's documented **manual VAD** mode because the Discord receive pipeline has already isolated and segmented one speaker before Gemini sees the buffered utterance: `activityStart` is sent before the 40 ms PCM chunks and `activityEnd` is sent after the final chunk. `audioStreamEnd` is not used in this mode. This is the same finalization contract that produced real finalized transcripts in the earlier live soak, while the later hybrid-VAD experiment timed out waiting for `inputTranscription`.
+Primary model: `gemini-3.5-transcribe-live`. Each opted-in Discord speaker owns a separate persistent WebSocket. Dank Shield uses Google's documented **manual VAD** contract because Discord has already isolated one speaker and Dank Shield owns the utterance boundary. Automatic activity detection is disabled; `activityStart` is sent immediately before that speaker's first streamed PCM chunk and `activityEnd` is sent when the local silence/max-duration boundary closes. `audioStreamEnd` is not used in manual-VAD mode.
 
-Language behavior defaults to **Auto / all supported languages**. An empty `languageCodes` list lets Gemini detect across its supported transcription locales and handle code-switching. A participant may optionally set **/captions → My Language** through Discord dropdowns. The first select offers **Auto · All Supported Languages** or a language group; the second select offers every BCP-47 code in Google's current Gemini 3.5 Transcribe supported-language table. No free-form language modal is used. The chosen hint applies only to that Discord user's provider session and reconnects only that speaker. Auto remains available for multilingual/code-switching speakers.
+The production path streams decoded Discord audio to Gemini **as frames arrive**. It does not buffer a multi-second utterance and then burst-upload it to a Live endpoint. A stateful FIR resampler keeps filter history across Discord frames, and the Gemini socket is prepared before the speaker is admitted so the first spoken audio is not queued behind the WebSocket handshake. The segmenter remains only to identify local utterance boundaries and bound cleanup/privacy state. When the first frame after a packet gap proves that the previous utterance ended, Dank Shield sends the previous turn's `activityEnd` **before** that post-gap frame can open the next `activityStart`; otherwise the new utterance's first audio would be incorrectly attached to the prior turn. Final transcript waits use FIFO per-turn futures, so the next turn can keep streaming without waiting for the prior `inputTranscription` and concurrent results cannot be consumed by the wrong segment task. The default 0.75-second packet-gap boundary is intentionally within Google's current 500–800 ms manual-VAD guidance, avoiding the aggressive sub-500 ms cutoff that can fragment natural pauses.
+
+Language behavior defaults to **Auto / all supported languages**. An empty `languageCodes` list lets Gemini detect across its supported transcription locales and handle code-switching. A participant may optionally set **/captions → My Language** through Discord dropdowns. The first select offers **Auto · All Supported Languages** or a language group; the second select offers every BCP-47 code in Google's current Gemini 3.5 Transcribe supported-language table. No free-form language modal is used. The chosen hint is remembered per server, applies only to that Discord user's provider session, and reconnects only that speaker when changed. Auto remains available for multilingual/code-switching speakers.
 
 Live Transcribe distinguishes speculative `interimInputTranscription` from finalized `inputTranscription`. Dank Shield publishes only finalized `inputTranscription`. Final results include a BCP-47 `languageCode`, which is retained for diagnostics and translation decisions. When a participant gave an explicit language hint and Gemini reports a different primary language family, Dank Shield fails that utterance closed as `[unclear audio]` instead of publishing confident-looking text in an unrelated language.
 
-Gemini documents a 10-minute maximum Live Transcribe session. Dank Shield proactively rotates a speaker's session before that limit and also honors `goAway` by reconnecting before the next utterance.
+Gemini documents a 10-minute maximum Live Transcribe session. Dank Shield proactively rotates a speaker's session before that limit and also honors `goAway` by reconnecting before the next utterance. WebSocket openness alone is not treated as session health: if the dedicated receive task is missing or has exited while the socket still appears open, the speaker session reconnects before accepting more PCM so audio cannot be sent into an unread connection.
 
 The server owner chooses one text-output mode:
 
@@ -186,9 +191,10 @@ The bot-owner soak panel must expose enough state to localize a failure:
 - identity/consent/malformed drops;
 - routed frames and queue depth;
 - Gemini Live connection/reconnect counts;
+- realtime audio chunks sent, audio-stream-end count, interim transcription events, and finalized transcription events;
 - Discord voice gateway speaking-signal count;
 - automatic receive-transport recovery count/failures and last recovery reason;
-- configured server output mode plus each opted-in speaker's optional language hint;
+- configured server output mode plus each opted-in speaker's remembered language hint and auto-caption preference;
 - last per-speaker audio RMS level and Gemini-detected language code;
 - explicit-language mismatch count;
 - translation request/skip/failure counts;
