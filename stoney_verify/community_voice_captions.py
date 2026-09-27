@@ -478,6 +478,11 @@ class _GeminiLiveSpeakerSession:
         self._receiver_task: Optional[asyncio.Task[None]] = None
         self._final_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=16)
         self._pending_finals: deque[asyncio.Future[Any]] = deque()
+        self._current_interims: deque[TranscriptResult] = deque(maxlen=4)
+        self._sealed_interim_fallbacks: dict[
+            asyncio.Future[Any],
+            TranscriptResult,
+        ] = {}
         self._resampler = _StreamingPCM48To16Mono()
 
     def _clear_final_queue(self) -> None:
@@ -490,12 +495,71 @@ class _GeminiLiveSpeakerSession:
     def _cancel_pending_finals(self) -> None:
         while self._pending_finals:
             waiter = self._pending_finals.popleft()
+            self._sealed_interim_fallbacks.pop(waiter, None)
             if not waiter.done():
                 waiter.cancel()
+        self._sealed_interim_fallbacks.clear()
+
+    @staticmethod
+    def _normalized_interim_text(text: str) -> str:
+        return " ".join(str(text or "").casefold().split())
+
+    def _record_interim(self, interim: dict[str, Any]) -> None:
+        text = str(interim.get("text") or "").strip()
+        if not text:
+            return
+        self._current_interims.append(
+            TranscriptResult(
+                text=text,
+                confidence=None,
+                provider="gemini-live-interim",
+                model=self.owner.model,
+                language_code=str(interim.get("languageCode") or "").strip(),
+            )
+        )
+
+    def _stable_interim_candidate(self) -> Optional[TranscriptResult]:
+        if len(self._current_interims) < 2:
+            return None
+
+        previous = self._current_interims[-2]
+        latest = self._current_interims[-1]
+        a = self._normalized_interim_text(previous.text)
+        b = self._normalized_interim_text(latest.text)
+        if not a or not b:
+            return None
+
+        previous_family = str(previous.language_code or "").split("-", 1)[0].casefold()
+        latest_family = str(latest.language_code or "").split("-", 1)[0].casefold()
+        if previous_family and latest_family and previous_family != latest_family:
+            return None
+
+        if len(b) < 8:
+            stable = a == b
+        else:
+            similarity = SequenceMatcher(None, a, b).ratio()
+            shorter, longer = sorted((a, b), key=len)
+            prefix_stable = bool(
+                longer.startswith(shorter)
+                and len(shorter) >= 8
+                and len(shorter) / max(1, len(longer)) >= 0.80
+            )
+            stable = similarity >= 0.90 or prefix_stable
+        if not stable:
+            return None
+
+        return TranscriptResult(
+            text=latest.text,
+            confidence=None,
+            provider="gemini-live-interim-timeout",
+            model=self.owner.model,
+            language_code=latest.language_code or previous.language_code,
+        )
 
     def _resolve_pending_final(self, value: Any) -> bool:
         while self._pending_finals:
             waiter = self._pending_finals.popleft()
+            self._sealed_interim_fallbacks.pop(waiter, None)
             if waiter.done():
                 continue
             if isinstance(value, Exception):
@@ -509,6 +573,7 @@ class _GeminiLiveSpeakerSession:
         delivered = False
         while self._pending_finals:
             waiter = self._pending_finals.popleft()
+            self._sealed_interim_fallbacks.pop(waiter, None)
             if waiter.done():
                 continue
             waiter.set_exception(exc)
@@ -534,6 +599,7 @@ class _GeminiLiveSpeakerSession:
         self.utterance_active = False
         self._resampler.reset()
         self._cancel_pending_finals()
+        self._current_interims.clear()
         self._clear_final_queue()
         if ws is not None and not ws.closed:
             try:
@@ -580,6 +646,7 @@ class _GeminiLiveSpeakerSession:
                 interim = content.get("interimInputTranscription")
                 if isinstance(interim, dict):
                     self.owner.interim_transcript_events += 1
+                    self._record_interim(interim)
 
                 final = content.get("inputTranscription")
                 if not isinstance(final, dict):
@@ -757,6 +824,7 @@ class _GeminiLiveSpeakerSession:
                 # Manual VAD has no server-side pre-speech buffer. Signal the
                 # turn before the first streamed PCM chunk so the first syllable
                 # is part of the same activity window.
+                self._current_interims.clear()
                 self._clear_final_queue()
                 await ws.send_json({"realtimeInput": {"activityStart": {}}})
                 self.owner.activity_starts += 1
@@ -798,6 +866,11 @@ class _GeminiLiveSpeakerSession:
                 )
                 return waiter
 
+            fallback = self._stable_interim_candidate()
+            self._current_interims.clear()
+            if fallback is not None:
+                self._sealed_interim_fallbacks[waiter] = fallback
+
             self._pending_finals.append(waiter)
             try:
                 await ws.send_json({"realtimeInput": {"activityEnd": {}}})
@@ -806,6 +879,7 @@ class _GeminiLiveSpeakerSession:
                     self._pending_finals.remove(waiter)
                 except ValueError:
                     pass
+                self._sealed_interim_fallbacks.pop(waiter, None)
                 waiter.cancel()
                 raise
 
@@ -824,6 +898,7 @@ class _GeminiLiveSpeakerSession:
                 timeout=self.owner.timeout_seconds,
             )
         except asyncio.TimeoutError:
+            fallback = self._sealed_interim_fallbacks.pop(waiter, None)
             try:
                 self._pending_finals.remove(waiter)
             except ValueError:
@@ -831,8 +906,13 @@ class _GeminiLiveSpeakerSession:
             if not waiter.done():
                 waiter.cancel()
             # A connected socket that accepted audio but stopped producing final
-            # events is not trustworthy for the next turn. Reconnect cleanly.
+            # events is not trustworthy for the next turn. Reconnect cleanly
+            # even when a stable interim can rescue this exact sealed utterance.
             await self.close()
+            if fallback is not None:
+                self.owner.interim_timeout_fallbacks += 1
+                self.owner.fallback_count += 1
+                return fallback
             raise CaptionTranscriptionError(
                 0,
                 "Gemini Live transcription timed out waiting for a finalized transcript.",
@@ -920,6 +1000,7 @@ class GeminiLiveTranscriber:
         self.activity_ends = 0
         self.interim_transcript_events = 0
         self.final_transcript_events = 0
+        self.interim_timeout_fallbacks = 0
         self.language_hint_mismatches = 0
         self.fallback_count = 0
         if not self.api_key:
