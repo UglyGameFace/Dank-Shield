@@ -477,6 +477,7 @@ class _GeminiLiveSpeakerSession:
         self._send_lock = asyncio.Lock()
         self._receiver_task: Optional[asyncio.Task[None]] = None
         self._final_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=16)
+        self._pending_finals: deque[asyncio.Future[Any]] = deque()
         self._resampler = _StreamingPCM48To16Mono()
 
     def _clear_final_queue(self) -> None:
@@ -485,6 +486,34 @@ class _GeminiLiveSpeakerSession:
                 self._final_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+
+    def _cancel_pending_finals(self) -> None:
+        while self._pending_finals:
+            waiter = self._pending_finals.popleft()
+            if not waiter.done():
+                waiter.cancel()
+
+    def _resolve_pending_final(self, value: Any) -> bool:
+        while self._pending_finals:
+            waiter = self._pending_finals.popleft()
+            if waiter.done():
+                continue
+            if isinstance(value, Exception):
+                waiter.set_exception(value)
+            else:
+                waiter.set_result(value)
+            return True
+        return False
+
+    def _fail_pending_finals(self, exc: Exception) -> bool:
+        delivered = False
+        while self._pending_finals:
+            waiter = self._pending_finals.popleft()
+            if waiter.done():
+                continue
+            waiter.set_exception(exc)
+            delivered = True
+        return delivered
 
     async def close(self) -> None:
         receiver = self._receiver_task
@@ -504,6 +533,7 @@ class _GeminiLiveSpeakerSession:
         self.rotate_before_next = False
         self.utterance_active = False
         self._resampler.reset()
+        self._cancel_pending_finals()
         self._clear_final_queue()
         if ws is not None and not ws.closed:
             try:
@@ -512,6 +542,12 @@ class _GeminiLiveSpeakerSession:
                 pass
 
     async def _push_final_event(self, value: Any) -> None:
+        # Production streaming seals each local utterance before the next turn
+        # starts, so finalized events can be mapped FIFO to an exact waiter.
+        # The bounded queue remains as a compatibility fallback for unexpected
+        # provider events that arrive without an active sealed turn.
+        if self._resolve_pending_final(value):
+            return
         if self._final_queue.full():
             try:
                 self._final_queue.get_nowait()
@@ -564,30 +600,37 @@ class _GeminiLiveSpeakerSession:
         except asyncio.CancelledError:
             raise
         except CaptionTranscriptionError as exc:
-            if self.ws is ws:
+            if self.ws is ws and not self._fail_pending_finals(exc):
                 await self._push_final_event(exc)
         except Exception:
             if self.ws is ws:
-                await self._push_final_event(
-                    CaptionTranscriptionError(
-                        0,
-                        "Gemini Live transcription receive loop failed.",
-                    )
+                exc = CaptionTranscriptionError(
+                    0,
+                    "Gemini Live transcription receive loop failed.",
                 )
+                if not self._fail_pending_finals(exc):
+                    await self._push_final_event(exc)
 
     async def _connect(self) -> None:
         async with self._connect_lock:
             current = self.ws
+            pending_finals = bool(self._pending_finals)
             expired = bool(
                 self.connected_at
                 and time.monotonic() - self.connected_at
                 >= self.owner.session_refresh_seconds
+                and not self.utterance_active
+                and not pending_finals
             )
             if (
                 current is not None
                 and not current.closed
                 and not expired
-                and not (self.rotate_before_next and not self.utterance_active)
+                and not (
+                    self.rotate_before_next
+                    and not self.utterance_active
+                    and not pending_finals
+                )
             ):
                 return
 
@@ -672,12 +715,19 @@ class _GeminiLiveSpeakerSession:
 
     async def _ensure_connected(self) -> aiohttp.ClientWebSocketResponse:
         ws = self.ws
+        pending_finals = bool(self._pending_finals)
         expired = bool(
             self.connected_at
             and time.monotonic() - self.connected_at
             >= self.owner.session_refresh_seconds
+            and not self.utterance_active
+            and not pending_finals
         )
-        rotate_now = bool(self.rotate_before_next and not self.utterance_active)
+        rotate_now = bool(
+            self.rotate_before_next
+            and not self.utterance_active
+            and not pending_finals
+        )
         if ws is None or ws.closed or expired or rotate_now:
             if ws is not None:
                 self.owner.live_reconnects += 1
@@ -714,35 +764,69 @@ class _GeminiLiveSpeakerSession:
             self.owner.audio_chunks_sent += 1
             self.owner.audio_bytes_sent += len(pcm16)
 
-    async def finalize(self) -> TranscriptResult:
+    async def seal_utterance(self) -> asyncio.Future[Any]:
+        """End the current manual-VAD activity without waiting for its transcript.
+
+        This lets the next Discord speech burst start streaming immediately after
+        activityEnd while the receive loop resolves the previous turn's dedicated
+        future. Per-turn futures prevent concurrent finalized transcripts from
+        being consumed by the wrong segment task.
+        """
+
+        loop = asyncio.get_running_loop()
         async with self._send_lock:
             ws = await self._ensure_connected()
+            waiter: asyncio.Future[Any] = loop.create_future()
             if not self.utterance_active:
-                return TranscriptResult(
-                    text="",
-                    confidence=None,
-                    provider="gemini-live",
-                    model=self.owner.model,
+                waiter.set_result(
+                    TranscriptResult(
+                        text="",
+                        confidence=None,
+                        provider="gemini-live",
+                        model=self.owner.model,
+                    )
                 )
-            await ws.send_json({"realtimeInput": {"activityEnd": {}}})
-            self.owner.activity_ends += 1
+                return waiter
 
+            self._pending_finals.append(waiter)
+            try:
+                await ws.send_json({"realtimeInput": {"activityEnd": {}}})
+            except Exception:
+                try:
+                    self._pending_finals.remove(waiter)
+                except ValueError:
+                    pass
+                waiter.cancel()
+                raise
+
+            self.owner.activity_ends += 1
+            self.utterance_active = False
+            self._resampler.reset()
+            return waiter
+
+    async def wait_for_final(
+        self,
+        waiter: asyncio.Future[Any],
+    ) -> TranscriptResult:
         try:
             result = await asyncio.wait_for(
-                self._final_queue.get(),
+                asyncio.shield(waiter),
                 timeout=self.owner.timeout_seconds,
             )
         except asyncio.TimeoutError:
+            try:
+                self._pending_finals.remove(waiter)
+            except ValueError:
+                pass
+            if not waiter.done():
+                waiter.cancel()
+            # A connected socket that accepted audio but stopped producing final
+            # events is not trustworthy for the next turn. Reconnect cleanly.
             await self.close()
             raise CaptionTranscriptionError(
                 0,
                 "Gemini Live transcription timed out waiting for a finalized transcript.",
             ) from None
-        finally:
-            # The next Discord speech burst is a fresh utterance. Reset only the
-            # FIR history/turn flag, not the persistent Gemini WebSocket.
-            self.utterance_active = False
-            self._resampler.reset()
 
         if isinstance(result, Exception):
             await self.close()
@@ -754,6 +838,12 @@ class _GeminiLiveSpeakerSession:
                 "Gemini Live transcription returned an invalid finalized event.",
             )
         return result
+
+    async def finalize(self) -> TranscriptResult:
+        """Compatibility path that seals and then waits for one finalized turn."""
+
+        waiter = await self.seal_utterance()
+        return await self.wait_for_final(waiter)
 
     async def transcribe_buffered(self, pcm48_stereo: bytes) -> TranscriptResult:
         """Compatibility path for tests/repair tooling, not the production path."""
@@ -950,12 +1040,33 @@ class GeminiLiveTranscriber:
         session = self._session_for_user(uid)
         await session.stream_pcm(frame.pcm)
 
-    async def finish_segment(self, segment: CaptionSegment) -> TranscriptResult:
+    async def seal_segment(
+        self,
+        segment: CaptionSegment,
+    ) -> tuple[_GeminiLiveSpeakerSession, asyncio.Future[Any]]:
+        """Send activityEnd now and return an exact turn token for later await."""
+
         uid = int(segment.user_id)
         self._last_audio_rms_dbfs[uid] = pcm16_rms_dbfs(segment.pcm)
         session = self._session_for_user(uid)
-        result = await session.finalize()
+        waiter = await session.seal_utterance()
+        return session, waiter
+
+    async def finish_sealed_segment(
+        self,
+        segment: CaptionSegment,
+        token: tuple[_GeminiLiveSpeakerSession, asyncio.Future[Any]],
+    ) -> TranscriptResult:
+        uid = int(segment.user_id)
+        session, waiter = token
+        result = await session.wait_for_final(waiter)
         return self._validate_result(uid, result)
+
+    async def finish_segment(self, segment: CaptionSegment) -> TranscriptResult:
+        """Compatibility path for callers that do not pre-seal the turn."""
+
+        token = await self.seal_segment(segment)
+        return await self.finish_sealed_segment(segment, token)
 
     async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
         """Compatibility path for tests/repair callers.
