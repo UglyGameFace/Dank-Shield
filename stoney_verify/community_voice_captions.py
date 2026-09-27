@@ -642,6 +642,13 @@ class _GeminiLiveSpeakerSession:
                 if not isinstance(content, dict):
                     continue
 
+                if bool(content.get("interrupted")):
+                    # Realtime input defaults to START_OF_ACTIVITY_INTERRUPTS.
+                    # Transcription-only sessions explicitly disable that setup
+                    # behavior, so any interruption observed here is useful
+                    # provider telemetry rather than an expected caption event.
+                    self.owner.interrupted_server_events += 1
+
                 interim = content.get("interimInputTranscription")
                 if isinstance(interim, dict):
                     self.owner.interim_transcript_events += 1
@@ -740,7 +747,14 @@ class _GeminiLiveSpeakerSession:
                     # in documented manual-VAD mode while still streaming every
                     # PCM frame as it arrives.
                     "realtimeInputConfig": {
-                        "automaticActivityDetection": {"disabled": True}
+                        "automaticActivityDetection": {"disabled": True},
+                        # The Live API defaults to START_OF_ACTIVITY_INTERRUPTS.
+                        # A new speaker turn may begin before inputTranscription
+                        # for the previous activityEnd arrives; interrupting the
+                        # server response there can discard that authoritative
+                        # final and leave its waiter to time out. Captions never
+                        # need conversational barge-in, so preserve finalization.
+                        "activityHandling": "NO_INTERRUPTION",
                     },
                     "inputAudioTranscription": transcription_config,
                 }
@@ -985,6 +999,7 @@ class GeminiLiveTranscriber:
         self.activity_ends = 0
         self.interim_transcript_events = 0
         self.final_transcript_events = 0
+        self.interrupted_server_events = 0
         self.language_hint_mismatches = 0
         self.fallback_count = 0
         if not self.api_key:
