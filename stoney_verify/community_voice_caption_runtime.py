@@ -157,6 +157,7 @@ class CommunityVoiceCaptionManager:
             "provider_fallbacks": int(getattr(state.engine.transcriber, "fallback_count", 0) or 0),
             "provider_live_connections": int(getattr(state.engine.transcriber, "live_connections", 0) or 0),
             "provider_live_reconnects": int(getattr(state.engine.transcriber, "live_reconnects", 0) or 0),
+            "language_hint_mismatches": int(getattr(state.engine.transcriber, "language_hint_mismatches", 0) or 0),
             "language_codes": list(getattr(state.engine.transcriber, "language_codes", []) or []),
             "output_mode": str(getattr(state.engine, "output_mode", "original") or "original"),
             "translation_requests": int(getattr(getattr(state.engine, "translator", None), "requests", 0) or 0),
