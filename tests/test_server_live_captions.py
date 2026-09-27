@@ -83,7 +83,7 @@ def test_general_live_caption_setup_is_reachable_and_supports_existing_server_vc
 
 def test_member_live_caption_panel_exposes_dropdown_language_accuracy_control() -> None:
     labels = _labels(ServerLiveCaptionsView(7))
-    assert "Caption My Voice" in labels
+    assert "Auto-Caption My Voice" in labels
     assert "My Language" in labels
     assert "Refresh" in labels
 
@@ -503,13 +503,32 @@ def test_general_live_captions_reuse_single_hardened_receiver_owner() -> None:
 
     assert "self._guild_owner" in runtime
     assert "self._user_language_hints" in runtime
+    assert "self._auto_opt_in" in runtime
+    assert "preferences_for_user" in runtime
+    assert "set_auto_caption_preference" in runtime
     assert "set_user_language_hint" in runtime
     assert "set_user_language_codes" in runtime
     assert "Another Live Captions session in this server already owns the voice receiver." in runtime
     assert '"caption_scope": "server"' in runtime
 
 
-def test_general_caption_scope_is_memory_only_and_collision_resistant() -> None:
+def test_live_caption_preferences_are_persisted_without_audio_persistence() -> None:
+    runtime = _text(RUNTIME)
+    events = (ROOT / "stoney_verify" / "events.py").read_text(encoding="utf-8")
+    profile = (ROOT / "stoney_verify" / "profile_card_service.py").read_text(encoding="utf-8")
+
+    assert 'LIVE_CAPTION_AUTO_OPT_IN_KEY = "live_captions_auto_opt_in"' in profile
+    assert 'LIVE_CAPTION_LANGUAGE_CODE_KEY = "live_captions_language_code"' in profile
+    assert "upsert_live_caption_preferences" in profile
+    assert "dank_profile_guild_settings" in profile
+    assert "handle_voice_state_update" in runtime
+    assert "caption_manager.handle_voice_state_update" in events
+    assert "_restore_auto_opt_ins(state, voice_channel)" in runtime
+    assert "prepare_user" in runtime
+    assert "Audio is never persisted by Dank Shield." in runtime
+
+
+def test_general_caption_session_scope_is_memory_only_and_collision_resistant() -> None:
     assert server_caption_scope_id(123456789) == "server:123456789"
     ui = _text(GENERAL_UI)
     assert "supabase" not in ui.casefold()
@@ -517,19 +536,23 @@ def test_general_caption_scope_is_memory_only_and_collision_resistant() -> None:
     assert "database" not in ui.casefold()
 
 
-def test_general_live_captions_require_staff_to_start_but_self_consent_only() -> None:
+def test_general_live_captions_require_staff_to_start_but_member_auto_consent_is_durable() -> None:
     ui = _text(GENERAL_UI)
+    runtime = _text(RUNTIME)
 
     assert "interaction_is_actual_guild_owner" in ui
     assert "interaction_has_administrator_authority" in ui
     assert "interaction_has_manage_guild_authority" in ui
     assert "Only the server owner, an administrator, or someone with Manage Server" in ui
 
-    assert 'label="Caption My Voice"' in ui
-    assert "int(interaction.user.id)" in ui
-    assert "target_voice_id" in ui
-    assert "Join <#{target_voice_id}> before opting your voice" in ui
-    assert "Nobody is transcribed automatically." in ui
+    assert 'label="Auto-Caption My Voice"' in ui
+    assert "set_auto_caption_preference" in ui
+    assert "remembered for this server" in ui
+    assert "restored automatically" in ui
+    assert "_restore_auto_opt_ins" in runtime
+    assert "handle_voice_state_update" in runtime
+    assert "_enable_user_for_state" in runtime
+    assert "raw audio and live audio buffers" in runtime
 
 
 def test_general_live_captions_keep_privacy_and_physical_source_limits_visible() -> None:
@@ -537,14 +560,12 @@ def test_general_live_captions_keep_privacy_and_physical_source_limits_visible()
 
     assert "Discord speakers stay isolated before transcription." in ui
     assert "My Language" in ui
-    assert "personal language hint" in ui
-    assert "Opting out immediately blocks new audio" in ui
+    assert "save a personal language hint" in ui
+    assert "remembered per server only after that member explicitly chooses them" in ui
+    assert "Turning auto-caption off immediately blocks new audio" in ui
     assert "Google Gemini's transcription API" in ui
-    assert "My Language" in ui
-    assert "defaults to Auto for all supported languages" in ui
-    assert "accuracy hint without changing anybody else's captions" in ui
     assert "finalized transcript text is translated" in ui
-    assert "Dank Shield itself does not save the audio." in ui
+    assert "does not save the audio" in ui
     assert "microphone already captures a TV, game audio, or another person" in ui
 
 
