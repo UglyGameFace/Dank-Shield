@@ -409,11 +409,17 @@ class _GeminiLiveSpeakerSession:
         except CaptionTranscriptionError:
             await ws.close()
             raise
+        except asyncio.TimeoutError:
+            await ws.close()
+            raise CaptionTranscriptionError(
+                0,
+                "Gemini Live transcription timed out waiting for setupComplete.",
+            ) from None
         except Exception:
             await ws.close()
             raise CaptionTranscriptionError(
                 0,
-                "Gemini Live transcription did not complete its session setup.",
+                "Gemini Live transcription failed while processing its session setup response.",
             ) from None
 
     async def _ensure_connected(self) -> aiohttp.ClientWebSocketResponse:
@@ -539,10 +545,24 @@ class GeminiLiveTranscriber:
 
     @staticmethod
     def _ws_payload(msg: aiohttp.WSMessage) -> dict[str, Any]:
-        if msg.type == aiohttp.WSMsgType.TEXT:
+        # Gemini Live JSON may arrive in either a text frame or a binary frame.
+        # Google's Python SDK deliberately reads raw websocket bytes before
+        # json-decoding the setup response, so treating BINARY as "no payload"
+        # can discard setupComplete/final transcript messages and cause a false
+        # timeout even though the server replied correctly.
+        if msg.type in {aiohttp.WSMsgType.TEXT, aiohttp.WSMsgType.BINARY}:
+            raw = msg.data
+            if isinstance(raw, (bytes, bytearray, memoryview)):
+                try:
+                    raw = bytes(raw).decode("utf-8")
+                except UnicodeDecodeError:
+                    raise CaptionTranscriptionError(
+                        0,
+                        "Gemini Live transcription returned non-UTF-8 WebSocket data.",
+                    ) from None
             try:
-                payload = json.loads(str(msg.data))
-            except json.JSONDecodeError:
+                payload = json.loads(str(raw))
+            except (TypeError, json.JSONDecodeError):
                 raise CaptionTranscriptionError(
                     0,
                     "Gemini Live transcription returned invalid JSON.",
@@ -553,15 +573,18 @@ class GeminiLiveTranscriber:
             aiohttp.WSMsgType.CLOSED,
             aiohttp.WSMsgType.CLOSING,
         }:
+            close_code = int(msg.data or 0) if isinstance(msg.data, int) else 0
+            suffix = f" (close code {close_code})" if close_code else ""
             raise CaptionTranscriptionError(
-                0,
-                "Gemini Live transcription closed its WebSocket session.",
+                close_code,
+                f"Gemini Live transcription closed its WebSocket session{suffix}.",
             )
         if msg.type == aiohttp.WSMsgType.ERROR:
             raise CaptionTranscriptionError(
                 0,
                 "Gemini Live transcription WebSocket reported a connection error.",
             )
+        # PING/PONG and other control frames contain no Gemini JSON payload.
         return {}
 
     @staticmethod
