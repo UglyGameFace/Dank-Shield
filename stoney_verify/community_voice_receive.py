@@ -673,10 +673,15 @@ async def connect_receive_client(
 
     async def _on_voice_member_speaking_state(
         member: Any,
-        _ssrc: int,
+        ssrc: int,
         speaking_state: Any,
     ) -> None:
         user_id = int(getattr(member, "id", 0) or 0)
+        if user_id <= 0:
+            try:
+                user_id = int(voice_client._get_id_from_ssrc(int(ssrc)) or 0)
+            except Exception:
+                user_id = 0
         if user_id <= 0:
             return
         bridge.note_gateway_speaking(
