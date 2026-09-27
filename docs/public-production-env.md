@@ -125,6 +125,8 @@ Gemini Live sessions are rotated before the documented 10-minute maximum and on 
 
 Discord voice control-plane health is not treated as proof that media is flowing. If an opted-in user's voice gateway speaking signal arrives but no PCM follows while the reader, DAVE session, and SSRC mapping still report ready, Dank Shield classifies the UDP media path as stalled and rebuilds only the receive transport. The existing caption engine stays alive, the exact opted-in users are restored to a fresh in-memory bridge, and recovery is limited to two attempts per rolling minute with a 20-second cooldown.
 
+Discord voice control-plane health is not treated as proof that media is flowing. If an opted-in user's voice gateway speaking signal arrives but no PCM follows while the reader, DAVE session, and SSRC mapping still report ready, Dank Shield classifies the UDP media path as stalled and rebuilds only the receive transport. The existing caption engine stays alive, the exact opted-in users are restored to a fresh in-memory bridge, and recovery is limited to two attempts per rolling minute with a 20-second cooldown.
+
 ## Public setup flow
 
 For each Discord server:
