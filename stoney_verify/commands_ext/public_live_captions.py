@@ -805,6 +805,7 @@ async def build_server_live_captions_embed(
             health = general.get("health") if isinstance(general.get("health"), dict) else {}
             connection = general.get("receive_connection") if isinstance(general.get("receive_connection"), dict) else {}
             provider_skipped = int(general.get("provider_skipped") or 0)
+            opus_plc_recoveries = int(health.get("opus_plc_recoveries") or 0)
             provider_live_connections = int(general.get("provider_live_connections") or 0)
             provider_live_reconnects = int(general.get("provider_live_reconnects") or 0)
             provider_audio_chunks = int(general.get("provider_audio_chunks_sent") or 0)
@@ -826,7 +827,7 @@ async def build_server_live_captions_embed(
                     f"Gateway speaking signals: **{int(health.get('gateway_speaking_signals') or 0)}** • receive recoveries: **{receive_recoveries}** • recovery failures: **{receive_recovery_failures}**\n"
                     f"DAVE ready: **{'yes' if connection.get('dave_session_ready') else 'no'}** • status: **{str(connection.get('dave_session_status') or 'none')[:24]}** • protocol: **{int(connection.get('dave_protocol_version') or 0)}** • epoch: **{int(connection.get('dave_epoch') or 0)}**\n"
                     f"Reader: **{'listening' if connection.get('reader_listening') else 'stopped'}** • mapped SSRCs: **{int(connection.get('mapped_ssrcs') or 0)}** • reader failures: **{int(health.get('reader_failures') or 0)}**\n"
-                    f"Corrupt Opus dropped: **{int(health.get('opus_decode_drops') or 0)}** • not consented: **{int(health.get('frames_not_consented') or 0)}** • unknown source: **{int(health.get('frames_unknown_source') or 0)}** • identity mismatch: **{int(health.get('frames_source_mismatch') or 0)}**\n"
+                    f"Corrupt Opus: PLC recovered **{opus_plc_recoveries}** • dropped **{int(health.get('opus_decode_drops') or 0)}** • not consented: **{int(health.get('frames_not_consented') or 0)}** • unknown source: **{int(health.get('frames_unknown_source') or 0)}** • identity mismatch: **{int(health.get('frames_source_mismatch') or 0)}**\n"
                     f"Malformed PCM: **{int(health.get('frames_malformed_pcm') or 0)}** • transcribed: **{int(general.get('segments_transcribed') or 0)}** • published: **{int(general.get('segments_published') or 0)}** • empty: **{int(general.get('segments_empty') or 0)}**\n"
                     f"Unclear: **{int(general.get('segments_unclear') or 0)}** • failures: **{int(general.get('segment_failures') or 0)}** • provider-skipped: **{provider_skipped}**\n"
                     f"Gemini Live connections: **{provider_live_connections}** • reconnects: **{provider_live_reconnects}** • audio chunks: **{provider_audio_chunks}**\n"
