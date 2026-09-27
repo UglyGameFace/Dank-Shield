@@ -4,6 +4,8 @@ import asyncio
 import struct
 from pathlib import Path
 
+import aiohttp
+
 import stoney_verify.community_voice_captions as captions_module
 from stoney_verify.community_voice_captions import (
     CaptionEngine,
@@ -243,6 +245,45 @@ def test_gemini_generate_content_text_ignores_thought_parts() -> None:
         ]
     }
     assert _gemini_text_from_generate_content(payload) == "hello from voice"
+
+
+def test_gemini_live_parses_binary_setup_complete_json() -> None:
+    msg = aiohttp.WSMessage(
+        aiohttp.WSMsgType.BINARY,
+        b'{"setupComplete":{}}',
+        "",
+    )
+    payload = GeminiLiveTranscriber._ws_payload(msg)
+    assert payload == {"setupComplete": {}}
+
+
+def test_gemini_live_parses_binary_final_transcript_json() -> None:
+    msg = aiohttp.WSMessage(
+        aiohttp.WSMsgType.BINARY,
+        (
+            b'{"serverContent":{"inputTranscription":'
+            b'{"text":"hola","languageCode":"es-ES"}}}'
+        ),
+        "",
+    )
+    payload = GeminiLiveTranscriber._ws_payload(msg)
+    final = payload["serverContent"]["inputTranscription"]
+    assert final["text"] == "hola"
+    assert final["languageCode"] == "es-ES"
+
+
+def test_gemini_live_rejects_non_utf8_binary_payload() -> None:
+    msg = aiohttp.WSMessage(
+        aiohttp.WSMsgType.BINARY,
+        b"\xff\xfe",
+        "",
+    )
+    try:
+        GeminiLiveTranscriber._ws_payload(msg)
+    except CaptionTranscriptionError as exc:
+        assert "non-UTF-8" in exc.safe_message
+    else:
+        raise AssertionError("binary non-UTF-8 payload must fail closed")
 
 
 def test_gemini_live_defaults_to_all_language_auto_detection() -> None:
