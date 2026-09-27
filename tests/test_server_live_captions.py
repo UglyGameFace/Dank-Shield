@@ -6,11 +6,14 @@ from types import SimpleNamespace
 
 import discord
 
+import stoney_verify.community_voice_caption_runtime as caption_runtime
 from stoney_verify.community_voice_caption_runtime import (
+    CommunityVoiceCaptionManager,
     live_captions_enabled,
     live_captions_start_allowed,
     server_caption_scope_id,
 )
+from stoney_verify.community_voice_receive import PerSpeakerFrameBridge
 from stoney_verify.commands_ext.public_command_surface_v2 import CompactDankHomeView
 from stoney_verify.commands_ext.public_live_captions import (
     CAPTION_ALLOWED_VOICE_CATEGORIES_KEY,
@@ -322,6 +325,165 @@ def test_soak_pipeline_diagnosis_separates_receive_from_provider_failures() -> N
     consent_text = _soak_pipeline_diagnosis(historical_consent)
     assert "cumulative" in consent_text
     assert "before opt-in" in consent_text
+
+    stalled_media = {
+        "health": {
+            "raw_udp_packets": 3,
+            "gateway_speaking_signals": 1,
+            "frames_seen": 0,
+            "frames_routed": 0,
+        },
+        "receive_connection": {
+            "reader_listening": True,
+            "dave_session_present": True,
+            "dave_session_ready": True,
+            "mapped_ssrcs": 2,
+        },
+        "receive_recoveries": 0,
+        "receive_recovery_failures": 0,
+        "segment_failures": 0,
+    }
+    assert "automatically checking/rebuilding" in _soak_pipeline_diagnosis(stalled_media)
+
+    recovered_media = dict(stalled_media)
+    recovered_media["receive_recoveries"] = 1
+    assert "automatically rebuilt" in _soak_pipeline_diagnosis(recovered_media)
+
+
+def test_speaking_signal_without_pcm_triggers_transport_recovery(monkeypatch) -> None:
+    async def _run() -> None:
+        manager = CommunityVoiceCaptionManager(SimpleNamespace())
+        bridge = PerSpeakerFrameBridge(asyncio.get_running_loop(), lambda frame: None)
+        bridge.opt_in(7)
+        bridge.health.raw_udp_packets = 3
+
+        voice_client = object()
+        manager._sessions["server:1"] = SimpleNamespace(
+            bridge=bridge,
+            voice_client=voice_client,
+        )
+
+        async def immediate_sleep(_seconds: float) -> None:
+            return None
+
+        recoveries = []
+
+        async def fake_recover(
+            session_id: str,
+            *,
+            expected_voice_client,
+            reason: str,
+        ) -> bool:
+            recoveries.append((session_id, expected_voice_client, reason))
+            return True
+
+        monkeypatch.setattr(caption_runtime.asyncio, "sleep", immediate_sleep)
+        monkeypatch.setattr(
+            caption_runtime,
+            "voice_receive_connection_diagnostics",
+            lambda _client: {
+                "reader_listening": True,
+                "dave_session_ready": True,
+                "mapped_ssrcs": 2,
+            },
+        )
+        manager._recover_receive_transport = fake_recover
+
+        await manager._verify_receive_after_speaking(
+            "server:1",
+            7,
+            voice_client,
+            {"frames_seen": 0, "raw_udp_packets": 3},
+        )
+
+        assert len(recoveries) == 1
+        assert recoveries[0][0] == "server:1"
+        assert "no PCM arrived" in recoveries[0][2]
+        assert "UDP delta=0" in recoveries[0][2]
+
+    asyncio.run(_run())
+
+
+def test_receive_transport_recovery_preserves_consent_with_fresh_bridge(monkeypatch) -> None:
+    async def _run() -> None:
+        class FakeVoiceChannel:
+            id = 44
+
+        class FakeGuild:
+            def get_channel(self, channel_id):
+                return FakeVoiceChannel() if int(channel_id) == 44 else None
+
+        class FakeBot:
+            def get_guild(self, guild_id):
+                return FakeGuild() if int(guild_id) == 1 else None
+
+        class OldVoiceClient:
+            def __init__(self) -> None:
+                self.disconnected = False
+
+            def is_connected(self) -> bool:
+                return True
+
+            async def disconnect(self, *, force: bool = False) -> None:
+                assert force is True
+                self.disconnected = True
+
+        manager = CommunityVoiceCaptionManager(FakeBot())
+        engine = SimpleNamespace(submit=lambda frame: None)
+        old_bridge = PerSpeakerFrameBridge(asyncio.get_running_loop(), engine.submit)
+        old_bridge.opt_in(7)
+        old_bridge.opt_in(8)
+        old_voice = OldVoiceClient()
+        state = SimpleNamespace(
+            session_id="server:1",
+            guild_id=1,
+            voice_channel_id=44,
+            destination_channel_id=55,
+            voice_client=old_voice,
+            bridge=old_bridge,
+            engine=engine,
+            scope_kind="server",
+            soak_test=True,
+            receive_recoveries=0,
+            receive_recovery_failures=0,
+            last_receive_recovery_reason="",
+            last_receive_recovery_at=0.0,
+        )
+        manager._sessions[state.session_id] = state
+
+        new_voice = object()
+        disconnected = []
+
+        def fake_disconnect(client) -> None:
+            disconnected.append(client)
+
+        async def fake_connect(channel, bridge):
+            assert isinstance(channel, FakeVoiceChannel)
+            assert bridge is not old_bridge
+            assert bridge.opted_in_user_ids() == (7, 8)
+            return new_voice
+
+        monkeypatch.setattr(caption_runtime.discord, "VoiceChannel", FakeVoiceChannel)
+        monkeypatch.setattr(caption_runtime, "disconnect_receive_client", fake_disconnect)
+        monkeypatch.setattr(caption_runtime, "connect_receive_client", fake_connect)
+
+        recovered = await manager._recover_receive_transport(
+            state.session_id,
+            expected_voice_client=old_voice,
+            reason="test stalled media plane",
+        )
+
+        assert recovered is True
+        assert disconnected == [old_voice]
+        assert old_voice.disconnected is True
+        assert state.voice_client is new_voice
+        assert state.bridge is not old_bridge
+        assert state.bridge.opted_in_user_ids() == (7, 8)
+        assert state.receive_recoveries == 1
+        assert state.receive_recovery_failures == 0
+        assert state.last_receive_recovery_reason == "test stalled media plane"
+
+    asyncio.run(_run())
 
 
 def test_general_live_captions_reuse_single_hardened_receiver_owner() -> None:
