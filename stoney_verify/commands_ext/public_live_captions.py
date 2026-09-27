@@ -174,6 +174,7 @@ _CAPTION_LANGUAGE_GROUPS: dict[str, dict[str, Any]] = {
             ("Croatian", "hr-HR"),
             ("Czech", "cs-CZ"),
             ("Estonian", "et-EE"),
+            ("Greek", "el-GR"),
             ("Hungarian", "hu-HU"),
             ("Latvian", "lv-LV"),
             ("Lithuanian", "lt-LT"),
