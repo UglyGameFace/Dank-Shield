@@ -1839,6 +1839,23 @@ async def on_voice_state_update(
             print("⚠️ voice sync to supabase failed:", repr(e))
 
         try:
+            from .community_voice_caption_runtime import (
+                ensure_community_voice_caption_manager,
+            )
+
+            caption_manager = ensure_community_voice_caption_manager(bot)
+            await caption_manager.handle_voice_state_update(
+                member,
+                before,
+                after,
+            )
+        except Exception as e:
+            print(
+                "⚠️ Live Captions remembered voice preference sync failed:",
+                repr(e),
+            )
+
+        try:
             changed_ids = {
                 _as_int(getattr(getattr(before, "channel", None), "id", 0), 0),
                 _as_int(getattr(getattr(after, "channel", None), "id", 0), 0),
