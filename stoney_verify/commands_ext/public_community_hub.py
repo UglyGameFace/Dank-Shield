@@ -2158,7 +2158,7 @@ class SessionDetailView(_OwnedView):
         await ensure_community_hub_runtime(interaction.client).refresh_session_card(session)
         await _followup(interaction, "✅ Ready." if new_ready else "Ready status cleared.")
 
-    @discord.ui.button(label="Caption My Voice", emoji="📝", style=discord.ButtonStyle.secondary, custom_id="dank:hub:detail:captionme:v1", row=1)
+    @discord.ui.button(label="Auto-Caption My Voice", emoji="📝", style=discord.ButtonStyle.secondary, custom_id="dank:hub:detail:captionme:v1", row=1)
     async def caption_me(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_ephemeral(interaction)
@@ -2599,7 +2599,7 @@ class CommunitySessionPublicView(discord.ui.View):
         )
 
 
-    @discord.ui.button(label="Caption My Voice", emoji="📝", style=discord.ButtonStyle.secondary, custom_id="dank:hub:public:captionme:v1", row=1)
+    @discord.ui.button(label="Auto-Caption My Voice", emoji="📝", style=discord.ButtonStyle.secondary, custom_id="dank:hub:public:captionme:v1", row=1)
     async def caption_me(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_ephemeral(interaction)
