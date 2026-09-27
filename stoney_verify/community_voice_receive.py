@@ -156,6 +156,7 @@ class VoiceReceiveHealth:
     raw_udp_packets: int = 0
     gateway_speaking_signals: int = 0
     opus_decode_drops: int = 0
+    opus_plc_recoveries: int = 0
     reader_failures: int = 0
     frames_seen: int = 0
     frames_routed: int = 0
@@ -172,6 +173,7 @@ class VoiceReceiveHealth:
             "raw_udp_packets": self.raw_udp_packets,
             "gateway_speaking_signals": self.gateway_speaking_signals,
             "opus_decode_drops": self.opus_decode_drops,
+            "opus_plc_recoveries": self.opus_plc_recoveries,
             "reader_failures": self.reader_failures,
             "frames_seen": self.frames_seen,
             "frames_routed": self.frames_routed,
@@ -343,6 +345,70 @@ def _safe_reader_error(error: Optional[BaseException]) -> str:
     if message:
         return f"{name}: {message}"[:240]
     return name[:240]
+
+
+def _install_voice_recv_opus_plc_patch() -> bool:
+    """Recover one isolated corrupt real Opus frame with libopus PLC.
+
+    The pinned receive dependency already invokes Decoder.decode(None) for
+    packets known to be missing. A corrupt real packet currently raises
+    OpusError before that path and is later dropped by the router survival
+    patch. Reuse the codec packet-loss concealment for one isolated bad real
+    frame, preserving timing/source while leaving router-drop as the final
+    fallback when concealment itself cannot run.
+
+    Consecutive synthetic recovery is intentionally bounded. After one PLC
+    replacement, another corrupt frame falls through to the router drop path
+    until a real Opus frame decodes successfully.
+    """
+
+    if voice_recv is None:
+        return False
+
+    try:
+        from discord.ext.voice_recv.opus import PacketDecoder
+        from discord.opus import OpusError
+    except Exception:
+        return False
+
+    if bool(getattr(PacketDecoder, "_dank_opus_plc_patch", False)):
+        return True
+
+    original_decode_packet = PacketDecoder._decode_packet
+
+    def _decode_packet(self: Any, packet: Any) -> Any:
+        try:
+            decoded = original_decode_packet(self, packet)
+            setattr(self, "_dank_plc_consecutive", 0)
+            return decoded
+        except OpusError as exc:
+            decoder = getattr(self, "_decoder", None)
+            consecutive = int(getattr(self, "_dank_plc_consecutive", 0) or 0)
+            if not packet or decoder is None or consecutive >= 1:
+                raise
+
+            try:
+                pcm = decoder.decode(None, fec=False)
+            except Exception:
+                raise exc
+
+            setattr(self, "_dank_plc_consecutive", consecutive + 1)
+            bridge = getattr(getattr(self, "sink", None), "bridge", None)
+            if bridge is not None:
+                try:
+                    bridge._increment("opus_plc_recoveries")
+                except Exception:
+                    pass
+            log.debug(
+                "Live Captions concealed corrupt Opus packet with PLC ssrc=%s error=%s",
+                getattr(self, "ssrc", "?"),
+                exc,
+            )
+            return packet, pcm
+
+    PacketDecoder._decode_packet = _decode_packet
+    setattr(PacketDecoder, "_dank_opus_plc_patch", True)
+    return True
 
 
 def _install_voice_recv_router_survival_patch() -> bool:
@@ -664,6 +730,10 @@ async def connect_receive_client(
             "Dank Shield is already receiving audio for another caption session in this server."
         )
 
+    if not _install_voice_recv_opus_plc_patch():
+        raise VoiceReceiveUnavailable(
+            "voice receive Opus PLC recovery patch could not be installed"
+        )
     if not _install_voice_recv_router_survival_patch():
         raise VoiceReceiveUnavailable(
             "voice receive router survival patch could not be installed"
