@@ -35,7 +35,7 @@ Discord voice gateway
   -> that user's explicit remembered Auto-Caption consent + active VC admission
   -> stateful per-speaker 48 kHz stereo -> 16 kHz mono FIR conversion
   -> each Discord PCM frame streams immediately to that speaker's persistent Gemini Live Transcribe WebSocket
-  -> local per-speaker silence boundary sends audioStreamEnd
+  -> local per-speaker silence boundary sends activityEnd
   -> finalized inputTranscription + detected BCP-47 language code
   -> optional text-only English translation
   -> configured caption text channel/thread
@@ -154,9 +154,9 @@ A normal-server caption transcript includes its source voice-channel identity. C
 
 Only isolated, opted-in PCM crosses the transcription boundary. Discord receive produces 48 kHz stereo signed-16 PCM. Dank Shield first downmixes stereo, applies a deterministic low-pass FIR below the 16 kHz target Nyquist limit, then decimates by three to 16 kHz mono signed-16 PCM. This avoids folding high-frequency mic/game noise back into the speech band during resampling.
 
-Primary model: `gemini-3.5-transcribe-live`. Each opted-in Discord speaker owns a separate persistent WebSocket. Dank Shield uses **hybrid VAD**: Gemini's automatic speech-start detection stays enabled, while Dank Shield's per-speaker silence boundary closes an utterance with `audioStreamEnd`.
+Primary model: `gemini-3.5-transcribe-live`. Each opted-in Discord speaker owns a separate persistent WebSocket. Dank Shield uses Google's documented **manual VAD** contract because Discord has already isolated one speaker and Dank Shield owns the utterance boundary. Automatic activity detection is disabled; `activityStart` is sent immediately before that speaker's first streamed PCM chunk and `activityEnd` is sent when the local silence/max-duration boundary closes. `audioStreamEnd` is not used in manual-VAD mode.
 
-The production path streams decoded Discord audio to Gemini **as frames arrive**. It does not buffer a multi-second utterance and then burst-upload it to a Live endpoint. A stateful FIR resampler keeps filter history across Discord frames, and the Gemini socket is prepared before the speaker is admitted so the first spoken audio is not queued behind the WebSocket handshake. The segmenter remains only to decide when to send `audioStreamEnd` and to bound cleanup/privacy state.
+The production path streams decoded Discord audio to Gemini **as frames arrive**. It does not buffer a multi-second utterance and then burst-upload it to a Live endpoint. A stateful FIR resampler keeps filter history across Discord frames, and the Gemini socket is prepared before the speaker is admitted so the first spoken audio is not queued behind the WebSocket handshake. The segmenter remains only to decide when to send `activityEnd` and to bound cleanup/privacy state. The default 0.75-second packet-gap boundary is intentionally within Google's current 500–800 ms manual-VAD guidance, avoiding the aggressive sub-500 ms cutoff that can fragment natural pauses.
 
 Language behavior defaults to **Auto / all supported languages**. An empty `languageCodes` list lets Gemini detect across its supported transcription locales and handle code-switching. A participant may optionally set **/captions → My Language** through Discord dropdowns. The first select offers **Auto · All Supported Languages** or a language group; the second select offers every BCP-47 code in Google's current Gemini 3.5 Transcribe supported-language table. No free-form language modal is used. The chosen hint is remembered per server, applies only to that Discord user's provider session, and reconnects only that speaker when changed. Auto remains available for multilingual/code-switching speakers.
 
