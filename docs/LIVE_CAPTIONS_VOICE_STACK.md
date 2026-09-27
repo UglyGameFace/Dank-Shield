@@ -139,11 +139,13 @@ A normal-server caption transcript includes its source voice-channel identity. C
 
 ## Transcription boundary
 
-Only isolated, opted-in PCM crosses the transcription boundary. Discord receive produces 48 kHz stereo signed-16 PCM; Dank Shield downsamples each isolated speaker segment to 16 kHz mono signed-16 PCM before sending it to that speaker's own Gemini Live Transcribe session.
+Only isolated, opted-in PCM crosses the transcription boundary. Discord receive produces 48 kHz stereo signed-16 PCM. Dank Shield first downmixes stereo, applies a deterministic low-pass FIR below the 16 kHz target Nyquist limit, then decimates by three to 16 kHz mono signed-16 PCM. This avoids folding high-frequency mic/game noise back into the speech band during resampling.
 
-Primary model: `gemini-3.5-transcribe-live`. Dank Shield uses manual activity boundaries around each speech segment and keeps one WebSocket session per opted-in Discord speaker. This preserves speaker isolation and avoids opening a new HTTP transcription request for every utterance.
+Primary model: `gemini-3.5-transcribe-live`. Each opted-in Discord speaker owns a separate persistent WebSocket. Dank Shield uses **hybrid VAD**: Gemini's automatic speech-start detection stays enabled, while Dank Shield's existing per-speaker silence boundary closes an utterance with `audioStreamEnd`. Audio is sent in 40 ms PCM chunks. This follows the Live Transcribe path without destructively gating words locally.
 
-Language behavior defaults to **Auto / all supported languages**. An empty `languageCodes` list lets Gemini detect across its supported transcription locales and handle code-switching. Final Live Transcribe responses include a BCP-47 `languageCode`, which Dank Shield retains for translation decisions.
+Language behavior defaults to **Auto / all supported languages**. An empty `languageCodes` list lets Gemini detect across its supported transcription locales and handle code-switching. A participant may optionally set **/captions → My Language** to a supported BCP-47 language hint such as `en-US`; that hint applies only to that Discord user's provider session and reconnects only that speaker. Auto remains available for multilingual speakers.
+
+Live Transcribe distinguishes speculative `interimInputTranscription` from finalized `inputTranscription`. Dank Shield publishes only finalized `inputTranscription`. Final results include a BCP-47 `languageCode`, which is retained for diagnostics and translation decisions. When a participant gave an explicit language hint and Gemini reports a different primary language family, Dank Shield fails that utterance closed as `[unclear audio]` instead of publishing confident-looking text in an unrelated language.
 
 Gemini documents a 10-minute maximum Live Transcribe session. Dank Shield proactively rotates a speaker's session before that limit and also honors `goAway` by reconnecting before the next utterance.
 
@@ -174,7 +176,9 @@ The bot-owner soak panel must expose enough state to localize a failure:
 - identity/consent/malformed drops;
 - routed frames and queue depth;
 - Gemini Live connection/reconnect counts;
-- configured language/output mode;
+- configured server output mode plus each opted-in speaker's optional language hint;
+- last per-speaker audio RMS level and Gemini-detected language code;
+- explicit-language mismatch count;
 - translation request/skip/failure counts;
 - transcribed/published/empty/unclear/failure counters.
 
@@ -208,7 +212,10 @@ The feature gate stays off until live testing covers at least:
 22. detected English skipping the translation request;
 23. non-English finalized text translation without a second audio submission;
 24. Gemini Live session rotation / `goAway` reconnect without cross-speaker state leakage;
-25. translation quota/provider failure degrading to original captions instead of stopping transcription.
+25. translation quota/provider failure degrading to original captions instead of stopping transcription;
+26. English-only speech with **My Language = English (US)** across several sentence lengths, verifying detected `en-*` and zero language-hint mismatches;
+27. deliberately conflicting explicit hint vs spoken language, verifying the utterance fails closed instead of publishing the wrong-language transcript;
+28. Auto mode with multiple supported languages and genuine code-switching after the explicit-hint accuracy pass.
 
 Success means the reader remains alive, speaker identity never crosses users, non-consenting audio never reaches transcription, and captions continue through expected voice/DAVE transitions.
 
