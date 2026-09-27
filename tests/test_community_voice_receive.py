@@ -27,22 +27,22 @@ from stoney_verify.community_voice_receive import (
 
 
 class _ImmediateLoop:
-    def call_soon_threadsafe(self, callback):
-        callback()
+    def call_soon_threadsafe(self, callback, *args):
+        callback(*args)
 
 
 class _QueuedLoop:
     def __init__(self) -> None:
         self.callbacks = []
 
-    def call_soon_threadsafe(self, callback):
-        self.callbacks.append(callback)
+    def call_soon_threadsafe(self, callback, *args):
+        self.callbacks.append((callback, args))
 
     def run_all(self) -> None:
         callbacks = list(self.callbacks)
         self.callbacks.clear()
-        for callback in callbacks:
-            callback()
+        for callback, args in callbacks:
+            callback(*args)
 
 
 def _record(name: str, msg: str, args=(), *, level: int = logging.INFO) -> logging.LogRecord:
@@ -328,6 +328,25 @@ def test_router_drops_corrupt_opus_packet_without_stopping_reader() -> None:
     assert bridge.health.opus_decode_drops == 1
     assert len(sink.writes) == 1
     assert sink.writes[0][0].id == 20
+
+
+def test_gateway_speaking_signal_only_probes_opted_in_active_speaker() -> None:
+    callbacks = []
+    bridge = PerSpeakerFrameBridge(_ImmediateLoop(), lambda frame: None)
+    bridge.set_speaking_callback(callbacks.append)
+
+    bridge.note_gateway_speaking(user_id=10, speaking_state=1)
+    assert callbacks == []
+    assert bridge.health.gateway_speaking_signals == 1
+
+    bridge.opt_in(10)
+    bridge.note_gateway_speaking(user_id=10, speaking_state=0)
+    assert callbacks == []
+    assert bridge.health.gateway_speaking_signals == 1
+
+    bridge.note_gateway_speaking(user_id=10, speaking_state=1)
+    assert callbacks == [10]
+    assert bridge.health.gateway_speaking_signals == 2
 
 
 def test_non_consented_audio_never_crosses_caption_boundary() -> None:
