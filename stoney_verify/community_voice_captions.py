@@ -1335,12 +1335,17 @@ class CaptionEngine:
             except Exception:
                 log.debug("Live Captions transcription provider cleanup failed", exc_info=True)
 
-    def _spawn_segment(self, segment: CaptionSegment) -> None:
+    def _spawn_segment(
+        self,
+        segment: CaptionSegment,
+        *,
+        sealed_token: Any = None,
+    ) -> None:
         uid = int(segment.user_id)
         if self._closed or not segment.pcm or uid in self._blocked_user_ids:
             return
         task = asyncio.create_task(
-            self._process_segment_safely(segment),
+            self._process_segment_safely(segment, sealed_token),
             name=f"dank-caption-segment:{uid}",
         )
         self._segment_tasks.add(task)
@@ -1357,9 +1362,13 @@ class CaptionEngine:
 
         task.add_done_callback(_done)
 
-    async def _process_segment_safely(self, segment: CaptionSegment) -> None:
+    async def _process_segment_safely(
+        self,
+        segment: CaptionSegment,
+        sealed_token: Any = None,
+    ) -> None:
         try:
-            await self._process_segment(segment)
+            await self._process_segment(segment, sealed_token)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1374,48 +1383,156 @@ class CaptionEngine:
                 self.last_failure,
             )
 
+    async def _stream_frame_safely(
+        self,
+        frame: SpeakerPCMFrame,
+        stream_frame: Any,
+    ) -> bool:
+        uid = int(frame.user_id)
+        if (
+            not callable(stream_frame)
+            or uid in self._blocked_user_ids
+            or self.provider_blocked_reason
+        ):
+            return False
+        try:
+            # Production sends each isolated Discord PCM frame at arrival time.
+            # Segment bookkeeping may run first only to discover whether a prior
+            # activity must be sealed before this frame can begin a new turn.
+            await stream_frame(frame)
+            return True
+        except Exception as exc:
+            if uid not in self._stream_failures_by_user:
+                self._stream_failures_by_user[uid] = exc
+                self.last_failure = _safe_segment_failure(exc)[:300]
+                log.warning(
+                    "Live Captions realtime stream failed user=%s failure=%s",
+                    uid,
+                    self.last_failure,
+                )
+            if isinstance(exc, CaptionTranscriptionError) and exc.terminal:
+                self.provider_blocked_reason = self.last_failure
+                self.provider_blocked_code = (
+                    exc.error_code
+                    or exc.error_type
+                    or str(exc.status_code)
+                )
+            return False
+
+    async def _seal_and_spawn(self, segment: CaptionSegment) -> bool:
+        uid = int(segment.user_id)
+        if self._closed or not segment.pcm or uid in self._blocked_user_ids:
+            return False
+        if self.provider_blocked_reason:
+            self._spawn_segment(segment)
+            return True
+
+        seal_segment = getattr(self.transcriber, "seal_segment", None)
+        finish_sealed_segment = getattr(
+            self.transcriber,
+            "finish_sealed_segment",
+            None,
+        )
+        if not callable(seal_segment) or not callable(finish_sealed_segment):
+            self._spawn_segment(segment)
+            return True
+
+        try:
+            # activityEnd must be on the wire before a post-gap frame is allowed
+            # to open the next activity. Waiting for inputTranscription happens
+            # later in the segment task, so realtime streaming never stalls here.
+            token = await seal_segment(segment)
+        except Exception as exc:
+            if uid not in self._stream_failures_by_user:
+                self._stream_failures_by_user[uid] = exc
+            self.last_failure = _safe_segment_failure(exc)[:300]
+            if isinstance(exc, CaptionTranscriptionError) and exc.terminal:
+                self.provider_blocked_reason = self.last_failure
+                self.provider_blocked_code = (
+                    exc.error_code
+                    or exc.error_type
+                    or str(exc.status_code)
+                )
+            # feed(frame) may already have opened the next local buffer while
+            # discovering a gap. Do not later publish audio that was never sent.
+            self.segmenter.discard_user(uid)
+            close_user = getattr(self.transcriber, "close_user", None)
+            if callable(close_user):
+                try:
+                    await close_user(uid)
+                except Exception:
+                    pass
+            self._spawn_segment(segment)
+            return False
+
+        self._spawn_segment(segment, sealed_token=token)
+        return True
+
     async def _run(self) -> None:
         stream_frame = getattr(self.transcriber, "stream_frame", None)
+        seal_segment = getattr(self.transcriber, "seal_segment", None)
+        finish_sealed_segment = getattr(
+            self.transcriber,
+            "finish_sealed_segment",
+            None,
+        )
+        ordered_live_stream = bool(
+            callable(stream_frame)
+            and callable(seal_segment)
+            and callable(finish_sealed_segment)
+        )
+
         while not self._closed:
             try:
                 frame = await asyncio.wait_for(self.queue.get(), timeout=0.25)
             except asyncio.TimeoutError:
                 for segment in self.segmenter.flush_idle():
+                    if ordered_live_stream:
+                        await self._seal_and_spawn(segment)
+                    else:
+                        self._spawn_segment(segment)
+                continue
+
+            if not ordered_live_stream:
+                await self._stream_frame_safely(frame, stream_frame)
+                for segment in self.segmenter.feed(frame):
                     self._spawn_segment(segment)
                 continue
 
-            uid = int(frame.user_id)
-            if (
-                callable(stream_frame)
-                and uid not in self._blocked_user_ids
-                and not self.provider_blocked_reason
-            ):
-                try:
-                    # This is the production Live path: send each isolated
-                    # Discord PCM frame at arrival time. Do not buffer a whole
-                    # utterance and replay it later.
-                    await stream_frame(frame)
-                except Exception as exc:
-                    if uid not in self._stream_failures_by_user:
-                        self._stream_failures_by_user[uid] = exc
-                        self.last_failure = _safe_segment_failure(exc)[:300]
-                        log.warning(
-                            "Live Captions realtime stream failed user=%s failure=%s",
-                            uid,
-                            self.last_failure,
-                        )
-                    if isinstance(exc, CaptionTranscriptionError) and exc.terminal:
-                        self.provider_blocked_reason = self.last_failure
-                        self.provider_blocked_code = (
-                            exc.error_code
-                            or exc.error_type
-                            or str(exc.status_code)
-                        )
+            # Feed first only to classify boundaries. A segment ending before
+            # this frame is the previous utterance after a packet/speech gap and
+            # must be sealed before this frame reaches Gemini. A segment ending
+            # on this frame hit the max-duration boundary and is sealed after the
+            # frame is streamed.
+            ready = self.segmenter.feed(frame)
+            before_frame = [
+                segment
+                for segment in ready
+                if float(segment.ended_at) < float(frame.received_at)
+            ]
+            after_frame = [
+                segment
+                for segment in ready
+                if float(segment.ended_at) >= float(frame.received_at)
+            ]
 
-            for segment in self.segmenter.feed(frame):
-                self._spawn_segment(segment)
+            boundary_ok = True
+            for segment in before_frame:
+                if not await self._seal_and_spawn(segment):
+                    boundary_ok = False
+            if not boundary_ok:
+                continue
 
-    async def _process_segment(self, segment: CaptionSegment) -> None:
+            await self._stream_frame_safely(frame, stream_frame)
+
+            for segment in after_frame:
+                await self._seal_and_spawn(segment)
+
+    async def _process_segment(
+        self,
+        segment: CaptionSegment,
+        sealed_token: Any = None,
+    ) -> None:
         if (
             not segment.pcm
             or self._closed
@@ -1437,17 +1554,28 @@ class CaptionEngine:
             return
         async with self._transcribe_semaphore:
             if self._global_transcribe_semaphore is None:
-                await self._transcribe_and_publish(segment)
+                await self._transcribe_and_publish(segment, sealed_token)
             else:
                 async with self._global_transcribe_semaphore:
-                    await self._transcribe_and_publish(segment)
+                    await self._transcribe_and_publish(segment, sealed_token)
 
-    async def _transcribe_and_publish(self, segment: CaptionSegment) -> None:
+    async def _transcribe_and_publish(
+        self,
+        segment: CaptionSegment,
+        sealed_token: Any = None,
+    ) -> None:
         uid = int(segment.user_id)
         if self._closed or uid in self._blocked_user_ids:
             return
+        finish_sealed_segment = getattr(
+            self.transcriber,
+            "finish_sealed_segment",
+            None,
+        )
         finish_segment = getattr(self.transcriber, "finish_segment", None)
-        if callable(finish_segment):
+        if sealed_token is not None and callable(finish_sealed_segment):
+            first = await finish_sealed_segment(segment, sealed_token)
+        elif callable(finish_segment):
             first = await finish_segment(segment)
         else:
             first = await self.transcriber.transcribe(segment)
@@ -1456,7 +1584,8 @@ class CaptionEngine:
         chosen = first
 
         if (
-            not callable(finish_segment)
+            sealed_token is None
+            and not callable(finish_segment)
             and first.confidence is not None
             and first.confidence < self.low_confidence_threshold
         ):
