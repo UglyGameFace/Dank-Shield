@@ -63,7 +63,7 @@ Inbound receive is currently pinned to upstream `discord-ext-voice-recv` PR #58 
 
 That patch reuses discord.py's ready DAVE session and the SSRC-mapped Discord user when decrypting an inbound audio frame immediately before Opus decode.
 
-PR #57's narrow packet-router survival behavior is applied by Dank Shield: a single `discord.opus.OpusError` is counted/dropped instead of terminating the whole receive reader. Other exception classes remain fatal and visible.
+PR #57's narrow packet-router survival behavior is applied by Dank Shield: a single `discord.opus.OpusError` can no longer terminate the whole receive reader. Before the final drop path, Dank Shield now patches the pinned PacketDecoder decode boundary so one isolated corrupt real Opus frame uses the same native libopus packet-loss concealment mechanism upstream already uses for a known-missing frame. Consecutive corrupt real frames are not endlessly synthesized: after one PLC replacement, further corruption falls through to the counted router drop until a real frame decodes successfully. Other exception classes remain fatal and visible, and soak telemetry separately reports PLC recoveries versus unrecoverable drops.
 
 PR #56 is a larger experimental receive rewrite with additional media-kind filtering and buffering. It is not adopted implicitly. Camera/video/screen-share traffic must be part of the real soak matrix before the current smaller PR #58 path is called production-ready.
 
