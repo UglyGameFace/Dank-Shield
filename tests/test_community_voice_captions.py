@@ -345,6 +345,33 @@ def test_gemini_live_supports_per_speaker_language_hints_without_affecting_other
     asyncio.run(_run())
 
 
+def test_explicit_english_hint_rejects_unrelated_detected_language() -> None:
+    class FakeSession:
+        async def transcribe(self, pcm: bytes) -> TranscriptResult:
+            assert pcm
+            return TranscriptResult(
+                "तो बात",
+                None,
+                "gemini-live",
+                "gemini-3.5-transcribe-live",
+                "hi-IN",
+            )
+
+    async def _run() -> None:
+        transcriber = GeminiLiveTranscriber("fake-key")
+        await transcriber.set_user_language_codes(55, ["en-US"])
+        transcriber._sessions[55] = FakeSession()
+        result = await transcriber.transcribe(
+            CaptionSegment(55, _pcm(900), 1.0, 2.0)
+        )
+        assert result.text == "[unclear audio]"
+        assert result.language_code == "hi-IN"
+        assert transcriber.language_hint_mismatches == 1
+        assert transcriber.last_detected_language_code(55) == "hi-IN"
+
+    asyncio.run(_run())
+
+
 def test_gemini_live_uses_hybrid_vad_and_audio_stream_end() -> None:
     source = (ROOT / "stoney_verify" / "community_voice_captions.py").read_text(encoding="utf-8")
     session_block = source.split("class _GeminiLiveSpeakerSession", 1)[1].split("class GeminiLiveTranscriber", 1)[0]
