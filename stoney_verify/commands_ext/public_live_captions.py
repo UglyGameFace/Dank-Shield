@@ -1257,33 +1257,26 @@ class ServerLiveCaptionsView(_OwnedView):
         await _defer_update(interaction)
         guild = interaction.guild
         if guild is None:
-            return await _followup(interaction, "Live Captions can only run inside a server.")
+            return await _followup(
+                interaction,
+                "Live Captions preferences can only be changed inside a server.",
+            )
 
         manager = ensure_community_voice_caption_manager(interaction.client)
-        sid = server_caption_scope_id(int(guild.id))
-        status = manager.status(sid)
-        if not bool(status.get("active")):
-            other = manager.status_for_guild(int(guild.id))
-            if bool(other.get("active")) and str(other.get("scope_kind") or "") == "community_hub":
-                return await _followup(
-                    interaction,
-                    "Community Hub Live Captions are running instead. Use that Community Hub session's **Caption My Voice** control.",
-                )
-            return await _followup(
-                interaction,
-                "General Live Captions are not running in this server right now.",
-            )
-
-        voice = _current_voice_channel(interaction)
-        target_voice_id = int(status.get("voice_channel_id") or 0)
-        if voice is None or int(voice.id) != target_voice_id:
-            return await _followup(
-                interaction,
-                f"Join <#{target_voice_id}> before opting your voice into this caption session.",
-            )
+        uid = int(interaction.user.id)
+        prefs = await manager.preferences_for_user(
+            int(guild.id),
+            uid,
+            refresh=True,
+        )
+        desired = not bool(prefs.get("auto_opt_in"))
 
         try:
-            enabled = await manager.toggle_consent(sid, int(interaction.user.id))
+            enabled = await manager.set_auto_caption_preference(
+                int(guild.id),
+                uid,
+                desired,
+            )
         except VoiceReceiveUnavailable as exc:
             return await _followup(interaction, f"❌ {exc}")
 
@@ -1295,11 +1288,11 @@ class ServerLiveCaptionsView(_OwnedView):
         if enabled:
             return await _followup(
                 interaction,
-                "✅ **Auto-Caption My Voice is ON for this server and remembered.** While Live Captions is running, Dank Shield will automatically activate your voice when you are in the captioned VC. Your speaker stream stays isolated. Your saved **My Language** hint is reused automatically. Opted-in audio is sent to Google Gemini's Free Tier transcription service; Dank Shield does not save the audio. Press **Auto-Caption My Voice** again at any time to revoke this remembered consent.",
+                "✅ **Auto-Caption My Voice is ON for this server and remembered.** When Live Captions is running, Dank Shield automatically activates your voice after you join the captioned VC. Your speaker stream stays isolated and your saved **My Language** hint is reused. Opted-in audio is sent to Google Gemini's Free Tier transcription service; Dank Shield does not save the audio. Press **Auto-Caption My Voice** again at any time to revoke this remembered consent.",
             )
         await _followup(
             interaction,
-            "✅ **Auto-Caption My Voice is OFF for this server.** Your remembered consent was revoked, new audio is blocked, and buffered/queued/in-flight caption audio was purged.",
+            "✅ **Auto-Caption My Voice is OFF for this server.** Your remembered consent was revoked. Any active, buffered, queued, or in-flight caption audio for your voice was cleared.",
         )
 
     @discord.ui.button(
