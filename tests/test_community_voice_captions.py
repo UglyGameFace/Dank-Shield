@@ -446,7 +446,7 @@ def test_caption_engine_streams_frames_before_local_segment_finalization() -> No
     assert published == [(91, "realtime speech", None)]
 
 
-def test_gemini_live_finalize_sends_stream_end_without_resending_audio() -> None:
+def test_gemini_live_streams_manual_vad_start_audio_end_without_replay() -> None:
     async def _run() -> None:
         owner = GeminiLiveTranscriber("fake-key")
         session = captions_module._GeminiLiveSpeakerSession(owner, 92)
@@ -462,8 +462,9 @@ def test_gemini_live_finalize_sends_stream_end_without_resending_audio() -> None
 
         ws = FakeWS()
         session.ws = ws
-        session.connected_at = 1.0
-        session.utterance_active = True
+        session.connected_at = captions_module.time.monotonic()
+
+        await session.stream_pcm(_pcm(1200))
         session._final_queue.put_nowait(
             TranscriptResult(
                 "done",
@@ -476,8 +477,12 @@ def test_gemini_live_finalize_sends_stream_end_without_resending_audio() -> None
 
         result = await session.finalize()
         assert result.text == "done"
-        assert ws.sent == [{"realtimeInput": {"audioStreamEnd": True}}]
-        assert owner.audio_stream_ends == 1
+        assert ws.sent[0] == {"realtimeInput": {"activityStart": {}}}
+        assert "audio" in ws.sent[1]["realtimeInput"]
+        assert ws.sent[-1] == {"realtimeInput": {"activityEnd": {}}}
+        assert len(ws.sent) == 3
+        assert owner.activity_starts == 1
+        assert owner.activity_ends == 1
 
     asyncio.run(_run())
 
@@ -492,14 +497,14 @@ def test_production_live_path_does_not_buffer_whole_utterance_before_send() -> N
     assert "Production CaptionEngine streams frames as they arrive." in source
 
 
-def test_gemini_live_uses_hybrid_vad_and_audio_stream_end() -> None:
+def test_gemini_live_uses_manual_vad_while_streaming_realtime_audio() -> None:
     source = (ROOT / "stoney_verify" / "community_voice_captions.py").read_text(encoding="utf-8")
     session_block = source.split("class _GeminiLiveSpeakerSession", 1)[1].split("class GeminiLiveTranscriber", 1)[0]
 
-    assert '"audioStreamEnd": True' in session_block
-    assert '"activityStart"' not in session_block
-    assert '"activityEnd"' not in session_block
-    assert '"automaticActivityDetection": {"disabled": True}' not in session_block
+    assert '"automaticActivityDetection": {"disabled": True}' in session_block
+    assert '"activityStart"' in session_block
+    assert '"activityEnd"' in session_block
+    assert '"audioStreamEnd": True' not in session_block
 
 
 def test_gemini_live_goaway_forces_reconnect_before_next_utterance() -> None:
