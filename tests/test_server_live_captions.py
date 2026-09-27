@@ -487,6 +487,95 @@ def test_receive_transport_recovery_preserves_consent_with_fresh_bridge(monkeypa
     asyncio.run(_run())
 
 
+def test_remembered_auto_caption_restores_at_session_start() -> None:
+    async def _run() -> None:
+        manager = CommunityVoiceCaptionManager(SimpleNamespace())
+        state = SimpleNamespace(guild_id=1)
+        voice_channel = SimpleNamespace(
+            members=[
+                SimpleNamespace(id=7, bot=False),
+                SimpleNamespace(id=8, bot=False),
+                SimpleNamespace(id=9, bot=True),
+            ]
+        )
+        enabled = []
+
+        async def prefs(guild_id, user_id, *, refresh=False):
+            assert guild_id == 1
+            return {
+                "auto_opt_in": int(user_id) == 7,
+                "language_code": "en-US" if int(user_id) == 7 else "",
+            }
+
+        async def enable(state_arg, user_id, *, refresh_preferences=False):
+            assert state_arg is state
+            enabled.append(int(user_id))
+
+        manager.preferences_for_user = prefs
+        manager._enable_user_for_state = enable
+
+        restored = await manager._restore_auto_opt_ins(state, voice_channel)
+        assert restored == 1
+        assert enabled == [7]
+
+    asyncio.run(_run())
+
+
+def test_remembered_auto_caption_follows_target_voice_join_and_leave() -> None:
+    async def _run() -> None:
+        manager = CommunityVoiceCaptionManager(SimpleNamespace())
+        state = SimpleNamespace(guild_id=1, voice_channel_id=44)
+        manager._guild_owner[1] = "server:1"
+        manager._sessions["server:1"] = state
+        actions = []
+
+        async def prefs(guild_id, user_id, *, refresh=False):
+            return {"auto_opt_in": True, "language_code": "en-US"}
+
+        async def enable(state_arg, user_id, *, refresh_preferences=False):
+            actions.append(("enable", int(user_id)))
+
+        async def disable(state_arg, user_id):
+            actions.append(("disable", int(user_id)))
+
+        manager.preferences_for_user = prefs
+        manager._enable_user_for_state = enable
+        manager._disable_user_for_state = disable
+
+        guild = SimpleNamespace(id=1)
+        member = SimpleNamespace(id=7, bot=False, guild=guild)
+        empty = SimpleNamespace(channel=None)
+        target = SimpleNamespace(channel=SimpleNamespace(id=44))
+
+        await manager.handle_voice_state_update(member, empty, target)
+        await manager.handle_voice_state_update(member, target, empty)
+
+        assert actions == [("enable", 7), ("disable", 7)]
+
+    asyncio.run(_run())
+
+
+def test_auto_caption_preference_can_be_saved_while_no_session_is_running() -> None:
+    async def _run() -> None:
+        manager = CommunityVoiceCaptionManager(SimpleNamespace())
+        writes = []
+
+        async def write(guild_id, user_id, *, auto_opt_in=None, language_code=None):
+            writes.append((guild_id, user_id, auto_opt_in, language_code))
+            return {
+                "auto_opt_in": bool(auto_opt_in),
+                "language_code": "",
+                "storage_available": True,
+            }
+
+        manager._write_preferences = write
+        enabled = await manager.set_auto_caption_preference(1, 7, True)
+        assert enabled is True
+        assert writes == [(1, 7, True, None)]
+
+    asyncio.run(_run())
+
+
 def test_general_live_captions_reuse_single_hardened_receiver_owner() -> None:
     ui = _text(GENERAL_UI)
     runtime = _text(RUNTIME)
