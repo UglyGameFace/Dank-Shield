@@ -108,9 +108,11 @@ Before a caption receiver is considered available, `discord.opus.is_loaded()` mu
 
 ### Gemini Live transcription and language policy
 
-Live Captions use `GEMINI_API_KEY` with `gemini-3.5-transcribe-live`. Each opted-in Discord speaker owns a separate Gemini Live WebSocket so speaker isolation continues through transcription. Discord's 48 kHz stereo PCM is converted to 16 kHz mono signed-16 PCM for the Live API.
+Live Captions use `GEMINI_API_KEY` with `gemini-3.5-transcribe-live`. Each opted-in Discord speaker owns a separate Gemini Live WebSocket so speaker isolation continues through transcription. Discord's 48 kHz stereo PCM is downmixed, low-pass filtered, and decimated to 16 kHz mono signed-16 PCM before the Live API. Gemini automatic speech-start detection remains enabled and Dank Shield ends its locally isolated utterance with `audioStreamEnd`.
 
-Leave `DANK_COMMUNITY_CAPTION_LANGUAGE_CODES` blank for the default **Auto / all supported languages** behavior and code-switching. Server owners normally do not need to configure a language list.
+Leave `DANK_COMMUNITY_CAPTION_LANGUAGE_CODES` blank for the default **Auto / all supported languages** behavior and code-switching. Members who know what language they are speaking may set **/captions → My Language** to a supported language name/code for a per-speaker recognition hint. The hint is memory-only, affects only that speaker, and also applies when that member opts into Community Hub captions. Auto remains the default.
+
+`DANK_COMMUNITY_CAPTION_CUSTOM_VOCABULARY` is optional and should contain only a short comma-separated set of genuinely likely domain terms. It is not a replacement for speaker language selection.
 
 The shared per-server caption output policy applies to both ordinary-server and Community Hub captions:
 - **Original language** — publish the finalized transcript as spoken.
@@ -119,7 +121,7 @@ The shared per-server caption output policy applies to both ordinary-server and 
 
 English conversion uses `gemini-3.1-flash-lite` on finalized text only. Audio is never submitted a second time for translation. If Live Transcribe already reports an English BCP-47 language code, the translation request is skipped entirely.
 
-Gemini Live sessions are rotated before the documented 10-minute maximum and on `goAway` before the next utterance. Translation failure must not stop original-language captions.
+Gemini Live sessions are rotated before the documented 10-minute maximum and on `goAway` before the next utterance. Translation failure must not stop original-language captions. Dank Shield publishes finalized `inputTranscription`, not speculative interim transcripts. If an explicit speaker language hint conflicts with Gemini's reported language family, the utterance is shown as `[unclear audio]` rather than an unrelated-language caption.
 
 ## Public setup flow
 

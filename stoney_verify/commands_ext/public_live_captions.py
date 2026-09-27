@@ -36,6 +36,140 @@ CAPTION_EXCLUDED_VOICE_CHANNELS_KEY = "live_captions_excluded_voice_channel_ids"
 CAPTION_OUTPUT_MODE_KEY = "live_captions_output_mode"
 CAPTION_LANGUAGE_CODES_KEY = "live_captions_language_codes"
 
+_SUPPORTED_CAPTION_LANGUAGE_CODES = frozenset({
+    "af-ZA", "am-ET", "ar-EG", "hy-AM", "as-IN", "az-AZ", "be-BY",
+    "bn-BD", "bn-IN", "bs-BA", "bg-BG", "rup-BG", "my-MM",
+    "yue-Hant-HK", "ca-ES", "ceb", "km-KH", "hr-HR", "cs-CZ",
+    "da-DK", "nl-NL", "en-GB", "en-IN", "en-US", "et-EE", "fa-IR",
+    "fil-PH", "fi-FI", "fr-FR", "gl-ES", "ka-GE", "de-DE", "el-GR",
+    "gu-IN", "ha-NG", "he-IL", "hi-IN", "hu-HU", "is-IS", "id-ID",
+    "it-IT", "ja-JP", "jv-ID", "kea-CV", "kn-IN", "kk-KZ", "ko-KR",
+    "ky-KG", "lv-LV", "ln-CD", "lt-LT", "mk-MK", "ms-MY", "ml-IN",
+    "mt-MT", "cmn-Hans-CN", "mr-IN", "mn-MN", "ne-NP", "nb-NO",
+    "or-IN", "pl-PL", "pt-BR", "pt-PT", "pa-IN", "pa-Guru-IN",
+    "ro-RO", "ru-RU", "sr-RS", "sd-Arab-IN", "sk-SK", "sl-SI",
+    "es-419", "es-US", "sw-KE", "sv-SE", "tg-TJ", "te-IN", "th-TH",
+    "tr-TR", "uk-UA", "uz-UZ", "vi-VN",
+})
+_CAPTION_LANGUAGE_BY_CODE = {
+    value.casefold(): value for value in _SUPPORTED_CAPTION_LANGUAGE_CODES
+}
+_CAPTION_LANGUAGE_ALIASES = {
+    "english": "en-US",
+    "english us": "en-US",
+    "american english": "en-US",
+    "english uk": "en-GB",
+    "british english": "en-GB",
+    "english india": "en-IN",
+    "spanish": "es-419",
+    "spanish latin america": "es-419",
+    "spanish us": "es-US",
+    "french": "fr-FR",
+    "german": "de-DE",
+    "italian": "it-IT",
+    "portuguese": "pt-BR",
+    "portuguese brazil": "pt-BR",
+    "portuguese portugal": "pt-PT",
+    "dutch": "nl-NL",
+    "polish": "pl-PL",
+    "russian": "ru-RU",
+    "ukrainian": "uk-UA",
+    "turkish": "tr-TR",
+    "arabic": "ar-EG",
+    "hebrew": "he-IL",
+    "farsi": "fa-IR",
+    "hindi": "hi-IN",
+    "bengali": "bn-IN",
+    "punjabi": "pa-IN",
+    "gujarati": "gu-IN",
+    "marathi": "mr-IN",
+    "telugu": "te-IN",
+    "kannada": "kn-IN",
+    "malayalam": "ml-IN",
+    "nepali": "ne-NP",
+    "thai": "th-TH",
+    "vietnamese": "vi-VN",
+    "indonesian": "id-ID",
+    "malay": "ms-MY",
+    "filipino": "fil-PH",
+    "japanese": "ja-JP",
+    "korean": "ko-KR",
+    "mandarin": "cmn-Hans-CN",
+    "mandarin chinese": "cmn-Hans-CN",
+    "chinese": "cmn-Hans-CN",
+    "cantonese": "yue-Hant-HK",
+    "swedish": "sv-SE",
+    "norwegian": "nb-NO",
+    "danish": "da-DK",
+    "finnish": "fi-FI",
+    "czech": "cs-CZ",
+    "slovak": "sk-SK",
+    "slovenian": "sl-SI",
+    "croatian": "hr-HR",
+    "serbian": "sr-RS",
+    "romanian": "ro-RO",
+    "bulgarian": "bg-BG",
+    "greek": "el-GR",
+    "hungarian": "hu-HU",
+    "icelandic": "is-IS",
+    "estonian": "et-EE",
+    "latvian": "lv-LV",
+    "lithuanian": "lt-LT",
+    "georgian": "ka-GE",
+    "armenian": "hy-AM",
+    "azerbaijani": "az-AZ",
+    "kazakh": "kk-KZ",
+    "uzbek": "uz-UZ",
+    "belarusian": "be-BY",
+    "swahili": "sw-KE",
+    "hausa": "ha-NG",
+    "afrikaans": "af-ZA",
+    "amharic": "am-ET",
+    "catalan": "ca-ES",
+    "galician": "gl-ES",
+    "cebuano": "ceb",
+    "javanese": "jv-ID",
+    "khmer": "km-KH",
+    "mongolian": "mn-MN",
+}
+
+
+def _normalize_personal_language_hint(value: Any) -> str:
+    raw = " ".join(str(value or "").replace("_", "-").strip().split())
+    folded = raw.casefold()
+    if not folded or folded in {"auto", "automatic", "all", "all languages"}:
+        return ""
+    alias = _CAPTION_LANGUAGE_ALIASES.get(folded)
+    if alias:
+        return alias
+    if folded in _CAPTION_LANGUAGE_BY_CODE:
+        return _CAPTION_LANGUAGE_BY_CODE[folded]
+    raise ValueError(
+        "Use Auto, a supported language name such as English, or a supported BCP-47 code such as en-US."
+    )
+
+
+def _personal_language_label(code: str) -> str:
+    value = str(code or "").strip()
+    if not value:
+        return "Auto · all supported languages"
+    names = {
+        "en-US": "English (US)",
+        "en-GB": "English (UK)",
+        "en-IN": "English (India)",
+        "es-419": "Spanish (Latin America)",
+        "es-US": "Spanish (US)",
+        "fr-FR": "French",
+        "de-DE": "German",
+        "hi-IN": "Hindi",
+        "ja-JP": "Japanese",
+        "ko-KR": "Korean",
+        "cmn-Hans-CN": "Mandarin Chinese",
+        "yue-Hant-HK": "Cantonese",
+        "pt-BR": "Portuguese (Brazil)",
+    }
+    return f"{names.get(value, value)} · accuracy hint"
+
 
 def _id_set(value: Any) -> set[int]:
     if isinstance(value, (list, tuple, set, frozenset)):
@@ -429,7 +563,24 @@ async def build_server_live_captions_embed(
             for value in (general.get("opted_in_user_ids") or [])
             if str(value).isdigit()
         }
-        user_opted = int(interaction.user.id) in opted
+        user_id = int(interaction.user.id)
+        user_opted = user_id in opted
+        personal_hint = manager.user_language_hint(user_id)
+        detected_map = general.get("speaker_detected_languages") if isinstance(general.get("speaker_detected_languages"), dict) else {}
+        level_map = general.get("speaker_audio_rms_dbfs") if isinstance(general.get("speaker_audio_rms_dbfs"), dict) else {}
+        detected_language = str(detected_map.get(str(user_id)) or "")
+        input_level = level_map.get(str(user_id))
+        diagnostic_line = ""
+        if detected_language or input_level is not None:
+            level_text = (
+                f"{float(input_level):.1f} dBFS"
+                if input_level is not None
+                else "not measured"
+            )
+            diagnostic_line = (
+                f"\nYour last audio: **{level_text}**"
+                + (f" • Gemini detected: **{detected_language}**" if detected_language else "")
+            )
         embed.add_field(
             name="Current session",
             value=(
@@ -438,8 +589,10 @@ async def build_server_live_captions_embed(
                 f"Mode: **{'DAVE soak test' if general.get('soak_test') else 'normal'}**\n"
                 f"Languages: **{'Auto-detect 85+ + code-switching' if not general.get('language_codes') else ', '.join(general.get('language_codes') or [])}**\n"
                 f"Text output: **{_caption_output_mode_label(str(general.get('output_mode') or 'original'))}**\n"
+                f"Your language: **{_personal_language_label(personal_hint)}**\n"
                 f"Opted-in speakers: **{len(opted)}**\n"
                 f"Your voice: **{'opted in' if user_opted else 'not opted in'}**"
+                f"{diagnostic_line}"
             ),
             inline=False,
         )
@@ -449,6 +602,7 @@ async def build_server_live_captions_embed(
             provider_skipped = int(general.get("provider_skipped") or 0)
             provider_live_connections = int(general.get("provider_live_connections") or 0)
             provider_live_reconnects = int(general.get("provider_live_reconnects") or 0)
+            language_hint_mismatches = int(general.get("language_hint_mismatches") or 0)
             translation_requests = int(general.get("translation_requests") or 0)
             translation_failures = int(general.get("translation_failures") or 0)
             translation_skipped = int(general.get("translation_skipped") or 0)
@@ -461,7 +615,8 @@ async def build_server_live_captions_embed(
                     f"Corrupt Opus dropped: **{int(health.get('opus_decode_drops') or 0)}** • not consented: **{int(health.get('frames_not_consented') or 0)}** • unknown source: **{int(health.get('frames_unknown_source') or 0)}** • identity mismatch: **{int(health.get('frames_source_mismatch') or 0)}**\n"
                     f"Malformed PCM: **{int(health.get('frames_malformed_pcm') or 0)}** • transcribed: **{int(general.get('segments_transcribed') or 0)}** • published: **{int(general.get('segments_published') or 0)}** • empty: **{int(general.get('segments_empty') or 0)}**\n"
                     f"Unclear: **{int(general.get('segments_unclear') or 0)}** • failures: **{int(general.get('segment_failures') or 0)}** • provider-skipped: **{provider_skipped}**\n"
-                    f"Gemini Live connections: **{provider_live_connections}** • reconnects: **{provider_live_reconnects}** • translations: **{translation_requests}** • translation skipped: **{translation_skipped}** • translation failures: **{translation_failures}**"
+                    f"Gemini Live connections: **{provider_live_connections}** • reconnects: **{provider_live_reconnects}** • language-hint mismatches: **{language_hint_mismatches}**\n"
+                    f"Translations: **{translation_requests}** • translation skipped: **{translation_skipped}** • translation failures: **{translation_failures}**"
                 ),
                 inline=False,
             )
@@ -538,6 +693,7 @@ async def build_server_live_captions_embed(
         name="Speaker isolation & privacy",
         value=(
             "Discord speakers stay isolated before transcription. Overlapping users are not mixed together. "
+            "Each participant can keep **My Language** on Auto or provide a personal language hint for better recognition. "
             "Opting out immediately blocks new audio and purges that speaker's buffered/queued/in-flight caption audio. "
             "Opted-in audio is sent to Google Gemini's transcription API for speech-to-text. This deployment uses Gemini's Free Tier, where Google states submitted content may be used to improve its products; Dank Shield itself does not save the audio. "
             "If a microphone already captures a TV, game audio, or another person in the same room, that sound is already part "
@@ -547,6 +703,46 @@ async def build_server_live_captions_embed(
     )
     embed.add_field(name="Control lifetime", value=private_menu_lifecycle_text(), inline=False)
     return embed
+
+
+class CaptionLanguageHintModal(discord.ui.Modal):
+    def __init__(self, *, owner_id: int, current_hint: str) -> None:
+        super().__init__(title="My Caption Language", timeout=300)
+        self.owner_id = int(owner_id)
+        self.language = discord.ui.TextInput(
+            label="Spoken language",
+            placeholder="Auto, English, Spanish, en-US, fr-FR…",
+            default=str(current_hint or "Auto")[:35],
+            required=True,
+            max_length=35,
+        )
+        self.add_item(self.language)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id:
+            return await interaction.response.send_message(
+                "Open your own /captions panel to set your spoken language.",
+                ephemeral=True,
+            )
+        try:
+            code = _normalize_personal_language_hint(self.language.value)
+        except ValueError as exc:
+            return await interaction.response.send_message(
+                f"❌ {exc}",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+        manager = ensure_community_voice_caption_manager(interaction.client)
+        await manager.set_user_language_hint(int(interaction.user.id), code)
+        await interaction.response.send_message(
+            (
+                f"✅ Your Live Captions language is now **{_personal_language_label(code)}**. "
+                "If you are already opted in, only your Gemini speaker session reconnects with the new hint."
+            ),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 class ServerLiveCaptionsView(_OwnedView):
@@ -711,11 +907,33 @@ class ServerLiveCaptionsView(_OwnedView):
         if enabled:
             return await _followup(
                 interaction,
-                "✅ Your voice is opted in. Dank Shield keeps your Discord speaker stream separate and Gemini Live automatically detects its supported languages, including code-switching. If this server enables English output, only finalized transcript text is translated; the audio is not submitted a second time for translation. This deployment uses Gemini's Free Tier, where Google states submitted content may be used to improve its products. Dank Shield itself does not save the audio.",
+                "✅ Your voice is opted in. Dank Shield keeps your Discord speaker stream separate. **My Language** defaults to Auto for all supported languages; setting the language you actually speak gives Gemini an accuracy hint without changing anybody else's captions. If this server enables English output, only finalized transcript text is translated; the audio is not submitted a second time for translation. This deployment uses Gemini's Free Tier, where Google states submitted content may be used to improve its products. Dank Shield itself does not save the audio.",
             )
         await _followup(
             interaction,
             "✅ Your voice is opted out. New audio is blocked and your buffered/queued/in-flight caption audio was purged.",
+        )
+
+    @discord.ui.button(
+        label="My Language",
+        emoji="🌐",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank:captions:server:language:v1",
+        row=0,
+    )
+    async def my_language(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        manager = ensure_community_voice_caption_manager(interaction.client)
+        current = manager.user_language_hint(int(interaction.user.id))
+        await interaction.response.send_modal(
+            CaptionLanguageHintModal(
+                owner_id=int(interaction.user.id),
+                current_hint=current,
+            )
         )
 
     @discord.ui.button(

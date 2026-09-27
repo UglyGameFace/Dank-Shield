@@ -86,6 +86,9 @@ class CommunityVoiceCaptionManager:
         self.bot = bot
         self._sessions: dict[str, CaptionRuntimeState] = {}
         self._guild_owner: dict[int, str] = {}
+        # Per-user spoken-language hints are memory-only, like caption consent.
+        # Empty/missing means Gemini automatic multilingual detection.
+        self._user_language_hints: dict[int, str] = {}
         self._lock = asyncio.Lock()
         self.max_active_guilds = _env_int(
             "DANK_COMMUNITY_CAPTION_MAX_ACTIVE_GUILDS", 4, 1, 100
@@ -109,6 +112,27 @@ class CommunityVoiceCaptionManager:
                 "capability": capability,
                 "opted_in_user_ids": [],
             }
+        opted_ids = list(state.bridge.opted_in_user_ids())
+        speaker_language_hints: dict[str, str] = {}
+        speaker_audio_rms_dbfs: dict[str, float] = {}
+        speaker_detected_languages: dict[str, str] = {}
+        for uid in opted_ids:
+            hint = self.user_language_hint(uid)
+            if hint:
+                speaker_language_hints[str(uid)] = hint
+            try:
+                level = state.engine.transcriber.last_audio_rms_dbfs(uid)
+            except Exception:
+                level = None
+            if level is not None:
+                speaker_audio_rms_dbfs[str(uid)] = float(level)
+            try:
+                detected = state.engine.transcriber.last_detected_language_code(uid)
+            except Exception:
+                detected = ""
+            if detected:
+                speaker_detected_languages[str(uid)] = detected
+
         return {
             "active": True,
             "capability": capability,
@@ -118,7 +142,10 @@ class CommunityVoiceCaptionManager:
             "guild_id": state.guild_id,
             "voice_channel_id": state.voice_channel_id,
             "destination_channel_id": state.destination_channel_id,
-            "opted_in_user_ids": list(state.bridge.opted_in_user_ids()),
+            "opted_in_user_ids": opted_ids,
+            "speaker_language_hints": speaker_language_hints,
+            "speaker_audio_rms_dbfs": speaker_audio_rms_dbfs,
+            "speaker_detected_languages": speaker_detected_languages,
             "health": state.bridge.health.snapshot(),
             "segments_transcribed": state.engine.segments_transcribed,
             "segments_published": state.engine.segments_published,
@@ -130,6 +157,7 @@ class CommunityVoiceCaptionManager:
             "provider_fallbacks": int(getattr(state.engine.transcriber, "fallback_count", 0) or 0),
             "provider_live_connections": int(getattr(state.engine.transcriber, "live_connections", 0) or 0),
             "provider_live_reconnects": int(getattr(state.engine.transcriber, "live_reconnects", 0) or 0),
+            "language_hint_mismatches": int(getattr(state.engine.transcriber, "language_hint_mismatches", 0) or 0),
             "language_codes": list(getattr(state.engine.transcriber, "language_codes", []) or []),
             "output_mode": str(getattr(state.engine, "output_mode", "original") or "original"),
             "translation_requests": int(getattr(getattr(state.engine, "translator", None), "requests", 0) or 0),
@@ -158,6 +186,31 @@ class CommunityVoiceCaptionManager:
             "guild_id": gid,
             "opted_in_user_ids": [],
         }
+
+    def user_language_hint(self, user_id: int) -> str:
+        return str(self._user_language_hints.get(int(user_id), "") or "")
+
+    async def set_user_language_hint(self, user_id: int, language_code: str) -> str:
+        uid = int(user_id)
+        code = str(language_code or "").strip()
+        if code:
+            self._user_language_hints[uid] = code
+        else:
+            self._user_language_hints.pop(uid, None)
+
+        # Apply immediately to any active provider session owned by this user.
+        # Gemini configuration is per WebSocket, so only that speaker reconnects.
+        for state in tuple(self._sessions.values()):
+            setter = getattr(state.engine.transcriber, "set_user_language_codes", None)
+            if callable(setter):
+                try:
+                    await setter(uid, [code] if code else [])
+                except Exception:
+                    log.exception(
+                        "Live Captions failed to apply speaker language hint user=%s",
+                        uid,
+                    )
+        return code
 
     async def start_server(
         self,
@@ -374,6 +427,10 @@ class CommunityVoiceCaptionManager:
             raise VoiceReceiveUnavailable(
                 "This session has reached its configured Live Captions speaker limit."
             )
+        hint = self.user_language_hint(uid)
+        setter = getattr(state.engine.transcriber, "set_user_language_codes", None)
+        if callable(setter):
+            await setter(uid, [hint] if hint else [])
         state.engine.allow_user(uid)
         state.bridge.opt_in(uid)
         return True

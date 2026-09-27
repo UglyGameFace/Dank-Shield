@@ -15,6 +15,7 @@ import base64
 import io
 import json
 import logging
+import math
 import os
 import struct
 import time
@@ -280,25 +281,104 @@ def _gemini_text_from_generate_content(payload: dict[str, Any]) -> str:
     return "\n".join(chunks).strip()
 
 
-def pcm48_stereo_to_pcm16_mono(pcm: bytes) -> bytes:
-    """Convert Discord 48 kHz stereo signed-16 PCM to Gemini Live 16 kHz mono PCM.
+def _design_downsample_fir(
+    *,
+    taps: int = 31,
+    cutoff_hz: float = 7000.0,
+    sample_rate: float = 48000.0,
+) -> tuple[float, ...]:
+    """Design a small Hamming-windowed sinc low-pass for 48kHz -> 16kHz.
 
-    Three consecutive stereo frames become one mono output sample. Averaging all
-    six signed samples provides a tiny box low-pass filter instead of simply
-    discarding 2/3 of the source samples.
+    The old three-frame box average only weakly suppressed energy above the new
+    8kHz Nyquist frequency, so high-frequency speech/noise could alias back into
+    the recognition band. This deterministic FIR keeps ordinary speech intact
+    while strongly reducing fold-back before decimation by three.
     """
 
-    usable = len(pcm) - (len(pcm) % 12)
+    count = int(taps)
+    if count < 7 or count % 2 == 0:
+        raise ValueError("downsample FIR tap count must be odd and >= 7")
+    fc = float(cutoff_hz) / float(sample_rate)
+    midpoint = (count - 1) / 2.0
+    coeffs: list[float] = []
+    for index in range(count):
+        distance = float(index) - midpoint
+        if abs(distance) < 1e-12:
+            ideal = 2.0 * fc
+        else:
+            ideal = math.sin(2.0 * math.pi * fc * distance) / (
+                math.pi * distance
+            )
+        window = 0.54 - 0.46 * math.cos(
+            2.0 * math.pi * float(index) / float(count - 1)
+        )
+        coeffs.append(ideal * window)
+    total = sum(coeffs)
+    if abs(total) < 1e-12:
+        raise RuntimeError("downsample FIR normalization failed")
+    return tuple(value / total for value in coeffs)
+
+
+_PCM48_TO_16_FIR = _design_downsample_fir()
+
+
+def pcm48_stereo_to_pcm16_mono(pcm: bytes) -> bytes:
+    """Convert Discord 48kHz stereo s16le PCM to Gemini's 16kHz mono s16le.
+
+    Discord/discord-ext-voice-recv yields decoded 48kHz stereo signed 16-bit
+    PCM. Google Live Transcribe expects raw 16kHz mono signed 16-bit PCM. Downmix
+    first, low-pass below the 8kHz target Nyquist, then decimate by three.
+    """
+
+    usable = len(pcm) - (len(pcm) % 4)
     if usable <= 0:
         return b""
+
     samples = struct.unpack("<" + ("h" * (usable // 2)), pcm[:usable])
-    out = []
-    for offset in range(0, len(samples), 6):
-        group = samples[offset : offset + 6]
-        if len(group) < 6:
-            break
-        out.append(max(-32768, min(32767, int(round(sum(group) / 6.0)))))
+    mono = [
+        int(round((int(samples[offset]) + int(samples[offset + 1])) / 2.0))
+        for offset in range(0, len(samples), 2)
+    ]
+    if not mono:
+        return b""
+
+    coeffs = _PCM48_TO_16_FIR
+    half = len(coeffs) // 2
+    out_count = (len(mono) + 2) // 3
+    out: list[int] = []
+    last = len(mono) - 1
+
+    for out_index in range(out_count):
+        center = out_index * 3
+        acc = 0.0
+        for tap_index, coefficient in enumerate(coeffs):
+            source_index = center + tap_index - half
+            if source_index < 0:
+                sample = mono[0]
+            elif source_index > last:
+                sample = mono[last]
+            else:
+                sample = mono[source_index]
+            acc += coefficient * float(sample)
+        out.append(max(-32768, min(32767, int(round(acc)))))
+
     return struct.pack("<" + ("h" * len(out)), *out) if out else b""
+
+
+def pcm16_rms_dbfs(pcm: bytes) -> float:
+    """Return RMS level for signed-16 PCM without retaining audio."""
+
+    usable = len(pcm) - (len(pcm) % 2)
+    if usable <= 0:
+        return -120.0
+    samples = struct.unpack("<" + ("h" * (usable // 2)), pcm[:usable])
+    if not samples:
+        return -120.0
+    mean_square = sum(float(value) * float(value) for value in samples) / float(len(samples))
+    if mean_square <= 0.0:
+        return -120.0
+    rms = math.sqrt(mean_square)
+    return max(-120.0, min(0.0, 20.0 * math.log10(rms / 32768.0)))
 
 
 def _language_codes(value: Any) -> list[str]:
@@ -378,17 +458,22 @@ class _GeminiLiveSpeakerSession:
                 "Gemini Live transcription could not open its WebSocket session.",
             ) from None
 
+        language_codes = self.owner.language_codes_for_user(self.user_id)
+        transcription_config: dict[str, Any] = {
+            "languageCodes": list(language_codes),
+            "mode": self.owner.mode,
+        }
+        if self.owner.custom_vocabulary:
+            transcription_config["customVocabulary"] = list(self.owner.custom_vocabulary)
+
         setup = {
             "setup": {
                 "model": f"models/{self.owner.model}",
                 "generationConfig": {"responseModalities": ["TEXT"]},
-                "realtimeInputConfig": {
-                    "automaticActivityDetection": {"disabled": True}
-                },
-                "inputAudioTranscription": {
-                    "languageCodes": list(self.owner.language_codes),
-                    "mode": self.owner.mode,
-                },
+                # Keep Google's automatic speech-start detection enabled. Dank
+                # Shield still owns end-of-utterance detection and sends
+                # audioStreamEnd for immediate finalization (hybrid VAD).
+                "inputAudioTranscription": transcription_config,
             }
         }
         try:
@@ -448,8 +533,11 @@ class _GeminiLiveSpeakerSession:
                 )
 
             try:
-                await ws.send_json({"realtimeInput": {"activityStart": {}}})
-                chunk_bytes = 3200  # 100 ms at 16 kHz mono signed-16 PCM.
+                # Google recommends 20-100ms PCM chunks. The segment is already
+                # isolated to one Discord speaker; automatic server VAD detects
+                # speech start and audioStreamEnd finalizes immediately when our
+                # local silence boundary closes the utterance.
+                chunk_bytes = 1280  # 40 ms at 16 kHz mono signed-16 PCM.
                 for offset in range(0, len(pcm16), chunk_bytes):
                     chunk = pcm16[offset : offset + chunk_bytes]
                     await ws.send_json(
@@ -462,7 +550,7 @@ class _GeminiLiveSpeakerSession:
                             }
                         }
                     )
-                await ws.send_json({"realtimeInput": {"activityEnd": {}}})
+                await ws.send_json({"realtimeInput": {"audioStreamEnd": True}})
 
                 while True:
                     msg = await asyncio.wait_for(
@@ -515,6 +603,7 @@ class GeminiLiveTranscriber:
         model: str = "gemini-3.5-transcribe-live",
         language_codes: Any = None,
         mode: str = "VERBATIM",
+        custom_vocabulary: Any = None,
         timeout_seconds: float = 20.0,
         session_refresh_seconds: float = 510.0,
     ) -> None:
@@ -522,6 +611,16 @@ class GeminiLiveTranscriber:
         self.model = str(model or "gemini-3.5-transcribe-live").strip()
         self.language_codes = _language_codes(language_codes)
         self.mode = "SMART" if str(mode or "").strip().upper() == "SMART" else "VERBATIM"
+        raw_vocab = (
+            list(custom_vocabulary)
+            if isinstance(custom_vocabulary, (list, tuple, set, frozenset))
+            else [part.strip() for part in str(custom_vocabulary or "").split(",")]
+        )
+        self.custom_vocabulary = [
+            str(value).strip()[:80]
+            for value in raw_vocab
+            if str(value).strip()
+        ][:100]
         self.timeout_seconds = max(5.0, min(45.0, float(timeout_seconds)))
         # Google documents a 10 minute max Live Transcribe session. Rotate
         # proactively so an utterance is not stranded at the hard boundary.
@@ -530,12 +629,46 @@ class GeminiLiveTranscriber:
             min(540.0, float(session_refresh_seconds)),
         )
         self._sessions: dict[int, _GeminiLiveSpeakerSession] = {}
+        self._user_language_codes: dict[int, list[str]] = {}
+        self._last_audio_rms_dbfs: dict[int, float] = {}
+        self._last_detected_language_code: dict[int, str] = {}
         self._http_session: Optional[aiohttp.ClientSession] = None
         self.live_connections = 0
         self.live_reconnects = 0
+        self.language_hint_mismatches = 0
         self.fallback_count = 0
         if not self.api_key:
             raise RuntimeError("GEMINI_API_KEY is required for Live Captions.")
+
+    def language_codes_for_user(self, user_id: int) -> list[str]:
+        uid = int(user_id)
+        override = self._user_language_codes.get(uid)
+        return list(override) if override is not None else list(self.language_codes)
+
+    async def set_user_language_codes(self, user_id: int, values: Any) -> list[str]:
+        uid = int(user_id)
+        normalized = _language_codes(values)
+        if normalized:
+            self._user_language_codes[uid] = normalized
+        else:
+            self._user_language_codes.pop(uid, None)
+
+        # Gemini Live transcription config is fixed at session setup. Close only
+        # this speaker's provider session so the next utterance reconnects with
+        # the new hint; no other Discord speaker is affected.
+        session = self._sessions.pop(uid, None)
+        if session is not None:
+            await session.close()
+        return list(normalized)
+
+    def user_language_codes(self, user_id: int) -> list[str]:
+        return list(self._user_language_codes.get(int(user_id), []))
+
+    def last_audio_rms_dbfs(self, user_id: int) -> Optional[float]:
+        return self._last_audio_rms_dbfs.get(int(user_id))
+
+    def last_detected_language_code(self, user_id: int) -> str:
+        return str(self._last_detected_language_code.get(int(user_id), "") or "")
 
     async def _http(self) -> aiohttp.ClientSession:
         if self._http_session is None or self._http_session.closed:
@@ -596,16 +729,41 @@ class GeminiLiveTranscriber:
 
     async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
         uid = int(segment.user_id)
+        self._last_audio_rms_dbfs[uid] = pcm16_rms_dbfs(segment.pcm)
         session = self._sessions.get(uid)
         if session is None:
             session = _GeminiLiveSpeakerSession(self, uid)
             self._sessions[uid] = session
-        return await session.transcribe(segment.pcm)
+        result = await session.transcribe(segment.pcm)
+        if result.language_code:
+            self._last_detected_language_code[uid] = result.language_code
+
+        expected_codes = self.language_codes_for_user(uid)
+        if expected_codes and result.language_code:
+            expected_families = {
+                str(code).split("-", 1)[0].casefold()
+                for code in expected_codes
+                if str(code).strip()
+            }
+            detected_family = str(result.language_code).split("-", 1)[0].casefold()
+            if detected_family and detected_family not in expected_families:
+                self.language_hint_mismatches += 1
+                return TranscriptResult(
+                    text="[unclear audio]",
+                    confidence=None,
+                    provider=result.provider,
+                    model=result.model,
+                    language_code=result.language_code,
+                )
+        return result
 
     async def close_user(self, user_id: int) -> None:
-        session = self._sessions.pop(int(user_id), None)
+        uid = int(user_id)
+        session = self._sessions.pop(uid, None)
         if session is not None:
             await session.close()
+        self._last_audio_rms_dbfs.pop(uid, None)
+        self._last_detected_language_code.pop(uid, None)
 
     async def close(self) -> None:
         sessions = list(self._sessions.values())
@@ -1014,6 +1172,7 @@ def gemini_live_transcriber_from_env(
         ),
         language_codes=configured,
         mode=os.getenv("DANK_COMMUNITY_CAPTION_TRANSCRIPTION_MODE", "VERBATIM"),
+        custom_vocabulary=os.getenv("DANK_COMMUNITY_CAPTION_CUSTOM_VOCABULARY", ""),
     )
 
 
@@ -1041,6 +1200,7 @@ __all__ = [
     "gemini_text_translator_from_env",
     "normalize_caption_output_mode",
     "normalize_pcm16_lossless_timing",
+    "pcm16_rms_dbfs",
     "pcm16_to_wav",
     "pcm48_stereo_to_pcm16_mono",
 ]
