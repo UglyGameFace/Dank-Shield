@@ -347,7 +347,7 @@ def test_gemini_live_supports_per_speaker_language_hints_without_affecting_other
 
 def test_explicit_english_hint_rejects_unrelated_detected_language() -> None:
     class FakeSession:
-        async def transcribe(self, pcm: bytes) -> TranscriptResult:
+        async def transcribe_buffered(self, pcm: bytes) -> TranscriptResult:
             assert pcm
             return TranscriptResult(
                 "तो बात",
@@ -356,6 +356,9 @@ def test_explicit_english_hint_rejects_unrelated_detected_language() -> None:
                 "gemini-3.5-transcribe-live",
                 "hi-IN",
             )
+
+        async def close(self) -> None:
+            return None
 
     async def _run() -> None:
         transcriber = GeminiLiveTranscriber("fake-key")
@@ -372,7 +375,129 @@ def test_explicit_english_hint_rejects_unrelated_detected_language() -> None:
     asyncio.run(_run())
 
 
-def test_gemini_live_uses_manual_vad_for_presegmented_discord_utterances() -> None:
+def test_streaming_resampler_converts_each_discord_20ms_frame_to_16khz() -> None:
+    resampler = captions_module._StreamingPCM48To16Mono()
+    # _pcm() is 1920 signed-16 samples = 960 stereo frames = 20ms at 48kHz.
+    converted = resampler.feed(_pcm(1200))
+    # 20ms at 16kHz mono = 320 signed-16 samples = 640 bytes.
+    assert len(converted) == 640
+
+
+def test_caption_engine_streams_frames_before_local_segment_finalization() -> None:
+    events = []
+    published = []
+
+    class StreamingTranscriber:
+        async def stream_frame(self, frame: SpeakerPCMFrame) -> None:
+            events.append(("stream", frame.user_id, frame.pcm))
+
+        async def finish_segment(self, segment: CaptionSegment) -> TranscriptResult:
+            events.append(("finish", segment.user_id, segment.pcm))
+            return TranscriptResult(
+                "realtime speech",
+                None,
+                "gemini-live",
+                "gemini-3.5-transcribe-live",
+                "en-US",
+            )
+
+        async def close(self) -> None:
+            return None
+
+    class OneFrameSegmenter:
+        def feed(self, frame: SpeakerPCMFrame):
+            events.append(("segment", frame.user_id, frame.pcm))
+            return [
+                CaptionSegment(
+                    frame.user_id,
+                    frame.pcm,
+                    frame.received_at,
+                    frame.received_at,
+                )
+            ]
+
+        def flush_idle(self):
+            return []
+
+        def flush_all(self):
+            return []
+
+        def discard_user(self, user_id: int):
+            return None
+
+    async def _run() -> None:
+        async def publish(user_id: int, text: str, confidence) -> None:
+            published.append((user_id, text, confidence))
+
+        engine = CaptionEngine(StreamingTranscriber(), publish)
+        engine.segmenter = OneFrameSegmenter()
+        engine.start()
+        engine.submit(_frame(91, 1.0, 777))
+        for _ in range(20):
+            if published:
+                break
+            await asyncio.sleep(0.01)
+        await engine.close()
+
+    asyncio.run(_run())
+    assert events[0][0] == "stream"
+    assert events[1][0] == "segment"
+    assert any(event[0] == "finish" for event in events)
+    assert published == [(91, "realtime speech", None)]
+
+
+def test_gemini_live_streams_manual_vad_start_audio_end_without_replay() -> None:
+    async def _run() -> None:
+        owner = GeminiLiveTranscriber("fake-key")
+        session = captions_module._GeminiLiveSpeakerSession(owner, 92)
+
+        class FakeWS:
+            closed = False
+
+            def __init__(self) -> None:
+                self.sent = []
+
+            async def send_json(self, payload) -> None:
+                self.sent.append(payload)
+
+        ws = FakeWS()
+        session.ws = ws
+        session.connected_at = captions_module.time.monotonic()
+
+        await session.stream_pcm(_pcm(1200))
+        session._final_queue.put_nowait(
+            TranscriptResult(
+                "done",
+                None,
+                "gemini-live",
+                owner.model,
+                "en-US",
+            )
+        )
+
+        result = await session.finalize()
+        assert result.text == "done"
+        assert ws.sent[0] == {"realtimeInput": {"activityStart": {}}}
+        assert "audio" in ws.sent[1]["realtimeInput"]
+        assert ws.sent[-1] == {"realtimeInput": {"activityEnd": {}}}
+        assert len(ws.sent) == 3
+        assert owner.activity_starts == 1
+        assert owner.activity_ends == 1
+
+    asyncio.run(_run())
+
+
+def test_production_live_path_does_not_buffer_whole_utterance_before_send() -> None:
+    source = (
+        ROOT / "stoney_verify" / "community_voice_captions.py"
+    ).read_text(encoding="utf-8")
+    engine_block = source.split("class CaptionEngine", 1)[1]
+    assert "await stream_frame(frame)" in engine_block
+    assert "await finish_segment(segment)" in engine_block
+    assert "Production CaptionEngine streams frames as they arrive." in source
+
+
+def test_gemini_live_uses_manual_vad_while_streaming_realtime_audio() -> None:
     source = (ROOT / "stoney_verify" / "community_voice_captions.py").read_text(encoding="utf-8")
     session_block = source.split("class _GeminiLiveSpeakerSession", 1)[1].split("class GeminiLiveTranscriber", 1)[0]
 
