@@ -227,6 +227,10 @@ PR #335 final-head validation completed green for Community Hub CI, Dank Shield 
 
 PR #336 final head `272fee22f680b8a8fef3748b1d60106ff91051a7` completed Community Hub CI, Dank Shield CI, Profile Runtime Diagnostics, Dank Design Regression CI, Ticket Owner Emergency Override, and Application Command Size Diagnostics successfully. After merge, Community Hub CI, Dank Shield CI, Ticket Owner Emergency Override, Supabase deployment, and Discloud deployment also completed successfully.
 
+PR #352 (`fix/live-captions-streaming-persistence-20260927`) now contains the provider-boundary repair for the live soak shown on 2026-09-27: Discord/DAVE/Opus remained healthy while Gemini Live timed out waiting for finalized transcripts because production still buffered a whole local utterance before sending it. The branch now streams isolated PCM frames to Gemini as they arrive, uses the local segmenter only to send `audioStreamEnd`, prewarms each opted-in speaker socket, and adds provider audio-chunk/stream-end/interim/final telemetry plus remembered per-server auto-caption/language preferences.
+
+The first PR #352 exact-head CI run reached **2156 passed / 1 failed** in the full unit suite and **124 passed / 1 failed** in Community Hub focused CI. Both failures were the same static privacy-contract regression: the rewritten Auto-Caption UI had dropped the existing disclosure that English output translates only finalized transcript text and never resubmits audio. The implementation restored that truthful disclosure rather than weakening the contract. Final-head CI is required again after that correction.
+
 Required for the current general Live Captions slice:
 - focused general/Community Hub caption contracts green;
 - full Dank Shield CI and every other workflow triggered by the exact head green;
@@ -240,6 +244,7 @@ The fix must not add a second Community Hub business handler or replay stale act
 
 ## Blockers / risks
 
+- Google developer reports from August/September 2026 describe an intermittent `gemini-3.5-transcribe-live` backend stall where a WebSocket can remain connected and accept audio while server responses stop. PR #352 already closes the speaker session on finalized-transcript timeout so the next utterance reconnects, but the production soak must verify the new audio-chunk/final-event telemetry before the global gate can be lifted.
 No production log excerpt for the latest intermittent Community Hub failure is available yet, so current code inspection can prove the stale-panel timing gap but cannot claim every fresh-panel failure has the same cause. Existing component-runtime diagnostics must remain intact so any remaining fresh-panel failure produces actionable evidence instead of guesswork.
 
 ## Backlog inside this same active task
