@@ -136,34 +136,19 @@ class _SpeakerBuffer:
     started_at: float = 0.0
     last_frame_at: float = 0.0
     total_bytes: int = 0
-    last_ssrc: int = 0
-    last_rtp_timestamp: int = 0
 
 
 class SpeechPreservingSegmenter:
-    """Track isolated-speaker turns without deleting speech samples.
-
-    Buffered/non-live callers can still hard-flush at the max segment duration.
-    The realtime Gemini path instead compacts already-streamed PCM at that
-    memory boundary while keeping the provider activity open until a genuine
-    speech gap. That avoids chopping continuous speech at an arbitrary timer.
-    """
+    """Split isolated speakers on packet gaps/max duration without audio gating."""
 
     def __init__(
         self,
         *,
         silence_gap_seconds: float = 0.75,
         max_segment_seconds: float = 8.0,
-        hard_flush_on_max: bool = True,
-        idle_flush_grace_seconds: float = 0.0,
     ) -> None:
         self.silence_gap_seconds = max(0.35, min(2.0, float(silence_gap_seconds)))
         self.max_segment_seconds = max(2.0, min(15.0, float(max_segment_seconds)))
-        self.hard_flush_on_max = bool(hard_flush_on_max)
-        self.idle_flush_grace_seconds = max(
-            0.0,
-            min(0.75, float(idle_flush_grace_seconds)),
-        )
         self._buffers: dict[int, _SpeakerBuffer] = {}
 
     @property
@@ -175,49 +160,13 @@ class SpeechPreservingSegmenter:
             * self.max_segment_seconds
         )
 
-    @staticmethod
-    def _rtp_gap_seconds(
-        buf: _SpeakerBuffer,
-        frame: SpeakerPCMFrame,
-    ) -> Optional[float]:
-        """Return media-clock separation when both frames share one SSRC.
-
-        Arrival time alone can contain scheduler/network stalls. RTP timestamps
-        advance on Discord's 48 kHz audio clock, so a late but contiguous packet
-        should not be mistaken for 750 ms of actual speaker silence.
-        """
-
-        current_ssrc = int(frame.ssrc or 0)
-        if (
-            current_ssrc <= 0
-            or int(buf.last_ssrc or 0) <= 0
-            or current_ssrc != int(buf.last_ssrc)
-        ):
-            return None
-        current = int(frame.rtp_timestamp) & 0xFFFFFFFF
-        previous = int(buf.last_rtp_timestamp) & 0xFFFFFFFF
-        delta = (current - previous) & 0xFFFFFFFF
-        return float(delta) / float(PCM_SAMPLE_RATE)
-
     def feed(self, frame: SpeakerPCMFrame) -> list[CaptionSegment]:
         ready: list[CaptionSegment] = []
         buf = self._buffers.get(frame.user_id)
 
         if buf is not None and buf.chunks:
-            arrival_gap = max(0.0, frame.received_at - buf.last_frame_at)
-            media_gap = self._rtp_gap_seconds(buf, frame)
-            # Require the media clock to agree when it is available. A packet
-            # delayed by Wi-Fi/host scheduling can arrive >750 ms late while
-            # still being the next 20 ms of speech. Splitting there destroys
-            # linguistic context and can cut a word or phrase in half.
-            real_gap = bool(
-                arrival_gap >= self.silence_gap_seconds
-                and (
-                    media_gap is None
-                    or media_gap >= self.silence_gap_seconds
-                )
-            )
-            if real_gap:
+            gap = max(0.0, frame.received_at - buf.last_frame_at)
+            if gap >= self.silence_gap_seconds:
                 segment = self._flush_user(frame.user_id)
                 if segment is not None:
                     ready.append(segment)
@@ -227,41 +176,27 @@ class SpeechPreservingSegmenter:
             buf = _SpeakerBuffer(
                 started_at=frame.received_at,
                 last_frame_at=frame.received_at,
-                last_ssrc=int(frame.ssrc or 0),
-                last_rtp_timestamp=int(frame.rtp_timestamp) & 0xFFFFFFFF,
             )
             self._buffers[frame.user_id] = buf
 
         buf.chunks.append(frame.pcm)
         buf.total_bytes += len(frame.pcm)
         buf.last_frame_at = frame.received_at
-        buf.last_ssrc = int(frame.ssrc or 0)
-        buf.last_rtp_timestamp = int(frame.rtp_timestamp) & 0xFFFFFFFF
 
         if buf.total_bytes >= self.max_segment_bytes:
-            if self.hard_flush_on_max:
-                segment = self._flush_user(frame.user_id)
-                if segment is not None:
-                    ready.append(segment)
-            else:
-                # Realtime Gemini has already received these samples. Keep only
-                # the most recent frame as a bounded local turn marker instead
-                # of sending activityEnd in the middle of continuous speech.
-                last_chunk = buf.chunks[-1]
-                buf.chunks[:] = [last_chunk]
-                buf.total_bytes = len(last_chunk)
-                buf.started_at = buf.last_frame_at
+            segment = self._flush_user(frame.user_id)
+            if segment is not None:
+                ready.append(segment)
 
         return ready
 
     def flush_idle(self, now: Optional[float] = None) -> list[CaptionSegment]:
         current = time.monotonic() if now is None else float(now)
         ready: list[CaptionSegment] = []
-        idle_threshold = self.silence_gap_seconds + self.idle_flush_grace_seconds
         for user_id, buf in list(self._buffers.items()):
             if not buf.chunks:
                 continue
-            if current - buf.last_frame_at >= idle_threshold:
+            if current - buf.last_frame_at >= self.silence_gap_seconds:
                 segment = self._flush_user(user_id)
                 if segment is not None:
                     ready.append(segment)
@@ -1307,18 +1242,7 @@ class CaptionEngine:
         self.queue: asyncio.Queue[SpeakerPCMFrame] = asyncio.Queue(
             maxsize=max(50, min(2000, int(queue_size)))
         )
-        realtime_turn_streaming = all(
-            callable(getattr(transcriber, name, None))
-            for name in ("stream_frame", "seal_segment", "finish_sealed_segment")
-        )
-        self.segmenter = SpeechPreservingSegmenter(
-            hard_flush_on_max=not realtime_turn_streaming,
-            # Give a late Discord packet a brief chance to arrive before an
-            # idle-only flush. If it does arrive, the RTP clock can distinguish
-            # transport jitter from genuine media silence. Buffered callers keep
-            # their historical zero-grace behavior.
-            idle_flush_grace_seconds=0.25 if realtime_turn_streaming else 0.0,
-        )
+        self.segmenter = SpeechPreservingSegmenter()
         self.low_confidence_threshold = max(0.0, min(1.0, float(low_confidence_threshold)))
         self.unclear_threshold = max(0.0, min(1.0, float(unclear_threshold)))
         self._task: Optional[asyncio.Task[None]] = None
