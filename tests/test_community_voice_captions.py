@@ -494,7 +494,9 @@ def test_production_live_path_does_not_buffer_whole_utterance_before_send() -> N
     engine_block = source.split("class CaptionEngine", 1)[1]
     assert "await stream_frame(frame)" in engine_block
     assert "await finish_segment(segment)" in engine_block
-    assert "Production CaptionEngine streams frames as they arrive." in source
+    stream_before_segment = engine_block.index("await stream_frame(frame)")
+    local_segment_admission = engine_block.index("for segment in self.segmenter.feed(frame):")
+    assert stream_before_segment < local_segment_admission
 
 
 def test_gemini_live_uses_manual_vad_while_streaming_realtime_audio() -> None:
