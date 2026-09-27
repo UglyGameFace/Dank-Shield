@@ -590,6 +590,97 @@ async def upsert_profile_guild_settings(guild_id: int, user_id: int, updates: Ma
         return await get_profile_guild_settings(gid, uid, refresh=True)
 
 
+LIVE_CAPTION_AUTO_OPT_IN_KEY = "live_captions_auto_opt_in"
+LIVE_CAPTION_LANGUAGE_CODE_KEY = "live_captions_language_code"
+
+
+async def get_live_caption_preferences(
+    guild_id: int,
+    user_id: int,
+    *,
+    refresh: bool = False,
+) -> dict[str, Any]:
+    """Return durable per-server Live Captions preferences for one member."""
+
+    row = await get_profile_guild_settings(
+        int(guild_id),
+        int(user_id),
+        refresh=refresh,
+    )
+    settings = (
+        dict(row.get("settings") or {})
+        if isinstance(row.get("settings"), Mapping)
+        else {}
+    )
+    return {
+        "auto_opt_in": bool(settings.get(LIVE_CAPTION_AUTO_OPT_IN_KEY, False)),
+        "language_code": str(
+            settings.get(LIVE_CAPTION_LANGUAGE_CODE_KEY) or ""
+        ).strip()[:35],
+    }
+
+
+async def upsert_live_caption_preferences(
+    guild_id: int,
+    user_id: int,
+    *,
+    auto_opt_in: Optional[bool] = None,
+    language_code: Optional[str] = None,
+) -> dict[str, Any]:
+    """Persist Live Captions consent/language without disturbing profile settings.
+
+    auto_opt_in is explicit durable consent for this Discord server only.
+    language_code is a per-server recognition hint; an empty string means
+    automatic language detection. Passing None leaves that field unchanged.
+    """
+
+    gid = int(guild_id)
+    uid = int(user_id)
+    lock = _USER_LOCKS.setdefault(uid, asyncio.Lock())
+    async with lock:
+        current = await get_profile_guild_settings(gid, uid, refresh=True)
+        settings = (
+            dict(current.get("settings") or {})
+            if isinstance(current.get("settings"), Mapping)
+            else {}
+        )
+
+        if auto_opt_in is not None:
+            settings[LIVE_CAPTION_AUTO_OPT_IN_KEY] = bool(auto_opt_in)
+
+        if language_code is not None:
+            code = str(language_code or "").strip()[:35]
+            if code:
+                settings[LIVE_CAPTION_LANGUAGE_CODE_KEY] = code
+            else:
+                settings.pop(LIVE_CAPTION_LANGUAGE_CODE_KEY, None)
+
+        payload = {
+            "guild_id": str(gid),
+            "user_id": str(uid),
+            "settings": settings,
+            "updated_at": utc_now_iso(),
+        }
+
+        def write(client: Any):
+            try:
+                return client.table(PROFILE_GUILD_SETTINGS_TABLE).upsert(
+                    payload,
+                    on_conflict="guild_id,user_id",
+                ).execute()
+            except TypeError:
+                return client.table(PROFILE_GUILD_SETTINGS_TABLE).upsert(
+                    payload
+                ).execute()
+
+        await _execute(
+            f"write live caption preferences {gid}/{uid}",
+            write,
+        )
+        invalidate_profile_cache(user_id=uid, guild_id=gid)
+        return await get_live_caption_preferences(gid, uid, refresh=True)
+
+
 async def save_platform_identity(
     user_id: int,
     platform: Any,
