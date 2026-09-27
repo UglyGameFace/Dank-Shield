@@ -21,7 +21,10 @@ from stoney_verify.commands_ext.public_live_captions import (
     CAPTION_VOICE_SCOPE_KEY,
     CaptionLanguageOutputView,
     ServerLiveCaptionsSetupView,
+    ServerLiveCaptionsView,
     _caption_output_mode,
+    _normalize_personal_language_hint,
+    _personal_language_label,
     _bot_owner_authorized,
     _soak_pipeline_diagnosis,
     _voice_allowed_by_config,
@@ -69,6 +72,27 @@ def test_general_live_caption_setup_is_reachable_and_supports_existing_server_vc
         "Language & Translation",
     }.issubset(setup_labels)
     assert "Live Captions" in _labels(DankSetupView(has_missing=True))
+
+
+def test_member_live_caption_panel_exposes_personal_language_accuracy_control() -> None:
+    labels = _labels(ServerLiveCaptionsView(7))
+    assert "Caption My Voice" in labels
+    assert "My Language" in labels
+    assert "Refresh" in labels
+
+    assert _normalize_personal_language_hint("Auto") == ""
+    assert _normalize_personal_language_hint("English") == "en-US"
+    assert _normalize_personal_language_hint("en-US") == "en-US"
+    assert _normalize_personal_language_hint("Hindi") == "hi-IN"
+    assert _personal_language_label("en-US").startswith("English (US)")
+    assert "all supported languages" in _personal_language_label("").lower()
+
+    try:
+        _normalize_personal_language_hint("not-a-real-language")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unsupported language hints must fail before Gemini session setup")
 
 
 def test_caption_language_output_modes_are_owner_configurable() -> None:
@@ -299,6 +323,9 @@ def test_general_live_captions_reuse_single_hardened_receiver_owner() -> None:
     assert "connect_receive_client" not in ui
 
     assert "self._guild_owner" in runtime
+    assert "self._user_language_hints" in runtime
+    assert "set_user_language_hint" in runtime
+    assert "set_user_language_codes" in runtime
     assert "Another Live Captions session in this server already owns the voice receiver." in runtime
     assert '"caption_scope": "server"' in runtime
 
@@ -330,6 +357,8 @@ def test_general_live_captions_keep_privacy_and_physical_source_limits_visible()
     ui = _text(GENERAL_UI)
 
     assert "Discord speakers stay isolated before transcription." in ui
+    assert "My Language" in ui
+    assert "personal language hint" in ui
     assert "Opting out immediately blocks new audio" in ui
     assert "Google Gemini's transcription API" in ui
     assert "Gemini Live automatically detects its supported languages" in ui
