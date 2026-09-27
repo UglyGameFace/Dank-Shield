@@ -232,6 +232,8 @@ PR #352 (`fix/live-captions-streaming-persistence-20260927`) contains the provid
 
 The first PR #352 exact-head CI run reached **2156 passed / 1 failed** in the full unit suite and **124 passed / 1 failed** in Community Hub focused CI. Both failures were the same static privacy-contract regression: the rewritten Auto-Caption UI had dropped the existing disclosure that English output translates only finalized transcript text and never resubmits audio. The implementation restored that truthful disclosure rather than weakening the contract. Final-head CI is required again after that correction.
 
+After reconciling PR #352 onto main `c0550646254d1f39b90b13921b25bfa5e25111dd`, reconciled head `b3ce99c71f0d3f98bcd26955348e44fac8b117c9` became mergeable and 0 commits behind main. Its first Community Hub CI compiled the caption stack successfully and passed **124 tests**, with exactly **1 failure** caused by a regression test matching an obsolete explanatory comment string rather than behavior. Commit `8888f1aa591908aa0a6182fcbf983ea7c394ac5b` replaced that prose assertion with the structural invariant that `await stream_frame(frame)` occurs before `self.segmenter.feed(frame)`. Exact-head CI must rerun after the task-record update.
+
 Required for the current general Live Captions slice:
 - focused general/Community Hub caption contracts green;
 - full Dank Shield CI and every other workflow triggered by the exact head green;
