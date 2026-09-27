@@ -4,8 +4,9 @@ from __future__ import annotations
 
 Community Hub sessions and general server voice channels share this same
 receiver owner. One caption receiver may own a guild voice connection at a
-time. Speaker consent is memory-only and must be re-established after restart.
-Audio is never persisted by Dank Shield.
+time. A member can explicitly remember auto-caption consent and a language hint
+per server; those preferences persist, while raw audio and live audio buffers
+never do. Audio is never persisted by Dank Shield.
 """
 
 import asyncio
@@ -92,9 +93,10 @@ class CommunityVoiceCaptionManager:
         self.bot = bot
         self._sessions: dict[str, CaptionRuntimeState] = {}
         self._guild_owner: dict[int, str] = {}
-        # Per-user spoken-language hints are memory-only, like caption consent.
-        # Empty/missing means Gemini automatic multilingual detection.
-        self._user_language_hints: dict[int, str] = {}
+        # Durable preferences are cached by (guild_id, user_id). Empty language
+        # means Gemini automatic multilingual detection.
+        self._user_language_hints: dict[tuple[int, int], str] = {}
+        self._auto_opt_in: dict[tuple[int, int], bool] = {}
         self._receive_probe_tasks: dict[tuple[str, int], asyncio.Task[Any]] = {}
         self._receive_recovery_locks: dict[str, asyncio.Lock] = {}
         self._lock = asyncio.Lock()
@@ -125,7 +127,7 @@ class CommunityVoiceCaptionManager:
         speaker_audio_rms_dbfs: dict[str, float] = {}
         speaker_detected_languages: dict[str, str] = {}
         for uid in opted_ids:
-            hint = self.user_language_hint(uid)
+            hint = self.user_language_hint(state.guild_id, uid)
             if hint:
                 speaker_language_hints[str(uid)] = hint
             try:
@@ -165,6 +167,12 @@ class CommunityVoiceCaptionManager:
             "provider_fallbacks": int(getattr(state.engine.transcriber, "fallback_count", 0) or 0),
             "provider_live_connections": int(getattr(state.engine.transcriber, "live_connections", 0) or 0),
             "provider_live_reconnects": int(getattr(state.engine.transcriber, "live_reconnects", 0) or 0),
+            "provider_audio_chunks_sent": int(getattr(state.engine.transcriber, "audio_chunks_sent", 0) or 0),
+            "provider_audio_bytes_sent": int(getattr(state.engine.transcriber, "audio_bytes_sent", 0) or 0),
+            "provider_activity_starts": int(getattr(state.engine.transcriber, "activity_starts", 0) or 0),
+            "provider_activity_ends": int(getattr(state.engine.transcriber, "activity_ends", 0) or 0),
+            "provider_interim_events": int(getattr(state.engine.transcriber, "interim_transcript_events", 0) or 0),
+            "provider_final_events": int(getattr(state.engine.transcriber, "final_transcript_events", 0) or 0),
             "receive_recoveries": int(state.receive_recoveries),
             "receive_recovery_failures": int(state.receive_recovery_failures),
             "last_receive_recovery_reason": str(state.last_receive_recovery_reason or ""),
@@ -203,30 +211,332 @@ class CommunityVoiceCaptionManager:
             "opted_in_user_ids": [],
         }
 
-    def user_language_hint(self, user_id: int) -> str:
-        return str(self._user_language_hints.get(int(user_id), "") or "")
+    @staticmethod
+    def _preference_key(guild_id: int, user_id: int) -> tuple[int, int]:
+        return (int(guild_id), int(user_id))
 
-    async def set_user_language_hint(self, user_id: int, language_code: str) -> str:
+    async def preferences_for_user(
+        self,
+        guild_id: int,
+        user_id: int,
+        *,
+        refresh: bool = False,
+    ) -> dict[str, Any]:
+        gid = int(guild_id)
         uid = int(user_id)
-        code = str(language_code or "").strip()
-        if code:
-            self._user_language_hints[uid] = code
-        else:
-            self._user_language_hints.pop(uid, None)
+        key = self._preference_key(gid, uid)
 
-        # Apply immediately to any active provider session owned by this user.
-        # Gemini configuration is per WebSocket, so only that speaker reconnects.
+        from .profile_card_service import get_live_caption_preferences
+
+        try:
+            prefs = await get_live_caption_preferences(
+                gid,
+                uid,
+                refresh=refresh,
+            )
+        except Exception as exc:
+            log.warning(
+                "Live Captions preference read failed guild=%s user=%s error=%s",
+                gid,
+                uid,
+                type(exc).__name__,
+            )
+            return {
+                "auto_opt_in": bool(self._auto_opt_in.get(key, False)),
+                "language_code": str(
+                    self._user_language_hints.get(key, "") or ""
+                ),
+                "storage_available": False,
+            }
+
+        auto_opt_in = bool(prefs.get("auto_opt_in", False))
+        language_code = str(prefs.get("language_code") or "").strip()[:35]
+        self._auto_opt_in[key] = auto_opt_in
+        if language_code:
+            self._user_language_hints[key] = language_code
+        else:
+            self._user_language_hints.pop(key, None)
+        return {
+            "auto_opt_in": auto_opt_in,
+            "language_code": language_code,
+            "storage_available": True,
+        }
+
+    def user_language_hint(self, guild_id: int, user_id: int) -> str:
+        key = self._preference_key(guild_id, user_id)
+        return str(self._user_language_hints.get(key, "") or "")
+
+    def auto_caption_cached(self, guild_id: int, user_id: int) -> bool:
+        return bool(
+            self._auto_opt_in.get(
+                self._preference_key(guild_id, user_id),
+                False,
+            )
+        )
+
+    async def _write_preferences(
+        self,
+        guild_id: int,
+        user_id: int,
+        *,
+        auto_opt_in: Optional[bool] = None,
+        language_code: Optional[str] = None,
+    ) -> dict[str, Any]:
+        gid = int(guild_id)
+        uid = int(user_id)
+        from .profile_card_service import upsert_live_caption_preferences
+
+        try:
+            prefs = await upsert_live_caption_preferences(
+                gid,
+                uid,
+                auto_opt_in=auto_opt_in,
+                language_code=language_code,
+            )
+        except Exception as exc:
+            log.exception(
+                "Live Captions preference write failed guild=%s user=%s",
+                gid,
+                uid,
+            )
+            raise VoiceReceiveUnavailable(
+                "Dank Shield could not save your Live Captions preference right now. Your existing preference was left unchanged."
+            ) from exc
+
+        key = self._preference_key(gid, uid)
+        remembered = bool(prefs.get("auto_opt_in", False))
+        code = str(prefs.get("language_code") or "").strip()[:35]
+        self._auto_opt_in[key] = remembered
+        if code:
+            self._user_language_hints[key] = code
+        else:
+            self._user_language_hints.pop(key, None)
+        return {
+            "auto_opt_in": remembered,
+            "language_code": code,
+            "storage_available": True,
+        }
+
+    async def set_user_language_hint(
+        self,
+        guild_id: int,
+        user_id: int,
+        language_code: str,
+    ) -> str:
+        gid = int(guild_id)
+        uid = int(user_id)
+        code = str(language_code or "").strip()[:35]
+        await self._write_preferences(
+            gid,
+            uid,
+            language_code=code,
+        )
+
+        # Gemini configuration is fixed at WebSocket setup. Reconnect only this
+        # speaker, and prewarm the replacement if they are currently opted in.
         for state in tuple(self._sessions.values()):
-            setter = getattr(state.engine.transcriber, "set_user_language_codes", None)
+            if int(state.guild_id) != gid:
+                continue
+            setter = getattr(
+                state.engine.transcriber,
+                "set_user_language_codes",
+                None,
+            )
             if callable(setter):
-                try:
-                    await setter(uid, [code] if code else [])
-                except Exception:
-                    log.exception(
-                        "Live Captions failed to apply speaker language hint user=%s",
-                        uid,
-                    )
+                await setter(uid, [code] if code else [])
+            if state.bridge.is_opted_in(uid):
+                prepare = getattr(
+                    state.engine.transcriber,
+                    "prepare_user",
+                    None,
+                )
+                if callable(prepare):
+                    await prepare(uid)
         return code
+
+    async def _enable_user_for_state(
+        self,
+        state: CaptionRuntimeState,
+        user_id: int,
+        *,
+        refresh_preferences: bool = False,
+    ) -> None:
+        uid = int(user_id)
+        if state.bridge.is_opted_in(uid):
+            return
+        if len(state.bridge.opted_in_user_ids()) >= self.max_speakers_per_session:
+            raise VoiceReceiveUnavailable(
+                "This session has reached its configured Live Captions speaker limit."
+            )
+
+        prefs = await self.preferences_for_user(
+            state.guild_id,
+            uid,
+            refresh=refresh_preferences,
+        )
+        hint = str(prefs.get("language_code") or "")
+        setter = getattr(
+            state.engine.transcriber,
+            "set_user_language_codes",
+            None,
+        )
+        if callable(setter):
+            await setter(uid, [hint] if hint else [])
+
+        # Establish Gemini before admitting the speaker's PCM. That prevents the
+        # first speech burst from queueing behind a WebSocket handshake.
+        prepare = getattr(
+            state.engine.transcriber,
+            "prepare_user",
+            None,
+        )
+        if callable(prepare):
+            await prepare(uid)
+
+        state.engine.allow_user(uid)
+        state.bridge.opt_in(uid)
+
+    async def _disable_user_for_state(
+        self,
+        state: CaptionRuntimeState,
+        user_id: int,
+    ) -> None:
+        uid = int(user_id)
+        if not state.bridge.is_opted_in(uid):
+            return
+        state.bridge.opt_out(uid)
+        await state.engine.revoke_user(uid)
+
+    async def set_auto_caption_preference(
+        self,
+        guild_id: int,
+        user_id: int,
+        enabled: bool,
+    ) -> bool:
+        gid = int(guild_id)
+        uid = int(user_id)
+        enabled = bool(enabled)
+        await self._write_preferences(
+            gid,
+            uid,
+            auto_opt_in=enabled,
+        )
+
+        sid = self._guild_owner.get(gid)
+        state = self._sessions.get(sid) if sid else None
+        if state is None:
+            return enabled
+
+        guild = self.bot.get_guild(gid)
+        member = guild.get_member(uid) if guild is not None else None
+        channel = getattr(getattr(member, "voice", None), "channel", None)
+        in_target = bool(
+            channel is not None
+            and int(getattr(channel, "id", 0) or 0)
+            == int(state.voice_channel_id)
+        )
+
+        if enabled and in_target:
+            try:
+                await self._enable_user_for_state(
+                    state,
+                    uid,
+                    refresh_preferences=True,
+                )
+            except Exception as exc:
+                raise VoiceReceiveUnavailable(
+                    "Your auto-caption preference was saved, but the current Gemini Live speaker session could not be prepared yet. It will retry the next time captions start or you rejoin the captioned voice channel."
+                ) from exc
+        elif not enabled:
+            await self._disable_user_for_state(state, uid)
+        return enabled
+
+    async def _restore_auto_opt_ins(
+        self,
+        state: CaptionRuntimeState,
+        voice_channel: discord.VoiceChannel,
+    ) -> int:
+        restored = 0
+        for member in tuple(getattr(voice_channel, "members", ()) or ()):
+            if getattr(member, "bot", False):
+                continue
+            if restored >= self.max_speakers_per_session:
+                break
+            prefs = await self.preferences_for_user(
+                state.guild_id,
+                int(member.id),
+                refresh=True,
+            )
+            if not bool(prefs.get("auto_opt_in")):
+                continue
+            try:
+                await self._enable_user_for_state(
+                    state,
+                    int(member.id),
+                    refresh_preferences=False,
+                )
+            except Exception:
+                log.exception(
+                    "Live Captions could not restore remembered auto-caption guild=%s user=%s",
+                    state.guild_id,
+                    member.id,
+                )
+                continue
+            restored += 1
+        return restored
+
+    async def handle_voice_state_update(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after: discord.VoiceState,
+    ) -> None:
+        if getattr(member, "bot", False):
+            return
+        gid = int(member.guild.id)
+        sid = self._guild_owner.get(gid)
+        state = self._sessions.get(sid) if sid else None
+        if state is None:
+            return
+
+        uid = int(member.id)
+        before_id = int(
+            getattr(getattr(before, "channel", None), "id", 0) or 0
+        )
+        after_id = int(
+            getattr(getattr(after, "channel", None), "id", 0) or 0
+        )
+        target = int(state.voice_channel_id)
+
+        if before_id == target and after_id != target:
+            # Leaving the captioned VC ends this runtime admission immediately,
+            # but does not revoke the member's remembered per-server preference.
+            await self._disable_user_for_state(state, uid)
+            return
+
+        if after_id != target or before_id == target:
+            return
+
+        prefs = await self.preferences_for_user(
+            gid,
+            uid,
+            refresh=True,
+        )
+        if not bool(prefs.get("auto_opt_in")):
+            return
+        try:
+            await self._enable_user_for_state(
+                state,
+                uid,
+                refresh_preferences=False,
+            )
+        except Exception:
+            log.exception(
+                "Live Captions automatic voice-join opt-in failed guild=%s user=%s",
+                gid,
+                uid,
+            )
+
 
     def _schedule_receive_probe(self, session_id: str, user_id: int) -> None:
         sid = str(session_id)
@@ -641,9 +951,24 @@ class CommunityVoiceCaptionManager:
                 lambda uid, _sid=sid: self._schedule_receive_probe(_sid, uid)
             )
             engine.start()
+            restored = await self._restore_auto_opt_ins(state, voice_channel)
+            if restored:
+                log.info(
+                    "Live Captions restored remembered auto-caption speakers session=%s guild=%s restored=%s",
+                    sid,
+                    guild_id,
+                    restored,
+                )
             return state
 
     async def toggle_consent(self, session_id: str, user_id: int) -> bool:
+        """Toggle remembered per-server auto-caption consent for one member.
+
+        Turning it on persists explicit consent for this server and immediately
+        admits the member when they are in the captioned VC. Turning it off
+        persists the revocation and purges current buffered/in-flight audio.
+        """
+
         sid = str(session_id)
         state = self._sessions.get(sid)
         if state is None:
@@ -651,21 +976,18 @@ class CommunityVoiceCaptionManager:
                 "Live Captions are not running for this session."
             )
         uid = int(user_id)
-        if state.bridge.is_opted_in(uid):
-            state.bridge.opt_out(uid)
-            await state.engine.revoke_user(uid)
-            return False
-        if len(state.bridge.opted_in_user_ids()) >= self.max_speakers_per_session:
-            raise VoiceReceiveUnavailable(
-                "This session has reached its configured Live Captions speaker limit."
-            )
-        hint = self.user_language_hint(uid)
-        setter = getattr(state.engine.transcriber, "set_user_language_codes", None)
-        if callable(setter):
-            await setter(uid, [hint] if hint else [])
-        state.engine.allow_user(uid)
-        state.bridge.opt_in(uid)
-        return True
+        prefs = await self.preferences_for_user(
+            state.guild_id,
+            uid,
+            refresh=True,
+        )
+        currently_enabled = bool(prefs.get("auto_opt_in"))
+        return await self.set_auto_caption_preference(
+            state.guild_id,
+            uid,
+            not currently_enabled,
+        )
+
 
     async def stop(self, session_id: str, *, announce: bool = True) -> bool:
         sid = str(session_id)
@@ -708,7 +1030,7 @@ class CommunityVoiceCaptionManager:
                     else ""
                 )
                 await destination.send(
-                    f"📝 **{scope_label} stopped.**{source} Speaker consent was cleared.",
+                    f"📝 **{scope_label} stopped.**{source} Active audio admission and buffered caption audio were cleared. Members who enabled remembered auto-caption stay opted in for future sessions until they turn it off.",
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
             except (discord.Forbidden, discord.NotFound, discord.HTTPException):
