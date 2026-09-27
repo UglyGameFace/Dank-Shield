@@ -118,6 +118,25 @@ def test_realtime_segmenter_compacts_long_speech_without_forcing_a_boundary() ->
     assert 0 < len(flushed[0].pcm) < segmenter.max_segment_bytes
 
 
+def test_realtime_idle_flush_grace_absorbs_short_transport_stalls() -> None:
+    segmenter = SpeechPreservingSegmenter(
+        silence_gap_seconds=0.5,
+        max_segment_seconds=8,
+        hard_flush_on_max=False,
+        idle_flush_grace_seconds=0.25,
+    )
+    first = _frame(10, 1.0, 111, rtp_timestamp=48_000)
+    assert segmenter.feed(first) == []
+
+    # Realtime mode deliberately waits slightly beyond the base VAD threshold
+    # before an idle-only seal. That gives a delayed packet time to arrive and
+    # let its RTP timestamp prove that the media itself was contiguous.
+    assert segmenter.flush_idle(now=1.70) == []
+    flushed = segmenter.flush_idle(now=1.76)
+    assert len(flushed) == 1
+    assert flushed[0].pcm == first.pcm
+
+
 def test_normalization_changes_gain_not_sample_count_or_timing() -> None:
     pcm = _pcm(1000)
     normalized = normalize_pcm16_lossless_timing(pcm)
