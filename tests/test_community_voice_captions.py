@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import struct
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from stoney_verify.community_voice_captions import (
     TranscriptResult,
     normalize_caption_output_mode,
     normalize_pcm16_lossless_timing,
+    pcm16_rms_dbfs,
     pcm48_stereo_to_pcm16_mono,
 )
 from stoney_verify.community_voice_receive import SpeakerPCMFrame
@@ -302,6 +304,55 @@ def test_pcm48_stereo_to_pcm16_mono_has_correct_rate_ratio() -> None:
     pcm = struct.pack("<" + ("h" * len(stereo_samples)), *stereo_samples)
     converted = pcm48_stereo_to_pcm16_mono(pcm)
     assert len(converted) == 160 * 2
+
+
+def _stereo_sine(frequency_hz: float, *, seconds: float = 0.20, peak: int = 12000) -> bytes:
+    frames = int(48_000 * seconds)
+    samples = []
+    for index in range(frames):
+        value = int(round(peak * math.sin(2.0 * math.pi * frequency_hz * index / 48_000.0)))
+        samples.extend([value, value])
+    return struct.pack("<" + ("h" * len(samples)), *samples)
+
+
+def test_pcm_downsampler_preserves_voice_band_and_suppresses_alias_energy() -> None:
+    voice = pcm48_stereo_to_pcm16_mono(_stereo_sine(1000.0))
+    ultrasonic = pcm48_stereo_to_pcm16_mono(_stereo_sine(12000.0))
+
+    voice_level = pcm16_rms_dbfs(voice)
+    alias_level = pcm16_rms_dbfs(ultrasonic)
+
+    # A 1kHz speech-band tone stays essentially intact while 12kHz energy,
+    # which would fold into the 16kHz target band without a real low-pass,
+    # is heavily attenuated before decimation.
+    assert voice_level > -13.0
+    assert alias_level < voice_level - 35.0
+
+
+def test_gemini_live_supports_per_speaker_language_hints_without_affecting_others() -> None:
+    async def _run() -> None:
+        transcriber = GeminiLiveTranscriber("fake-key", language_codes=[])
+        assert transcriber.language_codes_for_user(10) == []
+        assert transcriber.language_codes_for_user(20) == []
+
+        await transcriber.set_user_language_codes(10, ["en-US"])
+        assert transcriber.language_codes_for_user(10) == ["en-US"]
+        assert transcriber.language_codes_for_user(20) == []
+
+        await transcriber.set_user_language_codes(10, [])
+        assert transcriber.language_codes_for_user(10) == []
+
+    asyncio.run(_run())
+
+
+def test_gemini_live_uses_hybrid_vad_and_audio_stream_end() -> None:
+    source = (ROOT / "stoney_verify" / "community_voice_captions.py").read_text(encoding="utf-8")
+    session_block = source.split("class _GeminiLiveSpeakerSession", 1)[1].split("class GeminiLiveTranscriber", 1)[0]
+
+    assert '"audioStreamEnd": True' in session_block
+    assert '"activityStart"' not in session_block
+    assert '"activityEnd"' not in session_block
+    assert '"automaticActivityDetection": {"disabled": True}' not in session_block
 
 
 def test_gemini_live_goaway_forces_reconnect_before_next_utterance() -> None:
