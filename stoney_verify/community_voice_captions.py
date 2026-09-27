@@ -827,6 +827,12 @@ class _GeminiLiveSpeakerSession:
                 0,
                 "Gemini Live transcription timed out waiting for a finalized transcript.",
             ) from None
+        except CaptionTranscriptionError:
+            await self.close()
+            raise
+        except Exception:
+            await self.close()
+            raise
 
         if isinstance(result, Exception):
             await self.close()
