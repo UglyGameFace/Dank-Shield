@@ -154,6 +154,7 @@ class SpeakerPCMFrame:
 @dataclass(slots=True)
 class VoiceReceiveHealth:
     raw_udp_packets: int = 0
+    gateway_speaking_signals: int = 0
     opus_decode_drops: int = 0
     reader_failures: int = 0
     frames_seen: int = 0
@@ -169,6 +170,7 @@ class VoiceReceiveHealth:
     def snapshot(self) -> dict[str, int]:
         return {
             "raw_udp_packets": self.raw_udp_packets,
+            "gateway_speaking_signals": self.gateway_speaking_signals,
             "opus_decode_drops": self.opus_decode_drops,
             "reader_failures": self.reader_failures,
             "frames_seen": self.frames_seen,
@@ -432,7 +434,48 @@ class PerSpeakerFrameBridge:
         self.health = VoiceReceiveHealth()
         self._allowed_user_ids: set[int] = set()
         self._consent_generation: dict[int, int] = {}
+        self._speaking_callback: Optional[Callable[[int], None]] = None
         self._lock = threading.RLock()
+
+    def set_speaking_callback(
+        self,
+        callback: Optional[Callable[[int], None]],
+    ) -> None:
+        with self._lock:
+            self._speaking_callback = callback
+
+    def note_gateway_speaking(
+        self,
+        *,
+        user_id: int,
+        speaking_state: Any,
+    ) -> None:
+        uid = int(user_id)
+        if uid <= 0:
+            return
+
+        try:
+            raw_state = int(getattr(speaking_state, "value", speaking_state) or 0)
+        except (TypeError, ValueError):
+            raw_state = 0
+
+        # Discord voice opcode 5 is the authoritative control-plane signal that
+        # this source entered a speaking state. A zero state is the stop signal.
+        if raw_state <= 0:
+            return
+
+        self._increment("gateway_speaking_signals")
+        with self._lock:
+            callback = self._speaking_callback
+            opted_in = uid in self._allowed_user_ids
+
+        if callback is None or not opted_in:
+            return
+
+        try:
+            self.loop.call_soon_threadsafe(callback, uid)
+        except RuntimeError:
+            self._increment("callback_failures")
 
     def _advance_consent_generation(self, user_id: int) -> int:
         uid = int(user_id)
@@ -628,6 +671,31 @@ async def connect_receive_client(
 
     _install_raw_udp_probe(voice_client, bridge)
 
+    async def _on_voice_member_speaking_state(
+        member: Any,
+        _ssrc: int,
+        speaking_state: Any,
+    ) -> None:
+        user_id = int(getattr(member, "id", 0) or 0)
+        if user_id <= 0:
+            return
+        bridge.note_gateway_speaking(
+            user_id=user_id,
+            speaking_state=speaking_state,
+        )
+
+    add_listener = getattr(voice_client, "add_listener", None)
+    if callable(add_listener):
+        add_listener(
+            _on_voice_member_speaking_state,
+            name="on_voice_member_speaking_state",
+        )
+        setattr(
+            voice_client,
+            "_dank_caption_speaking_listener",
+            _on_voice_member_speaking_state,
+        )
+
     def _after_reader(error: Optional[Exception]) -> None:
         if error is None:
             return
@@ -642,6 +710,24 @@ async def connect_receive_client(
 
 
 def disconnect_receive_client(voice_client: Any) -> None:
+    listener = getattr(voice_client, "_dank_caption_speaking_listener", None)
+    remove_listener = getattr(voice_client, "remove_listener", None)
+    if listener is not None and callable(remove_listener):
+        try:
+            remove_listener(
+                listener,
+                name="on_voice_member_speaking_state",
+            )
+        except Exception:
+            log.debug(
+                "Live Captions failed to remove speaking listener cleanly",
+                exc_info=True,
+            )
+        try:
+            delattr(voice_client, "_dank_caption_speaking_listener")
+        except Exception:
+            pass
+
     connection = getattr(voice_client, "_connection", None)
     probe = getattr(voice_client, "_dank_caption_udp_probe", None)
     remove_listener = getattr(connection, "remove_socket_listener", None)
