@@ -361,7 +361,9 @@ def test_general_live_captions_keep_privacy_and_physical_source_limits_visible()
     assert "personal language hint" in ui
     assert "Opting out immediately blocks new audio" in ui
     assert "Google Gemini's transcription API" in ui
-    assert "Gemini Live automatically detects its supported languages" in ui
+    assert "My Language" in ui
+    assert "defaults to Auto for all supported languages" in ui
+    assert "accuracy hint without changing anybody else's captions" in ui
     assert "finalized transcript text is translated" in ui
     assert "Dank Shield itself does not save the audio." in ui
     assert "microphone already captures a TV, game audio, or another person" in ui
