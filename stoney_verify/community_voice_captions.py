@@ -635,6 +635,7 @@ class GeminiLiveTranscriber:
         self._http_session: Optional[aiohttp.ClientSession] = None
         self.live_connections = 0
         self.live_reconnects = 0
+        self.language_hint_mismatches = 0
         self.fallback_count = 0
         if not self.api_key:
             raise RuntimeError("GEMINI_API_KEY is required for Live Captions.")
@@ -736,6 +737,24 @@ class GeminiLiveTranscriber:
         result = await session.transcribe(segment.pcm)
         if result.language_code:
             self._last_detected_language_code[uid] = result.language_code
+
+        expected_codes = self.language_codes_for_user(uid)
+        if expected_codes and result.language_code:
+            expected_families = {
+                str(code).split("-", 1)[0].casefold()
+                for code in expected_codes
+                if str(code).strip()
+            }
+            detected_family = str(result.language_code).split("-", 1)[0].casefold()
+            if detected_family and detected_family not in expected_families:
+                self.language_hint_mismatches += 1
+                return TranscriptResult(
+                    text="[unclear audio]",
+                    confidence=None,
+                    provider=result.provider,
+                    model=result.model,
+                    language_code=result.language_code,
+                )
         return result
 
     async def close_user(self, user_id: int) -> None:
