@@ -102,6 +102,16 @@ Opus decoding is stateful. Decoder state must remain isolated per encoded stream
 
 Packet loss, FEC/PLC, sequence rollover, jitter, reconnects, and SSRC changes are receive-layer concerns. They must not cause audio from one Discord user to inherit another user's caption buffer.
 
+### Voice control-plane vs media-plane recovery
+
+A Discord voice session can report DAVE active, mapped SSRCs, and a listening reader while the UDP media path is no longer delivering usable audio. Those control-plane flags are not treated as proof that voice is flowing.
+
+Dank Shield listens to the voice gateway's speaking-state event for opted-in users. After a non-zero speaking signal, it snapshots receive counters and waits 2.5 seconds. If no PCM reaches the hardened sink while the reader is still listening, DAVE is ready, and a remote SSRC is mapped, the session is classified as a stalled receive transport.
+
+Recovery replaces only the Discord voice receive transport and `PerSpeakerFrameBridge`; the existing `CaptionEngine` and Gemini speaker session remain alive. The fresh bridge restores exactly the same opted-in user IDs. Old sink cleanup only touches the discarded bridge, so asynchronous cleanup cannot revoke consent on the recovered transport.
+
+Automatic recovery has a 20-second cooldown and is capped at two attempts per rolling minute. Quiet voice channels never trigger recovery by themselves.
+
 ## Speaker identity boundary
 
 A PCM frame is eligible for captioning only when all of these are true:
@@ -176,6 +186,8 @@ The bot-owner soak panel must expose enough state to localize a failure:
 - identity/consent/malformed drops;
 - routed frames and queue depth;
 - Gemini Live connection/reconnect counts;
+- Discord voice gateway speaking-signal count;
+- automatic receive-transport recovery count/failures and last recovery reason;
 - configured server output mode plus each opted-in speaker's optional language hint;
 - last per-speaker audio RMS level and Gemini-detected language code;
 - explicit-language mismatch count;
@@ -215,7 +227,9 @@ The feature gate stays off until live testing covers at least:
 25. translation quota/provider failure degrading to original captions instead of stopping transcription;
 26. English-only speech with **My Language = English (US)** across several sentence lengths, verifying detected `en-*` and zero language-hint mismatches;
 27. deliberately conflicting explicit hint vs spoken language, verifying the utterance fails closed instead of publishing the wrong-language transcript;
-28. Auto mode with multiple supported languages and genuine code-switching after the explicit-hint accuracy pass.
+28. Auto mode with multiple supported languages and genuine code-switching after the explicit-hint accuracy pass;
+29. a stalled media-plane case where Discord emits an opted-in speaking signal but no PCM follows, verifying one bounded automatic transport rebuild preserves the same consent and caption engine;
+30. repeated receive stalls, verifying no more than two automatic rebuild attempts occur in one rolling minute and the panel exposes the recovery state instead of treating control-plane flags as media health.
 
 Success means the reader remains alive, speaker identity never crosses users, non-consenting audio never reaches transcription, and captions continue through expected voice/DAVE transitions.
 
