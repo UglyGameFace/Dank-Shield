@@ -692,6 +692,7 @@ def test_gemini_live_uses_manual_vad_while_streaming_realtime_audio() -> None:
     session_block = source.split("class _GeminiLiveSpeakerSession", 1)[1].split("class GeminiLiveTranscriber", 1)[0]
 
     assert '"automaticActivityDetection": {"disabled": True}' in session_block
+    assert '"activityHandling": "NO_INTERRUPTION"' in session_block
     assert '"activityStart"' in session_block
     assert '"activityEnd"' in session_block
     assert '"audioStreamEnd": True' not in session_block
