@@ -643,6 +643,39 @@ def test_gemini_live_goaway_forces_reconnect_before_next_utterance() -> None:
     asyncio.run(_run())
 
 
+def test_gemini_live_dead_receiver_forces_reconnect_before_next_audio() -> None:
+    async def _run() -> None:
+        owner = GeminiLiveTranscriber("fake-key")
+        session = captions_module._GeminiLiveSpeakerSession(owner, 78)
+        stale = type("FakeWS", (), {"closed": False})()
+        session.ws = stale
+        session.connected_at = captions_module.time.monotonic()
+        session._receiver_task = type(
+            "DoneReceiver",
+            (),
+            {"done": lambda self: True},
+        )()
+        replacement = type("FakeWS", (), {"closed": False})()
+        healthy_receiver = type(
+            "HealthyReceiver",
+            (),
+            {"done": lambda self: False},
+        )()
+
+        async def fake_connect() -> None:
+            session.ws = replacement
+            session.connected_at = captions_module.time.monotonic()
+            session._receiver_task = healthy_receiver
+
+        session._connect = fake_connect
+        resolved = await session._ensure_connected()
+        assert resolved is replacement
+        assert owner.live_reconnects == 1
+        assert session._receiver_task is healthy_receiver
+
+    asyncio.run(_run())
+
+
 def test_caption_output_mode_normalization() -> None:
     assert normalize_caption_output_mode("original") == "original"
     assert normalize_caption_output_mode("english") == "english"
