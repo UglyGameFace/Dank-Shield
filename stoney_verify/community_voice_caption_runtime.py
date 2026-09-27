@@ -12,7 +12,7 @@ import asyncio
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import discord
@@ -51,6 +51,7 @@ class CaptionRuntimeState:
     receive_recovery_failures: int = 0
     last_receive_recovery_reason: str = ""
     last_receive_recovery_at: float = 0.0
+    receive_recovery_window: list[float] = field(default_factory=list)
 
 
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -343,11 +344,18 @@ class CommunityVoiceCaptionManager:
                 and now - state.last_receive_recovery_at < 20.0
             ):
                 return False
-            if state.receive_recoveries >= 2:
+
+            state.receive_recovery_window[:] = [
+                stamp
+                for stamp in state.receive_recovery_window
+                if now - float(stamp) < 60.0
+            ]
+            if len(state.receive_recovery_window) >= 2:
                 state.last_receive_recovery_reason = (
-                    "Automatic receive recovery limit reached; stop/start captions for a fresh session."
+                    "Automatic receive recovery is rate-limited after two attempts in one minute."
                 )
                 return False
+            state.receive_recovery_window.append(now)
 
             guild = self.bot.get_guild(state.guild_id)
             voice_channel = (
