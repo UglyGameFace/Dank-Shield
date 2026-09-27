@@ -516,6 +516,11 @@ def test_gemini_live_streams_manual_vad_start_audio_end_without_replay() -> None
         ws = FakeWS()
         session.ws = ws
         session.connected_at = captions_module.time.monotonic()
+        session._receiver_task = type(
+            "HealthyReceiver",
+            (),
+            {"done": lambda self: False},
+        )()
 
         await session.stream_pcm(_pcm(1200))
         waiter = await session.seal_utterance()
@@ -558,6 +563,11 @@ def test_gemini_live_maps_overlapping_finalized_turns_fifo() -> None:
         ws = FakeWS()
         session.ws = ws
         session.connected_at = captions_module.time.monotonic()
+        session._receiver_task = type(
+            "HealthyReceiver",
+            (),
+            {"done": lambda self: False},
+        )()
 
         await session.stream_pcm(_pcm(1000))
         first_waiter = await session.seal_utterance()
