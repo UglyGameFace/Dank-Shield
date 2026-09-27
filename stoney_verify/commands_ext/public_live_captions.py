@@ -563,7 +563,24 @@ async def build_server_live_captions_embed(
             for value in (general.get("opted_in_user_ids") or [])
             if str(value).isdigit()
         }
-        user_opted = int(interaction.user.id) in opted
+        user_id = int(interaction.user.id)
+        user_opted = user_id in opted
+        personal_hint = manager.user_language_hint(user_id)
+        detected_map = general.get("speaker_detected_languages") if isinstance(general.get("speaker_detected_languages"), dict) else {}
+        level_map = general.get("speaker_audio_rms_dbfs") if isinstance(general.get("speaker_audio_rms_dbfs"), dict) else {}
+        detected_language = str(detected_map.get(str(user_id)) or "")
+        input_level = level_map.get(str(user_id))
+        diagnostic_line = ""
+        if detected_language or input_level is not None:
+            level_text = (
+                f"{float(input_level):.1f} dBFS"
+                if input_level is not None
+                else "not measured"
+            )
+            diagnostic_line = (
+                f"\nYour last audio: **{level_text}**"
+                + (f" • Gemini detected: **{detected_language}**" if detected_language else "")
+            )
         embed.add_field(
             name="Current session",
             value=(
@@ -572,8 +589,10 @@ async def build_server_live_captions_embed(
                 f"Mode: **{'DAVE soak test' if general.get('soak_test') else 'normal'}**\n"
                 f"Languages: **{'Auto-detect 85+ + code-switching' if not general.get('language_codes') else ', '.join(general.get('language_codes') or [])}**\n"
                 f"Text output: **{_caption_output_mode_label(str(general.get('output_mode') or 'original'))}**\n"
+                f"Your language: **{_personal_language_label(personal_hint)}**\n"
                 f"Opted-in speakers: **{len(opted)}**\n"
                 f"Your voice: **{'opted in' if user_opted else 'not opted in'}**"
+                f"{diagnostic_line}"
             ),
             inline=False,
         )
@@ -672,6 +691,7 @@ async def build_server_live_captions_embed(
         name="Speaker isolation & privacy",
         value=(
             "Discord speakers stay isolated before transcription. Overlapping users are not mixed together. "
+            "Each participant can keep **My Language** on Auto or provide a personal language hint for better recognition. "
             "Opting out immediately blocks new audio and purges that speaker's buffered/queued/in-flight caption audio. "
             "Opted-in audio is sent to Google Gemini's transcription API for speech-to-text. This deployment uses Gemini's Free Tier, where Google states submitted content may be used to improve its products; Dank Shield itself does not save the audio. "
             "If a microphone already captures a TV, game audio, or another person in the same room, that sound is already part "
