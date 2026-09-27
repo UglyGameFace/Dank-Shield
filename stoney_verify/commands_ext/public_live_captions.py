@@ -36,6 +36,140 @@ CAPTION_EXCLUDED_VOICE_CHANNELS_KEY = "live_captions_excluded_voice_channel_ids"
 CAPTION_OUTPUT_MODE_KEY = "live_captions_output_mode"
 CAPTION_LANGUAGE_CODES_KEY = "live_captions_language_codes"
 
+_SUPPORTED_CAPTION_LANGUAGE_CODES = frozenset({
+    "af-ZA", "am-ET", "ar-EG", "hy-AM", "as-IN", "az-AZ", "be-BY",
+    "bn-BD", "bn-IN", "bs-BA", "bg-BG", "rup-BG", "my-MM",
+    "yue-Hant-HK", "ca-ES", "ceb", "km-KH", "hr-HR", "cs-CZ",
+    "da-DK", "nl-NL", "en-GB", "en-IN", "en-US", "et-EE", "fa-IR",
+    "fil-PH", "fi-FI", "fr-FR", "gl-ES", "ka-GE", "de-DE", "el-GR",
+    "gu-IN", "ha-NG", "he-IL", "hi-IN", "hu-HU", "is-IS", "id-ID",
+    "it-IT", "ja-JP", "jv-ID", "kea-CV", "kn-IN", "kk-KZ", "ko-KR",
+    "ky-KG", "lv-LV", "ln-CD", "lt-LT", "mk-MK", "ms-MY", "ml-IN",
+    "mt-MT", "cmn-Hans-CN", "mr-IN", "mn-MN", "ne-NP", "nb-NO",
+    "or-IN", "pl-PL", "pt-BR", "pt-PT", "pa-IN", "pa-Guru-IN",
+    "ro-RO", "ru-RU", "sr-RS", "sd-Arab-IN", "sk-SK", "sl-SI",
+    "es-419", "es-US", "sw-KE", "sv-SE", "tg-TJ", "te-IN", "th-TH",
+    "tr-TR", "uk-UA", "uz-UZ", "vi-VN",
+})
+_CAPTION_LANGUAGE_BY_CODE = {
+    value.casefold(): value for value in _SUPPORTED_CAPTION_LANGUAGE_CODES
+}
+_CAPTION_LANGUAGE_ALIASES = {
+    "english": "en-US",
+    "english us": "en-US",
+    "american english": "en-US",
+    "english uk": "en-GB",
+    "british english": "en-GB",
+    "english india": "en-IN",
+    "spanish": "es-419",
+    "spanish latin america": "es-419",
+    "spanish us": "es-US",
+    "french": "fr-FR",
+    "german": "de-DE",
+    "italian": "it-IT",
+    "portuguese": "pt-BR",
+    "portuguese brazil": "pt-BR",
+    "portuguese portugal": "pt-PT",
+    "dutch": "nl-NL",
+    "polish": "pl-PL",
+    "russian": "ru-RU",
+    "ukrainian": "uk-UA",
+    "turkish": "tr-TR",
+    "arabic": "ar-EG",
+    "hebrew": "he-IL",
+    "farsi": "fa-IR",
+    "hindi": "hi-IN",
+    "bengali": "bn-IN",
+    "punjabi": "pa-IN",
+    "gujarati": "gu-IN",
+    "marathi": "mr-IN",
+    "telugu": "te-IN",
+    "kannada": "kn-IN",
+    "malayalam": "ml-IN",
+    "nepali": "ne-NP",
+    "thai": "th-TH",
+    "vietnamese": "vi-VN",
+    "indonesian": "id-ID",
+    "malay": "ms-MY",
+    "filipino": "fil-PH",
+    "japanese": "ja-JP",
+    "korean": "ko-KR",
+    "mandarin": "cmn-Hans-CN",
+    "mandarin chinese": "cmn-Hans-CN",
+    "chinese": "cmn-Hans-CN",
+    "cantonese": "yue-Hant-HK",
+    "swedish": "sv-SE",
+    "norwegian": "nb-NO",
+    "danish": "da-DK",
+    "finnish": "fi-FI",
+    "czech": "cs-CZ",
+    "slovak": "sk-SK",
+    "slovenian": "sl-SI",
+    "croatian": "hr-HR",
+    "serbian": "sr-RS",
+    "romanian": "ro-RO",
+    "bulgarian": "bg-BG",
+    "greek": "el-GR",
+    "hungarian": "hu-HU",
+    "icelandic": "is-IS",
+    "estonian": "et-EE",
+    "latvian": "lv-LV",
+    "lithuanian": "lt-LT",
+    "georgian": "ka-GE",
+    "armenian": "hy-AM",
+    "azerbaijani": "az-AZ",
+    "kazakh": "kk-KZ",
+    "uzbek": "uz-UZ",
+    "belarusian": "be-BY",
+    "swahili": "sw-KE",
+    "hausa": "ha-NG",
+    "afrikaans": "af-ZA",
+    "amharic": "am-ET",
+    "catalan": "ca-ES",
+    "galician": "gl-ES",
+    "cebuano": "ceb",
+    "javanese": "jv-ID",
+    "khmer": "km-KH",
+    "mongolian": "mn-MN",
+}
+
+
+def _normalize_personal_language_hint(value: Any) -> str:
+    raw = " ".join(str(value or "").replace("_", "-").strip().split())
+    folded = raw.casefold()
+    if not folded or folded in {"auto", "automatic", "all", "all languages"}:
+        return ""
+    alias = _CAPTION_LANGUAGE_ALIASES.get(folded)
+    if alias:
+        return alias
+    if folded in _CAPTION_LANGUAGE_BY_CODE:
+        return _CAPTION_LANGUAGE_BY_CODE[folded]
+    raise ValueError(
+        "Use Auto, a supported language name such as English, or a supported BCP-47 code such as en-US."
+    )
+
+
+def _personal_language_label(code: str) -> str:
+    value = str(code or "").strip()
+    if not value:
+        return "Auto · all supported languages"
+    names = {
+        "en-US": "English (US)",
+        "en-GB": "English (UK)",
+        "en-IN": "English (India)",
+        "es-419": "Spanish (Latin America)",
+        "es-US": "Spanish (US)",
+        "fr-FR": "French",
+        "de-DE": "German",
+        "hi-IN": "Hindi",
+        "ja-JP": "Japanese",
+        "ko-KR": "Korean",
+        "cmn-Hans-CN": "Mandarin Chinese",
+        "yue-Hant-HK": "Cantonese",
+        "pt-BR": "Portuguese (Brazil)",
+    }
+    return f"{names.get(value, value)} · accuracy hint"
+
 
 def _id_set(value: Any) -> set[int]:
     if isinstance(value, (list, tuple, set, frozenset)):
