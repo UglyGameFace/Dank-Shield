@@ -372,14 +372,14 @@ def test_explicit_english_hint_rejects_unrelated_detected_language() -> None:
     asyncio.run(_run())
 
 
-def test_gemini_live_uses_hybrid_vad_and_audio_stream_end() -> None:
+def test_gemini_live_uses_manual_vad_for_presegmented_discord_utterances() -> None:
     source = (ROOT / "stoney_verify" / "community_voice_captions.py").read_text(encoding="utf-8")
     session_block = source.split("class _GeminiLiveSpeakerSession", 1)[1].split("class GeminiLiveTranscriber", 1)[0]
 
-    assert '"audioStreamEnd": True' in session_block
-    assert '"activityStart"' not in session_block
-    assert '"activityEnd"' not in session_block
-    assert '"automaticActivityDetection": {"disabled": True}' not in session_block
+    assert '"automaticActivityDetection": {"disabled": True}' in session_block
+    assert '"activityStart"' in session_block
+    assert '"activityEnd"' in session_block
+    assert '"audioStreamEnd": True' not in session_block
 
 
 def test_gemini_live_goaway_forces_reconnect_before_next_utterance() -> None:

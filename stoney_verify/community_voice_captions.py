@@ -470,9 +470,13 @@ class _GeminiLiveSpeakerSession:
             "setup": {
                 "model": f"models/{self.owner.model}",
                 "generationConfig": {"responseModalities": ["TEXT"]},
-                # Keep Google's automatic speech-start detection enabled. Dank
-                # Shield still owns end-of-utterance detection and sends
-                # audioStreamEnd for immediate finalization (hybrid VAD).
+                # Dank Shield has already isolated and segmented one Discord
+                # speaker before Gemini sees this audio. Use Google's documented
+                # manual-VAD mode for this buffered utterance so finalization is
+                # explicit and deterministic.
+                "realtimeInputConfig": {
+                    "automaticActivityDetection": {"disabled": True}
+                },
                 "inputAudioTranscription": transcription_config,
             }
         }
@@ -533,10 +537,10 @@ class _GeminiLiveSpeakerSession:
                 )
 
             try:
-                # Google recommends 20-100ms PCM chunks. The segment is already
-                # isolated to one Discord speaker; automatic server VAD detects
-                # speech start and audioStreamEnd finalizes immediately when our
-                # local silence boundary closes the utterance.
+                # The local segmenter has already established a single-speaker
+                # utterance boundary. In manual VAD mode Google requires
+                # activityStart before audio and activityEnd when speech ends.
+                await ws.send_json({"realtimeInput": {"activityStart": {}}})
                 chunk_bytes = 1280  # 40 ms at 16 kHz mono signed-16 PCM.
                 for offset in range(0, len(pcm16), chunk_bytes):
                     chunk = pcm16[offset : offset + chunk_bytes]
@@ -550,7 +554,7 @@ class _GeminiLiveSpeakerSession:
                             }
                         }
                     )
-                await ws.send_json({"realtimeInput": {"audioStreamEnd": True}})
+                await ws.send_json({"realtimeInput": {"activityEnd": {}}})
 
                 while True:
                     msg = await asyncio.wait_for(
