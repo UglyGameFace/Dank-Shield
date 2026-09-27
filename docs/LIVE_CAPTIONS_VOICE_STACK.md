@@ -162,7 +162,7 @@ Language behavior defaults to **Auto / all supported languages**. An empty `lang
 
 Live Transcribe distinguishes speculative `interimInputTranscription` from finalized `inputTranscription`. Dank Shield publishes only finalized `inputTranscription`. Final results include a BCP-47 `languageCode`, which is retained for diagnostics and translation decisions. When a participant gave an explicit language hint and Gemini reports a different primary language family, Dank Shield fails that utterance closed as `[unclear audio]` instead of publishing confident-looking text in an unrelated language.
 
-Gemini documents a 10-minute maximum Live Transcribe session. Dank Shield proactively rotates a speaker's session before that limit and also honors `goAway` by reconnecting before the next utterance.
+Gemini documents a 10-minute maximum Live Transcribe session. Dank Shield proactively rotates a speaker's session before that limit and also honors `goAway` by reconnecting before the next utterance. WebSocket openness alone is not treated as session health: if the dedicated receive task is missing or has exited while the socket still appears open, the speaker session reconnects before accepting more PCM so audio cannot be sent into an unread connection.
 
 The server owner chooses one text-output mode:
 
