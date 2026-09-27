@@ -950,9 +950,24 @@ class CommunityVoiceCaptionManager:
                 lambda uid, _sid=sid: self._schedule_receive_probe(_sid, uid)
             )
             engine.start()
+            restored = await self._restore_auto_opt_ins(state, voice_channel)
+            if restored:
+                log.info(
+                    "Live Captions restored remembered auto-caption speakers session=%s guild=%s restored=%s",
+                    sid,
+                    guild_id,
+                    restored,
+                )
             return state
 
     async def toggle_consent(self, session_id: str, user_id: int) -> bool:
+        """Toggle remembered per-server auto-caption consent for one member.
+
+        Turning it on persists explicit consent for this server and immediately
+        admits the member when they are in the captioned VC. Turning it off
+        persists the revocation and purges current buffered/in-flight audio.
+        """
+
         sid = str(session_id)
         state = self._sessions.get(sid)
         if state is None:
@@ -960,21 +975,18 @@ class CommunityVoiceCaptionManager:
                 "Live Captions are not running for this session."
             )
         uid = int(user_id)
-        if state.bridge.is_opted_in(uid):
-            state.bridge.opt_out(uid)
-            await state.engine.revoke_user(uid)
-            return False
-        if len(state.bridge.opted_in_user_ids()) >= self.max_speakers_per_session:
-            raise VoiceReceiveUnavailable(
-                "This session has reached its configured Live Captions speaker limit."
-            )
-        hint = self.user_language_hint(uid)
-        setter = getattr(state.engine.transcriber, "set_user_language_codes", None)
-        if callable(setter):
-            await setter(uid, [hint] if hint else [])
-        state.engine.allow_user(uid)
-        state.bridge.opt_in(uid)
-        return True
+        prefs = await self.preferences_for_user(
+            state.guild_id,
+            uid,
+            refresh=True,
+        )
+        currently_enabled = bool(prefs.get("auto_opt_in"))
+        return await self.set_auto_caption_preference(
+            state.guild_id,
+            uid,
+            not currently_enabled,
+        )
+
 
     async def stop(self, session_id: str, *, announce: bool = True) -> bool:
         sid = str(session_id)
@@ -1017,7 +1029,7 @@ class CommunityVoiceCaptionManager:
                     else ""
                 )
                 await destination.send(
-                    f"📝 **{scope_label} stopped.**{source} Speaker consent was cleared.",
+                    f"📝 **{scope_label} stopped.**{source} Active audio admission and buffered caption audio were cleared. Members who enabled remembered auto-caption stay opted in for future sessions until they turn it off.",
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
             except (discord.Forbidden, discord.NotFound, discord.HTTPException):
