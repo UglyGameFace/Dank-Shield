@@ -19,9 +19,13 @@ from stoney_verify.commands_ext.public_live_captions import (
     CAPTION_LANGUAGE_CODES_KEY,
     CAPTION_OUTPUT_MODE_KEY,
     CAPTION_VOICE_SCOPE_KEY,
+    CaptionLanguageChoiceView,
+    CaptionLanguageGroupView,
     CaptionLanguageOutputView,
     ServerLiveCaptionsSetupView,
     ServerLiveCaptionsView,
+    _CAPTION_LANGUAGE_GROUPS,
+    _SUPPORTED_CAPTION_LANGUAGE_CODES,
     _caption_output_mode,
     _normalize_personal_language_hint,
     _personal_language_label,
@@ -74,12 +78,27 @@ def test_general_live_caption_setup_is_reachable_and_supports_existing_server_vc
     assert "Live Captions" in _labels(DankSetupView(has_missing=True))
 
 
-def test_member_live_caption_panel_exposes_personal_language_accuracy_control() -> None:
+def test_member_live_caption_panel_exposes_dropdown_language_accuracy_control() -> None:
     labels = _labels(ServerLiveCaptionsView(7))
     assert "Caption My Voice" in labels
     assert "My Language" in labels
     assert "Refresh" in labels
 
+    group_view = CaptionLanguageGroupView(7, "")
+    group_select = next(item for item in group_view.children if isinstance(item, discord.ui.Select))
+    assert group_select.options[0].value == "__auto__"
+    assert "All Supported Languages" in group_select.options[0].label
+    assert len(group_select.options) <= 25
+
+    grouped_codes = set()
+    for group_key, group in _CAPTION_LANGUAGE_GROUPS.items():
+        assert len(group["options"]) <= 25
+        choice_view = CaptionLanguageChoiceView(7, group_key, "")
+        choice_select = next(item for item in choice_view.children if isinstance(item, discord.ui.Select))
+        assert 1 <= len(choice_select.options) <= 25
+        grouped_codes.update(option.value for option in choice_select.options)
+
+    assert grouped_codes == set(_SUPPORTED_CAPTION_LANGUAGE_CODES)
     assert _normalize_personal_language_hint("Auto") == ""
     assert _normalize_personal_language_hint("English") == "en-US"
     assert _normalize_personal_language_hint("en-US") == "en-US"
@@ -87,12 +106,9 @@ def test_member_live_caption_panel_exposes_personal_language_accuracy_control() 
     assert _personal_language_label("en-US").startswith("English (US)")
     assert "all supported languages" in _personal_language_label("").lower()
 
-    try:
-        _normalize_personal_language_hint("not-a-real-language")
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("unsupported language hints must fail before Gemini session setup")
+    ui = _text(GENERAL_UI)
+    assert "CaptionLanguageHintModal" not in ui
+    assert "send_modal(" not in ui
 
 
 def test_caption_language_output_modes_are_owner_configurable() -> None:
