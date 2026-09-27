@@ -546,6 +546,150 @@ def test_gemini_live_streams_manual_vad_start_audio_end_without_replay() -> None
     asyncio.run(_run())
 
 
+def test_gemini_live_timeout_recovers_only_stable_interim_for_exact_turn() -> None:
+    async def _run() -> None:
+        owner = GeminiLiveTranscriber("fake-key")
+        owner.timeout_seconds = 0.01
+        session = captions_module._GeminiLiveSpeakerSession(owner, 94)
+
+        class FakeWS:
+            closed = False
+
+            def __init__(self) -> None:
+                self.sent = []
+
+            async def send_json(self, payload) -> None:
+                self.sent.append(payload)
+
+            async def close(self) -> None:
+                self.closed = True
+
+        ws = FakeWS()
+        session.ws = ws
+        session.connected_at = captions_module.time.monotonic()
+        session._receiver_task = type(
+            "HealthyReceiver",
+            (),
+            {"done": lambda self: False, "cancel": lambda self: None},
+        )()
+        session.utterance_active = True
+
+        session._record_interim(
+            {"text": "meet me at the spawn point", "languageCode": "en-US"}
+        )
+        session._record_interim(
+            {"text": "meet me at the spawn point", "languageCode": "en-US"}
+        )
+
+        waiter = await session.seal_utterance()
+        result = await session.wait_for_final(waiter)
+
+        assert result.text == "meet me at the spawn point"
+        assert result.provider == "gemini-live-interim-timeout"
+        assert result.language_code == "en-US"
+        assert owner.interim_timeout_fallbacks == 1
+        assert owner.fallback_count == 1
+        assert ws.closed is True
+
+    asyncio.run(_run())
+
+
+def test_gemini_live_timeout_rejects_unstable_interim_hypotheses() -> None:
+    async def _run() -> None:
+        owner = GeminiLiveTranscriber("fake-key")
+        owner.timeout_seconds = 0.01
+        session = captions_module._GeminiLiveSpeakerSession(owner, 95)
+
+        class FakeWS:
+            closed = False
+
+            async def send_json(self, payload) -> None:
+                return None
+
+            async def close(self) -> None:
+                self.closed = True
+
+        ws = FakeWS()
+        session.ws = ws
+        session.connected_at = captions_module.time.monotonic()
+        session._receiver_task = type(
+            "HealthyReceiver",
+            (),
+            {"done": lambda self: False, "cancel": lambda self: None},
+        )()
+        session.utterance_active = True
+
+        session._record_interim(
+            {"text": "meet me at the spawn point", "languageCode": "en-US"}
+        )
+        session._record_interim(
+            {"text": "we need a spoon tonight", "languageCode": "en-US"}
+        )
+
+        waiter = await session.seal_utterance()
+        try:
+            await session.wait_for_final(waiter)
+        except CaptionTranscriptionError as exc:
+            assert "timed out waiting for a finalized transcript" in exc.safe_message
+        else:
+            raise AssertionError("unstable speculative interims must never publish")
+
+        assert owner.interim_timeout_fallbacks == 0
+        assert owner.fallback_count == 0
+        assert ws.closed is True
+
+    asyncio.run(_run())
+
+
+def test_gemini_live_authoritative_final_always_beats_stable_interim() -> None:
+    async def _run() -> None:
+        owner = GeminiLiveTranscriber("fake-key")
+        session = captions_module._GeminiLiveSpeakerSession(owner, 96)
+
+        class FakeWS:
+            closed = False
+
+            def __init__(self) -> None:
+                self.sent = []
+
+            async def send_json(self, payload) -> None:
+                self.sent.append(payload)
+
+        ws = FakeWS()
+        session.ws = ws
+        session.connected_at = captions_module.time.monotonic()
+        session._receiver_task = type(
+            "HealthyReceiver",
+            (),
+            {"done": lambda self: False},
+        )()
+        session.utterance_active = True
+
+        session._record_interim(
+            {"text": "meet me at spawn", "languageCode": "en-US"}
+        )
+        session._record_interim(
+            {"text": "meet me at spawn", "languageCode": "en-US"}
+        )
+        waiter = await session.seal_utterance()
+        await session._push_final_event(
+            TranscriptResult(
+                "meet me at the spawn point",
+                None,
+                "gemini-live",
+                owner.model,
+                "en-US",
+            )
+        )
+        result = await session.wait_for_final(waiter)
+
+        assert result.text == "meet me at the spawn point"
+        assert result.provider == "gemini-live"
+        assert owner.interim_timeout_fallbacks == 0
+
+    asyncio.run(_run())
+
+
 def test_gemini_live_maps_overlapping_finalized_turns_fifo() -> None:
     async def _run() -> None:
         owner = GeminiLiveTranscriber("fake-key")
