@@ -16,7 +16,12 @@ from typing import Any, Optional
 
 import discord
 
-from .community_voice_captions import CaptionEngine, gemini_transcriber_from_env
+from .community_voice_captions import (
+    CaptionEngine,
+    gemini_live_transcriber_from_env,
+    gemini_text_translator_from_env,
+    normalize_caption_output_mode,
+)
 from .community_voice_receive import (
     PerSpeakerFrameBridge,
     VoiceReceiveUnavailable,
@@ -123,6 +128,15 @@ class CommunityVoiceCaptionManager:
             "segment_failures": state.engine.segment_failures,
             "provider_skipped": state.engine.provider_skipped,
             "provider_fallbacks": int(getattr(state.engine.transcriber, "fallback_count", 0) or 0),
+            "provider_live_connections": int(getattr(state.engine.transcriber, "live_connections", 0) or 0),
+            "provider_live_reconnects": int(getattr(state.engine.transcriber, "live_reconnects", 0) or 0),
+            "language_codes": list(getattr(state.engine.transcriber, "language_codes", []) or []),
+            "output_mode": str(getattr(state.engine, "output_mode", "original") or "original"),
+            "translation_requests": int(getattr(getattr(state.engine, "translator", None), "requests", 0) or 0),
+            "translation_cache_hits": int(getattr(getattr(state.engine, "translator", None), "cache_hits", 0) or 0),
+            "translation_failures": int(getattr(getattr(state.engine, "translator", None), "failures", 0) or 0),
+            "translation_skipped": int(getattr(getattr(state.engine, "translator", None), "skipped", 0) or 0),
+            "translation_blocked_reason": str(getattr(getattr(state.engine, "translator", None), "blocked_reason", "") or ""),
             "provider_blocked_reason": str(state.engine.provider_blocked_reason or ""),
             "provider_blocked_code": str(state.engine.provider_blocked_code or ""),
             "queue_depth": state.engine.queue.qsize(),
@@ -210,6 +224,16 @@ class CommunityVoiceCaptionManager:
                 "Live Captions need GEMINI_API_KEY configured on the Dank Shield host."
             )
 
+        # One language/output policy per guild is shared by ordinary-server and
+        # Community Hub captions. Routing remains session-specific.
+        from .guild_config import get_guild_config
+
+        caption_cfg = await get_guild_config(guild_id, refresh=True)
+        output_mode = normalize_caption_output_mode(
+            caption_cfg.get("live_captions_output_mode", "original")
+        )
+        language_codes = caption_cfg.get("live_captions_language_codes") or []
+
         capability = voice_receive_capability()
         if not capability.available:
             raise VoiceReceiveUnavailable(capability.reason)
@@ -249,7 +273,14 @@ class CommunityVoiceCaptionManager:
                     "The Live Captions text destination no longer exists."
                 )
 
-            transcriber = gemini_transcriber_from_env()
+            transcriber = gemini_live_transcriber_from_env(
+                language_codes=language_codes,
+            )
+            translator = (
+                gemini_text_translator_from_env()
+                if output_mode in {"english", "bilingual"}
+                else None
+            )
 
             async def _publish(user_id: int, text: str, confidence: Optional[float]) -> None:
                 member = guild.get_member(int(user_id))
@@ -275,6 +306,8 @@ class CommunityVoiceCaptionManager:
             engine = CaptionEngine(
                 transcriber,
                 _publish,
+                translator=translator,
+                output_mode=output_mode,
                 global_transcribe_semaphore=self._global_transcribe_semaphore,
             )
             loop = asyncio.get_running_loop()
@@ -293,6 +326,7 @@ class CommunityVoiceCaptionManager:
                     "Dank Shield keeps each opted-in Discord speaker isolated before transcription. "
                     "Only members who explicitly choose **Caption My Voice** are transcribed. "
                     "Opted-in audio is sent to **Google Gemini's transcription API** for speech-to-text. "
+                    "Gemini automatically detects its supported languages and can handle code-switching; this server may optionally display English translation of finalized text. "
                     "This deployment uses Gemini's **Free Tier**; Google states Free Tier submitted content may be used to improve its products. "
                     "Dank Shield keeps audio only in bounded memory while processing it and does not save the audio.",
                     allowed_mentions=discord.AllowedMentions.none(),

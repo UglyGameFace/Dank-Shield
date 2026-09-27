@@ -14,7 +14,8 @@ The public feature gate `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` must remain off u
 - bundled libopus distribution: https://pypi.org/project/opuslib-next-bundled/
 - discord-ext-voice-recv upstream: https://github.com/imayhaveborkedit/discord-ext-voice-recv
 - Gemini audio transcription: https://ai.google.dev/gemini-api/docs/transcribe
-- Gemini audio input / inline-data limits: https://ai.google.dev/gemini-api/docs/audio
+- Gemini Live Transcribe: https://ai.google.dev/gemini-api/docs/live-api/live-transcribe
+- Gemini Live API reference: https://ai.google.dev/api/live
 - Gemini API rate limits: https://ai.google.dev/gemini-api/docs/rate-limits
 
 ## Receive pipeline
@@ -33,8 +34,11 @@ Discord voice gateway
   -> Dank Shield SSRC + source-user agreement
   -> that user's explicit Caption My Voice consent
   -> per-speaker segment buffer
-  -> in-memory WAV segment
-  -> Google Gemini transcription
+  -> 48 kHz stereo PCM segment
+  -> 16 kHz mono signed-16 PCM conversion
+  -> that speaker's persistent Gemini Live Transcribe WebSocket
+  -> finalized transcript + detected BCP-47 language code
+  -> optional text-only English translation
   -> configured caption text channel/thread
 ```
 
@@ -66,7 +70,7 @@ PR #56 is a larger experimental receive rewrite with additional media-kind filte
 
 ## Opus contract
 
-Dank Shield needs PCM for speech segmentation and WAV transcription. Therefore the receive sink returns `wants_opus() == False`, which makes `discord-ext-voice-recv` create one `discord.opus.Decoder` per SSRC.
+Dank Shield needs PCM for speech segmentation and Gemini Live Transcribe input. Therefore the receive sink returns `wants_opus() == False`, which makes `discord-ext-voice-recv` create one `discord.opus.Decoder` per SSRC.
 
 discord.py documents that native libopus must be loaded for PCM voice work and that `discord.opus.is_loaded()` must be true.
 
@@ -135,15 +139,25 @@ A normal-server caption transcript includes its source voice-channel identity. C
 
 ## Transcription boundary
 
-Only isolated, opted-in PCM is converted to an in-memory WAV segment and sent to the Google Gemini API using `GEMINI_API_KEY`.
+Only isolated, opted-in PCM crosses the transcription boundary. Discord receive produces 48 kHz stereo signed-16 PCM; Dank Shield downsamples each isolated speaker segment to 16 kHz mono signed-16 PCM before sending it to that speaker's own Gemini Live Transcribe session.
 
-Primary model: `gemini-3.5-transcribe`. It is purpose-built for speech-to-text and is used in verbatim mode. For these short 2–8 second caption segments, the WAV is sent inline and never written to disk.
+Primary model: `gemini-3.5-transcribe-live`. Dank Shield uses manual activity boundaries around each speech segment and keeps one WebSocket session per opted-in Discord speaker. This preserves speaker isolation and avoids opening a new HTTP transcription request for every utterance.
 
-Fallback model: `gemini-3.5-flash-lite`. It is used only when the dedicated transcribe model returns a successful response with no transcript text. The fallback receives the same in-memory WAV and a strict transcription-only prompt. This fallback exists because a successful empty response must not silently discard a user's opted-in utterance.
+Language behavior defaults to **Auto / all supported languages**. An empty `languageCodes` list lets Gemini detect across its supported transcription locales and handle code-switching. Final Live Transcribe responses include a BCP-47 `languageCode`, which Dank Shield retains for translation decisions.
 
-Gemini's documented transcription response does not provide the OpenAI-style token log-probability confidence used by the previous provider. Dank Shield therefore does not invent a confidence score. Confidence-only normalization/retry logic runs only for providers that actually supply a numeric confidence.
+Gemini documents a 10-minute maximum Live Transcribe session. Dank Shield proactively rotates a speaker's session before that limit and also honors `goAway` by reconnecting before the next utterance.
 
-Provider failures, empty transcripts, fallback use, rate/quota blocks, and publishing failures remain separately observable.
+The server owner chooses one text-output mode:
+
+1. **Original language** — publish the finalized transcript as spoken.
+2. **English** — translate only finalized non-English transcript text to English.
+3. **Original + English** — publish the original transcript plus the English translation.
+
+English conversion never resends the audio. It uses `gemini-3.1-flash-lite` on finalized text only. If Live Transcribe reports an `en-*` language code, Dank Shield skips the translation request entirely. Translation failure does not stop the original caption pipeline.
+
+Gemini Live Transcribe does not provide the old OpenAI token-logprob confidence used by the previous provider. Dank Shield therefore does not invent a confidence score. Confidence-only retry/unclear logic runs only when a provider actually supplies numeric confidence.
+
+Provider failures, Live session reconnects, transcription quota blocks, translation requests/skips/failures, and publishing failures remain separately observable.
 
 ## Required observability
 
@@ -159,6 +173,9 @@ The bot-owner soak panel must expose enough state to localize a failure:
 - PCM frames reaching the hardened sink;
 - identity/consent/malformed drops;
 - routed frames and queue depth;
+- Gemini Live connection/reconnect counts;
+- configured language/output mode;
+- translation request/skip/failure counts;
 - transcribed/published/empty/unclear/failure counters.
 
 A bot merely joining the voice channel is not evidence that receive, DAVE, Opus, or transcription works.
@@ -184,7 +201,14 @@ The feature gate stays off until live testing covers at least:
 15. Gemini authentication/permission/RESOURCE_EXHAUSTED/provider failure diagnostics;
 16. output-channel permission loss and recovery;
 17. Community Hub start/end cleanup using the same receiver owner;
-18. general-server stop cleanup with no late caption publication.
+18. general-server stop cleanup with no late caption publication;
+19. automatic language detection in multiple supported languages;
+20. mid-conversation code-switching;
+21. Original, English, and Original + English output modes;
+22. detected English skipping the translation request;
+23. non-English finalized text translation without a second audio submission;
+24. Gemini Live session rotation / `goAway` reconnect without cross-speaker state leakage;
+25. translation quota/provider failure degrading to original captions instead of stopping transcription.
 
 Success means the reader remains alive, speaker identity never crosses users, non-consenting audio never reaches transcription, and captions continue through expected voice/DAVE transitions.
 

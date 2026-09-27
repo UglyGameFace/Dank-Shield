@@ -4,16 +4,20 @@ import asyncio
 import struct
 from pathlib import Path
 
+import stoney_verify.community_voice_captions as captions_module
 from stoney_verify.community_voice_captions import (
     CaptionEngine,
     CaptionSegment,
     CaptionTranscriptionError,
-    GeminiTranscriber,
+    GeminiLiveTranscriber,
+    GeminiTextTranslator,
     _gemini_text_from_generate_content,
     _gemini_transcription_error,
     SpeechPreservingSegmenter,
     TranscriptResult,
+    normalize_caption_output_mode,
     normalize_pcm16_lossless_timing,
+    pcm48_stereo_to_pcm16_mono,
 )
 from stoney_verify.community_voice_receive import SpeakerPCMFrame
 
@@ -241,43 +245,142 @@ def test_gemini_generate_content_text_ignores_thought_parts() -> None:
     assert _gemini_text_from_generate_content(payload) == "hello from voice"
 
 
-def test_gemini_transcriber_falls_back_only_on_empty_primary() -> None:
+def test_gemini_live_defaults_to_all_language_auto_detection() -> None:
+    transcriber = GeminiLiveTranscriber("fake-key")
+    assert transcriber.model == "gemini-3.5-transcribe-live"
+    assert transcriber.language_codes == []
+    assert transcriber.mode == "VERBATIM"
+
+
+def test_pcm48_stereo_to_pcm16_mono_has_correct_rate_ratio() -> None:
+    # 480 stereo frames = 10ms at 48kHz. The Live API wants 160 mono
+    # samples for the same 10ms at 16kHz.
+    stereo_samples = []
+    for i in range(480):
+        stereo_samples.extend([1000 + i, -1000 + i])
+    pcm = struct.pack("<" + ("h" * len(stereo_samples)), *stereo_samples)
+    converted = pcm48_stereo_to_pcm16_mono(pcm)
+    assert len(converted) == 160 * 2
+
+
+def test_gemini_live_goaway_forces_reconnect_before_next_utterance() -> None:
     async def _run() -> None:
-        transcriber = GeminiTranscriber(
-            "fake-key",
-            model="gemini-3.5-transcribe",
-            fallback_model="gemini-3.5-flash-lite",
-        )
-        calls = []
+        owner = GeminiLiveTranscriber("fake-key")
+        session = captions_module._GeminiLiveSpeakerSession(owner, 77)
+        session.ws = type("FakeWS", (), {"closed": False})()
+        session.connected_at = 100.0
+        session.rotate_before_next = True
+        replacement = type("FakeWS", (), {"closed": False})()
 
-        async def fake_generate(wav_data: bytes, *, model: str) -> str:
-            assert wav_data.startswith(b"RIFF")
-            calls.append(model)
-            return "" if model == "gemini-3.5-transcribe" else "meet at spawn"
+        async def fake_connect() -> None:
+            session.ws = replacement
+            session.connected_at = 200.0
+            session.rotate_before_next = False
 
-        transcriber._generate = fake_generate
-        result = await transcriber.transcribe(
-            CaptionSegment(31, _pcm(900), 1.0, 2.0)
-        )
-        assert result.text == "meet at spawn"
-        assert result.provider == "gemini"
-        assert result.model == "gemini-3.5-flash-lite"
-        assert result.confidence is None
-        assert transcriber.fallback_count == 1
-        assert calls == ["gemini-3.5-transcribe", "gemini-3.5-flash-lite"]
+        session._connect = fake_connect
+        resolved = await session._ensure_connected()
+        assert resolved is replacement
+        assert owner.live_reconnects == 1
+        assert session.rotate_before_next is False
 
     asyncio.run(_run())
 
 
-def test_gemini_request_uses_inline_wav_and_no_disk_file_contract() -> None:
-    transcriber = GeminiTranscriber("fake-key", language="en-US")
-    body = transcriber._request_body(b"RIFFfake", model="gemini-3.5-transcribe")
-    part = body["contents"][0]["parts"][0]["inlineData"]
-    assert part["mimeType"] == "audio/wav"
-    assert part["data"]
-    cfg = body["generationConfig"]["audioTranscriptionConfig"]
-    assert cfg["mode"] == "VERBATIM"
-    assert cfg["languageCodes"] == ["en-US"]
+def test_caption_output_mode_normalization() -> None:
+    assert normalize_caption_output_mode("original") == "original"
+    assert normalize_caption_output_mode("english") == "english"
+    assert normalize_caption_output_mode("Original + English") == "bilingual"
+    assert normalize_caption_output_mode("both") == "bilingual"
+    assert normalize_caption_output_mode("anything-else") == "original"
+
+
+def test_text_translation_skips_detected_english_without_api_request() -> None:
+    async def _run() -> None:
+        translator = GeminiTextTranslator("fake-key")
+        result = await translator.translate_to_english(
+            "meet at spawn",
+            language_code="en-US",
+        )
+        assert result == "meet at spawn"
+        assert translator.requests == 0
+        assert translator.skipped == 1
+
+    asyncio.run(_run())
+
+
+class _SpanishLiveTranscriber:
+    async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
+        return TranscriptResult(
+            "nos vemos en el punto de aparición",
+            None,
+            "gemini-live",
+            "gemini-3.5-transcribe-live",
+            "es-ES",
+        )
+
+
+class _FakeEnglishTranslator:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def translate_to_english(self, text: str, *, language_code: str = "") -> str:
+        self.calls += 1
+        assert language_code == "es-ES"
+        assert "aparición" in text
+        return "see you at spawn"
+
+
+def test_bilingual_mode_translates_finalized_text_only() -> None:
+    published = []
+
+    async def _run() -> None:
+        translator = _FakeEnglishTranslator()
+
+        async def publish(user_id: int, text: str, confidence) -> None:
+            published.append((user_id, text, confidence))
+
+        engine = CaptionEngine(
+            _SpanishLiveTranscriber(),
+            publish,
+            translator=translator,
+            output_mode="bilingual",
+        )
+        await engine._process_segment(
+            CaptionSegment(31, _pcm(900), 1.0, 2.0)
+        )
+        assert translator.calls == 1
+
+    asyncio.run(_run())
+    assert published == [
+        (
+            31,
+            "nos vemos en el punto de aparición\n🌐 **English:** see you at spawn",
+            None,
+        )
+    ]
+
+
+def test_original_mode_never_calls_translation() -> None:
+    class _ExplodingTranslator:
+        async def translate_to_english(self, text: str, *, language_code: str = "") -> str:
+            raise AssertionError("original mode must not translate")
+
+    published = []
+
+    async def _run() -> None:
+        async def publish(user_id: int, text: str, confidence) -> None:
+            published.append(text)
+
+        engine = CaptionEngine(
+            _SpanishLiveTranscriber(),
+            publish,
+            translator=_ExplodingTranslator(),
+            output_mode="original",
+        )
+        await engine._process_segment(CaptionSegment(32, _pcm(900), 1.0, 2.0))
+
+    asyncio.run(_run())
+    assert published == ["nos vemos en el punto de aparición"]
 
 
 class _TerminalQuotaTranscriber:
@@ -458,6 +561,9 @@ def test_live_caption_privacy_disclosure_and_soak_gate_are_contractual() -> None
     assert "Gemini's **Free Tier**" in runtime
     assert "used to improve its products" in runtime
     assert "used to improve its products" in ui
+    assert "gemini-3.5-transcribe-live" in (ROOT / "stoney_verify" / "community_voice_captions.py").read_text(encoding="utf-8")
+    assert "languageCodes" in (ROOT / "stoney_verify" / "community_voice_captions.py").read_text(encoding="utf-8")
+    assert "audio/pcm;rate=16000" in (ROOT / "stoney_verify" / "community_voice_captions.py").read_text(encoding="utf-8")
     assert "OPENAI_API_KEY" not in runtime
     assert "api.openai.com" not in (ROOT / "stoney_verify" / "community_voice_captions.py").read_text(encoding="utf-8")
     assert "Caption My Voice" in ui

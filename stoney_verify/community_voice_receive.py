@@ -48,6 +48,81 @@ VOICE_RECV_DAVE_COMMIT = "03dd1e2dafe85522cc458441cd5b143b136ac836"
 VOICE_RECV_DAVE_SOURCE = "imayhaveborkedit/discord-ext-voice-recv#58"
 BUNDLED_OPUS_DISTRIBUTION = "opuslib-next-bundled==0.1.1"
 _OPUS_LIBRARY_SOURCE = ""
+_VOICE_RECV_NOISE_FILTER_INTERVAL_SECONDS = 60.0
+
+
+class _VoiceRecvBenignNoiseFilter(logging.Filter):
+    """Rate-limit known discord-ext-voice-recv INFO floods without hiding faults.
+
+    Upstream currently logs normal RTCP Sender Reports as "unexpected" once per
+    second and logs Discord's seq-only gateway compatibility field at INFO.
+    Keep one sample per interval for diagnostics while preserving every warning,
+    error, packet-loss notice, unknown-SSRC event, and genuinely new extra key.
+    """
+
+    def __init__(self, interval_seconds: float = _VOICE_RECV_NOISE_FILTER_INTERVAL_SECONDS) -> None:
+        super().__init__()
+        self.interval_seconds = max(1.0, float(interval_seconds))
+        self._last_emit: dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _noise_key(record: logging.LogRecord) -> str:
+        if record.name == "discord.ext.voice_recv.reader":
+            message = record.getMessage()
+            if (
+                message.startswith("Received unexpected rtcp packet: type=200")
+                and "SenderReportPacket" in message
+            ):
+                return "rtcp_sender_report"
+
+        if record.name == "discord.ext.voice_recv.gateway":
+            args = record.args
+            extra = None
+            if isinstance(args, tuple) and len(args) == 1 and isinstance(args[0], dict):
+                extra = args[0]
+            elif isinstance(args, dict):
+                extra = args
+            if isinstance(extra, dict) and set(extra) == {"seq"}:
+                return "gateway_seq_only"
+
+        return ""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        key = self._noise_key(record)
+        if not key:
+            return True
+
+        now = time.monotonic()
+        with self._lock:
+            last = float(self._last_emit.get(key, 0.0))
+            if last and now - last < self.interval_seconds:
+                return False
+            self._last_emit[key] = now
+        return True
+
+
+def _install_voice_recv_noise_filter() -> bool:
+    """Install one bounded filter on the two noisy upstream INFO loggers."""
+
+    installed = False
+    for logger_name in (
+        "discord.ext.voice_recv.reader",
+        "discord.ext.voice_recv.gateway",
+    ):
+        upstream_logger = logging.getLogger(logger_name)
+        existing = next(
+            (
+                item
+                for item in upstream_logger.filters
+                if isinstance(item, _VoiceRecvBenignNoiseFilter)
+            ),
+            None,
+        )
+        if existing is None:
+            upstream_logger.addFilter(_VoiceRecvBenignNoiseFilter())
+        installed = True
+    return installed
 
 
 class VoiceReceiveUnavailable(RuntimeError):
@@ -518,6 +593,7 @@ async def connect_receive_client(
     channel: discord.VoiceChannel,
     bridge: PerSpeakerFrameBridge,
 ) -> Any:
+    _install_voice_recv_noise_filter()
     capability = voice_receive_capability()
     if not capability.available or voice_recv is None:
         raise VoiceReceiveUnavailable(capability.reason)
@@ -603,6 +679,7 @@ __all__ = [
     "connect_receive_client",
     "disconnect_receive_client",
     "ensure_opus_loaded",
+    "_install_voice_recv_noise_filter",
     "voice_receive_capability",
     "voice_receive_connection_diagnostics",
 ]

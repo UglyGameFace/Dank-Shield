@@ -125,6 +125,7 @@ class TranscriptResult:
     confidence: Optional[float]
     provider: str
     model: str
+    language_code: str = ""
 
 
 @dataclass(slots=True)
@@ -279,107 +280,418 @@ def _gemini_text_from_generate_content(payload: dict[str, Any]) -> str:
     return "\n".join(chunks).strip()
 
 
-class GeminiTranscriber:
+def pcm48_stereo_to_pcm16_mono(pcm: bytes) -> bytes:
+    """Convert Discord 48 kHz stereo signed-16 PCM to Gemini Live 16 kHz mono PCM.
+
+    Three consecutive stereo frames become one mono output sample. Averaging all
+    six signed samples provides a tiny box low-pass filter instead of simply
+    discarding 2/3 of the source samples.
+    """
+
+    usable = len(pcm) - (len(pcm) % 12)
+    if usable <= 0:
+        return b""
+    samples = struct.unpack("<" + ("h" * (usable // 2)), pcm[:usable])
+    out = []
+    for offset in range(0, len(samples), 6):
+        group = samples[offset : offset + 6]
+        if len(group) < 6:
+            break
+        out.append(max(-32768, min(32767, int(round(sum(group) / 6.0)))))
+    return struct.pack("<" + ("h" * len(out)), *out) if out else b""
+
+
+def _language_codes(value: Any) -> list[str]:
+    if isinstance(value, (list, tuple, set, frozenset)):
+        raw = [str(item).strip() for item in value]
+    else:
+        raw = [
+            part.strip()
+            for part in str(value or "").replace(";", ",").split(",")
+        ]
+    seen: set[str] = set()
+    out: list[str] = []
+    for code in raw:
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        out.append(code[:35])
+        if len(out) >= 8:
+            break
+    return out
+
+
+def normalize_caption_output_mode(value: Any) -> str:
+    raw = str(value or "").strip().lower().replace("+", " ").replace("_", " ")
+    mode = "_".join(raw.split())
+    if mode in {"english", "english_only"}:
+        return "english"
+    if mode in {"bilingual", "original_english", "original_and_english", "both"}:
+        return "bilingual"
+    return "original"
+
+
+class _GeminiLiveSpeakerSession:
+    WS_URL = (
+        "wss://generativelanguage.googleapis.com/ws/"
+        "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+    )
+
+    def __init__(
+        self,
+        owner: "GeminiLiveTranscriber",
+        user_id: int,
+    ) -> None:
+        self.owner = owner
+        self.user_id = int(user_id)
+        self.ws: Optional[aiohttp.ClientWebSocketResponse] = None
+        self.connected_at = 0.0
+        self.rotate_before_next = False
+        self.lock = asyncio.Lock()
+
+    async def close(self) -> None:
+        ws = self.ws
+        self.ws = None
+        self.connected_at = 0.0
+        self.rotate_before_next = False
+        if ws is not None and not ws.closed:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+
+    async def _connect(self) -> None:
+        await self.close()
+        http = await self.owner._http()
+        url = f"{self.WS_URL}?key={self.owner.api_key}"
+        try:
+            ws = await http.ws_connect(
+                url,
+                heartbeat=20.0,
+                autoping=True,
+                receive_timeout=self.owner.timeout_seconds,
+                max_msg_size=2 * 1024 * 1024,
+            )
+        except Exception:
+            raise CaptionTranscriptionError(
+                0,
+                "Gemini Live transcription could not open its WebSocket session.",
+            ) from None
+
+        setup = {
+            "setup": {
+                "model": f"models/{self.owner.model}",
+                "generationConfig": {"responseModalities": ["TEXT"]},
+                "realtimeInputConfig": {
+                    "automaticActivityDetection": {"disabled": True}
+                },
+                "inputAudioTranscription": {
+                    "languageCodes": list(self.owner.language_codes),
+                    "mode": self.owner.mode,
+                },
+            }
+        }
+        try:
+            await ws.send_json(setup)
+            while True:
+                msg = await asyncio.wait_for(
+                    ws.receive(),
+                    timeout=self.owner.timeout_seconds,
+                )
+                payload = self.owner._ws_payload(msg)
+                if "setupComplete" in payload:
+                    self.ws = ws
+                    self.connected_at = time.monotonic()
+                    self.rotate_before_next = False
+                    self.owner.live_connections += 1
+                    return
+                self.owner._raise_ws_error(payload)
+        except CaptionTranscriptionError:
+            await ws.close()
+            raise
+        except Exception:
+            await ws.close()
+            raise CaptionTranscriptionError(
+                0,
+                "Gemini Live transcription did not complete its session setup.",
+            ) from None
+
+    async def _ensure_connected(self) -> aiohttp.ClientWebSocketResponse:
+        ws = self.ws
+        expired = bool(
+            self.connected_at
+            and time.monotonic() - self.connected_at >= self.owner.session_refresh_seconds
+        )
+        if ws is None or ws.closed or expired or self.rotate_before_next:
+            if ws is not None:
+                self.owner.live_reconnects += 1
+            await self._connect()
+        assert self.ws is not None
+        return self.ws
+
+    async def transcribe(self, pcm: bytes) -> TranscriptResult:
+        async with self.lock:
+            ws = await self._ensure_connected()
+            pcm16 = pcm48_stereo_to_pcm16_mono(pcm)
+            if not pcm16:
+                return TranscriptResult(
+                    text="",
+                    confidence=None,
+                    provider="gemini-live",
+                    model=self.owner.model,
+                )
+
+            try:
+                await ws.send_json({"realtimeInput": {"activityStart": {}}})
+                chunk_bytes = 3200  # 100 ms at 16 kHz mono signed-16 PCM.
+                for offset in range(0, len(pcm16), chunk_bytes):
+                    chunk = pcm16[offset : offset + chunk_bytes]
+                    await ws.send_json(
+                        {
+                            "realtimeInput": {
+                                "audio": {
+                                    "data": base64.b64encode(chunk).decode("ascii"),
+                                    "mimeType": "audio/pcm;rate=16000",
+                                }
+                            }
+                        }
+                    )
+                await ws.send_json({"realtimeInput": {"activityEnd": {}}})
+
+                while True:
+                    msg = await asyncio.wait_for(
+                        ws.receive(),
+                        timeout=self.owner.timeout_seconds,
+                    )
+                    payload = self.owner._ws_payload(msg)
+                    self.owner._raise_ws_error(payload)
+                    if "goAway" in payload:
+                        # Google may warn before a Live session is rotated. Keep
+                        # reading this utterance, then reconnect before the next.
+                        self.rotate_before_next = True
+                    content = payload.get("serverContent")
+                    if not isinstance(content, dict):
+                        continue
+                    final = content.get("inputTranscription")
+                    if not isinstance(final, dict):
+                        continue
+                    text = str(final.get("text") or "").strip()
+                    language_code = str(final.get("languageCode") or "").strip()
+                    return TranscriptResult(
+                        text=text,
+                        confidence=None,
+                        provider="gemini-live",
+                        model=self.owner.model,
+                        language_code=language_code,
+                    )
+            except CaptionTranscriptionError:
+                await self.close()
+                raise
+            except asyncio.TimeoutError:
+                await self.close()
+                raise CaptionTranscriptionError(
+                    0,
+                    "Gemini Live transcription timed out waiting for a finalized transcript.",
+                ) from None
+            except Exception:
+                await self.close()
+                raise CaptionTranscriptionError(
+                    0,
+                    "Gemini Live transcription connection failed while processing audio.",
+                ) from None
+
+
+class GeminiLiveTranscriber:
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        model: str = "gemini-3.5-transcribe-live",
+        language_codes: Any = None,
+        mode: str = "VERBATIM",
+        timeout_seconds: float = 20.0,
+        session_refresh_seconds: float = 510.0,
+    ) -> None:
+        self.api_key = str(api_key or "").strip()
+        self.model = str(model or "gemini-3.5-transcribe-live").strip()
+        self.language_codes = _language_codes(language_codes)
+        self.mode = "SMART" if str(mode or "").strip().upper() == "SMART" else "VERBATIM"
+        self.timeout_seconds = max(5.0, min(45.0, float(timeout_seconds)))
+        # Google documents a 10 minute max Live Transcribe session. Rotate
+        # proactively so an utterance is not stranded at the hard boundary.
+        self.session_refresh_seconds = max(
+            120.0,
+            min(540.0, float(session_refresh_seconds)),
+        )
+        self._sessions: dict[int, _GeminiLiveSpeakerSession] = {}
+        self._http_session: Optional[aiohttp.ClientSession] = None
+        self.live_connections = 0
+        self.live_reconnects = 0
+        self.fallback_count = 0
+        if not self.api_key:
+            raise RuntimeError("GEMINI_API_KEY is required for Live Captions.")
+
+    async def _http(self) -> aiohttp.ClientSession:
+        if self._http_session is None or self._http_session.closed:
+            timeout = aiohttp.ClientTimeout(total=None)
+            self._http_session = aiohttp.ClientSession(timeout=timeout)
+        return self._http_session
+
+    @staticmethod
+    def _ws_payload(msg: aiohttp.WSMessage) -> dict[str, Any]:
+        if msg.type == aiohttp.WSMsgType.TEXT:
+            try:
+                payload = json.loads(str(msg.data))
+            except json.JSONDecodeError:
+                raise CaptionTranscriptionError(
+                    0,
+                    "Gemini Live transcription returned invalid JSON.",
+                ) from None
+            return payload if isinstance(payload, dict) else {}
+        if msg.type in {
+            aiohttp.WSMsgType.CLOSE,
+            aiohttp.WSMsgType.CLOSED,
+            aiohttp.WSMsgType.CLOSING,
+        }:
+            raise CaptionTranscriptionError(
+                0,
+                "Gemini Live transcription closed its WebSocket session.",
+            )
+        if msg.type == aiohttp.WSMsgType.ERROR:
+            raise CaptionTranscriptionError(
+                0,
+                "Gemini Live transcription WebSocket reported a connection error.",
+            )
+        return {}
+
+    @staticmethod
+    def _raise_ws_error(payload: dict[str, Any]) -> None:
+        error = payload.get("error")
+        if isinstance(error, dict):
+            status = int(error.get("code") or 0)
+            raise _gemini_transcription_error(status, json.dumps({"error": error}))
+
+    async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
+        uid = int(segment.user_id)
+        session = self._sessions.get(uid)
+        if session is None:
+            session = _GeminiLiveSpeakerSession(self, uid)
+            self._sessions[uid] = session
+        return await session.transcribe(segment.pcm)
+
+    async def close_user(self, user_id: int) -> None:
+        session = self._sessions.pop(int(user_id), None)
+        if session is not None:
+            await session.close()
+
+    async def close(self) -> None:
+        sessions = list(self._sessions.values())
+        self._sessions.clear()
+        await asyncio.gather(*(session.close() for session in sessions), return_exceptions=True)
+        if self._http_session is not None and not self._http_session.closed:
+            await self._http_session.close()
+        self._http_session = None
+
+
+class GeminiTextTranslator:
     API_ROOT = "https://generativelanguage.googleapis.com/v1beta/models"
 
     def __init__(
         self,
         api_key: str,
         *,
-        model: str = "gemini-3.5-transcribe",
-        fallback_model: str = "gemini-3.5-flash-lite",
-        language: str = "",
-        timeout_seconds: float = 30.0,
+        model: str = "gemini-3.1-flash-lite",
+        timeout_seconds: float = 15.0,
+        cache_size: int = 256,
     ) -> None:
         self.api_key = str(api_key or "").strip()
-        self.model = str(model or "gemini-3.5-transcribe").strip()
-        self.fallback_model = str(fallback_model or "").strip()
-        self.language = str(language or "").strip()
-        self.timeout_seconds = max(5.0, min(60.0, float(timeout_seconds)))
-        self.fallback_count = 0
+        self.model = str(model or "gemini-3.1-flash-lite").strip()
+        self.timeout_seconds = max(5.0, min(30.0, float(timeout_seconds)))
+        self.cache_size = max(16, min(2000, int(cache_size)))
+        self._cache: dict[tuple[str, str], str] = {}
+        self.requests = 0
+        self.cache_hits = 0
+        self.failures = 0
+        self.skipped = 0
+        self.blocked_reason = ""
         if not self.api_key:
-            raise RuntimeError("GEMINI_API_KEY is required for Live Captions.")
+            raise RuntimeError("GEMINI_API_KEY is required for Live Captions translation.")
 
-    def _request_body(self, wav_data: bytes, *, model: str) -> dict[str, Any]:
-        encoded = base64.b64encode(wav_data).decode("ascii")
-        audio_part = {
-            "inlineData": {
-                "mimeType": "audio/wav",
-                "data": encoded,
-            }
-        }
-        if model == self.model:
-            transcription_config: dict[str, Any] = {"mode": "VERBATIM"}
-            if self.language:
-                transcription_config["languageCodes"] = [self.language]
-            return {
-                "contents": [{"role": "user", "parts": [audio_part]}],
-                "generationConfig": {
-                    "audioTranscriptionConfig": transcription_config,
-                },
-            }
+    async def translate_to_english(
+        self,
+        text: str,
+        *,
+        language_code: str = "",
+    ) -> Optional[str]:
+        source = str(text or "").strip()
+        lang = str(language_code or "").strip()
+        if not source:
+            return ""
+        if lang.lower().startswith("en"):
+            self.skipped += 1
+            return source
+        cache_key = (lang.casefold(), source)
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            self.cache_hits += 1
+            return cached
+        if self.blocked_reason:
+            self.skipped += 1
+            return None
 
         prompt = (
-            "Transcribe only the spoken words in this audio. "
-            "Return only the transcript text, with natural punctuation. "
-            "Do not describe sounds, identify the speaker, add labels, summarize, or answer the speech."
+            "Translate this finalized live caption into natural English. "
+            "Preserve meaning, names, numbers, profanity, slang, and tone. "
+            "Do not summarize, censor, explain, label the language, or add commentary. "
+            "If the caption is already English, return it unchanged. "
+            "Return only the translated caption text.\n\n"
+            f"Caption:\n{source}"
         )
-        if self.language:
-            prompt += f" The expected spoken language is {self.language}."
-        return {
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [
-                        {"text": prompt},
-                        audio_part,
-                    ],
-                }
-            ],
+        body = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
                 "thinkingConfig": {"thinkingLevel": "minimal"},
                 "responseMimeType": "text/plain",
                 "maxOutputTokens": 1024,
             },
         }
-
-    async def _generate(self, wav_data: bytes, *, model: str) -> str:
         timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
-        url = f"{self.API_ROOT}/{model}:generateContent"
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                url,
-                headers={
-                    "x-goog-api-key": self.api_key,
-                    "Content-Type": "application/json",
-                },
-                json=self._request_body(wav_data, model=model),
-            ) as response:
-                body = await response.text()
-                if response.status >= 400:
-                    raise _gemini_transcription_error(int(response.status), body)
-                try:
-                    payload = json.loads(body)
-                except json.JSONDecodeError as exc:
-                    raise RuntimeError("Gemini caption transcription returned invalid JSON") from exc
-        return _gemini_text_from_generate_content(payload)
+        url = f"{self.API_ROOT}/{self.model}:generateContent"
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                    url,
+                    headers={
+                        "x-goog-api-key": self.api_key,
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                ) as response:
+                    raw = await response.text()
+                    if response.status >= 400:
+                        exc = _gemini_transcription_error(int(response.status), raw)
+                        if exc.terminal:
+                            self.blocked_reason = exc.safe_message
+                        self.failures += 1
+                        return None
+                    try:
+                        payload = json.loads(raw)
+                    except json.JSONDecodeError:
+                        self.failures += 1
+                        return None
+        except Exception:
+            self.failures += 1
+            return None
 
-    async def transcribe(self, segment: CaptionSegment) -> TranscriptResult:
-        wav_data = pcm16_to_wav(segment.pcm)
-        text = await self._generate(wav_data, model=self.model)
-        used_model = self.model
-
-        if not text and self.fallback_model and self.fallback_model != self.model:
-            self.fallback_count += 1
-            text = await self._generate(wav_data, model=self.fallback_model)
-            used_model = self.fallback_model
-
-        return TranscriptResult(
-            text=text,
-            confidence=None,
-            provider="gemini",
-            model=used_model,
-        )
+        translated = _gemini_text_from_generate_content(payload)
+        self.requests += 1
+        if not translated:
+            self.failures += 1
+            return None
+        if len(self._cache) >= self.cache_size:
+            self._cache.pop(next(iter(self._cache)))
+        self._cache[cache_key] = translated
+        return translated
 
 
 class CaptionEngine:
@@ -388,12 +700,16 @@ class CaptionEngine:
         transcriber: Any,
         publish: Callable[[int, str, Optional[float]], Awaitable[None]],
         *,
+        translator: Optional[GeminiTextTranslator] = None,
+        output_mode: str = "original",
         queue_size: int = 400,
         low_confidence_threshold: float = 0.72,
         unclear_threshold: float = 0.48,
         global_transcribe_semaphore: Optional[asyncio.Semaphore] = None,
     ) -> None:
         self.transcriber = transcriber
+        self.translator = translator
+        self.output_mode = normalize_caption_output_mode(output_mode)
         self.publish = publish
         self.queue: asyncio.Queue[SpeakerPCMFrame] = asyncio.Queue(
             maxsize=max(50, min(2000, int(queue_size)))
@@ -456,6 +772,13 @@ class CaptionEngine:
         for frame in retained:
             self.queue.put_nowait(frame)
 
+        close_user = getattr(self.transcriber, "close_user", None)
+        if callable(close_user):
+            try:
+                await close_user(uid)
+            except Exception:
+                log.debug("Live Captions provider speaker cleanup failed user=%s", uid, exc_info=True)
+
         pending = list(self._segment_tasks_by_user.get(uid, set()))
         for task in pending:
             task.cancel()
@@ -489,6 +812,13 @@ class CaptionEngine:
             except asyncio.QueueEmpty:
                 break
         self.segmenter.flush_all()
+
+        close_provider = getattr(self.transcriber, "close", None)
+        if callable(close_provider):
+            try:
+                await close_provider()
+            except Exception:
+                log.debug("Live Captions transcription provider cleanup failed", exc_info=True)
 
     def _spawn_segment(self, segment: CaptionSegment) -> None:
         uid = int(segment.user_id)
@@ -614,19 +944,63 @@ class CaptionEngine:
             self.segments_unclear += 1
         if self._closed or uid in self._blocked_user_ids:
             return
-        await self.publish(segment.user_id, chosen.text[:1800], chosen.confidence)
+
+        rendered = chosen.text
+        if (
+            chosen.text != "[unclear audio]"
+            and self.output_mode in {"english", "bilingual"}
+            and self.translator is not None
+        ):
+            translated = await self.translator.translate_to_english(
+                chosen.text,
+                language_code=chosen.language_code,
+            )
+            if self._closed or uid in self._blocked_user_ids:
+                return
+            if self.output_mode == "english":
+                rendered = (
+                    translated
+                    if translated
+                    else f"⚠️ English translation unavailable · Original: {chosen.text}"
+                )
+            elif translated and translated.casefold() != chosen.text.casefold():
+                rendered = f"{chosen.text}\n🌐 **English:** {translated}"
+            elif translated:
+                rendered = chosen.text
+            else:
+                rendered = f"{chosen.text}\n🌐 **English:** [translation unavailable]"
+
+        await self.publish(segment.user_id, rendered[:1800], chosen.confidence)
         self.segments_published += 1
 
 
-def gemini_transcriber_from_env() -> GeminiTranscriber:
-    return GeminiTranscriber(
+def gemini_live_transcriber_from_env(
+    *,
+    language_codes: Any = None,
+) -> GeminiLiveTranscriber:
+    configured = (
+        language_codes
+        if language_codes is not None
+        else os.getenv("DANK_COMMUNITY_CAPTION_LANGUAGE_CODES", "")
+    )
+    return GeminiLiveTranscriber(
         os.getenv("GEMINI_API_KEY", ""),
-        model=os.getenv("DANK_COMMUNITY_CAPTION_MODEL", "gemini-3.5-transcribe"),
-        fallback_model=os.getenv(
-            "DANK_COMMUNITY_CAPTION_FALLBACK_MODEL",
-            "gemini-3.5-flash-lite",
+        model=os.getenv(
+            "DANK_COMMUNITY_CAPTION_LIVE_MODEL",
+            "gemini-3.5-transcribe-live",
         ),
-        language=os.getenv("DANK_COMMUNITY_CAPTION_LANGUAGE", ""),
+        language_codes=configured,
+        mode=os.getenv("DANK_COMMUNITY_CAPTION_TRANSCRIPTION_MODE", "VERBATIM"),
+    )
+
+
+def gemini_text_translator_from_env() -> GeminiTextTranslator:
+    return GeminiTextTranslator(
+        os.getenv("GEMINI_API_KEY", ""),
+        model=os.getenv(
+            "DANK_COMMUNITY_CAPTION_TRANSLATION_MODEL",
+            "gemini-3.1-flash-lite",
+        ),
     )
 
 
@@ -634,12 +1008,16 @@ __all__ = [
     "CaptionEngine",
     "CaptionSegment",
     "CaptionTranscriptionError",
-    "GeminiTranscriber",
+    "GeminiLiveTranscriber",
+    "GeminiTextTranslator",
     "SpeechPreservingSegmenter",
     "TranscriptResult",
     "_gemini_text_from_generate_content",
     "_gemini_transcription_error",
-    "gemini_transcriber_from_env",
+    "gemini_live_transcriber_from_env",
+    "gemini_text_translator_from_env",
+    "normalize_caption_output_mode",
     "normalize_pcm16_lossless_timing",
     "pcm16_to_wav",
+    "pcm48_stereo_to_pcm16_mono",
 ]

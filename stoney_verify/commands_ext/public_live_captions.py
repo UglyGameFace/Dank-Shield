@@ -33,6 +33,8 @@ CAPTION_VOICE_SCOPE_KEY = "live_captions_voice_scope_mode"
 CAPTION_ALLOWED_VOICE_CHANNELS_KEY = "live_captions_allowed_voice_channel_ids"
 CAPTION_ALLOWED_VOICE_CATEGORIES_KEY = "live_captions_allowed_voice_category_ids"
 CAPTION_EXCLUDED_VOICE_CHANNELS_KEY = "live_captions_excluded_voice_channel_ids"
+CAPTION_OUTPUT_MODE_KEY = "live_captions_output_mode"
+CAPTION_LANGUAGE_CODES_KEY = "live_captions_language_codes"
 
 
 def _id_set(value: Any) -> set[int]:
@@ -57,6 +59,22 @@ def _id_set(value: Any) -> set[int]:
 def _scope_mode(cfg: Any) -> str:
     value = str(getattr(cfg, "get", lambda *_: "all")(CAPTION_VOICE_SCOPE_KEY, "all") or "all").strip().lower()
     return "selected" if value == "selected" else "all"
+
+
+def _caption_output_mode(cfg: Any) -> str:
+    value = str(getattr(cfg, "get", lambda *_: "original")(CAPTION_OUTPUT_MODE_KEY, "original") or "original").strip().lower()
+    if value == "english":
+        return "english"
+    if value in {"bilingual", "both", "original_english"}:
+        return "bilingual"
+    return "original"
+
+
+def _caption_output_mode_label(mode: str) -> str:
+    return {
+        "english": "English translation",
+        "bilingual": "Original + English",
+    }.get(str(mode or "").strip().lower(), "Original language")
 
 
 def _configured_output_channel(guild: discord.Guild, cfg: Any) -> Optional[discord.TextChannel]:
@@ -418,6 +436,8 @@ async def build_server_live_captions_embed(
                 f"Voice: <#{voice_id}>\n"
                 f"Captions: <#{destination_id}>\n"
                 f"Mode: **{'DAVE soak test' if general.get('soak_test') else 'normal'}**\n"
+                f"Languages: **{'Auto-detect 85+ + code-switching' if not general.get('language_codes') else ', '.join(general.get('language_codes') or [])}**\n"
+                f"Text output: **{_caption_output_mode_label(str(general.get('output_mode') or 'original'))}**\n"
                 f"Opted-in speakers: **{len(opted)}**\n"
                 f"Your voice: **{'opted in' if user_opted else 'not opted in'}**"
             ),
@@ -427,7 +447,11 @@ async def build_server_live_captions_embed(
             health = general.get("health") if isinstance(general.get("health"), dict) else {}
             connection = general.get("receive_connection") if isinstance(general.get("receive_connection"), dict) else {}
             provider_skipped = int(general.get("provider_skipped") or 0)
-            provider_fallbacks = int(general.get("provider_fallbacks") or 0)
+            provider_live_connections = int(general.get("provider_live_connections") or 0)
+            provider_live_reconnects = int(general.get("provider_live_reconnects") or 0)
+            translation_requests = int(general.get("translation_requests") or 0)
+            translation_failures = int(general.get("translation_failures") or 0)
+            translation_skipped = int(general.get("translation_skipped") or 0)
             embed.add_field(
                 name="DAVE soak telemetry",
                 value=(
@@ -436,7 +460,8 @@ async def build_server_live_captions_embed(
                     f"Reader: **{'listening' if connection.get('reader_listening') else 'stopped'}** • mapped SSRCs: **{int(connection.get('mapped_ssrcs') or 0)}** • reader failures: **{int(health.get('reader_failures') or 0)}**\n"
                     f"Corrupt Opus dropped: **{int(health.get('opus_decode_drops') or 0)}** • not consented: **{int(health.get('frames_not_consented') or 0)}** • unknown source: **{int(health.get('frames_unknown_source') or 0)}** • identity mismatch: **{int(health.get('frames_source_mismatch') or 0)}**\n"
                     f"Malformed PCM: **{int(health.get('frames_malformed_pcm') or 0)}** • transcribed: **{int(general.get('segments_transcribed') or 0)}** • published: **{int(general.get('segments_published') or 0)}** • empty: **{int(general.get('segments_empty') or 0)}**\n"
-                    f"Unclear: **{int(general.get('segments_unclear') or 0)}** • failures: **{int(general.get('segment_failures') or 0)}** • Gemini fallback: **{provider_fallbacks}** • provider-skipped: **{provider_skipped}**"
+                    f"Unclear: **{int(general.get('segments_unclear') or 0)}** • failures: **{int(general.get('segment_failures') or 0)}** • provider-skipped: **{provider_skipped}**\n"
+                    f"Gemini Live connections: **{provider_live_connections}** • reconnects: **{provider_live_reconnects}** • translations: **{translation_requests}** • translation skipped: **{translation_skipped}** • translation failures: **{translation_failures}**"
                 ),
                 inline=False,
             )
@@ -477,6 +502,7 @@ async def build_server_live_captions_embed(
     allowed_channels = _id_set(cfg.get(CAPTION_ALLOWED_VOICE_CHANNELS_KEY))
     allowed_categories = _id_set(cfg.get(CAPTION_ALLOWED_VOICE_CATEGORIES_KEY))
     excluded_channels = _id_set(cfg.get(CAPTION_EXCLUDED_VOICE_CHANNELS_KEY))
+    output_mode = _caption_output_mode(cfg)
     if scope == "all":
         scope_text = f"All voice channels{f' except **{len(excluded_channels)}** excluded' if excluded_channels else ''}."
     else:
@@ -490,8 +516,10 @@ async def build_server_live_captions_embed(
         value=(
             f"Output: {output.mention if output is not None else '**Not configured**'}\n"
             f"Voice access: {scope_text}\n"
-            "Owners/admins can configure or create the output channel from **Setup**. "
-            "Community Hub captions remain session-scoped and continue posting to their own session discussion/thread."
+            "Languages: **Auto-detect all Gemini Transcribe supported languages (85+) + code-switching**\n"
+            f"Text output: **{_caption_output_mode_label(output_mode)}**\n"
+            "Owners/admins can configure routing and language output from **Setup**. "
+            "Community Hub captions remain session-scoped for routing but use the same server language/output setting."
         ),
         inline=False,
     )
@@ -683,7 +711,7 @@ class ServerLiveCaptionsView(_OwnedView):
         if enabled:
             return await _followup(
                 interaction,
-                "✅ Your voice is opted in. Speak for 2–5 seconds, then pause for about 1 second so a segment can close. Press **Refresh** to see exactly which pipeline stage is working. Your Discord speaker stream stays separate from other users before it is sent to Google Gemini's transcription API. This deployment uses Gemini's Free Tier, where Google states submitted content may be used to improve its products. Dank Shield itself does not save the audio.",
+                "✅ Your voice is opted in. Dank Shield keeps your Discord speaker stream separate and Gemini Live automatically detects its supported languages, including code-switching. If this server enables English output, only finalized transcript text is translated; the audio is not submitted a second time for translation. This deployment uses Gemini's Free Tier, where Google states submitted content may be used to improve its products. Dank Shield itself does not save the audio.",
             )
         await _followup(
             interaction,
@@ -800,6 +828,7 @@ async def build_server_live_captions_setup_embed(
     allowed_channels = _id_set(cfg.get(CAPTION_ALLOWED_VOICE_CHANNELS_KEY))
     allowed_categories = _id_set(cfg.get(CAPTION_ALLOWED_VOICE_CATEGORIES_KEY))
     excluded_channels = _id_set(cfg.get(CAPTION_EXCLUDED_VOICE_CHANNELS_KEY))
+    output_mode = _caption_output_mode(cfg)
 
     embed = discord.Embed(
         title="⚙️ Live Captions Setup",
@@ -815,6 +844,15 @@ async def build_server_live_captions_setup_embed(
             output.mention
             if output is not None
             else "Not configured. Choose an existing text channel or create the read-only **#live-captions** channel."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Language & translation",
+        value=(
+            "**Input:** Auto-detect 85+ supported languages and mid-conversation code-switching\n"
+            f"**Output:** {_caption_output_mode_label(output_mode)}\n"
+            "English conversion uses finalized transcript text only. Audio is never sent through a second translation pass."
         ),
         inline=False,
     )
@@ -971,6 +1009,107 @@ class CaptionVoiceRulePickerView(_OwnedView):
                 channel_types=channel_types,
                 row=0,
             )
+        )
+
+
+class CaptionLanguageOutputSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, current_mode: str) -> None:
+        self.owner_id = int(owner_id)
+        mode = _caption_output_mode_label(current_mode)
+        options = [
+            discord.SelectOption(
+                label="Original language",
+                value="original",
+                description="Show Gemini's finalized transcript in the language spoken.",
+                emoji="🗣️",
+                default=current_mode == "original",
+            ),
+            discord.SelectOption(
+                label="English",
+                value="english",
+                description="Translate non-English finalized text to English only.",
+                emoji="🇺🇸",
+                default=current_mode == "english",
+            ),
+            discord.SelectOption(
+                label="Original + English",
+                value="bilingual",
+                description="Show the original transcript plus an English translation.",
+                emoji="🌐",
+                default=current_mode == "bilingual",
+            ),
+        ]
+        super().__init__(
+            placeholder=f"Caption text output: {mode}",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="dank:captions:setup:language_output:v1",
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id:
+            return await interaction.response.send_message(
+                "Open your own Live Captions setup panel.",
+                ephemeral=True,
+            )
+        if not _staff_authorized(interaction):
+            return await interaction.response.send_message(
+                "❌ Manage Server or Administrator is required.",
+                ephemeral=True,
+            )
+        await _defer_update(interaction)
+        selected = str(self.values[0] if self.values else "original")
+        try:
+            await _save_caption_config(
+                interaction,
+                {
+                    CAPTION_OUTPUT_MODE_KEY: selected,
+                    # Empty language hints intentionally mean Gemini auto-detects
+                    # across its full supported language set and code-switching.
+                    CAPTION_LANGUAGE_CODES_KEY: [],
+                },
+            )
+        except Exception as exc:
+            return await _followup(
+                interaction,
+                f"❌ Could not save caption language output: {type(exc).__name__}: {str(exc)[:180]}",
+            )
+        await _edit_original(
+            interaction,
+            embed=await build_server_live_captions_setup_embed(interaction),
+            view=ServerLiveCaptionsSetupView(self.owner_id),
+        )
+        await _followup(
+            interaction,
+            f"✅ Live Captions now use **Auto-detect 85+ languages** with **{_caption_output_mode_label(selected)}** output.",
+        )
+
+
+class CaptionLanguageOutputView(_OwnedView):
+    def __init__(self, owner_id: int, current_mode: str) -> None:
+        super().__init__(owner_id)
+        self.add_item(CaptionLanguageOutputSelect(owner_id, current_mode))
+
+    @discord.ui.button(
+        label="Back to Setup",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dank:captions:setup:language_back:v1",
+        row=1,
+    )
+    async def back(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _edit_original(
+            interaction,
+            embed=await build_server_live_captions_setup_embed(interaction),
+            view=ServerLiveCaptionsSetupView(self.owner_id),
         )
 
 
@@ -1180,6 +1319,47 @@ class ServerLiveCaptionsSetupView(_OwnedView):
         )
 
     @discord.ui.button(
+        label="Language & Translation",
+        emoji="🌐",
+        style=discord.ButtonStyle.primary,
+        custom_id="dank:captions:setup:language:v1",
+        row=2,
+    )
+    async def language_output(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        if not _staff_authorized(interaction):
+            return await interaction.response.send_message(
+                "❌ Manage Server or Administrator is required.",
+                ephemeral=True,
+            )
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message(
+                "❌ This must be used inside a server.",
+                ephemeral=True,
+            )
+        await _defer_update(interaction)
+        cfg = await get_guild_config(int(guild.id), refresh=True)
+        mode = _caption_output_mode(cfg)
+        await _edit_original(
+            interaction,
+            embed=discord.Embed(
+                title="🌐 Live Captions Language & Translation",
+                description=(
+                    "Gemini Live automatically detects **85+ supported languages** and can handle code-switching. "
+                    "Choose how finalized captions are displayed. English translation uses the finalized transcript text only; "
+                    "the original audio is not sent through another translation pass."
+                ),
+                color=discord.Color.blurple(),
+            ),
+            view=CaptionLanguageOutputView(self.owner_id, mode),
+        )
+
+    @discord.ui.button(
         label="Clear Voice Rules",
         emoji="🧹",
         style=discord.ButtonStyle.danger,
@@ -1340,6 +1520,8 @@ async def open_server_live_captions_command(
 
 
 __all__ = [
+    "CaptionLanguageOutputSelect",
+    "CaptionLanguageOutputView",
     "CaptionOutputPickerView",
     "CaptionVoiceRulePickerView",
     "ServerLiveCaptionsSetupView",
