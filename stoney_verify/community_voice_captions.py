@@ -1542,9 +1542,10 @@ class CaptionEngine:
         ):
             return False
         try:
-            # Production sends each isolated Discord PCM frame at arrival time.
-            # Segment bookkeeping may run first only to discover whether a prior
-            # activity must be sealed before this frame can begin a new turn.
+            # Production submits each isolated Discord PCM frame at arrival time.
+            # The provider session may micro-batch the resampled samples into
+            # ~100 ms WebSocket audio chunks; segment bookkeeping still owns
+            # the exact speech boundary and can seal a prior turn first.
             await stream_frame(frame)
             return True
         except Exception as exc:
