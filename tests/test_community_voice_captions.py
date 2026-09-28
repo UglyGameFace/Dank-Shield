@@ -546,6 +546,105 @@ def test_gemini_live_streams_manual_vad_start_audio_end_without_replay() -> None
     asyncio.run(_run())
 
 
+def test_gemini_live_batches_five_discord_frames_into_one_100ms_provider_chunk() -> None:
+    async def _run() -> None:
+        owner = GeminiLiveTranscriber("fake-key")
+        session = captions_module._GeminiLiveSpeakerSession(owner, 120)
+
+        class FakeWS:
+            closed = False
+
+            def __init__(self) -> None:
+                self.sent = []
+
+            async def send_json(self, payload) -> None:
+                self.sent.append(payload)
+
+        ws = FakeWS()
+        session.ws = ws
+        session.connected_at = captions_module.time.monotonic()
+        session._receiver_task = type(
+            "HealthyReceiver",
+            (),
+            {"done": lambda self: False},
+        )()
+
+        for _ in range(4):
+            await session.stream_pcm(_pcm(1200))
+
+        assert ws.sent == [{"realtimeInput": {"activityStart": {}}}]
+        assert owner.audio_input_frames == 4
+        assert owner.audio_chunks_sent == 0
+
+        await session.stream_pcm(_pcm(1200))
+        assert len(ws.sent) == 2
+        audio = ws.sent[1]["realtimeInput"]["audio"]
+        assert audio["mimeType"] == "audio/pcm;rate=16000"
+        assert len(captions_module.base64.b64decode(audio["data"])) == 3200
+        assert owner.audio_input_frames == 5
+        assert owner.audio_chunks_sent == 1
+        assert owner.audio_bytes_sent == 3200
+
+    asyncio.run(_run())
+
+
+def test_gemini_live_flushes_short_provider_remainder_before_activity_end() -> None:
+    async def _run() -> None:
+        owner = GeminiLiveTranscriber("fake-key")
+        session = captions_module._GeminiLiveSpeakerSession(owner, 121)
+
+        class FakeWS:
+            closed = False
+
+            def __init__(self) -> None:
+                self.sent = []
+
+            async def send_json(self, payload) -> None:
+                self.sent.append(payload)
+
+        ws = FakeWS()
+        session.ws = ws
+        session.connected_at = captions_module.time.monotonic()
+        session._receiver_task = type(
+            "HealthyReceiver",
+            (),
+            {"done": lambda self: False},
+        )()
+
+        await session.stream_pcm(_pcm(1200))
+        assert ws.sent == [{"realtimeInput": {"activityStart": {}}}]
+        assert owner.audio_chunks_sent == 0
+
+        waiter = await session.seal_utterance()
+        kinds = [
+            "start"
+            if payload.get("realtimeInput", {}).get("activityStart") == {}
+            else "end"
+            if payload.get("realtimeInput", {}).get("activityEnd") == {}
+            else "audio"
+            for payload in ws.sent
+        ]
+        assert kinds == ["start", "audio", "end"]
+        audio = ws.sent[1]["realtimeInput"]["audio"]
+        assert 0 < len(captions_module.base64.b64decode(audio["data"])) < 3200
+        assert owner.audio_chunks_sent == 1
+        assert len(session._provider_pcm_buffer) == 0
+
+        await session._push_final_event(
+            TranscriptResult(
+                "short phrase",
+                None,
+                "gemini-live",
+                owner.model,
+                "en-US",
+            )
+        )
+        result = await session.wait_for_final(waiter)
+        assert result.text == "short phrase"
+
+    asyncio.run(_run())
+
+
 def test_gemini_live_timeout_recovers_only_stable_interim_for_exact_turn() -> None:
     async def _run() -> None:
         owner = GeminiLiveTranscriber("fake-key")
@@ -795,6 +894,7 @@ def test_gemini_live_uses_manual_vad_while_streaming_realtime_audio() -> None:
     session_block = source.split("class _GeminiLiveSpeakerSession", 1)[1].split("class GeminiLiveTranscriber", 1)[0]
 
     assert '"automaticActivityDetection": {"disabled": True}' in session_block
+    assert '"activityHandling": "NO_INTERRUPTION"' in session_block
     assert '"activityStart"' in session_block
     assert '"activityEnd"' in session_block
     assert '"audioStreamEnd": True' not in session_block

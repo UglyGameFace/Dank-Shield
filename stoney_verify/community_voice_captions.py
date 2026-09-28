@@ -326,9 +326,10 @@ _PCM48_TO_16_FIR = _design_downsample_fir()
 class _StreamingPCM48To16Mono:
     """Stateful 48 kHz stereo -> 16 kHz mono FIR decimator.
 
-    Live Transcribe expects audio as it is produced, not a several-second burst.
     Keeping FIR history per Discord speaker avoids introducing a filter edge at
-    every 20 ms Discord PCM frame.
+    every 20 ms Discord PCM frame. Provider transport may aggregate a few of
+    these resampled frames into Google's recommended ~100 ms Live chunks without
+    changing the speech samples or local utterance boundaries.
     """
 
     def __init__(self) -> None:
@@ -484,6 +485,11 @@ class _GeminiLiveSpeakerSession:
             TranscriptResult,
         ] = {}
         self._resampler = _StreamingPCM48To16Mono()
+        # Google Live Transcribe documents ~100 ms PCM chunks. Discord receive
+        # arrives in ~20 ms frames, so retain only a tiny per-speaker transport
+        # buffer instead of sending one WebSocket message per Discord frame.
+        self._provider_chunk_bytes = 16_000 * 2 // 10
+        self._provider_pcm_buffer = bytearray()
 
     def _clear_final_queue(self) -> None:
         while True:
@@ -603,6 +609,7 @@ class _GeminiLiveSpeakerSession:
         self.rotate_before_next = False
         self.utterance_active = False
         self._resampler.reset()
+        self._provider_pcm_buffer.clear()
         self._cancel_pending_finals()
         self._current_interims.clear()
         self._clear_final_queue()
@@ -647,6 +654,9 @@ class _GeminiLiveSpeakerSession:
                 content = payload.get("serverContent")
                 if not isinstance(content, dict):
                     continue
+
+                if bool(content.get("interrupted")):
+                    self.owner.interrupted_server_events += 1
 
                 interim = content.get("interimInputTranscription")
                 if isinstance(interim, dict):
@@ -747,7 +757,12 @@ class _GeminiLiveSpeakerSession:
                     # in documented manual-VAD mode while still streaming every
                     # PCM frame as it arrives.
                     "realtimeInputConfig": {
-                        "automaticActivityDetection": {"disabled": True}
+                        "automaticActivityDetection": {"disabled": True},
+                        # Live defaults to START_OF_ACTIVITY_INTERRUPTS. Caption
+                        # sessions can begin a new Discord turn while the prior
+                        # finalized inputTranscription is still arriving, so
+                        # barge-in can destroy the exact final we are awaiting.
+                        "activityHandling": "NO_INTERRUPTION",
                     },
                     "inputAudioTranscription": transcription_config,
                 }
@@ -767,6 +782,7 @@ class _GeminiLiveSpeakerSession:
                         self.rotate_before_next = False
                         self.utterance_active = False
                         self._resampler.reset()
+                        self._provider_pcm_buffer.clear()
                         self._clear_final_queue()
                         self.owner.live_connections += 1
                         self._receiver_task = asyncio.create_task(
@@ -817,6 +833,43 @@ class _GeminiLiveSpeakerSession:
         assert self.ws is not None
         return self.ws
 
+    async def _send_provider_audio(
+        self,
+        ws: aiohttp.ClientWebSocketResponse,
+        pcm16: bytes,
+    ) -> None:
+        if not pcm16:
+            return
+        await ws.send_json(
+            {
+                "realtimeInput": {
+                    "audio": {
+                        "data": base64.b64encode(pcm16).decode("ascii"),
+                        "mimeType": "audio/pcm;rate=16000",
+                    }
+                }
+            }
+        )
+        self.owner.audio_chunks_sent += 1
+        self.owner.audio_bytes_sent += len(pcm16)
+
+    async def _flush_provider_audio(
+        self,
+        ws: aiohttp.ClientWebSocketResponse,
+        *,
+        force: bool = False,
+    ) -> None:
+        chunk_size = int(self._provider_chunk_bytes)
+        while len(self._provider_pcm_buffer) >= chunk_size:
+            chunk = bytes(self._provider_pcm_buffer[:chunk_size])
+            del self._provider_pcm_buffer[:chunk_size]
+            await self._send_provider_audio(ws, chunk)
+
+        if force and self._provider_pcm_buffer:
+            chunk = bytes(self._provider_pcm_buffer)
+            self._provider_pcm_buffer.clear()
+            await self._send_provider_audio(ws, chunk)
+
     async def stream_pcm(self, pcm48_stereo: bytes) -> None:
         if not pcm48_stereo:
             return
@@ -825,27 +878,20 @@ class _GeminiLiveSpeakerSession:
             pcm16 = self._resampler.feed(pcm48_stereo)
             if not pcm16:
                 return
+            self.owner.audio_input_frames += 1
             if not self.utterance_active:
                 # Manual VAD has no server-side pre-speech buffer. Signal the
-                # turn before the first streamed PCM chunk so the first syllable
-                # is part of the same activity window.
+                # turn before buffering the first PCM samples so every provider
+                # audio chunk belongs to the same explicit activity window.
                 self._current_interims.clear()
                 self._clear_final_queue()
+                self._provider_pcm_buffer.clear()
                 await ws.send_json({"realtimeInput": {"activityStart": {}}})
                 self.owner.activity_starts += 1
                 self.utterance_active = True
-            await ws.send_json(
-                {
-                    "realtimeInput": {
-                        "audio": {
-                            "data": base64.b64encode(pcm16).decode("ascii"),
-                            "mimeType": "audio/pcm;rate=16000",
-                        }
-                    }
-                }
-            )
-            self.owner.audio_chunks_sent += 1
-            self.owner.audio_bytes_sent += len(pcm16)
+
+            self._provider_pcm_buffer.extend(pcm16)
+            await self._flush_provider_audio(ws)
 
     async def seal_utterance(self) -> asyncio.Future[Any]:
         """End the current manual-VAD activity without waiting for its transcript.
@@ -878,6 +924,10 @@ class _GeminiLiveSpeakerSession:
 
             self._pending_finals.append(waiter)
             try:
+                # Preserve every speech sample. A short final provider chunk is
+                # allowed at a real utterance boundary; activityEnd is never sent
+                # while resampled PCM is still buffered locally.
+                await self._flush_provider_audio(ws, force=True)
                 await ws.send_json({"realtimeInput": {"activityEnd": {}}})
             except Exception:
                 try:
@@ -891,6 +941,7 @@ class _GeminiLiveSpeakerSession:
             self.owner.activity_ends += 1
             self.utterance_active = False
             self._resampler.reset()
+            self._provider_pcm_buffer.clear()
             return waiter
 
     async def wait_for_final(
@@ -999,12 +1050,14 @@ class GeminiLiveTranscriber:
         self._http_session: Optional[aiohttp.ClientSession] = None
         self.live_connections = 0
         self.live_reconnects = 0
+        self.audio_input_frames = 0
         self.audio_chunks_sent = 0
         self.audio_bytes_sent = 0
         self.activity_starts = 0
         self.activity_ends = 0
         self.interim_transcript_events = 0
         self.final_transcript_events = 0
+        self.interrupted_server_events = 0
         self.interim_timeout_fallbacks = 0
         self.language_hint_mismatches = 0
         self.fallback_count = 0
@@ -1498,9 +1551,10 @@ class CaptionEngine:
         ):
             return False
         try:
-            # Production sends each isolated Discord PCM frame at arrival time.
-            # Segment bookkeeping may run first only to discover whether a prior
-            # activity must be sealed before this frame can begin a new turn.
+            # Production submits each isolated Discord PCM frame at arrival time.
+            # The provider session may micro-batch the resampled samples into
+            # ~100 ms WebSocket audio chunks; segment bookkeeping still owns
+            # the exact speech boundary and can seal a prior turn first.
             await stream_frame(frame)
             return True
         except Exception as exc:
