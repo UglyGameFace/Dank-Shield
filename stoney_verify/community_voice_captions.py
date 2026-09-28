@@ -655,6 +655,9 @@ class _GeminiLiveSpeakerSession:
                 if not isinstance(content, dict):
                     continue
 
+                if bool(content.get("interrupted")):
+                    self.owner.interrupted_server_events += 1
+
                 interim = content.get("interimInputTranscription")
                 if isinstance(interim, dict):
                     self.owner.interim_transcript_events += 1
@@ -754,7 +757,12 @@ class _GeminiLiveSpeakerSession:
                     # in documented manual-VAD mode while still streaming every
                     # PCM frame as it arrives.
                     "realtimeInputConfig": {
-                        "automaticActivityDetection": {"disabled": True}
+                        "automaticActivityDetection": {"disabled": True},
+                        # Live defaults to START_OF_ACTIVITY_INTERRUPTS. Caption
+                        # sessions can begin a new Discord turn while the prior
+                        # finalized inputTranscription is still arriving, so
+                        # barge-in can destroy the exact final we are awaiting.
+                        "activityHandling": "NO_INTERRUPTION",
                     },
                     "inputAudioTranscription": transcription_config,
                 }
@@ -1049,6 +1057,7 @@ class GeminiLiveTranscriber:
         self.activity_ends = 0
         self.interim_transcript_events = 0
         self.final_transcript_events = 0
+        self.interrupted_server_events = 0
         self.interim_timeout_fallbacks = 0
         self.language_hint_mismatches = 0
         self.fallback_count = 0
