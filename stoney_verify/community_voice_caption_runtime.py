@@ -174,6 +174,7 @@ class CommunityVoiceCaptionManager:
             "provider_activity_ends": int(getattr(state.engine.transcriber, "activity_ends", 0) or 0),
             "provider_interim_events": int(getattr(state.engine.transcriber, "interim_transcript_events", 0) or 0),
             "provider_final_events": int(getattr(state.engine.transcriber, "final_transcript_events", 0) or 0),
+            "provider_interrupted_events": int(getattr(state.engine.transcriber, "interrupted_server_events", 0) or 0),
             "provider_interim_timeout_fallbacks": int(getattr(state.engine.transcriber, "interim_timeout_fallbacks", 0) or 0),
             "receive_recoveries": int(state.receive_recoveries),
             "receive_recovery_failures": int(state.receive_recovery_failures),
