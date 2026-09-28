@@ -808,6 +808,7 @@ async def build_server_live_captions_embed(
             opus_plc_recoveries = int(health.get("opus_plc_recoveries") or 0)
             provider_live_connections = int(general.get("provider_live_connections") or 0)
             provider_live_reconnects = int(general.get("provider_live_reconnects") or 0)
+            provider_audio_input_frames = int(general.get("provider_audio_input_frames") or 0)
             provider_audio_chunks = int(general.get("provider_audio_chunks_sent") or 0)
             provider_activity_starts = int(general.get("provider_activity_starts") or 0)
             provider_activity_ends = int(general.get("provider_activity_ends") or 0)
@@ -830,7 +831,7 @@ async def build_server_live_captions_embed(
                     f"Corrupt Opus: PLC recovered **{opus_plc_recoveries}** • dropped **{int(health.get('opus_decode_drops') or 0)}** • not consented: **{int(health.get('frames_not_consented') or 0)}** • unknown source: **{int(health.get('frames_unknown_source') or 0)}** • identity mismatch: **{int(health.get('frames_source_mismatch') or 0)}**\n"
                     f"Malformed PCM: **{int(health.get('frames_malformed_pcm') or 0)}** • transcribed: **{int(general.get('segments_transcribed') or 0)}** • published: **{int(general.get('segments_published') or 0)}** • empty: **{int(general.get('segments_empty') or 0)}**\n"
                     f"Unclear: **{int(general.get('segments_unclear') or 0)}** • failures: **{int(general.get('segment_failures') or 0)}** • provider-skipped: **{provider_skipped}**\n"
-                    f"Gemini Live connections: **{provider_live_connections}** • reconnects: **{provider_live_reconnects}** • audio chunks: **{provider_audio_chunks}**\n"
+                    f"Gemini Live connections: **{provider_live_connections}** • reconnects: **{provider_live_reconnects}** • input frames: **{provider_audio_input_frames}** • ~100ms chunks: **{provider_audio_chunks}**\n"
                     f"Gemini manual VAD: starts **{provider_activity_starts}** • ends **{provider_activity_ends}**\n"
                     f"Gemini transcript events: interim **{provider_interim_events}** • final **{provider_final_events}** • stable-timeout recoveries **{provider_interim_timeout_fallbacks}** • language-hint mismatches: **{language_hint_mismatches}**\n"
                     f"Translations: **{translation_requests}** • translation skipped: **{translation_skipped}** • translation failures: **{translation_failures}**"
