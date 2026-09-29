@@ -24,6 +24,7 @@ from stoney_verify.ui.picker import DankRoleSelect
 
 _ROLE_EDITOR_PREFIX = "dank:roles:v1:"
 _ROLE_ACTION_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+_SELF_SERVICE_ROLE_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 _HEX_RE = re.compile(r"^#?([0-9a-fA-F]{6})$")
 
 _PERMISSION_GROUP_BASE: tuple[tuple[str, str, tuple[str, ...]], ...] = (
@@ -154,6 +155,15 @@ def _role_action_lock(guild_id: int, role_id: int, action: str) -> asyncio.Lock:
     return lock
 
 
+def _self_service_role_lock(guild_id: int, member_id: int) -> asyncio.Lock:
+    key = f"{int(guild_id)}:member:{int(member_id)}"
+    lock = _SELF_SERVICE_ROLE_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _SELF_SERVICE_ROLE_LOCKS[key] = lock
+    return lock
+
+
 def _bool_text(value: bool) -> str:
     return "On" if bool(value) else "Off"
 
@@ -229,8 +239,10 @@ async def _replace(
     *,
     embed: discord.Embed,
     view: discord.ui.View,
+    content: str = "",
 ) -> None:
     kwargs = {
+        "content": content or None,
         "embed": embed,
         "view": view,
         "allowed_mentions": discord.AllowedMentions.none(),
@@ -1717,40 +1729,44 @@ class SelfServiceRoleView(_OwnedView):
         if guild is None or member is None:
             return await _reply(interaction, "❌ This only works inside a server.")
 
-        role = guild.get_role(self.role_id)
-        if not isinstance(role, discord.Role):
-            return await _reply(interaction, "❌ That role no longer exists.")
-
-        kind, blocker = await _self_service_role_kind(guild, role)
-        if not kind:
-            return await _reply(interaction, "❌ " + (blocker or "That role is no longer self-service."))
+        if not interaction.response.is_done():
+            await interaction.response.defer()
 
         from stoney_verify.guild_config import get_guild_config
         from .public_toke import SESH_PING_ROLE_KEY, STONER_ROLE_KEY
 
-        config = await get_guild_config(int(guild.id), refresh=True)
-        raw_stoner = str(config.get(STONER_ROLE_KEY) or "0")
-        raw_sesh = str(config.get(SESH_PING_ROLE_KEY) or "0")
-        stoner_id = int(raw_stoner) if raw_stoner.isdigit() else 0
-        sesh_id = int(raw_sesh) if raw_sesh.isdigit() else 0
-
         try:
-            if role in member.roles:
-                await member.remove_roles(role, reason="Dank Shield /role self-service toggle")
-                if int(role.id) == stoner_id and sesh_id > 0 and sesh_id != stoner_id:
-                    sesh_role = guild.get_role(sesh_id)
-                    if isinstance(sesh_role, discord.Role) and sesh_role in member.roles:
-                        sesh_kind, sesh_blocker = await _self_service_role_kind(guild, sesh_role)
-                        if sesh_kind and not sesh_blocker:
-                            await member.remove_roles(sesh_role, reason="Dank Shield /role Stoner dependency")
-                result = f"Removed {role.mention}."
-            else:
-                if int(role.id) == sesh_id and sesh_id != stoner_id:
-                    stoner_role = guild.get_role(stoner_id)
-                    if not isinstance(stoner_role, discord.Role) or stoner_role not in member.roles:
-                        return await _reply(interaction, "❌ Select the configured Stoner role before enabling Sesh Pings.")
-                await member.add_roles(role, reason="Dank Shield /role self-service toggle")
-                result = f"Added {role.mention}."
+            async with _self_service_role_lock(guild.id, member.id):
+                role = guild.get_role(self.role_id)
+                if not isinstance(role, discord.Role):
+                    return await _reply(interaction, "❌ That role no longer exists.")
+
+                kind, blocker = await _self_service_role_kind(guild, role)
+                if not kind:
+                    return await _reply(interaction, "❌ " + (blocker or "That role is no longer self-service."))
+
+                config = await get_guild_config(int(guild.id), refresh=True)
+                raw_stoner = str(config.get(STONER_ROLE_KEY) or "0")
+                raw_sesh = str(config.get(SESH_PING_ROLE_KEY) or "0")
+                stoner_id = int(raw_stoner) if raw_stoner.isdigit() else 0
+                sesh_id = int(raw_sesh) if raw_sesh.isdigit() else 0
+
+                if role in member.roles:
+                    await member.remove_roles(role, reason="Dank Shield /role self-service toggle")
+                    if int(role.id) == stoner_id and sesh_id > 0 and sesh_id != stoner_id:
+                        sesh_role = guild.get_role(sesh_id)
+                        if isinstance(sesh_role, discord.Role) and sesh_role in member.roles:
+                            sesh_kind, sesh_blocker = await _self_service_role_kind(guild, sesh_role)
+                            if sesh_kind and not sesh_blocker:
+                                await member.remove_roles(sesh_role, reason="Dank Shield /role Stoner dependency")
+                    result = f"Removed {role.mention}."
+                else:
+                    if int(role.id) == sesh_id and sesh_id != stoner_id:
+                        stoner_role = guild.get_role(stoner_id)
+                        if not isinstance(stoner_role, discord.Role) or stoner_role not in member.roles:
+                            return await _reply(interaction, "❌ Select the configured Stoner role before enabling Sesh Pings.")
+                    await member.add_roles(role, reason="Dank Shield /role self-service toggle")
+                    result = f"Added {role.mention}."
         except discord.Forbidden:
             return await _reply(interaction, "❌ Dank Shield cannot manage that role. Staff should check role hierarchy.")
         except discord.HTTPException as exc:
@@ -1827,6 +1843,9 @@ async def open_role_command(
         return await _reply(interaction, "❌ /role only works inside a server.")
     if member is not None and role is not None:
         return await _reply(interaction, "❌ Choose either a member or a role, not both.")
+
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=True)
 
     if member is not None:
         from .member_command_center import open_member_target
