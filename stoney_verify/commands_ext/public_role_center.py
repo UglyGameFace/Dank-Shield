@@ -548,3 +548,139 @@ def _role_editor_home_embed(guild: discord.Guild) -> discord.Embed:
         value="@everyone, integration-managed roles, roles above you, and roles above Dank Shield are blocked.",
         inline=False,
     )
+    return embed
+
+
+def _role_health_embed(guild: discord.Guild, actor: Any) -> discord.Embed:
+    me = guild.me
+    roles = [role for role in guild.roles if not role.is_default()]
+    managed = [role for role in roles if role.managed]
+    bot_blocked = []
+    actor_blocked = []
+    if isinstance(me, discord.Member):
+        bot_blocked = [role for role in roles if not role.managed and role >= me.top_role]
+    if not _is_guild_owner(guild, actor) and isinstance(actor, discord.Member):
+        actor_blocked = [role for role in roles if not role.managed and role >= actor.top_role]
+    embed = discord.Embed(
+        title="🩺 Role Health",
+        description="Live hierarchy and Manage Roles readiness for this server.",
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(name="Server roles", value=str(len(roles)), inline=True)
+    embed.add_field(name="Managed/integration roles", value=str(len(managed)), inline=True)
+    embed.add_field(name="Above/equal Dank Shield", value=str(len(bot_blocked)), inline=True)
+    embed.add_field(name="Above/equal you", value=str(len(actor_blocked)), inline=True)
+    embed.add_field(
+        name="Dank Shield",
+        value=(
+            f"Manage Roles: **{_bool_text(_bot_can_manage_roles(guild))}**\n"
+            f"Top role: {getattr(getattr(me, 'top_role', None), 'mention', 'Unknown')}"
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Role mutations are checked again at execution time.")
+    return embed
+
+
+class _OwnedView(discord.ui.View):
+    def __init__(self, owner_id: int) -> None:
+        super().__init__(timeout=PRIVATE_MENU_TTL_SECONDS)
+        self.owner_id = int(owner_id)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(getattr(interaction.user, "id", 0) or 0) == self.owner_id:
+            return True
+        await _reply(interaction, "❌ Open your own `/dank home` panel to use these controls.")
+        return False
+
+    async def on_timeout(self) -> None:
+        for item in self.children:
+            try:
+                item.disabled = True
+            except Exception:
+                pass
+
+
+class RolesProfilesView(_OwnedView):
+    def __init__(
+        self,
+        owner_id: int,
+        *,
+        staff: bool,
+        role_manager: bool,
+        setup_manager: bool,
+    ) -> None:
+        super().__init__(owner_id)
+        self.staff = bool(staff)
+        self.role_manager = bool(role_manager)
+        self.setup_manager = bool(setup_manager)
+
+        if not self.staff:
+            self.remove_item(self.member_roles)
+        if not (self.staff and self.setup_manager):
+            self.remove_item(self.profile_builder)
+        if not self.role_manager:
+            self.remove_item(self.server_roles)
+            self.remove_item(self.create_role)
+            self.remove_item(self.role_health)
+
+    @discord.ui.button(label="My Profile", emoji="🪪", style=discord.ButtonStyle.primary, row=0)
+    async def my_profile(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_command_hub import open_profile_entry
+
+        await open_profile_entry(interaction)
+
+    @discord.ui.button(label="Profile Tags & Cosmetics", emoji="🎭", style=discord.ButtonStyle.secondary, row=0)
+    async def profile_tags(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild = interaction.guild
+        member = interaction.user
+        if guild is None or not isinstance(member, discord.Member):
+            return await _reply(interaction, "❌ This only works inside a server.")
+        from .public_self_roles_group import _open_profile_cosmetics
+
+        await _open_profile_cosmetics(interaction, guild, member)
+
+    @discord.ui.button(label="Member Role Manager", emoji="👥", style=discord.ButtonStyle.secondary, row=1)
+    async def member_roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _recognized_staff(interaction):
+            return await _reply(interaction, "❌ Staff only.")
+        from .public_member_role_browser import _open_member_browser
+
+        await _open_member_browser(interaction)
+
+    @discord.ui.button(label="Profile Builder", emoji="🌿", style=discord.ButtonStyle.secondary, row=1)
+    async def profile_builder(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _recognized_staff(interaction) or not _can_manage_setup(interaction):
+            return await _reply(interaction, "❌ Profile Builder setup requires authorized server management access.")
+        from .public_self_roles_group import _post_profile_builder
+
+        await _post_profile_builder(interaction, title="Profile Panel")
+
+    @discord.ui.button(label="Server Role Editor", emoji="🛠️", style=discord.ButtonStyle.primary, row=2)
+    async def server_roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild, actor = await _require_role_manager(interaction)
+        if guild is None or actor is None:
+            return
+        await _replace(
+            interaction,
+            embed=_role_editor_home_embed(guild),
+            view=RoleEditorHomeView(self.owner_id),
+        )
+
+    @discord.ui.button(label="Create Role", emoji="➕", style=discord.ButtonStyle.success, row=2)
+    async def create_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild, actor = await _require_role_manager(interaction)
+        if guild is None or actor is None:
+            return
+        await interaction.response.send_modal(CreateRoleModal(self.owner_id))
+
+    @discord.ui.button(label="Role Health", emoji="🩺", style=discord.ButtonStyle.secondary, row=2)
+    async def role_health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild, actor = 
