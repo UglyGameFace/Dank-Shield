@@ -568,7 +568,7 @@ async def _repair_specs(interaction: discord.Interaction, specs: list[RepairSpec
         return await interaction.followup.send("✅ Nothing missing anymore.", embed=embed, view=view, ephemeral=True)
 
     custom_names = custom_names or {}
-    naming_policy = await naming_identity.get_naming_policy(int(guild.id))
+    naming_policy = await naming_identity.get_naming_policy(int(guild.id), refresh=True)
     created: list[str] = []
     reused: list[str] = []
     notes: list[str] = []
