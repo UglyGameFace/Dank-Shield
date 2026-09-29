@@ -121,6 +121,18 @@ def test_ticket_runtime_markers_are_human_readable_with_legacy_aliases() -> None
     assert '_TRANSCRIPT_MARKER = "Transcript posted"' in new_service
 
 
+
+def test_public_control_center_and_db_check_footers_hide_operator_metadata() -> None:
+    control_surface = (PACKAGE / "commands_ext/public_command_surface_v2.py").read_text(encoding="utf-8")
+    setup_review = (PACKAGE / "commands_ext/public_setup_review.py").read_text(encoding="utf-8")
+
+    assert 'embed.set_footer(text="Dank Shield • Control Center")' in control_surface
+    assert "runtime_release_label" not in control_surface
+    assert 'embed.set_footer(text="Read-only check • no settings were changed.")' in setup_review
+    assert "refresh Supabase REST schema cache" not in setup_review
+    assert "service-role env vars" not in setup_review
+
+
 def test_known_developer_footer_phrases_are_removed() -> None:
     forbidden = {
         "welcome_card_studio_ui.py": (
