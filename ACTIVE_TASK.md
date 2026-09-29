@@ -48,7 +48,7 @@ Excluded:
 - Recommended/Required revisions do not remove Discord access.
 - Access-Gated revisions remove only the configured Member Access role when Strict Gate is already active.
 - Completing setup restores Member Access only when any configured prerequisite role is also present.
-- Server owner, bots, Administrator, Manage Server, and Manage Roles actors are exempt from accidental gate lockout.
+- Server owner and Administrator members are exempt because they bypass channel visibility restrictions; bots are excluded from member gating. Manage Server/Manage Roles staff still receive Member Access because those permissions do not bypass channel visibility denies.
 
 ## Safety / failure behavior
 
