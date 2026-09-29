@@ -287,7 +287,7 @@ async def policy_adjusted_name(
 ) -> str:
     """Return the final live name an enabled guild policy permits."""
 
-    policy = await naming_identity.get_naming_policy(guild_id)
+    policy = await naming_identity.get_naming_policy(guild_id, refresh=True)
     return policy_adjusted_name_for_policy(policy, kind=kind, name=name)
 
 
@@ -297,7 +297,7 @@ async def normalize_design_plan_for_guild(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Bind a design preview to the naming policy used to render its final names."""
 
-    policy = await naming_identity.get_naming_policy(guild_id)
+    policy = await naming_identity.get_naming_policy(guild_id, refresh=True)
     fingerprint = policy_fingerprint(policy)
     return normalize_design_plan_items(items, fingerprint), fingerprint
 
@@ -386,7 +386,7 @@ async def enforce_role_name(role: discord.Role) -> bool:
 
     if _role_blocker(role):
         return False
-    policy = await naming_identity.get_naming_policy(gid)
+    policy = await naming_identity.get_naming_policy(gid, refresh=True)
     if policy.get("mode") != naming_identity.NAMING_MODE_SEARCH_SAFE or not bool(policy.get("roles", True)):
         return False
 
@@ -432,7 +432,7 @@ async def enforce_channel_name(channel: discord.abc.GuildChannel) -> bool:
 
     if _channel_blocker(channel):
         return False
-    policy = await naming_identity.get_naming_policy(gid)
+    policy = await naming_identity.get_naming_policy(gid, refresh=True)
     if policy.get("mode") != naming_identity.NAMING_MODE_SEARCH_SAFE or not bool(policy.get("channels", True)):
         return False
 
