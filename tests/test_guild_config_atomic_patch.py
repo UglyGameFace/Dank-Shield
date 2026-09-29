@@ -172,6 +172,18 @@ def test_reachable_service_mode_compat_has_no_direct_guild_config_writer() -> No
     assert "Canonical guild config writer is unavailable." in source
 
 
+def test_setup_group_fallback_delegates_to_canonical_writer() -> None:
+    source = (
+        ROOT / "stoney_verify/commands_ext/public_setup_group.py"
+    ).read_text(encoding="utf-8")
+
+    assert "_fetch_existing_config_row_sync" not in source
+    assert "_settings_payload_update" not in source
+    assert "sb.table(table).update(" not in source
+    assert "_canonical_upsert_guild_config_sync(" in source
+    assert "_canonical_upsert_guild_config(" in source
+
+
 def test_atomic_patch_migration_uses_server_side_json_merge_and_service_role_only() -> None:
     sql = MIGRATION.read_text(encoding="utf-8")
 
