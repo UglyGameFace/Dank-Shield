@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 from stoney_verify.services import naming_identity
+from stoney_verify.services import role_mutation_authority
 from stoney_verify.services import search_safe_naming
 from stoney_verify.services import server_design_studio as design
 
@@ -62,7 +64,13 @@ def test_repair_batch_is_hard_capped_to_25_existing_names(monkeypatch) -> None:
     ]
     monkeypatch.setattr(search_safe_naming, "_channel_blocker", lambda _channel: "")
 
-    result = asyncio.run(search_safe_naming.apply_search_safe_batch(guild, limit=999))
+    result = asyncio.run(
+        search_safe_naming.apply_search_safe_batch(
+            guild,
+            actor=SimpleNamespace(id=123),
+            limit=999,
+        )
+    )
 
     assert result["batch_limit"] == 25
     assert len(result["changed"]) == 25
@@ -131,3 +139,150 @@ def test_server_design_exposes_reviewed_search_safe_workflow() -> None:
     assert "Manage Roles" in ui
     assert "Categories keep their full visual styling" in ui
     assert "continuous 300,000-server polling" in ui
+
+
+class _AuthPerms:
+    def __init__(self, *, administrator: bool = False, manage_roles: bool = False) -> None:
+        self.administrator = administrator
+        self.manage_roles = manage_roles
+
+
+class _AuthRole:
+    def __init__(
+        self,
+        guild: object,
+        role_id: int,
+        name: str,
+        position: int,
+        *,
+        managed: bool = False,
+        default: bool = False,
+    ) -> None:
+        self.guild = guild
+        self.id = int(role_id)
+        self.name = str(name)
+        self.position = int(position)
+        self.managed = bool(managed)
+        self._default = bool(default)
+        self.edits: list[str] = []
+
+    def is_default(self) -> bool:
+        return self._default
+
+    def __ge__(self, other: object) -> bool:
+        return self.position >= int(getattr(other, "position", -1))
+
+    async def edit(self, *, name: str, reason: str):
+        assert "Search-Safe Naming" in reason
+        self.name = str(name)
+        self.edits.append(self.name)
+        return self
+
+
+class _AuthMember:
+    def __init__(
+        self,
+        member_id: int,
+        top_role: _AuthRole,
+        *,
+        administrator: bool = False,
+        manage_roles: bool = True,
+    ) -> None:
+        self.id = int(member_id)
+        self.top_role = top_role
+        self.guild_permissions = _AuthPerms(
+            administrator=administrator,
+            manage_roles=manage_roles,
+        )
+
+
+class _AuthGuild:
+    def __init__(self, guild_id: int = 700) -> None:
+        self.id = int(guild_id)
+        self.owner_id = 1
+        self.owner = None
+        self.roles: list[_AuthRole] = []
+        self.channels: list[object] = []
+        self.me: object | None = None
+
+    def get_role(self, role_id: int):
+        return next((role for role in self.roles if role.id == int(role_id)), None)
+
+    def get_channel(self, _channel_id: int):
+        return None
+
+
+def test_shared_role_authority_blocks_manage_roles_actor_below_target(monkeypatch) -> None:
+    guild = _AuthGuild()
+    actor_top = _AuthRole(guild, 10, "Moderator", 5)
+    bot_top = _AuthRole(guild, 20, "Dank Shield", 50)
+    target = _AuthRole(guild, 30, _styled("staff"), 25)
+    actor = _AuthMember(2, actor_top, manage_roles=True)
+    bot_member = _AuthMember(999, bot_top, manage_roles=True)
+    guild.me = bot_member
+
+    monkeypatch.setattr(role_mutation_authority.discord, "Member", _AuthMember)
+
+    blockers = role_mutation_authority.role_mutation_blockers(guild, actor, target)
+
+    assert "Your highest role must stay above the role you edit." in blockers
+    assert all("Dank Shield's highest role" not in item for item in blockers)
+
+
+def test_search_safe_preview_marks_role_above_actor_as_blocked(monkeypatch) -> None:
+    guild = _AuthGuild()
+    actor_top = _AuthRole(guild, 10, "Moderator", 5)
+    bot_top = _AuthRole(guild, 20, "Dank Shield", 50)
+    target = _AuthRole(guild, 30, _styled("staff"), 25)
+    actor = _AuthMember(2, actor_top, manage_roles=True)
+    guild.me = _AuthMember(999, bot_top, manage_roles=True)
+    guild.roles = [target]
+
+    monkeypatch.setattr(role_mutation_authority.discord, "Member", _AuthMember)
+
+    rows = search_safe_naming.scan_search_safe_targets(guild, actor=actor)
+
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "role"
+    assert rows[0]["editable"] is False
+    assert "Your highest role must stay above the role you edit." in rows[0]["blocker"]
+
+
+def test_search_safe_batch_rechecks_role_authority_inside_resource_lock(monkeypatch) -> None:
+    guild = _AuthGuild()
+    target = _AuthRole(guild, 30, _styled("staff"), 10)
+    guild.roles = [target]
+    actor = SimpleNamespace(id=2)
+
+    monkeypatch.setattr(search_safe_naming.discord, "Role", _AuthRole)
+
+    checks = {"count": 0}
+
+    def changing_blocker(_role, *, actor=None):
+        assert actor is not None
+        checks["count"] += 1
+        if checks["count"] >= 3:
+            return "Your highest role must stay above the role you edit."
+        return ""
+
+    monkeypatch.setattr(search_safe_naming, "_role_blocker", changing_blocker)
+
+    result = asyncio.run(
+        search_safe_naming.apply_search_safe_batch(
+            guild,
+            actor=actor,
+            limit=25,
+        )
+    )
+
+    assert target.edits == []
+    assert result["changed"] == []
+    assert len(result["failed"]) == 1
+    assert "Your highest role must stay above the role you edit." in result["failed"][0]["error"]
+
+
+def test_search_safe_ui_binds_preview_and_apply_to_interaction_actor() -> None:
+    ui = (ROOT / "stoney_verify/commands_ext/public_search_safe_naming.py").read_text(encoding="utf-8")
+
+    assert "scan_search_safe_targets(guild, actor=interaction.user)" in ui
+    assert ui.count("actor=interaction.user") >= 5
