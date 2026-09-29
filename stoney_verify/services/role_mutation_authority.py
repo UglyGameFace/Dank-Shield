@@ -56,6 +56,18 @@ def bot_can_manage_roles(guild: discord.Guild) -> bool:
     return bool(perms.administrator or perms.manage_roles)
 
 
+def _live_actor(guild: discord.Guild, actor: Any) -> Any:
+    if not isinstance(actor, discord.Member):
+        return actor
+    try:
+        current = guild.get_member(int(actor.id))
+        if isinstance(current, discord.Member):
+            return current
+    except Exception:
+        pass
+    return actor
+
+
 def role_mutation_blockers(
     guild: discord.Guild,
     actor: Any,
@@ -70,6 +82,7 @@ def role_mutation_blockers(
 
     blockers: list[str] = []
     me = getattr(guild, "me", None)
+    actor = _live_actor(guild, actor)
 
     try:
         if role.is_default():
