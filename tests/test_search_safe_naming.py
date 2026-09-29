@@ -286,3 +286,116 @@ def test_search_safe_ui_binds_preview_and_apply_to_interaction_actor() -> None:
 
     assert "scan_search_safe_targets(guild, actor=interaction.user)" in ui
     assert ui.count("actor=interaction.user") >= 5
+
+
+def test_design_plan_normalization_binds_effective_policy_snapshot(monkeypatch) -> None:
+    async def policy(_guild_id: int):
+        return {
+            "mode": naming_identity.NAMING_MODE_SEARCH_SAFE,
+            "roles": True,
+            "channels": True,
+            "categories": False,
+        }
+
+    monkeypatch.setattr(naming_identity, "get_naming_policy", policy)
+    items = [
+        {
+            "kind": "text",
+            "channel_id": "1",
+            "before": "general",
+            "after": _styled("general"),
+            "status": "changed",
+            "warnings": [],
+        },
+        {
+            "kind": "category",
+            "channel_id": "2",
+            "before": "staff",
+            "after": _styled("staff"),
+            "status": "changed",
+            "warnings": [],
+        },
+    ]
+
+    normalized, snapshot = asyncio.run(
+        search_safe_naming.normalize_design_plan_for_guild(999, items)
+    )
+
+    assert snapshot == {
+        "mode": naming_identity.NAMING_MODE_SEARCH_SAFE,
+        "roles": True,
+        "channels": True,
+        "categories": False,
+    }
+    assert normalized[0]["after"] == "general"
+    assert normalized[0]["search_safe_naming"] is True
+    assert normalized[1]["after"] == items[1]["after"]
+    assert search_safe_naming.policy_matches_snapshot(snapshot, dict(snapshot))
+
+
+def test_design_policy_snapshot_detects_change_before_apply() -> None:
+    preview = {
+        "mode": naming_identity.NAMING_MODE_SEARCH_SAFE,
+        "roles": True,
+        "channels": True,
+        "categories": False,
+    }
+    current = {
+        **preview,
+        "mode": naming_identity.NAMING_MODE_PRESERVE,
+    }
+
+    assert search_safe_naming.policy_matches_snapshot(preview, preview)
+    assert not search_safe_naming.policy_matches_snapshot(preview, current)
+    assert not search_safe_naming.policy_matches_snapshot(None, preview)
+
+
+def test_undo_targets_obey_current_search_safe_policy() -> None:
+    policy = {
+        "mode": naming_identity.NAMING_MODE_SEARCH_SAFE,
+        "roles": True,
+        "channels": True,
+        "categories": False,
+    }
+    styled_channel = _styled("general")
+    styled_category = _styled("staff")
+    rows = search_safe_naming.normalize_undo_snapshot_items(
+        [
+            {
+                "kind": "text",
+                "old_name": styled_channel,
+                "new_name": "general",
+            },
+            {
+                "kind": "category",
+                "old_name": styled_category,
+                "new_name": "staff",
+            },
+        ],
+        policy,
+    )
+
+    assert rows[0]["old_name"] == "general"
+    assert rows[0]["search_safe_original_old_name"] == styled_channel
+    assert rows[0]["search_safe_undo_adjusted"] is True
+    assert rows[1]["old_name"] == styled_category
+    assert "search_safe_undo_adjusted" not in rows[1]
+
+
+def test_preserve_policy_leaves_direct_name_adjustment_unchanged() -> None:
+    styled = _styled("general")
+    policy = {
+        "mode": naming_identity.NAMING_MODE_PRESERVE,
+        "roles": True,
+        "channels": True,
+        "categories": False,
+    }
+
+    assert (
+        search_safe_naming.policy_adjusted_name_for_policy(
+            policy,
+            kind="channel",
+            name=styled,
+        )
+        == styled
+    )
