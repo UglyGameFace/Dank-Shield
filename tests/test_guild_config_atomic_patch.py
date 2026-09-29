@@ -162,6 +162,16 @@ def test_concurrent_clear_and_naming_write_preserve_unrelated_state(monkeypatch)
     assert saved["neighboring_setting"] == {"keep": True}
 
 
+def test_reachable_service_mode_compat_has_no_direct_guild_config_writer() -> None:
+    source = (
+        ROOT / "stoney_verify/startup_guards/setup_service_modes.py"
+    ).read_text(encoding="utf-8")
+
+    assert '.table("guild_configs").upsert' not in source
+    assert "get_supabase" not in source
+    assert "Canonical guild config writer is unavailable." in source
+
+
 def test_atomic_patch_migration_uses_server_side_json_merge_and_service_role_only() -> None:
     sql = MIGRATION.read_text(encoding="utf-8")
 
