@@ -75,6 +75,39 @@ def test_returning_member_reviews_only_sections_changed_since_completion() -> No
     assert status["access_gated"] is True
 
 
+
+
+def test_minor_revision_does_not_force_member_review() -> None:
+    guild = normalize_guild_setup_state(
+        {
+            "enabled": True,
+            "current_revision": 2,
+            "history": [
+                {
+                    "revision": 1,
+                    "severity": SEVERITY_REQUIRED,
+                    "changed_sections": list(SETUP_SECTIONS),
+                },
+                {
+                    "revision": 2,
+                    "severity": "minor",
+                    "changed_sections": [],
+                },
+            ],
+        }
+    )
+    member = normalize_member_setup_state(
+        {
+            "completed_revision": 1,
+            "section_revisions": {section: 1 for section in SETUP_SECTIONS},
+        }
+    )
+    status = member_review_status(guild, member)
+    assert status["pending_sections"] == []
+    assert status["is_current"] is True
+    assert status["access_gated"] is False
+
+
 def test_access_gate_never_activates_from_severity_without_live_gate() -> None:
     member = normalize_member_setup_state(
         {
