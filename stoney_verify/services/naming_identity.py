@@ -24,6 +24,7 @@ from typing import Any
 import discord
 from discord import app_commands
 
+from stoney_verify.services import naming_observability
 from stoney_verify.services import server_design_studio as design
 
 NAMING_IDENTITY_CONFIG_KEY = "naming_identity_v1"
@@ -294,17 +295,25 @@ def remember_alias(
     records = dict(result.get("records") or {})
     current = records.get(key) if isinstance(records.get(key), Mapping) else {}
     aliases = [clean_alias]
-    for old in list(current.get("aliases") or []):
+    source_aliases = list(current.get("aliases") or [])
+    for old in source_aliases:
         normalized = semantic_key(old)
         if normalized and normalized not in aliases:
             aliases.append(normalized)
-        if len(aliases) >= MAX_ALIASES_PER_RESOURCE:
-            break
+    if len(aliases) > MAX_ALIASES_PER_RESOURCE:
+        naming_observability.increment(
+            "alias_pruned",
+            len(aliases) - MAX_ALIASES_PER_RESOURCE,
+        )
     records[key] = {
         "aliases": aliases[:MAX_ALIASES_PER_RESOURCE],
         "updated_at": float(updated_at if updated_at is not None else time.time()),
     }
     if len(records) > MAX_TRACKED_RESOURCES:
+        naming_observability.increment(
+            "resource_pruned",
+            len(records) - MAX_TRACKED_RESOURCES,
+        )
         newest = sorted(
             records.items(),
             key=lambda item: float(item[1].get("updated_at") or 0.0),
@@ -465,8 +474,10 @@ async def _mutate_state_cas(
             updated=updated,
         )
         if applied:
+            naming_observability.increment("state_write_success")
             return persisted
 
+        naming_observability.increment("state_write_conflict")
         expected_raw = persisted_raw
         current = persisted
 
@@ -586,6 +597,7 @@ async def _flush_pending_once(guild_id: int) -> bool:
         _requeue_failed_flush(gid, pending_aliases, pending_deletes)
         raise
     except UnsupportedNamingIdentityVersion as exc:
+        naming_observability.increment("state_write_failure")
         try:
             print(
                 "⚠️ naming_identity write blocked by newer schema "
@@ -595,6 +607,7 @@ async def _flush_pending_once(guild_id: int) -> bool:
             pass
         return False
     except Exception as exc:
+        naming_observability.increment("state_write_failure")
         _requeue_failed_flush(gid, pending_aliases, pending_deletes)
         try:
             print(
@@ -825,15 +838,19 @@ async def resolve_role_query(
     ]
     raw_exact = [role for role in roles if _raw_name(role).casefold() == text.casefold()]
     if len(raw_exact) == 1:
+        naming_observability.increment("role_resolution_live")
         return raw_exact[0], ""
     if len(raw_exact) > 1:
+        naming_observability.increment("role_resolution_ambiguous")
         return None, "More than one role has that exact display name. Choose one from autocomplete."
 
     query_key = semantic_key(text)
     semantic_exact = [role for role in roles if semantic_key(_raw_name(role)) == query_key and query_key]
     if len(semantic_exact) == 1:
+        naming_observability.increment("role_resolution_semantic")
         return semantic_exact[0], ""
     if len(semantic_exact) > 1:
+        naming_observability.increment("role_resolution_ambiguous")
         return None, "More than one role has that searchable name. Choose one from autocomplete."
 
     state = await _load_state(int(guild.id))
@@ -844,8 +861,10 @@ async def resolve_role_query(
         and query_key in aliases_for(state, kind="role", resource_id=role.id)
     ]
     if len(alias_exact) == 1:
+        naming_observability.increment("role_resolution_alias")
         return alias_exact[0], ""
     if len(alias_exact) > 1:
+        naming_observability.increment("role_resolution_ambiguous")
         return None, "That old role name matches more than one role. Choose one from autocomplete."
     return None, "No role matched that name or saved alias. Choose one from autocomplete."
 
