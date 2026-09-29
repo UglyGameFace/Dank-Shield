@@ -555,32 +555,34 @@ async def _debounced_flush(guild_id: int) -> None:
         if not pending_aliases and not pending_deletes:
             return
 
-        state = await _load_state(gid)
-        before = _normalize_state(state)
-        updated = before
         stamp = time.time()
 
-        for key in sorted(pending_deletes):
-            kind, _, rid = key.partition(":")
-            updated = forget_resource(updated, kind=kind, resource_id=rid)
+        def mutate(current: Mapping[str, Any]) -> dict[str, Any]:
+            updated = _normalize_state(current)
+            _require_supported_state(updated)
 
-        for key, aliases in pending_aliases.items():
-            kind, _, rid = key.partition(":")
-            if key in pending_deletes:
-                continue
-            # Queue order is event order. remember_alias prepends each alias, so
-            # replaying oldest -> newest leaves the newest previous name first.
-            for alias in aliases:
-                updated = remember_alias(
-                    updated,
-                    kind=kind,
-                    resource_id=rid,
-                    alias=alias,
-                    updated_at=stamp,
-                )
+            for key in sorted(pending_deletes):
+                kind, _, rid = key.partition(":")
+                updated = forget_resource(updated, kind=kind, resource_id=rid)
 
-        if updated != before:
-            await _persist_state(gid, updated)
+            for key, aliases in pending_aliases.items():
+                kind, _, rid = key.partition(":")
+                if key in pending_deletes:
+                    continue
+                # Queue order is event order. remember_alias prepends each
+                # alias, so oldest -> newest leaves the newest previous name
+                # first even when CAS has to replay after a worker conflict.
+                for alias in aliases:
+                    updated = remember_alias(
+                        updated,
+                        kind=kind,
+                        resource_id=rid,
+                        alias=alias,
+                        updated_at=stamp,
+                    )
+            return updated
+
+        await _mutate_state_cas(gid, mutate)
     except asyncio.CancelledError:
         raise
     except UnsupportedNamingIdentityVersion as exc:
