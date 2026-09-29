@@ -399,3 +399,51 @@ def test_preserve_policy_leaves_direct_name_adjustment_unchanged() -> None:
         )
         == styled
     )
+
+
+def test_role_editor_adjusts_user_supplied_role_names_before_discord_mutation() -> None:
+    source = (
+        ROOT / "stoney_verify/commands_ext/public_role_center.py"
+    ).read_text(encoding="utf-8")
+
+    assert "from stoney_verify.services import search_safe_naming" in source
+    assert source.count("await search_safe_naming.policy_adjusted_name(") >= 3
+    duplicate = source.index('kind="role"', source.index("async def duplicate("))
+    create = source.index('kind="role"', source.index("class CreateRoleModal"))
+    edit = source.index('kind="role"', source.index("class EditRoleAppearanceModal"))
+    assert duplicate < create < edit
+
+
+def test_channel_builder_loads_one_policy_and_uses_effective_names() -> None:
+    source = (
+        ROOT / "stoney_verify/services/channel_builder_execution.py"
+    ).read_text(encoding="utf-8")
+
+    assert "naming_policy = await naming_identity.get_naming_policy(gid)" in source
+    assert "policy_adjusted_name_for_policy(" in source
+    assert 'policy_kind = "category" if kind == "category" else "channel"' in source
+    assert '"search_safe_adjusted": policy_adjusted' in source
+    assert source.index("policy_adjusted_name_for_policy(") < source.index("if action in")
+
+
+def test_setup_assistant_custom_names_use_one_search_safe_policy_snapshot() -> None:
+    source = (
+        ROOT / "stoney_verify/commands_ext/public_setup_assistant.py"
+    ).read_text(encoding="utf-8")
+
+    assert "naming_policy = await naming_identity.get_naming_policy(int(guild.id))" in source
+    assert source.count("policy_adjusted_name_for_policy(") >= 4
+    assert 'kind="role"' in source
+    assert 'kind="channel"' in source
+    assert 'kind="category"' in source
+    assert source.count("naming_policy=naming_policy") >= 6
+
+
+def test_server_stats_design_names_are_search_safe_before_create_or_refresh() -> None:
+    source = (ROOT / "stoney_verify/security_stats.py").read_text(encoding="utf-8")
+
+    assert "naming_policy = await naming_identity.get_naming_policy(gid)" in source
+    assert source.count("policy_adjusted_name_for_policy(") >= 4
+    assert "_find_owned_category(guild, cfg, naming_policy=naming_policy)" in source
+    assert source.count("naming_policy=naming_policy") >= 8
+    assert "category_name = search_safe_naming.policy_adjusted_name_for_policy(" in source
