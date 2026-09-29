@@ -427,7 +427,7 @@ def _embed(title: str, body: str, member: discord.Member, *, goodbye: bool = Fal
         embed.set_thumbnail(url=member.display_avatar.url)
     except Exception:
         pass
-    embed.set_footer(text="dank_shield:welcome_event:v1")
+    embed.set_footer(text="Member welcome")
     return embed
 
 
@@ -519,7 +519,7 @@ def _member_join_audit_embed(
         embed.set_thumbnail(url=member.display_avatar.url)
     except Exception:
         pass
-    embed.set_footer(text="dank_shield:staff_join_audit:v1")
+    embed.set_footer(text="Staff join audit")
     return embed
 
 
