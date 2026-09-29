@@ -81,19 +81,21 @@ The previously active **COMMUNITY-HUB-COMPLETION-RELIABILITY-014** task is suspe
 
 ## Validation / results
 
-Current implementation is frozen pending exact-head validation after this task-record update.
+Exact-head validation completed successfully on `b4e251d0cd3ae0789911352b592e8d95b995fce9` before this documentation-only update:
+- Dank Shield CI — success;
+- Profile Runtime Diagnostics — success;
+- Community Hub CI — success;
+- Dank Design Regression CI — success;
+- Ticket Owner Emergency Override — success;
+- Application Command Size Diagnostics — success.
 
-Evidence already obtained on superseded implementation heads:
-- Community Hub CI, Dank Design Regression CI, Ticket Owner Emergency Override, Application Command Size Diagnostics, and Profile Runtime Diagnostics passed on the first implementation head.
-- On later heads, Python compile, committed-diff whitespace, managed-category SQL smoke, and claim-first ticket security also passed before those heads were superseded by directly related safety/test refinements.
-- No earlier result is being treated as final exact-head evidence.
+Final pre-documentation compare showed:
+- PR #359 mergeable;
+- branch 26 commits ahead and 0 behind production main `b774ab13f8fba18819f453f165108e6aa1d29e97`;
+- exactly seven task-scoped files changed: ACTIVE_TASK.md, the two Roles & Profiles home routes, the canonical role center, one profile guidance line, the owner-authority contract test, and the dedicated role-editor regression test;
+- no Server Design, AntiNuke implementation, Community Hub, Live Captions, ticket, verification, migration, dependency, or deployment file changes.
 
-Required final evidence:
-- exact-head Dank Shield CI, including full `tests/` suite and standalone tool checks;
-- exact-head Profile Runtime Diagnostics;
-- exact-head Community Hub CI, Dank Design Regression CI, Ticket Owner Emergency Override, and Application Command Size Diagnostics;
-- final compare against current `main` with zero unexpected/behind changes;
-- final PR diff review restricted to this task.
+Because this task-record update changes the branch SHA, all triggered workflows must be green again on the new exact head before merge.
 
 ## Cleanup / conflicts
 
@@ -117,7 +119,7 @@ Required final evidence:
 
 ## Next step
 
-Run every repository workflow against the exact frozen head, inspect any failing job rather than retrying blindly, reconcile current `main` if it advanced, then perform final diff/cleanup review. Keep PR #359 draft until those gates are satisfied.
+Confirm every workflow triggered by this documentation-only final head is green, verify `main` has not advanced, then mark PR #359 ready for merge. Do not merge on stale-head evidence.
 
 ---
 
