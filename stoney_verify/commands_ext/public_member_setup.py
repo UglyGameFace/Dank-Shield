@@ -44,6 +44,10 @@ _DANGEROUS_ACCESS_PERMS: tuple[str, ...] = (
     "manage_messages",
     "mention_everyone",
     "manage_webhooks",
+    "view_audit_log",
+    "manage_nicknames",
+    "manage_events",
+    "manage_threads",
 )
 
 _RECONCILE_LOCKS: weakref.WeakValueDictionary[int, asyncio.Lock] = weakref.WeakValueDictionary()
@@ -830,6 +834,26 @@ class MemberSetupAdminView(discord.ui.View):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
+    @discord.ui.button(label="Use This Channel", emoji="📍", style=discord.ButtonStyle.secondary, row=0)
+    async def use_current_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _staff_authorized(interaction):
+            return
+        guild = interaction.guild
+        channel = interaction.channel
+        if guild is None or not isinstance(channel, discord.TextChannel):
+            return await _reply(interaction, "Run this inside the text channel you want to use for Member Setup.", ok=False)
+        state = await load_guild_setup_state(guild.id, refresh=True)
+        if state.get("gate_active"):
+            return await _reply(interaction, "Suspend Strict Gate before changing its setup channel.", ok=False)
+        await _defer(interaction)
+        state = await configure_guild_setup(
+            guild.id,
+            setup_channel_id=channel.id,
+            actor_id=interaction.user.id,
+        )
+        await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(self.owner_id))
+
     @discord.ui.button(label="Access Role", emoji="🔑", style=discord.ButtonStyle.secondary, row=0)
     async def access_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -884,6 +908,25 @@ class MemberSetupAdminView(discord.ui.View):
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
+
+    @discord.ui.button(label="Clear Prerequisite", emoji="🧹", style=discord.ButtonStyle.secondary, row=1)
+    async def clear_prerequisite(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _staff_authorized(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await _reply(interaction, "This only works inside a server.", ok=False)
+        state = await load_guild_setup_state(guild.id, refresh=True)
+        if state.get("gate_active"):
+            return await _reply(interaction, "Suspend Strict Gate before changing its prerequisite.", ok=False)
+        await _defer(interaction)
+        state = await configure_guild_setup(
+            guild.id,
+            prerequisite_role_id=0,
+            actor_id=interaction.user.id,
+        )
+        await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(self.owner_id))
 
     @discord.ui.button(label="Add Protected Category", emoji="🔒", style=discord.ButtonStyle.secondary, row=1)
     async def add_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
