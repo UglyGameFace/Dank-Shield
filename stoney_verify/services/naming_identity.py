@@ -28,6 +28,7 @@ from stoney_verify.services import server_design_studio as design
 
 NAMING_IDENTITY_CONFIG_KEY = "naming_identity_v1"
 NAMING_IDENTITY_VERSION = 1
+UNSUPPORTED_VERSION_KEY = "_unsupported_version"
 NAMING_MODE_PRESERVE = "preserve"
 NAMING_MODE_SEARCH_SAFE = "search_safe"
 NAMING_MODES = {NAMING_MODE_PRESERVE, NAMING_MODE_SEARCH_SAFE}
@@ -53,6 +54,47 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(str(value).strip())
     except Exception:
         return int(default)
+
+
+class UnsupportedNamingIdentityVersion(RuntimeError):
+    pass
+
+
+def _source_version(value: Any) -> int:
+    if not isinstance(value, Mapping):
+        return NAMING_IDENTITY_VERSION
+    raw = value.get("version")
+    if raw is None:
+        return NAMING_IDENTITY_VERSION
+    version = _safe_int(raw, NAMING_IDENTITY_VERSION)
+    return version if version > 0 else NAMING_IDENTITY_VERSION
+
+
+def _unsupported_state(version: int) -> dict[str, Any]:
+    return {
+        "version": int(version),
+        UNSUPPORTED_VERSION_KEY: True,
+        "policy": _normalize_policy({}),
+        "records": {},
+    }
+
+
+def _is_unsupported_state(value: Any) -> bool:
+    return bool(
+        isinstance(value, Mapping)
+        and (
+            bool(value.get(UNSUPPORTED_VERSION_KEY))
+            or _source_version(value) > NAMING_IDENTITY_VERSION
+        )
+    )
+
+
+def _require_supported_state(value: Any) -> None:
+    if _is_unsupported_state(value):
+        raise UnsupportedNamingIdentityVersion(
+            f"naming identity schema v{_source_version(value)} is newer than "
+            f"runtime v{NAMING_IDENTITY_VERSION}"
+        )
 
 
 def _resource_key(kind: str, resource_id: Any) -> str:
@@ -129,6 +171,9 @@ def _empty_state() -> dict[str, Any]:
 
 def _normalize_state(value: Any) -> dict[str, Any]:
     source = value if isinstance(value, Mapping) else {}
+    version = _source_version(source)
+    if version > NAMING_IDENTITY_VERSION:
+        return _unsupported_state(version)
     records_raw = source.get("records") if isinstance(source, Mapping) else {}
     records: dict[str, dict[str, Any]] = {}
     if isinstance(records_raw, Mapping):
@@ -171,7 +216,10 @@ def _normalize_state(value: Any) -> dict[str, Any]:
 
 
 def naming_policy(state: Mapping[str, Any] | None) -> dict[str, Any]:
-    return dict(_normalize_state(state).get("policy") or _normalize_policy({}))
+    normalized = _normalize_state(state)
+    if _is_unsupported_state(normalized):
+        return _normalize_policy({})
+    return dict(normalized.get("policy") or _normalize_policy({}))
 
 
 async def get_naming_policy(guild_id: Any) -> dict[str, Any]:
@@ -191,6 +239,7 @@ async def set_naming_mode(guild_id: Any, mode: str) -> dict[str, Any]:
 
     state = await _load_state(gid)
     updated = _normalize_state(state)
+    _require_supported_state(updated)
     policy = naming_policy(updated)
     policy["mode"] = clean_mode
     updated["policy"] = policy
@@ -208,6 +257,7 @@ def remember_alias(
 ) -> dict[str, Any]:
     """Pure bounded-state update used by the runtime and regression tests."""
     result = _normalize_state(state)
+    _require_supported_state(result)
     key = _resource_key(kind, resource_id)
     clean_alias = semantic_key(alias)
     if not key or not clean_alias:
@@ -247,6 +297,7 @@ def forget_resource(
     resource_id: Any,
 ) -> dict[str, Any]:
     result = _normalize_state(state)
+    _require_supported_state(result)
     key = _resource_key(kind, resource_id)
     records = dict(result.get("records") or {})
     if key:
@@ -265,6 +316,8 @@ def aliases_for(
     resource_id: Any,
 ) -> tuple[str, ...]:
     normalized = _normalize_state(state)
+    if _is_unsupported_state(normalized):
+        return ()
     record = (normalized.get("records") or {}).get(_resource_key(kind, resource_id), {})
     if not isinstance(record, Mapping):
         return ()
@@ -320,6 +373,7 @@ async def _load_state(guild_id: int) -> dict[str, Any]:
 async def _persist_state(guild_id: int, state: Mapping[str, Any]) -> None:
     gid = int(guild_id)
     normalized = _normalize_state(state)
+    _require_supported_state(normalized)
     from stoney_verify.guild_config import upsert_guild_config
 
     saved = await upsert_guild_config(
@@ -445,6 +499,14 @@ async def _debounced_flush(guild_id: int) -> None:
             await _persist_state(gid, updated)
     except asyncio.CancelledError:
         raise
+    except UnsupportedNamingIdentityVersion as exc:
+        try:
+            print(
+                "⚠️ naming_identity write blocked by newer schema "
+                f"guild={gid} error={exc}"
+            )
+        except Exception:
+            pass
     except Exception as exc:
         _requeue_failed_flush(gid, pending_aliases, pending_deletes)
         try:
@@ -752,6 +814,7 @@ def install_naming_identity_runtime(bot: Any) -> bool:
 
 
 __all__ = [
+    "UnsupportedNamingIdentityVersion",
     "MAX_ALIASES_PER_RESOURCE",
     "MAX_CACHED_GUILDS",
     "MAX_TRACKED_RESOURCES",
