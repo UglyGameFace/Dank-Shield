@@ -618,3 +618,71 @@ def test_public_diagnostics_exposes_naming_runtime_metrics() -> None:
 
     assert 'name="Search-Safe Naming Runtime"' in source
     assert "naming_observability.snapshot()" in source
+
+
+def test_prune_missing_resources_removes_only_dead_identity_records(monkeypatch) -> None:
+    live_role = _FakeResource(1, "Verified")
+    live_channel = _FakeResource(2, "general")
+    guild = _FakeGuild(roles=[live_role], channels=[live_channel])
+
+    state = naming_identity.remember_alias(
+        {},
+        kind="role",
+        resource_id=1,
+        alias="member",
+        updated_at=1.0,
+    )
+    state = naming_identity.remember_alias(
+        state,
+        kind="role",
+        resource_id=99,
+        alias="deleted-role",
+        updated_at=2.0,
+    )
+    state = naming_identity.remember_alias(
+        state,
+        kind="channel",
+        resource_id=2,
+        alias="chat",
+        updated_at=3.0,
+    )
+    state = naming_identity.remember_alias(
+        state,
+        kind="channel",
+        resource_id=88,
+        alias="deleted-channel",
+        updated_at=4.0,
+    )
+    saved: list[dict[str, object]] = []
+
+    async def fake_mutate(_guild_id: int, transform, **_kwargs):
+        updated = transform(state)
+        saved.append(updated)
+        return updated
+
+    monkeypatch.setattr(naming_identity, "_mutate_state_cas", fake_mutate)
+    naming_observability._reset_for_tests()  # noqa: SLF001
+
+    removed = asyncio.run(naming_identity.prune_missing_resources(guild))
+
+    assert removed == 2
+    assert len(saved) == 1
+    assert naming_identity.aliases_for(saved[0], kind="role", resource_id=1) == ("member",)
+    assert naming_identity.aliases_for(saved[0], kind="channel", resource_id=2) == ("chat",)
+    assert naming_identity.aliases_for(saved[0], kind="role", resource_id=99) == ()
+    assert naming_identity.aliases_for(saved[0], kind="channel", resource_id=88) == ()
+    assert naming_observability.snapshot()["resource_pruned"] == 2
+
+
+def test_stale_record_cleanup_is_on_demand_not_startup_sweep() -> None:
+    identity = (
+        ROOT / "stoney_verify/services/naming_identity.py"
+    ).read_text(encoding="utf-8")
+    ui = (
+        ROOT / "stoney_verify/commands_ext/public_search_safe_naming.py"
+    ).read_text(encoding="utf-8")
+
+    assert "await naming_identity.prune_missing_resources(guild)" in ui
+    install_start = identity.index("def install_naming_identity_runtime")
+    install_block = identity[install_start:]
+    assert "prune_missing_resources(" not in install_block
