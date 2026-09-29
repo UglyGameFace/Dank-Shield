@@ -421,7 +421,7 @@ def member_review_status(
         "pending_sections": pending_sections,
         "pending_section_revisions": pending_latest,
         "severity": severity,
-        "is_current": not pending_sections and completed_revision >= current_revision,
+        "is_current": not pending_sections,
         "first_time": first_time,
         "access_gated": (
             bool(guild.get("enabled", False))
