@@ -94,52 +94,68 @@ Validation evidence:
 - focused Search-Safe hierarchy regressions passed;
 - Dank Design Regression CI, Application Command Size Diagnostics, Schema Authority SQL, Ticket Owner Emergency Override, and Profile Runtime Diagnostics all passed.
 
-## Current implementation focus: P1 Dank Design ↔ Search-Safe authority consistency
+## Completed remediation slice: P1 Dank Design ↔ Search-Safe authority consistency
 
-Root causes:
-- the production Dank Design preview/apply paths did not consume the existing Search-Safe plan-normalization helper;
-- a preview could therefore display a styled channel target while an enabled Search-Safe gateway listener normalized the live result after Apply;
-- direct Rename could save a literal styled exact-name rule that disagreed with the active Search-Safe policy;
-- Undo could restore a Search-Safe-invalid styled-letter target and then be immediately contradicted by policy enforcement;
-- a naming-policy change between Preview and Apply/Undo was not part of preview staleness validation.
+The first P1 integration slice is repaired and validated.
+
+Implemented:
+- reviewed Dank Design previews normalize final channel names through the active Search-Safe policy before the admin reviews them;
+- every active V2 and surviving legacy reviewed preview producer stores a naming-policy snapshot;
+- Apply fails closed before any Discord rename when that policy changed after Preview;
+- direct Rename computes the Search-Safe effective name before Discord mutation and persists the actual final live name as the exact-name rule;
+- direct-Rename rollback also respects the current naming policy;
+- Undo previews effective restore targets under the current policy and rechecks that policy before mutation;
+- Search-Safe-adjusted Undo restores searchable letters instead of intentionally reintroducing styled compatibility letters while the policy is enabled.
+
+Validation evidence:
+- exact head `314f911757531e8cd4f3e5af074cd98427c937ec` completed all six triggered workflows successfully;
+- full Python compile/unit suite passed;
+- Dank Design Regression CI, Application Command Size Diagnostics, Profile Runtime Diagnostics, Schema Authority SQL, and the unrelated security workflows all passed;
+- source sweep confirmed every active reviewed `_store_pending()` producer stores `naming_policy`;
+- branch was 0 behind production `main` at that checkpoint.
+
+## Current implementation focus: P1 internal mutation double-PATCH elimination
+
+Root cause:
+- several Dank Shield-owned mutation paths could accept or generate styled role/channel names, write those names to Discord, and rely on the Search-Safe gateway listener to issue a second PATCH immediately afterward;
+- that wastes Discord API budget, creates brief preview/live-name disagreement, and increases race surface at public scale.
 
 Implementation now on branch `audit/search-safe-master-remediation-20260929`:
-- added stable naming-policy fingerprints and policy snapshot comparison helpers;
-- added `normalize_design_plan_for_guild()` so reviewed Design previews render the final names permitted by the current Search-Safe policy;
-- every active V2 reviewed preview producer now stores the naming-policy snapshot with its pending preview: Server Design, separator-only change, and Smart Repair;
-- surviving legacy exact-item/scoped/separator preview producers do the same before handing off to the consolidated Apply owner;
-- reviewed Apply reloads the current naming policy and fails closed before any Discord mutation if the policy differs from the preview snapshot;
-- direct Rename computes the Search-Safe effective name before the Discord PATCH and persists the actual final live name as the exact-name rule;
-- direct-Rename rollback also respects the current Search-Safe policy rather than deliberately restoring a policy-invalid styled-letter channel name;
-- Undo loads the current naming policy, previews effective restore targets under that policy, and rechecks the policy before mutation;
-- when Search-Safe is enabled, Undo may preserve decoration while restoring ordinary searchable letters instead of reintroducing styled compatibility letters;
-- focused regressions cover policy-bound plan normalization, stale-policy detection, effective Undo targets, Preserve mode, all active preview producers, and direct Rename ordering.
+- canonical `/role` create, edit-appearance, and duplicate paths compute the policy-permitted role name immediately before the Discord mutation;
+- Channel Builder loads the guild naming policy once per plan execution, applies it to arbitrary create/rename names, and reports requested versus effective names when Search-Safe adjusted them;
+- Setup Assistant loads the naming policy once per repair operation and applies it to custom role, category, text-channel, and voice-channel names before lookup/create;
+- Server Stats loads one policy snapshot per enable/refresh/disable operation, applies Search-Safe to Design-synced stat channel names and category names, and recognizes both legacy styled and current effective names during ownership discovery;
+- fixed canonical names that are already searchable, such as ticket channels, verification defaults, Member Access, and live-captions, are intentionally not given redundant policy reads.
+
+Focused regressions now assert:
+- all three Role Editor naming mutations invoke Search-Safe before Discord;
+- Channel Builder uses one policy snapshot and one effective-name calculation per row;
+- Setup Assistant applies one policy snapshot across its custom-name repair batch;
+- Server Stats uses policy-adjusted discovery/create/refresh names.
 
 ## Validation / results
 
-Current P1 implementation head before this task-record update: `56256e36119beabf18ab86639813235b3de70885`.
+Current implementation head before this task-record update: `eb3f84280c76d1164ac436ddebdb539ab9c186b9`.
 
-Validation for this P1 slice is **pending on the final exact head that includes this task record**. Do not treat the earlier P0-green head as proof for these changes.
-
-Required closure evidence:
-- exact-head compile and full Python test suite;
-- Dank Design focused regression workflow;
-- Application Command Size Diagnostics and Profile Runtime Diagnostics;
-- final source sweep showing every active reviewed `_store_pending()` producer stores `naming_policy`;
-- no active `UndoConfirmView` construction missing the policy snapshot;
-- branch remains 0 behind production `main`.
+This slice is **pending exact-head validation**. No completion claim is permitted until the final task-record head passes:
+- full Python compile/unit suite;
+- Dank Design Regression CI;
+- Application Command Size Diagnostics;
+- Profile Runtime Diagnostics;
+- Schema Authority SQL and the PostgreSQL guild-config race smoke test;
+- focused Search-Safe regressions;
+- branch ancestry check showing 0 behind production `main`.
 
 ## Cleanup / conflicts
 
-- canonical `guild_config` remains the only application-side guild config owner.
-- `role_mutation_authority.py` remains the shared human role-mutation authority primitive.
-- Search-Safe policy is the final authority over searchable role/channel letter glyphs when enabled; Dank Design remains the visual styling/rule owner for decoration, categories, and policy-permitted names.
-- old pending Design previews created without a naming-policy snapshot intentionally fail closed and require a fresh preview.
-- do not begin footer/UI cleanup while P1 reliability/integration findings remain active.
+- Search-Safe remains the final live-letter policy authority when enabled.
+- Dank Design, Role Editor, Setup Assistant, Channel Builder, and Server Stats keep their own feature responsibilities; they consume Search-Safe policy rather than duplicating its Unicode logic.
+- batch operations deliberately load one policy snapshot instead of performing one guild-config read per resource.
+- automatic gateway enforcement remains as a safety net for external/manual Discord edits and any future mutation path not yet policy-aware; it should no longer be the normal second step for the production paths above.
+- do not begin P2 footer/Member Setup cleanup while P1 reliability/concurrency findings remain active.
 
 ## Remaining P1 backlog inside this same master audit
 
-- wire Search-Safe policy adjustment into additional Dank Shield-owned role/channel creation and edit paths so internal actions do not intentionally create a styled name and then require a second gateway PATCH;
 - repair naming resource-lock lifecycle so queued waiters cannot split onto a second lock;
 - preserve semantic alias chronology during rapid rename debounce;
 - retry/retain pending alias/delete persistence on durable config failure;
@@ -150,6 +166,10 @@ Required closure evidence:
 - fix alias autocomplete priority when an exact previous alias competes with partial live-name matches;
 - harden cross-process naming-policy/cache behavior;
 - integrate Search-Safe repair with a proven aggregate Discord API pacing owner.
+
+## Next step
+
+Run exact-head CI for the internal-mutation Search-Safe wiring. If green, advance to the naming resource-lock lifecycle race. Do not start P2 cleanup early.
 
 ## P2 backlog inside this same master audit
 
