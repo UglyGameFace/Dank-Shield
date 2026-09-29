@@ -62,6 +62,8 @@ def test_direct_production_footers_do_not_embed_debug_tokens_or_raw_ids() -> Non
 def test_welcome_and_verification_emit_human_footers_with_legacy_compatibility() -> None:
     welcome = (PACKAGE / "welcome_message.py").read_text(encoding="utf-8")
     verify = (PACKAGE / "verify_ui.py").read_text(encoding="utf-8")
+    basic_modes = (PACKAGE / "setup_engine/verification_modes.py").read_text(encoding="utf-8")
+    basic_verify = (PACKAGE / "verification_new/basic_verify.py").read_text(encoding="utf-8")
 
     assert 'WELCOME_FOOTER = "Welcome • start here"' in welcome
     assert 'LEGACY_WELCOME_FOOTERS = ("dank_shield:welcome_message:v1",)' in welcome
@@ -70,6 +72,10 @@ def test_welcome_and_verification_emit_human_footers_with_legacy_compatibility()
     assert 'VERIFY_UI_FOOTER = "Verification • secure access"' in verify
     assert 'LEGACY_VERIFY_UI_FOOTERS = ("stoney_verify:verify_ui:v9",)' in verify
     assert "any(marker in footer_text for marker in LEGACY_VERIFY_UI_FOOTERS)" in verify
+
+    assert 'BASIC_VERIFY_FOOTER = "Dank Shield Basic Verify"' in basic_modes
+    assert 'LEGACY_BASIC_VERIFY_FOOTERS = ("dank_shield:basic_verify:v1",)' in basic_modes
+    assert "LEGACY_BASIC_VERIFY_FOOTERS" in basic_verify
 
 
 def test_spamguard_incident_footer_uses_durable_message_ownership_not_visible_ids() -> None:
@@ -104,6 +110,7 @@ def test_live_profile_footer_hides_ids_but_keeps_legacy_parser() -> None:
 
 def test_ticket_runtime_markers_are_human_readable_with_legacy_aliases() -> None:
     source = (PACKAGE / "transcripts.py").read_text(encoding="utf-8")
+    new_service = (PACKAGE / "tickets_new/transcript_service.py").read_text(encoding="utf-8")
 
     assert '_OPEN_CONTROLS_MARKER = "Ticket controls"' in source
     assert '_STAFF_CLOSED_MARKER = "Ticket closed by staff"' in source
@@ -111,3 +118,29 @@ def test_ticket_runtime_markers_are_human_readable_with_legacy_aliases() -> None
     assert '_TRANSCRIPT_POSTED_MARKER = "Transcript posted"' in source
     assert "_LEGACY_MARKERS" in source
     assert '"stoney_verify:open_controls:v5"' in source
+    assert '_TRANSCRIPT_MARKER = "Transcript posted"' in new_service
+
+
+def test_known_developer_footer_phrases_are_removed() -> None:
+    forbidden = {
+        "welcome_card_studio_ui.py": (
+            "canonical live runtime",
+            "Preview fallback • dank_shield:welcome_card_runtime:v1",
+        ),
+        "exit_card_studio_ui.py": ("dank_shield:exit_card_runtime:v1",),
+        "commands_ext/public_diagnostics_group.py": (
+            "diagnostics are per-process, per-guild",
+        ),
+        "commands_ext/public_modlog_group.py": ("Uses existing modlog_channel_id.",),
+        "commands_ext/public_protection_center.py": ("overlapping config bucket",),
+        "commands_ext/public_setup_group.py": ("config source:",),
+    }
+
+    failures: list[str] = []
+    for relative, phrases in forbidden.items():
+        source = (PACKAGE / relative).read_text(encoding="utf-8")
+        for phrase in phrases:
+            if phrase in source:
+                failures.append(f"{relative}: {phrase}")
+
+    assert failures == []
