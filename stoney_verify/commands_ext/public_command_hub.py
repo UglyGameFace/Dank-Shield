@@ -275,11 +275,9 @@ class DankHomeView(_OwnedView):
         button: discord.ui.Button,
     ) -> None:
         _ = button
-        if not _admin_or_manage(interaction):
-            return await open_profile_entry(interaction)
-        from .public_self_roles_group import _post_profile_builder
+        from .public_role_center import open_roles_profiles_center
 
-        await _post_profile_builder(interaction, title="Profile Panel")
+        await open_roles_profiles_center(interaction)
 
     @discord.ui.button(
         label="Logs & Activity",
