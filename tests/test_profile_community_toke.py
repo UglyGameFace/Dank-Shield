@@ -95,7 +95,7 @@ def test_toke_allowed_mentions_only_serializes_selected_role() -> None:
     role = discord.Object(id=123456789012345678)
     payload = public_toke._toke_allowed_mentions(role).to_dict()
 
-    assert payload.get("roles") == ["123456789012345678"]
+    assert payload.get("roles") == [123456789012345678]
     assert "everyone" not in payload.get("parse", [])
     assert "users" not in payload.get("parse", [])
     assert payload.get("replied_user") is not True
