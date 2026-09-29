@@ -105,6 +105,40 @@ def test_search_safe_policy_survives_bounded_alias_updates() -> None:
     assert naming_identity.naming_policy(state)["mode"] == naming_identity.NAMING_MODE_SEARCH_SAFE
 
 
+def test_policy_boolean_strings_are_parsed_instead_of_python_truthiness() -> None:
+    policy = naming_identity.naming_policy(
+        {
+            "policy": {
+                "mode": naming_identity.NAMING_MODE_SEARCH_SAFE,
+                "roles": "false",
+                "channels": "0",
+                "categories": "true",
+            }
+        }
+    )
+
+    assert policy["mode"] == naming_identity.NAMING_MODE_SEARCH_SAFE
+    assert policy["roles"] is False
+    assert policy["channels"] is False
+    assert policy["categories"] is True
+
+
+def test_unknown_policy_boolean_values_fall_back_to_safe_defaults() -> None:
+    policy = naming_identity.naming_policy(
+        {
+            "policy": {
+                "roles": "definitely",
+                "channels": 9,
+                "categories": "maybe",
+            }
+        }
+    )
+
+    assert policy["roles"] is True
+    assert policy["channels"] is True
+    assert policy["categories"] is False
+
+
 def test_unknown_policy_mode_fails_closed_to_preserve() -> None:
     policy = naming_identity.naming_policy({"policy": {"mode": "surprise-mode"}})
     assert policy["mode"] == naming_identity.NAMING_MODE_PRESERVE
