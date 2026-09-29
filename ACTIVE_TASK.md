@@ -187,41 +187,90 @@ The remaining Search-Safe/runtime P1 findings have now been implemented on this 
 
 Focused regressions now cover the lock lifecycle, alias chronology/retry/priority, future schema protection, Unicode scope, immutable reviewed batches, shared Design/Search-Safe locking, REST pacing ownership, fresh policy reads, nested CAS conflict replay, strict booleans, and shutdown flush behavior.
 
-## Current validation gate
+## P2 implementation complete — final exact-head re-audit pending
 
-P1 implementation is frozen for one exact-head validation pass.
+### Member Setup clarity
 
-Required before P2 implementation:
-- branch remains 0 behind production `main`;
-- full Python compile/unit suite passes;
+The Member Setup gate engine itself was left unchanged. The admin UX now explains its existing semantics explicitly:
+
+- **Eligibility prerequisite (optional):** a role such as Verified that the member must already have; Dank Shield does not grant this role.
+- **Member Access role (automatic):** the role Dank Shield grants/removes after an eligible member completes the current setup revision.
+- the manager shows the complete rule chain before Strict Gate activation:
+  **Eligibility → Complete Member Setup → Member Access → Protected Categories**;
+- protected-category visibility, revision IDs, prerequisite/access role IDs, strict-gate reconciliation, guild isolation, and existing member completion state were not redefined;
+- focused regression coverage protects the wording and the four-step relationship from collapsing back into two ambiguous role pickers.
+
+### Global production footer cleanup
+
+The requested global footer audit was completed as an inventory-first production pass.
+
+Removed or rewritten from live member/admin UI:
+- raw guild/channel IDs used only as debug/footer metadata;
+- `config source` and internal config-key wording such as `modlog_channel_id`;
+- `canonical live runtime`, runtime/schema/version labels, and internal service/monitor language;
+- visible `dank_shield:...` and `stoney_verify:...` machine tokens;
+- internal Community Hub session/version footer metadata;
+- raw live-profile user/trigger identifiers;
+- Spam Guard panel `page=...` runtime markers;
+- Spam Guard quarantine case/guild/user footer identifiers;
+- ticket/transcript runtime marker strings.
+
+Preserved or standardized:
+- safety warnings such as “preview only,” “nothing was changed,” or confirmation requirements;
+- pagination/counts;
+- action guidance and destination context;
+- useful audit labels such as Webhook audit, Emoji audit, Scheduled event audit, Automod audit;
+- user-facing product/navigation labels.
+
+Persistent/runtime compatibility was preserved rather than sacrificed for cosmetics:
+- old Welcome, Basic Verify, ticket/transcript, live-profile, Spam Guard panel, and Spam Guard incident marker strings remain recognized as **legacy detection inputs only**;
+- new Basic Verify panels use `Dank Shield Basic Verify`;
+- new ticket/transcript controls use human-readable marker labels;
+- new live-profile cards use `Dank Shield live profile` with durable state as the ownership source;
+- new Spam Guard panels use `Spam Guard • <Page>`;
+- Spam Guard incident restore resolves the durable quarantine case from `modlog_message_id` first and falls back to parsing the old encoded footer only for already-posted legacy cards.
+
+Dedicated footer regression coverage now:
+- scans production footer calls for raw `Guild {id}` leakage;
+- rejects known debug/footer phrases;
+- verifies human-readable current runtime markers plus backward legacy detection for persistent surfaces.
+
+## Final validation / re-audit gate
+
+Implementation changes are now frozen except for concrete validation failures.
+
+Required before this master remediation can be considered complete:
+- branch ancestry remains clean and 0 behind production `main`;
+- exact-head full Python compile/unit suite passes;
 - Dank Design Regression CI passes;
-- Application Command Size Diagnostics and Profile Runtime Diagnostics pass;
-- Schema Authority SQL and the real PostgreSQL sparse-write/clear/CAS smoke tests pass;
-- no exact-head workflow failure remains.
+- Application Command Size Diagnostics passes;
+- Profile Runtime Diagnostics passes;
+- Schema Authority SQL passes;
+- real PostgreSQL sparse write/clear/CAS smoke checks pass;
+- Ticket Owner Emergency Override and other triggered security regressions remain green;
+- final changed-file/diff review finds no unrelated task contamination or duplicate authority owners;
+- final 100-point audit ledger is updated to PASS / NEEDS HARDENING / N/A with unresolved findings explicitly listed;
+- Supabase migration deployment is observed after merge;
+- Discloud production startup is observed after merge;
+- live canary confirms Search-Safe reviewed repair, styled-role lookup, Member Setup manager wording, Design preview/apply/Undo consistency, and representative cleaned footers;
+- no production-complete claim is made before deployment/canary evidence exists.
 
-Do not use earlier green SHAs as proof for the current head.
+## Remaining non-blocking product/observability findings to classify in the final ledger
 
-## Next implementation focus after a green head: P2 production UX cleanup
-
-1. **Member Setup Access Role / Prerequisite Role clarity**
-   - present the flow as **Eligibility → Complete Member Setup → Member Access → Protected Categories**;
-   - label Prerequisite Role as an optional eligibility requirement such as Verified;
-   - label Member Access Role as the role Dank Shield grants/removes automatically to control protected category visibility;
-   - show the resulting rule chain before Strict Gate activation;
-   - preserve existing IDs, gate semantics, and guild isolation.
-
-2. **Global footer cleanup**
-   - inventory all live production `set_footer()` owners;
-   - remove/rewrite debug/operator metadata from member/admin UI, including raw guild IDs, config sources, runtime/schema identifiers, monitor/service names, internal implementation labels, and `dank_shield:...` tokens;
-   - preserve genuinely useful safety guidance, pagination, counts, confirmation semantics, and concise action guidance;
-   - standardize surviving footers so the product reads consistently across Setup, Member Setup, Role Editor, Server Design, verification, tickets, Community Hub, profiles, welcome/exit cards, diagnostics, and persistent tools;
-   - historical fixtures/tools are not production UI unless runtime ownership proves otherwise.
-
-3. Then finish remaining P2 observability/product findings and the final 100-point re-audit, migration deployment proof, Discloud startup validation, and live canary/soak evidence.
+These must be classified in the final re-audit rather than silently forgotten:
+- naming metrics/operational visibility for semantic/alias resolutions, automatic changes, reviewed repair changes, blocked/failed mutations, config writes, and pruning;
+- channel semantic lookup/product integration if the existing channel autocomplete helper remains unused;
+- eventual stale deleted-resource identity cleanup across downtime;
+- automatic enforcement failure visibility;
+- mobile/live canary for the intentional `/role` option schema change from Discord Role to semantic string autocomplete;
+- autocomplete privacy behavior for guilds with sensitive role naming;
+- normalized-name collision preview;
+- preview/name-length consistency;
+- searchability-versus-mentionability explanation.
 
 ## Next step
 
-Run exact-head validation once. If green, begin Member Setup clarity immediately, then the global footer cleanup. If a workflow fails, fix only the concrete regression and rerun from the new exact head.
+Run the final exact-head validation and re-audit once. Fix only concrete regressions found by that pass. If the branch is green and the ledger has no unresolved merge blocker, prepare PR #363 for merge; then require migration deployment, Discloud startup, and live canary evidence before marking the master task production-complete.
 
 ## Prior merged task record: SEARCH-SAFE-NAMING-017
 
