@@ -552,6 +552,41 @@ async def get_effective_profile_settings(guild_id: int, user_id: int) -> dict[st
     }
 
 
+async def list_profile_guild_settings(
+    guild_id: int,
+    *,
+    page_size: int = 500,
+) -> list[dict[str, Any]]:
+    """Read all per-member settings rows for one guild with bounded PostgREST paging."""
+    gid = int(guild_id)
+    size = max(50, min(int(page_size or 500), 1000))
+
+    def read_all(client: Any):
+        rows: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            response = (
+                client.table(PROFILE_GUILD_SETTINGS_TABLE)
+                .select("guild_id,user_id,settings")
+                .eq("guild_id", str(gid))
+                .order("user_id")
+                .range(offset, offset + size - 1)
+                .execute()
+            )
+            page = [
+                dict(row)
+                for row in (getattr(response, "data", None) or [])
+                if isinstance(row, Mapping)
+            ]
+            rows.extend(page)
+            if len(page) < size:
+                break
+            offset += size
+        return rows
+
+    return list(await _execute(f"list profile guild settings {gid}", read_all) or [])
+
+
 async def upsert_profile_guild_namespace(
     guild_id: int,
     user_id: int,
