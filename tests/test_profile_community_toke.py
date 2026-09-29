@@ -185,6 +185,6 @@ def test_stoner_is_profile_identity_but_sesh_subscription_is_not() -> None:
 
 
 def test_cheers_card_is_response_only_and_has_one_button() -> None:
-    view = public_toke.TokeCheersView(starter_id=123)
+    view = public_toke.TokeCheersView(starter_id=123, stoner_role_id=456)
     assert _labels(view) == {"Cheers"}
     assert len(view.children) == 1
