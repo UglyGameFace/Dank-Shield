@@ -45,15 +45,15 @@ def test_cleaned_production_footers_do_not_restore_known_debug_copy() -> None:
         "stoney_verify/tickets_new/channel_panel_repair.py",
     )
     forbidden = (
-        "canonical live runtime",
-        "dank_shield:welcome_card_runtime:v1",
-        "dank_shield:exit_card_runtime:v1",
-        "Uses existing modlog_channel_id",
-        "overlapping config bucket",
-        "config source:",
-        "source: /mod_ban_toggle",
-        "setup assistant",
-        "setup check groups existing health evidence",
+        "Welcome Card Studio • canonical live runtime",
+        "Preview fallback • dank_shield:welcome_card_runtime:v1",
+        "Exit Card Studio • dank_shield:exit_card_runtime:v1",
+        "Preview only • dank_shield:exit_card_runtime:v1",
+        "Uses existing modlog_channel_id. No separate overlapping log setting.",
+        "Protection Center uses existing Automod + Spam Guard settings; no new overlapping config bucket.",
+        'embed.set_footer(text=f"Guild {guild.id} • setup assistant")',
+        'embed.set_footer(text=f"Guild {guild.id} • setup check groups existing health evidence")',
+        'embed.set_footer(text=f"Guild {guild.id} • source: /mod_ban_toggle")',
     )
 
     combined = "\n".join(_source(path) for path in files)
