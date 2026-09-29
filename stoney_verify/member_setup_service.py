@@ -122,7 +122,10 @@ def default_guild_setup_state() -> dict[str, Any]:
         "prerequisite_role_id": "",
         "protected_category_ids": [],
         "gate_active": False,
+        "gate_transition": "",
         "gate_snapshot": {},
+        "grandfather_revision": 0,
+        "grandfather_before": "",
         "current_revision": 0,
         "history": [],
     }
@@ -152,8 +155,12 @@ def normalize_guild_setup_state(value: Any) -> dict[str, Any]:
                 category_ids.append(str(cid))
     state["protected_category_ids"] = category_ids[:100]
     state["gate_active"] = bool(raw.get("gate_active", False))
+    transition = str(raw.get("gate_transition") or "").strip().lower()
+    state["gate_transition"] = transition if transition in {"activating", "suspending"} else ""
     snapshot = raw.get("gate_snapshot")
     state["gate_snapshot"] = dict(snapshot) if isinstance(snapshot, Mapping) else {}
+    state["grandfather_revision"] = max(0, _safe_int(raw.get("grandfather_revision"), 0))
+    state["grandfather_before"] = _clean_text(raw.get("grandfather_before"), 80)
     state["current_revision"] = max(0, _safe_int(raw.get("current_revision"), 0))
 
     history: list[dict[str, Any]] = []
@@ -225,7 +232,10 @@ async def configure_guild_setup(
     prerequisite_role_id: Optional[int] = None,
     protected_category_ids: Optional[list[int]] = None,
     gate_active: Optional[bool] = None,
+    gate_transition: Optional[str] = None,
     gate_snapshot: Optional[Mapping[str, Any]] = None,
+    grandfather_revision: Optional[int] = None,
+    grandfather_before: Optional[str] = None,
     actor_id: int = 0,
 ) -> dict[str, Any]:
     state = await load_guild_setup_state(int(guild_id), refresh=True)
@@ -255,8 +265,17 @@ async def configure_guild_setup(
         ][:100]
     if gate_active is not None:
         state["gate_active"] = bool(gate_active)
+    if gate_transition is not None:
+        clean_transition = str(gate_transition or "").strip().lower()
+        if clean_transition not in {"", "activating", "suspending"}:
+            raise ValueError("Unknown Member Setup gate transition.")
+        state["gate_transition"] = clean_transition
     if gate_snapshot is not None:
         state["gate_snapshot"] = dict(gate_snapshot)
+    if grandfather_revision is not None:
+        state["grandfather_revision"] = max(0, int(grandfather_revision))
+    if grandfather_before is not None:
+        state["grandfather_before"] = _clean_text(grandfather_before, 80)
     return await save_guild_setup_state(
         int(guild_id),
         state,
