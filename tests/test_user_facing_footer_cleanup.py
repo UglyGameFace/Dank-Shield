@@ -83,7 +83,7 @@ def test_basic_verify_uses_human_footer_and_keeps_legacy_detection() -> None:
 def test_spam_guard_incident_and_panel_footers_are_human_readable() -> None:
     source = _source("stoney_verify/spam_guard.py")
 
-    assert 'return "SpamGuard quarantine • use Restore Member to reverse this action"' in source
+    assert 'return "Spam Guard incident • restore available"' in source
     assert "get_quarantine_case_by_modlog_message(" in source
     assert 'SPAM_PANEL_PUBLIC_PREFIX = "Spam Guard •"' in source
     assert "SPAM_PANEL_PUBLIC_PREFIX in footer" in source
