@@ -186,3 +186,18 @@ def test_beta_guild_sync_default_is_normalized_without_overriding_explicit_choic
     monkeypatch.setenv("DANK_SYNC_BETA_GUILD_COMMANDS", "true")
     normalize_command_runtime_env()
     assert os.environ["DANK_SYNC_BETA_GUILD_COMMANDS"] == "true"
+
+
+def test_bot_close_flushes_naming_identity_before_discord_shutdown() -> None:
+    source = (
+        ROOT / "stoney_verify/command_runtime.py"
+    ).read_text(encoding="utf-8")
+
+    close_start = source.index("async def close(self)")
+    setup_start = source.index("async def setup_hook(self)", close_start)
+    close_block = source[close_start:setup_start]
+
+    assert "flush_pending_naming_identity" in close_block
+    assert close_block.index("await flush_pending_naming_identity()") < close_block.index(
+        "await super().close()"
+    )
