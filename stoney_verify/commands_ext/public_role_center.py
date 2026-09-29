@@ -533,7 +533,7 @@ def _center_embed(*, staff: bool, role_manager: bool, setup_manager: bool) -> di
     )
     embed.add_field(
         name="Your profile",
-        value="🪪 **My Profile** • 🎭 **Profile Tags & Cosmetics**",
+        value="🪪 **My Profile** • 🎭 **Profile Tags & Cosmetics** • 🌿 **Community & Pings**",
         inline=False,
     )
     if staff:
@@ -680,6 +680,12 @@ class RolesProfilesView(_OwnedView):
         from .public_self_roles_group import _open_profile_cosmetics
 
         await _open_profile_cosmetics(interaction, guild, member)
+
+    @discord.ui.button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.secondary, row=0)
+    async def community_pings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_toke import open_member_community_pings
+        await open_member_community_pings(interaction)
 
     @discord.ui.button(label="Member Role Manager", emoji="👥", style=discord.ButtonStyle.secondary, row=1)
     async def member_roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
