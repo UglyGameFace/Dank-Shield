@@ -683,4 +683,135 @@ class RolesProfilesView(_OwnedView):
     @discord.ui.button(label="Role Health", emoji="🩺", style=discord.ButtonStyle.secondary, row=2)
     async def role_health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        guild, actor = 
+        guild, actor = await _require_role_manager(interaction)
+        if guild is None or actor is None:
+            return
+        await _replace(
+            interaction,
+            embed=_role_health_embed(guild, actor),
+            view=RoleHealthView(self.owner_id),
+        )
+
+    @discord.ui.button(label="Dank Shield Home", emoji="🏠", style=discord.ButtonStyle.secondary, row=4)
+    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_command_surface_v2 import replace_with_compact_dank_home
+
+        await replace_with_compact_dank_home(interaction)
+
+
+class RoleHealthView(_OwnedView):
+    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.primary)
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild, actor = await _require_role_manager(interaction)
+        if guild is None or actor is None:
+            return
+        await _replace(interaction, embed=_role_health_embed(guild, actor), view=self)
+
+    @discord.ui.button(label="Role Editor", emoji="🛠️", style=discord.ButtonStyle.secondary)
+    async def editor(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild, actor = await _require_role_manager(interaction)
+        if guild is None or actor is None:
+            return
+        await _replace(interaction, embed=_role_editor_home_embed(guild), view=RoleEditorHomeView(self.owner_id))
+
+    @discord.ui.button(label="Roles & Profiles", emoji="↩️", style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_roles_profiles_center(interaction)
+
+
+class RoleEditorHomeView(_OwnedView):
+    def __init__(self, owner_id: int) -> None:
+        super().__init__(owner_id)
+        self.add_item(
+            DankRoleSelect(
+                author_id=owner_id,
+                on_pick=self._picked,
+                placeholder="Choose a server role to inspect or edit…",
+                row=0,
+            )
+        )
+
+    async def _picked(self, interaction: discord.Interaction, role: discord.Role) -> None:
+        guild, actor = await _require_role_manager(interaction)
+        if guild is None or actor is None:
+            return
+        blockers = _role_mutation_blockers(guild, actor, role)
+        if blockers:
+            return await _reply(interaction, "❌ " + "\n• ".join(["That role cannot be edited:", *blockers]))
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        await _replace(
+            interaction,
+            embed=await _role_embed(guild, role),
+            view=RoleDetailView(self.owner_id, role.id),
+        )
+
+    @discord.ui.button(label="Create Role", emoji="➕", style=discord.ButtonStyle.success, row=1)
+    async def create_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild, actor = await _require_role_manager(interaction)
+        if guild is None or actor is None:
+            return
+        await interaction.response.send_modal(CreateRoleModal(self.owner_id))
+
+    @discord.ui.button(label="Role Health", emoji="🩺", style=discord.ButtonStyle.secondary, row=1)
+    async def health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild, actor = await _require_role_manager(interaction)
+        if guild is None or actor is None:
+            return
+        await _replace(interaction, embed=_role_health_embed(guild, actor), view=RoleHealthView(self.owner_id))
+
+    @discord.ui.button(label="Roles & Profiles", emoji="↩️", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_roles_profiles_center(interaction)
+
+
+class RoleDetailView(_OwnedView):
+    def __init__(self, owner_id: int, role_id: int) -> None:
+        super().__init__(owner_id)
+        self.role_id = int(role_id)
+
+    def _role(self, guild: discord.Guild) -> Optional[discord.Role]:
+        return guild.get_role(self.role_id)
+
+    async def _fresh(
+        self,
+        interaction: discord.Interaction,
+    ) -> tuple[Optional[discord.Guild], Optional[discord.Member], Optional[discord.Role]]:
+        guild, actor = await _require_role_manager(interaction)
+        if guild is None or actor is None:
+            return None, None, None
+        role = self._role(guild)
+        if not isinstance(role, discord.Role):
+            await _reply(interaction, "❌ That role no longer exists. Reopen the Role Editor.")
+            return guild, actor, None
+        blockers = _role_mutation_blockers(guild, actor, role)
+        if blockers:
+            await _reply(interaction, "❌ " + "\n• ".join(["That role is no longer editable:", *blockers]))
+            return guild, actor, None
+        return guild, actor, role
+
+    @discord.ui.button(label="Appearance / Rename", emoji="✏️", style=discord.ButtonStyle.primary, row=0)
+    async def appearance(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild, actor, role = await self._fresh(interaction)
+        if guild is None or actor is None or role is None:
+            return
+        await interaction.response.send_modal(EditRoleAppearanceModal(self.owner_id, role))
+
+    @discord.ui.button(label="Permissions", emoji="🔐", style=discord.ButtonStyle.primary, row=0)
+    async def permissions(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild, actor, role = await self._fresh(interaction)
+        if guild is None or actor is None or role is None:
+            return
+        view = PermissionGroupPickerView(self.owner_id, role.id).attach_for_role(role)
+        await _replace(
+            interaction,
+    
