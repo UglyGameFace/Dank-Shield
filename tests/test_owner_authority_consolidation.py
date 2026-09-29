@@ -112,8 +112,8 @@ def test_role_builder_routes_share_central_authority_contract() -> None:
     home_start = home.index('label="Roles & Profiles"')
     home_end = home.index('label="Logs & Activity"', home_start)
     home_route = home[home_start:home_end]
-    assert "_admin_or_manage(interaction)" in home_route
-    assert "_post_profile_builder(interaction" in home_route
+    assert "open_roles_profiles_center(interaction)" in home_route
+    assert "_post_profile_builder(interaction" not in home_route
 
     builder_start = roles.index('@profile_group.command(name="builder"')
     builder_end = roles.index('@profile_group.command(name="view"', builder_start)
