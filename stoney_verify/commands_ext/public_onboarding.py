@@ -150,7 +150,7 @@ def _setup_embed(guild: discord.Guild) -> discord.Embed:
         value="Until setup is saved for this server, staff/ticket workflows stay locked instead of guessing.",
         inline=False,
     )
-    embed.set_footer(text=f"Guild {guild.id} • isolated per-server config")
+    embed.set_footer(text="Setup is isolated to this server.")
     return embed
 
 
