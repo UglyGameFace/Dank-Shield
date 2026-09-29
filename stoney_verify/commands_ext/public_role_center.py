@@ -937,4 +937,140 @@ async def _move_role(
     if direction > 0:
         above = sorted(
             (candidate for candidate in candidates if candidate.position > role.position),
-            key=lambda candidate
+            key=lambda candidate: candidate.position,
+        )
+        target = above[0] if above else None
+    else:
+        below = sorted(
+            (candidate for candidate in candidates if candidate.position < role.position),
+            key=lambda candidate: candidate.position,
+            reverse=True,
+        )
+        target = below[0] if below else None
+
+    if not isinstance(target, discord.Role):
+        return await _reply(interaction, "ℹ️ That role is already at the editable edge of the hierarchy.")
+
+    me = guild.me
+    if direction > 0:
+        if not _is_guild_owner(guild, actor):
+            if not isinstance(actor, discord.Member):
+                return await _reply(interaction, "❌ Your live role hierarchy could not be resolved.")
+            if target >= actor.top_role:
+                return await _reply(interaction, "❌ Moving higher would cross your own highest role.")
+        if isinstance(me, discord.Member) and int(me.id) != int(guild.owner_id) and target >= me.top_role:
+            return await _reply(interaction, "❌ Moving higher would cross Dank Shield's highest role.")
+
+    if not interaction.response.is_done():
+        await interaction.response.defer()
+    try:
+        async with _role_action_lock(guild.id, role.id, "position"):
+            fresh = guild.get_role(role.id)
+            if not isinstance(fresh, discord.Role):
+                return await _reply(interaction, "❌ That role no longer exists.")
+            fresh_blockers = _role_mutation_blockers(guild, actor, fresh)
+            if fresh_blockers:
+                return await _reply(interaction, "❌ " + "\n• ".join(fresh_blockers))
+            edited = await fresh.edit(
+                position=target.position,
+                reason=_role_reason(
+                    f"moved role {fresh.id} {'up' if direction > 0 else 'down'}",
+                    actor,
+                ),
+            )
+            role = edited if isinstance(edited, discord.Role) else fresh
+    except discord.Forbidden:
+        return await _reply(interaction, "❌ Discord denied the hierarchy move.")
+    except discord.HTTPException as exc:
+        return await _reply(interaction, f"❌ Discord could not move the role: {_clip(exc, 300)}")
+
+    fresh = guild.get_role(int(role.id)) or role
+    await _replace(
+        interaction,
+        embed=await _role_embed(guild, fresh),
+        view=RoleDetailView(owner_id, fresh.id),
+    )
+
+
+class CreateRoleModal(discord.ui.Modal):
+    def __init__(self, owner_id: int) -> None:
+        super().__init__(title="Create Server Role", timeout=300)
+        self.owner_id = int(owner_id)
+        self.name_input = discord.ui.TextInput(
+            label="Role name",
+            placeholder="Moderator",
+            min_length=1,
+            max_length=100,
+            required=True,
+        )
+        self.colour_input = discord.ui.TextInput(
+            label="Colour",
+            placeholder="#5865F2 or default",
+            max_length=7,
+            required=False,
+        )
+        self.hoist_input = discord.ui.TextInput(
+            label="Display separately? yes/no",
+            default="no",
+            max_length=5,
+            required=True,
+        )
+        self.mentionable_input = discord.ui.TextInput(
+            label="Mentionable? yes/no",
+            default="no",
+            max_length=5,
+            required=True,
+        )
+        for item in (self.name_input, self.colour_input, self.hoist_input, self.mentionable_input):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        guild, actor = await _require_role_manager(interaction)
+        if guild is None or actor is None:
+            return
+        try:
+            colour = _parse_colour(str(self.colour_input.value), current=discord.Colour.default())
+            hoist = _parse_bool(str(self.hoist_input.value), field="Display separately")
+            mentionable = _parse_bool(str(self.mentionable_input.value), field="Mentionable")
+        except ValueError as exc:
+            return await _reply(interaction, f"❌ {exc}")
+        name = str(self.name_input.value or "").strip()
+        if not name:
+            return await _reply(interaction, "❌ Role name cannot be empty.")
+
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            async with _role_action_lock(guild.id, 0, "create"):
+                if not _actor_can_manage_roles(guild, actor) or not _bot_can_manage_roles(guild):
+                    return await _reply(interaction, "❌ Manage Roles authority changed before creation. Nothing was created.")
+                role = await guild.create_role(
+                    name=name[:100],
+                    permissions=discord.Permissions.none(),
+                    colour=colour,
+                    hoist=hoist,
+                    mentionable=mentionable,
+                    reason=_role_reason("created server role", actor),
+                )
+        except discord.Forbidden:
+            return await _reply(interaction, "❌ Discord denied role creation. Re-check Manage Roles.")
+        except discord.HTTPException as exc:
+            return await _reply(interaction, f"❌ Discord could not create the role: {_clip(exc, 300)}")
+
+        await _followup_panel(
+            interaction,
+            content="✅ Role created.",
+            embed=await _role_embed(guild, role),
+            view=RoleDetailView(self.owner_id, role.id),
+        )
+
+
+class EditRoleAppearanceModal(discord.ui.Modal):
+    def __init__(self, owner_id: int, role: discord.Role) -> None:
+        super().__init__(title="Edit Role Appearance", timeout=300)
+        self.owner_id = int(owner_id)
+        self.role_id = int(role.id)
+        current_colour = f"#{role.colour.value:06X}" if role.colour.value else "default"
+        current_icon = role.display_icon if isinstance(role.display_icon, str) else ""
+        self.name_input = discord.ui.TextInput(
+            la
