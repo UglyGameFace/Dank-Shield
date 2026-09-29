@@ -67,6 +67,33 @@ def test_semantic_rename_keeps_previous_search_name() -> None:
     assert naming_identity.previous_alias_for_rename("✅・Verified", "✅・Members") == "verified"
 
 
+def test_search_safe_policy_survives_bounded_alias_updates() -> None:
+    state = {
+        "version": naming_identity.NAMING_IDENTITY_VERSION,
+        "policy": {"mode": naming_identity.NAMING_MODE_SEARCH_SAFE},
+        "records": {},
+    }
+    state = naming_identity.remember_alias(
+        state,
+        kind="role",
+        resource_id=1,
+        alias="verified",
+        updated_at=1.0,
+    )
+    assert naming_identity.naming_policy(state)["mode"] == naming_identity.NAMING_MODE_SEARCH_SAFE
+
+    state = naming_identity.forget_resource(state, kind="role", resource_id=1)
+    assert naming_identity.naming_policy(state)["mode"] == naming_identity.NAMING_MODE_SEARCH_SAFE
+
+
+def test_unknown_policy_mode_fails_closed_to_preserve() -> None:
+    policy = naming_identity.naming_policy({"policy": {"mode": "surprise-mode"}})
+    assert policy["mode"] == naming_identity.NAMING_MODE_PRESERVE
+    assert policy["roles"] is True
+    assert policy["channels"] is True
+    assert policy["categories"] is False
+
+
 def test_alias_history_and_resource_records_are_strictly_bounded() -> None:
     state: dict[str, object] = {}
     for index, alias in enumerate(("one", "two", "three", "four"), start=1):
@@ -168,7 +195,9 @@ def test_runtime_is_event_driven_and_never_registers_an_on_ready_scan() -> None:
 
     events = [event for _callback, event in bot.listeners]
     assert events == [
+        "on_guild_role_create",
         "on_guild_role_update",
+        "on_guild_channel_create",
         "on_guild_channel_update",
         "on_guild_role_delete",
         "on_guild_channel_delete",
