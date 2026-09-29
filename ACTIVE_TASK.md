@@ -263,16 +263,24 @@ Required before this master remediation can be considered complete:
 - live canary confirms Search-Safe reviewed repair, styled-role lookup, Member Setup manager wording, Design preview/apply/Undo consistency, and representative cleaned footers;
 - no production-complete claim is made before deployment/canary evidence exists.
 
-## Remaining non-blocking finding / production evidence
+## Remaining production evidence only
 
-- stale identity records for resources deleted while the bot was offline remain bounded by the per-guild record cap and cannot resolve to deleted roles, but no opportunistic stale-record reconciliation has been added yet;
-- naming metrics are now fixed-cardinality and surfaced in read-only diagnostics;
-- automatic Search-Safe failures/blocks are counted;
-- the unused channel autocomplete helper was removed while the real /role resolver/listeners remain regression-protected;
-- normalized-name collisions are shown as reviewed warnings;
-- Search-Safe now explicitly explains that searchability does not override Discord role-mention/ping permissions;
-- one-to-one known-letter rewriting makes preview/live name length consistent for Search-Safe transforms;
-- mobile/live canary is still required for the intentional `/role` semantic string-autocomplete schema and the broader production flow.
+All known P0/P1/P2 implementation findings in the master ledger are now resolved.
+
+The final implementation additions also include:
+- fixed-cardinality Search-Safe/Naming Identity metrics exposed in read-only `/dank diagnostics`;
+- automatic enforcement blocked/failed counters;
+- normalized-name collision warnings in Search-Safe scan/preview;
+- explicit searchability-versus-role-mention guidance;
+- removal of the unused channel autocomplete surface while preserving/regression-protecting the real `/role` resolver and all naming gateway listeners;
+- opportunistic CAS cleanup of identity records for resources deleted while the bot was offline, triggered only when an authorized admin opens Search-Safe Naming and never from startup/global polling;
+- footer hygiene regression scanning production `set_footer()` calls for raw IDs/internal runtime markers.
+
+The only remaining gate is exact-head and post-merge evidence:
+- final exact-head workflow suite;
+- Supabase migration deployment after merge;
+- Discloud startup after merge;
+- live/mobile canary for `/role`, Search-Safe repair, Dank Design Preview/Apply/Undo, Member Setup manager wording, and representative cleaned persistent footers.
 
 ## Next step
 
