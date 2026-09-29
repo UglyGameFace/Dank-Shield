@@ -231,3 +231,124 @@ def test_native_runtime_discovery_recognizes_styled_role_and_channel_names() -> 
 
     assert guild_config._find_role_by_names(guild, ["verified"]) is verified  # noqa: SLF001
     assert guild_config._find_text_channel_by_names(guild, ["verify"]) is verify_channel  # noqa: SLF001
+
+
+def test_rapid_alias_flush_preserves_event_chronology(monkeypatch) -> None:
+    naming_identity._PENDING_ALIASES.clear()  # noqa: SLF001
+    naming_identity._PENDING_DELETES.clear()  # noqa: SLF001
+    naming_identity._FLUSH_TASKS.clear()  # noqa: SLF001
+    monkeypatch.setattr(naming_identity, "PERSIST_DEBOUNCE_SECONDS", 0.0)
+    monkeypatch.setattr(naming_identity, "_queue_flush", lambda _guild_id: None)
+
+    assert naming_identity.queue_rename(
+        guild_id=999,
+        kind="role",
+        resource_id=42,
+        before_name="Alpha",
+        after_name="Beta",
+    )
+    assert naming_identity.queue_rename(
+        guild_id=999,
+        kind="role",
+        resource_id=42,
+        before_name="Beta",
+        after_name="Charlie",
+    )
+    assert naming_identity.queue_rename(
+        guild_id=999,
+        kind="role",
+        resource_id=42,
+        before_name="Charlie",
+        after_name="Delta",
+    )
+
+    captured: dict[str, object] = {}
+
+    async def fake_load(_guild_id: int):
+        return {}
+
+    async def fake_persist(_guild_id: int, state):
+        captured["state"] = dict(state)
+
+    monkeypatch.setattr(naming_identity, "_load_state", fake_load)
+    monkeypatch.setattr(naming_identity, "_persist_state", fake_persist)
+
+    asyncio.run(naming_identity._debounced_flush(999))  # noqa: SLF001
+
+    state = captured["state"]
+    assert isinstance(state, dict)
+    assert naming_identity.aliases_for(state, kind="role", resource_id=42) == (
+        "charlie",
+        "beta",
+        "alpha",
+    )
+
+
+def test_failed_alias_persistence_requeues_old_events_ahead_of_newer_events(monkeypatch) -> None:
+    naming_identity._PENDING_ALIASES.clear()  # noqa: SLF001
+    naming_identity._PENDING_DELETES.clear()  # noqa: SLF001
+    naming_identity._FLUSH_TASKS.clear()  # noqa: SLF001
+    naming_identity._PENDING_ALIASES[999] = {"role:42": ["alpha"]}  # noqa: SLF001
+    naming_identity._PENDING_DELETES[999] = {"channel:88"}  # noqa: SLF001
+    monkeypatch.setattr(naming_identity, "PERSIST_DEBOUNCE_SECONDS", 0.0)
+
+    scheduled: list[int] = []
+    monkeypatch.setattr(
+        naming_identity,
+        "_queue_flush",
+        lambda guild_id: scheduled.append(int(guild_id)),
+    )
+
+    async def fake_load(_guild_id: int):
+        return {}
+
+    async def fail_after_new_event(_guild_id: int, _state):
+        naming_identity._PENDING_ALIASES.setdefault(999, {})["role:42"] = ["beta"]  # noqa: SLF001
+        raise RuntimeError("temporary database outage")
+
+    monkeypatch.setattr(naming_identity, "_load_state", fake_load)
+    monkeypatch.setattr(naming_identity, "_persist_state", fail_after_new_event)
+
+    asyncio.run(naming_identity._debounced_flush(999))  # noqa: SLF001
+
+    assert naming_identity._PENDING_ALIASES[999]["role:42"] == ["alpha", "beta"]  # noqa: SLF001
+    assert naming_identity._PENDING_DELETES[999] == {"channel:88"}  # noqa: SLF001
+    assert scheduled == [999]
+
+
+def test_exact_saved_alias_outranks_unrelated_partial_live_role_match(monkeypatch) -> None:
+    partial = _FakeResource(1, "Verified Team", position=50)
+    alias_target = _FakeResource(2, "Members", position=40)
+    guild = _FakeGuild(roles=[partial, alias_target])
+    interaction = SimpleNamespace(guild=guild)
+
+    state = naming_identity.remember_alias(
+        {},
+        kind="role",
+        resource_id=alias_target.id,
+        alias="Verified",
+        updated_at=1.0,
+    )
+
+    async def fake_load(_guild_id: int):
+        return state
+
+    monkeypatch.setattr(naming_identity, "_load_state", fake_load)
+    choices = asyncio.run(naming_identity.role_autocomplete(interaction, "Verified"))
+
+    assert [choice.value for choice in choices[:2]] == ["2", "1"]
+
+
+def test_exact_live_role_match_still_avoids_alias_state_read(monkeypatch) -> None:
+    exact = _FakeResource(1, "Verified", position=50)
+    partial = _FakeResource(2, "Verified Team", position=40)
+    guild = _FakeGuild(roles=[exact, partial])
+    interaction = SimpleNamespace(guild=guild)
+
+    async def fail_load(_guild_id: int):
+        raise AssertionError("exact live match must stay on the no-I/O fast path")
+
+    monkeypatch.setattr(naming_identity, "_load_state", fail_load)
+    choices = asyncio.run(naming_identity.role_autocomplete(interaction, "Verified"))
+
+    assert choices[0].value == "1"
