@@ -116,6 +116,7 @@ def default_guild_setup_state() -> dict[str, Any]:
         "schema_version": SETUP_SCHEMA_VERSION,
         "enabled": False,
         "setup_channel_id": "",
+        "panel_message_id": "",
         "access_mode": ACCESS_MODE_NORMAL,
         "access_role_id": "",
         "prerequisite_role_id": "",
@@ -132,6 +133,7 @@ def normalize_guild_setup_state(value: Any) -> dict[str, Any]:
     state = default_guild_setup_state()
     state["enabled"] = bool(raw.get("enabled", False))
     state["setup_channel_id"] = str(_safe_int(raw.get("setup_channel_id"), 0) or "")
+    state["panel_message_id"] = str(_safe_int(raw.get("panel_message_id"), 0) or "")
     state["access_mode"] = (
         str(raw.get("access_mode") or ACCESS_MODE_NORMAL)
         if str(raw.get("access_mode") or ACCESS_MODE_NORMAL) in ACCESS_MODES
@@ -217,6 +219,7 @@ async def configure_guild_setup(
     *,
     enabled: Optional[bool] = None,
     setup_channel_id: Optional[int] = None,
+    panel_message_id: Optional[int] = None,
     access_mode: Optional[str] = None,
     access_role_id: Optional[int] = None,
     prerequisite_role_id: Optional[int] = None,
@@ -230,6 +233,8 @@ async def configure_guild_setup(
         state["enabled"] = bool(enabled)
     if setup_channel_id is not None:
         state["setup_channel_id"] = str(max(0, int(setup_channel_id)) or "")
+    if panel_message_id is not None:
+        state["panel_message_id"] = str(max(0, int(panel_message_id)) or "")
     if access_mode is not None:
         clean_mode = str(access_mode or "").strip().lower()
         if clean_mode not in ACCESS_MODES:
