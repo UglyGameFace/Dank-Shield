@@ -96,6 +96,26 @@ def test_alias_history_and_resource_records_are_strictly_bounded() -> None:
     assert "role:1" not in records
 
 
+def test_process_state_cache_is_bounded_across_many_guilds(monkeypatch) -> None:
+    naming_identity._STATE_CACHE.clear()  # noqa: SLF001
+    monkeypatch.setattr(naming_identity, "MAX_CACHED_GUILDS", 3)
+
+    for guild_id in range(1, 8):
+        naming_identity._cache_state(  # noqa: SLF001
+            guild_id,
+            naming_identity.remember_alias(
+                {},
+                kind="role",
+                resource_id=guild_id,
+                alias=f"role-{guild_id}",
+                updated_at=float(guild_id),
+            ),
+        )
+
+    assert len(naming_identity._STATE_CACHE) == 3  # noqa: SLF001
+    naming_identity._STATE_CACHE.clear()  # noqa: SLF001
+
+
 def test_live_semantic_search_finds_styled_role_without_db_alias_lookup() -> None:
     role = _FakeResource(123, f"✅・{_styled('Verified')}", position=50)
     matches = naming_identity._search_resources(  # noqa: SLF001
