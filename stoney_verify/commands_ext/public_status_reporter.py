@@ -665,7 +665,7 @@ async def _send_status_report(bot: Any, guild: discord.Guild, *, event: str, for
         value="True bot-down alerts require a separate watchdog because the bot cannot send Discord messages while its own process is offline.",
         inline=False,
     )
-    embed.set_footer(text="Dank Shield status reporter")
+    embed.set_footer(text="Dank Shield Status")
 
     try:
         await channel.send(embed=embed)
