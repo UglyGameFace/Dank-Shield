@@ -54,15 +54,20 @@ def test_role_callback_exposes_only_member_and_role_shortcuts() -> None:
     assert signature.parameters["role"].default is None
 
 
-def test_member_shortcut_reuses_existing_guarded_member_center() -> None:
+def test_member_shortcut_is_role_focused_and_reuses_guarded_role_actions() -> None:
     source = (ROOT / "stoney_verify/commands_ext/member_command_center.py").read_text(encoding="utf-8")
-    start = source.index("async def open_member_target")
+    start = source.index("class DirectMemberRoleActionView")
     end = source.index("async def open_member_command_center", start)
     block = source[start:end]
 
     assert "require_review(interaction)" in block
-    assert "MemberActionView(" in block
-    assert "member_detail_embed(member, None)" in block
+    assert "DirectMemberRoleView(" in block
+    assert "DirectMemberRoleActionView(self, action=action)" in block
+    assert "MemberRoleActionView" in source
+    assert 'label="Add Role"' in block
+    assert 'label="Remove Role"' in block
+    assert 'label="View Profile"' in block
+    assert 'label="Full Member Panel"' in block
     assert "add_roles(" not in block
     assert "remove_roles(" not in block
 
