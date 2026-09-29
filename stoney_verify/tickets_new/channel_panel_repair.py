@@ -210,7 +210,7 @@ def _ticket_embed(channel: discord.TextChannel) -> discord.Embed:
         color=discord.Color.blurple(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.set_footer(text=f"Guild {channel.guild.id} • channel {channel.id}")
+    embed.set_footer(text="Ticket panel repair preview")
     return embed
 
 
