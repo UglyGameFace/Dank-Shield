@@ -657,3 +657,31 @@ def test_internal_batch_mutations_load_fresh_policy_once_per_operation() -> None
     assert "get_naming_policy(gid, refresh=True)" in builder
     assert "get_naming_policy(int(guild.id), refresh=True)" in setup
     assert stats.count("get_naming_policy(gid, refresh=True)") >= 3
+
+
+def test_search_safe_scan_warns_when_effective_name_collides(monkeypatch) -> None:
+    guild = _FakeGuild()
+    styled = _FakeChannel(guild, 1, f"🎥・{_styled('videos')}")
+    plain = _FakeChannel(guild, 2, "🎥・videos")
+    guild.channels = [styled, plain]
+    monkeypatch.setattr(search_safe_naming, "_channel_blocker", lambda _channel: "")
+
+    rows = search_safe_naming.scan_search_safe_targets(
+        guild,
+        actor=SimpleNamespace(id=123),
+    )
+
+    target = next(row for row in rows if row["id"] == styled.id)
+    assert target["after"] == "🎥・videos"
+    assert target["collision_count"] == 1
+    assert "same searchable name" in target["collision_warning"].lower()
+
+
+def test_search_safe_ui_explains_collision_and_mention_scope() -> None:
+    ui = (
+        ROOT / "stoney_verify/commands_ext/public_search_safe_naming.py"
+    ).read_text(encoding="utf-8")
+
+    assert "Potential same-name collisions" in ui
+    assert "Same searchable name warning" in ui
+    assert "Search-Safe does not change Discord's role-mention permissions" in ui
