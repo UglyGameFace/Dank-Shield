@@ -94,7 +94,7 @@ async def open_dank_home(interaction: discord.Interaction) -> None:
         ),
         inline=False,
     )
-    embed.set_footer(text="Dank Shield • UI-first command center")
+    embed.set_footer(text="Dank Shield Command Center")
     await _private(
         interaction,
         embed=embed,
