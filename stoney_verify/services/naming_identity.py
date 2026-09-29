@@ -546,46 +546,44 @@ def queue_delete(*, guild_id: Any, kind: str, resource_id: Any) -> bool:
     return True
 
 
-async def _debounced_flush(guild_id: int) -> None:
+async def _flush_pending_once(guild_id: int) -> bool:
+    """Flush one guild immediately while preserving claimed events on failure."""
+
     gid = int(guild_id)
-    pending_aliases: dict[str, list[str]] = {}
-    pending_deletes: set[str] = set()
+    pending_aliases = _PENDING_ALIASES.pop(gid, {})
+    pending_deletes = _PENDING_DELETES.pop(gid, set())
+    if not pending_aliases and not pending_deletes:
+        return False
+
+    stamp = time.time()
+
+    def mutate(current: Mapping[str, Any]) -> dict[str, Any]:
+        updated = _normalize_state(current)
+        _require_supported_state(updated)
+
+        for key in sorted(pending_deletes):
+            kind, _, rid = key.partition(":")
+            updated = forget_resource(updated, kind=kind, resource_id=rid)
+
+        for key, aliases in pending_aliases.items():
+            kind, _, rid = key.partition(":")
+            if key in pending_deletes:
+                continue
+            for alias in aliases:
+                updated = remember_alias(
+                    updated,
+                    kind=kind,
+                    resource_id=rid,
+                    alias=alias,
+                    updated_at=stamp,
+                )
+        return updated
+
     try:
-        await asyncio.sleep(PERSIST_DEBOUNCE_SECONDS)
-        pending_aliases = _PENDING_ALIASES.pop(gid, {})
-        pending_deletes = _PENDING_DELETES.pop(gid, set())
-        if not pending_aliases and not pending_deletes:
-            return
-
-        stamp = time.time()
-
-        def mutate(current: Mapping[str, Any]) -> dict[str, Any]:
-            updated = _normalize_state(current)
-            _require_supported_state(updated)
-
-            for key in sorted(pending_deletes):
-                kind, _, rid = key.partition(":")
-                updated = forget_resource(updated, kind=kind, resource_id=rid)
-
-            for key, aliases in pending_aliases.items():
-                kind, _, rid = key.partition(":")
-                if key in pending_deletes:
-                    continue
-                # Queue order is event order. remember_alias prepends each
-                # alias, so oldest -> newest leaves the newest previous name
-                # first even when CAS has to replay after a worker conflict.
-                for alias in aliases:
-                    updated = remember_alias(
-                        updated,
-                        kind=kind,
-                        resource_id=rid,
-                        alias=alias,
-                        updated_at=stamp,
-                    )
-            return updated
-
         await _mutate_state_cas(gid, mutate)
+        return True
     except asyncio.CancelledError:
+        _requeue_failed_flush(gid, pending_aliases, pending_deletes)
         raise
     except UnsupportedNamingIdentityVersion as exc:
         try:
@@ -595,6 +593,7 @@ async def _debounced_flush(guild_id: int) -> None:
             )
         except Exception:
             pass
+        return False
     except Exception as exc:
         _requeue_failed_flush(gid, pending_aliases, pending_deletes)
         try:
@@ -604,10 +603,68 @@ async def _debounced_flush(guild_id: int) -> None:
             )
         except Exception:
             pass
+        return False
+
+
+async def _debounced_flush(guild_id: int) -> None:
+    gid = int(guild_id)
+    try:
+        await asyncio.sleep(PERSIST_DEBOUNCE_SECONDS)
+        await _flush_pending_once(gid)
+    except asyncio.CancelledError:
+        raise
     finally:
         _FLUSH_TASKS.pop(gid, None)
         if _PENDING_ALIASES.get(gid) or _PENDING_DELETES.get(gid):
             _queue_flush(gid)
+
+
+async def flush_pending_naming_identity(
+    *,
+    timeout_seconds: float = 8.0,
+) -> dict[str, int]:
+    """Best-effort immediate persistence before the Discord event loop closes."""
+
+    tasks = [
+        task
+        for task in list(_FLUSH_TASKS.values())
+        if task is not None and not task.done()
+    ]
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    guild_ids = sorted(
+        set(_PENDING_ALIASES)
+        | set(_PENDING_DELETES)
+        | set(_FLUSH_TASKS)
+    )
+    if not guild_ids:
+        return {"guilds": 0, "flushed": 0, "pending": 0}
+
+    async def _flush_all() -> list[bool]:
+        return await asyncio.gather(
+            *(_flush_pending_once(gid) for gid in guild_ids),
+        )
+
+    try:
+        results = await asyncio.wait_for(
+            _flush_all(),
+            timeout=max(0.5, float(timeout_seconds or 8.0)),
+        )
+    except asyncio.TimeoutError:
+        results = []
+
+    pending = len(
+        set(_PENDING_ALIASES)
+        | set(_PENDING_DELETES)
+    )
+    return {
+        "guilds": len(guild_ids),
+        "flushed": sum(1 for value in results if value),
+        "pending": pending,
+    }
 
 
 def _raw_name(resource: Any) -> str:
@@ -910,6 +967,7 @@ __all__ = [
     "NAMING_MODE_PRESERVE",
     "NAMING_MODE_SEARCH_SAFE",
     "aliases_for",
+    "flush_pending_naming_identity",
     "get_naming_policy",
     "channel_autocomplete",
     "has_stylized_search_text",
