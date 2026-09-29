@@ -242,7 +242,7 @@ jobs:
           wait "$writer_two"
 
           psql -v ON_ERROR_STOP=1 <<'SQL'
-          do $
+          do $audit$
           declare
               saved jsonb;
           begin
@@ -258,7 +258,7 @@ jobs:
                   raise exception 'naming identity state was lost during concurrent guild config patches: %', saved;
               end if;
           end;
-          $;
+          $audit$;
           SQL
 
       - name: Apply managed category migrations twice
