@@ -75,6 +75,7 @@ Excluded:
 - The persistent Profile panel now exposes **Member Setup / Review** and is presented as **Member Setup & Profile**.
 - Profile Builder exposes **Member Setup Manager** without replacing existing profile/cosmetic role tooling.
 - Added focused regression coverage in `tests/test_member_setup_revision_runtime.py`.
+- New Member Setup/Profile panel posts persist the canonical channel/message ID. **Refresh Public Panel** upgrades one uniquely identifiable legacy bot-authored profile panel in place; zero/multiple candidates fail closed rather than editing an arbitrary message.
 
 ## Validation / results
 
