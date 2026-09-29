@@ -562,7 +562,7 @@ async def send_studio_preview(interaction: discord.Interaction) -> None:
             view=WelcomeCardStudioView(owner_id=int(interaction.user.id)),
         )
     live_embed.set_image(url=f"attachment://{file.filename}")
-    live_embed.set_footer(text="Preview only • dank_shield:welcome_card_runtime:v1")
+    live_embed.set_footer(text="Preview only • nothing was published")
     await _private(
         interaction,
         content=(
