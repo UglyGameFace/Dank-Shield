@@ -78,6 +78,7 @@ def _home_embed(
     blocked = [row for row in rows if not row.get("editable")]
     role_count = sum(1 for row in rows if row.get("kind") == "role")
     channel_count = sum(1 for row in rows if row.get("kind") == "channel")
+    collision_count = sum(1 for row in rows if int(row.get("collision_count") or 0) > 0)
     enabled = policy.get("mode") == naming_identity.NAMING_MODE_SEARCH_SAFE
 
     embed = discord.Embed(
@@ -98,7 +99,8 @@ def _home_embed(
             f"Roles with risky letters: **{role_count}**\n"
             f"Channels with risky letters: **{channel_count}**\n"
             f"Ready to repair: **{len(editable)}**\n"
-            f"Blocked by bot access/hierarchy: **{len(blocked)}**"
+            f"Blocked by bot access/hierarchy: **{len(blocked)}**\n"
+            f"Potential same-name collisions: **{collision_count}**"
         ),
         inline=True,
     )
@@ -116,7 +118,9 @@ def _home_embed(
         value=(
             "**Dank Shield search:** /role Verified can resolve a styled current name or a bounded saved previous name.\n"
             "**Discord native search:** only the live name is searchable, so Search-Safe mode must use ordinary letters "
-            "for the searchable word. Discord exposes no hidden alias field."
+            "for the searchable word. Discord exposes no hidden alias field.\n"
+            "**Mentions/pings:** Search-Safe does not change Discord's role-mention permissions or who is allowed to ping a role; "
+            "it only makes the visible name easier to find/type."
         ),
         inline=False,
     )
@@ -159,6 +163,11 @@ def _preview_embed(
         f"• {_clip(row.get('before'), 65)} · {_clip(row.get('blocker'), 110)}"
         for row in blocked[:6]
     ]
+    collisions = [
+        f"• {_clip(row.get('after'), 80)} · {_clip(row.get('collision_warning'), 120)}"
+        for row in reviewed_rows
+        if int(row.get("collision_count") or 0) > 0
+    ]
 
     embed = discord.Embed(
         title="🔎 Search-Safe Repair Preview",
@@ -189,6 +198,15 @@ def _preview_embed(
         embed.add_field(name="Reviewed changes", value="\n".join(examples)[:1024], inline=False)
     if blockers:
         embed.add_field(name="Blocked examples", value="\n".join(blockers)[:1024], inline=False)
+    if collisions:
+        embed.add_field(
+            name="Same searchable name warning",
+            value=(
+                "\n".join(collisions)[:900]
+                + "\nThese are warnings, not automatic blockers. Discord may allow duplicate names, but search/selection can become ambiguous."
+            )[:1024],
+            inline=False,
+        )
     embed.add_field(
         name="Important",
         value=(
