@@ -26,6 +26,7 @@ from .guild_config import (
     get_guild_config,
     upsert_guild_config,
 )
+from .services import naming_identity, search_safe_naming
 
 SECURITY_STATS_CATEGORY_NAME = "🛡️ DANK SHIELD STATS"
 SECURITY_STATS_ENABLED_KEY = "security_stats_display_enabled"
@@ -1081,7 +1082,12 @@ def _category_has_stats_evidence(
     return False
 
 
-def _find_owned_category(guild: discord.Guild, cfg: Any) -> Optional[discord.CategoryChannel]:
+def _find_owned_category(
+    guild: discord.Guild,
+    cfg: Any,
+    *,
+    naming_policy: Optional[Mapping[str, Any]] = None,
+) -> Optional[discord.CategoryChannel]:
     try:
         category_id = _safe_int(cfg.get(SECURITY_STATS_CATEGORY_ID_KEY), 0)
     except Exception:
@@ -1112,7 +1118,12 @@ def _find_owned_category(guild: discord.Guild, cfg: Any) -> Optional[discord.Cat
     preferences = security_stats_preferences(cfg)
     desired_name = str(preferences["category_name"])
     styled_name = security_stats_category_display_name(preferences)
-    accepted_names = {SECURITY_STATS_CATEGORY_NAME, desired_name, styled_name}
+    effective_name = search_safe_naming.policy_adjusted_name_for_policy(
+        dict(naming_policy or {}),
+        kind="category",
+        name=styled_name,
+    )
+    accepted_names = {SECURITY_STATS_CATEGORY_NAME, desired_name, styled_name, effective_name}
     for category in list(getattr(guild, "categories", []) or []):
         name = str(getattr(category, "name", "") or "")
         if (
@@ -1130,6 +1141,7 @@ def _find_existing_stat_channel(
     key: str,
     saved_id: int,
     preferences: Optional[Mapping[str, Any]] = None,
+    naming_policy: Optional[Mapping[str, Any]] = None,
 ) -> Optional[discord.VoiceChannel]:
     if saved_id > 0:
         found = guild.get_channel(saved_id)
@@ -1143,6 +1155,14 @@ def _find_existing_stat_channel(
         for candidate in (custom_prefix, rendered_prefix):
             if candidate and candidate not in prefixes:
                 prefixes.append(candidate)
+    for candidate in list(prefixes):
+        adjusted = search_safe_naming.policy_adjusted_name_for_policy(
+            dict(naming_policy or {}),
+            kind="channel",
+            name=candidate,
+        )
+        if adjusted and adjusted not in prefixes:
+            prefixes.append(adjusted)
     for channel in list(getattr(category, "voice_channels", []) or []):
         name = str(getattr(channel, "name", "") or "")
         if any(name.startswith(prefix) for prefix in prefixes):
@@ -1154,8 +1174,14 @@ async def _apply_category_preferences(
     guild: discord.Guild,
     category: discord.CategoryChannel,
     preferences: Mapping[str, Any],
+    *,
+    naming_policy: Optional[Mapping[str, Any]] = None,
 ) -> None:
-    desired_name = security_stats_category_display_name(preferences)
+    desired_name = search_safe_naming.policy_adjusted_name_for_policy(
+        dict(naming_policy or {}),
+        kind="category",
+        name=security_stats_category_display_name(preferences),
+    )
     if str(getattr(category, "name", "") or "") != desired_name:
         await category.edit(name=desired_name, reason="Apply Dank Shield server stats category name")
 
