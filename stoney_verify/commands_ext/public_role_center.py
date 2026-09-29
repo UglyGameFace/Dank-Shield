@@ -1843,7 +1843,7 @@ async def _role_name_autocomplete(
     member="Staff shortcut: open this member in the existing guarded member-role panel.",
     role="Type a normal role name; styled names and saved previous names are searchable.",
 )
-@app_commands.autocomplete(role=lambda interaction, current: _role_name_autocomplete(interaction, current))
+@app_commands.autocomplete(role=_role_name_autocomplete)
 async def open_role_command(
     interaction: discord.Interaction,
     member: Optional[discord.Member] = None,
