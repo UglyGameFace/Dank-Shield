@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from stoney_verify import guild_config
 from stoney_verify.services import naming_identity
+from stoney_verify.services import naming_observability
 from stoney_verify.services import server_design_studio as design
 
 
@@ -596,3 +597,24 @@ def test_role_resolver_and_event_runtime_remain_present_when_channel_autocomplet
     assert "async def _on_guild_role_delete(" in source
     assert "async def _on_guild_channel_delete(" in source
     assert "async def channel_autocomplete(" not in source
+
+
+def test_naming_observability_is_fixed_cardinality() -> None:
+    naming_observability._reset_for_tests()  # noqa: SLF001
+    naming_observability.increment("role_resolution_alias")
+    naming_observability.increment("repair_changed", 2)
+    naming_observability.increment("guild:999:repair_changed", 500)
+
+    metrics = naming_observability.snapshot()
+    assert metrics["role_resolution_alias"] == 1
+    assert metrics["repair_changed"] == 2
+    assert "guild:999:repair_changed" not in metrics
+
+
+def test_public_diagnostics_exposes_naming_runtime_metrics() -> None:
+    source = (
+        ROOT / "stoney_verify/commands_ext/public_diagnostics_group.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'name="Search-Safe Naming Runtime"' in source
+    assert "naming_observability.snapshot()" in source
