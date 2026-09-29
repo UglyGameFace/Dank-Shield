@@ -276,6 +276,21 @@ def gate_health(guild: discord.Guild, state: Mapping[str, Any]) -> dict[str, Any
         if any(int(category.id) == int(channel.category.id) for category in protected):
             blockers.append("The Member Setup channel cannot live inside a protected category.")
 
+    unsynced_children: list[str] = []
+    for category in protected:
+        for child in list(getattr(category, "channels", []) or []):
+            try:
+                if not bool(getattr(child, "permissions_synced", False)):
+                    unsynced_children.append(f"{category.name}/{getattr(child, 'name', child.id)}")
+            except Exception:
+                unsynced_children.append(f"{category.name}/{getattr(child, 'name', 'unknown')}")
+    if unsynced_children:
+        blockers.append(
+            "Protected categories contain unsynced child permissions: "
+            + ", ".join(unsynced_children[:5])
+            + ("…" if len(unsynced_children) > 5 else "")
+        )
+
     me = guild.me
     if isinstance(me, discord.Member):
         if not (me.guild_permissions.manage_channels or me.guild_permissions.administrator):
