@@ -141,7 +141,7 @@ async def execute_channel_builder_plan(
     skipped: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
     rollback_plan: list[dict[str, Any]] = []
-    naming_policy = await naming_identity.get_naming_policy(gid)
+    naming_policy = await naming_identity.get_naming_policy(gid, refresh=True)
     reason = f"Dank Shield Channel Builder actor={actor_id or 'dashboard'} mode={mode}"
     retry_key = f"channel-builder:{gid}"
 
