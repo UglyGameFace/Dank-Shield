@@ -30,6 +30,7 @@ NAMING_IDENTITY_CONFIG_KEY = "naming_identity_v1"
 NAMING_IDENTITY_VERSION = 1
 MAX_ALIASES_PER_RESOURCE = 3
 MAX_TRACKED_RESOURCES = 128
+MAX_CACHED_GUILDS = 1024
 STATE_CACHE_TTL_SECONDS = 300.0
 PERSIST_DEBOUNCE_SECONDS = 1.5
 
@@ -208,12 +209,41 @@ def aliases_for(
     return tuple(str(value) for value in list(record.get("aliases") or []) if str(value))
 
 
+def _cache_state(guild_id: int, state: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep the process cache bounded even if hundreds of thousands of guilds exist."""
+    gid = int(guild_id)
+    now = time.monotonic()
+    normalized = _normalize_state(state)
+    _STATE_CACHE[gid] = (now, normalized)
+
+    if len(_STATE_CACHE) > MAX_CACHED_GUILDS:
+        expired = [
+            cached_gid
+            for cached_gid, (stamp, _payload) in _STATE_CACHE.items()
+            if now - float(stamp) > STATE_CACHE_TTL_SECONDS
+        ]
+        for cached_gid in expired:
+            _STATE_CACHE.pop(cached_gid, None)
+
+    overflow = len(_STATE_CACHE) - MAX_CACHED_GUILDS
+    if overflow > 0:
+        oldest = sorted(
+            _STATE_CACHE.items(),
+            key=lambda item: float(item[1][0]),
+        )[:overflow]
+        for cached_gid, _payload in oldest:
+            _STATE_CACHE.pop(cached_gid, None)
+    return normalized
+
+
 async def _load_state(guild_id: int) -> dict[str, Any]:
     gid = int(guild_id)
     now = time.monotonic()
     cached = _STATE_CACHE.get(gid)
     if cached and now - float(cached[0]) <= STATE_CACHE_TTL_SECONDS:
         return _normalize_state(cached[1])
+    if cached:
+        _STATE_CACHE.pop(gid, None)
 
     try:
         from stoney_verify.guild_config import get_guild_config
@@ -222,8 +252,7 @@ async def _load_state(guild_id: int) -> dict[str, Any]:
         state = _normalize_state(config.get(NAMING_IDENTITY_CONFIG_KEY))
     except Exception:
         state = _empty_state()
-    _STATE_CACHE[gid] = (now, state)
-    return _normalize_state(state)
+    return _cache_state(gid, state)
 
 
 async def _persist_state(guild_id: int, state: Mapping[str, Any]) -> None:
@@ -241,7 +270,7 @@ async def _persist_state(guild_id: int, state: Mapping[str, Any]) -> None:
         },
     )
     persisted = _normalize_state(saved.get(NAMING_IDENTITY_CONFIG_KEY, normalized))
-    _STATE_CACHE[gid] = (time.monotonic(), persisted)
+    _cache_state(gid, persisted)
 
 
 def _queue_flush(guild_id: int) -> None:
@@ -593,6 +622,7 @@ def install_naming_identity_runtime(bot: Any) -> bool:
 
 __all__ = [
     "MAX_ALIASES_PER_RESOURCE",
+    "MAX_CACHED_GUILDS",
     "MAX_TRACKED_RESOURCES",
     "NAMING_IDENTITY_CONFIG_KEY",
     "aliases_for",
