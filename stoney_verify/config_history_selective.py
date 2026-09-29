@@ -438,7 +438,7 @@ def _restore_core_selected_sync(
             gid,
             clear_keys,
             source="config_history_restore",
-            actor=actor_id,
+            actor=None,
         )
     upsert_guild_config_sync(gid, restore_values)
     restored = history._fetch_current_config_row_sync(gid)[1]
