@@ -141,7 +141,7 @@ def _center_embed() -> discord.Embed:
         value="Repair missing Pending roles • Post/refresh Verify panel • Map exact existing verification roles.",
         inline=False,
     )
-    embed.set_footer(text="/verify • one staff doorway")
+    embed.set_footer(text="Verification Center • staff controls")
     return embed
 
 
@@ -164,7 +164,7 @@ def _target_embed(member: discord.Member) -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text="Existing verification command services are reused; role hierarchy is checked by them.")
+    embed.set_footer(text="Role hierarchy is checked again before verification roles are changed.")
     return embed
 
 
