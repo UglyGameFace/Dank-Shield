@@ -17,7 +17,8 @@ import discord
 from .guild_config import get_guild_config, invalidate_guild_config
 from .commands_ext.public_setup_group import _upsert_config
 
-WELCOME_FOOTER = "dank_shield:welcome_message:v1"
+WELCOME_FOOTER = "Welcome • start here"
+LEGACY_WELCOME_FOOTERS = ("dank_shield:welcome_message:v1",)
 DEFAULT_TITLE = "👋 Welcome to {server_name}!"
 DEFAULT_BODY = (
     "Thanks for joining **{server_name}**. Your access may be limited until you verify.\n\n"
@@ -203,7 +204,7 @@ async def _find_existing_welcome_message(channel: discord.TextChannel) -> Option
                 continue
             for embed in list(getattr(msg, "embeds", []) or []):
                 footer = str(getattr(getattr(embed, "footer", None), "text", "") or "")
-                if WELCOME_FOOTER in footer:
+                if WELCOME_FOOTER in footer or any(marker in footer for marker in LEGACY_WELCOME_FOOTERS):
                     return msg
     except Exception:
         return None
