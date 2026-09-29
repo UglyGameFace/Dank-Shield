@@ -428,6 +428,29 @@ async def clear_stale_guild_command_copies(
 
 
 class _DankCommandOwnerMixin:
+    async def close(self) -> None:
+        try:
+            from .services.naming_identity import flush_pending_naming_identity
+
+            result = await flush_pending_naming_identity()
+            if int(result.get("pending", 0) or 0) > 0:
+                print(
+                    "⚠️ naming_identity shutdown flush incomplete "
+                    f"guilds={result.get('guilds')} flushed={result.get('flushed')} "
+                    f"pending={result.get('pending')}"
+                )
+            elif int(result.get("guilds", 0) or 0) > 0:
+                print(
+                    "🔎 naming_identity shutdown flush complete "
+                    f"guilds={result.get('guilds')} flushed={result.get('flushed')}"
+                )
+        except Exception as exc:
+            print(
+                "⚠️ naming_identity shutdown flush failed "
+                f"error={type(exc).__name__}: {exc}"
+            )
+        await super().close()  # type: ignore[misc]
+
     async def setup_hook(self) -> None:
         await super().setup_hook()  # type: ignore[misc]
         public_scope = public_command_scope_enabled()
