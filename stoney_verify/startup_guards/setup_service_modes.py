@@ -39,9 +39,8 @@ except Exception:
         return None
 
 try:
-    from stoney_verify.globals import get_supabase, now_utc
+    from stoney_verify.globals import now_utc
 except Exception:
-    get_supabase = None  # type: ignore
 
     def now_utc():  # type: ignore
         import datetime
@@ -290,19 +289,9 @@ async def _save_service_state(guild_id: int, payload: dict[str, bool], actor: An
     except Exception:
         pass
 
-    if upsert_guild_config is not None:
-        await upsert_guild_config(int(guild_id), final)  # type: ignore[misc]
-    elif get_supabase is not None:
-        sb = get_supabase()
-        if sb is None:
-            raise RuntimeError("Supabase is unavailable.")
-
-        def sync() -> None:
-            sb.table("guild_configs").upsert({"guild_id": str(int(guild_id)), **final}, on_conflict="guild_id").execute()
-
-        await asyncio.to_thread(sync)
-    else:
-        raise RuntimeError("No config writer is available.")
+    if upsert_guild_config is None:
+        raise RuntimeError("Canonical guild config writer is unavailable.")
+    await upsert_guild_config(int(guild_id), final)  # type: ignore[misc]
 
     try:
         invalidate_guild_config(int(guild_id))
