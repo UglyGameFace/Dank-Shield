@@ -30,6 +30,7 @@ from stoney_verify.member_setup_service import (
     publish_revision,
 )
 from stoney_verify.ui.picker import DankChannelSelect, DankRoleSelect
+from .role_center_navigation import BackToRoleCenterButton, CloseRolePanelButton, defer_panel, replace_panel
 from .public_setup_group import _require_setup_permission
 
 
@@ -90,28 +91,20 @@ async def _reply(interaction: discord.Interaction, content: str, *, ok: Optional
 async def _replace(
     interaction: discord.Interaction,
     *,
-    embed: discord.Embed,
-    view: discord.ui.View,
+    embed: Optional[discord.Embed] = None,
+    view: Optional[discord.ui.View] = None,
     content: str = "",
 ) -> None:
-    kwargs = {
-        "content": content or None,
-        "embed": embed,
-        "view": view,
-        "allowed_mentions": discord.AllowedMentions.none(),
-    }
-    if not interaction.response.is_done():
-        if interaction.message is not None:
-            await interaction.response.edit_message(**kwargs)
-        else:
-            await interaction.response.send_message(**kwargs, ephemeral=True)
-    else:
-        await interaction.edit_original_response(**kwargs)
+    await replace_panel(
+        interaction,
+        content=content,
+        embed=embed,
+        view=view,
+    )
 
 
 async def _defer(interaction: discord.Interaction) -> None:
-    if not interaction.response.is_done():
-        await interaction.response.defer(ephemeral=True, thinking=True)
+    await defer_panel(interaction)
 
 
 def _resolve_channel(guild: discord.Guild, value: Any) -> Optional[discord.TextChannel]:
@@ -492,10 +485,28 @@ def _member_embed(
     return embed
 
 
-class MemberSetupView(discord.ui.View):
-    def __init__(self, owner_id: int, pending_sections: list[str], *, current: bool) -> None:
-        super().__init__(timeout=900)
+class _SetupOwnedView(discord.ui.View):
+    def __init__(self, owner_id: int, *, timeout: float = 900) -> None:
+        super().__init__(timeout=timeout)
         self.owner_id = int(owner_id)
+
+
+class _BackToSetupAdminButton(discord.ui.Button):
+    def __init__(self, *, row: int = 1) -> None:
+        super().__init__(
+            label="Member Setup Manager",
+            emoji="↩️",
+            style=discord.ButtonStyle.secondary,
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await open_member_setup_admin(interaction)
+
+
+class MemberSetupView(_SetupOwnedView):
+    def __init__(self, owner_id: int, pending_sections: list[str], *, current: bool) -> None:
+        super().__init__(owner_id, timeout=900)
         self.pending_sections = list(pending_sections)
         self.current = bool(current)
 
@@ -571,6 +582,18 @@ class MemberSetupView(discord.ui.View):
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_member_setup(interaction)
+
+    @discord.ui.button(label="Roles & Profiles", emoji="↩️", style=discord.ButtonStyle.secondary, row=4)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_role_center import open_roles_profiles_center
+        await open_roles_profiles_center(interaction)
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, row=4)
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .role_center_navigation import close_panel
+        await close_panel(interaction, fallback_text="Member Setup closed.")
 
 
 async def open_member_setup(interaction: discord.Interaction) -> None:
@@ -793,10 +816,9 @@ async def _staff_authorized(interaction: discord.Interaction) -> bool:
     return bool(await _require_setup_permission(interaction))
 
 
-class SetupChannelPickerView(discord.ui.View):
+class SetupChannelPickerView(_SetupOwnedView):
     def __init__(self, owner_id: int) -> None:
-        super().__init__(timeout=300)
-        self.owner_id = int(owner_id)
+        super().__init__(owner_id, timeout=300)
         self.add_item(
             DankChannelSelect(
                 author_id=self.owner_id,
@@ -806,6 +828,8 @@ class SetupChannelPickerView(discord.ui.View):
                 row=0,
             )
         )
+        self.add_item(_BackToSetupAdminButton(row=1))
+        self.add_item(CloseRolePanelButton(row=1))
 
     async def _picked(self, interaction: discord.Interaction, channel: discord.abc.GuildChannel) -> None:
         if not await _staff_authorized(interaction):
@@ -825,10 +849,9 @@ class SetupChannelPickerView(discord.ui.View):
         await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(interaction.user.id))
 
 
-class AccessRolePickerView(discord.ui.View):
+class AccessRolePickerView(_SetupOwnedView):
     def __init__(self, owner_id: int, *, prerequisite: bool = False) -> None:
-        super().__init__(timeout=300)
-        self.owner_id = int(owner_id)
+        super().__init__(owner_id, timeout=300)
         self.prerequisite = bool(prerequisite)
         self.add_item(
             DankRoleSelect(
@@ -842,6 +865,8 @@ class AccessRolePickerView(discord.ui.View):
                 row=0,
             )
         )
+        self.add_item(_BackToSetupAdminButton(row=1))
+        self.add_item(CloseRolePanelButton(row=1))
 
     async def _picked(self, interaction: discord.Interaction, role: discord.Role) -> None:
         if not await _staff_authorized(interaction):
@@ -866,10 +891,9 @@ class AccessRolePickerView(discord.ui.View):
         await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(interaction.user.id))
 
 
-class ProtectedCategoryPickerView(discord.ui.View):
+class ProtectedCategoryPickerView(_SetupOwnedView):
     def __init__(self, owner_id: int) -> None:
-        super().__init__(timeout=300)
-        self.owner_id = int(owner_id)
+        super().__init__(owner_id, timeout=300)
         self.add_item(
             DankChannelSelect(
                 author_id=self.owner_id,
@@ -879,6 +903,8 @@ class ProtectedCategoryPickerView(discord.ui.View):
                 row=0,
             )
         )
+        self.add_item(_BackToSetupAdminButton(row=1))
+        self.add_item(CloseRolePanelButton(row=1))
 
     async def _picked(self, interaction: discord.Interaction, channel: discord.abc.GuildChannel) -> None:
         if not await _staff_authorized(interaction):
@@ -1041,25 +1067,21 @@ class GateSuspendConfirmModal(discord.ui.Modal):
         )
 
 
-class MemberSetupAdminView(discord.ui.View):
+class MemberSetupAdminView(_SetupOwnedView):
     def __init__(self, owner_id: int) -> None:
-        super().__init__(timeout=900)
-        self.owner_id = int(owner_id)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if int(interaction.user.id) != self.owner_id:
-            await _reply(interaction, "Only the manager who opened this setup panel can use it.", ok=False)
-            return False
-        return True
+        super().__init__(owner_id, timeout=900)
 
     @discord.ui.button(label="Setup Channel", emoji="🪪", style=discord.ButtonStyle.secondary, row=0)
     async def setup_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await interaction.response.send_message(
-            content="Choose the permanent Member Setup channel. It must remain visible while members are gated.",
+        await _replace(
+            interaction,
+            embed=discord.Embed(
+                title="🪪 Choose Member Setup Channel",
+                description="Choose the permanent setup channel. It must remain visible while members are gated.",
+                color=discord.Color.blurple(),
+            ),
             view=SetupChannelPickerView(self.owner_id),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
         )
 
     @discord.ui.button(label="Use This Channel", emoji="📍", style=discord.ButtonStyle.secondary, row=0)
@@ -1085,11 +1107,14 @@ class MemberSetupAdminView(discord.ui.View):
     @discord.ui.button(label="Access Role", emoji="🔑", style=discord.ButtonStyle.secondary, row=0)
     async def access_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await interaction.response.send_message(
-            content="Choose the role that unlocks protected member categories.",
+        await _replace(
+            interaction,
+            embed=discord.Embed(
+                title="🔑 Choose Member Access Role",
+                description="Choose the role that unlocks protected member categories.",
+                color=discord.Color.blurple(),
+            ),
             view=AccessRolePickerView(self.owner_id),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
         )
 
     @discord.ui.button(label="Create Member Access", emoji="➕", style=discord.ButtonStyle.secondary, row=0)
@@ -1130,11 +1155,14 @@ class MemberSetupAdminView(discord.ui.View):
     @discord.ui.button(label="Prerequisite Role", emoji="✅", style=discord.ButtonStyle.secondary, row=1)
     async def prerequisite(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await interaction.response.send_message(
-            content="Optional: choose a role such as Verified. Completing Member Setup will not grant Member Access until this role is present.",
+        await _replace(
+            interaction,
+            embed=discord.Embed(
+                title="✅ Choose Prerequisite Role",
+                description="Optional: choose a role such as Verified. Member Access unlocks only after setup is current and this role is present.",
+                color=discord.Color.blurple(),
+            ),
             view=AccessRolePickerView(self.owner_id, prerequisite=True),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
         )
 
     @discord.ui.button(label="Clear Prerequisite", emoji="🧹", style=discord.ButtonStyle.secondary, row=1)
@@ -1159,11 +1187,14 @@ class MemberSetupAdminView(discord.ui.View):
     @discord.ui.button(label="Add Protected Category", emoji="🔒", style=discord.ButtonStyle.secondary, row=1)
     async def add_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await interaction.response.send_message(
-            content="Choose one member category to protect. Repeat this action for additional categories.",
+        await _replace(
+            interaction,
+            embed=discord.Embed(
+                title="🔒 Add Protected Category",
+                description="Choose one member category to protect. Repeat this action for additional categories.",
+                color=discord.Color.blurple(),
+            ),
             view=ProtectedCategoryPickerView(self.owner_id),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
         )
 
     @discord.ui.button(label="Clear Protected Categories", emoji="🧹", style=discord.ButtonStyle.secondary, row=1)
@@ -1257,6 +1288,18 @@ class MemberSetupAdminView(discord.ui.View):
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_member_setup_admin(interaction)
+
+    @discord.ui.button(label="Roles & Profiles", emoji="↩️", style=discord.ButtonStyle.secondary, row=4)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_role_center import open_roles_profiles_center
+        await open_roles_profiles_center(interaction)
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, row=4)
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .role_center_navigation import close_panel
+        await close_panel(interaction, fallback_text="Member Setup Manager closed.")
 
 
 async def open_member_setup_admin(interaction: discord.Interaction) -> None:
