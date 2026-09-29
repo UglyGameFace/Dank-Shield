@@ -1192,7 +1192,7 @@ async def build_full_health_embed(guild: discord.Guild) -> discord.Embed:
         )[:1024],
         inline=False,
     )
-    embed.set_footer(text=f"Guild {guild.id} • /dank setup • full preflight")
+    embed.set_footer(text="/dank setup • full preflight")
     return embed
 
 
