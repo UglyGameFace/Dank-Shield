@@ -139,7 +139,13 @@ def _role_reason(action: str, actor: Any) -> str:
 
 
 def _role_action_lock(guild_id: int, role_id: int, action: str) -> asyncio.Lock:
-    key = f"{int(guild_id)}:{int(role_id)}:{str(action)}"
+    # Serialize every mutation of the same role, even when different controls
+    # (rename/permissions/move/delete) are pressed concurrently.
+    key = (
+        f"{int(guild_id)}:role:{int(role_id)}"
+        if int(role_id) > 0
+        else f"{int(guild_id)}:create:{str(action)}"
+    )
     lock = _ROLE_ACTION_LOCKS.get(key)
     if lock is None:
         lock = asyncio.Lock()
@@ -382,14 +388,22 @@ def _value_contains_role_id(value: Any, role_id: int) -> bool:
 
 def _config_dependency_labels(config: Mapping[str, Any], role_id: int) -> list[str]:
     labels: list[str] = []
-    for key, value in dict(config or {}).items():
-        clean_key = str(key or "")
-        if "role" not in clean_key.casefold():
-            continue
-        if not _value_contains_role_id(value, role_id):
-            continue
-        label = clean_key.replace("_id", "").replace("_ids", "").replace("_", " ").strip().title()
-        labels.append(label or clean_key)
+
+    def walk(value: Any, path: tuple[str, ...] = ()) -> None:
+        if isinstance(value, Mapping):
+            for raw_key, item in value.items():
+                key = str(raw_key or "")
+                next_path = (*path, key)
+                if "role" in key.casefold() and _value_contains_role_id(item, role_id):
+                    label = key.replace("_id", "").replace("_ids", "").replace("_", " ").strip().title()
+                    labels.append(label or " / ".join(next_path))
+                walk(item, next_path)
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                walk(item, path)
+
+    walk(dict(config or {}))
     return sorted(dict.fromkeys(labels))
 
 
@@ -485,7 +499,7 @@ async def _role_embed(guild: discord.Guild, role: discord.Role) -> discord.Embed
     return embed
 
 
-def _center_embed(*, staff: bool, role_manager: bool) -> discord.Embed:
+def _center_embed(*, staff: bool, role_manager: bool, setup_manager: bool) -> discord.Embed:
     embed = discord.Embed(
         title="🎭 Roles & Profiles",
         description=(
@@ -501,9 +515,12 @@ def _center_embed(*, staff: bool, role_manager: bool) -> discord.Embed:
         inline=False,
     )
     if staff:
+        staff_tools = ["👥 **Member Role Manager**"]
+        if setup_manager:
+            staff_tools.append("🌿 **Profile Builder**")
         embed.add_field(
             name="Staff tools",
-            value="👥 **Member Role Manager** • 🌿 **Profile Builder**",
+            value=" • ".join(staff_tools),
             inline=False,
         )
     if role_manager:
@@ -1449,8 +1466,20 @@ class AdministratorPermissionConfirmModal(discord.ui.Modal):
         self.add_item(self.confirm)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        if str(self.confirm.value or "").strip() != self.role_name:
-            return await _reply(interaction, "❌ Confirmation did not match the role name. Nothing changed.")
+        guild, actor = await _require_role_manager(interaction)
+        if guild is None or actor is None:
+            return
+        role = guild.get_role(self.role_id)
+        if not isinstance(role, discord.Role):
+            return await _reply(interaction, "❌ That role no longer exists.")
+        current_name = str(role.name)
+        if current_name != self.role_name:
+            return await _reply(
+                interaction,
+                "❌ That role was renamed after this confirmation opened. Reopen Permissions and review it again.",
+            )
+        if str(self.confirm.value or "").strip() != current_name:
+            return await _reply(interaction, "❌ Confirmation did not match the current role name. Nothing changed.")
         await _apply_permission_selection(
             interaction,
             owner_id=self.owner_id,
@@ -1539,7 +1568,11 @@ async def open_roles_profiles_center(interaction: discord.Interaction) -> None:
     setup_manager = _can_manage_setup(interaction)
     await _replace(
         interaction,
-        embed=_center_embed(staff=staff, role_manager=role_manager),
+        embed=_center_embed(
+            staff=staff,
+            role_manager=role_manager,
+            setup_manager=setup_manager,
+        ),
         view=RolesProfilesView(
             int(interaction.user.id),
             staff=staff,
