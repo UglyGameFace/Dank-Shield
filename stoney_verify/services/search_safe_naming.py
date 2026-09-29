@@ -177,6 +177,47 @@ def scan_search_safe_targets(
         if row is not None:
             rows.append(row)
 
+    effective_names: dict[tuple[str, str], list[int]] = {}
+    for role in list(getattr(guild, "roles", []) or []):
+        try:
+            if bool(role.is_default()):
+                continue
+        except Exception:
+            pass
+        effective = naming_identity.search_safe_display_name(
+            getattr(role, "name", "")
+        ).strip().casefold()
+        if effective:
+            effective_names.setdefault(("role", effective), []).append(
+                _safe_int(getattr(role, "id", 0), 0)
+            )
+
+    for channel in list(getattr(guild, "channels", []) or []):
+        if isinstance(channel, discord.CategoryChannel):
+            continue
+        if is_share_router_design_resource(channel):
+            continue
+        effective = naming_identity.search_safe_display_name(
+            getattr(channel, "name", "")
+        ).strip().casefold()
+        if effective:
+            effective_names.setdefault(("channel", effective), []).append(
+                _safe_int(getattr(channel, "id", 0), 0)
+            )
+
+    for row in rows:
+        key = (
+            str(row.get("kind") or ""),
+            str(row.get("after") or "").strip().casefold(),
+        )
+        ids = [rid for rid in effective_names.get(key, []) if rid > 0]
+        others = [rid for rid in ids if rid != _safe_int(row.get("id"), 0)]
+        row["collision_count"] = len(others)
+        if others:
+            row["collision_warning"] = (
+                f"{len(others)} other {row.get('kind')} resource(s) resolve to the same searchable name."
+            )
+
     rows.sort(
         key=lambda row: (
             0 if bool(row.get("editable")) else 1,
