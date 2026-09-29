@@ -2,6 +2,133 @@
 
 ## Active task / desired outcome
 
+**ROLES-PROFILES-ROLE-EDITOR-015 — add one safe Roles & Profiles center with staff-only Discord role administration**
+
+Desired outcome: `/dank home → Roles & Profiles` must become one capability-aware center. Normal members see only their own profile/cosmetic surfaces. Recognized staff may reach existing member-role/profile management. Only the server owner, Administrator, or a member with live Discord **Manage Roles** permission may see or execute server-role creation, rename/edit, permissions, hierarchy movement, duplication, or deletion. Every mutation must re-check actor authority, bot authority, role hierarchy, managed/default-role restrictions, and relevant Dank Shield dependencies at execution time.
+
+## Scope / single active task lock
+
+Only the Roles & Profiles center and server-role editor behavior required for this feature are active.
+
+Included:
+- replace the current staff `Roles & Profiles` shortcut to Profile Builder with a real role/profile center;
+- capability-aware member vs staff vs role-manager surfaces;
+- create role;
+- select and inspect a role;
+- rename / colour / hoist / mentionable / unicode role icon editing where supported;
+- grouped server-permission editing with grant-safety checks;
+- safe hierarchy movement;
+- duplicate role;
+- dependency-aware, confirmed role deletion;
+- reuse existing Profile Builder, profile/cosmetic role manager, Member Role Manager, permission/hierarchy safety helpers where structurally correct;
+- targeted regression tests, full repository validation, cleanup, final diff review, PR/CI/deployment evidence before any completion claim.
+
+Excluded:
+- Server Design naming/category/channel behavior;
+- Invite Shield, AntiNuke policy redesign, tickets, verification redesign, Live Captions, Community Hub feature work;
+- unrelated role-system cleanup.
+
+## Switch record
+
+User explicitly issued:
+
+`FORCE SWITCH: Dank Shield Roles & Profiles Role Editor`
+
+Reason: build the staff-only server role creation, editing, rename, hierarchy, permissions, duplicate, and deletion system.
+
+### Suspended task state: Community Hub / Live Captions
+
+The previously active **COMMUNITY-HUB-COMPLETION-RELIABILITY-014** task is suspended, not abandoned. Its full prior task record is preserved below under **Suspended prior task record**. At suspension:
+- production `main` advanced through Live Captions work to merge `b774ab13f8fba18819f453f165108e6aa1d29e97` (PR #358);
+- the Community Hub / Live Captions scope, findings, implementation history, validation evidence, cleanup constraints, blockers/risks, backlog, and next soak/validation steps remain exactly documented in the archived record;
+- no Community Hub code is part of this Role Editor branch unless directly required by shared command-surface correctness.
+
+## Findings / root cause
+
+1. Dank Shield already has role-adjacent features, but no authoritative general Discord role editor.
+2. `/dank home → Roles & Profiles` currently sends server managers directly to the Profile Builder, while normal members go to their profile entry.
+3. Existing role systems are fragmented by purpose: profile/cosmetic roles, member-role assignment/browser, verification/setup role mapping, and AntiNuke rollback. None owns general role mutation.
+4. Existing member-role authorization intentionally treats configured staff / moderation permissions more broadly than Discord `Manage Roles`. That broader staff gate is appropriate for browsing/review but is too permissive for server-role mutation.
+5. Discord's own contract requires Manage Roles for create/edit/delete/reorder and hierarchy limits role mutation to roles below the actor; Dank Shield must independently enforce the same boundary for both the actor and bot before API calls.
+6. Existing `member_role_browser_common.py` already contains reusable protected-role/config and actor/bot hierarchy concepts, but server-role editing needs a dedicated authority check because member moderation actions and role-definition mutations are different capabilities.
+7. Server Design explicitly excludes roles, so the canonical home for the full editor is **Roles & Profiles**, not Server Design. A future visual-only shortcut can route into the same editor without creating duplicate ownership.
+
+## Execution path
+
+`/dank home`
+→ `CompactDankHomeView.roles`
+→ new canonical Roles & Profiles center
+→ member-safe profile route OR recognized-staff tools
+→ role-manager-only server role administration
+→ fresh role resolution + fresh authority/hierarchy/dependency checks
+→ Discord role mutation
+→ refreshed editor/center.
+
+## Changes
+
+- Branch created from production main `b774ab13f8fba18819f453f165108e6aa1d29e97`: `feat/roles-profiles-role-editor-20260928`; draft PR #359 opened.
+- Added canonical `commands_ext/public_role_center.py` and routed both current **Roles & Profiles** home implementations through it.
+- Normal members receive only profile/cosmetic controls. Recognized staff may reach the existing Member Role Manager. Profile Builder is only rendered when the opener also has its established setup-management authority.
+- Server role administration is only rendered for the server owner, Administrator, or a live Discord member with **Manage Roles**.
+- Added role creation, inspect/select, rename/appearance, colour, hoist, mentionable, supported unicode role icon editing, grouped permission editing, one-step hierarchy movement, duplication, Role Health, and exact-name-confirmed deletion.
+- Every mutation re-resolves current state and re-checks actor authority, bot Manage Roles, managed/default-role restrictions, and actor/bot hierarchy. Mutations for the same role are serialized through one per-role lock.
+- Permission editing preserves permissions outside the selected group, rejects grants the actor/bot cannot grant, keeps each Discord select within 25 options, and requires exact current-role-name confirmation before enabling Administrator.
+- Deletion discovers current Dank Shield role dependencies recursively from guild config **and** the separate authoritative Spam Guard security settings, then checks again under the mutation lock immediately before deletion; unreadable durable role settings fail closed.
+- Existing profile/cosmetic management, Member Role Manager, shared role picker, and AntiNuke HTTP self-action provenance remain authoritative; no competing assignment, profile, or AntiNuke owner was added.
+- Duplicate creation re-checks fresh permissions under lock; optional placement failure leaves the created role intact and surfaces a warning rather than pretending placement succeeded.
+- Updated empty cosmetic-role guidance to the public `/dank home → Roles & Profiles → Profile Builder` route.
+- Added focused regression coverage in `tests/test_roles_profiles_role_editor.py` and updated the existing owner-authority command-surface contract.
+
+## Validation / results
+
+Exact-head validation completed successfully on `b4e251d0cd3ae0789911352b592e8d95b995fce9` before this documentation-only update:
+- Dank Shield CI — success;
+- Profile Runtime Diagnostics — success;
+- Community Hub CI — success;
+- Dank Design Regression CI — success;
+- Ticket Owner Emergency Override — success;
+- Application Command Size Diagnostics — success.
+
+Final pre-documentation compare showed:
+- PR #359 mergeable;
+- branch 26 commits ahead and 0 behind production main `b774ab13f8fba18819f453f165108e6aa1d29e97`;
+- exactly seven task-scoped files changed: ACTIVE_TASK.md, the two Roles & Profiles home routes, the canonical role center, one profile guidance line, the owner-authority contract test, and the dedicated role-editor regression test;
+- no Server Design, AntiNuke implementation, Community Hub, Live Captions, ticket, verification, migration, dependency, or deployment file changes.
+
+Because this task-record update changes the branch SHA, all triggered workflows must be green again on the new exact head before merge.
+
+## Cleanup / conflicts
+
+- No Server Design role mutation path was added; Server Design remains channel/category naming-only.
+- No second member-role assignment engine or profile/cosmetic manager was created.
+- No AntiNuke bypass or new provenance system was created. Normal Discord role API calls remain covered by `anti_nuke_self_action_runtime` role create/update/delete authorization. AntiNuke trusted-role settings already live in guild config; Spam Guard's separate `guild_security_settings` role references are read through its existing owner.
+- The old direct **Roles & Profiles → Profile Builder** routing is removed from both home implementations.
+- Stale public guidance to the compacted `/dank profile builder` doorway was corrected in the canonical profile-role UI.
+- No unrelated Community Hub, Live Captions, Invite Shield, ticket, verification, or Server Design behavior is intentionally changed.
+
+## Blockers / risks
+
+- Exact-head CI is still required before merge/completion claims.
+- Discord itself remains the final authority on role hierarchy and server feature availability; the editor pre-checks these boundaries and reports Discord API refusals without weakening them.
+- Custom image role icons are preserved/displayed but this UI only edits supported unicode role icons; adding binary role-icon uploads would require an attachment-capable upload surface and is not silently emulated.
+
+## Backlog
+
+- Suspended Community Hub / Live Captions completion task, with full state preserved below.
+- Optional future Server Design → Role Appearance shortcut into this same authoritative editor after this task is complete.
+
+## Next step
+
+Confirm every workflow triggered by this documentation-only final head is green, verify `main` has not advanced, then mark PR #359 ready for merge. Do not merge on stale-head evidence.
+
+---
+
+# Suspended prior task record
+
+# Active Task
+
+## Active task / desired outcome
+
 **COMMUNITY-HUB-COMPLETION-RELIABILITY-014 — finish the Dank Shield Community Hub as a reliable, general-use product instead of a one-pass scaffold**
 
 Desired outcome: Community Hub interactions must acknowledge reliably, stale private Hub panels must recover without red Discord failures, the user-facing flow must match the intended plain-English experience, and missing promised Hub capabilities must be completed without weakening public-session persistence, permissions, cleanup, rate-limit safety, or privacy boundaries.
