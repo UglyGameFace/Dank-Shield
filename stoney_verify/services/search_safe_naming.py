@@ -18,6 +18,7 @@ from typing import Any
 import discord
 
 from stoney_verify.services import naming_identity
+from stoney_verify.services import naming_mutation_locks
 from stoney_verify.services import role_mutation_authority
 from stoney_verify.share_router_resources import is_share_router_design_resource
 
@@ -357,21 +358,23 @@ async def enforce_role_name(role: discord.Role) -> bool:
     if policy.get("mode") != naming_identity.NAMING_MODE_SEARCH_SAFE or not bool(policy.get("roles", True)):
         return False
 
-    lock = _resource_lock("role", gid, rid)
+    guild_lock = naming_mutation_locks.guild_naming_lock(gid)
+    resource_lock = _resource_lock("role", gid, rid)
     try:
-        async with lock:
-            fresh = guild.get_role(rid) if guild is not None else None
-            if not isinstance(fresh, discord.Role):
-                return False
-            current = str(fresh.name or "").strip()
-            desired = naming_identity.search_safe_display_name(current).strip()
-            if not desired or desired == current or _role_blocker(fresh):
-                return False
-            await fresh.edit(
-                name=desired[:100],
-                reason="Dank Shield Search-Safe Naming policy",
-            )
-            return True
+        async with guild_lock:
+            async with resource_lock:
+                fresh = guild.get_role(rid) if guild is not None else None
+                if not isinstance(fresh, discord.Role):
+                    return False
+                current = str(fresh.name or "").strip()
+                desired = naming_identity.search_safe_display_name(current).strip()
+                if not desired or desired == current or _role_blocker(fresh):
+                    return False
+                await fresh.edit(
+                    name=desired[:100],
+                    reason="Dank Shield Search-Safe Naming policy",
+                )
+                return True
     except (discord.Forbidden, discord.HTTPException):
         return False
 
@@ -398,26 +401,28 @@ async def enforce_channel_name(channel: discord.abc.GuildChannel) -> bool:
     if policy.get("mode") != naming_identity.NAMING_MODE_SEARCH_SAFE or not bool(policy.get("channels", True)):
         return False
 
-    lock = _resource_lock("channel", gid, cid)
+    guild_lock = naming_mutation_locks.guild_naming_lock(gid)
+    resource_lock = _resource_lock("channel", gid, cid)
     try:
-        async with lock:
-            fresh = guild.get_channel(cid) if guild is not None else None
-            if fresh is None or isinstance(fresh, discord.CategoryChannel):
-                return False
-            current = str(getattr(fresh, "name", "") or "").strip()
-            desired = naming_identity.search_safe_display_name(current).strip()
-            if not desired or desired == current or _channel_blocker(fresh):
-                return False
-            await fresh.edit(
-                name=desired[:100],
-                reason="Dank Shield Search-Safe Naming policy",
-            )
-            return True
+        async with guild_lock:
+            async with resource_lock:
+                fresh = guild.get_channel(cid) if guild is not None else None
+                if fresh is None or isinstance(fresh, discord.CategoryChannel):
+                    return False
+                current = str(getattr(fresh, "name", "") or "").strip()
+                desired = naming_identity.search_safe_display_name(current).strip()
+                if not desired or desired == current or _channel_blocker(fresh):
+                    return False
+                await fresh.edit(
+                    name=desired[:100],
+                    reason="Dank Shield Search-Safe Naming policy",
+                )
+                return True
     except (discord.Forbidden, discord.HTTPException):
         return False
 
 
-async def apply_search_safe_batch(
+async def _apply_search_safe_batch_locked(
     guild: discord.Guild,
     *,
     actor: Any,
@@ -581,6 +586,25 @@ async def apply_search_safe_batch(
         "remaining_blocked": sum(1 for row in remaining_rows if not row.get("editable")),
         "batch_limit": batch_limit,
     }
+
+
+async def apply_search_safe_batch(
+    guild: discord.Guild,
+    *,
+    actor: Any,
+    reviewed_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    limit: int = DEFAULT_REPAIR_BATCH_SIZE,
+) -> dict[str, Any]:
+    """Serialize reviewed Search-Safe repair with Dank Design for this guild."""
+
+    guild_lock = naming_mutation_locks.guild_naming_lock(int(guild.id))
+    async with guild_lock:
+        return await _apply_search_safe_batch_locked(
+            guild,
+            actor=actor,
+            reviewed_rows=reviewed_rows,
+            limit=limit,
+        )
 
 
 __all__ = [
