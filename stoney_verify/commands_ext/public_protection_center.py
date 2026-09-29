@@ -531,7 +531,7 @@ def _protection_embed(
         ),
         inline=False,
     )
-    embed.set_footer(text="Protection Center uses existing Automod + Spam Guard settings; no new overlapping config bucket.")
+    embed.set_footer(text="Protection Center • changes apply to this server’s Automod and Spam Guard settings.")
     return embed
 
 
