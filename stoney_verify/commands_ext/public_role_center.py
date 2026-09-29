@@ -1829,19 +1829,32 @@ async def _open_direct_role(
     )
 
 
+async def _role_name_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    """Alias-aware role lookup owned by the shared naming-identity service."""
+    from stoney_verify.services.naming_identity import role_autocomplete
+
+    return await role_autocomplete(interaction, current)
+
+
 @app_commands.describe(
     member="Staff shortcut: open this member in the existing guarded member-role panel.",
-    role="Open an approved self-role, or the staff role editor when you have Manage Roles.",
+    role="Type a normal role name; styled names and saved previous names are searchable.",
 )
+@app_commands.autocomplete(role=lambda interaction, current: _role_name_autocomplete(interaction, current))
 async def open_role_command(
     interaction: discord.Interaction,
     member: Optional[discord.Member] = None,
-    role: Optional[discord.Role] = None,
+    role: Optional[str] = None,
 ) -> None:
     """One smart doorway into the canonical Roles & Profiles runtime."""
     if interaction.guild is None:
         return await _reply(interaction, "❌ /role only works inside a server.")
-    if member is not None and role is not None:
+
+    role_query = str(role or "").strip()
+    if member is not None and role_query:
         return await _reply(interaction, "❌ Choose either a member or a role, not both.")
 
     if not interaction.response.is_done():
@@ -1852,8 +1865,16 @@ async def open_role_command(
         await open_member_target(interaction, member)
         return
 
-    if role is not None:
-        await _open_direct_role(interaction, role)
+    if role_query:
+        from stoney_verify.services.naming_identity import resolve_role_query
+
+        resolved, error = await resolve_role_query(interaction.guild, role_query)
+        if not isinstance(resolved, discord.Role):
+            return await _reply(
+                interaction,
+                "❌ " + (error or "No role matched that name or saved alias."),
+            )
+        await _open_direct_role(interaction, resolved)
         return
 
     await open_roles_profiles_center(interaction)
