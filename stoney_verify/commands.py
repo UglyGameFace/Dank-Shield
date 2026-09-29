@@ -208,6 +208,19 @@ except Exception as e:
     raise
 
 
+# Versioned Member Setup owns join/update access reconciliation separately from
+# slash-command registration. Install it strictly so an active gate can never be
+# left without its recovery/grant runtime after a partial command-module failure.
+try:
+    from .commands_ext.public_member_setup import (
+        install_member_setup_runtime as _install_member_setup_runtime,
+    )
+    _install_member_setup_runtime(bot, strict=True)
+except Exception as e:
+    print(f"❌ commands.py Member Setup runtime failed closed: {repr(e)}")
+    raise
+
+
 # ============================================================
 # Register split slash commands
 # ============================================================
