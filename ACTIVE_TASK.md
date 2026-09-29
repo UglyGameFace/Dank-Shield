@@ -2,9 +2,9 @@
 
 ## Active task / desired outcome
 
-**PROFILE-COMMUNITY-TOKE-016 — make Stoner/community roles self-selectable and add a safe member `/toke` ping flow**
+**PROFILE-COMMUNITY-TOKE-016 — unify self-service/community roles with safe `/toke` and a smart `/role` doorway**
 
-Desired outcome: Dank Shield Profile Builder must let staff map existing safe community roles without recreating them. Members can self-select the configured **Stoner** identity/community role and optional **Sesh Pings** notification role from their profile controls. Any member currently holding the configured Stoner role may use a simple global `/toke` command to ping the configured opt-in sesh audience, with scoped mentions, anti-spam cooldowns, and an optional preferred session channel.
+Desired outcome: Dank Shield Profile Builder must let staff map existing safe community roles without recreating them. Members can self-select the configured **Stoner** identity/community role and optional **Sesh Pings** notification role, use one smart `/role` doorway for approved self-service/profile roles, and use `/toke` from the Stoner role to ping the opt-in sesh audience. Staff/member-role and full server-role shortcuts must reuse the existing guarded Roles & Profiles owners rather than creating parallel role engines.
 
 ## Scope / single active task lock
 
@@ -15,6 +15,10 @@ Included:
 - optional preferred smoke-session text channel;
 - member self-selection UI for Stoner / Sesh Pings alongside the existing cosmetic/profile tools;
 - `/toke` as one intentional member-facing global slash command;
+- `/role` as one intentional smart global slash command with optional `member` and `role` targets;
+- `/role` with no options opens the canonical Roles & Profiles center;
+- `/role member:@User` reuses the existing guarded Member Action panel and remains staff-authorized;
+- `/role role:@Role` opens the existing Server Role Editor for live role managers, otherwise exposes Add/Remove only for roles already recognized by Profile Builder / Community & Pings;
 - only current Stoner-role members may invoke `/toke`;
 - only the configured sesh audience role may be mentioned;
 - no arbitrary user supplied role mentions;
@@ -58,15 +62,18 @@ Excluded:
 - Separate-mode Sesh Pings requires Stoner; removing Stoner also removes the separate Sesh Pings subscription. Same-role mode remains supported.
 - Existing profile-safe role checks remain authoritative for both mapped roles; no second role-safety policy was created.
 - The configured Stoner role appears on Dank Profile cards as a **Community** identity label; Sesh Pings is intentionally hidden from profile identity display.
-- Added intentional top-level `/toke [message]`; the public application-command contract is now eight items total: seven slash roots plus **View Dank Profile**.
+- Added intentional top-level `/toke [message]` and smart top-level `/role [member] [role]`; the public application-command contract is now nine items total: eight slash roots plus **View Dank Profile**.
 - `/toke` acknowledges before config I/O, re-resolves live mappings and Discord permissions, requires the invoker's current Stoner role, serializes sends per guild, and records cooldowns only after a successful send.
 - Outbound role mention scope is constructed by one testable helper permitting only the configured Sesh Pings role, with users/everyone disabled.
 - Added focused behavioral coverage in `tests/test_profile_community_toke.py`; updated every known public-command guard, payload test, command-tree test, ownership doc, and production command-count contract for `/toke`.
 - Existing profile suggestion compatibility subclasses preserve the new controls; Profile Panel/Edit Profile component rows remain within Discord's five-component row limit.
+- `/role` is only a doorway: it routes normal members to existing self-service role ownership, staff member targets to the existing Member Action panel, and Manage Roles/Admin/owner role targets to the existing Server Role Editor.
+- Direct self-role toggles are serialized per guild/member, re-read current durable mappings before mutation, preserve the Stoner → Sesh Pings dependency, and never make arbitrary server roles self-assignable.
+- Added focused regression coverage in `tests/test_role_command_doorway.py` and updated all public command-surface contracts from eight to nine total application-command items.
 
 ## Validation / results
 
-Implementation is frozen pending exact-head PR CI. Pre-PR compare against `main` shows the branch ahead with **0 behind**, and the diff is limited to Profile/Community roles, the canonical `/toke` owner, command-surface contracts/docs, and focused tests.
+Implementation is frozen again after the `/role` expansion pending exact-head PR CI. Pre-PR compare against `main` shows the branch ahead with **0 behind**, and the diff is limited to Profile/Community roles, the canonical `/toke` owner, command-surface contracts/docs, and focused tests.
 
 Required before merge:
 - all six repository workflows green on the exact PR head;
