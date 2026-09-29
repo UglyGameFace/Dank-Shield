@@ -104,7 +104,7 @@ def sticky_embed(config: StickyConfig) -> discord.Embed:
         embed.set_image(url=config.image_url)
     if config.thumbnail_url:
         embed.set_thumbnail(url=config.thumbnail_url)
-    embed.set_footer(text="Dank Shield • persistent message")
+    embed.set_footer(text="This message updates automatically.")
     return embed
 
 
@@ -124,7 +124,7 @@ def sticky_poll_embed(poll: StickyPoll) -> discord.Embed:
     )
     embed.add_field(name=state_label, value="\n".join(lines) or "No choices.", inline=False)
     embed.set_footer(
-        text=f"Dank Shield • {poll.total_votes} total vote{'s' if poll.total_votes != 1 else ''} • one choice per member"
+        text=f"{poll.total_votes} total vote{'s' if poll.total_votes != 1 else ''} • one choice per member"
     )
     return embed
 
