@@ -176,7 +176,7 @@ def attach_setup_review_commands() -> None:
                 embed.add_field(name="Cache Snapshot", value=f"source=`{snapshot.get('source')}` age=`{snapshot.get('age_seconds')}` keys=`{snapshot.get('cached_keys_count')}`", inline=False)
                 if result.get("error"):
                     embed.add_field(name=f"Error ({result.get('error_kind')})", value=str(result.get("error"))[:1024], inline=False)
-                embed.set_footer(text="If this fails after migrations, refresh Supabase REST schema cache or check service-role env vars.")
+                embed.set_footer(text="Read-only check • no settings were changed.")
                 await interaction.followup.send(embed=embed, ephemeral=True)
 
             _DB_CHECK_COMMAND_ATTACHED = True
