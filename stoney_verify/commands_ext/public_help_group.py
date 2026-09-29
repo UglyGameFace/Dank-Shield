@@ -69,6 +69,7 @@ BORING_PUBLIC_TARGET = {
     "dank",
     "captions",
     "mod",
+    "role",
     "ticket",
     "tickets",
     "toke",
