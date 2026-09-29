@@ -46,7 +46,7 @@ MAX_SAME_SPEAKER_COOLDOWN_SECONDS = 3600.0
 LIVE_CARD_HISTORY_SCAN_LIMIT = 100
 READY_RECONCILE_THROTTLE_SECONDS = 60.0
 LIVE_CARD_FOOTER_PREFIX = "Dank Shield live profile"
-_LIVE_CARD_FOOTER_RE = re.compile(r"^Dank Shield live profile • user:(\d+) • trigger:(\d+)$")
+_LEGACY_LIVE_CARD_FOOTER_RE = re.compile(r"^Dank Shield live profile • user:(\d+) • trigger:(\d+)$")
 
 
 @dataclass(frozen=True)
@@ -144,19 +144,36 @@ def parse_live_card_config(config: Mapping[str, Any]) -> LiveCardConfig:
 
 
 def live_card_footer(user_id: int, trigger_message_id: int) -> str:
-    return f"{LIVE_CARD_FOOTER_PREFIX} • user:{int(user_id)} • trigger:{int(trigger_message_id)}"
+    _ = user_id, trigger_message_id
+    return LIVE_CARD_FOOTER_PREFIX
+
+
+def _live_card_footer_text(message: Any) -> str:
+    try:
+        for embed in list(getattr(message, "embeds", []) or []):
+            footer = str(getattr(getattr(embed, "footer", None), "text", "") or "").strip()
+            if footer:
+                return footer
+    except Exception:
+        pass
+    return ""
+
+
+def is_live_card_message(message: Any) -> bool:
+    footer = _live_card_footer_text(message)
+    return bool(
+        footer == LIVE_CARD_FOOTER_PREFIX
+        or _LEGACY_LIVE_CARD_FOOTER_RE.fullmatch(footer)
+    )
 
 
 def parse_live_card_footer(message: Any) -> Optional[tuple[int, int]]:
-    try:
-        embeds = list(getattr(message, "embeds", []) or [])
-        for embed in embeds:
-            footer = str(getattr(getattr(embed, "footer", None), "text", "") or "")
-            match = _LIVE_CARD_FOOTER_RE.fullmatch(footer)
-            if match:
-                return int(match.group(1)), int(match.group(2))
-    except Exception:
-        return None
+    """Parse legacy ID-bearing footers for backward recovery only."""
+
+    footer = _live_card_footer_text(message)
+    match = _LEGACY_LIVE_CARD_FOOTER_RE.fullmatch(footer)
+    if match:
+        return int(match.group(1)), int(match.group(2))
     return None
 
 
@@ -544,7 +561,7 @@ class LiveProfileCardRuntime:
         bot_user = getattr(self.bot, "user", None)
         if bot_user is None or int(getattr(message.author, "id", 0) or 0) != int(bot_user.id):
             return False
-        if parse_live_card_footer(message) is None:
+        if not is_live_card_message(message):
             return False
         for attempt in range(3):
             try:
@@ -804,13 +821,15 @@ class LiveProfileCardRuntime:
             state_rows = []
 
         owned_by_id: dict[int, discord.Message] = {}
+        owned_metadata: dict[int, tuple[int, int]] = {}
         persisted_users: set[int] = set()
         for state in state_rows:
             try:
                 stored_message_id = int(str(state.get("message_id") or "0"))
                 stored_user_id = int(str(state.get("user_id") or "0"))
+                stored_trigger_id = int(str(state.get("trigger_message_id") or "0"))
             except Exception:
-                stored_message_id = stored_user_id = 0
+                stored_message_id = stored_user_id = stored_trigger_id = 0
             if stored_user_id > 0:
                 persisted_users.add(stored_user_id)
             if not stored_message_id:
@@ -824,23 +843,30 @@ class LiveProfileCardRuntime:
             if (
                 stored_message is not None
                 and int(getattr(stored_message.author, "id", 0) or 0) == int(bot_user.id)
-                and parse_live_card_footer(stored_message) is not None
+                and is_live_card_message(stored_message)
             ):
                 owned_by_id[int(stored_message.id)] = stored_message
+                if stored_user_id > 0:
+                    owned_metadata[int(stored_message.id)] = (
+                        stored_user_id,
+                        max(0, stored_trigger_id),
+                    )
 
         try:
             async for message in channel.history(limit=LIVE_CARD_HISTORY_SCAN_LIMIT):
                 if int(getattr(message.author, "id", 0) or 0) != int(bot_user.id):
                     continue
-                if parse_live_card_footer(message) is not None:
+                parsed = parse_live_card_footer(message)
+                if parsed is not None:
                     owned_by_id[int(message.id)] = message
+                    owned_metadata.setdefault(int(message.id), parsed)
         except Exception:
             if not owned_by_id:
                 return
 
         by_user: dict[int, list[discord.Message]] = {}
         for owned in owned_by_id.values():
-            parsed = parse_live_card_footer(owned)
+            parsed = owned_metadata.get(int(owned.id)) or parse_live_card_footer(owned)
             if parsed is None:
                 continue
             by_user.setdefault(int(parsed[0]), []).append(owned)
@@ -848,7 +874,7 @@ class LiveProfileCardRuntime:
         live_users: set[int] = set()
         for user_id, owned in by_user.items():
             newest = max(owned, key=lambda item: int(item.id))
-            parsed = parse_live_card_footer(newest)
+            parsed = owned_metadata.get(int(newest.id)) or parse_live_card_footer(newest)
             if parsed is None:
                 continue
             live_users.add(user_id)
@@ -888,6 +914,7 @@ __all__ = [
     "LiveCardConfig",
     "LiveCardRender",
     "LiveProfileCardRuntime",
+    "is_live_card_message",
     "live_card_footer",
     "parse_live_card_config",
     "parse_live_card_footer",
