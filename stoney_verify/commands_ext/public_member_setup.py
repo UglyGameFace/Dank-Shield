@@ -598,9 +598,23 @@ async def refresh_public_member_setup_panel(
 
     from .public_self_roles_group import ProfilePanelView, _profile_panel_embed
 
+    public_embed = _profile_panel_embed(guild)
+    current_revision = int(state.get("current_revision") or 0)
+    latest = latest_revision(state)
+    if current_revision > 0:
+        public_embed.add_field(
+            name=f"Published setup revision {current_revision}",
+            value=(
+                f"**{_severity_label(str((latest or {}).get('severity') or SEVERITY_MINOR))}**"
+                + (f" — {_clip((latest or {}).get('summary'), 850)}" if _clip((latest or {}).get("summary"), 850) else "")
+                + "\nOpen **Member Setup / Review** to see whether this revision needs anything from you."
+            ),
+            inline=False,
+        )
+
     try:
         await message.edit(
-            embed=_profile_panel_embed(guild),
+            embed=public_embed,
             view=ProfilePanelView(),
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -857,9 +871,21 @@ class PublishRevisionModal(discord.ui.Modal):
         )
         if self.severity == SEVERITY_ACCESS_GATED:
             _schedule_guild_reconcile(guild)
+
+        panel_message, panel_error = await refresh_public_member_setup_panel(
+            guild,
+            actor_id=interaction.user.id,
+        )
+        panel_note = ""
+        if panel_message is not None:
+            panel_note = f" Public panel refreshed in {panel_message.channel.mention}."
+        elif panel_error:
+            panel_note = f" Public panel was not refreshed: {_clip(panel_error, 220)}"
+
+        state = await load_guild_setup_state(guild.id, refresh=True)
         await _replace(
             interaction,
-            content=f"✅ Published member setup revision {state.get('current_revision')}.",
+            content=f"✅ Published member setup revision {state.get('current_revision')}.{panel_note}",
             embed=_admin_embed(guild, state),
             view=MemberSetupAdminView(interaction.user.id),
         )
