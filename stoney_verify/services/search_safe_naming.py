@@ -17,6 +17,7 @@ from typing import Any
 import discord
 
 from stoney_verify.services import naming_identity
+from stoney_verify.services import role_mutation_authority
 from stoney_verify.share_router_resources import is_share_router_design_resource
 
 DEFAULT_REPAIR_BATCH_SIZE = 25
@@ -49,10 +50,18 @@ def _release_resource_lock(kind: str, guild_id: int, resource_id: int, lock: asy
         _RESOURCE_LOCKS.pop(key, None)
 
 
-def _role_blocker(role: Any) -> str:
+def _role_blocker(role: Any, *, actor: Any = None) -> str:
     guild = getattr(role, "guild", None)
     if guild is None:
         return "Role is not attached to a guild."
+
+    # Human-reviewed repairs must obey the same live actor + bot hierarchy
+    # boundary as the canonical /role editor. Automatic policy enforcement has
+    # no initiating human actor, so it retains the bot-policy checks below.
+    if actor is not None:
+        blockers = role_mutation_authority.role_mutation_blockers(guild, actor, role)
+        return " ".join(str(item) for item in blockers if str(item).strip())
+
     try:
         if bool(role.is_default()):
             return "@everyone is never renamed."
@@ -95,7 +104,7 @@ def _channel_blocker(channel: Any) -> str:
     return ""
 
 
-def _target_row(kind: str, resource: Any) -> dict[str, Any] | None:
+def _target_row(kind: str, resource: Any, *, actor: Any = None) -> dict[str, Any] | None:
     if kind == "channel" and is_share_router_design_resource(resource):
         return None
     before = str(getattr(resource, "name", "") or "").strip()
@@ -103,7 +112,7 @@ def _target_row(kind: str, resource: Any) -> dict[str, Any] | None:
     if not before or not after or before == after:
         return None
 
-    blocker = _role_blocker(resource) if kind == "role" else _channel_blocker(resource)
+    blocker = _role_blocker(resource, actor=actor) if kind == "role" else _channel_blocker(resource)
     return {
         "kind": kind,
         "id": _safe_int(getattr(resource, "id", 0), 0),
@@ -114,8 +123,12 @@ def _target_row(kind: str, resource: Any) -> dict[str, Any] | None:
     }
 
 
-def scan_search_safe_targets(guild: discord.Guild) -> list[dict[str, Any]]:
-    """Return current styled role/channel names whose letters block native search."""
+def scan_search_safe_targets(
+    guild: discord.Guild,
+    *,
+    actor: Any = None,
+) -> list[dict[str, Any]]:
+    """Return styled role/channel names, optionally scoped to a live human actor."""
     rows: list[dict[str, Any]] = []
 
     for role in list(getattr(guild, "roles", []) or []):
@@ -124,14 +137,14 @@ def scan_search_safe_targets(guild: discord.Guild) -> list[dict[str, Any]]:
                 continue
         except Exception:
             pass
-        row = _target_row("role", role)
+        row = _target_row("role", role, actor=actor)
         if row is not None:
             rows.append(row)
 
     for channel in list(getattr(guild, "channels", []) or []):
         if isinstance(channel, discord.CategoryChannel):
             continue
-        row = _target_row("channel", channel)
+        row = _target_row("channel", channel, actor=actor)
         if row is not None:
             rows.append(row)
 
@@ -217,8 +230,8 @@ async def policy_adjusted_name(
     return naming_identity.search_safe_display_name(raw).strip() or raw
 
 
-def search_safe_summary(guild: discord.Guild) -> dict[str, int]:
-    rows = scan_search_safe_targets(guild)
+def search_safe_summary(guild: discord.Guild, *, actor: Any = None) -> dict[str, int]:
+    rows = scan_search_safe_targets(guild, actor=actor)
     return {
         "total": len(rows),
         "editable": sum(1 for row in rows if row.get("editable")),
@@ -314,11 +327,12 @@ async def enforce_channel_name(channel: discord.abc.GuildChannel) -> bool:
 async def apply_search_safe_batch(
     guild: discord.Guild,
     *,
+    actor: Any,
     limit: int = DEFAULT_REPAIR_BATCH_SIZE,
 ) -> dict[str, Any]:
-    """Repair a bounded batch of existing names after an explicit admin preview."""
+    """Repair a bounded reviewed batch under the initiating actor's live authority."""
     batch_limit = max(1, min(_safe_int(limit, DEFAULT_REPAIR_BATCH_SIZE), MAX_REPAIR_BATCH_SIZE))
-    initial = scan_search_safe_targets(guild)
+    initial = scan_search_safe_targets(guild, actor=actor)
     editable = [row for row in initial if row.get("editable")]
     selected = editable[:batch_limit]
 
@@ -338,7 +352,7 @@ async def apply_search_safe_batch(
                 continue
             before = str(resource.name or "").strip()
             after = naming_identity.search_safe_display_name(before).strip()
-            blocker = _role_blocker(resource)
+            blocker = _role_blocker(resource, actor=actor)
         else:
             resource = guild.get_channel(rid)
             if resource is None or isinstance(resource, discord.CategoryChannel):
@@ -358,12 +372,36 @@ async def apply_search_safe_batch(
         try:
             async with lock:
                 if kind == "role":
-                    await resource.edit(
+                    fresh = guild.get_role(rid)
+                    if not isinstance(fresh, discord.Role):
+                        failed.append({**row, "error": "Role disappeared before repair."})
+                        continue
+                    before = str(fresh.name or "").strip()
+                    after = naming_identity.search_safe_display_name(before).strip()
+                    blocker = _role_blocker(fresh, actor=actor)
+                    if blocker:
+                        failed.append({**row, "before": before, "after": after, "error": blocker})
+                        continue
+                    if not after or after == before:
+                        continue
+                    await fresh.edit(
                         name=after[:100],
                         reason="Dank Shield Search-Safe Naming reviewed repair",
                     )
                 else:
-                    await resource.edit(
+                    fresh = guild.get_channel(rid)
+                    if fresh is None or isinstance(fresh, discord.CategoryChannel):
+                        failed.append({**row, "error": "Channel disappeared before repair."})
+                        continue
+                    before = str(getattr(fresh, "name", "") or "").strip()
+                    after = naming_identity.search_safe_display_name(before).strip()
+                    blocker = _channel_blocker(fresh)
+                    if blocker:
+                        failed.append({**row, "before": before, "after": after, "error": blocker})
+                        continue
+                    if not after or after == before:
+                        continue
+                    await fresh.edit(
                         name=after[:100],
                         reason="Dank Shield Search-Safe Naming reviewed repair",
                     )
@@ -373,7 +411,7 @@ async def apply_search_safe_batch(
         finally:
             _release_resource_lock(kind, int(guild.id), rid, lock)
 
-    remaining_rows = scan_search_safe_targets(guild)
+    remaining_rows = scan_search_safe_targets(guild, actor=actor)
     return {
         "initial_total": len(initial),
         "initial_editable": len(editable),
