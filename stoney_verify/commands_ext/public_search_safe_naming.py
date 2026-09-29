@@ -386,7 +386,11 @@ class SearchSafeResultView(discord.ui.View):
                 action_name="design.search_safe.next_policy_changed",
             )
 
-        result = await search_safe_naming.apply_search_safe_batch(guild, limit=_BATCH_SIZE)
+        result = await search_safe_naming.apply_search_safe_batch(
+            guild,
+            actor=interaction.user,
+            limit=_BATCH_SIZE,
+        )
         remaining = int(result.get("remaining_editable") or 0)
         await interaction.edit_original_response(
             embed=_result_embed(result, policy),
@@ -413,7 +417,7 @@ async def open_search_safe_naming(interaction: discord.Interaction) -> None:
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True, thinking=False)
     policy = await naming_identity.get_naming_policy(guild.id)
-    rows = search_safe_naming.scan_search_safe_targets(guild)
+    rows = search_safe_naming.scan_search_safe_targets(guild, actor=interaction.user)
     await interaction.edit_original_response(
         embed=_home_embed(guild, policy, rows),
         view=SearchSafeHomeView(
