@@ -801,7 +801,7 @@ async def _open_profile_cosmetics(
 
     if not roles:
         await interaction.response.send_message(
-            "🎭 No profile tags/cosmetics are available yet. Staff can add them in `/dank profile builder` → **Profile Tags & Cosmetics**.",
+            "🎭 No profile tags/cosmetics are available yet. Authorized staff can add them from `/dank home` → **Roles & Profiles** → **Profile Builder** → **Profile Tags & Cosmetics**.",
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
