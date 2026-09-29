@@ -1367,6 +1367,7 @@ class ProfilePanelView(discord.ui.View):
         self.add_item(discord.ui.Button(label="Edit Interests", emoji="🎮", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:interests", row=1))
         self.add_item(discord.ui.Button(label="Signature Settings", emoji="🔐", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}privacy", row=1))
         self.add_item(discord.ui.Button(label="Profile Tags & Cosmetics", emoji="🎭", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}cosmetics", row=2))
+        self.add_item(discord.ui.Button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}community_pings", row=2))
 
         self.add_item(discord.ui.Button(label="Suggest Missing Interest", emoji="➕", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing_interest", row=2))
         self.add_item(discord.ui.Button(label="Missing Identity?", emoji="✍️", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing", row=2))
@@ -1418,6 +1419,7 @@ class ProfileEditView(discord.ui.View):
         self.add_item(discord.ui.Button(label="Signature Settings", emoji="🔐", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}privacy", row=1))
         self.add_item(discord.ui.Button(label="Missing Identity?", emoji="✍️", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing", row=2))
         self.add_item(discord.ui.Button(label="Suggest Missing Interest", emoji="➕", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing_interest", row=2))
+        self.add_item(discord.ui.Button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}community_pings", row=2))
 
 
 def register_profile_panel_runtime(bot: Any) -> bool:
@@ -1775,6 +1777,7 @@ class ProfileBuilderView(discord.ui.View):
             self.add_item(discord.ui.Button(label="Fix Channel Permissions", emoji="🛠️", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:fix", row=0))
 
         self.add_item(discord.ui.Button(label="Profile Tags & Cosmetics", emoji="🎭", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:cosmetics", row=1))
+        self.add_item(discord.ui.Button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:community_pings", row=1))
         self.add_item(discord.ui.Button(label="Health", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}builder:health", row=1))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -1864,6 +1867,11 @@ async def _handle_builder_action(interaction: discord.Interaction, action: str) 
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
+        return True
+
+    if action == "community_pings":
+        from .public_toke import open_community_ping_setup
+        await open_community_ping_setup(interaction)
         return True
 
     if action == "health":
@@ -2036,6 +2044,11 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
 
     if suffix == "cosmetics":
         await _open_profile_cosmetics(interaction, guild, member)
+        return True
+
+    if suffix == "community_pings":
+        from .public_toke import open_member_community_pings
+        await open_member_community_pings(interaction)
         return True
 
     if suffix == "pick_member":
