@@ -65,10 +65,16 @@ def test_repair_batch_is_hard_capped_to_25_existing_names(monkeypatch) -> None:
     ]
     monkeypatch.setattr(search_safe_naming, "_channel_blocker", lambda _channel: "")
 
+    rows = search_safe_naming.scan_search_safe_targets(
+        guild,
+        actor=SimpleNamespace(id=123),
+    )
+    reviewed = search_safe_naming.reviewed_search_safe_batch(rows, limit=999)
     result = asyncio.run(
         search_safe_naming.apply_search_safe_batch(
             guild,
             actor=SimpleNamespace(id=123),
+            reviewed_rows=reviewed,
             limit=999,
         )
     )
@@ -77,6 +83,67 @@ def test_repair_batch_is_hard_capped_to_25_existing_names(monkeypatch) -> None:
     assert len(result["changed"]) == 25
     assert result["remaining_editable"] == 5
     assert sum(bool(channel.edits) for channel in guild.channels) == 25
+
+
+def test_reviewed_batch_does_not_rescan_and_include_new_resource(monkeypatch) -> None:
+    guild = _FakeGuild()
+    reviewed_channel = _FakeChannel(guild, 1, f"🎥・{_styled('videos')}")
+    guild.channels = [reviewed_channel]
+    monkeypatch.setattr(search_safe_naming, "_channel_blocker", lambda _channel: "")
+
+    rows = search_safe_naming.scan_search_safe_targets(
+        guild,
+        actor=SimpleNamespace(id=123),
+    )
+    reviewed = search_safe_naming.reviewed_search_safe_batch(rows, limit=25)
+
+    surprise = _FakeChannel(guild, 2, f"🎵・{_styled('music')}")
+    guild.channels.insert(0, surprise)
+
+    result = asyncio.run(
+        search_safe_naming.apply_search_safe_batch(
+            guild,
+            actor=SimpleNamespace(id=123),
+            reviewed_rows=reviewed,
+            limit=25,
+        )
+    )
+
+    assert reviewed_channel.edits == ["🎥・videos"]
+    assert surprise.edits == []
+    assert len(result["changed"]) == 1
+    assert result["changed"][0]["id"] == reviewed_channel.id
+
+
+def test_reviewed_batch_rejects_name_changed_after_preview(monkeypatch) -> None:
+    guild = _FakeGuild()
+    channel = _FakeChannel(guild, 1, f"🎥・{_styled('videos')}")
+    guild.channels = [channel]
+    monkeypatch.setattr(search_safe_naming, "_channel_blocker", lambda _channel: "")
+
+    rows = search_safe_naming.scan_search_safe_targets(
+        guild,
+        actor=SimpleNamespace(id=123),
+    )
+    reviewed = search_safe_naming.reviewed_search_safe_batch(rows, limit=25)
+
+    changed_after_preview = f"🎥・{_styled('clips')}"
+    channel.name = changed_after_preview
+
+    result = asyncio.run(
+        search_safe_naming.apply_search_safe_batch(
+            guild,
+            actor=SimpleNamespace(id=123),
+            reviewed_rows=reviewed,
+            limit=25,
+        )
+    )
+
+    assert channel.name == changed_after_preview
+    assert channel.edits == []
+    assert result["changed"] == []
+    assert len(result["failed"]) == 1
+    assert "changed after preview" in result["failed"][0]["error"].lower()
 
 
 def test_enabled_policy_enforces_new_styled_channel_without_guild_scan(monkeypatch) -> None:
@@ -137,6 +204,8 @@ def test_server_design_exposes_reviewed_search_safe_workflow() -> None:
     assert 'custom_id="dank_design_v2:search_safe"' in design_v2
     assert "Preview Search-Safe Repair" in ui
     assert "Enable + Repair Next 25" in ui
+    assert "Preview Next 25" in ui
+    assert "reviewed_rows=self.reviewed_rows" in ui
     assert "Manage Roles" in ui
     assert "Categories keep their full visual styling" in ui
     assert "continuous 300,000-server polling" in ui
@@ -258,11 +327,20 @@ def test_search_safe_batch_rechecks_role_authority_inside_resource_lock(monkeypa
     monkeypatch.setattr(search_safe_naming.discord, "Role", _AuthRole)
 
     checks = {"count": 0}
+    reviewed = [
+        {
+            "kind": "role",
+            "id": target.id,
+            "before": target.name,
+            "after": naming_identity.search_safe_display_name(target.name),
+            "editable": True,
+        }
+    ]
 
     def changing_blocker(_role, *, actor=None):
         assert actor is not None
         checks["count"] += 1
-        if checks["count"] >= 3:
+        if checks["count"] >= 2:
             return "Your highest role must stay above the role you edit."
         return ""
 
@@ -272,6 +350,7 @@ def test_search_safe_batch_rechecks_role_authority_inside_resource_lock(monkeypa
         search_safe_naming.apply_search_safe_batch(
             guild,
             actor=actor,
+            reviewed_rows=reviewed,
             limit=25,
         )
     )
