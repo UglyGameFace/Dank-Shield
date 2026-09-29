@@ -1381,3 +1381,142 @@ async def _apply_permission_selection(
                 role_id=role.id,
                 group_key=group_key,
                 selected=selected,
+                role_name=role.name,
+            )
+        )
+
+    permissions = discord.Permissions(role.permissions.value)
+    permissions.update(**{name: name in selected for name in names})
+    if not interaction.response.is_done():
+        await interaction.response.defer()
+    try:
+        async with _role_action_lock(guild.id, role.id, "permissions"):
+            fresh = guild.get_role(role.id)
+            if not isinstance(fresh, discord.Role):
+                return await _reply(interaction, "❌ That role no longer exists.")
+            fresh_blockers = _role_mutation_blockers(guild, actor, fresh)
+            if fresh_blockers:
+                return await _reply(interaction, "❌ " + "\n• ".join(fresh_blockers))
+            current_permissions = discord.Permissions(fresh.permissions.value)
+            current_permissions.update(**{name: name in selected for name in names})
+            edited = await fresh.edit(
+                permissions=current_permissions,
+                reason=_role_reason(f"edited permissions for role {fresh.id}", actor),
+            )
+            if not isinstance(edited, discord.Role):
+                edited = guild.get_role(fresh.id) or fresh
+    except discord.Forbidden:
+        return await _reply(interaction, "❌ Discord denied the permission change.")
+    except discord.HTTPException as exc:
+        return await _reply(interaction, f"❌ Discord could not save permissions: {_clip(exc, 300)}")
+
+    if from_modal:
+        await _followup_panel(
+            interaction,
+            content="✅ Role permissions updated.",
+            embed=await _role_embed(guild, edited),
+            view=RoleDetailView(owner_id, edited.id),
+        )
+    else:
+        await _replace(
+            interaction,
+            embed=await _role_embed(guild, edited),
+            view=RoleDetailView(owner_id, edited.id),
+        )
+
+
+class AdministratorPermissionConfirmModal(discord.ui.Modal):
+    def __init__(
+        self,
+        owner_id: int,
+        *,
+        role_id: int,
+        group_key: str,
+        selected: set[str],
+        role_name: str,
+    ) -> None:
+        super().__init__(title="Confirm Administrator Permission", timeout=300)
+        self.owner_id = int(owner_id)
+        self.role_id = int(role_id)
+        self.group_key = str(group_key)
+        self.selected = set(selected)
+        self.role_name = str(role_name)
+        self.confirm = discord.ui.TextInput(
+            label="Type the exact role name to confirm",
+            placeholder=_clip(role_name, 100),
+            max_length=100,
+        )
+        self.add_item(self.confirm)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if str(self.confirm.value or "").strip() != self.role_name:
+            return await _reply(interaction, "❌ Confirmation did not match the role name. Nothing changed.")
+        await _apply_permission_selection(
+            interaction,
+            owner_id=self.owner_id,
+            role_id=self.role_id,
+            group_key=self.group_key,
+            selected=self.selected,
+            allow_admin=True,
+            from_modal=True,
+        )
+
+
+class DeleteRoleModal(discord.ui.Modal):
+    def __init__(self, owner_id: int, role: discord.Role) -> None:
+        super().__init__(title="Confirm Role Deletion", timeout=300)
+        self.owner_id = int(owner_id)
+        self.role_id = int(role.id)
+        self.role_name = str(role.name)
+        self.confirm = discord.ui.TextInput(
+            label="Type the exact role name",
+            placeholder=_clip(role.name, 100),
+            max_length=100,
+        )
+        self.add_item(self.confirm)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        guild, actor = await _require_role_manager(interaction)
+        if guild is None or actor is None:
+            return
+        role = guild.get_role(self.role_id)
+        if not isinstance(role, discord.Role):
+            return await _reply(interaction, "❌ That role no longer exists.")
+        blockers = _role_mutation_blockers(guild, actor, role)
+        if blockers:
+            return await _reply(interaction, "❌ " + "\n• ".join(blockers))
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        dependencies = await _role_dependencies(guild, role)
+        if dependencies:
+            return await _reply(
+                interaction,
+                "❌ This role became a Dank Shield dependency before confirmation. Remap it first.",
+            )
+        if str(self.confirm.value or "").strip() != str(role.name):
+            return await _reply(interaction, "❌ Confirmation did not match the current role name. Nothing was deleted.")
+
+        role_name = str(role.name)
+        try:
+            async with _role_action_lock(guild.id, role.id, "delete"):
+                fresh = guild.get_role(role.id)
+                if not isinstance(fresh, discord.Role):
+                    return await _reply(interaction, "❌ That role no longer exists.")
+                fresh_blockers = _role_mutation_blockers(guild, actor, fresh)
+                if fresh_blockers:
+                    return await _reply(interaction, "❌ " + "\n• ".join(fresh_blockers))
+                fresh_dependencies = await _role_dependencies(guild, fresh)
+                if fresh_dependencies:
+                    return await _reply(
+                        interaction,
+                        "❌ This role became a Dank Shield dependency before deletion. Remap it first.",
+                    )
+                await fresh.delete(reason=_role_reason(f"deleted role {fresh.id}", actor))
+        except discord.Forbidden:
+            return await _reply(interaction, "❌ Discord denied the role deletion.")
+        except discord.HTTPException as exc:
+            return await _reply(interaction, f"❌ Discord could not delete the role: {_clip(exc, 300)}")
+
+        await _followup_panel(
+            interaction,
+           
