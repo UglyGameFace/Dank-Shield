@@ -205,6 +205,52 @@ def normalize_design_plan_items(
     return out
 
 
+def policy_fingerprint(policy: dict[str, Any] | Any) -> dict[str, Any]:
+    raw = dict(policy) if isinstance(policy, dict) else {}
+    return {
+        "mode": str(raw.get("mode") or naming_identity.NAMING_MODE_PRESERVE),
+        "roles": bool(raw.get("roles", True)),
+        "channels": bool(raw.get("channels", True)),
+        "categories": bool(raw.get("categories", False)),
+    }
+
+
+def policy_matches_snapshot(snapshot: Any, current: Any) -> bool:
+    if not isinstance(snapshot, dict):
+        return False
+    return policy_fingerprint(snapshot) == policy_fingerprint(current)
+
+
+def policy_adjusted_name_for_policy(
+    policy: dict[str, Any] | Any,
+    *,
+    kind: str,
+    name: Any,
+) -> str:
+    """Return the live name permitted by one already-loaded naming policy."""
+
+    raw = str(name or "").strip()
+    if not raw:
+        return raw
+
+    clean_kind = str(kind or "").strip().lower()
+    if clean_kind in {"text", "voice", "stage", "forum", "media", "channel"}:
+        clean_kind = "channel"
+
+    current = policy_fingerprint(policy)
+    if current["mode"] != naming_identity.NAMING_MODE_SEARCH_SAFE:
+        return raw
+    if clean_kind == "role" and not current["roles"]:
+        return raw
+    if clean_kind == "channel" and not current["channels"]:
+        return raw
+    if clean_kind == "category" and not current["categories"]:
+        return raw
+    if clean_kind not in {"role", "channel", "category"}:
+        return raw
+    return naming_identity.search_safe_display_name(raw).strip() or raw
+
+
 async def policy_adjusted_name(
     guild_id: Any,
     *,
@@ -212,22 +258,42 @@ async def policy_adjusted_name(
     name: Any,
 ) -> str:
     """Return the final live name an enabled guild policy permits."""
-    raw = str(name or "").strip()
-    if not raw:
-        return raw
-    clean_kind = str(kind or "").strip().lower()
+
     policy = await naming_identity.get_naming_policy(guild_id)
-    if policy.get("mode") != naming_identity.NAMING_MODE_SEARCH_SAFE:
-        return raw
-    if clean_kind == "role" and not bool(policy.get("roles", True)):
-        return raw
-    if clean_kind == "channel" and not bool(policy.get("channels", True)):
-        return raw
-    if clean_kind == "category" and not bool(policy.get("categories", False)):
-        return raw
-    if clean_kind not in {"role", "channel", "category"}:
-        return raw
-    return naming_identity.search_safe_display_name(raw).strip() or raw
+    return policy_adjusted_name_for_policy(policy, kind=kind, name=name)
+
+
+async def normalize_design_plan_for_guild(
+    guild_id: Any,
+    items: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Bind a design preview to the naming policy used to render its final names."""
+
+    policy = await naming_identity.get_naming_policy(guild_id)
+    fingerprint = policy_fingerprint(policy)
+    return normalize_design_plan_items(items, fingerprint), fingerprint
+
+
+def normalize_undo_snapshot_items(
+    items: list[dict[str, Any]] | list[Any],
+    policy: dict[str, Any] | Any,
+) -> list[dict[str, Any]]:
+    """Make Undo restore targets obey the current Search-Safe authority."""
+
+    out: list[dict[str, Any]] = []
+    for raw in list(items or []):
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        kind = str(item.get("kind") or "channel").strip().lower()
+        old_name = str(item.get("old_name") or item.get("before") or "").strip()
+        adjusted = policy_adjusted_name_for_policy(policy, kind=kind, name=old_name)
+        if adjusted and adjusted != old_name:
+            item["search_safe_original_old_name"] = old_name
+            item["old_name"] = adjusted
+            item["search_safe_undo_adjusted"] = True
+        out.append(item)
+    return out
 
 
 def search_safe_summary(guild: discord.Guild, *, actor: Any = None) -> dict[str, int]:
@@ -432,8 +498,13 @@ __all__ = [
     "apply_search_safe_batch",
     "enforce_channel_name",
     "enforce_role_name",
+    "normalize_design_plan_for_guild",
     "normalize_design_plan_items",
+    "normalize_undo_snapshot_items",
     "policy_adjusted_name",
+    "policy_adjusted_name_for_policy",
+    "policy_fingerprint",
+    "policy_matches_snapshot",
     "scan_search_safe_targets",
     "search_safe_summary",
 ]
