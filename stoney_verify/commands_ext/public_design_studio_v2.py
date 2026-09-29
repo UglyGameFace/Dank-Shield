@@ -17,6 +17,8 @@ import discord
 
 from stoney_verify.interaction_guard import run_guarded_interaction, safe_send_interaction
 from stoney_verify.commands_ext import public_design_studio as legacy
+from stoney_verify.services import search_safe_naming
+from stoney_verify.services import naming_identity
 from stoney_verify.services import server_design_apply_service as apply_service
 from stoney_verify.services import server_design_plan_service as plans
 from stoney_verify.services import server_design_repair_confidence as repair_confidence
@@ -187,6 +189,10 @@ async def _store_preview(
 ) -> None:
     guild = interaction.guild
     assert guild is not None
+    items, naming_policy = await search_safe_naming.normalize_design_plan_for_guild(
+        int(guild.id),
+        [dict(item) for item in items],
+    )
     created_at = legacy._store_pending(  # type: ignore[attr-defined]
         int(guild.id),
         int(interaction.user.id),
@@ -195,6 +201,7 @@ async def _store_preview(
             "options": dict(options),
             "mode": mode,
             "scope_title": title,
+            "naming_policy": dict(naming_policy),
         },
     )
     has_blockers = any(item.get("status") == "failed" for item in items)
@@ -884,6 +891,10 @@ class DesignServerView(DesignView):
             options,
             separator_id=selected,
         )
+        items, naming_policy = await search_safe_naming.normalize_design_plan_for_guild(
+            int(guild.id),
+            [dict(item) for item in items],
+        )
         has_blockers = any(item.get("status") == "failed" for item in items)
         has_changes = any(item.get("status") == "changed" for item in items)
         created_at = legacy._store_pending(  # type: ignore[attr-defined]
@@ -895,6 +906,7 @@ class DesignServerView(DesignView):
                 "mode": "style_change_separator",
                 "style_change_dimension": "channel_separator",
                 "separator_id": selected,
+                "naming_policy": dict(naming_policy),
             },
         )
         await interaction.edit_original_response(
@@ -1192,6 +1204,10 @@ class ReviewRepairView(DesignView):
         await interaction.response.defer(ephemeral=True, thinking=True)
         options = await _load_design_options(int(guild.id))
         items, plan_options, analysis = await plans.build_drift_repair_plan(guild, options)
+        items, naming_policy = await search_safe_naming.normalize_design_plan_for_guild(
+            int(guild.id),
+            [dict(item) for item in items],
+        )
         created_at = legacy._store_pending(  # type: ignore[attr-defined]
             int(guild.id),
             int(interaction.user.id),
@@ -1200,6 +1216,7 @@ class ReviewRepairView(DesignView):
                 "options": dict(plan_options),
                 "analysis": dict(analysis),
                 "mode": "consistency_check_v2",
+                "naming_policy": dict(naming_policy),
             },
         )
         has_changes = any(item.get("status") == "changed" for item in items)
@@ -1437,7 +1454,17 @@ def _undo_preview_embed(snapshot: Mapping[str, Any]) -> discord.Embed:
     embed.add_field(name="Items in latest Apply", value=f"**{len(items)}**", inline=True)
     embed.add_field(name="Snapshot storage", value="Durable" if snapshot.get("durable") is not False else "Emergency memory-only", inline=True)
     embed.add_field(name="Will restore", value="\n".join(lines)[:1024] or "No restorable names.", inline=False)
-    embed.set_footer(text="Confirm Undo only after reviewing these exact names")
+    adjusted = sum(1 for item in items if bool(item.get("search_safe_undo_adjusted")))
+    if adjusted:
+        embed.add_field(
+            name="Search-Safe authority",
+            value=(
+                f"**{adjusted}** restore target(s) were adjusted to ordinary searchable letters because Search-Safe Naming is currently enabled. "
+                "Decoration is preserved; disabling Search-Safe and reopening Undo is required to review the original styled-letter targets."
+            )[:1024],
+            inline=False,
+        )
+    embed.set_footer(text="Confirm Undo only after reviewing these effective names")
     return legacy._clean_design_embed(embed)  # type: ignore[attr-defined]
 
 
@@ -1458,7 +1485,20 @@ async def _open_undo_action(interaction: discord.Interaction) -> None:
         )
         return
     created_at = _safe_float(latest.get("created_at"), 0.0)
-    await interaction.edit_original_response(embed=_undo_preview_embed(latest), view=UndoConfirmView(snapshot_created_at=created_at))
+    policy = await naming_identity.get_naming_policy(int(guild.id))
+    policy_snapshot = search_safe_naming.policy_fingerprint(policy)
+    effective = dict(latest)
+    effective["items"] = search_safe_naming.normalize_undo_snapshot_items(
+        list(latest.get("items") or []),
+        policy_snapshot,
+    )
+    await interaction.edit_original_response(
+        embed=_undo_preview_embed(effective),
+        view=UndoConfirmView(
+            snapshot_created_at=created_at,
+            naming_policy=policy_snapshot,
+        ),
+    )
 
 
 async def _open_undo(interaction: discord.Interaction) -> None:
@@ -1483,9 +1523,15 @@ class DoneView(DesignView):
 
 
 class UndoConfirmView(DesignView):
-    def __init__(self, *, snapshot_created_at: float) -> None:
+    def __init__(
+        self,
+        *,
+        snapshot_created_at: float,
+        naming_policy: Mapping[str, Any],
+    ) -> None:
         super().__init__(timeout=900)
         self.snapshot_created_at = float(snapshot_created_at)
+        self.naming_policy = search_safe_naming.policy_fingerprint(dict(naming_policy))
 
     @discord.ui.button(label="Confirm Undo Last Apply", emoji="↩️", style=discord.ButtonStyle.danger, custom_id="dank_design_v2:undo_confirm", row=0)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1510,6 +1556,17 @@ class UndoConfirmView(DesignView):
             return
 
         await interaction.response.defer(ephemeral=True, thinking=False)
+        current_policy = await naming_identity.get_naming_policy(int(guild.id))
+        if not search_safe_naming.policy_matches_snapshot(self.naming_policy, current_policy):
+            await interaction.edit_original_response(
+                content=(
+                    "❌ Search-Safe Naming changed after this Undo preview was built. "
+                    "Nothing was changed. Reopen Undo Last Apply to review the effective restore names."
+                ),
+                embed=None,
+                view=DoneView(can_rollback=True),
+            )
+            return
         latest = await legacy._latest_rollback_snapshot(int(guild.id))  # type: ignore[attr-defined]
         if not _snapshot_matches(latest, self.snapshot_created_at):
             await interaction.edit_original_response(
@@ -1525,7 +1582,10 @@ class UndoConfirmView(DesignView):
                 await interaction.edit_original_response(content="❌ The latest Apply snapshot changed before Undo started. Nothing was changed.", embed=None, view=DoneView(can_rollback=True))
                 return
             assert latest is not None
-            items = list(latest.get("items") or [])
+            items = search_safe_naming.normalize_undo_snapshot_items(
+                list(latest.get("items") or []),
+                self.naming_policy,
+            )
             ready, errors = await apply_service.preflight_undo(guild, items, name_limit=studio.DISCORD_NAME_LIMIT)
             if errors:
                 embed = discord.Embed(
@@ -2326,6 +2386,20 @@ class ReviewedPreviewView(DesignView):
             )
             return
         mode = _safe_str(payload.get("mode"), "preview")
+        preview_policy = payload.get("naming_policy")
+        current_policy = await naming_identity.get_naming_policy(int(guild.id))
+        if not search_safe_naming.policy_matches_snapshot(preview_policy, current_policy):
+            legacy._PENDING.pop(key, None)  # type: ignore[attr-defined]
+            await safe_send_interaction(
+                interaction,
+                content=(
+                    "❌ Search-Safe Naming changed after this preview was built. "
+                    "Nothing was changed. Build a fresh Dank Design preview so the names you review are the names Apply will actually use."
+                ),
+                ephemeral=True,
+                action_name="design.v2.apply_reviewed.naming_policy_changed",
+            )
+            return
         failed_items = [item for item in items if item.get("status") == "failed"]
         allow_safe_subset = mode == "consistency_check_v2"
 
