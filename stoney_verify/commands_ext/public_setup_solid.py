@@ -263,63 +263,24 @@ async def _save_config(interaction: discord.Interaction, payload: dict[str, Any]
 
 
 async def _clear_config_keys(interaction: discord.Interaction, keys: Iterable[str]) -> None:
-    """Clear optional setup slots.
+    """Clear optional setup slots through the canonical atomic config owner."""
 
-    The public setup writer intentionally ignores empty snowflakes to prevent
-    accidental data loss. This clear path is explicit and only available inside
-    /dank setup.
-    """
     guild = interaction.guild
     if guild is None:
         raise RuntimeError("This must be used inside a server.")
 
-    keys = [str(k) for k in keys if str(k).strip() and str(k) not in CONTROL_KEYS]
-    if not keys:
+    clean_keys = [str(k) for k in keys if str(k).strip() and str(k) not in CONTROL_KEYS]
+    if not clean_keys:
         return
 
-    def _sync() -> None:
-        sb = get_supabase()
-        if sb is None:
-            raise RuntimeError("Supabase is not available.")
+    from .public_setup_config_writer import clear_guild_config_keys
 
-        table = "guild_configs"
-        try:
-            import os
-
-            table = (os.getenv("DANK_GUILD_CONFIG_TABLE") or table).strip() or table
-        except Exception:
-            pass
-
-        res = sb.table(table).select("*").eq("guild_id", str(int(guild.id))).limit(1).execute()
-        rows = getattr(res, "data", None) or []
-        existing = rows[0] if rows and isinstance(rows[0], Mapping) else {}
-
-        payload: dict[str, Any] = {
-            "updated_at": _utc_iso(),
-            "config_last_write_mode": "explicit_clear",
-            "config_last_write_source": "/dank setup clear optional slots",
-            "config_last_write_at": _utc_iso(),
-        }
-
-        for key in keys:
-            if key in existing:
-                payload[key] = None
-
-        for json_key in ("settings", "config", "metadata", "meta"):
-            current = existing.get(json_key) if isinstance(existing, Mapping) else None
-            if isinstance(current, Mapping):
-                next_payload = dict(current)
-                for key in keys:
-                    next_payload.pop(key, None)
-                payload[json_key] = next_payload
-
-        if existing:
-            sb.table(table).update(payload).eq("guild_id", str(int(guild.id))).execute()
-        else:
-            payload["guild_id"] = str(int(guild.id))
-            sb.table(table).upsert(payload).execute()
-
-    await asyncio.to_thread(_sync)
+    await clear_guild_config_keys(
+        int(guild.id),
+        clean_keys,
+        source="/dank setup clear optional slots",
+        actor=interaction.user,
+    )
     invalidate_guild_config(guild.id)
 
 
