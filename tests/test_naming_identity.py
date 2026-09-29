@@ -317,14 +317,13 @@ def test_rapid_alias_flush_preserves_event_chronology(monkeypatch) -> None:
 
     captured: dict[str, object] = {}
 
-    async def fake_load(_guild_id: int):
-        return {}
+    async def fake_mutate(_guild_id: int, transform, *, attempts: int = 5):
+        _ = attempts
+        state = dict(transform({}))
+        captured["state"] = state
+        return state
 
-    async def fake_persist(_guild_id: int, state):
-        captured["state"] = dict(state)
-
-    monkeypatch.setattr(naming_identity, "_load_state", fake_load)
-    monkeypatch.setattr(naming_identity, "_persist_state", fake_persist)
+    monkeypatch.setattr(naming_identity, "_mutate_state_cas", fake_mutate)
 
     asyncio.run(naming_identity._debounced_flush(999))  # noqa: SLF001
 
@@ -352,15 +351,12 @@ def test_failed_alias_persistence_requeues_old_events_ahead_of_newer_events(monk
         lambda guild_id: scheduled.append(int(guild_id)),
     )
 
-    async def fake_load(_guild_id: int):
-        return {}
-
-    async def fail_after_new_event(_guild_id: int, _state):
+    async def fail_after_new_event(_guild_id: int, _transform, *, attempts: int = 5):
+        _ = attempts
         naming_identity._PENDING_ALIASES.setdefault(999, {})["role:42"] = ["beta"]  # noqa: SLF001
         raise RuntimeError("temporary database outage")
 
-    monkeypatch.setattr(naming_identity, "_load_state", fake_load)
-    monkeypatch.setattr(naming_identity, "_persist_state", fail_after_new_event)
+    monkeypatch.setattr(naming_identity, "_mutate_state_cas", fail_after_new_event)
 
     asyncio.run(naming_identity._debounced_flush(999))  # noqa: SLF001
 
@@ -405,6 +401,50 @@ def test_exact_live_role_match_still_avoids_alias_state_read(monkeypatch) -> Non
     choices = asyncio.run(naming_identity.role_autocomplete(interaction, "Verified"))
 
     assert choices[0].value == "1"
+
+
+def test_naming_state_cas_replays_transform_on_concurrent_worker_winner(monkeypatch) -> None:
+    initial = naming_identity._normalize_state({})  # noqa: SLF001
+    winner = naming_identity.remember_alias(
+        initial,
+        kind="role",
+        resource_id=2,
+        alias="winner",
+        updated_at=1.0,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_fresh(_guild_id: int):
+        return None, initial
+
+    async def fake_cas(_guild_id: int, *, expected_raw, updated):
+        calls.append(
+            {
+                "expected": expected_raw,
+                "updated": naming_identity._normalize_state(updated),  # noqa: SLF001
+            }
+        )
+        if len(calls) == 1:
+            return False, winner, winner
+        return True, updated, naming_identity._normalize_state(updated)  # noqa: SLF001
+
+    monkeypatch.setattr(naming_identity, "_fresh_state_source", fake_fresh)
+    monkeypatch.setattr(naming_identity, "_cas_state", fake_cas)
+
+    def transform(current):
+        return naming_identity.remember_alias(
+            current,
+            kind="role",
+            resource_id=1,
+            alias="mine",
+            updated_at=2.0,
+        )
+
+    saved = asyncio.run(naming_identity._mutate_state_cas(999, transform))  # noqa: SLF001
+
+    assert len(calls) == 2
+    assert naming_identity.aliases_for(saved, kind="role", resource_id=1) == ("mine",)
+    assert naming_identity.aliases_for(saved, kind="role", resource_id=2) == ("winner",)
 
 
 def test_future_naming_schema_reads_fail_closed_without_reinterpreting_records() -> None:
@@ -458,14 +498,15 @@ def test_set_naming_mode_does_not_overwrite_future_schema(monkeypatch) -> None:
     }
     persisted: list[object] = []
 
-    async def fake_load(_guild_id: int):
-        return future
+    async def fake_fresh(_guild_id: int):
+        return future, naming_identity._normalize_state(future)  # noqa: SLF001
 
-    async def fake_persist(_guild_id: int, state):
-        persisted.append(state)
+    async def fake_cas(*args, **kwargs):
+        persisted.append((args, kwargs))
+        raise AssertionError("CAS must not run for a future schema")
 
-    monkeypatch.setattr(naming_identity, "_load_state", fake_load)
-    monkeypatch.setattr(naming_identity, "_persist_state", fake_persist)
+    monkeypatch.setattr(naming_identity, "_fresh_state_source", fake_fresh)
+    monkeypatch.setattr(naming_identity, "_cas_state", fake_cas)
 
     async def scenario() -> None:
         try:
