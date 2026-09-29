@@ -505,6 +505,119 @@ async def open_member_setup(interaction: discord.Interaction) -> None:
     )
 
 
+def _message_component_ids(message: discord.Message) -> set[str]:
+    out: set[str] = set()
+    for row in list(getattr(message, "components", []) or []):
+        children = list(getattr(row, "children", []) or [])
+        if not children:
+            children = [row]
+        for child in children:
+            custom_id = str(getattr(child, "custom_id", "") or "")
+            if custom_id:
+                out.add(custom_id)
+    return out
+
+
+def _looks_like_member_setup_panel(message: discord.Message, guild: discord.Guild) -> bool:
+    try:
+        author_id = int(getattr(getattr(message, "author", None), "id", 0) or 0)
+        bot_id = int(getattr(getattr(guild, "me", None), "id", 0) or 0)
+        if author_id <= 0 or author_id != bot_id:
+            return False
+        component_ids = _message_component_ids(message)
+        if not any(custom_id.startswith("dank:profile:v1:") for custom_id in component_ids):
+            return False
+        titles = {
+            str(getattr(embed, "title", "") or "").strip()
+            for embed in list(getattr(message, "embeds", []) or [])
+        }
+        return bool(
+            {"Profile Panel", "Member Setup & Profile"}.intersection(titles)
+            or "dank:profile:v1:edit" in component_ids
+        )
+    except Exception:
+        return False
+
+
+async def _find_or_fetch_member_setup_panel(
+    guild: discord.Guild,
+    state: Mapping[str, Any],
+) -> tuple[Optional[discord.Message], str]:
+    channel = _resolve_channel(guild, state.get("setup_channel_id"))
+    if channel is None:
+        return None, "Choose the permanent Member Setup channel first."
+
+    saved_id = _safe_int(state.get("panel_message_id"), 0)
+    if saved_id > 0:
+        try:
+            message = await channel.fetch_message(saved_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            message = None
+        if isinstance(message, discord.Message) and _looks_like_member_setup_panel(message, guild):
+            return message, ""
+
+    me = guild.me
+    if not isinstance(me, discord.Member):
+        return None, "Dank Shield could not resolve its bot member."
+    perms = channel.permissions_for(me)
+    if not (perms.view_channel and perms.read_message_history):
+        return None, "Dank Shield needs View Channel and Read Message History to adopt the existing panel."
+
+    matches: list[discord.Message] = []
+    try:
+        async for message in channel.history(limit=100):
+            if _looks_like_member_setup_panel(message, guild):
+                matches.append(message)
+                if len(matches) > 1:
+                    break
+    except (discord.Forbidden, discord.HTTPException) as exc:
+        return None, f"Could not inspect the Member Setup channel history: {type(exc).__name__}."
+
+    if not matches:
+        return None, (
+            "No canonical Dank Shield profile/setup panel was found in the configured channel. "
+            "Use Profile Builder to post one."
+        )
+    if len(matches) > 1:
+        return None, (
+            "More than one canonical profile/setup panel exists in the configured channel. "
+            "Delete the obsolete duplicate before refreshing so Dank Shield cannot edit the wrong panel."
+        )
+    return matches[0], ""
+
+
+async def refresh_public_member_setup_panel(
+    guild: discord.Guild,
+    *,
+    actor_id: int,
+) -> tuple[Optional[discord.Message], str]:
+    state = await load_guild_setup_state(guild.id, refresh=True)
+    message, error = await _find_or_fetch_member_setup_panel(guild, state)
+    if message is None:
+        return None, error
+
+    from .public_self_roles_group import ProfilePanelView, _profile_panel_embed
+
+    try:
+        await message.edit(
+            embed=_profile_panel_embed(guild),
+            view=ProfilePanelView(),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    except discord.Forbidden:
+        return None, "Dank Shield cannot edit that panel message."
+    except discord.HTTPException as exc:
+        return None, f"Discord could not refresh the panel: {type(exc).__name__}."
+
+    await configure_guild_setup(
+        guild.id,
+        setup_channel_id=message.channel.id,
+        panel_message_id=message.id,
+        actor_id=actor_id,
+    )
+    return message, ""
+
+
 def _admin_embed(guild: discord.Guild, state: Mapping[str, Any]) -> discord.Embed:
     health = gate_health(guild, state)
     channel = health["setup_channel"]
@@ -540,6 +653,12 @@ def _admin_embed(guild: discord.Guild, state: Mapping[str, Any]) -> discord.Embe
         name="Member Access role",
         value=access_role.mention if isinstance(access_role, discord.Role) else "Not selected",
         inline=True,
+    )
+    panel_message_id = _safe_int(state.get("panel_message_id"), 0)
+    embed.add_field(
+        name="Public setup panel",
+        value=(f"Tracked message: `{panel_message_id}`" if panel_message_id > 0 else "Legacy/untracked — use **Refresh Public Panel** to adopt it."),
+        inline=False,
     )
     embed.add_field(
         name="Prerequisite",
@@ -974,6 +1093,29 @@ class MemberSetupAdminView(discord.ui.View):
         _ = button
         await interaction.response.send_modal(PublishRevisionModal(SEVERITY_ACCESS_GATED))
 
+    @discord.ui.button(label="Refresh Public Panel", emoji="♻️", style=discord.ButtonStyle.primary, row=3)
+    async def refresh_public_panel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _staff_authorized(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await _reply(interaction, "This only works inside a server.", ok=False)
+        await _defer(interaction)
+        message, error = await refresh_public_member_setup_panel(
+            guild,
+            actor_id=interaction.user.id,
+        )
+        if message is None:
+            return await _reply(interaction, error or "The public panel could not be refreshed.", ok=False)
+        state = await load_guild_setup_state(guild.id, refresh=True)
+        await _replace(
+            interaction,
+            content=f"✅ Refreshed the canonical Member Setup & Profile panel in {message.channel.mention}.",
+            embed=_admin_embed(guild, state),
+            view=MemberSetupAdminView(self.owner_id),
+        )
+
     @discord.ui.button(label="Activate Strict Gate", emoji="🛡️", style=discord.ButtonStyle.danger, row=3)
     async def activate(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -1303,6 +1445,7 @@ __all__ = [
     "install_member_setup_runtime",
     "open_member_setup",
     "open_member_setup_admin",
+    "refresh_public_member_setup_panel",
     "reconcile_guild_access_gate",
     "reconcile_member_access",
     "suspend_strict_gate",
