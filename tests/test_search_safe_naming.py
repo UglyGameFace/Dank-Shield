@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -447,3 +448,47 @@ def test_server_stats_design_names_are_search_safe_before_create_or_refresh() ->
     assert "_find_owned_category(guild, cfg, naming_policy=naming_policy)" in source
     assert source.count("naming_policy=naming_policy") >= 8
     assert "category_name = search_safe_naming.policy_adjusted_name_for_policy(" in source
+
+
+def test_resource_lock_registry_does_not_split_queued_waiters() -> None:
+    search_safe_naming._RESOURCE_LOCKS.clear()  # noqa: SLF001
+
+    async def scenario() -> None:
+        first = search_safe_naming._resource_lock("channel", 999, 123)  # noqa: SLF001
+        await first.acquire()
+
+        queued = search_safe_naming._resource_lock("channel", 999, 123)  # noqa: SLF001
+        assert queued is first
+
+        async def waiter() -> None:
+            await queued.acquire()
+            queued.release()
+
+        waiting_task = asyncio.create_task(waiter())
+        await asyncio.sleep(0)
+
+        # Releasing the first holder must not evict the registry entry while a
+        # queued waiter still owns a strong reference to the same lock.
+        first.release()
+        third = search_safe_naming._resource_lock("channel", 999, 123)  # noqa: SLF001
+        assert third is first
+        assert third is queued
+
+        await waiting_task
+
+    asyncio.run(scenario())
+    gc.collect()
+
+    # Weak ownership prevents one lock object per historical Discord resource
+    # from becoming a permanent process-wide memory registry.
+    assert len(search_safe_naming._RESOURCE_LOCKS) == 0  # noqa: SLF001
+
+
+def test_resource_lock_registry_has_no_manual_release_pop_race() -> None:
+    source = (
+        ROOT / "stoney_verify/services/search_safe_naming.py"
+    ).read_text(encoding="utf-8")
+
+    assert "WeakValueDictionary" in source
+    assert "def _release_resource_lock" not in source
+    assert "_release_resource_lock(" not in source
