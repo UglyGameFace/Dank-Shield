@@ -714,6 +714,49 @@ async def refresh_public_member_setup_panel(
     return message, ""
 
 
+def _strict_gate_flow_value(
+    guild: discord.Guild,
+    state: Mapping[str, Any],
+) -> str:
+    prerequisite = _resolve_role(guild, state.get("prerequisite_role_id"))
+    access_role = _resolve_role(guild, state.get("access_role_id"))
+    protected = [
+        guild.get_channel(_safe_int(raw_id, 0))
+        for raw_id in list(state.get("protected_category_ids") or [])
+    ]
+    protected = [
+        item for item in protected if isinstance(item, discord.CategoryChannel)
+    ]
+
+    eligibility = (
+        prerequisite.mention
+        if isinstance(prerequisite, discord.Role)
+        else "No prerequisite — any non-exempt member is eligible"
+    )
+    access = (
+        access_role.mention
+        if isinstance(access_role, discord.Role)
+        else "Member Access role not configured"
+    )
+    destination = (
+        f"{len(protected)} protected categor{'y' if len(protected) == 1 else 'ies'}"
+        if protected
+        else "No protected categories configured"
+    )
+    prerequisite_note = (
+        "Dank Shield **does not grant** the eligibility prerequisite. The member must already have it."
+        if isinstance(prerequisite, discord.Role)
+        else "There is no separate eligibility role to earn first."
+    )
+    return (
+        f"**1. Eligibility:** {eligibility}\n"
+        "**2. Setup:** member completes/confirms the current Member Setup revision\n"
+        f"**3. Access:** Dank Shield automatically grants/removes {access}\n"
+        f"**4. Visibility:** that Member Access role unlocks {destination}\n"
+        f"{prerequisite_note}"
+    )[:1024]
+
+
 def _admin_embed(guild: discord.Guild, state: Mapping[str, Any]) -> discord.Embed:
     health = gate_health(guild, state)
     channel = health["setup_channel"]
@@ -746,8 +789,12 @@ def _admin_embed(guild: discord.Guild, state: Mapping[str, Any]) -> discord.Embe
         inline=True,
     )
     embed.add_field(
-        name="Member Access role",
-        value=access_role.mention if isinstance(access_role, discord.Role) else "Not selected",
+        name="Member Access role (automatic)",
+        value=(
+            f"{access_role.mention}\nDank Shield grants/removes this role after setup."
+            if isinstance(access_role, discord.Role)
+            else "Not selected — choose the role Dank Shield should grant/remove automatically."
+        ),
         inline=True,
     )
     panel_message_id = _safe_int(state.get("panel_message_id"), 0)
@@ -757,8 +804,12 @@ def _admin_embed(guild: discord.Guild, state: Mapping[str, Any]) -> discord.Embe
         inline=False,
     )
     embed.add_field(
-        name="Prerequisite",
-        value=prerequisite.mention if isinstance(prerequisite, discord.Role) else "None",
+        name="Eligibility prerequisite (optional)",
+        value=(
+            f"{prerequisite.mention}\nMember must already have this role; Dank Shield does not grant it."
+            if isinstance(prerequisite, discord.Role)
+            else "None — setup completion alone can qualify a member for Member Access."
+        ),
         inline=True,
     )
     embed.add_field(
@@ -767,6 +818,11 @@ def _admin_embed(guild: discord.Guild, state: Mapping[str, Any]) -> discord.Embe
             "\n".join(f"• {category.name}" for category in categories[:12])
             if categories else "None selected"
         ),
+        inline=False,
+    )
+    embed.add_field(
+        name="How Strict Gate works",
+        value=_strict_gate_flow_value(guild, state),
         inline=False,
     )
     if health["blockers"]:
@@ -835,9 +891,9 @@ class AccessRolePickerView(discord.ui.View):
                 author_id=self.owner_id,
                 on_pick=self._picked,
                 placeholder=(
-                    "Choose a verification/prerequisite role…"
+                    "Choose the optional eligibility role members must already have…"
                     if self.prerequisite
-                    else "Choose the Member Access role…"
+                    else "Choose the role Dank Shield should grant/remove automatically…"
                 ),
                 row=0,
             )
@@ -1082,11 +1138,15 @@ class MemberSetupAdminView(discord.ui.View):
         )
         await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(self.owner_id))
 
-    @discord.ui.button(label="Access Role", emoji="🔑", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Member Access Role", emoji="🔑", style=discord.ButtonStyle.secondary, row=0)
     async def access_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.send_message(
-            content="Choose the role that unlocks protected member categories.",
+            content=(
+                "Choose the **Member Access** role. Dank Shield will grant this role automatically "
+                "after an eligible member completes the current setup, and remove it when an active "
+                "Access-Gated revision requires review. This is the role that unlocks your protected categories."
+            ),
             view=AccessRolePickerView(self.owner_id),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
@@ -1127,17 +1187,21 @@ class MemberSetupAdminView(discord.ui.View):
         state = await configure_guild_setup(guild.id, access_role_id=role.id, actor_id=interaction.user.id)
         await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(self.owner_id))
 
-    @discord.ui.button(label="Prerequisite Role", emoji="✅", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Eligibility Prerequisite", emoji="✅", style=discord.ButtonStyle.secondary, row=1)
     async def prerequisite(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.send_message(
-            content="Optional: choose a role such as Verified. Completing Member Setup will not grant Member Access until this role is present.",
+            content=(
+                "Optional eligibility check: choose a role such as **Verified** that the member must "
+                "already have before Member Access can be granted. Dank Shield does **not** grant this "
+                "prerequisite role. If you leave it empty, completing Member Setup is enough to qualify."
+            ),
             view=AccessRolePickerView(self.owner_id, prerequisite=True),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @discord.ui.button(label="Clear Prerequisite", emoji="🧹", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Clear Eligibility Rule", emoji="🧹", style=discord.ButtonStyle.secondary, row=1)
     async def clear_prerequisite(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _staff_authorized(interaction):
@@ -1238,6 +1302,8 @@ class MemberSetupAdminView(discord.ui.View):
         health = gate_health(guild, state)
         if not health["ready"]:
             return await _reply(interaction, "Fix Strict Gate blockers first:\n" + "\n".join(f"• {x}" for x in health["blockers"][:8]), ok=False)
+        # The manager embed immediately above this button shows the exact
+        # Eligibility → Setup → Member Access → Protected Categories chain.
         await interaction.response.send_modal(GateActivationConfirmModal(guild))
 
     @discord.ui.button(label="Suspend Strict Gate", emoji="🧯", style=discord.ButtonStyle.secondary, row=3)
