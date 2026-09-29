@@ -167,10 +167,10 @@ async def enforce_role_name(role: discord.Role) -> bool:
     if gid <= 0 or rid <= 0:
         return False
 
+    if _role_blocker(role):
+        return False
     policy = await naming_identity.get_naming_policy(gid)
     if policy.get("mode") != naming_identity.NAMING_MODE_SEARCH_SAFE or not bool(policy.get("roles", True)):
-        return False
-    if _role_blocker(role):
         return False
 
     lock = _resource_lock("role", gid, rid)
@@ -210,10 +210,10 @@ async def enforce_channel_name(channel: discord.abc.GuildChannel) -> bool:
     if gid <= 0 or cid <= 0:
         return False
 
+    if _channel_blocker(channel):
+        return False
     policy = await naming_identity.get_naming_policy(gid)
     if policy.get("mode") != naming_identity.NAMING_MODE_SEARCH_SAFE or not bool(policy.get("channels", True)):
-        return False
-    if _channel_blocker(channel):
         return False
 
     lock = _resource_lock("channel", gid, cid)
