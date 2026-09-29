@@ -679,9 +679,6 @@ async def open_toke_command(
         )
     if not _member_has_role_id(member, stoner_id):
         return await _reply(interaction, f"You need the {stoner_role.mention} role to use /toke.")
-    if len(list(getattr(ping_role, "members", []) or [])) <= 0:
-        return await _reply(interaction, f"No members are opted into {ping_role.mention} yet.")
-
     channel = _target_channel(guild, interaction, channel_id)
     if not isinstance(channel, discord.TextChannel):
         return await _reply(
