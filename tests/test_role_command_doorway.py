@@ -64,6 +64,10 @@ def test_member_shortcut_is_role_focused_and_reuses_guarded_role_actions() -> No
     assert "DirectMemberRoleView(" in block
     assert "DirectMemberRoleActionView(self, action=action)" in block
     assert "MemberRoleActionView" in source
+    assert 'class DirectMemberRoleActionView(MemberRoleActionView):' in block
+    assert '@discord.ui.button(' in block
+    assert 'label="Back"' in block
+    assert 'embed=_member_role_shortcut_embed(target)' in block
     assert 'label="Add Role"' in block
     assert 'label="Remove Role"' in block
     assert 'label="View Profile"' in block
