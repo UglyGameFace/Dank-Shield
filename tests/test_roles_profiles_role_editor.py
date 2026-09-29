@@ -100,12 +100,14 @@ def test_dependency_scan_finds_role_ids_without_confusing_unrelated_config() -> 
         "profile_cosmetic_role_ids": ["7", str(role_id)],
         "ticket_category_id": str(role_id),
         "nested_role_settings": {"protected": [str(role_id)]},
+        "verification_settings": {"verified_role_id": str(role_id)},
         "unrelated": str(role_id),
     }
     labels = _config_dependency_labels(config, role_id)
     assert "Staff Role" in labels
     assert "Profile Cosmetic Role" in labels
     assert "Nested Role Settings" in labels
+    assert "Verified Role" in labels
     assert all("Ticket Category" not in label for label in labels)
     assert all(label != "Unrelated" for label in labels)
 
