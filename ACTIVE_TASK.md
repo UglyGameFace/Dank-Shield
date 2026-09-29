@@ -2,6 +2,102 @@
 
 ## Active task / desired outcome
 
+**NAMING-IDENTITY-017 — preserve stylized role/channel display names while making Dank Shield lookups semantic and alias-aware at public scale**
+
+Desired outcome: servers may keep decorative Unicode role/channel display names while Dank Shield-controlled lookup understands the ordinary semantic name (for example, `Verified` finding a styled Verified role). Real semantic renames retain a small previous-name alias history keyed by Discord resource ID. The implementation must remain guild-isolated and practical for 300,000+ servers without full-guild polling or unbounded history.
+
+## Scope / single active task lock
+
+Included:
+- one shared semantic-name normalizer that reuses the existing Dank Design Unicode decoding owner;
+- bot-controlled role lookup/autocomplete that accepts normal text for styled current names;
+- bounded previous semantic aliases for real role/channel renames;
+- event-driven role/channel rename and delete tracking with per-guild debounced persistence;
+- canonical `guild_config` storage only, with no second database/persistence engine;
+- Unicode-aware guild runtime discovery for configured roles/channels;
+- preserve existing role-management, self-service, hierarchy, and permission gates;
+- focused regression tests, exact-head CI, cleanup/conflict review, and final diff review.
+
+Excluded:
+- pretending Discord native `@role` autocomplete or the native Share To picker supports hidden aliases; Discord owns those UIs;
+- automatic mass renaming of existing servers;
+- periodic/on-ready scans of every guild;
+- unlimited rename history or one database row per Discord resource;
+- unrelated Dank Design, moderation, tickets, verification, Community Hub, or protection redesigns.
+
+## Findings / root cause
+
+1. Decorative Discord "fonts" are distinct Unicode code points, so Discord's native role/channel search can fail when a user types ordinary letters.
+2. Dank Design already owns reliable Unicode font decoding in `server_design_studio.strip_known_unicode_fonts` / `normalize_base_name`; a second Unicode mapping would be duplicate logic.
+3. Discord exposes no hidden alias field for roles/channels, so only Dank Shield-controlled searches can honor semantic/previous aliases while the live name remains fully stylized.
+4. Discord snowflake IDs are the stable resource identity. Names are mutable display metadata and must not become primary keys.
+5. At public scale, style-only changes need no stored history because the current stylized name can be normalized live. Only real semantic renames need bounded aliases.
+6. `stoney_verify.guild_config` is the current canonical config/runtime-discovery owner; the historical startup validator is retired and must not be restored.
+
+## Execution path
+
+Discord role/channel update event
+→ compare semantic before/after names
+→ ignore style-only changes
+→ queue only real semantic alias changes
+→ debounce by guild
+→ bounded `naming_identity_v1` object in canonical guild config.
+
+`/role role:<text>`
+→ live display/semantic search first
+→ lazy durable alias lookup only if live search misses
+→ resolve current Discord role by ID
+→ existing self-service/staff role authority and mutation paths.
+
+## Changes
+
+- Branch: `feat/search-safe-naming-identity-20260929`, based exactly on merged production main `afa5930d8f0fd55762d19c04471605906bbaf5c8`.
+- Added `services/naming_identity.py` with bounded per-resource aliases (3), bounded tracked resources per guild (128), short cache, event listeners, and per-guild debounced writes.
+- Style-only renames such as `Verified → styled Verified` deliberately create no durable alias record; the live semantic key already resolves `Verified`.
+- Real semantic renames preserve the previous semantic key so a prior normal name can still find the current object in Dank Shield-controlled lookup.
+- `/role` keeps the same public command/option name but changes the role shortcut from Discord-native role selection to a string autocomplete backed by semantic/alias lookup; existing role editor/self-service gates remain authoritative.
+- Compact command installation now attaches the naming-identity listeners exactly once and does not register an `on_ready` sweep.
+- Canonical guild runtime discovery now compares both raw and semantic names, so styled Verified/verification resources can be discovered without removing their style.
+- Added focused naming-identity and role-doorway regression coverage.
+
+## Validation / results
+
+Implementation is in progress. The branch is currently ahead of `main` and not behind. Exact-head CI has not yet been run, so no completion or merge-readiness claim is made.
+
+Required before merge:
+- focused naming-identity and role-doorway tests green;
+- full repository CI/compile/static/tool audits green on the exact PR head;
+- command payload/public-surface checks confirm the nine-command contract is unchanged;
+- final compare against current `main` remains 0 behind;
+- final diff contains only naming identity, the existing role doorway/runtime-discovery integrations, tests, and this task record.
+
+## Cleanup / conflicts
+
+- Reused the existing Dank Design Unicode decoder instead of introducing a competing font map.
+- Reused canonical guild config rather than adding a per-resource table or migration.
+- Did not reactivate the retired `startup_guards.guild_config_runtime_validator`; native `guild_config` remains authoritative.
+- Did not create a second role editor, role assignment path, or permission repair implementation.
+
+## Blockers / risks
+
+- Discord native `@role` search and native Share To remain outside bot control while the actual live resource name stays stylized.
+- Historical aliases require at least one rename event while Dank Shield is present; arbitrary pre-install name history cannot be reconstructed.
+- Exact-head CI and final branch/diff validation are still pending.
+
+## Next step
+
+Run focused and full PR validation, fix only failures rooted in this task, then perform final cleanup/conflict/diff inspection before any merge-readiness claim.
+
+## Prior task closure
+
+PR #360, **Add self-service community roles, /toke, and smart /role**, merged into production `main` as `afa5930d8f0fd55762d19c04471605906bbaf5c8`.
+
+---
+
+# Active Task
+
+## Active task / desired outcome
+
 **PROFILE-COMMUNITY-TOKE-016 — unify self-service/community roles with safe `/toke` and a smart `/role` doorway**
 
 Desired outcome: Dank Shield Profile Builder must let staff map existing safe community roles without recreating them. Members can self-select the configured **Stoner** identity/community role and optional **Sesh Pings** notification role, use one smart `/role` doorway for approved self-service/profile roles, and use `/toke` from the Stoner role to ping the opt-in sesh audience. Staff/member-role and full server-role shortcuts must reuse the existing guarded Roles & Profiles owners rather than creating parallel role engines.
