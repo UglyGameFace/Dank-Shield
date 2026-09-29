@@ -241,6 +241,14 @@ jobs:
           wait "$writer_one"
           wait "$writer_two"
 
+          psql -v ON_ERROR_STOP=1 -c "select public.patch_dank_guild_config('smoke-guild-1', '{\"obsolete_setup_key\":\"remove-me\",\"stable_neighbor\":{\"keep\":true}}'::jsonb);"
+          psql -v ON_ERROR_STOP=1 -c "select public.patch_dank_guild_config('smoke-guild-1', '{}'::jsonb, array['obsolete_setup_key']);" &
+          clear_writer=$!
+          psql -v ON_ERROR_STOP=1 -c "select public.patch_dank_guild_config('smoke-guild-1', '{\"race_neighbor\":{\"value\":1}}'::jsonb);" &
+          patch_writer=$!
+          wait "$clear_writer"
+          wait "$patch_writer"
+
           psql -v ON_ERROR_STOP=1 <<'SQL'
           do $audit$
           declare
@@ -256,6 +264,18 @@ jobs:
 
               if saved -> 'naming_identity_v1' -> 'policy' ->> 'mode' <> 'search_safe' then
                   raise exception 'naming identity state was lost during concurrent guild config patches: %', saved;
+              end if;
+
+              if saved ? 'obsolete_setup_key' then
+                  raise exception 'atomic clear did not remove obsolete_setup_key: %', saved;
+              end if;
+
+              if saved -> 'stable_neighbor' ->> 'keep' <> 'true' then
+                  raise exception 'atomic clear removed an unrelated neighbor: %', saved;
+              end if;
+
+              if saved -> 'race_neighbor' ->> 'value' <> '1' then
+                  raise exception 'concurrent patch was lost during atomic clear: %', saved;
               end if;
           end;
           $audit$;
