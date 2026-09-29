@@ -953,6 +953,11 @@ class MemberSetupAdminView(discord.ui.View):
         state = await configure_guild_setup(guild.id, protected_category_ids=[], actor_id=interaction.user.id)
         await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(self.owner_id))
 
+    @discord.ui.button(label="Publish Minor", emoji="📝", style=discord.ButtonStyle.secondary, row=2)
+    async def publish_minor(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.send_modal(PublishRevisionModal(SEVERITY_MINOR))
+
     @discord.ui.button(label="Publish Recommended", emoji="🆕", style=discord.ButtonStyle.secondary, row=2)
     async def publish_recommended(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
