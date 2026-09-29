@@ -137,13 +137,23 @@ def _preview_embed(
     guild: discord.Guild,
     policy: dict[str, Any],
     rows: list[dict[str, Any]],
+    reviewed_rows: list[dict[str, Any]],
 ) -> discord.Embed:
     _ = guild
     editable = [row for row in rows if row.get("editable")]
     blocked = [row for row in rows if not row.get("editable")]
+    reviewed_ids = {
+        (str(row.get("kind") or ""), int(row.get("id") or 0))
+        for row in reviewed_rows
+    }
+    deferred_ready = [
+        row
+        for row in editable
+        if (str(row.get("kind") or ""), int(row.get("id") or 0)) not in reviewed_ids
+    ]
     examples = [
         f"• {_clip(row.get('before'), 85)} → {_clip(row.get('after'), 85)}"
-        for row in editable[:10]
+        for row in reviewed_rows[:10]
     ]
     blockers = [
         f"• {_clip(row.get('before'), 65)} · {_clip(row.get('blocker'), 110)}"
@@ -153,16 +163,18 @@ def _preview_embed(
     embed = discord.Embed(
         title="🔎 Search-Safe Repair Preview",
         description=(
-            "**Nothing has been renamed yet.** Confirming enables the persistent Search-Safe policy "
-            f"for this server and repairs at most **{_BATCH_SIZE}** currently editable names. "
-            "If more remain, the next reviewed batch can be applied from the result screen."
+            "**Nothing has been renamed yet.** Confirming enables/keeps the persistent Search-Safe policy "
+            f"and applies only the **{len(reviewed_rows)} exact resource(s)** captured by this preview. "
+            "Every ID, current name, permission boundary, and Search-Safe output is rechecked before its Discord edit. "
+            "If more remain, the result screen builds a fresh reviewed preview for the next batch."
         ),
         color=discord.Color.orange(),
     )
     embed.add_field(
         name="Scope",
         value=(
-            f"Ready: **{len(editable)}**\n"
+            f"Reviewed in this batch: **{len(reviewed_rows)}**\n"
+            f"Ready after this batch: **{len(deferred_ready)}**\n"
             f"Blocked: **{len(blocked)}**\n"
             f"Current policy: **{_mode_label(policy)}**"
         ),
@@ -174,7 +186,7 @@ def _preview_embed(
         inline=True,
     )
     if examples:
-        embed.add_field(name="Sample reviewed changes", value="\n".join(examples)[:1024], inline=False)
+        embed.add_field(name="Reviewed changes", value="\n".join(examples)[:1024], inline=False)
     if blockers:
         embed.add_field(name="Blocked examples", value="\n".join(blockers)[:1024], inline=False)
     embed.add_field(
@@ -266,9 +278,13 @@ class SearchSafeHomeView(discord.ui.View):
         await interaction.response.defer(ephemeral=True, thinking=False)
         policy = await naming_identity.get_naming_policy(guild.id)
         rows = search_safe_naming.scan_search_safe_targets(guild, actor=interaction.user)
+        reviewed_rows = search_safe_naming.reviewed_search_safe_batch(
+            rows,
+            limit=_BATCH_SIZE,
+        )
         await interaction.edit_original_response(
-            embed=_preview_embed(guild, policy, rows),
-            view=SearchSafePreviewView(),
+            embed=_preview_embed(guild, policy, rows, reviewed_rows),
+            view=SearchSafePreviewView(reviewed_rows=reviewed_rows),
         )
 
     @discord.ui.button(
@@ -316,8 +332,10 @@ class SearchSafeHomeView(discord.ui.View):
 
 
 class SearchSafePreviewView(discord.ui.View):
-    def __init__(self) -> None:
+    def __init__(self, *, reviewed_rows: list[dict[str, Any]]) -> None:
         super().__init__(timeout=900)
+        self.reviewed_rows = [dict(row) for row in reviewed_rows]
+        self.apply.disabled = not bool(self.reviewed_rows)
 
     @discord.ui.button(
         label="Enable + Repair Next 25",
@@ -338,6 +356,7 @@ class SearchSafePreviewView(discord.ui.View):
         result = await search_safe_naming.apply_search_safe_batch(
             guild,
             actor=interaction.user,
+            reviewed_rows=self.reviewed_rows,
             limit=_BATCH_SIZE,
         )
         remaining = int(result.get("remaining_editable") or 0)
@@ -364,7 +383,7 @@ class SearchSafeResultView(discord.ui.View):
         self.next_batch.disabled = not has_more
 
     @discord.ui.button(
-        label="Repair Next 25",
+        label="Preview Next 25",
         emoji="🔁",
         style=discord.ButtonStyle.primary,
         custom_id="dank_design_search_safe:next_batch",
@@ -386,15 +405,23 @@ class SearchSafeResultView(discord.ui.View):
                 action_name="design.search_safe.next_policy_changed",
             )
 
-        result = await search_safe_naming.apply_search_safe_batch(
+        rows = search_safe_naming.scan_search_safe_targets(
             guild,
             actor=interaction.user,
+        )
+        reviewed_rows = search_safe_naming.reviewed_search_safe_batch(
+            rows,
             limit=_BATCH_SIZE,
         )
-        remaining = int(result.get("remaining_editable") or 0)
+        if not reviewed_rows:
+            await interaction.edit_original_response(
+                embed=_home_embed(guild, policy, rows),
+                view=SearchSafeHomeView(enabled=True),
+            )
+            return
         await interaction.edit_original_response(
-            embed=_result_embed(result, policy),
-            view=SearchSafeResultView(has_more=remaining > 0),
+            embed=_preview_embed(guild, policy, rows, reviewed_rows),
+            view=SearchSafePreviewView(reviewed_rows=reviewed_rows),
         )
 
     @discord.ui.button(
