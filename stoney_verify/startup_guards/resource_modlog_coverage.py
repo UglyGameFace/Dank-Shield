@@ -285,7 +285,7 @@ async def _on_guild_stickers_update(guild: discord.Guild, before: list[Any], aft
         embed.add_field(name="Audit Action", value=f"`{action}`", inline=True)
         if reason:
             embed.add_field(name="Audit Reason", value=_trim(reason, 350), inline=False)
-        embed.set_footer(text=f"Guild {guild.id} • sticker audit")
+        embed.set_footer(text="Sticker audit")
         await _send(guild, embed)
     except Exception as e:
         _warn(f"sticker update failed: {e!r}")
@@ -302,7 +302,7 @@ async def _on_scheduled_event_create(event: Any) -> None:
         embed.add_field(name="Created By", value=actor, inline=False)
         if reason:
             embed.add_field(name="Audit Reason", value=_trim(reason, 350), inline=False)
-        embed.set_footer(text=f"Guild {guild.id} • scheduled event audit")
+        embed.set_footer(text="Scheduled event audit")
         await _send(guild, embed)
     except Exception as e:
         _warn(f"scheduled event create failed: {e!r}")
@@ -323,7 +323,7 @@ async def _on_scheduled_event_update(before: Any, after: Any) -> None:
             return
         if reason:
             embed.add_field(name="Audit Reason", value=_trim(reason, 350), inline=False)
-        embed.set_footer(text=f"Guild {guild.id} • scheduled event audit")
+        embed.set_footer(text="Scheduled event audit")
         await _send(guild, embed)
     except Exception as e:
         _warn(f"scheduled event update failed: {e!r}")
@@ -340,7 +340,7 @@ async def _on_scheduled_event_delete(event: Any) -> None:
         embed.add_field(name="Deleted By", value=actor, inline=False)
         if reason:
             embed.add_field(name="Audit Reason", value=_trim(reason, 350), inline=False)
-        embed.set_footer(text=f"Guild {guild.id} • scheduled event audit")
+        embed.set_footer(text="Scheduled event audit")
         await _send(guild, embed)
     except Exception as e:
         _warn(f"scheduled event delete failed: {e!r}")
@@ -372,7 +372,7 @@ async def _automod_log(rule: Any, title: str, action_name: str, color: discord.C
             embed.add_field(name="Enabled", value=f"`{enabled}`", inline=True)
         if reason:
             embed.add_field(name="Audit Reason", value=_trim(reason, 350), inline=False)
-        embed.set_footer(text=f"Guild {guild.id} • automod audit")
+        embed.set_footer(text="Automod audit")
         await _send(guild, embed)
     except Exception as e:
         _warn(f"automod log failed: {e!r}")
