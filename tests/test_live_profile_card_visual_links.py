@@ -217,7 +217,7 @@ def test_username_only_public_accounts_remain_in_image_without_fake_links(monkey
 
 def test_legacy_footer_and_attachment_markers_remain_cleanup_compatible():
     legacy = discord.Embed()
-    legacy.set_footer(text=runtime.live_card_footer(55, 66))
+    legacy.set_footer(text="Dank Shield live profile • user:55 • trigger:66")
     assert runtime.parse_live_card_footer(Message(legacy)) == (55, 66)
 
     modern = discord.Embed()
