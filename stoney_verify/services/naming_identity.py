@@ -570,7 +570,8 @@ async def role_autocomplete(
     query_text = str(current or "").strip().casefold()
     query_key = semantic_key(current)
     has_live_exact = any(
-        (_live_match_score(role, query_text, query_key) or 99) <= 1
+        (score := _live_match_score(role, query_text, query_key)) is not None
+        and score <= 1
         for role in live
     )
     if has_live_exact or not str(current or "").strip():
@@ -599,7 +600,8 @@ async def channel_autocomplete(
     query_text = str(current or "").strip().casefold()
     query_key = semantic_key(current)
     has_live_exact = any(
-        (_live_match_score(channel, query_text, query_key) or 99) <= 1
+        (score := _live_match_score(channel, query_text, query_key)) is not None
+        and score <= 1
         for channel in live
     )
     if has_live_exact or not str(current or "").strip():
