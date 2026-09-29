@@ -263,17 +263,16 @@ Required before this master remediation can be considered complete:
 - live canary confirms Search-Safe reviewed repair, styled-role lookup, Member Setup manager wording, Design preview/apply/Undo consistency, and representative cleaned footers;
 - no production-complete claim is made before deployment/canary evidence exists.
 
-## Remaining non-blocking product/observability findings to classify in the final ledger
+## Remaining non-blocking finding / production evidence
 
-These must be classified in the final re-audit rather than silently forgotten:
-- naming metrics/operational visibility for semantic/alias resolutions, automatic changes, reviewed repair changes, blocked/failed mutations, config writes, and pruning;
-- channel semantic lookup/product integration if the existing channel autocomplete helper remains unused;
-- eventual stale deleted-resource identity cleanup across downtime;
-- automatic enforcement failure visibility;
-- mobile/live canary for the intentional `/role` option schema change from Discord Role to semantic string autocomplete;
-- normalized-name collision preview;
-- preview/name-length consistency;
-- searchability-versus-mentionability explanation.
+- stale identity records for resources deleted while the bot was offline remain bounded by the per-guild record cap and cannot resolve to deleted roles, but no opportunistic stale-record reconciliation has been added yet;
+- naming metrics are now fixed-cardinality and surfaced in read-only diagnostics;
+- automatic Search-Safe failures/blocks are counted;
+- the unused channel autocomplete helper was removed while the real /role resolver/listeners remain regression-protected;
+- normalized-name collisions are shown as reviewed warnings;
+- Search-Safe now explicitly explains that searchability does not override Discord role-mention/ping permissions;
+- one-to-one known-letter rewriting makes preview/live name length consistent for Search-Safe transforms;
+- mobile/live canary is still required for the intentional `/role` semantic string-autocomplete schema and the broader production flow.
 
 ## Next step
 
