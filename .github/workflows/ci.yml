@@ -219,6 +219,48 @@ jobs:
           insert into public.guild_configs(guild_id) values ('smoke-guild-1');
           SQL
 
+      - name: Verify atomic guild config sparse patch under concurrent writers
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          alter table public.guild_configs
+              add column if not exists settings jsonb not null default '{}'::jsonb,
+              add column if not exists config jsonb not null default '{}'::jsonb,
+              add column if not exists metadata jsonb not null default '{}'::jsonb,
+              add column if not exists meta jsonb not null default '{}'::jsonb,
+              add column if not exists updated_at timestamptz not null default now();
+          SQL
+
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260929143000_atomic_guild_config_patch.sql
+
+          psql -v ON_ERROR_STOP=1 -c "select public.patch_dank_guild_config('smoke-guild-1', '{\"member_setup_state\":{\"current_revision\":2}}'::jsonb);" &
+          writer_one=$!
+          psql -v ON_ERROR_STOP=1 -c "select public.patch_dank_guild_config('smoke-guild-1', '{\"naming_identity_v1\":{\"policy\":{\"mode\":\"search_safe\"}}}'::jsonb);" &
+          writer_two=$!
+          wait "$writer_one"
+          wait "$writer_two"
+
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $
+          declare
+              saved jsonb;
+          begin
+              select settings into saved
+                from public.guild_configs
+               where guild_id = 'smoke-guild-1';
+
+              if saved -> 'member_setup_state' ->> 'current_revision' <> '2' then
+                  raise exception 'member setup state was lost during concurrent guild config patches: %', saved;
+              end if;
+
+              if saved -> 'naming_identity_v1' -> 'policy' ->> 'mode' <> 'search_safe' then
+                  raise exception 'naming identity state was lost during concurrent guild config patches: %', saved;
+              end if;
+          end;
+          $;
+          SQL
+
       - name: Apply managed category migrations twice
         shell: bash
         run: |
