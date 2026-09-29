@@ -1954,11 +1954,27 @@ async def _handle_builder_action(interaction: discord.Interaction, action: str) 
 
         try:
             _roles, created, reused = await _create_profile_roles(interaction, guild)
-            await channel.send(
+            sent = await channel.send(
                 embed=_profile_panel_embed(guild),
                 view=ProfilePanelView(),
                 allowed_mentions=discord.AllowedMentions.none(),
             )
+            try:
+                from stoney_verify.member_setup_service import configure_guild_setup
+                await configure_guild_setup(
+                    guild.id,
+                    setup_channel_id=channel.id,
+                    panel_message_id=sent.id,
+                    actor_id=interaction.user.id,
+                )
+            except Exception as state_exc:
+                try:
+                    await sent.delete()
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f"Panel posted but durable Member Setup ownership could not be saved: {type(state_exc).__name__}"
+                ) from state_exc
             await interaction.followup.send(
                 f"✅ Member Setup & Profile panel posted in {channel.mention}. Roles created: {len(created)}. Reused: {len(reused)}.",
                 ephemeral=True,
