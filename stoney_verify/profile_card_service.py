@@ -552,6 +552,49 @@ async def get_effective_profile_settings(guild_id: int, user_id: int) -> dict[st
     }
 
 
+async def upsert_profile_guild_namespace(
+    guild_id: int,
+    user_id: int,
+    key: str,
+    value: Any,
+) -> dict[str, Any]:
+    """Persist one service-owned per-guild member namespace without disturbing privacy settings."""
+    gid = int(guild_id)
+    uid = int(user_id)
+    namespace = str(key or "").strip()
+    if not namespace or len(namespace) > 80:
+        raise ValueError("A valid per-guild member namespace key is required.")
+
+    lock = _USER_LOCKS.setdefault(uid, asyncio.Lock())
+    async with lock:
+        current = await get_profile_guild_settings(gid, uid, refresh=True)
+        settings = dict(current.get("settings") or {})
+        if value is None:
+            settings.pop(namespace, None)
+        else:
+            settings[namespace] = value
+
+        payload = {
+            "guild_id": str(gid),
+            "user_id": str(uid),
+            "settings": settings,
+            "updated_at": utc_now_iso(),
+        }
+
+        def write(client: Any):
+            try:
+                return client.table(PROFILE_GUILD_SETTINGS_TABLE).upsert(
+                    payload,
+                    on_conflict="guild_id,user_id",
+                ).execute()
+            except TypeError:
+                return client.table(PROFILE_GUILD_SETTINGS_TABLE).upsert(payload).execute()
+
+        await _execute(f"write profile guild namespace {namespace} {gid}/{uid}", write)
+        invalidate_profile_cache(user_id=uid, guild_id=gid)
+        return await get_profile_guild_settings(gid, uid, refresh=True)
+
+
 async def upsert_profile_guild_settings(guild_id: int, user_id: int, updates: Mapping[str, Any]) -> dict[str, Any]:
     gid = int(guild_id)
     uid = int(user_id)
