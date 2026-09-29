@@ -662,7 +662,7 @@ async def _build_plain_setup_health_embed(
 
     embed.set_footer(
         text=(
-            f"Guild {guild.id} • only enabled features "
+            "Only enabled features "
             "are checked"
         )
     )
@@ -3379,7 +3379,7 @@ async def _open_guided_setup(
 
     embed.set_footer(
         text=(
-            f"Guild {guild.id} • guided setup"
+            "Guided setup • review each required step"
         )
     )
 
