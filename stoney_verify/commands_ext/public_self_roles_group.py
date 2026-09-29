@@ -1043,14 +1043,14 @@ def _profile_card_view_with_actions(member: discord.Member, *, page: int = 0) ->
     return view
 
 
-def _profile_panel_embed(guild: discord.Guild, *, title: str = "Profile Panel") -> discord.Embed:
+def _profile_panel_embed(guild: discord.Guild, *, title: str = "Member Setup & Profile") -> discord.Embed:
     embed = discord.Embed(
         title=title[:256],
         description=(
-            "Customize your server profile with optional pronoun, identity, interest, community, and cosmetic roles.\n\n"
-            "Press **Edit My Profile** for profile labels, **Profile Tags & Cosmetics** for harmless extras, or "
-            "**Community & Pings** for the server's opt-in community/notification roles. "
-            "None of these controls grant verification, tickets, moderation, staff access, or protected server permissions."
+            "Use this permanent panel for your server setup, profile roles, community choices, and future setup reviews.\n\n"
+            "Press **Member Setup / Review** first when the server says your setup changed. Your existing valid choices are preserved. "
+            "Use **Edit My Profile** for profile labels, **Profile Tags & Cosmetics** for harmless extras, or "
+            "**Community & Pings** for opt-in community/notification roles."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
@@ -1071,8 +1071,13 @@ def _profile_panel_embed(guild: discord.Guild, *, title: str = "Profile Panel") 
         ),
         inline=False,
     )
-    embed.add_field(name="Panel lifetime", value=public_panel_lifecycle_text("Profile Panel", "Private profile menus/dropdowns"), inline=False)
-    embed.set_footer(text="Dank Shield profile panel")
+    embed.add_field(
+        name="Setup updates",
+        value="Dank Shield can ask you to review only the sections changed by a published server setup revision. Critical revisions may temporarily require setup review before Member Access is restored.",
+        inline=False,
+    )
+    embed.add_field(name="Panel lifetime", value=public_panel_lifecycle_text("Member Setup panel", "Private setup/profile menus"), inline=False)
+    embed.set_footer(text="Dank Shield Member Setup & Profile")
     return embed
 
 
@@ -1380,6 +1385,7 @@ class ProfilePanelView(discord.ui.View):
 
         self.add_item(discord.ui.Button(label="Suggest Missing Interest", emoji="➕", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing_interest", row=2))
         self.add_item(discord.ui.Button(label="Missing Identity?", emoji="✍️", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing", row=2))
+        self.add_item(discord.ui.Button(label="Member Setup / Review", emoji="🪪", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}member_setup", row=3))
         self.add_item(discord.ui.Button(label="Clear Profile Tags", emoji="🧹", style=discord.ButtonStyle.danger, custom_id=f"{PROFILE_PREFIX}clear", row=3))
 
 
@@ -1789,6 +1795,7 @@ class ProfileBuilderView(discord.ui.View):
         self.add_item(discord.ui.Button(label="Profile Tags & Cosmetics", emoji="🎭", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:cosmetics", row=1))
         self.add_item(discord.ui.Button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:community_pings", row=1))
         self.add_item(discord.ui.Button(label="Health", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}builder:health", row=1))
+        self.add_item(discord.ui.Button(label="Member Setup Manager", emoji="🧭", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:member_setup", row=2))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.author_id:
@@ -1884,6 +1891,11 @@ async def _handle_builder_action(interaction: discord.Interaction, action: str) 
         await open_community_ping_setup(interaction)
         return True
 
+    if action == "member_setup":
+        from .public_member_setup import open_member_setup_admin
+        await open_member_setup_admin(interaction)
+        return True
+
     if action == "health":
         lines: list[str] = []
         if ready:
@@ -1948,7 +1960,7 @@ async def _handle_builder_action(interaction: discord.Interaction, action: str) 
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             await interaction.followup.send(
-                f"✅ Profile panel posted in {channel.mention}. Roles created: {len(created)}. Reused: {len(reused)}.",
+                f"✅ Member Setup & Profile panel posted in {channel.mention}. Roles created: {len(created)}. Reused: {len(reused)}.",
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
@@ -2059,6 +2071,11 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
     if suffix == "community_pings":
         from .public_toke import open_member_community_pings
         await open_member_community_pings(interaction)
+        return True
+
+    if suffix == "member_setup":
+        from .public_member_setup import open_member_setup
+        await open_member_setup(interaction)
         return True
 
     if suffix == "pick_member":
