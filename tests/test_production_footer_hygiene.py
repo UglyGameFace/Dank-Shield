@@ -80,7 +80,6 @@ def test_spamguard_incident_footer_uses_durable_message_ownership_not_visible_id
     )[0]
     assert "SpamGuard quarantine" in incident_block
     assert "|case=" not in incident_block
-    assert "guild_id" only if False else True
     assert "get_quarantine_case_by_modlog_message(" in source
 
     callback = source.split("class SpamIncidentRestoreButton", 1)[1].split(
