@@ -28,6 +28,9 @@ from stoney_verify.services import server_design_studio as design
 
 NAMING_IDENTITY_CONFIG_KEY = "naming_identity_v1"
 NAMING_IDENTITY_VERSION = 1
+NAMING_MODE_PRESERVE = "preserve"
+NAMING_MODE_SEARCH_SAFE = "search_safe"
+NAMING_MODES = {NAMING_MODE_PRESERVE, NAMING_MODE_SEARCH_SAFE}
 MAX_ALIASES_PER_RESOURCE = 3
 MAX_TRACKED_RESOURCES = 128
 MAX_CACHED_GUILDS = 1024
@@ -101,8 +104,27 @@ def previous_alias_for_rename(before_name: Any, after_name: Any) -> str:
     return ""
 
 
+def _normalize_policy(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, Mapping) else {}
+    mode = str(source.get("mode") or NAMING_MODE_PRESERVE).strip().lower()
+    if mode not in NAMING_MODES:
+        mode = NAMING_MODE_PRESERVE
+    return {
+        "mode": mode,
+        "roles": bool(source.get("roles", True)),
+        "channels": bool(source.get("channels", True)),
+        # Categories can keep the heavy visual font while searchable channel
+        # words and roles use ordinary letters.
+        "categories": bool(source.get("categories", False)),
+    }
+
+
 def _empty_state() -> dict[str, Any]:
-    return {"version": NAMING_IDENTITY_VERSION, "records": {}}
+    return {
+        "version": NAMING_IDENTITY_VERSION,
+        "policy": _normalize_policy({}),
+        "records": {},
+    }
 
 
 def _normalize_state(value: Any) -> dict[str, Any]:
@@ -141,7 +163,39 @@ def _normalize_state(value: Any) -> dict[str, Any]:
             reverse=True,
         )[:MAX_TRACKED_RESOURCES]
         records = dict(newest)
-    return {"version": NAMING_IDENTITY_VERSION, "records": records}
+    return {
+        "version": NAMING_IDENTITY_VERSION,
+        "policy": _normalize_policy(source.get("policy")),
+        "records": records,
+    }
+
+
+def naming_policy(state: Mapping[str, Any] | None) -> dict[str, Any]:
+    return dict(_normalize_state(state).get("policy") or _normalize_policy({}))
+
+
+async def get_naming_policy(guild_id: Any) -> dict[str, Any]:
+    gid = _safe_int(guild_id, 0)
+    if gid <= 0:
+        return _normalize_policy({})
+    return naming_policy(await _load_state(gid))
+
+
+async def set_naming_mode(guild_id: Any, mode: str) -> dict[str, Any]:
+    gid = _safe_int(guild_id, 0)
+    clean_mode = str(mode or "").strip().lower()
+    if gid <= 0:
+        raise ValueError("guild_id must be a positive Discord snowflake")
+    if clean_mode not in NAMING_MODES:
+        raise ValueError(f"unsupported naming mode: {mode!r}")
+
+    state = await _load_state(gid)
+    updated = _normalize_state(state)
+    policy = naming_policy(updated)
+    policy["mode"] = clean_mode
+    updated["policy"] = policy
+    await _persist_state(gid, updated)
+    return dict(policy)
 
 
 def remember_alias(
@@ -179,7 +233,11 @@ def remember_alias(
             reverse=True,
         )[:MAX_TRACKED_RESOURCES]
         records = dict(newest)
-    return {"version": NAMING_IDENTITY_VERSION, "records": records}
+    return {
+        "version": NAMING_IDENTITY_VERSION,
+        "policy": naming_policy(result),
+        "records": records,
+    }
 
 
 def forget_resource(
@@ -193,7 +251,11 @@ def forget_resource(
     records = dict(result.get("records") or {})
     if key:
         records.pop(key, None)
-    return {"version": NAMING_IDENTITY_VERSION, "records": records}
+    return {
+        "version": NAMING_IDENTITY_VERSION,
+        "policy": naming_policy(result),
+        "records": records,
+    }
 
 
 def aliases_for(
@@ -561,6 +623,12 @@ async def resolve_role_query(
     return None, "No role matched that name or saved alias. Choose one from autocomplete."
 
 
+async def _on_guild_role_create(role: discord.Role) -> None:
+    from stoney_verify.services.search_safe_naming import enforce_role_name
+
+    await enforce_role_name(role)
+
+
 async def _on_guild_role_update(before: discord.Role, after: discord.Role) -> None:
     if str(getattr(before, "name", "")) == str(getattr(after, "name", "")):
         return
@@ -571,6 +639,15 @@ async def _on_guild_role_update(before: discord.Role, after: discord.Role) -> No
         before_name=getattr(before, "name", ""),
         after_name=getattr(after, "name", ""),
     )
+    from stoney_verify.services.search_safe_naming import enforce_role_name
+
+    await enforce_role_name(after)
+
+
+async def _on_guild_channel_create(channel: discord.abc.GuildChannel) -> None:
+    from stoney_verify.services.search_safe_naming import enforce_channel_name
+
+    await enforce_channel_name(channel)
 
 
 async def _on_guild_channel_update(
@@ -586,6 +663,9 @@ async def _on_guild_channel_update(
         before_name=getattr(before, "name", ""),
         after_name=getattr(after, "name", ""),
     )
+    from stoney_verify.services.search_safe_naming import enforce_channel_name
+
+    await enforce_channel_name(after)
 
 
 async def _on_guild_role_delete(role: discord.Role) -> None:
@@ -608,7 +688,9 @@ def install_naming_identity_runtime(bot: Any) -> bool:
     """Attach sparse rename/delete listeners once. No startup guild scan."""
     if bool(getattr(bot, _RUNTIME_FLAG, False)):
         return False
+    bot.add_listener(_on_guild_role_create, "on_guild_role_create")
     bot.add_listener(_on_guild_role_update, "on_guild_role_update")
+    bot.add_listener(_on_guild_channel_create, "on_guild_channel_create")
     bot.add_listener(_on_guild_channel_update, "on_guild_channel_update")
     bot.add_listener(_on_guild_role_delete, "on_guild_role_delete")
     bot.add_listener(_on_guild_channel_delete, "on_guild_channel_delete")
@@ -625,7 +707,10 @@ __all__ = [
     "MAX_CACHED_GUILDS",
     "MAX_TRACKED_RESOURCES",
     "NAMING_IDENTITY_CONFIG_KEY",
+    "NAMING_MODE_PRESERVE",
+    "NAMING_MODE_SEARCH_SAFE",
     "aliases_for",
+    "get_naming_policy",
     "channel_autocomplete",
     "has_stylized_search_text",
     "install_naming_identity_runtime",
@@ -636,5 +721,6 @@ __all__ = [
     "resolve_role_query",
     "role_autocomplete",
     "search_safe_display_name",
+    "set_naming_mode",
     "semantic_key",
 ]
