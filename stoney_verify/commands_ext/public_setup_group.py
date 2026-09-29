@@ -1842,7 +1842,7 @@ def _health_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
     embed.add_field(name="Blockers", value=_field_text(blockers, empty="✅ None"), inline=False)
     embed.add_field(name="Warnings", value=_field_text(warnings, empty="✅ None"), inline=False)
     embed.add_field(name="Passing Checks", value=_field_text(ok, empty="No passing checks reported."), inline=False)
-    embed.set_footer(text=f"Guild {guild.id} • config source: {_safe_str(_cfg_value(cfg, 'source', 'unknown'), 'unknown')}")
+    embed.set_footer(text="Server setup • saved settings for this server only")
     return embed
 
 
