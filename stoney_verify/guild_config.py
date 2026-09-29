@@ -886,6 +886,98 @@ def _atomic_patch_guild_config_sync(
     return _rpc_mapping_row(response)
 
 
+def _compare_and_swap_guild_config_key_sync(
+    guild_id: Any,
+    key: str,
+    *,
+    expected: Any,
+    value: Any,
+    source: str,
+) -> tuple[bool, GuildRuntimeConfig]:
+    """Atomically replace one unprotected nested feature key when it still matches."""
+
+    gid = _fallback_guild_id(guild_id)
+    clean_key = str(key or "").strip()
+    if gid <= 0:
+        raise ValueError("guild_id must be a positive Discord snowflake")
+    if (
+        not clean_key
+        or clean_key in _CONTROL_KEYS
+        or clean_key in _BASE_WRITE_KEYS
+        or clean_key in _JSON_CONFIG_KEYS
+        or clean_key.startswith("config_last_")
+        or _is_protected_key(clean_key)
+    ):
+        raise ValueError(f"compare-and-swap is not allowed for config key: {clean_key!r}")
+
+    sb = get_supabase()
+    if sb is None:
+        raise RuntimeError("Supabase is unavailable for atomic guild config compare-and-swap")
+
+    stamp = _now().isoformat()
+    response = _execute_db_op(
+        f"atomic guild config CAS guild={gid} key={clean_key}",
+        lambda: sb.rpc(
+            GUILD_CONFIG_PATCH_RPC,
+            {
+                "p_guild_id": str(gid),
+                "p_patch": {
+                    clean_key: value,
+                    "config_last_write_mode": "explicit_override",
+                    "config_last_write_source": _safe_str(source, "guild_config_cas")[:300],
+                    "config_last_write_at": stamp,
+                },
+                "p_clear_keys": [],
+                "p_expected": {clean_key: expected},
+            },
+        ).execute(),
+    )
+    envelope = _rpc_mapping_row(response)
+    if "__atomic_patch_applied" not in envelope:
+        raise RuntimeError(
+            "Atomic guild config RPC does not support compare-and-swap; apply the current migration first"
+        )
+
+    applied = bool(envelope.get("__atomic_patch_applied"))
+    raw_row = envelope.get("__atomic_patch_row")
+    if not isinstance(raw_row, Mapping):
+        raise RuntimeError("Atomic guild config compare-and-swap returned no canonical row")
+
+    return applied, _normalize_config_row(
+        raw_row,
+        gid,
+        table_name="guild_configs",
+    )
+
+
+async def compare_and_swap_guild_config_key(
+    guild_id: Any,
+    key: str,
+    *,
+    expected: Any,
+    value: Any,
+    source: str = "guild_config_cas",
+) -> tuple[bool, GuildRuntimeConfig]:
+    """Cross-process-safe compare-and-swap for one unprotected feature blob."""
+
+    gid = _fallback_guild_id(guild_id)
+    applied, config = await _run_db(
+        f"guild config CAS async guild={gid} key={str(key or '').strip()}",
+        lambda: _compare_and_swap_guild_config_key_sync(
+            gid,
+            key,
+            expected=expected,
+            value=value,
+            source=source,
+        ),
+    )
+    if gid > 0:
+        clear_guild_config_cache(gid)
+        _CONFIG_CACHE[_cache_key(gid)] = dict(config)
+        _CONFIG_CACHE_TS[_cache_key(gid)] = _now()
+    return bool(applied), GuildRuntimeConfig(config)
+
+
 def _db_upsert_guild_config_sync(guild_id: Any, patch: Mapping[str, Any]) -> GuildRuntimeConfig:
     gid = _fallback_guild_id(guild_id)
     if gid <= 0:
@@ -1493,6 +1585,7 @@ __all__ = [
     "env_fallback_guild_config",
     "get_cached_guild_config",
     "get_guild_config",
+    "compare_and_swap_guild_config_key",
     "upsert_guild_config_sync",
     "upsert_guild_config",
     "clear_guild_config_keys_sync",
