@@ -20,6 +20,7 @@ import discord
 from discord import app_commands
 
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+from stoney_verify.services import role_mutation_authority
 from stoney_verify.ui.picker import DankRoleSelect
 
 _ROLE_EDITOR_PREFIX = "dank:roles:v1:"
@@ -119,18 +120,7 @@ def _actor_id(actor: Any) -> int:
 
 
 def _is_guild_owner(guild: discord.Guild, actor: Any) -> bool:
-    actor_id = _actor_id(actor)
-    if actor_id <= 0:
-        return False
-    try:
-        if int(getattr(guild, "owner_id", 0) or 0) == actor_id:
-            return True
-    except Exception:
-        pass
-    try:
-        return int(getattr(getattr(guild, "owner", None), "id", 0) or 0) == actor_id
-    except Exception:
-        return False
+    return role_mutation_authority.is_guild_owner(guild, actor)
 
 
 def _role_reason(action: str, actor: Any) -> str:
@@ -202,20 +192,11 @@ def _parse_colour(value: str, *, current: discord.Colour) -> discord.Colour:
 
 
 def _actor_can_manage_roles(guild: discord.Guild, actor: Any) -> bool:
-    if _is_guild_owner(guild, actor):
-        return True
-    if not isinstance(actor, discord.Member):
-        return False
-    perms = actor.guild_permissions
-    return bool(perms.administrator or perms.manage_roles)
+    return role_mutation_authority.actor_can_manage_roles(guild, actor)
 
 
 def _bot_can_manage_roles(guild: discord.Guild) -> bool:
-    me = guild.me
-    if not isinstance(me, discord.Member):
-        return False
-    perms = me.guild_permissions
-    return bool(perms.administrator or perms.manage_roles)
+    return role_mutation_authority.bot_can_manage_roles(guild)
 
 
 async def _reply(
@@ -318,33 +299,7 @@ def _role_mutation_blockers(
     actor: Any,
     role: discord.Role,
 ) -> list[str]:
-    blockers: list[str] = []
-    me = guild.me
-    if role.is_default():
-        blockers.append("@everyone cannot be edited by this tool.")
-    if role.managed:
-        blockers.append("Discord/integration-managed roles cannot be edited manually.")
-    if not _actor_can_manage_roles(guild, actor):
-        blockers.append("You no longer have Manage Roles.")
-    if not isinstance(me, discord.Member):
-        blockers.append("Dank Shield could not resolve its server member.")
-        return blockers
-    if not _bot_can_manage_roles(guild):
-        blockers.append("Dank Shield is missing Manage Roles.")
-    try:
-        if not _is_guild_owner(guild, actor):
-            if not isinstance(actor, discord.Member):
-                blockers.append("Your live server-member role hierarchy could not be resolved.")
-            elif role >= actor.top_role:
-                blockers.append("Your highest role must stay above the role you edit.")
-    except Exception:
-        blockers.append("Your role hierarchy could not be verified.")
-    try:
-        if int(me.id) != int(guild.owner_id) and role >= me.top_role:
-            blockers.append("Dank Shield's highest role must stay above the role it edits.")
-    except Exception:
-        blockers.append("Dank Shield's role hierarchy could not be verified.")
-    return blockers
+    return role_mutation_authority.role_mutation_blockers(guild, actor, role)
 
 
 def _permission_grant_blockers(
