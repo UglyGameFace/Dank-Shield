@@ -219,7 +219,7 @@ def test_manual_backup_snapshots_core_and_ticket_choices(
     assert [row["version_id"] for row in result["backup_versions"]] == [55, 56]
 
 
-def test_restore_creates_safety_backup_then_restores_selected_snapshot(
+def test_restore_creates_safety_backup_then_uses_canonical_sparse_writer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     current = {
@@ -244,9 +244,9 @@ def test_restore_creates_safety_backup_then_restores_selected_snapshot(
         "created_at": "2026-07-19T00:00:00+00:00",
         "updated_at": "2026-07-19T12:00:00+00:00",
     }
-    recorder: dict[str, Any] = {}
     backups: list[dict[str, Any]] = []
-    cache_clears: list[int] = []
+    writes: list[dict[str, Any]] = []
+    clears: list[tuple[str, ...]] = []
 
     monkeypatch.setattr(
         config_history,
@@ -282,17 +282,19 @@ def test_restore_creates_safety_backup_then_restores_selected_snapshot(
             "snapshot": dict(saved_snapshot),
         }
 
+    def fake_upsert(guild_id: int, patch: dict[str, Any]):
+        assert guild_id == 123
+        writes.append(dict(patch))
+        return {"guild_id": "123", **patch}
+
+    def fake_clear(guild_id: int, keys, *, source: str, actor=None):
+        assert guild_id == 123
+        clears.append(tuple(sorted(keys)))
+        return {"guild_id": "123"}
+
     monkeypatch.setattr(config_history, "_insert_snapshot_sync", insert_snapshot)
-    monkeypatch.setattr(
-        config_history,
-        "_require_supabase",
-        lambda: FakeSupabase(recorder),
-    )
-    monkeypatch.setattr(
-        config_history,
-        "clear_guild_config_cache",
-        lambda guild_id: cache_clears.append(guild_id),
-    )
+    monkeypatch.setattr(config_history, "upsert_guild_config_sync", fake_upsert)
+    monkeypatch.setattr(config_history, "clear_guild_config_keys_sync", fake_clear)
 
     result = config_history.restore_config_version_sync(
         123,
@@ -308,20 +310,20 @@ def test_restore_creates_safety_backup_then_restores_selected_snapshot(
     assert backups[0]["mode"] == "restore_guard"
     assert backups[0]["is_manual"] is True
 
-    payload = recorder["payload"]
-    assert recorder["table"] == "guild_configs"
-    assert recorder["filters"] == [("guild_id", "123")]
-    assert payload["ticket_prefix"] == "restored"
-    assert "guild_id" not in payload
-    assert "created_at" not in payload
-    assert "updated_at" not in payload
-    assert payload["settings"]["spam_guard_enabled"] is True
-    assert payload["settings"]["config_last_write_source"] == "config_history_restore"
-    assert payload["settings"]["config_last_write_mode"] == "restore"
-    assert payload["settings"]["config_last_write_actor_id"] == "77"
-    assert payload["settings"]["config_last_write_reason"] == "Rollback bad setup change"
-    assert payload["settings"]["config_restored_from_version_id"] == "8"
-    assert cache_clears == [123]
+    assert clears == []
+    assert len(writes) == 1
+    patch = writes[0]
+    assert patch["ticket_prefix"] == "restored"
+    assert patch["spam_guard_enabled"] is True
+    assert "settings" not in patch
+    assert "metadata" not in patch
+    assert patch["config_last_write_source"] == "config_history_restore"
+    assert patch["config_last_write_mode"] == "restore"
+    assert patch["config_last_write_actor_id"] == "77"
+    assert patch["config_last_write_reason"] == "Rollback bad setup change"
+    assert patch["config_restored_from_version_id"] == "8"
+    assert patch["__config_write_mode"] == "force"
+    assert patch["__config_write_source"] == "config_history_restore"
     assert result["config_table"] == "guild_configs"
     assert result["restored_from_version_id"] == 8
 
