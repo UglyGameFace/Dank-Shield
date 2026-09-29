@@ -365,7 +365,7 @@ async def open_modlog_health(interaction: discord.Interaction) -> None:
     embed.add_field(name="Coverage", value=("✅ " + str(len(present)) + f"/{len(expected)} event families active") if present else "⚠️ Could not inspect event listeners.", inline=False)
     if missing_events:
         embed.add_field(name="Missing / Core handled elsewhere", value="\n".join(missing_events[:12])[:1024], inline=False)
-    embed.set_footer(text="Uses existing modlog_channel_id. No separate overlapping log setting.")
+    embed.set_footer(text="Uses this server’s saved Modlog channel.")
     await interaction.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
