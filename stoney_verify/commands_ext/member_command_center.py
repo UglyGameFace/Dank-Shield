@@ -819,6 +819,33 @@ class SafetyGuideView(OwnedView):
         await _replace_panel(interaction, embed=_operations_embed(), view=view)
 
 
+async def open_member_target(
+    interaction: discord.Interaction,
+    member: discord.Member,
+) -> None:
+    """Open the existing guarded member panel for one explicitly selected member."""
+    if not await require_review(interaction):
+        return
+    guild = interaction.guild
+    if guild is None or int(getattr(member.guild, "id", 0) or 0) != int(guild.id):
+        return await reply_ephemeral(interaction, "❌ That user is not a member of this server.")
+
+    from .public_member_role_browser import _load_quick_roles
+
+    quick_roles = await _load_quick_roles(guild)
+    back_view = LiveMembersMenuView(int(interaction.user.id), quick_roles=quick_roles)
+    view = MemberActionView(
+        owner_id=int(interaction.user.id),
+        member=member,
+        browser=back_view,
+    )
+    await _replace_panel(
+        interaction,
+        embed=member_detail_embed(member, None),
+        view=view,
+    )
+
+
 async def open_member_command_center(interaction: discord.Interaction) -> None:
     if not await require_review(interaction):
         return
@@ -829,4 +856,5 @@ async def open_member_command_center(interaction: discord.Interaction) -> None:
 __all__ = [
     "MemberCommandCenterView",
     "open_member_command_center",
+    "open_member_target",
 ]
