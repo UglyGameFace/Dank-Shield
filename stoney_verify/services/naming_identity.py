@@ -632,6 +632,64 @@ async def _debounced_flush(guild_id: int) -> None:
             _queue_flush(gid)
 
 
+async def prune_missing_resources(guild: discord.Guild) -> int:
+    """Opportunistically remove identity records for resources deleted while offline.
+
+    This is intentionally called only from an explicit per-guild admin surface.
+    It never performs a startup/global guild sweep.
+    """
+
+    gid = _safe_int(getattr(guild, "id", 0), 0)
+    if gid <= 0:
+        return 0
+
+    live_roles = {
+        _safe_int(getattr(role, "id", 0), 0)
+        for role in list(getattr(guild, "roles", []) or [])
+    }
+    live_channels = {
+        _safe_int(getattr(channel, "id", 0), 0)
+        for channel in list(getattr(guild, "channels", []) or [])
+    }
+    live_roles.discard(0)
+    live_channels.discard(0)
+
+    removed = 0
+
+    def mutate(current: Mapping[str, Any]) -> dict[str, Any]:
+        nonlocal removed
+        normalized = _normalize_state(current)
+        _require_supported_state(normalized)
+        records = dict(normalized.get("records") or {})
+        kept: dict[str, Any] = {}
+        local_removed = 0
+
+        for key, payload in records.items():
+            kind, _, raw_id = str(key).partition(":")
+            rid = _safe_int(raw_id, 0)
+            if kind == "role" and rid not in live_roles:
+                local_removed += 1
+                continue
+            if kind == "channel" and rid not in live_channels:
+                local_removed += 1
+                continue
+            kept[str(key)] = payload
+
+        removed = local_removed
+        if local_removed <= 0:
+            return normalized
+        return {
+            "version": NAMING_IDENTITY_VERSION,
+            "policy": naming_policy(normalized),
+            "records": kept,
+        }
+
+    await _mutate_state_cas(gid, mutate)
+    if removed > 0:
+        naming_observability.increment("resource_pruned", removed)
+    return removed
+
+
 async def flush_pending_naming_identity(
     *,
     timeout_seconds: float = 8.0,
@@ -962,6 +1020,7 @@ __all__ = [
     "has_stylized_search_text",
     "install_naming_identity_runtime",
     "previous_alias_for_rename",
+    "prune_missing_resources",
     "queue_delete",
     "queue_rename",
     "remember_alias",
