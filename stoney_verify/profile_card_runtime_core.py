@@ -161,10 +161,15 @@ def _live_card_footer_text(message: Any) -> str:
 
 def is_live_card_message(message: Any) -> bool:
     footer = _live_card_footer_text(message)
-    return bool(
-        footer == LIVE_CARD_FOOTER_PREFIX
-        or _LEGACY_LIVE_CARD_FOOTER_RE.fullmatch(footer)
-    )
+    if footer == LIVE_CARD_FOOTER_PREFIX or _LEGACY_LIVE_CARD_FOOTER_RE.fullmatch(footer):
+        return True
+    # The public runtime injects parse_live_card_footer() with support for the
+    # invisible embed URL / attachment ownership markers. Use that injected
+    # parser here so cleanup/replacement does not depend on visible debug IDs.
+    try:
+        return parse_live_card_footer(message) is not None
+    except Exception:
+        return False
 
 
 def parse_live_card_footer(message: Any) -> Optional[tuple[int, int]]:
