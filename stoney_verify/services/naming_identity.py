@@ -795,6 +795,122 @@ async def role_autocomplete(
     ]
 
 
+def _parse_resource_id_query(value: Any) -> int:
+    text = str(value or "").strip()
+    match = _ROLE_MENTION_RE.fullmatch(text)
+    if match:
+        return _safe_int(match.group(1), 0)
+    return _safe_int(text, 0) if text.isdigit() else 0
+
+
+async def resolve_role_query(
+    guild: discord.Guild,
+    query: Any,
+) -> tuple[discord.Role | None, str]:
+    text = str(query or "").strip()
+    if not text:
+        return None, "Choose a role."
+
+    direct_id = _parse_resource_id_query(text)
+    if direct_id > 0:
+        role = guild.get_role(direct_id)
+        if isinstance(role, discord.Role) and not role.is_default():
+            return role, ""
+        return None, "That role no longer exists."
+
+    roles = [
+        role
+        for role in list(getattr(guild, "roles", []) or [])
+        if isinstance(role, discord.Role) and not role.is_default()
+    ]
+    raw_exact = [role for role in roles if _raw_name(role).casefold() == text.casefold()]
+    if len(raw_exact) == 1:
+        return raw_exact[0], ""
+    if len(raw_exact) > 1:
+        return None, "More than one role has that exact display name. Choose one from autocomplete."
+
+    query_key = semantic_key(text)
+    semantic_exact = [role for role in roles if semantic_key(_raw_name(role)) == query_key and query_key]
+    if len(semantic_exact) == 1:
+        return semantic_exact[0], ""
+    if len(semantic_exact) > 1:
+        return None, "More than one role has that searchable name. Choose one from autocomplete."
+
+    state = await _load_state(int(guild.id))
+    alias_exact = [
+        role
+        for role in roles
+        if query_key
+        and query_key in aliases_for(state, kind="role", resource_id=role.id)
+    ]
+    if len(alias_exact) == 1:
+        return alias_exact[0], ""
+    if len(alias_exact) > 1:
+        return None, "That old role name matches more than one role. Choose one from autocomplete."
+    return None, "No role matched that name or saved alias. Choose one from autocomplete."
+
+
+async def _on_guild_role_create(role: discord.Role) -> None:
+    from stoney_verify.services.search_safe_naming import enforce_role_name
+
+    await enforce_role_name(role)
+
+
+async def _on_guild_role_update(before: discord.Role, after: discord.Role) -> None:
+    if str(getattr(before, "name", "")) == str(getattr(after, "name", "")):
+        return
+    queue_rename(
+        guild_id=getattr(getattr(after, "guild", None), "id", 0),
+        kind="role",
+        resource_id=getattr(after, "id", 0),
+        before_name=getattr(before, "name", ""),
+        after_name=getattr(after, "name", ""),
+    )
+    from stoney_verify.services.search_safe_naming import enforce_role_name
+
+    await enforce_role_name(after)
+
+
+async def _on_guild_channel_create(channel: discord.abc.GuildChannel) -> None:
+    from stoney_verify.services.search_safe_naming import enforce_channel_name
+
+    await enforce_channel_name(channel)
+
+
+async def _on_guild_channel_update(
+    before: discord.abc.GuildChannel,
+    after: discord.abc.GuildChannel,
+) -> None:
+    if str(getattr(before, "name", "")) == str(getattr(after, "name", "")):
+        return
+    queue_rename(
+        guild_id=getattr(getattr(after, "guild", None), "id", 0),
+        kind="channel",
+        resource_id=getattr(after, "id", 0),
+        before_name=getattr(before, "name", ""),
+        after_name=getattr(after, "name", ""),
+    )
+    from stoney_verify.services.search_safe_naming import enforce_channel_name
+
+    await enforce_channel_name(after)
+
+
+async def _on_guild_role_delete(role: discord.Role) -> None:
+    queue_delete(
+        guild_id=getattr(getattr(role, "guild", None), "id", 0),
+        kind="role",
+        resource_id=getattr(role, "id", 0),
+    )
+
+
+async def _on_guild_channel_delete(channel: discord.abc.GuildChannel) -> None:
+    queue_delete(
+        guild_id=getattr(getattr(channel, "guild", None), "id", 0),
+        kind="channel",
+        resource_id=getattr(channel, "id", 0),
+    )
+
+
 def install_naming_identity_runtime(bot: Any) -> bool:
     """Attach sparse rename/delete listeners once. No startup guild scan."""
     if bool(getattr(bot, _RUNTIME_FLAG, False)):
