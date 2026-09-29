@@ -1883,13 +1883,41 @@ async def open_roles_profiles_center(interaction: discord.Interaction) -> None:
     staff = await _recognized_staff(interaction)
     role_manager = _actor_can_manage_roles(guild, interaction.user)
     setup_manager = _can_manage_setup(interaction)
+    embed = _center_embed(
+        staff=staff,
+        role_manager=role_manager,
+        setup_manager=setup_manager,
+    )
+    try:
+        from stoney_verify.member_setup_service import (
+            load_guild_setup_state,
+            load_member_setup_state,
+            member_review_status,
+        )
+
+        guild_setup, member_setup = await asyncio.gather(
+            load_guild_setup_state(guild.id),
+            load_member_setup_state(guild.id, interaction.user.id),
+        )
+        setup_status = member_review_status(guild_setup, member_setup)
+        current_revision = int(setup_status.get("current_revision") or 0)
+        if current_revision > 0:
+            if setup_status.get("is_current"):
+                setup_text = f"✅ Current on revision **{current_revision}**."
+            else:
+                pending = list(setup_status.get("pending_sections") or [])
+                gate_note = " • **Member Access review required**" if setup_status.get("access_gated") else ""
+                setup_text = (
+                    f"⚠️ Revision **{current_revision}** needs review{gate_note}. "
+                    f"Changed sections: **{len(pending)}**. Open **Member Setup**."
+                )
+            embed.add_field(name="Your Member Setup", value=setup_text, inline=False)
+    except Exception:
+        pass
+
     await _replace(
         interaction,
-        embed=_center_embed(
-            staff=staff,
-            role_manager=role_manager,
-            setup_manager=setup_manager,
-        ),
+        embed=embed,
         view=RolesProfilesView(
             int(interaction.user.id),
             staff=staff,
