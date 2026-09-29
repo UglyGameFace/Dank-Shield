@@ -127,111 +127,101 @@ Validation evidence before later runtime-hardening commits:
 - focused Dank Design Regression CI, Application Command Size Diagnostics, Schema Authority SQL, Ticket Owner Emergency Override, DS Backlog 027 Validation, and Profile Runtime Diagnostics were green on `d0f67fa8aaa02322b8562637cf30d8e6b30ccc4e`;
 - the full Dank Shield CI run on that now-superseded head was still executing when further same-task commits were made, so it is not treated as completion evidence.
 
-## Current implementation focus: P1 naming runtime reliability and exact semantics
+## P1 implementation complete — exact-head validation pending
 
-This same P1 reliability cluster now includes four audit findings that shared the naming runtime and could be fixed without changing the public command surface.
+The remaining Search-Safe/runtime P1 findings have now been implemented on this same remediation branch.
 
-### Resource-lock lifecycle
+### Runtime reliability / semantic history
+- per-resource mutation locks use weak lifecycle ownership, eliminating the queued-waiter split-lock race without permanent lock-registry growth;
+- rapid semantic aliases preserve actual event order instead of set/alphabetical order;
+- failed alias/delete persistence requeues claimed events ahead of newer events;
+- cancellation after a flush has claimed events also requeues them rather than losing them;
+- exact saved aliases outrank unrelated partial live matches while exact live-name matches keep the no-DB fast path;
+- future naming schema versions fail closed and older workers refuse to overwrite/downgrade them;
+- malformed policy booleans such as `"false"` are parsed explicitly instead of Python truthiness.
 
-Root cause:
-- the per-resource lock registry manually removed an `asyncio.Lock` after a holder released it;
-- an already-queued waiter could still reference that old lock while a third coroutine obtained a newly-created lock for the same Discord resource, allowing concurrent mutations.
+### Unicode / Search-Safe scope
+- Dank Design remains the one Unicode font-map owner;
+- its reverse font map is cached;
+- Search-Safe rewrites only known styled glyphs that decode to one ASCII alphabetic character;
+- unrelated compatibility symbols, ligatures, temperatures, trademark/service marks, and decorative digits remain untouched.
 
-Implementation:
-- `search_safe_naming._RESOURCE_LOCKS` now uses `weakref.WeakValueDictionary`;
-- manual `_release_resource_lock` logic was removed;
-- queued holders/waiters keep the shared lock alive naturally, while idle historical resource locks disappear without permanent registry growth;
-- regressions prove a queued waiter and later third caller receive the same lock and no manual-pop path remains.
+### Reviewed repair transaction correctness
+- Preview freezes the exact bounded editable resource identities the admin reviewed;
+- Apply mutates only those reviewed IDs and rechecks current name, permission/hierarchy blocker, and derived Search-Safe output before each PATCH;
+- resources added after Preview cannot silently enter Apply;
+- reviewed resources renamed after Preview fail closed and require a fresh preview;
+- **Preview Next 25** now builds a new reviewed batch instead of immediately mutating a freshly rescanned batch.
 
-### Alias chronology, durable retry, and autocomplete priority
+### Shared Dank Design/Search-Safe mutation authority
+- one weak per-guild naming mutation lock is owned by `services/naming_mutation_locks.py`;
+- Dank Design's existing `_lock_for()` is now a compatibility facade over that shared owner;
+- Search-Safe automatic enforcement and reviewed batch repair use the same guild lock plus their resource lock;
+- gateway enforcement therefore waits for a Design Apply/Undo transaction rather than racing its preflight assumptions.
 
-Root causes:
-- pending aliases were stored in a set and alphabetically sorted before persistence, destroying real rename chronology;
-- pending aliases/deletes were popped before durable persistence and could be silently lost after a database failure;
-- autocomplete skipped alias-state reads whenever any partial live match existed, allowing a partial current name to hide an exact saved old alias.
+### Discord REST pacing / retries
+- Search-Safe name edits funnel through one `_safe_name_edit()` helper;
+- the helper shares the existing process-wide Discord REST budget from `discord_api_safety`;
+- the same edit uses the canonical operation-queue retry helper for retryable Discord/API failures;
+- no Search-Safe role/channel name PATCH bypasses that helper.
 
-Implementation:
-- pending aliases are ordered lists with recency-preserving deduplication;
-- debounce flush replays oldest → newest so persisted history remains newest-first through `remember_alias()`;
-- failed persistence requeues the exact failed aliases/deletes ahead of any newer events that arrived during the failed write;
-- exact live names retain the no-I/O fast path;
-- partial live matches now load bounded alias state, and exact saved aliases outrank unrelated live prefix/substring matches;
-- focused regressions cover rapid rename order, failure requeue, exact alias priority, and exact-live fast-path behavior.
+### Cross-process config correctness
+- the canonical atomic guild-config RPC now supports optional compare-and-swap expectations for a shared nested feature key;
+- stale CAS writers return the newest canonical row without writing;
+- Naming Identity state mutations replay their pure transform against the winner's state and retry with a bounded attempt count;
+- concurrent workers therefore preserve each other's aliases/policy rather than last-writer-wins replacing the whole `naming_identity_v1` blob;
+- protected setup keys cannot use the CAS helper as a bypass;
+- mutation/review paths force fresh naming-policy reads before live Discord changes;
+- the naming cache TTL was reduced from 300s to 60s, and an expired naming cache bypasses the guild-config cache so the two TTLs no longer stack.
 
-### Future naming schema protection
+### Shutdown durability
+- naming debounce work has an immediate `_flush_pending_once()` primitive;
+- claimed events are requeued when a flush is cancelled;
+- `flush_pending_naming_identity()` cancels debounce timers and performs bounded immediate persistence;
+- the native Dank bot-class owner calls that flush from `Bot.close()` before Discord tears down the event loop;
+- no `atexit` or instance monkey-patch shutdown owner was added.
 
-Root cause:
-- the persisted `version` field was effectively decorative, so an older worker could interpret a newer state as v1 and overwrite it.
+### Internal double-PATCH elimination
+- `/role` create/edit/duplicate, Channel Builder, Setup Assistant custom names, Server Stats, Dank Design previews/direct rename/Undo all consume the active Search-Safe policy before their own live mutations;
+- gateway enforcement remains the safety net for external/manual Discord edits rather than the normal second PATCH for Dank Shield-owned actions.
 
-Implementation:
-- future schema versions normalize to an explicit unsupported sentinel with Preserve/no-alias read behavior;
-- mutating operations reject unsupported future versions with `UnsupportedNamingIdentityVersion`;
-- policy changes and alias writes therefore cannot downgrade a future schema;
-- debounce flush logs and stops rather than retry-looping or overwriting newer-format state;
-- regressions cover read fail-closed behavior and rejected mutations.
+Focused regressions now cover the lock lifecycle, alias chronology/retry/priority, future schema protection, Unicode scope, immutable reviewed batches, shared Design/Search-Safe locking, REST pacing ownership, fresh policy reads, nested CAS conflict replay, strict booleans, and shutdown flush behavior.
 
-### Unicode rewrite scope
+## Current validation gate
 
-Root cause:
-- Search-Safe called the broad Dank Design decoder once per character;
-- that decoder intentionally ends with NFKC for semantic parsing, so live-name rewriting could also transform unrelated compatibility characters such as trademark/service marks, Celsius, circled digits, and ligatures.
+P1 implementation is frozen for one exact-head validation pass.
 
-Implementation:
-- Dank Design now exposes cached `decode_known_unicode_font_glyph()`, reusing its existing canonical font map without broad compatibility normalization;
-- `_reverse_font_map()` is cached rather than rebuilt for every glyph;
-- Search-Safe live rewriting uses only that canonical glyph decoder;
-- live replacement is limited to known glyphs that decode to one ASCII alphabetic character;
-- unrelated compatibility symbols and decorative digits remain exactly as the admin chose them;
-- regressions cover known styled/fullwidth letters plus `™`, `℠`, `℃`, `①`, and `ﬁ`.
+Required before P2 implementation:
+- branch remains 0 behind production `main`;
+- full Python compile/unit suite passes;
+- Dank Design Regression CI passes;
+- Application Command Size Diagnostics and Profile Runtime Diagnostics pass;
+- Schema Authority SQL and the real PostgreSQL sparse-write/clear/CAS smoke tests pass;
+- no exact-head workflow failure remains.
 
-## Validation / results
+Do not use earlier green SHAs as proof for the current head.
 
-Current exact implementation head after Unicode regressions: `3f5b5633eff143d8dcff03781bee645d604babbb`.
+## Next implementation focus after a green head: P2 production UX cleanup
 
-This runtime-reliability slice is **pending exact-head validation**. Earlier green heads prove earlier slices only. Completion requires:
-- full Python compile/unit suite on the current exact head;
-- focused Search-Safe/Naming Identity regressions;
-- Dank Design Regression CI;
-- Application Command Size Diagnostics and Profile Runtime Diagnostics;
-- Schema Authority SQL plus PostgreSQL guild-config concurrency smoke;
-- branch ancestry check showing 0 behind production `main`.
+1. **Member Setup Access Role / Prerequisite Role clarity**
+   - present the flow as **Eligibility → Complete Member Setup → Member Access → Protected Categories**;
+   - label Prerequisite Role as an optional eligibility requirement such as Verified;
+   - label Member Access Role as the role Dank Shield grants/removes automatically to control protected category visibility;
+   - show the resulting rule chain before Strict Gate activation;
+   - preserve existing IDs, gate semantics, and guild isolation.
 
-## Cleanup / conflicts
+2. **Global footer cleanup**
+   - inventory all live production `set_footer()` owners;
+   - remove/rewrite debug/operator metadata from member/admin UI, including raw guild IDs, config sources, runtime/schema identifiers, monitor/service names, internal implementation labels, and `dank_shield:...` tokens;
+   - preserve genuinely useful safety guidance, pagination, counts, confirmation semantics, and concise action guidance;
+   - standardize surviving footers so the product reads consistently across Setup, Member Setup, Role Editor, Server Design, verification, tickets, Community Hub, profiles, welcome/exit cards, diagnostics, and persistent tools;
+   - historical fixtures/tools are not production UI unless runtime ownership proves otherwise.
 
-- Search-Safe remains the one live-letter policy owner; other features consume it rather than duplicating Unicode maps.
-- Dank Design remains the canonical Unicode font-map owner.
-- the gateway listener remains a safety net for external/manual Discord edits rather than the expected second PATCH for internal mutation paths.
-- future naming-state versions are protected from older-runtime writes.
-- no new public slash root or command schema change was introduced by this cluster.
-- P2 footer/Member Setup cleanup remains blocked behind outstanding P1 reliability/integration work.
-
-## Remaining P1 backlog inside this same master audit
-
-- bind reviewed Search-Safe repair to the exact reviewed target set with locked revalidation instead of silently rescanning a potentially different batch at Apply time;
-- reconcile Search-Safe and Dank Design mutation locking/authority so both cannot race the same resource through different lock domains;
-- integrate reviewed Search-Safe repair with a proven aggregate Discord API pacing owner for batches up to 25;
-- harden cross-process naming-policy/cache correctness and remove unnecessary stacked cache authority;
-- define shutdown/debounce ownership so pending naming persistence is safely flushed or explicitly retained during shutdown;
-- harden malformed policy booleans instead of treating strings such as `"false"` as truthy;
-- finish channel semantic lookup/product integration or explicitly remove decorative unused surfaces;
-- add safe eventual cleanup/observability for stale deleted-resource identity records and automatic enforcement failures;
-- add requested naming metrics/operational visibility;
-- finish command-schema/mobile canary, autocomplete privacy, normalized-name collision preview, name-length preview, and searchability-versus-mentionability UX findings.
-
-## Next step
-
-Validate exact head `3f5b5633eff143d8dcff03781bee645d604babbb` once. Then fix reviewed Search-Safe target-set immutability and shared mutation authority before moving to API pacing and cache/shutdown hardening.
-
-## P2 backlog inside this same master audit
-
-- clarify Member Setup Access Role versus Prerequisite Role and show the eligibility → completion → Member Access → protected categories rule chain before Strict Gate activation;
-- perform the global user-facing footer audit and remove debug/operator metadata while preserving useful user guidance;
-- add requested naming observability/metrics and remaining product-polish findings;
-- finish the 100-point PASS/FAIL/NEEDS HARDENING/N/A re-audit, final diff inspection, migration deployment proof, Discloud startup validation, and live canary/soak evidence.
+3. Then finish remaining P2 observability/product findings and the final 100-point re-audit, migration deployment proof, Discloud startup validation, and live canary/soak evidence.
 
 ## Next step
 
-Run exact-head CI for the Dank Design/Search-Safe authority slice. Fix only failures from this root-cause cluster. Once green, record the exact validated SHA and move to the next P1 in severity order rather than starting the P2 footer or Member Setup cleanup early.
+Run exact-head validation once. If green, begin Member Setup clarity immediately, then the global footer cleanup. If a workflow fails, fix only the concrete regression and rerun from the new exact head.
 
 ## Prior merged task record: SEARCH-SAFE-NAMING-017
 
