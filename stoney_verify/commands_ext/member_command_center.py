@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 import discord
 
-from .member_role_browser_actions import MemberActionView, member_detail_embed
+from .member_role_browser_actions import MemberActionView, MemberRoleActionView, member_detail_embed
 from .member_role_browser_common import (
     OwnedView,
     ensure_member_cache,
@@ -819,11 +819,142 @@ class SafetyGuideView(OwnedView):
         await _replace_panel(interaction, embed=_operations_embed(), view=view)
 
 
+def _member_role_shortcut_embed(member: discord.Member) -> discord.Embed:
+    roles = [
+        role.mention
+        for role in reversed(list(getattr(member, "roles", []) or []))
+        if isinstance(role, discord.Role) and not role.is_default()
+    ]
+    embed = discord.Embed(
+        title="👥 Member Role Manager",
+        description=f"{member.mention}\n`{member.id}`",
+        color=member.color if member.color.value else discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(
+        name=f"Current roles ({len(roles)})",
+        value=(" ".join(roles) if roles else "No assigned roles.")[:1024],
+        inline=False,
+    )
+    embed.add_field(
+        name="Role safety",
+        value=(
+            "Add/Remove reuses the existing guarded member-role engine. "
+            "Protected roles, actor/bot hierarchy, and current permissions are checked again at selection time."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="/role member • Dank Shield Roles & Profiles")
+    return embed
+
+
+class DirectMemberRoleActionView(MemberRoleActionView):
+    async def back(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        target = await self.parent._fresh_target(interaction)
+        if target is not None:
+            await interaction.response.edit_message(
+                embed=_member_role_shortcut_embed(target),
+                view=self.parent,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+
+class DirectMemberRoleView(OwnedView):
+    role: Optional[discord.Role] = None
+
+    def __init__(
+        self,
+        *,
+        owner_id: int,
+        member: discord.Member,
+        browser: Any,
+    ) -> None:
+        self.member_id = int(member.id)
+        self.browser = browser
+        super().__init__(owner_id)
+
+    async def _fresh_target(self, interaction: discord.Interaction) -> Optional[discord.Member]:
+        member = interaction.guild.get_member(self.member_id)
+        if isinstance(member, discord.Member):
+            return member
+        try:
+            fetched = await interaction.guild.fetch_member(self.member_id)
+            return fetched if isinstance(fetched, discord.Member) else None
+        except Exception:
+            await reply_ephemeral(interaction, "❌ That member is no longer in the server.")
+            return None
+
+    async def _open_role_action(self, interaction: discord.Interaction, action: str) -> None:
+        target = await self._fresh_target(interaction)
+        if target is None:
+            return
+        label = "Add Role" if action == "add_role" else "Remove Role"
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title=("➕ " if action == "add_role" else "➖ ") + label,
+                description=(
+                    f"Target: {target.mention}\n\n"
+                    "Choose one role. The existing member-role guard will re-check "
+                    "permissions, protected-role rules, and hierarchy before changing anything."
+                ),
+                color=discord.Color.blurple(),
+            ),
+            view=DirectMemberRoleActionView(self, action=action),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @discord.ui.button(label="Add Role", emoji="➕", style=discord.ButtonStyle.primary, row=0)
+    async def add_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await self._open_role_action(interaction, "add_role")
+
+    @discord.ui.button(label="Remove Role", emoji="➖", style=discord.ButtonStyle.secondary, row=0)
+    async def remove_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await self._open_role_action(interaction, "remove_role")
+
+    @discord.ui.button(label="View Profile", emoji="🪪", style=discord.ButtonStyle.secondary, row=1)
+    async def profile(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        target = await self._fresh_target(interaction)
+        if target is None:
+            return
+        from .public_profile_cards import send_privacy_aware_profile
+        await send_privacy_aware_profile(interaction, target)
+
+    @discord.ui.button(label="Full Member Panel", emoji="🛡️", style=discord.ButtonStyle.secondary, row=1)
+    async def full_panel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        target = await self._fresh_target(interaction)
+        if target is None:
+            return
+        await interaction.response.edit_message(
+            embed=member_detail_embed(target, None),
+            view=MemberActionView(
+                owner_id=self.owner_id,
+                member=target,
+                browser=self.browser,
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @discord.ui.button(label="Roles & Profiles", emoji="↩️", style=discord.ButtonStyle.secondary, row=2)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_role_center import open_roles_profiles_center
+        await open_roles_profiles_center(interaction)
+
+
 async def open_member_target(
     interaction: discord.Interaction,
     member: discord.Member,
 ) -> None:
-    """Open the existing guarded member panel for one explicitly selected member."""
+    """Open a role-focused staff shortcut using the existing guarded role engine."""
     if not await require_review(interaction):
         return
     guild = interaction.guild
@@ -834,17 +965,16 @@ async def open_member_target(
 
     quick_roles = await _load_quick_roles(guild)
     back_view = LiveMembersMenuView(int(interaction.user.id), quick_roles=quick_roles)
-    view = MemberActionView(
+    view = DirectMemberRoleView(
         owner_id=int(interaction.user.id),
         member=member,
         browser=back_view,
     )
     await _replace_panel(
         interaction,
-        embed=member_detail_embed(member, None),
+        embed=_member_role_shortcut_embed(member),
         view=view,
     )
-
 
 async def open_member_command_center(interaction: discord.Interaction) -> None:
     if not await require_review(interaction):
@@ -854,6 +984,7 @@ async def open_member_command_center(interaction: discord.Interaction) -> None:
 
 
 __all__ = [
+    "DirectMemberRoleView",
     "MemberCommandCenterView",
     "open_member_command_center",
     "open_member_target",
