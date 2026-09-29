@@ -73,7 +73,7 @@ The previously active **COMMUNITY-HUB-COMPLETION-RELIABILITY-014** task is suspe
 - Added role creation, inspect/select, rename/appearance, colour, hoist, mentionable, supported unicode role icon editing, grouped permission editing, one-step hierarchy movement, duplication, Role Health, and exact-name-confirmed deletion.
 - Every mutation re-resolves current state and re-checks actor authority, bot Manage Roles, managed/default-role restrictions, and actor/bot hierarchy. Mutations for the same role are serialized through one per-role lock.
 - Permission editing preserves permissions outside the selected group, rejects grants the actor/bot cannot grant, keeps each Discord select within 25 options, and requires exact current-role-name confirmation before enabling Administrator.
-- Deletion discovers current Dank Shield role dependencies recursively from guild config and checks again under the mutation lock immediately before deletion; config-read failure blocks deletion.
+- Deletion discovers current Dank Shield role dependencies recursively from guild config **and** the separate authoritative Spam Guard security settings, then checks again under the mutation lock immediately before deletion; unreadable durable role settings fail closed.
 - Existing profile/cosmetic management, Member Role Manager, shared role picker, and AntiNuke HTTP self-action provenance remain authoritative; no competing assignment, profile, or AntiNuke owner was added.
 - Duplicate creation re-checks fresh permissions under lock; optional placement failure leaves the created role intact and surfaces a warning rather than pretending placement succeeded.
 - Updated empty cosmetic-role guidance to the public `/dank home → Roles & Profiles → Profile Builder` route.
@@ -99,7 +99,7 @@ Required final evidence:
 
 - No Server Design role mutation path was added; Server Design remains channel/category naming-only.
 - No second member-role assignment engine or profile/cosmetic manager was created.
-- No AntiNuke bypass or new provenance system was created. Normal Discord role API calls remain covered by `anti_nuke_self_action_runtime` role create/update/delete authorization.
+- No AntiNuke bypass or new provenance system was created. Normal Discord role API calls remain covered by `anti_nuke_self_action_runtime` role create/update/delete authorization. AntiNuke trusted-role settings already live in guild config; Spam Guard's separate `guild_security_settings` role references are read through its existing owner.
 - The old direct **Roles & Profiles → Profile Builder** routing is removed from both home implementations.
 - Stale public guidance to the compacted `/dank profile builder` doorway was corrected in the canonical profile-role UI.
 - No unrelated Community Hub, Live Captions, Invite Shield, ticket, verification, or Server Design behavior is intentionally changed.
