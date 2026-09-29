@@ -461,6 +461,7 @@ async def open_search_safe_naming(interaction: discord.Interaction) -> None:
     assert guild is not None
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True, thinking=False)
+    await naming_identity.prune_missing_resources(guild)
     policy = await naming_identity.get_naming_policy(guild.id, refresh=True)
     rows = search_safe_naming.scan_search_safe_targets(guild, actor=interaction.user)
     await interaction.edit_original_response(
