@@ -253,7 +253,36 @@ jobs:
           do $audit$
           declare
               saved jsonb;
+              first_cas jsonb;
+              stale_cas jsonb;
           begin
+              perform public.patch_dank_guild_config(
+                  'smoke-guild-1',
+                  '{"cas_probe":{"version":1}}'::jsonb
+              );
+
+              select public.patch_dank_guild_config(
+                  'smoke-guild-1',
+                  '{"cas_probe":{"version":2}}'::jsonb,
+                  array[]::text[],
+                  '{"cas_probe":{"version":1}}'::jsonb
+              ) into first_cas;
+
+              select public.patch_dank_guild_config(
+                  'smoke-guild-1',
+                  '{"cas_probe":{"version":3}}'::jsonb,
+                  array[]::text[],
+                  '{"cas_probe":{"version":1}}'::jsonb
+              ) into stale_cas;
+
+              if first_cas ->> '__atomic_patch_applied' <> 'true' then
+                  raise exception 'first guild config compare-and-swap did not apply: %', first_cas;
+              end if;
+
+              if stale_cas ->> '__atomic_patch_applied' <> 'false' then
+                  raise exception 'stale guild config compare-and-swap was not rejected: %', stale_cas;
+              end if;
+
               select settings into saved
                 from public.guild_configs
                where guild_id = 'smoke-guild-1';
@@ -276,6 +305,10 @@ jobs:
 
               if saved -> 'race_neighbor' ->> 'value' <> '1' then
                   raise exception 'concurrent patch was lost during atomic clear: %', saved;
+              end if;
+
+              if saved -> 'cas_probe' ->> 'version' <> '2' then
+                  raise exception 'stale compare-and-swap overwrote the winning config value: %', saved;
               end if;
           end;
           $audit$;
