@@ -29,6 +29,7 @@ TOKE_GUILD_COOLDOWN_SECONDS = 5 * 60
 _TOKE_USER_LAST: dict[tuple[int, int], float] = {}
 _TOKE_GUILD_LAST: dict[int, float] = {}
 _TOKE_LOCKS: weakref.WeakValueDictionary[int, asyncio.Lock] = weakref.WeakValueDictionary()
+_COMMUNITY_ROLE_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -103,6 +104,15 @@ def _toke_lock(guild_id: int) -> asyncio.Lock:
     if lock is None:
         lock = asyncio.Lock()
         _TOKE_LOCKS[gid] = lock
+    return lock
+
+
+def _community_role_lock(guild_id: int, user_id: int) -> asyncio.Lock:
+    key = f"{int(guild_id)}:{int(user_id)}"
+    lock = _COMMUNITY_ROLE_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _COMMUNITY_ROLE_LOCKS[key] = lock
     return lock
 
 
@@ -508,49 +518,50 @@ async def _handle_member_pick(interaction: discord.Interaction, values: list[str
     if guild is None or member is None:
         return await _reply(interaction, "This only works inside a server.")
 
-    await _defer_private(interaction)
-    stoner, ping, _cfg = await _member_roles(guild)
-    available = {
-        int(role.id): role
-        for role in (stoner, ping)
-        if isinstance(role, discord.Role)
-    }
-    selected = {
-        int(value)
-        for value in values
-        if str(value).isdigit() and int(value) in available
-    }
+    await _defer_update(interaction)
+    async with _community_role_lock(int(guild.id), int(member.id)):
+        stoner, ping, _cfg = await _member_roles(guild)
+        available = {
+            int(role.id): role
+            for role in (stoner, ping)
+            if isinstance(role, discord.Role)
+        }
+        selected = {
+            int(value)
+            for value in values
+            if str(value).isdigit() and int(value) in available
+        }
 
-    stoner_id = int(stoner.id) if isinstance(stoner, discord.Role) else 0
-    ping_id = int(ping.id) if isinstance(ping, discord.Role) else 0
-    if stoner_id and ping_id and stoner_id != ping_id and ping_id in selected and stoner_id not in selected:
-        return await _reply(interaction, "Select the Stoner role too if you want Sesh Pings.")
+        stoner_id = int(stoner.id) if isinstance(stoner, discord.Role) else 0
+        ping_id = int(ping.id) if isinstance(ping, discord.Role) else 0
+        if stoner_id and ping_id and stoner_id != ping_id and ping_id in selected and stoner_id not in selected:
+            return await _reply(interaction, "Select the Stoner role too if you want Sesh Pings.")
 
-    to_add = [
-        role
-        for role_id, role in available.items()
-        if role_id in selected and role not in member.roles
-    ]
-    to_remove = [
-        role
-        for role_id, role in available.items()
-        if role_id not in selected and role in member.roles
-    ]
+        to_add = [
+            role
+            for role_id, role in available.items()
+            if role_id in selected and role not in member.roles
+        ]
+        to_remove = [
+            role
+            for role_id, role in available.items()
+            if role_id not in selected and role in member.roles
+        ]
 
-    if stoner_id and stoner_id not in selected and ping_id and ping_id != stoner_id:
-        ping_role = available.get(ping_id)
-        if isinstance(ping_role, discord.Role) and ping_role in member.roles and ping_role not in to_remove:
-            to_remove.append(ping_role)
+        if stoner_id and stoner_id not in selected and ping_id and ping_id != stoner_id:
+            ping_role = available.get(ping_id)
+            if isinstance(ping_role, discord.Role) and ping_role in member.roles and ping_role not in to_remove:
+                to_remove.append(ping_role)
 
-    try:
-        if to_add:
-            await member.add_roles(*to_add, reason="Dank Shield Community & Pings self-selection")
-        if to_remove:
-            await member.remove_roles(*to_remove, reason="Dank Shield Community & Pings self-selection")
-    except discord.Forbidden:
-        return await _reply(interaction, "Dank Shield cannot manage one of those roles. Staff should check role hierarchy.")
-    except discord.HTTPException as exc:
-        return await _reply(interaction, f"Discord could not update those roles: {type(exc).__name__}.")
+        try:
+            if to_add:
+                await member.add_roles(*to_add, reason="Dank Shield Community & Pings self-selection")
+            if to_remove:
+                await member.remove_roles(*to_remove, reason="Dank Shield Community & Pings self-selection")
+        except discord.Forbidden:
+            return await _reply(interaction, "Dank Shield cannot manage one of those roles. Staff should check role hierarchy.")
+        except discord.HTTPException as exc:
+            return await _reply(interaction, f"Discord could not update those roles: {type(exc).__name__}.")
 
     if to_add or to_remove:
         try:
@@ -565,7 +576,6 @@ async def _handle_member_pick(interaction: discord.Interaction, values: list[str
     if to_remove:
         changes.append("Removed: " + ", ".join(role.mention for role in to_remove))
     await _reply(interaction, "\n".join(changes) if changes else "No community-role changes needed.", ok=True)
-
 
 async def open_member_community_pings(interaction: discord.Interaction) -> None:
     guild = interaction.guild
