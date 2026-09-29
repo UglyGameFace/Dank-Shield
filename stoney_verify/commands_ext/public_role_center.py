@@ -862,9 +862,9 @@ class RoleDetailView(_OwnedView):
         grant_blockers = _permission_grant_blockers(guild, actor, enabled)
         if grant_blockers:
             return await _reply(interaction, "❌ " + "\n• ".join(grant_blockers))
-        icon = role.display_icon if isinstance(role.display_icon, str) else None
         if not interaction.response.is_done():
             await interaction.response.defer()
+        position_warning = ""
         try:
             async with _role_action_lock(guild.id, role.id, "duplicate"):
                 fresh = guild.get_role(role.id)
@@ -873,29 +873,42 @@ class RoleDetailView(_OwnedView):
                 fresh_blockers = _role_mutation_blockers(guild, actor, fresh)
                 if fresh_blockers:
                     return await _reply(interaction, "❌ " + "\n• ".join(fresh_blockers))
-                created = await guild.create_role(
-                    name=_clip(f"{fresh.name} Copy", 100),
-                    permissions=discord.Permissions(fresh.permissions.value),
-                    colour=fresh.colour,
-                    hoist=fresh.hoist,
-                    mentionable=fresh.mentionable,
-                    display_icon=icon,
-                    reason=_role_reason(f"duplicated role {fresh.id}", actor),
-                )
+                fresh_enabled = [name for name, value in fresh.permissions if value]
+                fresh_grant_blockers = _permission_grant_blockers(guild, actor, fresh_enabled)
+                if fresh_grant_blockers:
+                    return await _reply(interaction, "❌ " + "\n• ".join(fresh_grant_blockers))
+                create_fields: dict[str, Any] = {
+                    "name": _clip(f"{fresh.name} Copy", 100),
+                    "permissions": discord.Permissions(fresh.permissions.value),
+                    "colour": fresh.colour,
+                    "hoist": fresh.hoist,
+                    "mentionable": fresh.mentionable,
+                    "reason": _role_reason(f"duplicated role {fresh.id}", actor),
+                }
+                fresh_icon = fresh.display_icon if isinstance(fresh.display_icon, str) else None
+                if fresh_icon and "ROLE_ICONS" in set(getattr(guild, "features", []) or []):
+                    create_fields["display_icon"] = fresh_icon
+                created = await guild.create_role(**create_fields)
                 try:
                     await created.edit(
                         position=max(1, fresh.position - 1),
                         reason=_role_reason(f"positioned duplicate of {fresh.id}", actor),
                     )
-                except Exception:
-                    pass
+                except (discord.Forbidden, discord.HTTPException):
+                    position_warning = (
+                        "Discord created the copy, but did not allow Dank Shield to place it beside the original. "
+                        "The new role remains at Discord's default creation position."
+                    )
         except discord.Forbidden:
             return await _reply(interaction, "❌ Discord denied the duplicate. Re-check Manage Roles and hierarchy.")
         except discord.HTTPException as exc:
             return await _reply(interaction, f"❌ Discord could not duplicate the role: {_clip(exc, 300)}")
+        duplicate_embed = await _role_embed(guild, created)
+        if position_warning:
+            duplicate_embed.add_field(name="Position warning", value=position_warning, inline=False)
         await _replace(
             interaction,
-            embed=await _role_embed(guild, created),
+            embed=duplicate_embed,
             view=RoleDetailView(self.owner_id, created.id),
         )
 
@@ -926,6 +939,52 @@ class RoleDetailView(_OwnedView):
         await _replace(interaction, embed=_role_editor_home_embed(guild), view=RoleEditorHomeView(self.owner_id))
 
 
+def _adjacent_editable_role(
+    guild: discord.Guild,
+    role: discord.Role,
+    direction: int,
+) -> Optional[discord.Role]:
+    candidates = [
+        candidate
+        for candidate in guild.roles
+        if isinstance(candidate, discord.Role)
+        and not candidate.is_default()
+        and not candidate.managed
+        and int(candidate.id) != int(role.id)
+    ]
+    if direction > 0:
+        above = sorted(
+            (candidate for candidate in candidates if candidate.position > role.position),
+            key=lambda candidate: candidate.position,
+        )
+        return above[0] if above else None
+    below = sorted(
+        (candidate for candidate in candidates if candidate.position < role.position),
+        key=lambda candidate: candidate.position,
+        reverse=True,
+    )
+    return below[0] if below else None
+
+
+def _move_target_blocker(
+    guild: discord.Guild,
+    actor: Any,
+    target: discord.Role,
+    direction: int,
+) -> str:
+    if direction <= 0:
+        return ""
+    if not _is_guild_owner(guild, actor):
+        if not isinstance(actor, discord.Member):
+            return "Your live role hierarchy could not be resolved."
+        if target >= actor.top_role:
+            return "Moving higher would cross your own highest role."
+    me = guild.me
+    if isinstance(me, discord.Member) and int(me.id) != int(guild.owner_id) and target >= me.top_role:
+        return "Moving higher would cross Dank Shield's highest role."
+    return ""
+
+
 async def _move_role(
     interaction: discord.Interaction,
     *,
@@ -943,40 +1002,12 @@ async def _move_role(
     if blockers:
         return await _reply(interaction, "❌ " + "\n• ".join(blockers))
 
-    candidates = [
-        candidate
-        for candidate in guild.roles
-        if isinstance(candidate, discord.Role)
-        and not candidate.is_default()
-        and not candidate.managed
-        and int(candidate.id) != int(role.id)
-    ]
-    if direction > 0:
-        above = sorted(
-            (candidate for candidate in candidates if candidate.position > role.position),
-            key=lambda candidate: candidate.position,
-        )
-        target = above[0] if above else None
-    else:
-        below = sorted(
-            (candidate for candidate in candidates if candidate.position < role.position),
-            key=lambda candidate: candidate.position,
-            reverse=True,
-        )
-        target = below[0] if below else None
-
+    target = _adjacent_editable_role(guild, role, direction)
     if not isinstance(target, discord.Role):
         return await _reply(interaction, "ℹ️ That role is already at the editable edge of the hierarchy.")
-
-    me = guild.me
-    if direction > 0:
-        if not _is_guild_owner(guild, actor):
-            if not isinstance(actor, discord.Member):
-                return await _reply(interaction, "❌ Your live role hierarchy could not be resolved.")
-            if target >= actor.top_role:
-                return await _reply(interaction, "❌ Moving higher would cross your own highest role.")
-        if isinstance(me, discord.Member) and int(me.id) != int(guild.owner_id) and target >= me.top_role:
-            return await _reply(interaction, "❌ Moving higher would cross Dank Shield's highest role.")
+    crossing = _move_target_blocker(guild, actor, target, direction)
+    if crossing:
+        return await _reply(interaction, "❌ " + crossing)
 
     if not interaction.response.is_done():
         await interaction.response.defer()
@@ -988,8 +1019,14 @@ async def _move_role(
             fresh_blockers = _role_mutation_blockers(guild, actor, fresh)
             if fresh_blockers:
                 return await _reply(interaction, "❌ " + "\n• ".join(fresh_blockers))
+            fresh_target = _adjacent_editable_role(guild, fresh, direction)
+            if not isinstance(fresh_target, discord.Role):
+                return await _reply(interaction, "ℹ️ The role hierarchy changed; this role is now at the editable edge.")
+            crossing = _move_target_blocker(guild, actor, fresh_target, direction)
+            if crossing:
+                return await _reply(interaction, "❌ " + crossing)
             edited = await fresh.edit(
-                position=target.position,
+                position=fresh_target.position,
                 reason=_role_reason(
                     f"moved role {fresh.id} {'up' if direction > 0 else 'down'}",
                     actor,
