@@ -212,4 +212,178 @@ async def _reply(
         "allowed_mentions": discord.AllowedMentions.none(),
     }
     if not interaction.response.is_done():
-        await interac
+        await interaction.response.send_message(content, **kwargs)
+    else:
+        await interaction.followup.send(content, **kwargs)
+
+
+async def _replace(
+    interaction: discord.Interaction,
+    *,
+    embed: discord.Embed,
+    view: discord.ui.View,
+) -> None:
+    kwargs = {
+        "embed": embed,
+        "view": view,
+        "allowed_mentions": discord.AllowedMentions.none(),
+    }
+    if not interaction.response.is_done():
+        if interaction.message is not None:
+            await interaction.response.edit_message(**kwargs)
+        else:
+            await interaction.response.send_message(**kwargs, ephemeral=True)
+    else:
+        await interaction.edit_original_response(**kwargs)
+
+
+async def _followup_panel(
+    interaction: discord.Interaction,
+    *,
+    embed: discord.Embed,
+    view: discord.ui.View,
+    content: str = "",
+) -> None:
+    await interaction.followup.send(
+        content=content or None,
+        embed=embed,
+        view=view,
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
+async def _recognized_staff(interaction: discord.Interaction) -> bool:
+    try:
+        from .member_role_browser_common import _can_review
+
+        return bool(await _can_review(interaction))
+    except Exception:
+        return False
+
+
+def _can_manage_setup(interaction: discord.Interaction) -> bool:
+    try:
+        from .public_owner_authority import interaction_has_manage_guild_authority
+
+        return bool(interaction_has_manage_guild_authority(interaction))
+    except Exception:
+        return False
+
+
+async def _require_role_manager(
+    interaction: discord.Interaction,
+) -> tuple[Optional[discord.Guild], Optional[Any]]:
+    guild = interaction.guild
+    actor = interaction.user
+    if guild is None or actor is None:
+        await _reply(interaction, "❌ Role administration only works inside a server.")
+        return None, None
+    if not _actor_can_manage_roles(guild, actor):
+        await _reply(
+            interaction,
+            "❌ Server role editing requires the server owner, Administrator, or the live Discord **Manage Roles** permission.",
+        )
+        return None, None
+    if not _bot_can_manage_roles(guild):
+        await _reply(
+            interaction,
+            "❌ Dank Shield is missing **Manage Roles**, so it cannot edit server roles.",
+        )
+        return None, None
+    return guild, actor
+
+
+def _role_mutation_blockers(
+    guild: discord.Guild,
+    actor: Any,
+    role: discord.Role,
+) -> list[str]:
+    blockers: list[str] = []
+    me = guild.me
+    if role.is_default():
+        blockers.append("@everyone cannot be edited by this tool.")
+    if role.managed:
+        blockers.append("Discord/integration-managed roles cannot be edited manually.")
+    if not _actor_can_manage_roles(guild, actor):
+        blockers.append("You no longer have Manage Roles.")
+    if not isinstance(me, discord.Member):
+        blockers.append("Dank Shield could not resolve its server member.")
+        return blockers
+    if not _bot_can_manage_roles(guild):
+        blockers.append("Dank Shield is missing Manage Roles.")
+    try:
+        if not _is_guild_owner(guild, actor):
+            if not isinstance(actor, discord.Member):
+                blockers.append("Your live server-member role hierarchy could not be resolved.")
+            elif role >= actor.top_role:
+                blockers.append("Your highest role must stay above the role you edit.")
+    except Exception:
+        blockers.append("Your role hierarchy could not be verified.")
+    try:
+        if int(me.id) != int(guild.owner_id) and role >= me.top_role:
+            blockers.append("Dank Shield's highest role must stay above the role it edits.")
+    except Exception:
+        blockers.append("Dank Shield's role hierarchy could not be verified.")
+    return blockers
+
+
+def _permission_grant_blockers(
+    guild: discord.Guild,
+    actor: Any,
+    names: Sequence[str],
+) -> list[str]:
+    blockers: list[str] = []
+    me = guild.me
+    actor_perms = (
+        actor.guild_permissions
+        if isinstance(actor, discord.Member)
+        else discord.Permissions.none()
+    )
+    bot_perms = me.guild_permissions if isinstance(me, discord.Member) else discord.Permissions.none()
+
+    if not _is_guild_owner(guild, actor) and not actor_perms.administrator:
+        missing = [name for name in names if not bool(getattr(actor_perms, name, False))]
+        if missing:
+            blockers.append(
+                "You cannot grant permissions you do not have: "
+                + ", ".join(_permission_label(name) for name in missing[:6])
+                + ("…" if len(missing) > 6 else "")
+            )
+
+    if not bot_perms.administrator:
+        missing = [name for name in names if not bool(getattr(bot_perms, name, False))]
+        if missing:
+            blockers.append(
+                "Dank Shield cannot grant permissions it does not have: "
+                + ", ".join(_permission_label(name) for name in missing[:6])
+                + ("…" if len(missing) > 6 else "")
+            )
+    return blockers
+
+
+def _value_contains_role_id(value: Any, role_id: int) -> bool:
+    if value is None or isinstance(value, bool):
+        return False
+    if isinstance(value, Mapping):
+        return any(_value_contains_role_id(item, role_id) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_value_contains_role_id(item, role_id) for item in value)
+    try:
+        if int(value) == int(role_id):
+            return True
+    except Exception:
+        pass
+    try:
+        return str(role_id) in re.findall(r"\d{5,25}", str(value))
+    except Exception:
+        return False
+
+
+def _config_dependency_labels(config: Mapping[str, Any], role_id: int) -> list[str]:
+    labels: list[str] = []
+    for key, value in dict(config or {}).items():
+        clean_key = str(key or "")
+        if "role" not in clean_key.casefold():
+            continue
+        if not _value_contains_role_id(value, role_
