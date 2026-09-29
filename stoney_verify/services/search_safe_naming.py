@@ -291,6 +291,42 @@ def normalize_undo_snapshot_items(
     return out
 
 
+def reviewed_search_safe_batch(
+    rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    *,
+    limit: int = DEFAULT_REPAIR_BATCH_SIZE,
+) -> list[dict[str, Any]]:
+    """Freeze the exact editable rows an admin reviewed for one bounded batch."""
+
+    batch_limit = max(
+        1,
+        min(_safe_int(limit, DEFAULT_REPAIR_BATCH_SIZE), MAX_REPAIR_BATCH_SIZE),
+    )
+    selected: list[dict[str, Any]] = []
+    for raw in list(rows or []):
+        if not isinstance(raw, dict) or not bool(raw.get("editable")):
+            continue
+        kind = str(raw.get("kind") or "").strip().lower()
+        rid = _safe_int(raw.get("id"), 0)
+        before = str(raw.get("before") or "").strip()
+        after = str(raw.get("after") or "").strip()
+        if kind not in {"role", "channel"} or rid <= 0 or not before or not after:
+            continue
+        selected.append(
+            {
+                **dict(raw),
+                "kind": kind,
+                "id": rid,
+                "before": before,
+                "after": after,
+                "editable": True,
+            }
+        )
+        if len(selected) >= batch_limit:
+            break
+    return selected
+
+
 def search_safe_summary(guild: discord.Guild, *, actor: Any = None) -> dict[str, int]:
     rows = scan_search_safe_targets(guild, actor=actor)
     return {
@@ -385,13 +421,16 @@ async def apply_search_safe_batch(
     guild: discord.Guild,
     *,
     actor: Any,
+    reviewed_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
     limit: int = DEFAULT_REPAIR_BATCH_SIZE,
 ) -> dict[str, Any]:
-    """Repair a bounded reviewed batch under the initiating actor's live authority."""
-    batch_limit = max(1, min(_safe_int(limit, DEFAULT_REPAIR_BATCH_SIZE), MAX_REPAIR_BATCH_SIZE))
-    initial = scan_search_safe_targets(guild, actor=actor)
-    editable = [row for row in initial if row.get("editable")]
-    selected = editable[:batch_limit]
+    """Apply only the exact bounded rows captured by the reviewed preview."""
+
+    batch_limit = max(
+        1,
+        min(_safe_int(limit, DEFAULT_REPAIR_BATCH_SIZE), MAX_REPAIR_BATCH_SIZE),
+    )
+    selected = reviewed_search_safe_batch(list(reviewed_rows or []), limit=batch_limit)
 
     changed: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
@@ -399,30 +438,61 @@ async def apply_search_safe_batch(
     for row in selected:
         kind = str(row.get("kind") or "")
         rid = _safe_int(row.get("id"), 0)
-        if rid <= 0:
-            continue
+        reviewed_before = str(row.get("before") or "").strip()
+        reviewed_after = str(row.get("after") or "").strip()
 
         if kind == "role":
             resource = guild.get_role(rid)
             if not isinstance(resource, discord.Role):
-                failed.append({**row, "error": "Role disappeared before repair."})
+                failed.append({**row, "error": "Role disappeared after preview."})
                 continue
-            before = str(resource.name or "").strip()
-            after = naming_identity.search_safe_display_name(before).strip()
+            current = str(resource.name or "").strip()
             blocker = _role_blocker(resource, actor=actor)
-        else:
+        elif kind == "channel":
             resource = guild.get_channel(rid)
             if resource is None or isinstance(resource, discord.CategoryChannel):
-                failed.append({**row, "error": "Channel disappeared before repair."})
+                failed.append({**row, "error": "Channel disappeared after preview."})
                 continue
-            before = str(getattr(resource, "name", "") or "").strip()
-            after = naming_identity.search_safe_display_name(before).strip()
+            current = str(getattr(resource, "name", "") or "").strip()
             blocker = _channel_blocker(resource)
-
-        if blocker:
-            failed.append({**row, "before": before, "after": after, "error": blocker})
+        else:
+            failed.append({**row, "error": "Reviewed resource type is no longer valid."})
             continue
-        if not after or after == before:
+
+        if current != reviewed_before:
+            failed.append(
+                {
+                    **row,
+                    "before": current,
+                    "after": reviewed_after,
+                    "error": (
+                        f"Name changed after preview from {reviewed_before!r} "
+                        f"to {current or 'blank'!r}. Preview again."
+                    ),
+                }
+            )
+            continue
+        if blocker:
+            failed.append(
+                {
+                    **row,
+                    "before": current,
+                    "after": reviewed_after,
+                    "error": blocker,
+                }
+            )
+            continue
+
+        derived_after = naming_identity.search_safe_display_name(current).strip()
+        if not derived_after or derived_after != reviewed_after:
+            failed.append(
+                {
+                    **row,
+                    "before": current,
+                    "after": derived_after,
+                    "error": "Search-Safe output changed after preview. Preview again.",
+                }
+            )
             continue
 
         lock = _resource_lock(kind, int(guild.id), rid)
@@ -431,46 +501,78 @@ async def apply_search_safe_batch(
                 if kind == "role":
                     fresh = guild.get_role(rid)
                     if not isinstance(fresh, discord.Role):
-                        failed.append({**row, "error": "Role disappeared before repair."})
+                        failed.append({**row, "error": "Role disappeared after preview."})
                         continue
-                    before = str(fresh.name or "").strip()
-                    after = naming_identity.search_safe_display_name(before).strip()
+                    current = str(fresh.name or "").strip()
                     blocker = _role_blocker(fresh, actor=actor)
-                    if blocker:
-                        failed.append({**row, "before": before, "after": after, "error": blocker})
-                        continue
-                    if not after or after == before:
-                        continue
-                    await fresh.edit(
-                        name=after[:100],
-                        reason="Dank Shield Search-Safe Naming reviewed repair",
-                    )
                 else:
                     fresh = guild.get_channel(rid)
                     if fresh is None or isinstance(fresh, discord.CategoryChannel):
-                        failed.append({**row, "error": "Channel disappeared before repair."})
+                        failed.append({**row, "error": "Channel disappeared after preview."})
                         continue
-                    before = str(getattr(fresh, "name", "") or "").strip()
-                    after = naming_identity.search_safe_display_name(before).strip()
+                    current = str(getattr(fresh, "name", "") or "").strip()
                     blocker = _channel_blocker(fresh)
-                    if blocker:
-                        failed.append({**row, "before": before, "after": after, "error": blocker})
-                        continue
-                    if not after or after == before:
-                        continue
-                    await fresh.edit(
-                        name=after[:100],
-                        reason="Dank Shield Search-Safe Naming reviewed repair",
+
+                if current != reviewed_before:
+                    failed.append(
+                        {
+                            **row,
+                            "before": current,
+                            "after": reviewed_after,
+                            "error": (
+                                f"Name changed after preview from {reviewed_before!r} "
+                                f"to {current or 'blank'!r}. Preview again."
+                            ),
+                        }
                     )
-            changed.append({**row, "before": before, "after": after})
+                    continue
+                if blocker:
+                    failed.append(
+                        {
+                            **row,
+                            "before": current,
+                            "after": reviewed_after,
+                            "error": blocker,
+                        }
+                    )
+                    continue
+
+                derived_after = naming_identity.search_safe_display_name(current).strip()
+                if not derived_after or derived_after != reviewed_after:
+                    failed.append(
+                        {
+                            **row,
+                            "before": current,
+                            "after": derived_after,
+                            "error": "Search-Safe output changed after preview. Preview again.",
+                        }
+                    )
+                    continue
+
+                await fresh.edit(
+                    name=reviewed_after[:100],
+                    reason="Dank Shield Search-Safe Naming reviewed repair",
+                )
+                changed.append(
+                    {
+                        **row,
+                        "before": reviewed_before,
+                        "after": reviewed_after,
+                    }
+                )
         except (discord.Forbidden, discord.HTTPException) as exc:
-            failed.append({**row, "before": before, "after": after, "error": type(exc).__name__})
+            failed.append(
+                {
+                    **row,
+                    "before": current,
+                    "after": reviewed_after,
+                    "error": type(exc).__name__,
+                }
+            )
 
     remaining_rows = scan_search_safe_targets(guild, actor=actor)
     return {
-        "initial_total": len(initial),
-        "initial_editable": len(editable),
-        "initial_blocked": len(initial) - len(editable),
+        "reviewed": len(selected),
         "attempted": len(selected),
         "changed": changed,
         "failed": failed,
@@ -494,6 +596,7 @@ __all__ = [
     "policy_adjusted_name_for_policy",
     "policy_fingerprint",
     "policy_matches_snapshot",
+    "reviewed_search_safe_batch",
     "scan_search_safe_targets",
     "search_safe_summary",
 ]
