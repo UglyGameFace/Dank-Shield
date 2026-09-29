@@ -212,6 +212,25 @@ async def reserve_recovery_discord_rest_requests(
             _RECOVERY_REST_WAITERS = max(0, _RECOVERY_REST_WAITERS - 1)
 
 
+async def reserve_bulk_discord_rest_requests(
+    weight: int = 1,
+    *,
+    label: str = "bulk_mutation",
+) -> None:
+    """Share the proven process-wide REST budget with bounded bulk mutations.
+
+    The existing recovery budget deliberately keeps headroom below the hosting
+    provider's aggregate ceiling. Reviewed bulk mutations use the same pool so
+    startup recovery and admin-triggered rename bursts cannot independently
+    consume that headroom at the same time.
+    """
+
+    await reserve_recovery_discord_rest_requests(
+        weight,
+        label=f"bulk:{str(label or 'mutation')[:100]}",
+    )
+
+
 def _audit_cooldown_seconds() -> float:
     return _env_float("DANK_AUDIT_LOG_COOLDOWN_SECONDS", 6.0)
 
@@ -516,5 +535,6 @@ __all__ = [
     "install_discord_api_safety",
     "recovery_discord_rest_budget_snapshot",
     "recovery_request_weight",
+    "reserve_bulk_discord_rest_requests",
     "reserve_recovery_discord_rest_requests",
 ]
