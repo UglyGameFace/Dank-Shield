@@ -1628,6 +1628,8 @@ class DeleteRoleModal(discord.ui.Modal):
 async def _self_service_role_kind(
     guild: discord.Guild,
     role: discord.Role,
+    *,
+    config: Optional[Any] = None,
 ) -> tuple[str, str]:
     """Return (kind, blocker). Empty kind means the role is not self-service."""
     from stoney_verify.guild_config import get_guild_config
@@ -1642,7 +1644,8 @@ async def _self_service_role_kind(
     )
     from .public_toke import SESH_PING_ROLE_KEY, STONER_ROLE_KEY
 
-    config = await get_guild_config(int(guild.id), refresh=True)
+    if config is None:
+        config = await get_guild_config(int(guild.id), refresh=True)
     blocker = _profile_cosmetic_role_blocker(guild, role, config)
     if blocker:
         return "", blocker
@@ -1822,10 +1825,47 @@ async def _role_name_autocomplete(
     interaction: discord.Interaction,
     current: str,
 ) -> list[app_commands.Choice[str]]:
-    """Alias-aware role lookup owned by the shared naming-identity service."""
+    """Return alias-aware role choices the caller is actually allowed to use."""
     from stoney_verify.services.naming_identity import role_autocomplete
 
-    return await role_autocomplete(interaction, current)
+    guild = interaction.guild
+    member = interaction.user if isinstance(interaction.user, discord.Member) else None
+    if guild is None or member is None:
+        return []
+
+    choices = await role_autocomplete(interaction, current)
+    if not choices:
+        return []
+
+    if _actor_can_manage_roles(guild, member):
+        allowed: list[app_commands.Choice[str]] = []
+        for choice in choices:
+            raw = str(choice.value or "").strip()
+            role = guild.get_role(int(raw)) if raw.isdigit() else None
+            if not isinstance(role, discord.Role):
+                continue
+            if _role_mutation_blockers(guild, member, role):
+                continue
+            allowed.append(choice)
+        return allowed[:25]
+
+    from stoney_verify.guild_config import get_guild_config
+
+    config = await get_guild_config(int(guild.id), refresh=True)
+    allowed: list[app_commands.Choice[str]] = []
+    for choice in choices:
+        raw = str(choice.value or "").strip()
+        role = guild.get_role(int(raw)) if raw.isdigit() else None
+        if not isinstance(role, discord.Role):
+            continue
+        kind, _blocker = await _self_service_role_kind(
+            guild,
+            role,
+            config=config,
+        )
+        if kind:
+            allowed.append(choice)
+    return allowed[:25]
 
 
 @app_commands.describe(
