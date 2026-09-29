@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from stoney_verify.services import naming_identity
+from stoney_verify.services import naming_mutation_locks
 from stoney_verify.services import role_mutation_authority
 from stoney_verify.services import search_safe_naming
 from stoney_verify.services import server_design_studio as design
@@ -527,6 +528,43 @@ def test_server_stats_design_names_are_search_safe_before_create_or_refresh() ->
     assert "_find_owned_category(guild, cfg, naming_policy=naming_policy)" in source
     assert source.count("naming_policy=naming_policy") >= 8
     assert "category_name = search_safe_naming.policy_adjusted_name_for_policy(" in source
+
+
+def test_dank_design_and_search_safe_share_one_guild_naming_lock(monkeypatch) -> None:
+    from stoney_verify.commands_ext import public_design_studio as legacy
+
+    naming_mutation_locks.GUILD_NAMING_LOCKS.clear()
+    guild = _FakeGuild()
+    channel = _FakeChannel(guild, 1, f"🎥・{_styled('videos')}")
+    guild.channels = [channel]
+    monkeypatch.setattr(search_safe_naming, "_channel_blocker", lambda _channel: "")
+
+    async def search_safe_policy(_guild_id: int):
+        return {
+            "mode": naming_identity.NAMING_MODE_SEARCH_SAFE,
+            "roles": True,
+            "channels": True,
+            "categories": False,
+        }
+
+    monkeypatch.setattr(naming_identity, "get_naming_policy", search_safe_policy)
+
+    async def scenario() -> None:
+        shared = naming_mutation_locks.guild_naming_lock(guild.id)
+        assert legacy._lock_for(guild.id) is shared  # noqa: SLF001
+
+        await shared.acquire()
+        task = asyncio.create_task(search_safe_naming.enforce_channel_name(channel))
+        await asyncio.sleep(0)
+
+        assert task.done() is False
+        assert channel.edits == []
+
+        shared.release()
+        assert await task is True
+
+    asyncio.run(scenario())
+    assert channel.edits == ["🎥・videos"]
 
 
 def test_resource_lock_registry_does_not_split_queued_waiters() -> None:
