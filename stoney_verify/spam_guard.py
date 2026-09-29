@@ -27,6 +27,7 @@ QUARANTINE_CASES_TABLE = "guild_security_quarantine_cases"
 
 SPAM_PANEL_FOOTER_BASE = "stoney_verify:spam_guard_panel:v11"
 SPAM_PANEL_FOOTER_PREFIX = "stoney_verify:spam_guard_panel:"
+SPAM_PANEL_PUBLIC_PREFIX = "Spam Guard •"
 SPAM_PANEL_PAGES = ("overview", "detection", "enforcement", "access")
 
 SPAM_INCIDENT_FOOTER_PREFIX = "stoney_verify:spam_guard_incident"
@@ -382,7 +383,7 @@ def _message_mentions_everyone(message: discord.Message) -> bool:
 
 def _panel_footer(page: str) -> str:
     clean_page = page if page in SPAM_PANEL_PAGES else "overview"
-    return f"{SPAM_PANEL_FOOTER_BASE} • page={clean_page}"
+    return f"{SPAM_PANEL_PUBLIC_PREFIX} {clean_page.title()}"
 
 
 def _page_title(page: str) -> str:
@@ -1495,7 +1496,11 @@ async def _find_existing_panel(channel: discord.TextChannel) -> Optional[discord
                 continue
             for emb in (msg.embeds or []):
                 footer = _safe_str(getattr(getattr(emb, "footer", None), "text", ""))
-                if SPAM_PANEL_FOOTER_PREFIX in footer or SPAM_PANEL_FOOTER_BASE in footer:
+                if (
+                    SPAM_PANEL_PUBLIC_PREFIX in footer
+                    or SPAM_PANEL_FOOTER_PREFIX in footer
+                    or SPAM_PANEL_FOOTER_BASE in footer
+                ):
                     return msg
     except Exception:
         pass
