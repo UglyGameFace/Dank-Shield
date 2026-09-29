@@ -35,7 +35,7 @@ NAMING_MODES = {NAMING_MODE_PRESERVE, NAMING_MODE_SEARCH_SAFE}
 MAX_ALIASES_PER_RESOURCE = 3
 MAX_TRACKED_RESOURCES = 128
 MAX_CACHED_GUILDS = 1024
-STATE_CACHE_TTL_SECONDS = 300.0
+STATE_CACHE_TTL_SECONDS = 60.0
 PERSIST_DEBOUNCE_SECONDS = 1.5
 
 _RUNTIME_FLAG = "_dank_naming_identity_runtime_v1"
@@ -395,7 +395,9 @@ async def _load_state(
     try:
         from stoney_verify.guild_config import get_guild_config
 
-        config = await get_guild_config(gid, refresh=refresh)
+        # Once the naming cache misses/expires, bypass the guild-config cache too.
+        # This prevents two stacked TTLs from extending cross-process staleness.
+        config = await get_guild_config(gid, refresh=True)
         state = _normalize_state(config.get(NAMING_IDENTITY_CONFIG_KEY))
     except Exception:
         state = _empty_state()
