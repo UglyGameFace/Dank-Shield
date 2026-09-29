@@ -14,7 +14,6 @@ import discord
 from discord import app_commands
 
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS, private_menu_lifecycle_text
-from ..runtime_release import runtime_release_label
 from .public_setup_group import dank_group
 
 _INSTALLED = False
@@ -100,12 +99,7 @@ def _home_embed() -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(
-        text=(
-            "Dank Shield • app-style controls • actions preserved • "
-            f"{runtime_release_label()}"
-        )[:2048]
-    )
+    embed.set_footer(text="Dank Shield • Control Center")
     return embed
 
 
