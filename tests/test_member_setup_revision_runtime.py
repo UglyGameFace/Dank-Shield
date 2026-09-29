@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
+from stoney_verify.commands_ext.public_member_setup import (
+    _looks_like_member_setup_panel,
+    _message_component_ids,
+)
 from stoney_verify.member_setup_service import (
     ACCESS_MODE_STRICT,
     SETUP_SECTIONS,
@@ -182,3 +187,45 @@ def test_access_gated_publish_requires_active_gate() -> None:
     )[0]
     assert "Strict Gate is not active" in block
     assert "_schedule_guild_reconcile(guild)" in block
+
+
+def test_live_panel_adoption_requires_bot_author_and_profile_components() -> None:
+    edit = SimpleNamespace(custom_id="dank:profile:v1:edit")
+    row = SimpleNamespace(children=[edit])
+    message = SimpleNamespace(
+        author=SimpleNamespace(id=77),
+        components=[row],
+        embeds=[SimpleNamespace(title="Profile Panel")],
+    )
+    guild = SimpleNamespace(me=SimpleNamespace(id=77))
+
+    assert _message_component_ids(message) == {"dank:profile:v1:edit"}
+    assert _looks_like_member_setup_panel(message, guild) is True
+
+    wrong_author = SimpleNamespace(
+        author=SimpleNamespace(id=88),
+        components=[row],
+        embeds=[SimpleNamespace(title="Profile Panel")],
+    )
+    assert _looks_like_member_setup_panel(wrong_author, guild) is False
+
+    unrelated = SimpleNamespace(
+        author=SimpleNamespace(id=77),
+        components=[SimpleNamespace(children=[SimpleNamespace(custom_id="ticket:create")])],
+        embeds=[SimpleNamespace(title="Profile Panel")],
+    )
+    assert _looks_like_member_setup_panel(unrelated, guild) is False
+
+
+def test_public_panel_refresh_fails_closed_on_ambiguous_legacy_panels() -> None:
+    assert "More than one canonical profile/setup panel exists" in RUNTIME
+    assert "Delete the obsolete duplicate before refreshing" in RUNTIME
+    assert 'channel.history(limit=100)' in RUNTIME
+    assert 'panel_message_id=message.id' in RUNTIME
+
+
+def test_new_profile_panel_persists_canonical_message_ownership() -> None:
+    assert "sent = await channel.send(" in PROFILE
+    assert "panel_message_id=sent.id" in PROFILE
+    assert "setup_channel_id=channel.id" in PROFILE
+    assert "await sent.delete()" in PROFILE
