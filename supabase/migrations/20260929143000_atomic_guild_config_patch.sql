@@ -16,7 +16,8 @@
 create or replace function public.patch_dank_guild_config(
     p_guild_id text,
     p_patch jsonb,
-    p_clear_keys text[] default array[]::text[]
+    p_clear_keys text[] default array[]::text[],
+    p_expected jsonb default null
 )
 returns jsonb
 language plpgsql
@@ -26,8 +27,13 @@ as $$
 declare
     clean_patch jsonb := coalesce(p_patch, '{}'::jsonb);
     clear_keys text[] := coalesce(p_clear_keys, array[]::text[]);
+    expected_patch jsonb := p_expected;
     assignments text[] := array[]::text[];
     json_column text;
+    compare_column text := null;
+    compare_payload jsonb := '{}'::jsonb;
+    expected_key text;
+    expectation_matches boolean := true;
     column_row record;
     result jsonb;
 begin
@@ -37,6 +43,10 @@ begin
 
     if jsonb_typeof(clean_patch) <> 'object' then
         raise exception 'guild config patch must be a JSON object';
+    end if;
+
+    if expected_patch is not null and jsonb_typeof(expected_patch) <> 'object' then
+        raise exception 'guild config expected patch must be a JSON object';
     end if;
 
     -- These fields are database-owned and must never be client patched or cleared.
@@ -68,6 +78,65 @@ begin
     insert into public.guild_configs (guild_id)
     values (btrim(p_guild_id))
     on conflict (guild_id) do nothing;
+
+    -- Optional compare-and-swap boundary for callers that update one shared
+    -- nested config value from multiple bot processes. Lock the row first,
+    -- compare only the supplied expected keys, and return the current row
+    -- without writing when another worker won the race.
+    if expected_patch is not null then
+        foreach json_column in array array['settings', 'config', 'metadata', 'meta']
+        loop
+            if exists (
+                select 1
+                  from pg_attribute a
+                 where a.attrelid = 'public.guild_configs'::regclass
+                   and a.attnum > 0
+                   and not a.attisdropped
+                   and a.attname = json_column
+                   and format_type(a.atttypid, a.atttypmod) = 'jsonb'
+            ) then
+                compare_column := json_column;
+                exit;
+            end if;
+        end loop;
+
+        if compare_column is null then
+            raise exception 'guild_configs has no JSON compatibility column for compare-and-swap';
+        end if;
+
+        execute format(
+            'select coalesce(%I, ''{}''::jsonb) from public.guild_configs where guild_id = $1 for update',
+            compare_column
+        )
+        using btrim(p_guild_id)
+        into compare_payload;
+
+        for expected_key in select jsonb_object_keys(expected_patch)
+        loop
+            if expected_patch -> expected_key = 'null'::jsonb then
+                if compare_payload ? expected_key
+                   and compare_payload -> expected_key <> 'null'::jsonb then
+                    expectation_matches := false;
+                    exit;
+                end if;
+            elsif compare_payload -> expected_key is distinct from expected_patch -> expected_key then
+                expectation_matches := false;
+                exit;
+            end if;
+        end loop;
+
+        if not expectation_matches then
+            select to_jsonb(gc)
+              into result
+              from public.guild_configs gc
+             where gc.guild_id = btrim(p_guild_id);
+
+            return jsonb_build_object(
+                '__atomic_patch_applied', false,
+                '__atomic_patch_row', coalesce(result, '{}'::jsonb)
+            );
+        end if;
+    end if;
 
     -- Every compatibility JSON column receives the same sparse merge. The
     -- expression is evaluated against the row version locked by this UPDATE,
@@ -174,6 +243,12 @@ begin
           into result
           from public.guild_configs gc
          where gc.guild_id = btrim(p_guild_id);
+        if expected_patch is not null then
+            return jsonb_build_object(
+                '__atomic_patch_applied', true,
+                '__atomic_patch_row', coalesce(result, '{}'::jsonb)
+            );
+        end if;
         return coalesce(result, '{}'::jsonb);
     end if;
 
@@ -184,11 +259,17 @@ begin
     using btrim(p_guild_id), clean_patch, clear_keys
     into result;
 
+    if expected_patch is not null then
+        return jsonb_build_object(
+            '__atomic_patch_applied', true,
+            '__atomic_patch_row', coalesce(result, '{}'::jsonb)
+        );
+    end if;
     return coalesce(result, '{}'::jsonb);
 end;
-$$;
+$;
 
-revoke all on function public.patch_dank_guild_config(text, jsonb, text[]) from public;
-revoke all on function public.patch_dank_guild_config(text, jsonb, text[]) from anon;
-revoke all on function public.patch_dank_guild_config(text, jsonb, text[]) from authenticated;
-grant execute on function public.patch_dank_guild_config(text, jsonb, text[]) to service_role;
+revoke all on function public.patch_dank_guild_config(text, jsonb, text[], jsonb) from public;
+revoke all on function public.patch_dank_guild_config(text, jsonb, text[], jsonb) from anon;
+revoke all on function public.patch_dank_guild_config(text, jsonb, text[], jsonb) from authenticated;
+grant execute on function public.patch_dank_guild_config(text, jsonb, text[], jsonb) to service_role;
