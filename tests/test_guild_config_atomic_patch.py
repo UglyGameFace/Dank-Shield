@@ -19,9 +19,12 @@ class _AtomicRPC:
 
     def execute(self):
         patch = dict(self.params["p_patch"])  # type: ignore[arg-type]
+        clear_keys = list(self.params.get("p_clear_keys") or [])
         with self.owner.lock:
             for key in ("settings", "config", "metadata", "meta"):
                 current = dict(self.owner.row.get(key) or {})
+                for clear_key in clear_keys:
+                    current.pop(str(clear_key), None)
                 current.update(patch)
                 self.owner.row[key] = current
             return SimpleNamespace(data=dict(self.owner.row))
@@ -76,6 +79,7 @@ def test_atomic_writer_sends_only_sparse_updates_not_rebuilt_neighbor_state(monk
     assert patch["naming_identity_v1"] == {"policy": {"mode": "search_safe"}}
     assert "member_setup_state" not in patch
     assert "neighboring_setting" not in patch
+    assert fake.calls[0][1]["p_clear_keys"] == []
 
 
 def test_concurrent_naming_and_member_setup_writes_preserve_each_other(monkeypatch) -> None:
@@ -118,11 +122,51 @@ def test_concurrent_naming_and_member_setup_writes_preserve_each_other(monkeypat
     assert saved["neighboring_setting"] == {"keep": True}
 
 
+def test_concurrent_clear_and_naming_write_preserve_unrelated_state(monkeypatch) -> None:
+    stale = _stale_row()
+    stale_settings = dict(stale["settings"])  # type: ignore[arg-type]
+    stale_settings["obsolete_setup_key"] = "remove-me"
+    for key in ("settings", "config", "metadata", "meta"):
+        stale[key] = dict(stale_settings)
+
+    fake = _FakeSupabase(stale)
+    monkeypatch.setattr(guild_config, "get_supabase", lambda: fake)
+    monkeypatch.setattr(guild_config, "GUILD_CONFIG_TABLE_FALLBACKS", ("guild_configs",))
+    monkeypatch.setattr(guild_config, "_fetch_existing_row_sync", lambda _table, _gid: dict(stale))
+
+    async def scenario() -> None:
+        clear = asyncio.to_thread(
+            guild_config.clear_guild_config_keys_sync,
+            999,
+            ("obsolete_setup_key",),
+            source="member setup reconciliation",
+        )
+        naming = asyncio.to_thread(
+            guild_config._db_upsert_guild_config_sync,
+            999,
+            {
+                "naming_identity_v1": {"policy": {"mode": "search_safe"}},
+                "__config_write_mode": "explicit_override",
+                "__config_write_source": "naming_identity_runtime",
+                "__config_write_allow_keys": ["naming_identity_v1"],
+            },
+        )
+        await asyncio.gather(clear, naming)
+
+    asyncio.run(scenario())
+
+    saved = dict(fake.row["settings"])  # type: ignore[arg-type]
+    assert "obsolete_setup_key" not in saved
+    assert saved["naming_identity_v1"] == {"policy": {"mode": "search_safe"}}
+    assert saved["member_setup_state"] == {"current_revision": 1}
+    assert saved["neighboring_setting"] == {"keep": True}
+
+
 def test_atomic_patch_migration_uses_server_side_json_merge_and_service_role_only() -> None:
     sql = MIGRATION.read_text(encoding="utf-8")
 
     assert "create or replace function public.patch_dank_guild_config" in sql.lower()
-    assert "coalesce(%I, ''{}''::jsonb) || $2" in sql
+    assert "(coalesce(%I, ''{}''::jsonb) - $3) || $2" in sql
     assert "on conflict (guild_id) do nothing" in sql.lower()
-    assert "revoke all on function public.patch_dank_guild_config(text, jsonb) from public" in sql.lower()
-    assert "grant execute on function public.patch_dank_guild_config(text, jsonb) to service_role" in sql.lower()
+    assert "revoke all on function public.patch_dank_guild_config(text, jsonb, text[]) from public" in sql.lower()
+    assert "grant execute on function public.patch_dank_guild_config(text, jsonb, text[]) to service_role" in sql.lower()
