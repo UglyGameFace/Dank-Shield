@@ -1523,7 +1523,8 @@ async def disable_security_stats_display(
     gid = int(guild.id)
     async with _lock_for(_DISPLAY_LOCKS, gid):
         cfg = await get_guild_config(gid, refresh=True)
-        category = _find_owned_category(guild, cfg)
+        naming_policy = await naming_identity.get_naming_policy(gid)
+        category = _find_owned_category(guild, cfg, naming_policy=naming_policy)
         saved_ids = _saved_channel_ids(cfg)
         preferences = security_stats_preferences(cfg)
 
@@ -1553,6 +1554,7 @@ async def disable_security_stats_display(
                     key=key,
                     saved_id=saved_ids.get(key, 0),
                     preferences=preferences,
+                    naming_policy=naming_policy,
                 )
                 if channel is None:
                     continue
@@ -1640,7 +1642,8 @@ async def refresh_security_stats_display(
         return False
     _ACTIVE_DISPLAY_GUILDS.add(gid)
 
-    category = _find_owned_category(guild, cfg)
+    naming_policy = await naming_identity.get_naming_policy(gid)
+    category = _find_owned_category(guild, cfg, naming_policy=naming_policy)
     if category is None:
         ok, _note = await ensure_security_stats_display(guild)
         return bool(ok)
@@ -1651,6 +1654,14 @@ async def refresh_security_stats_display(
         counts=_stats_counts(cfg),
         preferences=preferences,
     )
+    names = {
+        key: search_safe_naming.policy_adjusted_name_for_policy(
+            naming_policy,
+            kind="channel",
+            name=value,
+        )
+        for key, value in names.items()
+    }
     saved_ids = _saved_channel_ids(cfg)
     previous_ids = {
         key: str(value)
@@ -1662,7 +1673,12 @@ async def refresh_security_stats_display(
 
     async with _lock_for(_DISPLAY_LOCKS, gid):
         try:
-            await _apply_category_preferences(guild, category, preferences)
+            await _apply_category_preferences(
+                guild,
+                category,
+                preferences,
+                naming_policy=naming_policy,
+            )
         except (discord.Forbidden, discord.HTTPException) as exc:
             print(
                 f"⚠️ security_stats category refresh failed guild={gid} "
@@ -1676,6 +1692,7 @@ async def refresh_security_stats_display(
                 key=key,
                 saved_id=saved_ids.get(key, 0),
                 preferences=preferences,
+                naming_policy=naming_policy,
             )
             if key not in visible_keys:
                 removed = await _remove_hidden_stat_channel(channel, key=key)
