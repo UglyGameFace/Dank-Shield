@@ -265,7 +265,7 @@ class SearchSafeHomeView(discord.ui.View):
         assert guild is not None
         await interaction.response.defer(ephemeral=True, thinking=False)
         policy = await naming_identity.get_naming_policy(guild.id)
-        rows = search_safe_naming.scan_search_safe_targets(guild)
+        rows = search_safe_naming.scan_search_safe_targets(guild, actor=interaction.user)
         await interaction.edit_original_response(
             embed=_preview_embed(guild, policy, rows),
             view=SearchSafePreviewView(),
@@ -286,7 +286,7 @@ class SearchSafeHomeView(discord.ui.View):
         assert guild is not None
         await interaction.response.defer(ephemeral=True, thinking=False)
         policy = await naming_identity.set_naming_mode(guild.id, naming_identity.NAMING_MODE_PRESERVE)
-        rows = search_safe_naming.scan_search_safe_targets(guild)
+        rows = search_safe_naming.scan_search_safe_targets(guild, actor=interaction.user)
         embed = _home_embed(guild, policy, rows)
         embed.add_field(
             name="Policy changed",
@@ -335,7 +335,11 @@ class SearchSafePreviewView(discord.ui.View):
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         policy = await naming_identity.set_naming_mode(guild.id, naming_identity.NAMING_MODE_SEARCH_SAFE)
-        result = await search_safe_naming.apply_search_safe_batch(guild, limit=_BATCH_SIZE)
+        result = await search_safe_naming.apply_search_safe_batch(
+            guild,
+            actor=interaction.user,
+            limit=_BATCH_SIZE,
+        )
         remaining = int(result.get("remaining_editable") or 0)
         await interaction.edit_original_response(
             embed=_result_embed(result, policy),
