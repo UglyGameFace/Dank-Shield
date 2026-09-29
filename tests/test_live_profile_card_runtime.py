@@ -7,6 +7,7 @@ import discord
 
 import stoney_verify.profile_card_runtime as runtime_module
 from stoney_verify.profile_card_runtime import (
+    LIVE_CARD_FOOTER_PREFIX,
     LiveCardRender,
     LiveProfileCardRuntime,
     PendingTrigger,
@@ -342,6 +343,47 @@ def test_delete_guard_refuses_user_messages_even_with_marker(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_new_live_card_footer_hides_ids_and_reconciles_from_durable_state(monkeypatch):
+    async def scenario():
+        _patch_discord_types(monkeypatch)
+        bot = FakeBot()
+        guild = FakeGuild(71, bot.user)
+        bot.guilds = [guild]
+        channel = guild.add_channel(710)
+        embed = discord.Embed(title="Current")
+        embed.set_footer(text=live_card_footer(808, 10))
+        message = FakeSentMessage(300, bot.user, [embed])
+        channel.fetch_messages = {message.id: message}
+        channel.history_messages = [message]
+        states = _install_storage(monkeypatch, channel)
+        states.append(
+            {
+                "guild_id": guild.id,
+                "channel_id": channel.id,
+                "message_id": message.id,
+                "user_id": 808,
+                "trigger_message_id": 10,
+            }
+        )
+
+        async def get_config(_guild_id):
+            return _config(channel.id)
+
+        monkeypatch.setattr(runtime_module, "get_guild_config", get_config)
+        runtime = LiveProfileCardRuntime(bot, renderer=_fake_renderer([]), sleep=asyncio.sleep)
+        await runtime.reconcile_guild(guild)
+
+        assert embed.footer.text == LIVE_CARD_FOOTER_PREFIX
+        assert "808" not in embed.footer.text
+        assert "10" not in embed.footer.text
+        assert states[0]["message_id"] == message.id
+        assert states[0]["user_id"] == 808
+        assert states[0]["trigger_message_id"] == 10
+        assert message.deleted is False
+
+    asyncio.run(scenario())
+
+
 def test_configured_channel_reconciliation_keeps_newest_and_cleans_stack(monkeypatch):
     async def scenario():
         _patch_discord_types(monkeypatch)
@@ -350,9 +392,9 @@ def test_configured_channel_reconciliation_keeps_newest_and_cleans_stack(monkeyp
         bot.guilds = [guild]
         channel = guild.add_channel(70)
         old_embed = discord.Embed(title="Old")
-        old_embed.set_footer(text=live_card_footer(808, 10))
+        old_embed.set_footer(text="Dank Shield live profile • user:808 • trigger:10")
         new_embed = discord.Embed(title="New")
-        new_embed.set_footer(text=live_card_footer(909, 11))
+        new_embed.set_footer(text="Dank Shield live profile • user:909 • trigger:11")
         old = FakeSentMessage(100, bot.user, [old_embed])
         new = FakeSentMessage(200, bot.user, [new_embed])
         channel.fetch_messages = {old.id: old, new.id: new}
