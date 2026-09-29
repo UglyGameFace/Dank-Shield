@@ -277,6 +277,29 @@ def gate_health(guild: discord.Guild, state: Mapping[str, Any]) -> dict[str, Any
     if not protected:
         blockers.append("Choose at least one member category for the access gate.")
 
+    for category in protected:
+        try:
+            visible_to_everyone = bool(category.permissions_for(guild.default_role).view_channel)
+        except Exception:
+            visible_to_everyone = False
+        try:
+            visible_to_prerequisite = bool(
+                isinstance(prerequisite, discord.Role)
+                and category.permissions_for(prerequisite).view_channel
+            )
+        except Exception:
+            visible_to_prerequisite = False
+        if not (visible_to_everyone or visible_to_prerequisite):
+            blockers.append(
+                f"{category.name} is currently private from both @everyone"
+                + (
+                    f" and {prerequisite.name}"
+                    if isinstance(prerequisite, discord.Role)
+                    else ""
+                )
+                + ". Granting Member Access there would widen visibility; choose a normal member category or configure its existing member prerequisite first."
+            )
+
     if channel is not None and channel.category is not None:
         if any(int(category.id) == int(channel.category.id) for category in protected):
             blockers.append("The Member Setup channel cannot live inside a protected category.")
@@ -334,7 +357,10 @@ async def _member_payload(
         load_guild_setup_state(member.guild.id, refresh=True),
         load_member_setup_state(member.guild.id, member.id, refresh=True),
     )
-    return guild_state, member_state, member_review_status(guild_state, member_state)
+    status = member_review_status(guild_state, member_state)
+    if _member_exempt(member):
+        status["access_gated"] = False
+    return guild_state, member_state, status
 
 
 def _severity_label(value: str) -> str:
@@ -363,7 +389,13 @@ def _member_embed(
         color = discord.Color.blurple()
     elif status.get("is_current"):
         title = "✅ Member Setup Current"
-        description = f"You're current on **revision {current}**. Your saved choices remain yours until you change them."
+        if completed < current:
+            description = (
+                f"Revision **{current}** requires no new action from you. "
+                f"Your last explicit setup confirmation was revision **{completed}**, and your saved choices remain valid."
+            )
+        else:
+            description = f"You're current on **revision {current}**. Your saved choices remain yours until you change them."
         color = discord.Color.green()
     elif status.get("access_gated"):
         title = "🔒 Member Setup Required"
