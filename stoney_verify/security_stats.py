@@ -1399,12 +1399,26 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
 
         preferences = security_stats_preferences(cfg)
         counts = _stats_counts(cfg)
+        naming_policy = await naming_identity.get_naming_policy(gid)
         names = await _display_names_for_guild(
             guild,
             counts=counts,
             preferences=preferences,
         )
-        category = _find_owned_category(guild, cfg)
+        names = {
+            key: search_safe_naming.policy_adjusted_name_for_policy(
+                naming_policy,
+                kind="channel",
+                name=value,
+            )
+            for key, value in names.items()
+        }
+        category_name = search_safe_naming.policy_adjusted_name_for_policy(
+            naming_policy,
+            kind="category",
+            name=security_stats_category_display_name(preferences),
+        )
+        category = _find_owned_category(guild, cfg, naming_policy=naming_policy)
 
         try:
             if category is None:
@@ -1412,7 +1426,7 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
                     guild.default_role: discord.PermissionOverwrite(view_channel=True, connect=False),
                 }
                 category = await guild.create_category(
-                    security_stats_category_display_name(preferences),
+                    category_name,
                     overwrites=overwrites,
                     reason="Dank Shield Server Stats display",
                 )
@@ -1423,7 +1437,12 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
                     connect=False,
                     reason="Keep Dank Shield Server Stats visible but non-joinable",
                 )
-            await _apply_category_preferences(guild, category, preferences)
+            await _apply_category_preferences(
+                guild,
+                category,
+                preferences,
+                naming_policy=naming_policy,
+            )
         except discord.Forbidden:
             return False, "❌ Discord denied permission to create, rename, move, or lock Server Stats. Check **Manage Channels** and **Manage Roles**."
         except discord.HTTPException as exc:
@@ -1441,6 +1460,7 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
                 key=key,
                 saved_id=saved_ids.get(key, 0),
                 preferences=preferences,
+                naming_policy=naming_policy,
             )
             if key not in visible_keys:
                 removed = await _remove_hidden_stat_channel(channel, key=key)
@@ -1488,7 +1508,7 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
 
         return (
             True,
-            f"✅ Server Stats are active in **{security_stats_category_display_name(preferences)}** "
+            f"✅ Server Stats are active in **{category_name}** "
             f"with `{len(visible_keys)}` visible counters.",
         )
 
