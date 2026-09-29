@@ -737,7 +737,7 @@ async def _build_assistant_payload(guild: discord.Guild) -> tuple[discord.Embed,
     else:
         recommended = "No required action. Use **Run Health Check** after changing roles/channels."
     embed.add_field(name="Recommended Next Step", value=recommended, inline=False)
-    embed.set_footer(text=f"Guild {guild.id} • setup assistant")
+    embed.set_footer(text="Setup Assistant • review before applying changes")
     return embed, SetupAssistantView(has_missing=bool(missing_specs))
 
 
