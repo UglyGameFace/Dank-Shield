@@ -180,6 +180,18 @@ async def _reply(interaction: discord.Interaction, content: str, *, ok: bool = F
         await interaction.followup.send(**payload)
 
 
+async def _defer_private(interaction: discord.Interaction) -> None:
+    if interaction.response.is_done():
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+
+async def _defer_update(interaction: discord.Interaction) -> None:
+    if interaction.response.is_done():
+        return
+    await interaction.response.defer()
+
+
 async def _setup_embed(guild: discord.Guild) -> discord.Embed:
     cfg = await _config(guild)
     stoner_id, ping_id, channel_id = _configured_ids(cfg)
@@ -276,12 +288,13 @@ class CommunityPingSetupView(discord.ui.View):
         guild = interaction.guild
         if guild is None:
             return await _reply(interaction, "This only works inside a server.")
+        await _defer_update(interaction)
         cfg = await _config(guild)
         blocker = _profile_safe_blocker(guild, role, cfg)
         if blocker:
             return await _reply(interaction, blocker)
         await _save_mapping(interaction, key=key, value=int(role.id))
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=await _setup_embed(guild),
             view=CommunityPingSetupView(self.author_id),
             allowed_mentions=discord.AllowedMentions.none(),
@@ -303,8 +316,9 @@ class CommunityPingSetupView(discord.ui.View):
         guild = interaction.guild
         if guild is None or not isinstance(channel, discord.TextChannel):
             return await _reply(interaction, "Choose a normal server text channel.")
+        await _defer_update(interaction)
         await _save_mapping(interaction, key=TOKE_CHANNEL_KEY, value=int(channel.id))
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=await _setup_embed(guild),
             view=CommunityPingSetupView(self.author_id),
             allowed_mentions=discord.AllowedMentions.none(),
@@ -318,6 +332,7 @@ class CommunityPingSetupView(discord.ui.View):
         guild = interaction.guild
         if guild is None:
             return await _reply(interaction, "This only works inside a server.")
+        await _defer_update(interaction)
         cfg = await _config(guild)
         stoner_id, _ping_id, _channel_id = _configured_ids(cfg)
         role = guild.get_role(stoner_id) if stoner_id else None
@@ -327,7 +342,7 @@ class CommunityPingSetupView(discord.ui.View):
         if blocker:
             return await _reply(interaction, blocker)
         await _save_mapping(interaction, key=SESH_PING_ROLE_KEY, value=int(role.id))
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=await _setup_embed(guild),
             view=CommunityPingSetupView(self.author_id),
             allowed_mentions=discord.AllowedMentions.none(),
@@ -341,8 +356,9 @@ class CommunityPingSetupView(discord.ui.View):
         guild = interaction.guild
         if guild is None:
             return await _reply(interaction, "This only works inside a server.")
+        await _defer_update(interaction)
         await _clear_mappings(interaction, (TOKE_CHANNEL_KEY,))
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=await _setup_embed(guild),
             view=CommunityPingSetupView(self.author_id),
             allowed_mentions=discord.AllowedMentions.none(),
@@ -356,8 +372,9 @@ class CommunityPingSetupView(discord.ui.View):
         guild = interaction.guild
         if guild is None:
             return await _reply(interaction, "This only works inside a server.")
+        await _defer_update(interaction)
         await _clear_mappings(interaction, (STONER_ROLE_KEY, SESH_PING_ROLE_KEY))
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=await _setup_embed(guild),
             view=CommunityPingSetupView(self.author_id),
             allowed_mentions=discord.AllowedMentions.none(),
@@ -371,7 +388,8 @@ class CommunityPingSetupView(discord.ui.View):
         guild = interaction.guild
         if guild is None:
             return await _reply(interaction, "This only works inside a server.")
-        await interaction.response.edit_message(
+        await _defer_update(interaction)
+        await interaction.edit_original_response(
             embed=await _setup_embed(guild),
             view=CommunityPingSetupView(self.author_id),
             allowed_mentions=discord.AllowedMentions.none(),
@@ -384,10 +402,10 @@ async def open_community_ping_setup(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     if guild is None:
         return await _reply(interaction, "This only works inside a server.")
-    await interaction.response.send_message(
+    await _defer_private(interaction)
+    await interaction.edit_original_response(
         embed=await _setup_embed(guild),
         view=CommunityPingSetupView(int(interaction.user.id)),
-        ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),
     )
 
@@ -490,6 +508,7 @@ async def _handle_member_pick(interaction: discord.Interaction, values: list[str
     if guild is None or member is None:
         return await _reply(interaction, "This only works inside a server.")
 
+    await _defer_private(interaction)
     stoner, ping, _cfg = await _member_roles(guild)
     available = {
         int(role.id): role
@@ -554,6 +573,7 @@ async def open_member_community_pings(interaction: discord.Interaction) -> None:
     if guild is None or member is None:
         return await _reply(interaction, "This only works inside a server.")
 
+    await _defer_private(interaction)
     stoner, ping, _cfg = await _member_roles(guild)
     choices = _member_choices(member, stoner, ping)
     if not choices:
@@ -562,7 +582,7 @@ async def open_member_community_pings(interaction: discord.Interaction) -> None:
             "This server has not configured its Stoner / Sesh Pings self-roles yet.",
         )
 
-    await interaction.response.send_message(
+    await interaction.edit_original_response(
         embed=_member_embed(member, stoner, ping),
         view=DankMultiPickerView(
             author_id=int(member.id),
@@ -574,7 +594,6 @@ async def open_member_community_pings(interaction: discord.Interaction) -> None:
             max_values=len(choices),
             allow_anyone=False,
         ),
-        ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),
     )
 
@@ -621,6 +640,7 @@ async def open_toke_command(
     if guild is None or member is None:
         return await _reply(interaction, "/toke only works inside a server.")
 
+    await _defer_private(interaction)
     cfg = await _config(guild)
     stoner_id, ping_id, channel_id = _configured_ids(cfg)
     if stoner_id <= 0 or ping_id <= 0:
@@ -663,9 +683,6 @@ async def open_toke_command(
     remaining, label = _cooldown_remaining(now=now, guild_id=guild.id, user_id=member.id)
     if remaining > 0:
         return await _reply(interaction, f"Wait {_format_wait(remaining)} for {label}.")
-
-    if not interaction.response.is_done():
-        await interaction.response.defer(ephemeral=True, thinking=True)
 
     clean_message = _clean_member_message(message)
     async with _toke_lock(int(guild.id)):
