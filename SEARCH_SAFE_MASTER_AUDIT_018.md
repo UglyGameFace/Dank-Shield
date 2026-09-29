@@ -125,7 +125,7 @@ Status meanings:
 96. **PASS** — Member Setup shows the rule chain Eligibility → Setup → Member Access → Protected Categories before Strict Gate activation.
 97. **PASS** — global production footer hygiene removes raw IDs/debug/runtime/config metadata while preserving useful safety, pagination, count, and action guidance.
 98. **PASS** — persistent footer/runtime compatibility is retained for old Welcome, Verify, tickets/transcripts, live-profile, Spam Guard panel, and Spam Guard incident messages.
-99. **NEEDS HARDENING** — operational metrics, channel semantic product integration, stale-record cleanup, automatic-enforcement failure visibility, normalized-name collision preview, name-length preview consistency, and searchability-vs-mentionability explanation remain non-blocking product/observability follow-ups.
+99. **NEEDS HARDENING** — stale identity records for resources deleted while the bot was offline remain bounded and unreachable by live role resolution, but there is not yet an opportunistic reconciliation pass to remove those dead records before normal cap-based pruning. Fixed-cardinality naming metrics, automatic failure visibility, normalized-name collision warnings, name-length consistency, searchability-vs-mentionability guidance, and the unused channel autocomplete surface are now resolved.
 100. **NEEDS HARDENING** — production closure still requires the final exact-head CI suite, post-merge Supabase migration deployment, Discloud startup, mobile /role canary, Search-Safe/Design/Member Setup live canary, and soak evidence.
 
 ## Merge-blocker conclusion
