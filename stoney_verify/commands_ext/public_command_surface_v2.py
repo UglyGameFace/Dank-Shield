@@ -127,6 +127,7 @@ def _help_embed() -> discord.Embed:
             "`/mod` — moderation/member center\n"
             "`/ticket` — current ticket controls\n"
             "`/tickets` — queues, ticket setup, routing, categories\n"
+            "`/toke` — ping the opt-in sesh crowd (Stoner role required)\n"
             "`/verify` — verification status/repair center"
         ),
         inline=False,
