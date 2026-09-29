@@ -278,28 +278,29 @@ def gate_health(guild: discord.Guild, state: Mapping[str, Any]) -> dict[str, Any
     if not protected:
         blockers.append("Choose at least one member category for the access gate.")
 
-    for category in protected:
-        try:
-            visible_to_everyone = bool(category.permissions_for(guild.default_role).view_channel)
-        except Exception:
-            visible_to_everyone = False
-        try:
-            visible_to_prerequisite = bool(
-                isinstance(prerequisite, discord.Role)
-                and category.permissions_for(prerequisite).view_channel
-            )
-        except Exception:
-            visible_to_prerequisite = False
-        if not (visible_to_everyone or visible_to_prerequisite):
-            blockers.append(
-                f"{category.name} is currently private from both @everyone"
-                + (
-                    f" and {prerequisite.name}"
-                    if isinstance(prerequisite, discord.Role)
-                    else ""
+    if not state.get("gate_active") and str(state.get("gate_transition") or "") != "suspending":
+        for category in protected:
+            try:
+                visible_to_everyone = bool(category.permissions_for(guild.default_role).view_channel)
+            except Exception:
+                visible_to_everyone = False
+            try:
+                visible_to_prerequisite = bool(
+                    isinstance(prerequisite, discord.Role)
+                    and category.permissions_for(prerequisite).view_channel
                 )
-                + ". Granting Member Access there would widen visibility; choose a normal member category or configure its existing member prerequisite first."
-            )
+            except Exception:
+                visible_to_prerequisite = False
+            if not (visible_to_everyone or visible_to_prerequisite):
+                blockers.append(
+                    f"{category.name} is currently private from both @everyone"
+                    + (
+                        f" and {prerequisite.name}"
+                        if isinstance(prerequisite, discord.Role)
+                        else ""
+                    )
+                    + ". Granting Member Access there would widen visibility; choose a normal member category or configure its existing member prerequisite first."
+                )
 
     if channel is not None and channel.category is not None:
         if any(int(category.id) == int(channel.category.id) for category in protected):
@@ -381,6 +382,7 @@ def _effective_member_state(
 
     if (
         baseline_revision > 0
+        and str(guild_state.get("gate_transition") or "") != "activating"
         and grandfather_before is not None
         and isinstance(joined_at, datetime)
         and joined_at.astimezone(timezone.utc) <= grandfather_before
@@ -1348,11 +1350,11 @@ async def activate_strict_gate(guild: discord.Guild, *, actor_id: int) -> dict[s
             "Repair the protected category permissions before trying again."
         )
 
+    if state.get("gate_active"):
+        return state
     health = gate_health(guild, state)
     if not health["ready"]:
         raise RuntimeError(" | ".join(health["blockers"][:8]))
-    if state.get("gate_active"):
-        return state
 
     if int(state.get("current_revision") or 0) <= 0:
         state = await publish_revision(
@@ -1514,7 +1516,8 @@ async def reconcile_member_access(
         return "access_role_blocked"
 
     current_member_state = dict(member_state or await load_member_setup_state(guild.id, member.id))
-    status = member_review_status(state, current_member_state)
+    effective_member_state = _effective_member_state(member, state, current_member_state)
+    status = member_review_status(state, effective_member_state)
 
     if status.get("access_gated"):
         if access_role in member.roles:
@@ -1606,11 +1609,17 @@ async def _on_member_setup_update(before: discord.Member, after: discord.Member)
 
 async def _on_member_setup_guild_available(guild: discord.Guild) -> None:
     try:
-        state = await load_guild_setup_state(guild.id)
+        state = await recover_interrupted_gate_transition(guild)
+        if state.get("gate_transition"):
+            print(
+                "❌ member_setup gate transition still requires recovery "
+                f"guild={guild.id} transition={state.get('gate_transition')}"
+            )
+            return
         if state.get("gate_active"):
             _schedule_guild_reconcile(guild)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"⚠️ member_setup guild-available recovery failed guild={guild.id}: {type(exc).__name__}: {exc}")
 
 
 def install_member_setup_runtime(bot: Any, *, strict: bool = False) -> bool:
@@ -1643,6 +1652,7 @@ __all__ = [
     "open_member_setup",
     "open_member_setup_admin",
     "refresh_public_member_setup_panel",
+    "recover_interrupted_gate_transition",
     "reconcile_guild_access_gate",
     "reconcile_member_access",
     "suspend_strict_gate",
