@@ -1082,16 +1082,43 @@ def _invalid_saved_ids(guild: discord.Guild, config: Mapping[str, Any]) -> dict[
     return invalid
 
 
+def _semantic_resource_name(value: Any) -> str:
+    """Normalize decorative Unicode for runtime discovery without owning styling."""
+    try:
+        from stoney_verify.services.server_design_studio import normalize_base_name
+
+        return str(normalize_base_name(value, default="") or "").strip().lower()
+    except Exception:
+        return str(value or "").strip().lower()
+
+
+def _name_match_keys(names: list[str]) -> tuple[list[str], list[str]]:
+    raw = [str(name).lower().strip() for name in names if str(name).strip()]
+    semantic: list[str] = []
+    for name in names:
+        key = _semantic_resource_name(name)
+        if key and key not in semantic:
+            semantic.append(key)
+    return raw, semantic
+
+
 def _find_role_by_names(guild: discord.Guild, names: list[str]) -> Optional[discord.Role]:
-    wanted = [name.lower().strip() for name in names if name.strip()]
+    wanted, semantic_wanted = _name_match_keys(names)
     try:
         for role in guild.roles:
             role_name = str(role.name or "").lower().strip()
             if role_name in wanted:
                 return role
         for role in guild.roles:
+            semantic_name = _semantic_resource_name(role.name)
+            if semantic_name and semantic_name in semantic_wanted:
+                return role
+        for role in guild.roles:
             role_name = str(role.name or "").lower().strip()
-            if any(name in role_name for name in wanted):
+            semantic_name = _semantic_resource_name(role.name)
+            if any(name in role_name for name in wanted) or any(
+                name in semantic_name for name in semantic_wanted
+            ):
                 return role
     except Exception:
         pass
@@ -1102,15 +1129,22 @@ def _find_text_channel_by_names(
     guild: discord.Guild,
     names: list[str],
 ) -> Optional[discord.TextChannel]:
-    wanted = [name.lower().strip() for name in names if name.strip()]
+    wanted, semantic_wanted = _name_match_keys(names)
     try:
         for channel in guild.text_channels:
             channel_name = str(channel.name or "").lower().strip()
             if channel_name in wanted:
                 return channel
         for channel in guild.text_channels:
+            semantic_name = _semantic_resource_name(channel.name)
+            if semantic_name and semantic_name in semantic_wanted:
+                return channel
+        for channel in guild.text_channels:
             channel_name = str(channel.name or "").lower().strip()
-            if any(name in channel_name for name in wanted):
+            semantic_name = _semantic_resource_name(channel.name)
+            if any(name in channel_name for name in wanted) or any(
+                name in semantic_name for name in semantic_wanted
+            ):
                 return channel
     except Exception:
         pass
@@ -1121,15 +1155,22 @@ def _find_category_by_names(
     guild: discord.Guild,
     names: list[str],
 ) -> Optional[discord.CategoryChannel]:
-    wanted = [name.lower().strip() for name in names if name.strip()]
+    wanted, semantic_wanted = _name_match_keys(names)
     try:
         for category in guild.categories:
             category_name = str(category.name or "").lower().strip()
             if category_name in wanted:
                 return category
         for category in guild.categories:
+            semantic_name = _semantic_resource_name(category.name)
+            if semantic_name and semantic_name in semantic_wanted:
+                return category
+        for category in guild.categories:
             category_name = str(category.name or "").lower().strip()
-            if any(name in category_name for name in wanted):
+            semantic_name = _semantic_resource_name(category.name)
+            if any(name in category_name for name in wanted) or any(
+                name in semantic_name for name in semantic_wanted
+            ):
                 return category
     except Exception:
         pass
