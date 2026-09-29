@@ -456,6 +456,26 @@ async def mark_section_reviewed(
     return saved, member_review_status(guild, saved)
 
 
+async def confirm_current_choices(
+    guild_id: int,
+    user_id: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Explicitly accept the currently published choices for every pending section."""
+    guild = await load_guild_setup_state(int(guild_id), refresh=True)
+    member = await load_member_setup_state(int(guild_id), int(user_id), refresh=True)
+    status = member_review_status(guild, member)
+    current_revision = int(guild.get("current_revision") or 0)
+    section_revisions = dict(member.get("section_revisions") or {})
+    for section in status.get("pending_sections", []):
+        section_revisions[str(section)] = current_revision
+    member["section_revisions"] = section_revisions
+    member["completed_revision"] = current_revision
+    member["completed_at"] = utc_now_iso()
+    member["last_reviewed_at"] = utc_now_iso()
+    saved = await save_member_setup_state(int(guild_id), int(user_id), member)
+    return saved, member_review_status(guild, saved)
+
+
 async def complete_current_revision(
     guild_id: int,
     user_id: int,
