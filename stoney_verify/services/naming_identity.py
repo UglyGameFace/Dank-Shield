@@ -18,7 +18,7 @@ Scale rules:
 import asyncio
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import discord
@@ -244,11 +244,15 @@ def naming_policy(state: Mapping[str, Any] | None) -> dict[str, Any]:
     return dict(normalized.get("policy") or _normalize_policy({}))
 
 
-async def get_naming_policy(guild_id: Any) -> dict[str, Any]:
+async def get_naming_policy(
+    guild_id: Any,
+    *,
+    refresh: bool = False,
+) -> dict[str, Any]:
     gid = _safe_int(guild_id, 0)
     if gid <= 0:
         return _normalize_policy({})
-    return naming_policy(await _load_state(gid))
+    return naming_policy(await _load_state(gid, refresh=refresh))
 
 
 async def set_naming_mode(guild_id: Any, mode: str) -> dict[str, Any]:
@@ -259,14 +263,16 @@ async def set_naming_mode(guild_id: Any, mode: str) -> dict[str, Any]:
     if clean_mode not in NAMING_MODES:
         raise ValueError(f"unsupported naming mode: {mode!r}")
 
-    state = await _load_state(gid)
-    updated = _normalize_state(state)
-    _require_supported_state(updated)
-    policy = naming_policy(updated)
-    policy["mode"] = clean_mode
-    updated["policy"] = policy
-    await _persist_state(gid, updated)
-    return dict(policy)
+    def mutate(current: Mapping[str, Any]) -> dict[str, Any]:
+        updated = _normalize_state(current)
+        _require_supported_state(updated)
+        policy = naming_policy(updated)
+        policy["mode"] = clean_mode
+        updated["policy"] = policy
+        return updated
+
+    saved = await _mutate_state_cas(gid, mutate)
+    return naming_policy(saved)
 
 
 def remember_alias(
@@ -373,11 +379,15 @@ def _cache_state(guild_id: int, state: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-async def _load_state(guild_id: int) -> dict[str, Any]:
+async def _load_state(
+    guild_id: int,
+    *,
+    refresh: bool = False,
+) -> dict[str, Any]:
     gid = int(guild_id)
     now = time.monotonic()
     cached = _STATE_CACHE.get(gid)
-    if cached and now - float(cached[0]) <= STATE_CACHE_TTL_SECONDS:
+    if not refresh and cached and now - float(cached[0]) <= STATE_CACHE_TTL_SECONDS:
         return _normalize_state(cached[1])
     if cached:
         _STATE_CACHE.pop(gid, None)
@@ -385,30 +395,82 @@ async def _load_state(guild_id: int) -> dict[str, Any]:
     try:
         from stoney_verify.guild_config import get_guild_config
 
-        config = await get_guild_config(gid)
+        config = await get_guild_config(gid, refresh=refresh)
         state = _normalize_state(config.get(NAMING_IDENTITY_CONFIG_KEY))
     except Exception:
         state = _empty_state()
     return _cache_state(gid, state)
 
 
-async def _persist_state(guild_id: int, state: Mapping[str, Any]) -> None:
+async def _fresh_state_source(guild_id: int) -> tuple[Any, dict[str, Any]]:
     gid = int(guild_id)
-    normalized = _normalize_state(state)
-    _require_supported_state(normalized)
-    from stoney_verify.guild_config import upsert_guild_config
+    from stoney_verify.guild_config import get_guild_config
 
-    saved = await upsert_guild_config(
+    config = await get_guild_config(gid, refresh=True)
+    raw = config.get(NAMING_IDENTITY_CONFIG_KEY)
+    normalized = _normalize_state(raw)
+    _cache_state(gid, normalized)
+    return raw, normalized
+
+
+async def _cas_state(
+    guild_id: int,
+    *,
+    expected_raw: Any,
+    updated: Mapping[str, Any],
+) -> tuple[bool, Any, dict[str, Any]]:
+    gid = int(guild_id)
+    normalized = _normalize_state(updated)
+    _require_supported_state(normalized)
+
+    from stoney_verify.guild_config import compare_and_swap_guild_config_key
+
+    applied, config = await compare_and_swap_guild_config_key(
         gid,
-        {
-            NAMING_IDENTITY_CONFIG_KEY: normalized,
-            "__config_write_mode": "explicit_override",
-            "__config_write_source": "naming_identity_runtime",
-            "__config_write_allow_keys": [NAMING_IDENTITY_CONFIG_KEY],
-        },
+        NAMING_IDENTITY_CONFIG_KEY,
+        expected=expected_raw,
+        value=normalized,
+        source="naming_identity_runtime",
     )
-    persisted = _normalize_state(saved.get(NAMING_IDENTITY_CONFIG_KEY, normalized))
+    persisted_raw = config.get(NAMING_IDENTITY_CONFIG_KEY)
+    persisted = _normalize_state(persisted_raw)
     _cache_state(gid, persisted)
+    return bool(applied), persisted_raw, persisted
+
+
+async def _mutate_state_cas(
+    guild_id: int,
+    transform: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+    *,
+    attempts: int = 5,
+) -> dict[str, Any]:
+    """Apply one naming-state transform with cross-process conflict retries."""
+
+    gid = int(guild_id)
+    expected_raw, current = await _fresh_state_source(gid)
+    total = max(1, min(int(attempts or 1), 10))
+
+    for _attempt in range(total):
+        _require_supported_state(current)
+        updated = _normalize_state(transform(current))
+        _require_supported_state(updated)
+        if updated == current:
+            return _cache_state(gid, current)
+
+        applied, persisted_raw, persisted = await _cas_state(
+            gid,
+            expected_raw=expected_raw,
+            updated=updated,
+        )
+        if applied:
+            return persisted
+
+        expected_raw = persisted_raw
+        current = persisted
+
+    raise RuntimeError(
+        f"naming identity compare-and-swap contention exceeded {total} attempts"
+    )
 
 
 def _queue_flush(guild_id: int) -> None:
