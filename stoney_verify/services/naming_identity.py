@@ -122,7 +122,12 @@ def search_safe_display_name(value: Any) -> str:
             decoded = design.decode_known_unicode_font_glyph(char)
         except Exception:
             decoded = char
-        if decoded != char:
+        if (
+            decoded != char
+            and len(decoded) == 1
+            and decoded.isascii()
+            and decoded.isalpha()
+        ):
             output.append(decoded)
             continue
         output.append(char)
