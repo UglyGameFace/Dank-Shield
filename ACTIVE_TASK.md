@@ -17,7 +17,7 @@ Included:
 - `/toke` as one intentional member-facing global slash command;
 - `/role` as one intentional smart global slash command with optional `member` and `role` targets;
 - `/role` with no options opens the canonical Roles & Profiles center;
-- `/role member:@User` reuses the existing guarded Member Action panel and remains staff-authorized;
+- `/role member:@User` opens a role-focused Member Role Manager card; Add/Remove reuse the existing guarded MemberRoleActionView, while View Profile and an explicit Full Member Panel remain available;
 - `/role role:@Role` opens the existing Server Role Editor for live role managers, otherwise exposes Add/Remove only for roles already recognized by Profile Builder / Community & Pings;
 - only current Stoner-role members may invoke `/toke`;
 - only the configured sesh audience role may be mentioned;
@@ -67,7 +67,7 @@ Excluded:
 - Outbound role mention scope is constructed by one testable helper permitting only the configured Sesh Pings role, with users/everyone disabled.
 - Added focused behavioral coverage in `tests/test_profile_community_toke.py`; updated every known public-command guard, payload test, command-tree test, ownership doc, and production command-count contract for `/toke`.
 - Existing profile suggestion compatibility subclasses preserve the new controls; Profile Panel/Edit Profile component rows remain within Discord's five-component row limit.
-- `/role` is only a doorway: it routes normal members to existing self-service role ownership, staff member targets to the existing Member Action panel, and Manage Roles/Admin/owner role targets to the existing Server Role Editor.
+- `/role` is only a doorway: it routes normal members to existing self-service role ownership, staff member targets to a role-focused facade over the existing guarded member-role engine, and Manage Roles/Admin/owner role targets to the existing Server Role Editor.
 - Direct self-role toggles are serialized per guild/member, re-read current durable mappings before mutation, preserve the Stoner → Sesh Pings dependency, and never make arbitrary server roles self-assignable.
 - Added focused regression coverage in `tests/test_role_command_doorway.py` and updated all public command-surface contracts from eight to nine total application-command items.
 
