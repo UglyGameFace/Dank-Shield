@@ -8,6 +8,7 @@ from typing import Any, Optional
 import discord
 
 from . import channel_builder_runtime as rt
+from . import naming_identity, search_safe_naming
 from ..operation_queue import with_retry
 
 
@@ -140,13 +141,21 @@ async def execute_channel_builder_plan(
     skipped: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
     rollback_plan: list[dict[str, Any]] = []
+    naming_policy = await naming_identity.get_naming_policy(gid)
     reason = f"Dank Shield Channel Builder actor={actor_id or 'dashboard'} mode={mode}"
     retry_key = f"channel-builder:{gid}"
 
     for item in list(items or []):
         action = str(item.get("action") or "skip")
-        final_name = str(item.get("final_name") or "").strip()[:100]
+        requested_name = str(item.get("final_name") or "").strip()[:100]
         kind = str(item.get("type") or "text")
+        policy_kind = "category" if kind == "category" else "channel"
+        final_name = search_safe_naming.policy_adjusted_name_for_policy(
+            naming_policy,
+            kind=policy_kind,
+            name=requested_name,
+        )[:100]
+        policy_adjusted = final_name != requested_name
         try:
             if action in {"skip", "keep"}:
                 skipped.append({"id": item.get("id"), "action": action, "name": final_name})
@@ -158,11 +167,11 @@ async def execute_channel_builder_plan(
                     continue
                 before = _rollback_for_rename(channel)
                 if dry_run:
-                    changed.append({"id": item.get("id"), "action": action, "from": before["name"], "to": final_name, "dry_run": True})
+                    changed.append({"id": item.get("id"), "action": action, "from": before["name"], "to": final_name, "requested_name": requested_name, "search_safe_adjusted": policy_adjusted, "dry_run": True})
                     continue
                 await with_retry(lambda: channel.edit(name=final_name, reason=reason), attempts=3, concurrency_key=retry_key)
                 rollback_plan.insert(0, before)
-                changed.append({"id": item.get("id"), "action": action, "channel_id": str(getattr(channel, "id", "")), "from": before["name"], "to": final_name})
+                changed.append({"id": item.get("id"), "action": action, "channel_id": str(getattr(channel, "id", "")), "from": before["name"], "to": final_name, "requested_name": requested_name, "search_safe_adjusted": policy_adjusted})
                 await asyncio.sleep(0.25)
                 continue
             if action == "create":
@@ -171,7 +180,7 @@ async def execute_channel_builder_plan(
                     continue
                 parent = _find_category(guild, str(item.get("category") or ""))
                 if dry_run:
-                    changed.append({"id": item.get("id"), "action": action, "type": kind, "name": final_name, "category": _channel_name(parent), "dry_run": True})
+                    changed.append({"id": item.get("id"), "action": action, "type": kind, "name": final_name, "requested_name": requested_name, "search_safe_adjusted": policy_adjusted, "category": _channel_name(parent), "dry_run": True})
                     continue
 
                 async def create_one() -> Any:
@@ -185,7 +194,7 @@ async def execute_channel_builder_plan(
 
                 created = await with_retry(create_one, attempts=3, concurrency_key=retry_key)
                 rollback_plan.insert(0, _rollback_for_created(created))
-                changed.append({"id": item.get("id"), "action": action, "type": kind, "channel_id": str(getattr(created, "id", "")), "name": final_name})
+                changed.append({"id": item.get("id"), "action": action, "type": kind, "channel_id": str(getattr(created, "id", "")), "name": final_name, "requested_name": requested_name, "search_safe_adjusted": policy_adjusted})
                 await asyncio.sleep(0.25)
                 continue
             failed.append({"id": item.get("id"), "action": action, "error": "unsupported_action"})
