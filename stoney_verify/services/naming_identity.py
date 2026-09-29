@@ -119,14 +119,12 @@ def search_safe_display_name(value: Any) -> str:
     output: list[str] = []
     for char in raw:
         try:
-            decoded = design.strip_known_unicode_fonts(char)
+            decoded = design.decode_known_unicode_font_glyph(char)
         except Exception:
             decoded = char
         if decoded != char:
-            alnum = "".join(part for part in decoded if part.isalnum())
-            if alnum:
-                output.append(alnum)
-                continue
+            output.append(decoded)
+            continue
         output.append(char)
     return "".join(output)
 
