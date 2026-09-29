@@ -1272,17 +1272,82 @@ async def open_member_setup_admin(interaction: discord.Interaction) -> None:
     )
 
 
-async def _mark_member_current(guild: discord.Guild, member: discord.Member, current_revision: int) -> None:
-    state = default_member_setup_state()
-    state["completed_revision"] = int(current_revision)
-    state["section_revisions"] = {section: int(current_revision) for section in SETUP_SECTIONS}
-    state["completed_at"] = discord.utils.utcnow().isoformat()
-    state["last_reviewed_at"] = state["completed_at"]
-    await save_member_setup_state(guild.id, member.id, state)
+async def _restore_gate_snapshot(
+    guild: discord.Guild,
+    state: Mapping[str, Any],
+    *,
+    reason: str,
+) -> list[str]:
+    snapshot = state.get("gate_snapshot") if isinstance(state.get("gate_snapshot"), Mapping) else {}
+    access_role = _resolve_role(guild, state.get("access_role_id"))
+    failures: list[str] = []
+
+    for raw_id, saved in snapshot.items():
+        category = guild.get_channel(_safe_int(raw_id, 0))
+        if not isinstance(category, discord.CategoryChannel):
+            # A deleted category no longer needs an overwrite restored.
+            continue
+        try:
+            await _restore_category_gate(
+                category,
+                everyone=guild.default_role,
+                access_role=access_role,
+                snapshot=saved if isinstance(saved, Mapping) else {},
+                reason=reason,
+            )
+        except Exception as exc:
+            failures.append(f"{category.name}: {type(exc).__name__}")
+    return failures
+
+
+async def recover_interrupted_gate_transition(guild: discord.Guild) -> dict[str, Any]:
+    """Fail open after a process crash during activation/suspension."""
+    state = await load_guild_setup_state(guild.id, refresh=True)
+    transition = str(state.get("gate_transition") or "")
+    if transition not in {"activating", "suspending"}:
+        return state
+
+    failures = await _restore_gate_snapshot(
+        guild,
+        state,
+        reason=f"Dank Shield Member Setup recovery from interrupted {transition}",
+    )
+    if failures:
+        print(
+            "❌ member_setup transition recovery incomplete "
+            f"guild={guild.id} transition={transition} failures={' | '.join(failures[:6])}"
+        )
+        return state
+
+    state = await configure_guild_setup(
+        guild.id,
+        access_mode=ACCESS_MODE_NORMAL,
+        gate_active=False,
+        gate_transition="",
+        gate_snapshot={},
+        grandfather_revision=(
+            0 if transition == "activating" else _safe_int(state.get("grandfather_revision"), 0)
+        ),
+        grandfather_before=(
+            "" if transition == "activating" else str(state.get("grandfather_before") or "")
+        ),
+        actor_id=0,
+    )
+    print(
+        "✅ member_setup recovered interrupted transition "
+        f"guild={guild.id} transition={transition} gate_active=False"
+    )
+    return state
 
 
 async def activate_strict_gate(guild: discord.Guild, *, actor_id: int) -> dict[str, Any]:
-    state = await load_guild_setup_state(guild.id, refresh=True)
+    state = await recover_interrupted_gate_transition(guild)
+    if state.get("gate_transition"):
+        raise RuntimeError(
+            "A previous Strict Gate transition could not be recovered automatically. "
+            "Repair the protected category permissions before trying again."
+        )
+
     health = gate_health(guild, state)
     if not health["ready"]:
         raise RuntimeError(" | ".join(health["blockers"][:8]))
@@ -1306,101 +1371,127 @@ async def activate_strict_gate(guild: discord.Guild, *, actor_id: int) -> dict[s
         raise RuntimeError("Member Access role is unavailable.")
 
     current_revision = int(state.get("current_revision") or 0)
+    grandfather_before = discord.utils.utcnow().isoformat()
 
-    # Grandfather current eligible members before any category is hidden.
-    for index, member in enumerate(list(guild.members)):
-        if not isinstance(member, discord.Member) or member.bot:
-            continue
-        if isinstance(prerequisite, discord.Role) and prerequisite not in member.roles and not _member_exempt(member):
-            continue
-        await _mark_member_current(guild, member, current_revision)
-        if access_role not in member.roles and not _member_exempt(member):
-            try:
-                await member.add_roles(access_role, reason="Dank Shield Member Setup strict-gate activation baseline")
-            except discord.HTTPException as exc:
-                raise RuntimeError(f"Could not grandfather {member}: {type(exc).__name__}") from exc
-        if index and index % 25 == 0:
-            await asyncio.sleep(0)
+    # Snapshot every category BEFORE any permission mutation and persist the
+    # transition first. A host crash can then safely restore the old visibility.
+    snapshot: dict[str, Any] = {
+        str(category.id): _category_snapshot(
+            category,
+            everyone=guild.default_role,
+            access_role=access_role,
+        )
+        for category in categories
+    }
+    state = await configure_guild_setup(
+        guild.id,
+        enabled=True,
+        access_mode=ACCESS_MODE_STRICT,
+        gate_active=False,
+        gate_transition="activating",
+        gate_snapshot=snapshot,
+        grandfather_revision=current_revision,
+        grandfather_before=grandfather_before,
+        actor_id=actor_id,
+    )
 
-    snapshot: dict[str, Any] = {}
-    reason = f"Dank Shield Member Setup strict gate activated by {actor_id}"
     try:
+        # Existing members are grandfathered by the guild checkpoint above.
+        # Only Discord role assignment is needed here; there is no per-member
+        # database write during activation.
+        for index, member in enumerate(list(guild.members)):
+            if not isinstance(member, discord.Member) or member.bot or _member_exempt(member):
+                continue
+            if isinstance(prerequisite, discord.Role) and prerequisite not in member.roles:
+                continue
+            if access_role not in member.roles:
+                await member.add_roles(
+                    access_role,
+                    reason="Dank Shield Member Setup strict-gate activation baseline",
+                )
+            if index and index % 25 == 0:
+                await asyncio.sleep(0)
+
+        reason = f"Dank Shield Member Setup strict gate activated by {actor_id}"
         for category in categories:
-            snapshot[str(category.id)] = _category_snapshot(
-                category,
-                everyone=guild.default_role,
-                access_role=access_role,
-            )
             await _set_category_gate(
                 category,
                 everyone=guild.default_role,
                 access_role=access_role,
                 reason=reason,
             )
-    except Exception:
-        for raw_id, saved in snapshot.items():
-            category = guild.get_channel(_safe_int(raw_id, 0))
-            if isinstance(category, discord.CategoryChannel):
-                try:
-                    await _restore_category_gate(
-                        category,
-                        everyone=guild.default_role,
-                        access_role=access_role,
-                        snapshot=saved if isinstance(saved, Mapping) else {},
-                        reason="Dank Shield Member Setup activation rollback",
-                    )
-                except Exception:
-                    pass
-        raise
+    except Exception as exc:
+        rollback_state = await load_guild_setup_state(guild.id, refresh=True)
+        failures = await _restore_gate_snapshot(
+            guild,
+            rollback_state,
+            reason="Dank Shield Member Setup activation rollback",
+        )
+        if not failures:
+            await configure_guild_setup(
+                guild.id,
+                access_mode=ACCESS_MODE_NORMAL,
+                gate_active=False,
+                gate_transition="",
+                gate_snapshot={},
+                grandfather_revision=0,
+                grandfather_before="",
+                actor_id=actor_id,
+            )
+        raise RuntimeError(
+            "Strict Gate activation failed"
+            + (f"; rollback incomplete: {' | '.join(failures[:6])}" if failures else "")
+            + f": {type(exc).__name__}"
+        ) from exc
 
-    state = await configure_guild_setup(
+    return await configure_guild_setup(
         guild.id,
         enabled=True,
         access_mode=ACCESS_MODE_STRICT,
         gate_active=True,
+        gate_transition="",
         gate_snapshot=snapshot,
+        grandfather_revision=current_revision,
+        grandfather_before=grandfather_before,
         actor_id=actor_id,
     )
-    return state
 
 
 async def suspend_strict_gate(guild: discord.Guild, *, actor_id: int) -> dict[str, Any]:
-    state = await load_guild_setup_state(guild.id, refresh=True)
-    access_role = _resolve_role(guild, state.get("access_role_id"))
+    state = await recover_interrupted_gate_transition(guild)
+    if state.get("gate_transition"):
+        raise RuntimeError(
+            "A previous Strict Gate transition could not be recovered automatically. "
+            "Repair the protected category permissions before trying again."
+        )
     if not state.get("gate_active"):
         return state
-    if not isinstance(access_role, discord.Role):
-        raise RuntimeError("The configured Member Access role no longer exists; category restoration needs manual review.")
 
-    snapshot = state.get("gate_snapshot") if isinstance(state.get("gate_snapshot"), Mapping) else {}
-    failures: list[str] = []
-    for raw_id, saved in snapshot.items():
-        category = guild.get_channel(_safe_int(raw_id, 0))
-        if not isinstance(category, discord.CategoryChannel):
-            failures.append(f"category {raw_id} missing")
-            continue
-        try:
-            await _restore_category_gate(
-                category,
-                everyone=guild.default_role,
-                access_role=access_role,
-                snapshot=saved if isinstance(saved, Mapping) else {},
-                reason=f"Dank Shield Member Setup strict gate suspended by {actor_id}",
-            )
-        except Exception as exc:
-            failures.append(f"{category.name}: {type(exc).__name__}")
-
+    # Persist the suspending state before the first restore call. If the process
+    # exits midway, guild-available recovery can continue restoring the snapshot.
+    state = await configure_guild_setup(
+        guild.id,
+        gate_transition="suspending",
+        actor_id=actor_id,
+    )
+    failures = await _restore_gate_snapshot(
+        guild,
+        state,
+        reason=f"Dank Shield Member Setup strict gate suspended by {actor_id}",
+    )
     if failures:
-        raise RuntimeError("Could not restore every protected category: " + " | ".join(failures[:6]))
+        raise RuntimeError(
+            "Could not restore every protected category: " + " | ".join(failures[:6])
+        )
 
     return await configure_guild_setup(
         guild.id,
         access_mode=ACCESS_MODE_NORMAL,
         gate_active=False,
+        gate_transition="",
         gate_snapshot={},
         actor_id=actor_id,
     )
-
 
 async def reconcile_member_access(
     member: discord.Member,
