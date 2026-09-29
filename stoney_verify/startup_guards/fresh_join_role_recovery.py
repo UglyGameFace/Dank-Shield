@@ -139,7 +139,7 @@ async def _post_recovery_log(member: discord.Member, *, title: str, detail: str,
             timestamp=_utcnow(),
         )
         embed.add_field(name="User", value=f"{member.mention}\n`{member}`\n`{member.id}`", inline=False)
-        embed.set_footer(text=f"Guild {member.guild.id} • fresh join role recovery")
+        embed.set_footer(text="Fresh join role recovery")
         await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
     except Exception as e:
         _warn(
