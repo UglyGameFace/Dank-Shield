@@ -581,3 +581,18 @@ def test_set_naming_mode_does_not_overwrite_future_schema(monkeypatch) -> None:
 
     asyncio.run(scenario())
     assert persisted == []
+
+
+def test_role_resolver_and_event_runtime_remain_present_when_channel_autocomplete_is_removed() -> None:
+    source = (
+        ROOT / "stoney_verify/services/naming_identity.py"
+    ).read_text(encoding="utf-8")
+
+    assert "async def resolve_role_query(" in source
+    assert "async def _on_guild_role_create(" in source
+    assert "async def _on_guild_role_update(" in source
+    assert "async def _on_guild_channel_create(" in source
+    assert "async def _on_guild_channel_update(" in source
+    assert "async def _on_guild_role_delete(" in source
+    assert "async def _on_guild_channel_delete(" in source
+    assert "async def channel_autocomplete(" not in source
