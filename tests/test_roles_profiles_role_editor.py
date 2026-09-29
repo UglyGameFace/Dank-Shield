@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ from stoney_verify.commands_ext.public_role_center import (
     _parse_bool,
     _parse_colour,
     _permission_groups,
+    _role_dependencies,
 )
 from stoney_verify.ui.picker import DankRoleSelect
 
@@ -112,6 +114,65 @@ def test_dependency_scan_finds_role_ids_without_confusing_unrelated_config() -> 
     assert all("Ticket Category" not in label for label in labels)
     assert all(label != "Unrelated" for label in labels)
 
+
+
+def test_role_dependencies_include_spam_guard_role_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    from stoney_verify import guild_config, spam_guard
+
+    role_id = 123456789012345678
+
+    async def fake_get_guild_config(guild_id: int, *, refresh: bool = False):
+        assert guild_id == 55
+        assert refresh is True
+        return {"verified_role_id": "999999999999999999"}
+
+    async def fake_get_spam_settings(guild_id: int):
+        assert guild_id == 55
+        return {
+            "quarantine_role_id": str(role_id),
+            "exempt_role_ids": ["111111111111111111", str(role_id)],
+        }
+
+    monkeypatch.setattr(guild_config, "get_guild_config", fake_get_guild_config)
+    monkeypatch.setattr(spam_guard, "get_spam_settings", fake_get_spam_settings)
+    monkeypatch.setattr(spam_guard, "_SETTINGS_LAST_DIAG_BY_GUILD", {55: {"status": "ok"}})
+
+    dependencies = asyncio.run(
+        _role_dependencies(
+            SimpleNamespace(id=55),
+            SimpleNamespace(id=role_id),
+        )
+    )
+    assert "Spam Guard · Quarantine Role" in dependencies
+    assert "Spam Guard · Exempt Roles" in dependencies
+
+
+def test_role_dependencies_fail_closed_when_spam_guard_cannot_be_verified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from stoney_verify import guild_config, spam_guard
+
+    async def fake_get_guild_config(guild_id: int, *, refresh: bool = False):
+        return {}
+
+    async def fake_get_spam_settings(guild_id: int):
+        return {}
+
+    monkeypatch.setattr(guild_config, "get_guild_config", fake_get_guild_config)
+    monkeypatch.setattr(spam_guard, "get_spam_settings", fake_get_spam_settings)
+    monkeypatch.setattr(
+        spam_guard,
+        "_SETTINGS_LAST_DIAG_BY_GUILD",
+        {55: {"status": "unavailable", "source": "defaults"}},
+    )
+
+    dependencies = asyncio.run(
+        _role_dependencies(
+            SimpleNamespace(id=55),
+            SimpleNamespace(id=123456789012345678),
+        )
+    )
+    assert "Spam Guard role settings could not be verified" in dependencies
 
 def test_boolean_and_colour_inputs_fail_closed() -> None:
     assert _parse_bool("yes", field="Mentionable") is True
