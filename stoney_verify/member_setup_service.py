@@ -232,7 +232,10 @@ async def configure_guild_setup(
     if enabled is not None:
         state["enabled"] = bool(enabled)
     if setup_channel_id is not None:
-        state["setup_channel_id"] = str(max(0, int(setup_channel_id)) or "")
+        new_channel_id = str(max(0, int(setup_channel_id)) or "")
+        if new_channel_id != str(state.get("setup_channel_id") or "") and panel_message_id is None:
+            state["panel_message_id"] = ""
+        state["setup_channel_id"] = new_channel_id
     if panel_message_id is not None:
         state["panel_message_id"] = str(max(0, int(panel_message_id)) or "")
     if access_mode is not None:
