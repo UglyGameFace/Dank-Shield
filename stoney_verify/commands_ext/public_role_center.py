@@ -386,4 +386,165 @@ def _config_dependency_labels(config: Mapping[str, Any], role_id: int) -> list[s
         clean_key = str(key or "")
         if "role" not in clean_key.casefold():
             continue
-        if not _value_contains_role_id(value, role_
+        if not _value_contains_role_id(value, role_id):
+            continue
+        label = clean_key.replace("_id", "").replace("_ids", "").replace("_", " ").strip().title()
+        labels.append(label or clean_key)
+    return sorted(dict.fromkeys(labels))
+
+
+async def _role_dependencies(guild: discord.Guild, role: discord.Role) -> list[str]:
+    try:
+        from stoney_verify.guild_config import get_guild_config
+
+        config = await get_guild_config(int(guild.id), refresh=True)
+    except Exception:
+        return ["Dank Shield configuration could not be verified"]
+    return _config_dependency_labels(config, int(role.id))
+
+
+def _permission_groups(role: discord.Role) -> list[tuple[str, str, tuple[str, ...]]]:
+    available = [str(name) for name, _enabled in role.permissions]
+    available_set = set(available)
+    used: set[str] = set()
+    groups: list[tuple[str, str, tuple[str, ...]]] = []
+
+    for key, label, desired in _PERMISSION_GROUP_BASE:
+        names = tuple(name for name in desired if name in available_set and name not in used)
+        if not names:
+            continue
+        used.update(names)
+        groups.append((key, label, names))
+
+    remaining = [name for name in available if name not in used]
+    for index in range(0, len(remaining), 25):
+        chunk = tuple(remaining[index : index + 25])
+        if not chunk:
+            continue
+        number = index // 25 + 1
+        label = "Other Permissions" if len(remaining) <= 25 else f"Other Permissions {number}"
+        groups.append((f"other_{number}", label, chunk))
+    return groups
+
+
+def _role_icon_text(role: discord.Role) -> str:
+    icon = getattr(role, "display_icon", None)
+    if icon is None:
+        return "None"
+    if isinstance(icon, str):
+        return icon
+    return "Custom image"
+
+
+async def _role_embed(guild: discord.Guild, role: discord.Role) -> discord.Embed:
+    dependencies = await _role_dependencies(guild, role)
+    perms_enabled = [name for name, enabled in role.permissions if enabled]
+    colour = f"#{role.colour.value:06X}" if role.colour.value else "Default"
+    embed = discord.Embed(
+        title=f"🎭 Role Editor · {role.name}",
+        description=(
+            "Every action re-checks your live Discord permissions, Dank Shield's permissions, "
+            "and both role hierarchies before changing anything."
+        ),
+        color=role.colour if role.colour.value else discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(name="Role", value=f"{role.mention}\n`{role.id}`", inline=True)
+    embed.add_field(name="Position", value=f"`{role.position}`", inline=True)
+    embed.add_field(name="Members", value=str(len(role.members)), inline=True)
+    embed.add_field(
+        name="Appearance",
+        value=(
+            f"Colour: **{colour}**\n"
+            f"Hoisted: **{_bool_text(role.hoist)}**\n"
+            f"Mentionable: **{_bool_text(role.mentionable)}**\n"
+            f"Icon: **{_role_icon_text(role)}**"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="Permissions",
+        value=f"**{len(perms_enabled)}** enabled",
+        inline=True,
+    )
+    embed.add_field(
+        name="Dank Shield dependencies",
+        value=(
+            "\n".join(f"• {item}" for item in dependencies)[:1024]
+            if dependencies
+            else "None detected"
+        ),
+        inline=False,
+    )
+    embed.set_footer(
+        text=(
+            "Managed roles and @everyone are immutable here. "
+            "Configured Dank Shield roles must be remapped before deletion."
+        )
+    )
+    return embed
+
+
+def _center_embed(*, staff: bool, role_manager: bool) -> discord.Embed:
+    embed = discord.Embed(
+        title="🎭 Roles & Profiles",
+        description=(
+            "Profiles and cosmetic roles stay member-safe. Server role administration only appears "
+            "for people who currently have Discord's Manage Roles authority."
+        ),
+        color=discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(
+        name="Your profile",
+        value="🪪 **My Profile** • 🎭 **Profile Tags & Cosmetics**",
+        inline=False,
+    )
+    if staff:
+        embed.add_field(
+            name="Staff tools",
+            value="👥 **Member Role Manager** • 🌿 **Profile Builder**",
+            inline=False,
+        )
+    if role_manager:
+        embed.add_field(
+            name="Server role administration",
+            value=(
+                "🛠️ **Server Role Editor** • ➕ **Create Role** • 🩺 **Role Health**\n"
+                "Rename, colours/icons, permissions, hierarchy, duplication, and confirmed deletion."
+            ),
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="Server role administration",
+            value="Hidden unless your account currently has **Manage Roles**, Administrator, or server-owner authority.",
+            inline=False,
+        )
+    return embed
+
+
+def _role_editor_home_embed(guild: discord.Guild) -> discord.Embed:
+    me = guild.me
+    bot_top = getattr(getattr(me, "top_role", None), "mention", "Unknown")
+    manageable = 0
+    for role in guild.roles:
+        if role.is_default() or role.managed:
+            continue
+        if isinstance(me, discord.Member) and role < me.top_role:
+            manageable += 1
+    embed = discord.Embed(
+        title="🛠️ Server Role Editor",
+        description=(
+            "Choose a role below. Creation and every mutation are staff-only and permission-gated; "
+            "member profile roles are still managed through the existing profile tools."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(name="Manageable by Dank Shield", value=str(manageable), inline=True)
+    embed.add_field(name="Dank Shield top role", value=str(bot_top), inline=True)
+    embed.add_field(
+        name="Safety",
+        value="@everyone, integration-managed roles, roles above you, and roles above Dank Shield are blocked.",
+        inline=False,
+    )
