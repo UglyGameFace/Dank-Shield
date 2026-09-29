@@ -618,17 +618,19 @@ async def open_member_community_pings(interaction: discord.Interaction) -> None:
 
 
 class TokeCheersView(discord.ui.View):
-    def __init__(self, starter_id: int) -> None:
+    def __init__(self, starter_id: int, stoner_role_id: int) -> None:
         super().__init__(timeout=15 * 60)
         self.starter_id = int(starter_id)
+        self.stoner_role_id = int(stoner_role_id)
         self.cheered_ids: set[int] = set()
         self.cheers_count = 0
 
     @discord.ui.button(label="Cheers", emoji="💨", style=discord.ButtonStyle.success)
     async def cheers(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        user_id = _safe_int(getattr(interaction.user, "id", 0), 0)
-        if user_id <= 0:
-            return
+        member = interaction.user if isinstance(interaction.user, discord.Member) else None
+        user_id = _safe_int(getattr(member, "id", 0), 0)
+        if member is None or user_id <= 0 or not _member_has_role_id(member, self.stoner_role_id):
+            return await _reply(interaction, "The configured Stoner role is required to join this cheers.")
         if user_id in self.cheered_ids:
             return await _reply(interaction, "You already sent cheers on this call.")
         self.cheered_ids.add(user_id)
@@ -677,6 +679,8 @@ async def open_toke_command(
         )
     if not _member_has_role_id(member, stoner_id):
         return await _reply(interaction, f"You need the {stoner_role.mention} role to use /toke.")
+    if len(list(getattr(ping_role, "members", []) or [])) <= 0:
+        return await _reply(interaction, f"No members are opted into {ping_role.mention} yet.")
 
     channel = _target_channel(guild, interaction, channel_id)
     if not isinstance(channel, discord.TextChannel):
@@ -724,7 +728,7 @@ async def open_toke_command(
             sent = await channel.send(
                 content=ping_role.mention,
                 embed=embed,
-                view=TokeCheersView(member.id),
+                view=TokeCheersView(member.id, stoner_role.id),
                 allowed_mentions=_toke_allowed_mentions(ping_role),
             )
         except discord.Forbidden:
