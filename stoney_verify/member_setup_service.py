@@ -12,6 +12,7 @@ from typing import Any, Mapping, Optional
 from .guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
 from .profile_card_service import (
     get_profile_guild_settings,
+    list_profile_guild_settings,
     upsert_profile_guild_namespace,
 )
 
@@ -309,6 +310,19 @@ async def save_member_setup_state(
         normalized,
     )
     return await load_member_setup_state(int(guild_id), int(user_id), refresh=True)
+
+
+async def load_guild_member_setup_states(guild_id: int) -> dict[int, dict[str, Any]]:
+    """Return one durable setup-state snapshot for every stored member in a guild."""
+    rows = await list_profile_guild_settings(int(guild_id))
+    out: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        uid = _safe_int(row.get("user_id"), 0)
+        if uid <= 0:
+            continue
+        settings = dict(row.get("settings") or {}) if isinstance(row.get("settings"), Mapping) else {}
+        out[uid] = normalize_member_setup_state(settings.get(MEMBER_SETUP_KEY))
+    return out
 
 
 def _revisions_after(
