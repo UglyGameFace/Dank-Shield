@@ -778,7 +778,7 @@ async def _build_health_embed(guild: discord.Guild) -> discord.Embed:
         inline=False,
     )
 
-    embed.set_footer(text=f"Guild {guild.id} • setup check groups existing health evidence")
+    embed.set_footer(text="Setup check • grouped from existing health evidence")
     return embed
 
 
