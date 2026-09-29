@@ -546,12 +546,13 @@ def _center_embed(*, staff: bool, role_manager: bool, setup_manager: bool) -> di
     )
     embed.add_field(
         name="Your profile",
-        value="🪪 **My Profile** • 🎭 **Profile Tags & Cosmetics** • 🌿 **Community & Pings**",
+        value="🪪 **Member Setup** • 👤 **My Profile** • 🎭 **Profile Tags & Cosmetics** • 🌿 **Community & Pings**",
         inline=False,
     )
     if staff:
         staff_tools = ["👥 **Member Role Manager**"]
         if setup_manager:
+            staff_tools.append("🧭 **Member Setup Manager**")
             staff_tools.append("🌿 **Profile Builder**")
         embed.add_field(
             name="Staff tools",
@@ -670,13 +671,20 @@ class RolesProfilesView(_OwnedView):
         if not self.staff:
             self.remove_item(self.member_roles)
         if not (self.staff and self.setup_manager):
+            self.remove_item(self.member_setup_admin)
             self.remove_item(self.profile_builder)
         if not self.role_manager:
             self.remove_item(self.server_roles)
             self.remove_item(self.create_role)
             self.remove_item(self.role_health)
 
-    @discord.ui.button(label="My Profile", emoji="🪪", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Member Setup", emoji="🪪", style=discord.ButtonStyle.primary, row=0)
+    async def member_setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_member_setup import open_member_setup
+        await open_member_setup(interaction)
+
+    @discord.ui.button(label="My Profile", emoji="👤", style=discord.ButtonStyle.secondary, row=0)
     async def my_profile(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_command_hub import open_profile_entry
@@ -708,6 +716,14 @@ class RolesProfilesView(_OwnedView):
         from .public_member_role_browser import _open_member_browser
 
         await _open_member_browser(interaction)
+
+    @discord.ui.button(label="Member Setup Manager", emoji="🧭", style=discord.ButtonStyle.primary, row=1)
+    async def member_setup_admin(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _recognized_staff(interaction) or not _can_manage_setup(interaction):
+            return await _reply(interaction, "❌ Member Setup management requires authorized server management access.")
+        from .public_member_setup import open_member_setup_admin
+        await open_member_setup_admin(interaction)
 
     @discord.ui.button(label="Profile Builder", emoji="🌿", style=discord.ButtonStyle.secondary, row=1)
     async def profile_builder(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
