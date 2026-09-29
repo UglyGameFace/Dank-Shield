@@ -24,6 +24,7 @@ from .public_owner_authority import interaction_is_actual_guild_owner
 
 from stoney_verify.interaction_guard import run_guarded_interaction, safe_send_interaction
 from stoney_verify.share_router_resources import is_share_router_design_resource
+from stoney_verify.services import naming_mutation_locks
 from stoney_verify.services import search_safe_naming
 from stoney_verify.services import server_design_plan_service as plan_service
 from stoney_verify.services import server_design_studio as studio
@@ -31,7 +32,7 @@ from stoney_verify.services import server_design_rule_service as rule_service
 
 _PENDING: dict[str, dict[str, Any]] = {}
 _LAST_SNAPSHOTS: dict[str, list[dict[str, Any]]] = {}
-_LOCKS: dict[str, asyncio.Lock] = {}
+_LOCKS = naming_mutation_locks.GUILD_NAMING_LOCKS
 _ROLLBACK_LOCK = asyncio.Lock()
 ROLLBACK_FILE = Path(
     os.getenv(
@@ -142,12 +143,9 @@ def _invalidate_pending_for_guild(guild_id: int) -> None:
 
 
 def _lock_for(guild_id: int) -> asyncio.Lock:
-    key = _guild_key(guild_id)
-    lock = _LOCKS.get(key)
-    if lock is None:
-        lock = asyncio.Lock()
-        _LOCKS[key] = lock
-    return lock
+    """Compatibility facade over the shared guild naming mutation lock."""
+
+    return naming_mutation_locks.guild_naming_lock(int(guild_id))
 
 
 def _load_rollback_store_unlocked() -> dict[str, Any]:
