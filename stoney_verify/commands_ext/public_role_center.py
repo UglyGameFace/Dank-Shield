@@ -1519,4 +1519,47 @@ class DeleteRoleModal(discord.ui.Modal):
 
         await _followup_panel(
             interaction,
-           
+            content="✅ Role deletion completed.",
+            embed=discord.Embed(
+                title="🗑️ Role Deleted",
+                description=f"Deleted **{discord.utils.escape_markdown(role_name)}**.",
+                color=discord.Color.red(),
+            ),
+            view=RoleEditorHomeView(self.owner_id),
+        )
+
+
+async def open_roles_profiles_center(interaction: discord.Interaction) -> None:
+    guild = interaction.guild
+    if guild is None:
+        return await _reply(interaction, "❌ Roles & Profiles only works inside a server.")
+
+    staff = await _recognized_staff(interaction)
+    role_manager = _actor_can_manage_roles(guild, interaction.user)
+    setup_manager = _can_manage_setup(interaction)
+    await _replace(
+        interaction,
+        embed=_center_embed(staff=staff, role_manager=role_manager),
+        view=RolesProfilesView(
+            int(interaction.user.id),
+            staff=staff,
+            role_manager=role_manager,
+            setup_manager=setup_manager,
+        ),
+    )
+
+
+__all__ = [
+    "RolesProfilesView",
+    "RoleEditorHomeView",
+    "RoleDetailView",
+    "PermissionGroupPickerView",
+    "PermissionToggleView",
+    "open_roles_profiles_center",
+    "_actor_can_manage_roles",
+    "_config_dependency_labels",
+    "_parse_bool",
+    "_parse_colour",
+    "_permission_groups",
+    "_role_mutation_blockers",
+]
