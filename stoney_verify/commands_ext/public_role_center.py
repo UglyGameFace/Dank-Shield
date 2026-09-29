@@ -814,4 +814,127 @@ class RoleDetailView(_OwnedView):
         view = PermissionGroupPickerView(self.owner_id, role.id).attach_for_role(role)
         await _replace(
             interaction,
-    
+            embed=discord.Embed(
+                title=f"🔐 Permissions · {role.name}",
+                description=(
+                    "Choose a permission group. Saving a group changes only that group and preserves "
+                    "every permission outside it. Permissions you cannot grant are rejected before Discord is called."
+                ),
+                color=role.colour if role.colour.value else discord.Color.blurple(),
+            ),
+            view=view,
+        )
+
+    @discord.ui.button(label="Move Up", emoji="⬆️", style=discord.ButtonStyle.secondary, row=1)
+    async def move_up(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _move_role(interaction, owner_id=self.owner_id, role_id=self.role_id, direction=1)
+
+    @discord.ui.button(label="Move Down", emoji="⬇️", style=discord.ButtonStyle.secondary, row=1)
+    async def move_down(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _move_role(interaction, owner_id=self.owner_id, role_id=self.role_id, direction=-1)
+
+    @discord.ui.button(label="Duplicate", emoji="🧬", style=discord.ButtonStyle.secondary, row=1)
+    async def duplicate(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild, actor, role = await self._fresh(interaction)
+        if guild is None or actor is None or role is None:
+            return
+        enabled = [name for name, value in role.permissions if value]
+        grant_blockers = _permission_grant_blockers(guild, actor, enabled)
+        if grant_blockers:
+            return await _reply(interaction, "❌ " + "\n• ".join(grant_blockers))
+        icon = role.display_icon if isinstance(role.display_icon, str) else None
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        try:
+            async with _role_action_lock(guild.id, role.id, "duplicate"):
+                fresh = guild.get_role(role.id)
+                if not isinstance(fresh, discord.Role):
+                    return await _reply(interaction, "❌ That role no longer exists.")
+                fresh_blockers = _role_mutation_blockers(guild, actor, fresh)
+                if fresh_blockers:
+                    return await _reply(interaction, "❌ " + "\n• ".join(fresh_blockers))
+                created = await guild.create_role(
+                    name=_clip(f"{fresh.name} Copy", 100),
+                    permissions=discord.Permissions(fresh.permissions.value),
+                    colour=fresh.colour,
+                    hoist=fresh.hoist,
+                    mentionable=fresh.mentionable,
+                    display_icon=icon,
+                    reason=_role_reason(f"duplicated role {fresh.id}", actor),
+                )
+                try:
+                    await created.edit(
+                        position=max(1, fresh.position - 1),
+                        reason=_role_reason(f"positioned duplicate of {fresh.id}", actor),
+                    )
+                except Exception:
+                    pass
+        except discord.Forbidden:
+            return await _reply(interaction, "❌ Discord denied the duplicate. Re-check Manage Roles and hierarchy.")
+        except discord.HTTPException as exc:
+            return await _reply(interaction, f"❌ Discord could not duplicate the role: {_clip(exc, 300)}")
+        await _replace(
+            interaction,
+            embed=await _role_embed(guild, created),
+            view=RoleDetailView(self.owner_id, created.id),
+        )
+
+    @discord.ui.button(label="Delete Role", emoji="🗑️", style=discord.ButtonStyle.danger, row=2)
+    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild, actor, role = await self._fresh(interaction)
+        if guild is None or actor is None or role is None:
+            return
+        await interaction.response.send_modal(DeleteRoleModal(self.owner_id, role))
+
+    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=3)
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild, actor, role = await self._fresh(interaction)
+        if guild is None or actor is None or role is None:
+            return
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        await _replace(interaction, embed=await _role_embed(guild, role), view=self)
+
+    @discord.ui.button(label="Choose Another Role", emoji="↩️", style=discord.ButtonStyle.secondary, row=3)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild, actor = await _require_role_manager(interaction)
+        if guild is None or actor is None:
+            return
+        await _replace(interaction, embed=_role_editor_home_embed(guild), view=RoleEditorHomeView(self.owner_id))
+
+
+async def _move_role(
+    interaction: discord.Interaction,
+    *,
+    owner_id: int,
+    role_id: int,
+    direction: int,
+) -> None:
+    guild, actor = await _require_role_manager(interaction)
+    if guild is None or actor is None:
+        return
+    role = guild.get_role(int(role_id))
+    if not isinstance(role, discord.Role):
+        return await _reply(interaction, "❌ That role no longer exists.")
+    blockers = _role_mutation_blockers(guild, actor, role)
+    if blockers:
+        return await _reply(interaction, "❌ " + "\n• ".join(blockers))
+
+    candidates = [
+        candidate
+        for candidate in guild.roles
+        if isinstance(candidate, discord.Role)
+        and not candidate.is_default()
+        and not candidate.managed
+        and int(candidate.id) != int(role.id)
+    ]
+    if direction > 0:
+        above = sorted(
+            (candidate for candidate in candidates if candidate.position > role.position),
+            key=lambda candidate
