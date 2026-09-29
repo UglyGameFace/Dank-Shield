@@ -233,7 +233,17 @@ Persistent/runtime compatibility was preserved rather than sacrificed for cosmet
 Dedicated footer regression coverage now:
 - scans production footer calls for raw `Guild {id}` leakage;
 - rejects known debug/footer phrases;
-- verifies human-readable current runtime markers plus backward legacy detection for persistent surfaces.
+- verifies human-readable current runtime markers plus backward legacy detection for persistent surfaces;
+- locks the public Control Center and setup DB-check footers against runtime/build proof and backend-operator troubleshooting text.
+
+Exact-branch follow-up inspection found and corrected four footer inconsistencies that the earlier task summary had overstated as complete:
+- Welcome Card Studio still exposed `dank_shield:welcome_card_runtime:v1` on the successful image-preview path; it now says `Preview only • nothing was published`;
+- the public Dank Shield Control Center appended `runtime_release_label()`, exposing commit/source fingerprints; that footer is now `Dank Shield • Control Center` while runtime proof remains available to internal diagnostics/support paths;
+- the setup DB-check footer exposed Supabase schema-cache/service-role environment troubleshooting; it now says `Read-only check • no settings were changed.`;
+- Spam Guard incident footer runtime and tests disagreed about the intended human wording; new incidents now consistently use `Spam Guard incident • restore available`, durable `modlog_message_id` ownership remains primary, and the legacy encoded-footer parser remains intact.
+
+Footer implementation checkpoint before this task-record-only update: `9e8265669a0d929b75b08a36ae8bb4a7c796d098`.
+Exact-head validation is still pending; no green/complete claim is made from these edits alone.
 
 Role autocomplete privacy is also hardened:
 - `/role` autocomplete filters choices before Discord returns them;
