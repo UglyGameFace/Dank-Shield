@@ -763,7 +763,7 @@ async def _build_recovery_embed(
         )
     embed.set_footer(
         text=(
-            f"Guild {guild.id} • reset and restore actions require confirmation"
+            "Reset and restore actions require confirmation."
         )
     )
     return embed

@@ -18,28 +18,30 @@ Scale rules:
 import asyncio
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import discord
 from discord import app_commands
 
+from stoney_verify.services import naming_observability
 from stoney_verify.services import server_design_studio as design
 
 NAMING_IDENTITY_CONFIG_KEY = "naming_identity_v1"
 NAMING_IDENTITY_VERSION = 1
+UNSUPPORTED_VERSION_KEY = "_unsupported_version"
 NAMING_MODE_PRESERVE = "preserve"
 NAMING_MODE_SEARCH_SAFE = "search_safe"
 NAMING_MODES = {NAMING_MODE_PRESERVE, NAMING_MODE_SEARCH_SAFE}
 MAX_ALIASES_PER_RESOURCE = 3
 MAX_TRACKED_RESOURCES = 128
 MAX_CACHED_GUILDS = 1024
-STATE_CACHE_TTL_SECONDS = 300.0
+STATE_CACHE_TTL_SECONDS = 60.0
 PERSIST_DEBOUNCE_SECONDS = 1.5
 
 _RUNTIME_FLAG = "_dank_naming_identity_runtime_v1"
 _STATE_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
-_PENDING_ALIASES: dict[int, dict[str, set[str]]] = {}
+_PENDING_ALIASES: dict[int, dict[str, list[str]]] = {}
 _PENDING_DELETES: dict[int, set[str]] = {}
 _FLUSH_TASKS: dict[int, asyncio.Task[Any]] = {}
 
@@ -53,6 +55,47 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(str(value).strip())
     except Exception:
         return int(default)
+
+
+class UnsupportedNamingIdentityVersion(RuntimeError):
+    pass
+
+
+def _source_version(value: Any) -> int:
+    if not isinstance(value, Mapping):
+        return NAMING_IDENTITY_VERSION
+    raw = value.get("version")
+    if raw is None:
+        return NAMING_IDENTITY_VERSION
+    version = _safe_int(raw, NAMING_IDENTITY_VERSION)
+    return version if version > 0 else NAMING_IDENTITY_VERSION
+
+
+def _unsupported_state(version: int) -> dict[str, Any]:
+    return {
+        "version": int(version),
+        UNSUPPORTED_VERSION_KEY: True,
+        "policy": _normalize_policy({}),
+        "records": {},
+    }
+
+
+def _is_unsupported_state(value: Any) -> bool:
+    return bool(
+        isinstance(value, Mapping)
+        and (
+            bool(value.get(UNSUPPORTED_VERSION_KEY))
+            or _source_version(value) > NAMING_IDENTITY_VERSION
+        )
+    )
+
+
+def _require_supported_state(value: Any) -> None:
+    if _is_unsupported_state(value):
+        raise UnsupportedNamingIdentityVersion(
+            f"naming identity schema v{_source_version(value)} is newer than "
+            f"runtime v{NAMING_IDENTITY_VERSION}"
+        )
 
 
 def _resource_key(kind: str, resource_id: Any) -> str:
@@ -77,14 +120,17 @@ def search_safe_display_name(value: Any) -> str:
     output: list[str] = []
     for char in raw:
         try:
-            decoded = design.strip_known_unicode_fonts(char)
+            decoded = design.decode_known_unicode_font_glyph(char)
         except Exception:
             decoded = char
-        if decoded != char:
-            alnum = "".join(part for part in decoded if part.isalnum())
-            if alnum:
-                output.append(alnum)
-                continue
+        if (
+            decoded != char
+            and len(decoded) == 1
+            and decoded.isascii()
+            and decoded.isalpha()
+        ):
+            output.append(decoded)
+            continue
         output.append(char)
     return "".join(output)
 
@@ -104,6 +150,25 @@ def previous_alias_for_rename(before_name: Any, after_name: Any) -> str:
     return ""
 
 
+def _policy_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return bool(default)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+        return bool(default)
+    text = str(value).strip().casefold()
+    if text in {"true", "1", "yes", "y", "on", "enabled"}:
+        return True
+    if text in {"false", "0", "no", "n", "off", "disabled", ""}:
+        return False
+    return bool(default)
+
+
 def _normalize_policy(value: Any) -> dict[str, Any]:
     source = value if isinstance(value, Mapping) else {}
     mode = str(source.get("mode") or NAMING_MODE_PRESERVE).strip().lower()
@@ -111,11 +176,11 @@ def _normalize_policy(value: Any) -> dict[str, Any]:
         mode = NAMING_MODE_PRESERVE
     return {
         "mode": mode,
-        "roles": bool(source.get("roles", True)),
-        "channels": bool(source.get("channels", True)),
+        "roles": _policy_bool(source.get("roles"), True),
+        "channels": _policy_bool(source.get("channels"), True),
         # Categories can keep the heavy visual font while searchable channel
         # words and roles use ordinary letters.
-        "categories": bool(source.get("categories", False)),
+        "categories": _policy_bool(source.get("categories"), False),
     }
 
 
@@ -129,6 +194,9 @@ def _empty_state() -> dict[str, Any]:
 
 def _normalize_state(value: Any) -> dict[str, Any]:
     source = value if isinstance(value, Mapping) else {}
+    version = _source_version(source)
+    if version > NAMING_IDENTITY_VERSION:
+        return _unsupported_state(version)
     records_raw = source.get("records") if isinstance(source, Mapping) else {}
     records: dict[str, dict[str, Any]] = {}
     if isinstance(records_raw, Mapping):
@@ -171,14 +239,21 @@ def _normalize_state(value: Any) -> dict[str, Any]:
 
 
 def naming_policy(state: Mapping[str, Any] | None) -> dict[str, Any]:
-    return dict(_normalize_state(state).get("policy") or _normalize_policy({}))
+    normalized = _normalize_state(state)
+    if _is_unsupported_state(normalized):
+        return _normalize_policy({})
+    return dict(normalized.get("policy") or _normalize_policy({}))
 
 
-async def get_naming_policy(guild_id: Any) -> dict[str, Any]:
+async def get_naming_policy(
+    guild_id: Any,
+    *,
+    refresh: bool = False,
+) -> dict[str, Any]:
     gid = _safe_int(guild_id, 0)
     if gid <= 0:
         return _normalize_policy({})
-    return naming_policy(await _load_state(gid))
+    return naming_policy(await _load_state(gid, refresh=refresh))
 
 
 async def set_naming_mode(guild_id: Any, mode: str) -> dict[str, Any]:
@@ -189,13 +264,16 @@ async def set_naming_mode(guild_id: Any, mode: str) -> dict[str, Any]:
     if clean_mode not in NAMING_MODES:
         raise ValueError(f"unsupported naming mode: {mode!r}")
 
-    state = await _load_state(gid)
-    updated = _normalize_state(state)
-    policy = naming_policy(updated)
-    policy["mode"] = clean_mode
-    updated["policy"] = policy
-    await _persist_state(gid, updated)
-    return dict(policy)
+    def mutate(current: Mapping[str, Any]) -> dict[str, Any]:
+        updated = _normalize_state(current)
+        _require_supported_state(updated)
+        policy = naming_policy(updated)
+        policy["mode"] = clean_mode
+        updated["policy"] = policy
+        return updated
+
+    saved = await _mutate_state_cas(gid, mutate)
+    return naming_policy(saved)
 
 
 def remember_alias(
@@ -208,6 +286,7 @@ def remember_alias(
 ) -> dict[str, Any]:
     """Pure bounded-state update used by the runtime and regression tests."""
     result = _normalize_state(state)
+    _require_supported_state(result)
     key = _resource_key(kind, resource_id)
     clean_alias = semantic_key(alias)
     if not key or not clean_alias:
@@ -216,17 +295,25 @@ def remember_alias(
     records = dict(result.get("records") or {})
     current = records.get(key) if isinstance(records.get(key), Mapping) else {}
     aliases = [clean_alias]
-    for old in list(current.get("aliases") or []):
+    source_aliases = list(current.get("aliases") or [])
+    for old in source_aliases:
         normalized = semantic_key(old)
         if normalized and normalized not in aliases:
             aliases.append(normalized)
-        if len(aliases) >= MAX_ALIASES_PER_RESOURCE:
-            break
+    if len(aliases) > MAX_ALIASES_PER_RESOURCE:
+        naming_observability.increment(
+            "alias_pruned",
+            len(aliases) - MAX_ALIASES_PER_RESOURCE,
+        )
     records[key] = {
         "aliases": aliases[:MAX_ALIASES_PER_RESOURCE],
         "updated_at": float(updated_at if updated_at is not None else time.time()),
     }
     if len(records) > MAX_TRACKED_RESOURCES:
+        naming_observability.increment(
+            "resource_pruned",
+            len(records) - MAX_TRACKED_RESOURCES,
+        )
         newest = sorted(
             records.items(),
             key=lambda item: float(item[1].get("updated_at") or 0.0),
@@ -247,6 +334,7 @@ def forget_resource(
     resource_id: Any,
 ) -> dict[str, Any]:
     result = _normalize_state(state)
+    _require_supported_state(result)
     key = _resource_key(kind, resource_id)
     records = dict(result.get("records") or {})
     if key:
@@ -265,6 +353,8 @@ def aliases_for(
     resource_id: Any,
 ) -> tuple[str, ...]:
     normalized = _normalize_state(state)
+    if _is_unsupported_state(normalized):
+        return ()
     record = (normalized.get("records") or {}).get(_resource_key(kind, resource_id), {})
     if not isinstance(record, Mapping):
         return ()
@@ -298,11 +388,15 @@ def _cache_state(guild_id: int, state: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-async def _load_state(guild_id: int) -> dict[str, Any]:
+async def _load_state(
+    guild_id: int,
+    *,
+    refresh: bool = False,
+) -> dict[str, Any]:
     gid = int(guild_id)
     now = time.monotonic()
     cached = _STATE_CACHE.get(gid)
-    if cached and now - float(cached[0]) <= STATE_CACHE_TTL_SECONDS:
+    if not refresh and cached and now - float(cached[0]) <= STATE_CACHE_TTL_SECONDS:
         return _normalize_state(cached[1])
     if cached:
         _STATE_CACHE.pop(gid, None)
@@ -310,29 +404,86 @@ async def _load_state(guild_id: int) -> dict[str, Any]:
     try:
         from stoney_verify.guild_config import get_guild_config
 
-        config = await get_guild_config(gid)
+        # Once the naming cache misses/expires, bypass the guild-config cache too.
+        # This prevents two stacked TTLs from extending cross-process staleness.
+        config = await get_guild_config(gid, refresh=True)
         state = _normalize_state(config.get(NAMING_IDENTITY_CONFIG_KEY))
     except Exception:
         state = _empty_state()
     return _cache_state(gid, state)
 
 
-async def _persist_state(guild_id: int, state: Mapping[str, Any]) -> None:
+async def _fresh_state_source(guild_id: int) -> tuple[Any, dict[str, Any]]:
     gid = int(guild_id)
-    normalized = _normalize_state(state)
-    from stoney_verify.guild_config import upsert_guild_config
+    from stoney_verify.guild_config import get_guild_config
 
-    saved = await upsert_guild_config(
+    config = await get_guild_config(gid, refresh=True)
+    raw = config.get(NAMING_IDENTITY_CONFIG_KEY)
+    normalized = _normalize_state(raw)
+    _cache_state(gid, normalized)
+    return raw, normalized
+
+
+async def _cas_state(
+    guild_id: int,
+    *,
+    expected_raw: Any,
+    updated: Mapping[str, Any],
+) -> tuple[bool, Any, dict[str, Any]]:
+    gid = int(guild_id)
+    normalized = _normalize_state(updated)
+    _require_supported_state(normalized)
+
+    from stoney_verify.guild_config import compare_and_swap_guild_config_key
+
+    applied, config = await compare_and_swap_guild_config_key(
         gid,
-        {
-            NAMING_IDENTITY_CONFIG_KEY: normalized,
-            "__config_write_mode": "explicit_override",
-            "__config_write_source": "naming_identity_runtime",
-            "__config_write_allow_keys": [NAMING_IDENTITY_CONFIG_KEY],
-        },
+        NAMING_IDENTITY_CONFIG_KEY,
+        expected=expected_raw,
+        value=normalized,
+        source="naming_identity_runtime",
     )
-    persisted = _normalize_state(saved.get(NAMING_IDENTITY_CONFIG_KEY, normalized))
+    persisted_raw = config.get(NAMING_IDENTITY_CONFIG_KEY)
+    persisted = _normalize_state(persisted_raw)
     _cache_state(gid, persisted)
+    return bool(applied), persisted_raw, persisted
+
+
+async def _mutate_state_cas(
+    guild_id: int,
+    transform: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+    *,
+    attempts: int = 5,
+) -> dict[str, Any]:
+    """Apply one naming-state transform with cross-process conflict retries."""
+
+    gid = int(guild_id)
+    expected_raw, current = await _fresh_state_source(gid)
+    total = max(1, min(int(attempts or 1), 10))
+
+    for _attempt in range(total):
+        _require_supported_state(current)
+        updated = _normalize_state(transform(current))
+        _require_supported_state(updated)
+        if updated == current:
+            return _cache_state(gid, current)
+
+        applied, persisted_raw, persisted = await _cas_state(
+            gid,
+            expected_raw=expected_raw,
+            updated=updated,
+        )
+        if applied:
+            naming_observability.increment("state_write_success")
+            return persisted
+
+        naming_observability.increment("state_write_conflict")
+        expected_raw = persisted_raw
+        current = persisted
+
+    raise RuntimeError(
+        f"naming identity compare-and-swap contention exceeded {total} attempts"
+    )
 
 
 def _queue_flush(guild_id: int) -> None:
@@ -362,9 +513,38 @@ def queue_rename(
     if gid <= 0 or not key or not alias:
         return False
     rows = _PENDING_ALIASES.setdefault(gid, {})
-    rows.setdefault(key, set()).add(alias)
+    aliases = rows.setdefault(key, [])
+    if alias in aliases:
+        aliases.remove(alias)
+    aliases.append(alias)
     _queue_flush(gid)
     return True
+
+
+def _requeue_failed_flush(
+    guild_id: int,
+    aliases: Mapping[str, Sequence[str]],
+    deletes: set[str],
+) -> None:
+    """Restore a failed flush ahead of newer queued events without losing chronology."""
+
+    gid = int(guild_id)
+    if aliases:
+        rows = _PENDING_ALIASES.setdefault(gid, {})
+        for key, failed_aliases in aliases.items():
+            newer_aliases = list(rows.get(key) or [])
+            merged: list[str] = []
+            for alias in [*list(failed_aliases or []), *newer_aliases]:
+                clean = semantic_key(alias)
+                if not clean:
+                    continue
+                if clean in merged:
+                    merged.remove(clean)
+                merged.append(clean)
+            if merged:
+                rows[key] = merged
+    if deletes:
+        _PENDING_DELETES.setdefault(gid, set()).update(deletes)
 
 
 def queue_delete(*, guild_id: Any, kind: str, resource_id: Any) -> bool:
@@ -377,19 +557,20 @@ def queue_delete(*, guild_id: Any, kind: str, resource_id: Any) -> bool:
     return True
 
 
-async def _debounced_flush(guild_id: int) -> None:
-    gid = int(guild_id)
-    try:
-        await asyncio.sleep(PERSIST_DEBOUNCE_SECONDS)
-        pending_aliases = _PENDING_ALIASES.pop(gid, {})
-        pending_deletes = _PENDING_DELETES.pop(gid, set())
-        if not pending_aliases and not pending_deletes:
-            return
+async def _flush_pending_once(guild_id: int) -> bool:
+    """Flush one guild immediately while preserving claimed events on failure."""
 
-        state = await _load_state(gid)
-        before = _normalize_state(state)
-        updated = before
-        stamp = time.time()
+    gid = int(guild_id)
+    pending_aliases = _PENDING_ALIASES.pop(gid, {})
+    pending_deletes = _PENDING_DELETES.pop(gid, set())
+    if not pending_aliases and not pending_deletes:
+        return False
+
+    stamp = time.time()
+
+    def mutate(current: Mapping[str, Any]) -> dict[str, Any]:
+        updated = _normalize_state(current)
+        _require_supported_state(updated)
 
         for key in sorted(pending_deletes):
             kind, _, rid = key.partition(":")
@@ -399,7 +580,7 @@ async def _debounced_flush(guild_id: int) -> None:
             kind, _, rid = key.partition(":")
             if key in pending_deletes:
                 continue
-            for alias in sorted(aliases):
+            for alias in aliases:
                 updated = remember_alias(
                     updated,
                     kind=kind,
@@ -407,12 +588,27 @@ async def _debounced_flush(guild_id: int) -> None:
                     alias=alias,
                     updated_at=stamp,
                 )
+        return updated
 
-        if updated != before:
-            await _persist_state(gid, updated)
+    try:
+        await _mutate_state_cas(gid, mutate)
+        return True
     except asyncio.CancelledError:
+        _requeue_failed_flush(gid, pending_aliases, pending_deletes)
         raise
+    except UnsupportedNamingIdentityVersion as exc:
+        naming_observability.increment("state_write_failure")
+        try:
+            print(
+                "⚠️ naming_identity write blocked by newer schema "
+                f"guild={gid} error={exc}"
+            )
+        except Exception:
+            pass
+        return False
     except Exception as exc:
+        naming_observability.increment("state_write_failure")
+        _requeue_failed_flush(gid, pending_aliases, pending_deletes)
         try:
             print(
                 "⚠️ naming_identity flush failed "
@@ -420,10 +616,126 @@ async def _debounced_flush(guild_id: int) -> None:
             )
         except Exception:
             pass
+        return False
+
+
+async def _debounced_flush(guild_id: int) -> None:
+    gid = int(guild_id)
+    try:
+        await asyncio.sleep(PERSIST_DEBOUNCE_SECONDS)
+        await _flush_pending_once(gid)
+    except asyncio.CancelledError:
+        raise
     finally:
         _FLUSH_TASKS.pop(gid, None)
         if _PENDING_ALIASES.get(gid) or _PENDING_DELETES.get(gid):
             _queue_flush(gid)
+
+
+async def prune_missing_resources(guild: discord.Guild) -> int:
+    """Opportunistically remove identity records for resources deleted while offline.
+
+    This is intentionally called only from an explicit per-guild admin surface.
+    It never performs a startup/global guild sweep.
+    """
+
+    gid = _safe_int(getattr(guild, "id", 0), 0)
+    if gid <= 0:
+        return 0
+
+    live_roles = {
+        _safe_int(getattr(role, "id", 0), 0)
+        for role in list(getattr(guild, "roles", []) or [])
+    }
+    live_channels = {
+        _safe_int(getattr(channel, "id", 0), 0)
+        for channel in list(getattr(guild, "channels", []) or [])
+    }
+    live_roles.discard(0)
+    live_channels.discard(0)
+
+    removed = 0
+
+    def mutate(current: Mapping[str, Any]) -> dict[str, Any]:
+        nonlocal removed
+        normalized = _normalize_state(current)
+        _require_supported_state(normalized)
+        records = dict(normalized.get("records") or {})
+        kept: dict[str, Any] = {}
+        local_removed = 0
+
+        for key, payload in records.items():
+            kind, _, raw_id = str(key).partition(":")
+            rid = _safe_int(raw_id, 0)
+            if kind == "role" and rid not in live_roles:
+                local_removed += 1
+                continue
+            if kind == "channel" and rid not in live_channels:
+                local_removed += 1
+                continue
+            kept[str(key)] = payload
+
+        removed = local_removed
+        if local_removed <= 0:
+            return normalized
+        return {
+            "version": NAMING_IDENTITY_VERSION,
+            "policy": naming_policy(normalized),
+            "records": kept,
+        }
+
+    await _mutate_state_cas(gid, mutate)
+    if removed > 0:
+        naming_observability.increment("resource_pruned", removed)
+    return removed
+
+
+async def flush_pending_naming_identity(
+    *,
+    timeout_seconds: float = 8.0,
+) -> dict[str, int]:
+    """Best-effort immediate persistence before the Discord event loop closes."""
+
+    tasks = [
+        task
+        for task in list(_FLUSH_TASKS.values())
+        if task is not None and not task.done()
+    ]
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    guild_ids = sorted(
+        set(_PENDING_ALIASES)
+        | set(_PENDING_DELETES)
+        | set(_FLUSH_TASKS)
+    )
+    if not guild_ids:
+        return {"guilds": 0, "flushed": 0, "pending": 0}
+
+    async def _flush_all() -> list[bool]:
+        return await asyncio.gather(
+            *(_flush_pending_once(gid) for gid in guild_ids),
+        )
+
+    try:
+        results = await asyncio.wait_for(
+            _flush_all(),
+            timeout=max(0.5, float(timeout_seconds or 8.0)),
+        )
+    except asyncio.TimeoutError:
+        results = []
+
+    pending = len(
+        set(_PENDING_ALIASES)
+        | set(_PENDING_DELETES)
+    )
+    return {
+        "guilds": len(guild_ids),
+        "flushed": sum(1 for value in results if value),
+        "pending": pending,
+    }
 
 
 def _raw_name(resource: Any) -> str:
@@ -449,13 +761,13 @@ def _live_match_score(resource: Any, query_text: str, query_key: str) -> int | N
     if query_key and semantic == query_key:
         return 1
     if query_text and raw_fold.startswith(query_text):
-        return 2
-    if query_key and semantic.startswith(query_key):
         return 3
-    if query_text and query_text in raw_fold:
+    if query_key and semantic.startswith(query_key):
         return 4
-    if query_key and query_key in semantic:
+    if query_text and query_text in raw_fold:
         return 5
+    if query_key and query_key in semantic:
+        return 6
     return None
 
 
@@ -468,7 +780,7 @@ def _alias_match_score(
         return None
     normalized = [semantic_key(alias) for alias in aliases]
     if query_key in normalized:
-        return 6
+        return 2
     if any(alias.startswith(query_key) for alias in normalized if alias):
         return 7
     if any(query_key in alias for alias in normalized if alias):
@@ -530,9 +842,17 @@ async def role_autocomplete(
         return []
     roles = list(getattr(guild, "roles", []) or [])
 
-    # Common case: current stylized name can be decoded live without DB I/O.
+    # Exact live names need no alias-state read. Partial live matches do, because
+    # an exact previous alias must outrank an unrelated prefix/substring match.
     live = _search_resources(roles, kind="role", current=current, state=None, limit=25)
-    if live or not str(current or "").strip():
+    query_text = str(current or "").strip().casefold()
+    query_key = semantic_key(current)
+    has_live_exact = any(
+        (score := _live_match_score(role, query_text, query_key)) is not None
+        and score <= 1
+        for role in live
+    )
+    if has_live_exact or not str(current or "").strip():
         return [
             app_commands.Choice(name=_choice_name(role), value=str(_resource_id(role)))
             for role in live
@@ -543,28 +863,6 @@ async def role_autocomplete(
     return [
         app_commands.Choice(name=_choice_name(role), value=str(_resource_id(role)))
         for role in matches
-    ]
-
-
-async def channel_autocomplete(
-    interaction: discord.Interaction,
-    current: str,
-) -> list[app_commands.Choice[str]]:
-    guild = interaction.guild
-    if guild is None:
-        return []
-    channels = list(getattr(guild, "channels", []) or [])
-    live = _search_resources(channels, kind="channel", current=current, state=None, limit=25)
-    if live or not str(current or "").strip():
-        return [
-            app_commands.Choice(name=_choice_name(channel), value=str(_resource_id(channel)))
-            for channel in live
-        ]
-    state = await _load_state(int(guild.id))
-    matches = _search_resources(channels, kind="channel", current=current, state=state, limit=25)
-    return [
-        app_commands.Choice(name=_choice_name(channel), value=str(_resource_id(channel)))
-        for channel in matches
     ]
 
 
@@ -598,15 +896,19 @@ async def resolve_role_query(
     ]
     raw_exact = [role for role in roles if _raw_name(role).casefold() == text.casefold()]
     if len(raw_exact) == 1:
+        naming_observability.increment("role_resolution_live")
         return raw_exact[0], ""
     if len(raw_exact) > 1:
+        naming_observability.increment("role_resolution_ambiguous")
         return None, "More than one role has that exact display name. Choose one from autocomplete."
 
     query_key = semantic_key(text)
     semantic_exact = [role for role in roles if semantic_key(_raw_name(role)) == query_key and query_key]
     if len(semantic_exact) == 1:
+        naming_observability.increment("role_resolution_semantic")
         return semantic_exact[0], ""
     if len(semantic_exact) > 1:
+        naming_observability.increment("role_resolution_ambiguous")
         return None, "More than one role has that searchable name. Choose one from autocomplete."
 
     state = await _load_state(int(guild.id))
@@ -617,8 +919,10 @@ async def resolve_role_query(
         and query_key in aliases_for(state, kind="role", resource_id=role.id)
     ]
     if len(alias_exact) == 1:
+        naming_observability.increment("role_resolution_alias")
         return alias_exact[0], ""
     if len(alias_exact) > 1:
+        naming_observability.increment("role_resolution_ambiguous")
         return None, "That old role name matches more than one role. Choose one from autocomplete."
     return None, "No role matched that name or saved alias. Choose one from autocomplete."
 
@@ -703,6 +1007,7 @@ def install_naming_identity_runtime(bot: Any) -> bool:
 
 
 __all__ = [
+    "UnsupportedNamingIdentityVersion",
     "MAX_ALIASES_PER_RESOURCE",
     "MAX_CACHED_GUILDS",
     "MAX_TRACKED_RESOURCES",
@@ -710,11 +1015,12 @@ __all__ = [
     "NAMING_MODE_PRESERVE",
     "NAMING_MODE_SEARCH_SAFE",
     "aliases_for",
+    "flush_pending_naming_identity",
     "get_naming_policy",
-    "channel_autocomplete",
     "has_stylized_search_text",
     "install_naming_identity_runtime",
     "previous_alias_for_rename",
+    "prune_missing_resources",
     "queue_delete",
     "queue_rename",
     "remember_alias",

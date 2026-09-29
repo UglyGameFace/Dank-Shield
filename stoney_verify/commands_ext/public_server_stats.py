@@ -138,7 +138,7 @@ def _center_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text="Dank Shield Server Stats • per-server settings • no hardcoded home-server layout")
+    embed.set_footer(text="Server Stats • settings apply only to this server.")
     return embed
 
 

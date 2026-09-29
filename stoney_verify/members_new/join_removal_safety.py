@@ -305,7 +305,7 @@ def build_fresh_join_removal_embed(
         ),
         inline=False,
     )
-    embed.set_footer(text=f"Guild {guild.id} • fresh join removal safety")
+    embed.set_footer(text="Fresh join removal safety")
     return embed
 
 
@@ -341,7 +341,7 @@ def build_fresh_join_recovery_embed(
         ),
         inline=False,
     )
-    embed.set_footer(text=f"Guild {guild.id} • fresh join verification recovery")
+    embed.set_footer(text="Fresh join verification recovery")
     return embed
 
 

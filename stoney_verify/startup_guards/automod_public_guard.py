@@ -233,7 +233,7 @@ async def _modlog(guild: discord.Guild, message: discord.Message, reason: str) -
         content = str(getattr(message, "content", "") or "")
         if content:
             embed.add_field(name="Message", value=content[:1000], inline=False)
-        embed.set_footer(text="Dank Shield Automod • configured by Protection Center")
+        embed.set_footer(text="Automod • managed in Protection Center")
         await _post_modlog(guild, embed)
     except Exception as exc:
         try:

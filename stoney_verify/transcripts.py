@@ -119,12 +119,33 @@ except Exception:
 # Markers / locks
 # ============================================================
 
-_CLOSE_PROMPT_MARKER = "stoney_verify:close_prompt:v10"
-_STAFF_CLOSED_MARKER = "stoney_verify:staff_closed:v10"
-_CLOSE_REOPENED_MARKER = "stoney_verify:ticket_reopened:v9"
-_STAFF_REVIEW_PANEL_MARKER = "stoney_verify:staff_review_panel:v6"
-_TRANSCRIPT_POSTED_MARKER = "stoney_verify:transcript_posted:v6"
-_OPEN_CONTROLS_MARKER = "stoney_verify:open_controls:v5"
+_CLOSE_PROMPT_MARKER = "Ticket close confirmation"
+_STAFF_CLOSED_MARKER = "Ticket closed by staff"
+_CLOSE_REOPENED_MARKER = "Ticket reopened"
+_STAFF_REVIEW_PANEL_MARKER = "Staff ticket review"
+_TRANSCRIPT_POSTED_MARKER = "Transcript posted"
+_OPEN_CONTROLS_MARKER = "Ticket controls"
+
+_LEGACY_MARKERS: dict[str, tuple[str, ...]] = {
+    _CLOSE_PROMPT_MARKER: ("stoney_verify:close_prompt:v10",),
+    _STAFF_CLOSED_MARKER: ("stoney_verify:staff_closed:v10",),
+    _CLOSE_REOPENED_MARKER: ("stoney_verify:ticket_reopened:v9",),
+    _STAFF_REVIEW_PANEL_MARKER: ("stoney_verify:staff_review_panel:v6",),
+    _TRANSCRIPT_POSTED_MARKER: ("stoney_verify:transcript_posted:v6",),
+    _OPEN_CONTROLS_MARKER: ("stoney_verify:open_controls:v5",),
+}
+
+
+def _marker_variants(marker: str) -> tuple[str, ...]:
+    clean = str(marker or "").strip()
+    if not clean:
+        return ()
+    return (clean, *_LEGACY_MARKERS.get(clean, ()))
+
+
+def _text_has_marker(text: Any, marker: str) -> bool:
+    haystack = str(text or "")
+    return any(candidate in haystack for candidate in _marker_variants(marker))
 
 _CLOSE_PROMPT_LOCKS: Dict[int, asyncio.Lock] = {}
 _STAFF_REVIEW_PANEL_LOCKS: Dict[int, asyncio.Lock] = {}
@@ -856,7 +877,7 @@ def _message_has_marker_or_custom_ids(
     try:
         if marker:
             content = str(getattr(message, "content", "") or "")
-            if marker in content:
+            if _text_has_marker(content, marker):
                 return True
     except Exception:
         pass
@@ -865,7 +886,7 @@ def _message_has_marker_or_custom_ids(
         embeds = getattr(message, "embeds", None) or []
         for e in embeds:
             footer_text = str(getattr(getattr(e, "footer", None), "text", "") or "")
-            if marker and marker in footer_text:
+            if marker and _text_has_marker(footer_text, marker):
                 return True
     except Exception:
         pass
@@ -1795,7 +1816,7 @@ async def post_or_replace_verification_staff_panel(
                     footer_text = str(
                         getattr(getattr(msg.embeds[0], "footer", None), "text", "") or ""
                     )
-                    if _STAFF_REVIEW_PANEL_MARKER in footer_text:
+                    if _text_has_marker(footer_text, _STAFF_REVIEW_PANEL_MARKER):
                         await msg.edit(embed=embed, view=view)
                         return "updated"
                 except Exception:

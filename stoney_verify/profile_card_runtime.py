@@ -616,7 +616,10 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
                 raise _CurrentCardVerificationUnavailable from exc
             if (
                 int(getattr(stored.author, "id", 0) or 0) == int(bot_user.id)
-                and parse_live_card_footer(stored) is not None
+                and (
+                    parse_live_card_footer(stored) is not None
+                    or _core.is_live_card_message(stored)
+                )
             ):
                 owned[int(stored.id)] = stored
 
@@ -680,7 +683,29 @@ class LiveProfileCardRuntime(_core.LiveProfileCardRuntime):
         if newest is not None:
             parsed = parse_live_card_footer(newest)
             if parsed is None:
-                raise _CurrentCardVerificationUnavailable
+                # New cards intentionally hide raw user/trigger IDs from the
+                # footer. Recover those values only from the durable row that
+                # pointed at this already-verified bot-authored live-card
+                # message.
+                state = next(
+                    (
+                        row
+                        for row in states
+                        if int(str(row.get("message_id") or "0")) == int(newest.id)
+                    ),
+                    None,
+                )
+                if not isinstance(state, Mapping):
+                    raise _CurrentCardVerificationUnavailable
+                try:
+                    parsed = (
+                        int(str(state.get("user_id") or "0")),
+                        int(str(state.get("trigger_message_id") or "0")),
+                    )
+                except Exception as exc:
+                    raise _CurrentCardVerificationUnavailable from exc
+                if parsed[0] <= 0:
+                    raise _CurrentCardVerificationUnavailable
             current = _CurrentCard(
                 message_id=int(newest.id),
                 user_id=int(parsed[0]),

@@ -232,7 +232,7 @@ async def _on_member_update(before: discord.Member, after: discord.Member) -> No
             embed.set_thumbnail(url=str(after.display_avatar.url))
         except Exception:
             pass
-        embed.set_footer(text=f"Guild {guild.id} • member update modlog")
+        embed.set_footer(text="Member update log")
         await _send(guild, embed)
     except Exception as e:
         print(f"⚠️ public_member_update_modlog on_member_update failed: {e!r}")

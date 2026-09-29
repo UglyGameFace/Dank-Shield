@@ -280,7 +280,7 @@ def _result_embed(guild: discord.Guild, spec: SetupTarget, query: str, matches: 
     if len(matches) > 10:
         preview.append(f"• …and {len(matches) - 10} more result(s)")
     embed.add_field(name=f"Matches found: {len(matches)}", value="\n".join(preview) or "None", inline=False)
-    embed.set_footer(text=f"Guild {guild.id} • showing top {min(25, len(matches))} selectable result(s)")
+    embed.set_footer(text=f"Showing top {min(25, len(matches))} selectable result(s)")
     return embed
 
 

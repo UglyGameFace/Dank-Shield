@@ -49,6 +49,7 @@ GUILD_CONFIG_TABLE_FALLBACKS = tuple(
 
 _CACHE_TTL_SECONDS = 60
 _DB_MAX_ATTEMPTS = 5
+GUILD_CONFIG_PATCH_RPC = "patch_dank_guild_config"
 
 _CONFIG_CACHE: Dict[str, Dict[str, Any]] = {}
 _CONFIG_CACHE_TS: Dict[str, datetime] = {}
@@ -348,6 +349,16 @@ def _is_missing_table_error(error: Exception) -> bool:
         or "schema cache" in text
         or "undefinedtable" in text
         or ("relation" in text and "does not exist" in text)
+    )
+
+
+def _is_missing_atomic_patch_rpc_error(error: Exception) -> bool:
+    text = repr(error).lower()
+    return bool(
+        "pgrst202" in text
+        or "could not find the function" in text
+        or "patch_dank_guild_config" in text and "schema cache" in text
+        or "has no attribute 'rpc'" in text
     )
 
 
@@ -827,6 +838,146 @@ def _candidate_write_payloads(
     return unique
 
 
+def _rpc_mapping_row(response: Any) -> dict[str, Any]:
+    data = getattr(response, "data", None)
+    if isinstance(data, Mapping):
+        return dict(data)
+    if isinstance(data, list) and data and isinstance(data[0], Mapping):
+        return dict(data[0])
+    return {}
+
+
+def _atomic_patch_guild_config_sync(
+    sb: Any,
+    guild_id: int,
+    updates: Mapping[str, Any],
+    *,
+    clear_keys: Iterable[str] = (),
+) -> dict[str, Any]:
+    payload = {
+        str(key): value
+        for key, value in dict(updates).items()
+        if str(key) not in _CONTROL_KEYS and value is not None
+    }
+    clears = sorted(
+        {
+            str(key).strip()
+            for key in clear_keys
+            if str(key).strip()
+            and str(key).strip() not in _CONTROL_KEYS
+            and str(key).strip() not in _BASE_WRITE_KEYS
+            and str(key).strip() not in _JSON_CONFIG_KEYS
+        }
+    )
+    if not payload and not clears:
+        return {}
+
+    response = _execute_db_op(
+        f"atomic guild config patch guild={int(guild_id)}",
+        lambda: sb.rpc(
+            GUILD_CONFIG_PATCH_RPC,
+            {
+                "p_guild_id": str(int(guild_id)),
+                "p_patch": payload,
+                "p_clear_keys": clears,
+            },
+        ).execute(),
+    )
+    return _rpc_mapping_row(response)
+
+
+def _compare_and_swap_guild_config_key_sync(
+    guild_id: Any,
+    key: str,
+    *,
+    expected: Any,
+    value: Any,
+    source: str,
+) -> tuple[bool, GuildRuntimeConfig]:
+    """Atomically replace one unprotected nested feature key when it still matches."""
+
+    gid = _fallback_guild_id(guild_id)
+    clean_key = str(key or "").strip()
+    if gid <= 0:
+        raise ValueError("guild_id must be a positive Discord snowflake")
+    if (
+        not clean_key
+        or clean_key in _CONTROL_KEYS
+        or clean_key in _BASE_WRITE_KEYS
+        or clean_key in _JSON_CONFIG_KEYS
+        or clean_key.startswith("config_last_")
+        or _is_protected_key(clean_key)
+    ):
+        raise ValueError(f"compare-and-swap is not allowed for config key: {clean_key!r}")
+
+    sb = get_supabase()
+    if sb is None:
+        raise RuntimeError("Supabase is unavailable for atomic guild config compare-and-swap")
+
+    stamp = _now().isoformat()
+    response = _execute_db_op(
+        f"atomic guild config CAS guild={gid} key={clean_key}",
+        lambda: sb.rpc(
+            GUILD_CONFIG_PATCH_RPC,
+            {
+                "p_guild_id": str(gid),
+                "p_patch": {
+                    clean_key: value,
+                    "config_last_write_mode": "explicit_override",
+                    "config_last_write_source": _safe_str(source, "guild_config_cas")[:300],
+                    "config_last_write_at": stamp,
+                },
+                "p_clear_keys": [],
+                "p_expected": {clean_key: expected},
+            },
+        ).execute(),
+    )
+    envelope = _rpc_mapping_row(response)
+    if "__atomic_patch_applied" not in envelope:
+        raise RuntimeError(
+            "Atomic guild config RPC does not support compare-and-swap; apply the current migration first"
+        )
+
+    applied = bool(envelope.get("__atomic_patch_applied"))
+    raw_row = envelope.get("__atomic_patch_row")
+    if not isinstance(raw_row, Mapping):
+        raise RuntimeError("Atomic guild config compare-and-swap returned no canonical row")
+
+    return applied, _normalize_config_row(
+        raw_row,
+        gid,
+        table_name="guild_configs",
+    )
+
+
+async def compare_and_swap_guild_config_key(
+    guild_id: Any,
+    key: str,
+    *,
+    expected: Any,
+    value: Any,
+    source: str = "guild_config_cas",
+) -> tuple[bool, GuildRuntimeConfig]:
+    """Cross-process-safe compare-and-swap for one unprotected feature blob."""
+
+    gid = _fallback_guild_id(guild_id)
+    applied, config = await _run_db(
+        f"guild config CAS async guild={gid} key={str(key or '').strip()}",
+        lambda: _compare_and_swap_guild_config_key_sync(
+            gid,
+            key,
+            expected=expected,
+            value=value,
+            source=source,
+        ),
+    )
+    if gid > 0:
+        clear_guild_config_cache(gid)
+        _CONFIG_CACHE[_cache_key(gid)] = dict(config)
+        _CONFIG_CACHE_TS[_cache_key(gid)] = _now()
+    return bool(applied), GuildRuntimeConfig(config)
+
+
 def _db_upsert_guild_config_sync(guild_id: Any, patch: Mapping[str, Any]) -> GuildRuntimeConfig:
     gid = _fallback_guild_id(guild_id)
     if gid <= 0:
@@ -860,6 +1011,25 @@ def _db_upsert_guild_config_sync(guild_id: Any, patch: Mapping[str, Any]) -> Gui
             if existing:
                 return _normalize_config_row(existing, gid, table_name=table_name)
             continue
+
+        if table_name == "guild_configs":
+            try:
+                atomic_row = _atomic_patch_guild_config_sync(sb, gid, safe_updates)
+                if atomic_row:
+                    return _normalize_config_row(atomic_row, gid, table_name=table_name)
+                refreshed = _fetch_existing_row_sync(table_name, gid)
+                if refreshed:
+                    return _normalize_config_row(refreshed, gid, table_name=table_name)
+            except Exception as exc:
+                last_error = exc
+                if not _is_missing_atomic_patch_rpc_error(exc):
+                    if _is_missing_table_error(exc):
+                        break
+                    continue
+                _warn(
+                    f"atomic guild config patch RPC unavailable guild={gid}; "
+                    "falling back to compatibility read/merge/write until the migration is applied"
+                )
 
         for payload in _candidate_write_payloads(gid, safe_updates, existing):
             clean_payload = {
@@ -994,6 +1164,35 @@ def clear_guild_config_keys_sync(
         if actor is not None:
             metadata["configured_by_id"] = str(getattr(actor, "id", "") or "")
             metadata["configured_by_name"] = str(actor)
+
+        if table_name == "guild_configs":
+            try:
+                atomic_row = _atomic_patch_guild_config_sync(
+                    sb,
+                    gid,
+                    metadata,
+                    clear_keys=clear_keys,
+                )
+                if atomic_row:
+                    config = _normalize_config_row(atomic_row, gid, table_name=table_name)
+                    clear_guild_config_cache(gid)
+                    _CONFIG_CACHE[_cache_key(gid)] = dict(config)
+                    _CONFIG_CACHE_TS[_cache_key(gid)] = _now()
+                    return config
+                refreshed = _fetch_existing_row_sync(table_name, gid)
+                if refreshed:
+                    config = _normalize_config_row(refreshed, gid, table_name=table_name)
+                    clear_guild_config_cache(gid)
+                    _CONFIG_CACHE[_cache_key(gid)] = dict(config)
+                    _CONFIG_CACHE_TS[_cache_key(gid)] = _now()
+                    return config
+            except Exception as exc:
+                if not _is_missing_atomic_patch_rpc_error(exc):
+                    raise
+                _warn(
+                    f"atomic guild config clear RPC unavailable guild={gid}; "
+                    "falling back to compatibility read/merge/write until the migration is applied"
+                )
 
         settings = _settings_payload_without_keys(existing, clear_keys, metadata)
         columns = {str(key) for key in existing.keys()}
@@ -1386,6 +1585,7 @@ __all__ = [
     "env_fallback_guild_config",
     "get_cached_guild_config",
     "get_guild_config",
+    "compare_and_swap_guild_config_key",
     "upsert_guild_config_sync",
     "upsert_guild_config",
     "clear_guild_config_keys_sync",

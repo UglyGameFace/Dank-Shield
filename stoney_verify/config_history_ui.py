@@ -281,7 +281,7 @@ def _history_embed(
         )
 
     embed.set_footer(
-        text=f"Guild {guild.id} • newest 50 versions retained per configuration domain"
+        text="Newest 50 versions retained per configuration area."
     )
     return embed
 

@@ -26,6 +26,7 @@ from .guild_config import (
     get_guild_config,
     upsert_guild_config,
 )
+from .services import naming_identity, search_safe_naming
 
 SECURITY_STATS_CATEGORY_NAME = "🛡️ DANK SHIELD STATS"
 SECURITY_STATS_ENABLED_KEY = "security_stats_display_enabled"
@@ -1081,7 +1082,12 @@ def _category_has_stats_evidence(
     return False
 
 
-def _find_owned_category(guild: discord.Guild, cfg: Any) -> Optional[discord.CategoryChannel]:
+def _find_owned_category(
+    guild: discord.Guild,
+    cfg: Any,
+    *,
+    naming_policy: Optional[Mapping[str, Any]] = None,
+) -> Optional[discord.CategoryChannel]:
     try:
         category_id = _safe_int(cfg.get(SECURITY_STATS_CATEGORY_ID_KEY), 0)
     except Exception:
@@ -1112,7 +1118,12 @@ def _find_owned_category(guild: discord.Guild, cfg: Any) -> Optional[discord.Cat
     preferences = security_stats_preferences(cfg)
     desired_name = str(preferences["category_name"])
     styled_name = security_stats_category_display_name(preferences)
-    accepted_names = {SECURITY_STATS_CATEGORY_NAME, desired_name, styled_name}
+    effective_name = search_safe_naming.policy_adjusted_name_for_policy(
+        dict(naming_policy or {}),
+        kind="category",
+        name=styled_name,
+    )
+    accepted_names = {SECURITY_STATS_CATEGORY_NAME, desired_name, styled_name, effective_name}
     for category in list(getattr(guild, "categories", []) or []):
         name = str(getattr(category, "name", "") or "")
         if (
@@ -1130,6 +1141,7 @@ def _find_existing_stat_channel(
     key: str,
     saved_id: int,
     preferences: Optional[Mapping[str, Any]] = None,
+    naming_policy: Optional[Mapping[str, Any]] = None,
 ) -> Optional[discord.VoiceChannel]:
     if saved_id > 0:
         found = guild.get_channel(saved_id)
@@ -1143,6 +1155,14 @@ def _find_existing_stat_channel(
         for candidate in (custom_prefix, rendered_prefix):
             if candidate and candidate not in prefixes:
                 prefixes.append(candidate)
+    for candidate in list(prefixes):
+        adjusted = search_safe_naming.policy_adjusted_name_for_policy(
+            dict(naming_policy or {}),
+            kind="channel",
+            name=candidate,
+        )
+        if adjusted and adjusted not in prefixes:
+            prefixes.append(adjusted)
     for channel in list(getattr(category, "voice_channels", []) or []):
         name = str(getattr(channel, "name", "") or "")
         if any(name.startswith(prefix) for prefix in prefixes):
@@ -1154,8 +1174,14 @@ async def _apply_category_preferences(
     guild: discord.Guild,
     category: discord.CategoryChannel,
     preferences: Mapping[str, Any],
+    *,
+    naming_policy: Optional[Mapping[str, Any]] = None,
 ) -> None:
-    desired_name = security_stats_category_display_name(preferences)
+    desired_name = search_safe_naming.policy_adjusted_name_for_policy(
+        dict(naming_policy or {}),
+        kind="category",
+        name=security_stats_category_display_name(preferences),
+    )
     if str(getattr(category, "name", "") or "") != desired_name:
         await category.edit(name=desired_name, reason="Apply Dank Shield server stats category name")
 
@@ -1373,12 +1399,26 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
 
         preferences = security_stats_preferences(cfg)
         counts = _stats_counts(cfg)
+        naming_policy = await naming_identity.get_naming_policy(gid, refresh=True)
         names = await _display_names_for_guild(
             guild,
             counts=counts,
             preferences=preferences,
         )
-        category = _find_owned_category(guild, cfg)
+        names = {
+            key: search_safe_naming.policy_adjusted_name_for_policy(
+                naming_policy,
+                kind="channel",
+                name=value,
+            )
+            for key, value in names.items()
+        }
+        category_name = search_safe_naming.policy_adjusted_name_for_policy(
+            naming_policy,
+            kind="category",
+            name=security_stats_category_display_name(preferences),
+        )
+        category = _find_owned_category(guild, cfg, naming_policy=naming_policy)
 
         try:
             if category is None:
@@ -1386,7 +1426,7 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
                     guild.default_role: discord.PermissionOverwrite(view_channel=True, connect=False),
                 }
                 category = await guild.create_category(
-                    security_stats_category_display_name(preferences),
+                    category_name,
                     overwrites=overwrites,
                     reason="Dank Shield Server Stats display",
                 )
@@ -1397,7 +1437,12 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
                     connect=False,
                     reason="Keep Dank Shield Server Stats visible but non-joinable",
                 )
-            await _apply_category_preferences(guild, category, preferences)
+            await _apply_category_preferences(
+                guild,
+                category,
+                preferences,
+                naming_policy=naming_policy,
+            )
         except discord.Forbidden:
             return False, "❌ Discord denied permission to create, rename, move, or lock Server Stats. Check **Manage Channels** and **Manage Roles**."
         except discord.HTTPException as exc:
@@ -1415,6 +1460,7 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
                 key=key,
                 saved_id=saved_ids.get(key, 0),
                 preferences=preferences,
+                naming_policy=naming_policy,
             )
             if key not in visible_keys:
                 removed = await _remove_hidden_stat_channel(channel, key=key)
@@ -1462,7 +1508,7 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
 
         return (
             True,
-            f"✅ Server Stats are active in **{security_stats_category_display_name(preferences)}** "
+            f"✅ Server Stats are active in **{category_name}** "
             f"with `{len(visible_keys)}` visible counters.",
         )
 
@@ -1477,7 +1523,8 @@ async def disable_security_stats_display(
     gid = int(guild.id)
     async with _lock_for(_DISPLAY_LOCKS, gid):
         cfg = await get_guild_config(gid, refresh=True)
-        category = _find_owned_category(guild, cfg)
+        naming_policy = await naming_identity.get_naming_policy(gid, refresh=True)
+        category = _find_owned_category(guild, cfg, naming_policy=naming_policy)
         saved_ids = _saved_channel_ids(cfg)
         preferences = security_stats_preferences(cfg)
 
@@ -1507,6 +1554,7 @@ async def disable_security_stats_display(
                     key=key,
                     saved_id=saved_ids.get(key, 0),
                     preferences=preferences,
+                    naming_policy=naming_policy,
                 )
                 if channel is None:
                     continue
@@ -1594,7 +1642,8 @@ async def refresh_security_stats_display(
         return False
     _ACTIVE_DISPLAY_GUILDS.add(gid)
 
-    category = _find_owned_category(guild, cfg)
+    naming_policy = await naming_identity.get_naming_policy(gid, refresh=True)
+    category = _find_owned_category(guild, cfg, naming_policy=naming_policy)
     if category is None:
         ok, _note = await ensure_security_stats_display(guild)
         return bool(ok)
@@ -1605,6 +1654,14 @@ async def refresh_security_stats_display(
         counts=_stats_counts(cfg),
         preferences=preferences,
     )
+    names = {
+        key: search_safe_naming.policy_adjusted_name_for_policy(
+            naming_policy,
+            kind="channel",
+            name=value,
+        )
+        for key, value in names.items()
+    }
     saved_ids = _saved_channel_ids(cfg)
     previous_ids = {
         key: str(value)
@@ -1616,7 +1673,12 @@ async def refresh_security_stats_display(
 
     async with _lock_for(_DISPLAY_LOCKS, gid):
         try:
-            await _apply_category_preferences(guild, category, preferences)
+            await _apply_category_preferences(
+                guild,
+                category,
+                preferences,
+                naming_policy=naming_policy,
+            )
         except (discord.Forbidden, discord.HTTPException) as exc:
             print(
                 f"⚠️ security_stats category refresh failed guild={gid} "
@@ -1630,6 +1692,7 @@ async def refresh_security_stats_display(
                 key=key,
                 saved_id=saved_ids.get(key, 0),
                 preferences=preferences,
+                naming_policy=naming_policy,
             )
             if key not in visible_keys:
                 removed = await _remove_hidden_stat_channel(channel, key=key)

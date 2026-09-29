@@ -20,6 +20,8 @@ import discord
 from discord import app_commands
 
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+from stoney_verify.services import role_mutation_authority
+from stoney_verify.services import search_safe_naming
 from stoney_verify.ui.picker import DankRoleSelect
 
 _ROLE_EDITOR_PREFIX = "dank:roles:v1:"
@@ -119,18 +121,7 @@ def _actor_id(actor: Any) -> int:
 
 
 def _is_guild_owner(guild: discord.Guild, actor: Any) -> bool:
-    actor_id = _actor_id(actor)
-    if actor_id <= 0:
-        return False
-    try:
-        if int(getattr(guild, "owner_id", 0) or 0) == actor_id:
-            return True
-    except Exception:
-        pass
-    try:
-        return int(getattr(getattr(guild, "owner", None), "id", 0) or 0) == actor_id
-    except Exception:
-        return False
+    return role_mutation_authority.is_guild_owner(guild, actor)
 
 
 def _role_reason(action: str, actor: Any) -> str:
@@ -202,20 +193,11 @@ def _parse_colour(value: str, *, current: discord.Colour) -> discord.Colour:
 
 
 def _actor_can_manage_roles(guild: discord.Guild, actor: Any) -> bool:
-    if _is_guild_owner(guild, actor):
-        return True
-    if not isinstance(actor, discord.Member):
-        return False
-    perms = actor.guild_permissions
-    return bool(perms.administrator or perms.manage_roles)
+    return role_mutation_authority.actor_can_manage_roles(guild, actor)
 
 
 def _bot_can_manage_roles(guild: discord.Guild) -> bool:
-    me = guild.me
-    if not isinstance(me, discord.Member):
-        return False
-    perms = me.guild_permissions
-    return bool(perms.administrator or perms.manage_roles)
+    return role_mutation_authority.bot_can_manage_roles(guild)
 
 
 async def _reply(
@@ -318,33 +300,7 @@ def _role_mutation_blockers(
     actor: Any,
     role: discord.Role,
 ) -> list[str]:
-    blockers: list[str] = []
-    me = guild.me
-    if role.is_default():
-        blockers.append("@everyone cannot be edited by this tool.")
-    if role.managed:
-        blockers.append("Discord/integration-managed roles cannot be edited manually.")
-    if not _actor_can_manage_roles(guild, actor):
-        blockers.append("You no longer have Manage Roles.")
-    if not isinstance(me, discord.Member):
-        blockers.append("Dank Shield could not resolve its server member.")
-        return blockers
-    if not _bot_can_manage_roles(guild):
-        blockers.append("Dank Shield is missing Manage Roles.")
-    try:
-        if not _is_guild_owner(guild, actor):
-            if not isinstance(actor, discord.Member):
-                blockers.append("Your live server-member role hierarchy could not be resolved.")
-            elif role >= actor.top_role:
-                blockers.append("Your highest role must stay above the role you edit.")
-    except Exception:
-        blockers.append("Your role hierarchy could not be verified.")
-    try:
-        if int(me.id) != int(guild.owner_id) and role >= me.top_role:
-            blockers.append("Dank Shield's highest role must stay above the role it edits.")
-    except Exception:
-        blockers.append("Dank Shield's role hierarchy could not be verified.")
-    return blockers
+    return role_mutation_authority.role_mutation_blockers(guild, actor, role)
 
 
 def _permission_grant_blockers(
@@ -934,8 +890,13 @@ class RoleDetailView(_OwnedView):
                 fresh_grant_blockers = _permission_grant_blockers(guild, actor, fresh_enabled)
                 if fresh_grant_blockers:
                     return await _reply(interaction, "❌ " + "\n• ".join(fresh_grant_blockers))
+                duplicate_name = await search_safe_naming.policy_adjusted_name(
+                    int(guild.id),
+                    kind="role",
+                    name=_clip(f"{fresh.name} Copy", 100),
+                )
                 create_fields: dict[str, Any] = {
-                    "name": _clip(f"{fresh.name} Copy", 100),
+                    "name": _clip(duplicate_name, 100),
                     "permissions": discord.Permissions(fresh.permissions.value),
                     "colour": fresh.colour,
                     "hoist": fresh.hoist,
@@ -1155,8 +1116,13 @@ class CreateRoleModal(discord.ui.Modal):
             async with _role_action_lock(guild.id, 0, "create"):
                 if not _actor_can_manage_roles(guild, actor) or not _bot_can_manage_roles(guild):
                     return await _reply(interaction, "❌ Manage Roles authority changed before creation. Nothing was created.")
+                effective_name = await search_safe_naming.policy_adjusted_name(
+                    int(guild.id),
+                    kind="role",
+                    name=name,
+                )
                 role = await guild.create_role(
-                    name=name[:100],
+                    name=effective_name[:100],
                     permissions=discord.Permissions.none(),
                     colour=colour,
                     hoist=hoist,
@@ -1266,6 +1232,13 @@ class EditRoleAppearanceModal(discord.ui.Modal):
                 fresh_blockers = _role_mutation_blockers(guild, actor, fresh)
                 if fresh_blockers:
                     return await _reply(interaction, "❌ " + "\n• ".join(fresh_blockers))
+                fields["name"] = (
+                    await search_safe_naming.policy_adjusted_name(
+                        int(guild.id),
+                        kind="role",
+                        name=fields.get("name"),
+                    )
+                )[:100]
                 edited = await fresh.edit(**fields)
                 if not isinstance(edited, discord.Role):
                     edited = guild.get_role(self.role_id) or fresh
@@ -1655,6 +1628,8 @@ class DeleteRoleModal(discord.ui.Modal):
 async def _self_service_role_kind(
     guild: discord.Guild,
     role: discord.Role,
+    *,
+    config: Optional[Any] = None,
 ) -> tuple[str, str]:
     """Return (kind, blocker). Empty kind means the role is not self-service."""
     from stoney_verify.guild_config import get_guild_config
@@ -1669,7 +1644,8 @@ async def _self_service_role_kind(
     )
     from .public_toke import SESH_PING_ROLE_KEY, STONER_ROLE_KEY
 
-    config = await get_guild_config(int(guild.id), refresh=True)
+    if config is None:
+        config = await get_guild_config(int(guild.id), refresh=True)
     blocker = _profile_cosmetic_role_blocker(guild, role, config)
     if blocker:
         return "", blocker
@@ -1849,10 +1825,47 @@ async def _role_name_autocomplete(
     interaction: discord.Interaction,
     current: str,
 ) -> list[app_commands.Choice[str]]:
-    """Alias-aware role lookup owned by the shared naming-identity service."""
+    """Return alias-aware role choices the caller is actually allowed to use."""
     from stoney_verify.services.naming_identity import role_autocomplete
 
-    return await role_autocomplete(interaction, current)
+    guild = interaction.guild
+    member = interaction.user if isinstance(interaction.user, discord.Member) else None
+    if guild is None or member is None:
+        return []
+
+    choices = await role_autocomplete(interaction, current)
+    if not choices:
+        return []
+
+    if _actor_can_manage_roles(guild, member):
+        allowed: list[app_commands.Choice[str]] = []
+        for choice in choices:
+            raw = str(choice.value or "").strip()
+            role = guild.get_role(int(raw)) if raw.isdigit() else None
+            if not isinstance(role, discord.Role):
+                continue
+            if _role_mutation_blockers(guild, member, role):
+                continue
+            allowed.append(choice)
+        return allowed[:25]
+
+    from stoney_verify.guild_config import get_guild_config
+
+    config = await get_guild_config(int(guild.id), refresh=True)
+    allowed: list[app_commands.Choice[str]] = []
+    for choice in choices:
+        raw = str(choice.value or "").strip()
+        role = guild.get_role(int(raw)) if raw.isdigit() else None
+        if not isinstance(role, discord.Role):
+            continue
+        kind, _blocker = await _self_service_role_kind(
+            guild,
+            role,
+            config=config,
+        )
+        if kind:
+            allowed.append(choice)
+    return allowed[:25]
 
 
 @app_commands.describe(

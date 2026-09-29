@@ -116,7 +116,7 @@ def main() -> int:
         "Undo Last Apply",
     ):
         if f'label="{label}"' not in V2:
-            failures.append(f"consolidated five-workflow home is missing: {label}")
+            failures.append(f"consolidated six-workflow home is missing: {label}")
 
     if "class ReviewedPreviewView" not in V2 or "Apply Reviewed Changes" not in V2:
         failures.append("consolidated reviewed-apply owner is missing")

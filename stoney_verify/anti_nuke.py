@@ -1200,7 +1200,7 @@ async def _post_incident(
             value=details[:1024],
             inline=False,
         )
-    embed.set_footer(text="Dank Shield AntiNuke • audit-log attributed")
+    embed.set_footer(text="AntiNuke • action matched to the Discord audit log")
     await _post_modlog(guild, embed)
 
 

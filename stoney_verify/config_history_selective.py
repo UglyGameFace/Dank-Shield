@@ -12,7 +12,7 @@ import asyncio
 from typing import Any, Iterable, Mapping, Optional
 
 from . import config_history as history
-from .guild_config import clear_guild_config_cache
+from .guild_config import clear_guild_config_keys_sync, upsert_guild_config_sync
 
 CORE_DOMAIN = "core"
 TICKET_CHOICES_DOMAIN = "ticket_choices"
@@ -22,8 +22,6 @@ RESTORE_ALL = "all"
 RESTORE_MISSING = "missing"
 RESTORE_SELECTED = "selected"
 VALID_RESTORE_MODES = {RESTORE_ALL, RESTORE_MISSING, RESTORE_SELECTED}
-
-_CONTAINER_KEYS = ("settings", "config", "metadata", "meta")
 
 _SECTION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
@@ -402,62 +400,48 @@ def _restore_core_selected_sync(
         is_manual=True,
     )
 
-    allowed_columns = {str(key) for key in current.keys()}
-    restore_payload: dict[str, Any] = {}
+    snapshot_flat = _flat_core(snapshot)
+    restore_values: dict[str, Any] = {}
+    clear_keys: list[str] = []
 
     for key in selected:
-        if key in allowed_columns and key not in history._RESTORE_EXCLUDED_KEYS:
-            restore_payload[key] = snapshot.get(key) if key in snapshot else None
-
-    touched_containers: set[str] = set()
-    for container in _CONTAINER_KEYS:
-        if container not in allowed_columns:
+        if key in history._RESTORE_EXCLUDED_KEYS:
             continue
-        current_nested = dict(current.get(container)) if isinstance(current.get(container), Mapping) else {}
-        saved_nested = dict(snapshot.get(container)) if isinstance(snapshot.get(container), Mapping) else {}
-        changed_container = False
-        for key in selected:
-            if key in saved_nested:
-                current_nested[key] = saved_nested[key]
-                changed_container = True
-            elif key in current_nested:
-                current_nested.pop(key, None)
-                changed_container = True
-        if changed_container:
-            restore_payload[container] = current_nested
-            touched_containers.add(container)
+        if key in snapshot_flat and snapshot_flat.get(key) is not None:
+            restore_values[key] = snapshot_flat[key]
+        else:
+            clear_keys.append(key)
 
-    audit_container = next(
-        (name for name in ("settings", "config", "metadata") if name in allowed_columns),
-        None,
-    )
-    if audit_container:
-        raw = restore_payload.get(audit_container, current.get(audit_container))
-        restore_payload[audit_container] = history._restore_audit_payload(
-            raw,
+    restore_values.update(
+        history._restore_audit_payload(
+            {},
             actor_id=actor_id,
             reason=reason,
             version_id=vid,
         )
-        touched_containers.add(audit_container)
+    )
+    restore_values.update(
+        {
+            "__config_write_mode": "force",
+            "__config_write_source": "config_history_restore",
+            "__config_write_allow_keys": sorted(
+                key for key in restore_values if not key.startswith("__")
+            ),
+        }
+    )
 
-    if not restore_payload:
+    if not restore_values and not clear_keys:
         raise RuntimeError("The selected Core Settings cannot be restored in the current schema.")
 
-    response = (
-        history._require_supabase()
-        .table(table_name)
-        .update(restore_payload)
-        .eq("guild_id", str(gid))
-        .execute()
-    )
-    rows = getattr(response, "data", None) or []
-    restored = (
-        dict(rows[0])
-        if rows and isinstance(rows[0], Mapping)
-        else history._fetch_current_config_row_sync(gid)[1]
-    )
-    clear_guild_config_cache(gid)
+    if clear_keys:
+        clear_guild_config_keys_sync(
+            gid,
+            clear_keys,
+            source="config_history_restore",
+            actor=None,
+        )
+    upsert_guild_config_sync(gid, restore_values)
+    restored = history._fetch_current_config_row_sync(gid)[1]
 
     return {
         "guild_id": str(gid),

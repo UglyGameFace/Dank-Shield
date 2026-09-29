@@ -125,3 +125,17 @@ def test_self_role_toggle_rechecks_live_mapping_under_member_lock() -> None:
     assert "get_guild_config(int(guild.id), refresh=True)" in block
     assert "Select the configured Stoner role before enabling Sesh Pings." in block
     assert "remove_roles(sesh_role" in block
+
+
+def test_role_autocomplete_filters_choices_before_discord_returns_them() -> None:
+    source = (ROOT / "stoney_verify/commands_ext/public_role_center.py").read_text(encoding="utf-8")
+    start = source.index("async def _role_name_autocomplete")
+    end = source.index("@app_commands.describe", start)
+    block = source[start:end]
+
+    assert "_actor_can_manage_roles(guild, member)" in block
+    assert "_role_mutation_blockers(guild, member, role)" in block
+    assert "get_guild_config(int(guild.id), refresh=True)" in block
+    assert "_self_service_role_kind(" in block
+    assert "config=config" in block
+    assert "return allowed[:25]" in block

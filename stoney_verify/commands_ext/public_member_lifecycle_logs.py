@@ -355,9 +355,9 @@ def _member_join_embed(member: discord.Member) -> discord.Embed:
     except Exception:
         pass
     try:
-        embed.set_footer(text=f"Guild {member.guild.id} • Members: {member.guild.member_count or 'unknown'}")
+        embed.set_footer(text=f"Members: {member.guild.member_count or 'unknown'}")
     except Exception:
-        embed.set_footer(text=f"Guild {member.guild.id}")
+        embed.set_footer(text="Member lifecycle log")
     return embed
 
 
@@ -381,9 +381,9 @@ def _member_public_leave_embed(member: discord.Member) -> discord.Embed:
     except Exception:
         pass
     try:
-        embed.set_footer(text=f"Guild {member.guild.id} • Members: {member.guild.member_count or 'unknown'}")
+        embed.set_footer(text=f"Members: {member.guild.member_count or 'unknown'}")
     except Exception:
-        embed.set_footer(text=f"Guild {member.guild.id}")
+        embed.set_footer(text="Member lifecycle log")
     return embed
 
 
@@ -455,9 +455,9 @@ def _member_staff_leave_embed(member: discord.Member, removal_info: Optional[Dic
     except Exception:
         pass
     try:
-        embed.set_footer(text=f"Guild {member.guild.id} • Members: {member.guild.member_count or 'unknown'}")
+        embed.set_footer(text=f"Members: {member.guild.member_count or 'unknown'}")
     except Exception:
-        embed.set_footer(text=f"Guild {member.guild.id}")
+        embed.set_footer(text="Member lifecycle log")
     return embed
 
 

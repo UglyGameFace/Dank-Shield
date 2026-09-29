@@ -14,7 +14,11 @@ from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
 from .globals import get_supabase, now_utc
-from .guild_config import GUILD_CONFIG_TABLE_FALLBACKS, clear_guild_config_cache
+from .guild_config import (
+    GUILD_CONFIG_TABLE_FALLBACKS,
+    clear_guild_config_keys_sync,
+    upsert_guild_config_sync,
+)
 
 CONFIG_HISTORY_TABLE = (
     os.getenv("DANK_GUILD_CONFIG_HISTORY_TABLE") or "guild_config_versions"
@@ -428,54 +432,49 @@ def _restore_core_config_version_sync(
         is_manual=True,
     )
 
-    allowed_columns = {str(key) for key in current.keys()}
-    restore_payload = {
-        str(key): value
-        for key, value in snapshot.items()
-        if str(key) in allowed_columns and str(key) not in _RESTORE_EXCLUDED_KEYS
+    current_flat = _flatten_functional_config(current)
+    snapshot_flat = _flatten_functional_config(snapshot)
+
+    clear_keys = sorted(
+        key
+        for key in current_flat
+        if key not in snapshot_flat or snapshot_flat.get(key) is None
+    )
+    restore_values = {
+        key: value
+        for key, value in snapshot_flat.items()
+        if value is not None
     }
+    restore_values.update(
+        _restore_audit_payload(
+            {},
+            actor_id=actor_id,
+            reason=reason,
+            version_id=vid,
+        )
+    )
+    restore_values.update(
+        {
+            "__config_write_mode": "force",
+            "__config_write_source": "config_history_restore",
+            "__config_write_allow_keys": sorted(restore_values.keys()),
+        }
+    )
 
-    if "settings" in allowed_columns and "settings" in snapshot:
-        restore_payload["settings"] = _restore_audit_payload(
-            snapshot.get("settings"),
-            actor_id=actor_id,
-            reason=reason,
-            version_id=vid,
-        )
-    if "config" in allowed_columns and "config" in snapshot:
-        restore_payload["config"] = _restore_audit_payload(
-            snapshot.get("config"),
-            actor_id=actor_id,
-            reason=reason,
-            version_id=vid,
-        )
-    if "metadata" in allowed_columns and "metadata" in snapshot:
-        restore_payload["metadata"] = _restore_audit_payload(
-            snapshot.get("metadata"),
-            actor_id=actor_id,
-            reason=reason,
-            version_id=vid,
-        )
-
-    if not restore_payload:
+    if not restore_values and not clear_keys:
         raise RuntimeError(
             "Configuration version contains no restorable fields for the current schema."
         )
 
-    sb = _require_supabase()
-    response = (
-        sb.table(table_name)
-        .update(restore_payload)
-        .eq("guild_id", str(gid))
-        .execute()
-    )
-    rows = getattr(response, "data", None) or []
-    restored = (
-        dict(rows[0])
-        if rows and isinstance(rows[0], Mapping)
-        else _fetch_current_config_row_sync(gid)[1]
-    )
-    clear_guild_config_cache(gid)
+    if clear_keys:
+        clear_guild_config_keys_sync(
+            gid,
+            clear_keys,
+            source="config_history_restore",
+            actor=None,
+        )
+    upsert_guild_config_sync(gid, restore_values)
+    restored = _fetch_current_config_row_sync(gid)[1]
 
     return {
         "guild_id": str(gid),

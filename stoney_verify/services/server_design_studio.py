@@ -8,6 +8,7 @@ character and keeps readable text as the final fallback.
 """
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 import re
 import unicodedata
 from typing import Any, Iterable, Mapping
@@ -523,6 +524,7 @@ def category_frame_affixes(frame: CategoryFrameSpec | str) -> tuple[str, str]:
     return prefix, suffix
 
 
+@lru_cache(maxsize=1)
 def _reverse_font_map() -> dict[str, str]:
     reverse: dict[str, str] = {}
     for style in FONT_STYLES:
@@ -534,6 +536,21 @@ def _reverse_font_map() -> dict[str, str]:
             if glyph and glyph != plain and not glyph.isascii():
                 reverse.setdefault(glyph, plain)
     return reverse
+
+
+def decode_known_unicode_font_glyph(value: Any) -> str:
+    """Decode only glyphs that Dank Design itself generated as font variants.
+
+    Unlike strip_known_unicode_fonts(), this helper deliberately does not apply
+    broad Unicode compatibility normalization. It is the safe primitive for
+    live display-name rewrites where unrelated symbols and ligatures must remain
+    exactly as the admin chose them.
+    """
+
+    raw = str(value or "")
+    if len(raw) != 1:
+        return raw
+    return _reverse_font_map().get(raw, raw)
 
 
 def strip_known_unicode_fonts(value: Any) -> str:
@@ -985,5 +1002,5 @@ __all__ = [
     "SEPARATOR_LIBRARY", "SERVER_DESIGN_SEPARATOR_IDS", "THEMES", "build_styled_name",
     "category_frame_affixes", "category_frame_preview", "design_score", "detect_duplicate_outputs", "fallback_ladder", "font_label",
     "font_preview", "normalize_base_name", "parse_channel_name", "preview_lines", "separator_preview",
-    "strip_known_unicode_fonts", "summarize_plan", "suggested_icon", "transform_text_safe", "validate_separator",
+    "decode_known_unicode_font_glyph", "strip_known_unicode_fonts", "summarize_plan", "suggested_icon", "transform_text_safe", "validate_separator",
 ]

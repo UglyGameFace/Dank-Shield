@@ -12,17 +12,22 @@ server-design engine.
 """
 
 import asyncio
+import weakref
 from typing import Any
 
 import discord
 
 from stoney_verify.services import naming_identity
+from stoney_verify.services import naming_observability
+from stoney_verify.services import naming_mutation_locks
+from stoney_verify.services import role_mutation_authority
+from stoney_verify.operation_queue import with_retry
 from stoney_verify.share_router_resources import is_share_router_design_resource
 
 DEFAULT_REPAIR_BATCH_SIZE = 25
 MAX_REPAIR_BATCH_SIZE = 25
 
-_RESOURCE_LOCKS: dict[str, asyncio.Lock] = {}
+_RESOURCE_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -34,6 +39,37 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
+async def _safe_name_edit(
+    resource: Any,
+    *,
+    name: str,
+    reason: str,
+    guild_id: int,
+    kind: str,
+) -> Any:
+    """Reserve process-wide REST headroom and retry one idempotent name PATCH."""
+
+    from stoney_verify.startup_guards.discord_api_safety import (
+        reserve_bulk_discord_rest_requests,
+    )
+
+    await reserve_bulk_discord_rest_requests(
+        1,
+        label=f"search_safe:{kind}:guild={int(guild_id)}",
+    )
+
+    async def _edit() -> Any:
+        return await resource.edit(name=name, reason=reason)
+
+    return await with_retry(
+        _edit,
+        attempts=3,
+        base_delay=0.75,
+        max_delay=8.0,
+        concurrency_key=f"search-safe-name:{int(guild_id)}:{kind}",
+    )
+
+
 def _resource_lock(kind: str, guild_id: int, resource_id: int) -> asyncio.Lock:
     key = f"{kind}:{int(guild_id)}:{int(resource_id)}"
     lock = _RESOURCE_LOCKS.get(key)
@@ -43,16 +79,18 @@ def _resource_lock(kind: str, guild_id: int, resource_id: int) -> asyncio.Lock:
     return lock
 
 
-def _release_resource_lock(kind: str, guild_id: int, resource_id: int, lock: asyncio.Lock) -> None:
-    key = f"{kind}:{int(guild_id)}:{int(resource_id)}"
-    if _RESOURCE_LOCKS.get(key) is lock and not lock.locked():
-        _RESOURCE_LOCKS.pop(key, None)
-
-
-def _role_blocker(role: Any) -> str:
+def _role_blocker(role: Any, *, actor: Any = None) -> str:
     guild = getattr(role, "guild", None)
     if guild is None:
         return "Role is not attached to a guild."
+
+    # Human-reviewed repairs must obey the same live actor + bot hierarchy
+    # boundary as the canonical /role editor. Automatic policy enforcement has
+    # no initiating human actor, so it retains the bot-policy checks below.
+    if actor is not None:
+        blockers = role_mutation_authority.role_mutation_blockers(guild, actor, role)
+        return " ".join(str(item) for item in blockers if str(item).strip())
+
     try:
         if bool(role.is_default()):
             return "@everyone is never renamed."
@@ -95,7 +133,7 @@ def _channel_blocker(channel: Any) -> str:
     return ""
 
 
-def _target_row(kind: str, resource: Any) -> dict[str, Any] | None:
+def _target_row(kind: str, resource: Any, *, actor: Any = None) -> dict[str, Any] | None:
     if kind == "channel" and is_share_router_design_resource(resource):
         return None
     before = str(getattr(resource, "name", "") or "").strip()
@@ -103,7 +141,7 @@ def _target_row(kind: str, resource: Any) -> dict[str, Any] | None:
     if not before or not after or before == after:
         return None
 
-    blocker = _role_blocker(resource) if kind == "role" else _channel_blocker(resource)
+    blocker = _role_blocker(resource, actor=actor) if kind == "role" else _channel_blocker(resource)
     return {
         "kind": kind,
         "id": _safe_int(getattr(resource, "id", 0), 0),
@@ -114,8 +152,12 @@ def _target_row(kind: str, resource: Any) -> dict[str, Any] | None:
     }
 
 
-def scan_search_safe_targets(guild: discord.Guild) -> list[dict[str, Any]]:
-    """Return current styled role/channel names whose letters block native search."""
+def scan_search_safe_targets(
+    guild: discord.Guild,
+    *,
+    actor: Any = None,
+) -> list[dict[str, Any]]:
+    """Return styled role/channel names, optionally scoped to a live human actor."""
     rows: list[dict[str, Any]] = []
 
     for role in list(getattr(guild, "roles", []) or []):
@@ -124,16 +166,57 @@ def scan_search_safe_targets(guild: discord.Guild) -> list[dict[str, Any]]:
                 continue
         except Exception:
             pass
-        row = _target_row("role", role)
+        row = _target_row("role", role, actor=actor)
         if row is not None:
             rows.append(row)
 
     for channel in list(getattr(guild, "channels", []) or []):
         if isinstance(channel, discord.CategoryChannel):
             continue
-        row = _target_row("channel", channel)
+        row = _target_row("channel", channel, actor=actor)
         if row is not None:
             rows.append(row)
+
+    effective_names: dict[tuple[str, str], list[int]] = {}
+    for role in list(getattr(guild, "roles", []) or []):
+        try:
+            if bool(role.is_default()):
+                continue
+        except Exception:
+            pass
+        effective = naming_identity.search_safe_display_name(
+            getattr(role, "name", "")
+        ).strip().casefold()
+        if effective:
+            effective_names.setdefault(("role", effective), []).append(
+                _safe_int(getattr(role, "id", 0), 0)
+            )
+
+    for channel in list(getattr(guild, "channels", []) or []):
+        if isinstance(channel, discord.CategoryChannel):
+            continue
+        if is_share_router_design_resource(channel):
+            continue
+        effective = naming_identity.search_safe_display_name(
+            getattr(channel, "name", "")
+        ).strip().casefold()
+        if effective:
+            effective_names.setdefault(("channel", effective), []).append(
+                _safe_int(getattr(channel, "id", 0), 0)
+            )
+
+    for row in rows:
+        key = (
+            str(row.get("kind") or ""),
+            str(row.get("after") or "").strip().casefold(),
+        )
+        ids = [rid for rid in effective_names.get(key, []) if rid > 0]
+        others = [rid for rid in ids if rid != _safe_int(row.get("id"), 0)]
+        row["collision_count"] = len(others)
+        if others:
+            row["collision_warning"] = (
+                f"{len(others)} other {row.get('kind')} resource(s) resolve to the same searchable name."
+            )
 
     rows.sort(
         key=lambda row: (
@@ -192,6 +275,52 @@ def normalize_design_plan_items(
     return out
 
 
+def policy_fingerprint(policy: dict[str, Any] | Any) -> dict[str, Any]:
+    raw = dict(policy) if isinstance(policy, dict) else {}
+    return {
+        "mode": str(raw.get("mode") or naming_identity.NAMING_MODE_PRESERVE),
+        "roles": bool(raw.get("roles", True)),
+        "channels": bool(raw.get("channels", True)),
+        "categories": bool(raw.get("categories", False)),
+    }
+
+
+def policy_matches_snapshot(snapshot: Any, current: Any) -> bool:
+    if not isinstance(snapshot, dict):
+        return False
+    return policy_fingerprint(snapshot) == policy_fingerprint(current)
+
+
+def policy_adjusted_name_for_policy(
+    policy: dict[str, Any] | Any,
+    *,
+    kind: str,
+    name: Any,
+) -> str:
+    """Return the live name permitted by one already-loaded naming policy."""
+
+    raw = str(name or "").strip()
+    if not raw:
+        return raw
+
+    clean_kind = str(kind or "").strip().lower()
+    if clean_kind in {"text", "voice", "stage", "forum", "media", "channel"}:
+        clean_kind = "channel"
+
+    current = policy_fingerprint(policy)
+    if current["mode"] != naming_identity.NAMING_MODE_SEARCH_SAFE:
+        return raw
+    if clean_kind == "role" and not current["roles"]:
+        return raw
+    if clean_kind == "channel" and not current["channels"]:
+        return raw
+    if clean_kind == "category" and not current["categories"]:
+        return raw
+    if clean_kind not in {"role", "channel", "category"}:
+        return raw
+    return naming_identity.search_safe_display_name(raw).strip() or raw
+
+
 async def policy_adjusted_name(
     guild_id: Any,
     *,
@@ -199,26 +328,82 @@ async def policy_adjusted_name(
     name: Any,
 ) -> str:
     """Return the final live name an enabled guild policy permits."""
-    raw = str(name or "").strip()
-    if not raw:
-        return raw
-    clean_kind = str(kind or "").strip().lower()
-    policy = await naming_identity.get_naming_policy(guild_id)
-    if policy.get("mode") != naming_identity.NAMING_MODE_SEARCH_SAFE:
-        return raw
-    if clean_kind == "role" and not bool(policy.get("roles", True)):
-        return raw
-    if clean_kind == "channel" and not bool(policy.get("channels", True)):
-        return raw
-    if clean_kind == "category" and not bool(policy.get("categories", False)):
-        return raw
-    if clean_kind not in {"role", "channel", "category"}:
-        return raw
-    return naming_identity.search_safe_display_name(raw).strip() or raw
+
+    policy = await naming_identity.get_naming_policy(guild_id, refresh=True)
+    return policy_adjusted_name_for_policy(policy, kind=kind, name=name)
 
 
-def search_safe_summary(guild: discord.Guild) -> dict[str, int]:
-    rows = scan_search_safe_targets(guild)
+async def normalize_design_plan_for_guild(
+    guild_id: Any,
+    items: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Bind a design preview to the naming policy used to render its final names."""
+
+    policy = await naming_identity.get_naming_policy(guild_id, refresh=True)
+    fingerprint = policy_fingerprint(policy)
+    return normalize_design_plan_items(items, fingerprint), fingerprint
+
+
+def normalize_undo_snapshot_items(
+    items: list[dict[str, Any]] | list[Any],
+    policy: dict[str, Any] | Any,
+) -> list[dict[str, Any]]:
+    """Make Undo restore targets obey the current Search-Safe authority."""
+
+    out: list[dict[str, Any]] = []
+    for raw in list(items or []):
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        kind = str(item.get("kind") or "channel").strip().lower()
+        old_name = str(item.get("old_name") or item.get("before") or "").strip()
+        adjusted = policy_adjusted_name_for_policy(policy, kind=kind, name=old_name)
+        if adjusted and adjusted != old_name:
+            item["search_safe_original_old_name"] = old_name
+            item["old_name"] = adjusted
+            item["search_safe_undo_adjusted"] = True
+        out.append(item)
+    return out
+
+
+def reviewed_search_safe_batch(
+    rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    *,
+    limit: int = DEFAULT_REPAIR_BATCH_SIZE,
+) -> list[dict[str, Any]]:
+    """Freeze the exact editable rows an admin reviewed for one bounded batch."""
+
+    batch_limit = max(
+        1,
+        min(_safe_int(limit, DEFAULT_REPAIR_BATCH_SIZE), MAX_REPAIR_BATCH_SIZE),
+    )
+    selected: list[dict[str, Any]] = []
+    for raw in list(rows or []):
+        if not isinstance(raw, dict) or not bool(raw.get("editable")):
+            continue
+        kind = str(raw.get("kind") or "").strip().lower()
+        rid = _safe_int(raw.get("id"), 0)
+        before = str(raw.get("before") or "").strip()
+        after = str(raw.get("after") or "").strip()
+        if kind not in {"role", "channel"} or rid <= 0 or not before or not after:
+            continue
+        selected.append(
+            {
+                **dict(raw),
+                "kind": kind,
+                "id": rid,
+                "before": before,
+                "after": after,
+                "editable": True,
+            }
+        )
+        if len(selected) >= batch_limit:
+            break
+    return selected
+
+
+def search_safe_summary(guild: discord.Guild, *, actor: Any = None) -> dict[str, int]:
+    rows = scan_search_safe_targets(guild, actor=actor)
     return {
         "total": len(rows),
         "editable": sum(1 for row in rows if row.get("editable")),
@@ -242,30 +427,36 @@ async def enforce_role_name(role: discord.Role) -> bool:
         return False
 
     if _role_blocker(role):
+        naming_observability.increment("auto_blocked")
         return False
-    policy = await naming_identity.get_naming_policy(gid)
+    policy = await naming_identity.get_naming_policy(gid, refresh=True)
     if policy.get("mode") != naming_identity.NAMING_MODE_SEARCH_SAFE or not bool(policy.get("roles", True)):
         return False
 
-    lock = _resource_lock("role", gid, rid)
+    guild_lock = naming_mutation_locks.guild_naming_lock(gid)
+    resource_lock = _resource_lock("role", gid, rid)
     try:
-        async with lock:
-            fresh = guild.get_role(rid) if guild is not None else None
-            if not isinstance(fresh, discord.Role):
-                return False
-            current = str(fresh.name or "").strip()
-            desired = naming_identity.search_safe_display_name(current).strip()
-            if not desired or desired == current or _role_blocker(fresh):
-                return False
-            await fresh.edit(
-                name=desired[:100],
-                reason="Dank Shield Search-Safe Naming policy",
-            )
-            return True
+        async with guild_lock:
+            async with resource_lock:
+                fresh = guild.get_role(rid) if guild is not None else None
+                if not isinstance(fresh, discord.Role):
+                    return False
+                current = str(fresh.name or "").strip()
+                desired = naming_identity.search_safe_display_name(current).strip()
+                if not desired or desired == current or _role_blocker(fresh):
+                    return False
+                await _safe_name_edit(
+                    fresh,
+                    name=desired[:100],
+                    reason="Dank Shield Search-Safe Naming policy",
+                    guild_id=gid,
+                    kind="role",
+                )
+                naming_observability.increment("auto_change_role")
+                return True
     except (discord.Forbidden, discord.HTTPException):
+        naming_observability.increment("auto_failed")
         return False
-    finally:
-        _release_resource_lock("role", gid, rid, lock)
 
 
 async def enforce_channel_name(channel: discord.abc.GuildChannel) -> bool:
@@ -285,42 +476,52 @@ async def enforce_channel_name(channel: discord.abc.GuildChannel) -> bool:
         return False
 
     if _channel_blocker(channel):
+        naming_observability.increment("auto_blocked")
         return False
-    policy = await naming_identity.get_naming_policy(gid)
+    policy = await naming_identity.get_naming_policy(gid, refresh=True)
     if policy.get("mode") != naming_identity.NAMING_MODE_SEARCH_SAFE or not bool(policy.get("channels", True)):
         return False
 
-    lock = _resource_lock("channel", gid, cid)
+    guild_lock = naming_mutation_locks.guild_naming_lock(gid)
+    resource_lock = _resource_lock("channel", gid, cid)
     try:
-        async with lock:
-            fresh = guild.get_channel(cid) if guild is not None else None
-            if fresh is None or isinstance(fresh, discord.CategoryChannel):
-                return False
-            current = str(getattr(fresh, "name", "") or "").strip()
-            desired = naming_identity.search_safe_display_name(current).strip()
-            if not desired or desired == current or _channel_blocker(fresh):
-                return False
-            await fresh.edit(
-                name=desired[:100],
-                reason="Dank Shield Search-Safe Naming policy",
-            )
-            return True
+        async with guild_lock:
+            async with resource_lock:
+                fresh = guild.get_channel(cid) if guild is not None else None
+                if fresh is None or isinstance(fresh, discord.CategoryChannel):
+                    return False
+                current = str(getattr(fresh, "name", "") or "").strip()
+                desired = naming_identity.search_safe_display_name(current).strip()
+                if not desired or desired == current or _channel_blocker(fresh):
+                    return False
+                await _safe_name_edit(
+                    fresh,
+                    name=desired[:100],
+                    reason="Dank Shield Search-Safe Naming policy",
+                    guild_id=gid,
+                    kind="channel",
+                )
+                naming_observability.increment("auto_change_channel")
+                return True
     except (discord.Forbidden, discord.HTTPException):
+        naming_observability.increment("auto_failed")
         return False
-    finally:
-        _release_resource_lock("channel", gid, cid, lock)
 
 
-async def apply_search_safe_batch(
+async def _apply_search_safe_batch_locked(
     guild: discord.Guild,
     *,
+    actor: Any,
+    reviewed_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
     limit: int = DEFAULT_REPAIR_BATCH_SIZE,
 ) -> dict[str, Any]:
-    """Repair a bounded batch of existing names after an explicit admin preview."""
-    batch_limit = max(1, min(_safe_int(limit, DEFAULT_REPAIR_BATCH_SIZE), MAX_REPAIR_BATCH_SIZE))
-    initial = scan_search_safe_targets(guild)
-    editable = [row for row in initial if row.get("editable")]
-    selected = editable[:batch_limit]
+    """Apply only the exact bounded rows captured by the reviewed preview."""
+
+    batch_limit = max(
+        1,
+        min(_safe_int(limit, DEFAULT_REPAIR_BATCH_SIZE), MAX_REPAIR_BATCH_SIZE),
+    )
+    selected = reviewed_search_safe_batch(list(reviewed_rows or []), limit=batch_limit)
 
     changed: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
@@ -328,56 +529,157 @@ async def apply_search_safe_batch(
     for row in selected:
         kind = str(row.get("kind") or "")
         rid = _safe_int(row.get("id"), 0)
-        if rid <= 0:
-            continue
+        reviewed_before = str(row.get("before") or "").strip()
+        reviewed_after = str(row.get("after") or "").strip()
 
         if kind == "role":
             resource = guild.get_role(rid)
             if not isinstance(resource, discord.Role):
-                failed.append({**row, "error": "Role disappeared before repair."})
+                failed.append({**row, "error": "Role disappeared after preview."})
                 continue
-            before = str(resource.name or "").strip()
-            after = naming_identity.search_safe_display_name(before).strip()
-            blocker = _role_blocker(resource)
-        else:
+            current = str(resource.name or "").strip()
+            blocker = _role_blocker(resource, actor=actor)
+        elif kind == "channel":
             resource = guild.get_channel(rid)
             if resource is None or isinstance(resource, discord.CategoryChannel):
-                failed.append({**row, "error": "Channel disappeared before repair."})
+                failed.append({**row, "error": "Channel disappeared after preview."})
                 continue
-            before = str(getattr(resource, "name", "") or "").strip()
-            after = naming_identity.search_safe_display_name(before).strip()
+            current = str(getattr(resource, "name", "") or "").strip()
             blocker = _channel_blocker(resource)
-
-        if blocker:
-            failed.append({**row, "before": before, "after": after, "error": blocker})
+        else:
+            failed.append({**row, "error": "Reviewed resource type is no longer valid."})
             continue
-        if not after or after == before:
+
+        if current != reviewed_before:
+            failed.append(
+                {
+                    **row,
+                    "before": current,
+                    "after": reviewed_after,
+                    "error": (
+                        f"Name changed after preview from {reviewed_before!r} "
+                        f"to {current or 'blank'!r}. Preview again."
+                    ),
+                }
+            )
+            continue
+        if blocker:
+            failed.append(
+                {
+                    **row,
+                    "before": current,
+                    "after": reviewed_after,
+                    "error": blocker,
+                }
+            )
+            continue
+
+        derived_after = naming_identity.search_safe_display_name(current).strip()
+        if not derived_after or derived_after != reviewed_after:
+            failed.append(
+                {
+                    **row,
+                    "before": current,
+                    "after": derived_after,
+                    "error": "Search-Safe output changed after preview. Preview again.",
+                }
+            )
             continue
 
         lock = _resource_lock(kind, int(guild.id), rid)
         try:
             async with lock:
                 if kind == "role":
-                    await resource.edit(
-                        name=after[:100],
-                        reason="Dank Shield Search-Safe Naming reviewed repair",
-                    )
+                    fresh = guild.get_role(rid)
+                    if not isinstance(fresh, discord.Role):
+                        failed.append({**row, "error": "Role disappeared after preview."})
+                        continue
+                    current = str(fresh.name or "").strip()
+                    blocker = _role_blocker(fresh, actor=actor)
                 else:
-                    await resource.edit(
-                        name=after[:100],
-                        reason="Dank Shield Search-Safe Naming reviewed repair",
-                    )
-            changed.append({**row, "before": before, "after": after})
-        except (discord.Forbidden, discord.HTTPException) as exc:
-            failed.append({**row, "before": before, "after": after, "error": type(exc).__name__})
-        finally:
-            _release_resource_lock(kind, int(guild.id), rid, lock)
+                    fresh = guild.get_channel(rid)
+                    if fresh is None or isinstance(fresh, discord.CategoryChannel):
+                        failed.append({**row, "error": "Channel disappeared after preview."})
+                        continue
+                    current = str(getattr(fresh, "name", "") or "").strip()
+                    blocker = _channel_blocker(fresh)
 
-    remaining_rows = scan_search_safe_targets(guild)
+                if current != reviewed_before:
+                    failed.append(
+                        {
+                            **row,
+                            "before": current,
+                            "after": reviewed_after,
+                            "error": (
+                                f"Name changed after preview from {reviewed_before!r} "
+                                f"to {current or 'blank'!r}. Preview again."
+                            ),
+                        }
+                    )
+                    continue
+                if blocker:
+                    failed.append(
+                        {
+                            **row,
+                            "before": current,
+                            "after": reviewed_after,
+                            "error": blocker,
+                        }
+                    )
+                    continue
+
+                derived_after = naming_identity.search_safe_display_name(current).strip()
+                if not derived_after or derived_after != reviewed_after:
+                    failed.append(
+                        {
+                            **row,
+                            "before": current,
+                            "after": derived_after,
+                            "error": "Search-Safe output changed after preview. Preview again.",
+                        }
+                    )
+                    continue
+
+                await _safe_name_edit(
+                    fresh,
+                    name=reviewed_after[:100],
+                    reason="Dank Shield Search-Safe Naming reviewed repair",
+                    guild_id=int(guild.id),
+                    kind=kind,
+                )
+                changed.append(
+                    {
+                        **row,
+                        "before": reviewed_before,
+                        "after": reviewed_after,
+                    }
+                )
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            failed.append(
+                {
+                    **row,
+                    "before": current,
+                    "after": reviewed_after,
+                    "error": type(exc).__name__,
+                }
+            )
+
+    naming_observability.increment("repair_changed", len(changed))
+    naming_observability.increment("repair_failed", len(failed))
+    naming_observability.increment(
+        "repair_blocked",
+        sum(
+            1
+            for row in failed
+            if "highest role" in str(row.get("error") or "").casefold()
+            or "missing manage" in str(row.get("error") or "").casefold()
+            or "cannot be edited" in str(row.get("error") or "").casefold()
+        ),
+    )
+
+    remaining_rows = scan_search_safe_targets(guild, actor=actor)
     return {
-        "initial_total": len(initial),
-        "initial_editable": len(editable),
-        "initial_blocked": len(initial) - len(editable),
+        "reviewed": len(selected),
         "attempted": len(selected),
         "changed": changed,
         "failed": failed,
@@ -388,14 +690,39 @@ async def apply_search_safe_batch(
     }
 
 
+async def apply_search_safe_batch(
+    guild: discord.Guild,
+    *,
+    actor: Any,
+    reviewed_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    limit: int = DEFAULT_REPAIR_BATCH_SIZE,
+) -> dict[str, Any]:
+    """Serialize reviewed Search-Safe repair with Dank Design for this guild."""
+
+    guild_lock = naming_mutation_locks.guild_naming_lock(int(guild.id))
+    async with guild_lock:
+        return await _apply_search_safe_batch_locked(
+            guild,
+            actor=actor,
+            reviewed_rows=reviewed_rows,
+            limit=limit,
+        )
+
+
 __all__ = [
     "DEFAULT_REPAIR_BATCH_SIZE",
     "MAX_REPAIR_BATCH_SIZE",
     "apply_search_safe_batch",
     "enforce_channel_name",
     "enforce_role_name",
+    "normalize_design_plan_for_guild",
     "normalize_design_plan_items",
+    "normalize_undo_snapshot_items",
     "policy_adjusted_name",
+    "policy_adjusted_name_for_policy",
+    "policy_fingerprint",
+    "policy_matches_snapshot",
+    "reviewed_search_safe_batch",
     "scan_search_safe_targets",
     "search_safe_summary",
 ]

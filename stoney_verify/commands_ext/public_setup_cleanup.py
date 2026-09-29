@@ -1246,7 +1246,7 @@ async def patched_recovery_embed(
     )
     embed.set_footer(
         text=(
-            f"Guild {guild.id} • Discord-item removal always requires confirmation"
+            "Discord-item removal always requires confirmation."
         )
     )
     return embed

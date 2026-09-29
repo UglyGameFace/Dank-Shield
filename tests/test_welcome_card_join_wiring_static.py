@@ -66,8 +66,8 @@ def test_studio_preview_uses_exact_live_embed_and_image_fallback_paths() -> None
     assert 'live_embed.set_image(url=f"attachment://{file.filename}")' in STUDIO
     assert "Exact live join-card preview" in STUDIO
     assert "the exact live text fallback is below" in STUDIO
-    assert "Preview only • dank_shield:welcome_card_runtime:v1" in STUDIO
-    assert "Preview fallback • dank_shield:welcome_card_runtime:v1" in STUDIO
+    assert "Preview only • nothing was published" in STUDIO
+    assert "Preview fallback • simplified preview" in STUDIO
 
 
 def test_image_text_adapter_preserves_exact_bitmap_member_copy() -> None:

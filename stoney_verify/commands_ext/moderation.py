@@ -241,7 +241,7 @@ async def _log_slash_mod_action(
     if extra:
         embed.add_field(name="Details", value=str(extra)[:1024], inline=False)
     embed.add_field(name="Target Account Created", value=_created_line(target), inline=False)
-    embed.set_footer(text=f"Guild {guild.id} • source: slash command")
+    embed.set_footer(text="Action initiated from a moderation command.")
 
     try:
         await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())

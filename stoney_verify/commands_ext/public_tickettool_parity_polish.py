@@ -312,7 +312,7 @@ def _panel_embed(guild: discord.Guild) -> discord.Embed:
         value="1. Press **Create Ticket**\n2. Pick a ticket type\n3. A private ticket channel opens",
         inline=False,
     )
-    embed.set_footer(text=f"{guild.name} • Dank Shield ticket panel • category-menu")
+    embed.set_footer(text=f"{guild.name} • Dank Shield Ticket Panel • choose a category")
     return embed
 
 

@@ -183,8 +183,9 @@ def test_selective_core_restore_changes_only_requested_setting(
             },
         },
     }
-    recorder: dict[str, Any] = {}
     backups: list[dict[str, Any]] = []
+    writes: list[dict[str, Any]] = []
+    clears: list[tuple[str, ...]] = []
 
     monkeypatch.setattr(
         history,
@@ -192,14 +193,23 @@ def test_selective_core_restore_changes_only_requested_setting(
         lambda _guild_id: ("guild_configs", current),
     )
     monkeypatch.setattr(history, "_fetch_version_sync", lambda *_args, **_kwargs: version)
-    monkeypatch.setattr(history, "_require_supabase", lambda: FakeSupabase(recorder))
     monkeypatch.setattr(
         history,
         "_insert_snapshot_sync",
         lambda *args, **kwargs: backups.append({"args": args, "kwargs": kwargs})
         or {"version_id": 99},
     )
-    monkeypatch.setattr(selective, "clear_guild_config_cache", lambda _guild_id: None)
+    monkeypatch.setattr(
+        selective,
+        "upsert_guild_config_sync",
+        lambda guild_id, patch: writes.append(dict(patch)) or {"guild_id": str(guild_id)},
+    )
+    monkeypatch.setattr(
+        selective,
+        "clear_guild_config_keys_sync",
+        lambda guild_id, keys, *, source, actor=None: clears.append(tuple(sorted(keys)))
+        or {"guild_id": str(guild_id)},
+    )
 
     result = selective.restore_config_version_selective_sync(
         123,
@@ -209,10 +219,16 @@ def test_selective_core_restore_changes_only_requested_setting(
         actor_id=77,
     )
 
-    payload = recorder["update_payload"]
-    assert "ticket_prefix" not in payload
-    assert payload["settings"]["welcome_title"] == "Saved title"
-    assert payload["settings"]["spam_guard_enabled"] is True
+    assert clears == []
+    assert len(writes) == 1
+    patch = writes[0]
+    assert patch["welcome_title"] == "Saved title"
+    assert "ticket_prefix" not in patch
+    assert "spam_guard_enabled" not in patch
+    assert "settings" not in patch
+    assert patch["config_last_write_source"] == "config_history_restore"
+    assert patch["config_last_write_actor_id"] == "77"
+    assert patch["__config_write_mode"] == "force"
     assert result["restored_items"] == ["welcome_title"]
     assert len(backups) == 1
     assert backups[0]["kwargs"]["source"] == "pre_restore_backup"
@@ -236,7 +252,7 @@ def test_missing_only_core_restore_does_not_overwrite_existing_value(
             },
         },
     }
-    recorder: dict[str, Any] = {}
+    writes: list[dict[str, Any]] = []
 
     monkeypatch.setattr(
         history,
@@ -244,9 +260,17 @@ def test_missing_only_core_restore_does_not_overwrite_existing_value(
         lambda _guild_id: ("guild_configs", current),
     )
     monkeypatch.setattr(history, "_fetch_version_sync", lambda *_args, **_kwargs: version)
-    monkeypatch.setattr(history, "_require_supabase", lambda: FakeSupabase(recorder))
     monkeypatch.setattr(history, "_insert_snapshot_sync", lambda *args, **kwargs: {"version_id": 99})
-    monkeypatch.setattr(selective, "clear_guild_config_cache", lambda _guild_id: None)
+    monkeypatch.setattr(
+        selective,
+        "upsert_guild_config_sync",
+        lambda guild_id, patch: writes.append(dict(patch)) or {"guild_id": str(guild_id)},
+    )
+    monkeypatch.setattr(
+        selective,
+        "clear_guild_config_keys_sync",
+        lambda guild_id, keys, *, source, actor=None: {"guild_id": str(guild_id)},
+    )
 
     result = selective.restore_config_version_selective_sync(
         123,
@@ -254,9 +278,10 @@ def test_missing_only_core_restore_does_not_overwrite_existing_value(
         mode=selective.RESTORE_MISSING,
     )
 
-    payload = recorder["update_payload"]["settings"]
-    assert payload["antinuke_enabled"] is True
-    assert payload["spam_guard_enabled"] is True
+    assert len(writes) == 1
+    patch = writes[0]
+    assert patch["antinuke_enabled"] is True
+    assert "spam_guard_enabled" not in patch
     assert result["restored_items"] == ["antinuke_enabled"]
 
 

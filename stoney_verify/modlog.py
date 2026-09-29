@@ -2129,7 +2129,7 @@ async def build_member_leave_embed(
     try:
         embed.set_footer(
             text=(
-                f"Guild {guild.id} • voluntary leave / no matching kick or ban audit"
+                "Voluntary leave • no matching kick or ban found"
             )
         )
     except Exception:

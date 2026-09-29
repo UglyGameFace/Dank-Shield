@@ -331,7 +331,7 @@ def _build_report_embed(report: InactiveScanReport, *, page: int = 0) -> discord
     embed.add_field(name=f"Users Found — Page {page + 1}/{pages}", value=_build_page_users_text(report, page=page), inline=False)
     embed.add_field(name="Controls", value="Select a user for details, lock/skip after review, manage locked users, or rescan with 30d/90d/180d.", inline=False)
     embed.add_field(name="Settings", value=_build_settings_line(report), inline=False)
-    embed.set_footer(text=f"Guild {report.guild_id} • post-verification activity only • Data Notes has the long details")
+    embed.set_footer(text="Post-verification activity only • See Data Notes for details.")
     return embed
 
 

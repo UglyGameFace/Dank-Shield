@@ -30,6 +30,7 @@ from .public_setup_group import (
     dank_group,
 )
 from ..guild_config import get_guild_config, invalidate_guild_config
+from ..services import naming_identity, search_safe_naming
 
 
 _ATTACHED = False
@@ -340,8 +341,20 @@ def _voice_overwrites(guild: discord.Guild, *, staff_role: Optional[discord.Role
     return overwrites
 
 
-async def _ensure_role(guild: discord.Guild, name: str, *, created: list[str], reused: list[str], notes: list[str]) -> Optional[discord.Role]:
-    name = _clean_name(name, DEFAULT_STAFF_ROLE_NAME)
+async def _ensure_role(
+    guild: discord.Guild,
+    name: str,
+    *,
+    naming_policy: Mapping[str, Any],
+    created: list[str],
+    reused: list[str],
+    notes: list[str],
+) -> Optional[discord.Role]:
+    name = search_safe_naming.policy_adjusted_name_for_policy(
+        dict(naming_policy),
+        kind="role",
+        name=_clean_name(name, DEFAULT_STAFF_ROLE_NAME),
+    )[:100]
     existing = _role_by_name(guild, name)
     if existing is not None:
         reused.append(f"Role: {existing.mention}")
@@ -359,8 +372,21 @@ async def _ensure_role(guild: discord.Guild, name: str, *, created: list[str], r
         return None
 
 
-async def _ensure_category(guild: discord.Guild, name: str, *, overwrites: Optional[dict[Any, discord.PermissionOverwrite]], created: list[str], reused: list[str], notes: list[str]) -> Optional[discord.CategoryChannel]:
-    name = _clean_name(name, MANAGEMENT_CATEGORY_NAME)
+async def _ensure_category(
+    guild: discord.Guild,
+    name: str,
+    *,
+    naming_policy: Mapping[str, Any],
+    overwrites: Optional[dict[Any, discord.PermissionOverwrite]],
+    created: list[str],
+    reused: list[str],
+    notes: list[str],
+) -> Optional[discord.CategoryChannel]:
+    name = search_safe_naming.policy_adjusted_name_for_policy(
+        dict(naming_policy),
+        kind="category",
+        name=_clean_name(name, MANAGEMENT_CATEGORY_NAME),
+    )[:100]
     existing = _category_by_name(guild, name)
     if existing is not None:
         reused.append(f"Category: `{existing.name}`")
@@ -411,8 +437,23 @@ def _preserve_existing_bot_manage_permissions(
     return copied
 
 
-async def _ensure_text_channel(guild: discord.Guild, name: str, *, category: Optional[discord.CategoryChannel], overwrites: Optional[dict[Any, discord.PermissionOverwrite]], topic: str, created: list[str], reused: list[str], notes: list[str]) -> Optional[discord.TextChannel]:
-    name = _clean_name(name, STATUS_CHANNEL_NAME)
+async def _ensure_text_channel(
+    guild: discord.Guild,
+    name: str,
+    *,
+    naming_policy: Mapping[str, Any],
+    category: Optional[discord.CategoryChannel],
+    overwrites: Optional[dict[Any, discord.PermissionOverwrite]],
+    topic: str,
+    created: list[str],
+    reused: list[str],
+    notes: list[str],
+) -> Optional[discord.TextChannel]:
+    name = search_safe_naming.policy_adjusted_name_for_policy(
+        dict(naming_policy),
+        kind="channel",
+        name=_clean_name(name, STATUS_CHANNEL_NAME),
+    )[:100]
     existing = _text_channel_by_name(guild, name)
     if existing is not None:
         reused.append(f"Channel: {existing.mention}")
@@ -445,8 +486,22 @@ async def _ensure_text_channel(guild: discord.Guild, name: str, *, category: Opt
         return None
 
 
-async def _ensure_voice_channel(guild: discord.Guild, name: str, *, category: Optional[discord.CategoryChannel], overwrites: Optional[dict[Any, discord.PermissionOverwrite]], created: list[str], reused: list[str], notes: list[str]) -> Optional[discord.VoiceChannel]:
-    name = _clean_name(name, VC_VERIFY_CHANNEL_NAME)
+async def _ensure_voice_channel(
+    guild: discord.Guild,
+    name: str,
+    *,
+    naming_policy: Mapping[str, Any],
+    category: Optional[discord.CategoryChannel],
+    overwrites: Optional[dict[Any, discord.PermissionOverwrite]],
+    created: list[str],
+    reused: list[str],
+    notes: list[str],
+) -> Optional[discord.VoiceChannel]:
+    name = search_safe_naming.policy_adjusted_name_for_policy(
+        dict(naming_policy),
+        kind="channel",
+        name=_clean_name(name, VC_VERIFY_CHANNEL_NAME),
+    )[:100]
     existing = _voice_channel_by_name(guild, name)
     if existing is not None:
         reused.append(f"Voice: {existing.mention}")
@@ -513,6 +568,7 @@ async def _repair_specs(interaction: discord.Interaction, specs: list[RepairSpec
         return await interaction.followup.send("✅ Nothing missing anymore.", embed=embed, view=view, ephemeral=True)
 
     custom_names = custom_names or {}
+    naming_policy = await naming_identity.get_naming_policy(int(guild.id), refresh=True)
     created: list[str] = []
     reused: list[str] = []
     notes: list[str] = []
@@ -526,7 +582,14 @@ async def _repair_specs(interaction: discord.Interaction, specs: list[RepairSpec
     unverified_role = guild.get_role(unverified_role_id) if unverified_role_id > 0 else None
 
     for spec in [s for s in specs if s.kind == "role"]:
-        role = await _ensure_role(guild, custom_names.get(spec.key, spec.default_name), created=created, reused=reused, notes=notes)
+        role = await _ensure_role(
+            guild,
+            custom_names.get(spec.key, spec.default_name),
+            naming_policy=naming_policy,
+            created=created,
+            reused=reused,
+            notes=notes,
+        )
         if role is None:
             continue
         updates.update(_updates_for_spec(spec, role))
@@ -540,7 +603,15 @@ async def _repair_specs(interaction: discord.Interaction, specs: list[RepairSpec
     voice_overwrites = _voice_overwrites(guild, staff_role=staff_role, control_role=control_role, unverified_role=unverified_role)
 
     for spec in [s for s in specs if s.kind == "category"]:
-        category = await _ensure_category(guild, custom_names.get(spec.key, spec.default_name), overwrites=staff_overwrites, created=created, reused=reused, notes=notes)
+        category = await _ensure_category(
+            guild,
+            custom_names.get(spec.key, spec.default_name),
+            naming_policy=naming_policy,
+            overwrites=staff_overwrites,
+            created=created,
+            reused=reused,
+            notes=notes,
+        )
         if category is not None:
             updates.update(_updates_for_spec(spec, category))
 
@@ -548,23 +619,58 @@ async def _repair_specs(interaction: discord.Interaction, specs: list[RepairSpec
     management_category = _category_by_name(guild, MANAGEMENT_CATEGORY_NAME)
 
     if any(s.category_group == "start" for s in specs):
-        start_category = await _ensure_category(guild, START_CATEGORY_NAME, overwrites=public_overwrites, created=created, reused=reused, notes=notes)
+        start_category = await _ensure_category(
+            guild,
+            START_CATEGORY_NAME,
+            naming_policy=naming_policy,
+            overwrites=public_overwrites,
+            created=created,
+            reused=reused,
+            notes=notes,
+        )
     if any(s.category_group == "management" for s in specs):
         modlog_id = _safe_int(getattr(cfg, "modlog_channel_id", 0), 0)
         modlog_channel = guild.get_channel(modlog_id) if modlog_id > 0 else None
         if isinstance(modlog_channel, discord.TextChannel) and modlog_channel.category is not None:
             management_category = modlog_channel.category
         if management_category is None:
-            management_category = await _ensure_category(guild, MANAGEMENT_CATEGORY_NAME, overwrites=staff_overwrites, created=created, reused=reused, notes=notes)
+            management_category = await _ensure_category(
+                guild,
+                MANAGEMENT_CATEGORY_NAME,
+                naming_policy=naming_policy,
+                overwrites=staff_overwrites,
+                created=created,
+                reused=reused,
+                notes=notes,
+            )
 
     for spec in [s for s in specs if s.kind in {"text", "voice"}]:
         name = custom_names.get(spec.key, spec.default_name)
         category = start_category if spec.category_group == "start" else management_category
         overwrites = voice_overwrites if spec.kind == "voice" and spec.category_group == "start" else public_overwrites if spec.category_group == "start" else staff_overwrites
         if spec.kind == "text":
-            obj = await _ensure_text_channel(guild, name, category=category, overwrites=overwrites, topic=_topic_for_spec(spec), created=created, reused=reused, notes=notes)
+            obj = await _ensure_text_channel(
+                guild,
+                name,
+                naming_policy=naming_policy,
+                category=category,
+                overwrites=overwrites,
+                topic=_topic_for_spec(spec),
+                created=created,
+                reused=reused,
+                notes=notes,
+            )
         else:
-            obj = await _ensure_voice_channel(guild, name, category=category, overwrites=overwrites, created=created, reused=reused, notes=notes)
+            obj = await _ensure_voice_channel(
+                guild,
+                name,
+                naming_policy=naming_policy,
+                category=category,
+                overwrites=overwrites,
+                created=created,
+                reused=reused,
+                notes=notes,
+            )
         if obj is not None:
             updates.update(_updates_for_spec(spec, obj))
 
@@ -631,7 +737,7 @@ async def _build_assistant_payload(guild: discord.Guild) -> tuple[discord.Embed,
     else:
         recommended = "No required action. Use **Run Health Check** after changing roles/channels."
     embed.add_field(name="Recommended Next Step", value=recommended, inline=False)
-    embed.set_footer(text=f"Guild {guild.id} • setup assistant")
+    embed.set_footer(text="Setup Assistant • review before applying changes")
     return embed, SetupAssistantView(has_missing=bool(missing_specs))
 
 

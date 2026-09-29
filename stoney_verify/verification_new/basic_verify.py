@@ -25,6 +25,7 @@ from stoney_verify.setup_engine.loader import snapshot_from_config
 from stoney_verify.setup_engine.verification_modes import (
     BASIC_VERIFY_CUSTOM_ID,
     BASIC_VERIFY_FOOTER,
+    LEGACY_BASIC_VERIFY_FOOTERS,
     basic_verify_allowed_for_guild,
     basic_verify_disabled_reason,
 )
@@ -247,6 +248,8 @@ def is_basic_verify_panel_embed(embed: discord.Embed) -> bool:
     try:
         footer_text = str(getattr(getattr(embed, "footer", None), "text", "") or "")
         if BASIC_VERIFY_FOOTER in footer_text:
+            return True
+        if any(marker in footer_text for marker in LEGACY_BASIC_VERIFY_FOOTERS):
             return True
         if footer_text.strip() in {"Dank Shield Basic Verify", "Dank Shield Basic Verify • access only"}:
             return True

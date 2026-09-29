@@ -343,7 +343,7 @@ async def setup_overview(interaction: discord.Interaction) -> None:
             action="/dank embed health",
         )
 
-        embed.set_footer(text="Dank Shield overview: read-only, per-guild, no hidden config changes")
+        embed.set_footer(text="Read-only setup overview • no settings were changed.")
         sent = await safe_send_interaction(
             interaction,
             embed=embed,

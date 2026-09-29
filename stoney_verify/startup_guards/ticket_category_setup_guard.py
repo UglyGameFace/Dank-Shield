@@ -536,7 +536,7 @@ async def _build_category_manager_payload(
         ),
         inline=False,
     )
-    embed.set_footer(text=f"Guild {guild.id} • category setup v{service.CATEGORY_SETUP_VERSION}")
+    embed.set_footer(text="Ticket category setup • changes require confirmation")
     return embed, CategorySetupManagerView(state=state)
 
 

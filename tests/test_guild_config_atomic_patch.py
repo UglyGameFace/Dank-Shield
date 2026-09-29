@@ -1,0 +1,292 @@
+from __future__ import annotations
+
+import asyncio
+import threading
+from pathlib import Path
+from types import SimpleNamespace
+
+from stoney_verify import guild_config
+
+
+ROOT = Path(__file__).resolve().parents[1]
+MIGRATION = ROOT / "supabase/migrations/20260929143000_atomic_guild_config_patch.sql"
+
+
+class _AtomicRPC:
+    def __init__(self, owner: "_FakeSupabase", params: dict[str, object]) -> None:
+        self.owner = owner
+        self.params = dict(params)
+
+    def execute(self):
+        patch = dict(self.params["p_patch"])  # type: ignore[arg-type]
+        clear_keys = list(self.params.get("p_clear_keys") or [])
+        expected = self.params.get("p_expected")
+        with self.owner.lock:
+            if isinstance(expected, dict):
+                current_settings = dict(self.owner.row.get("settings") or {})
+                matches = True
+                for key, wanted in expected.items():
+                    if wanted is None:
+                        if key in current_settings and current_settings.get(key) is not None:
+                            matches = False
+                            break
+                    elif current_settings.get(key) != wanted:
+                        matches = False
+                        break
+                if not matches:
+                    return SimpleNamespace(
+                        data={
+                            "__atomic_patch_applied": False,
+                            "__atomic_patch_row": dict(self.owner.row),
+                        }
+                    )
+
+            for key in ("settings", "config", "metadata", "meta"):
+                current = dict(self.owner.row.get(key) or {})
+                for clear_key in clear_keys:
+                    current.pop(str(clear_key), None)
+                current.update(patch)
+                self.owner.row[key] = current
+
+            if isinstance(expected, dict):
+                return SimpleNamespace(
+                    data={
+                        "__atomic_patch_applied": True,
+                        "__atomic_patch_row": dict(self.owner.row),
+                    }
+                )
+            return SimpleNamespace(data=dict(self.owner.row))
+
+
+class _FakeSupabase:
+    def __init__(self, row: dict[str, object]) -> None:
+        self.row = dict(row)
+        self.lock = threading.Lock()
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def rpc(self, name: str, params: dict[str, object]):
+        assert name == guild_config.GUILD_CONFIG_PATCH_RPC
+        self.calls.append((name, dict(params)))
+        return _AtomicRPC(self, params)
+
+
+def _stale_row() -> dict[str, object]:
+    initial_settings = {
+        "member_setup_state": {"current_revision": 1},
+        "naming_identity_v1": {"policy": {"mode": "preserve"}},
+        "neighboring_setting": {"keep": True},
+    }
+    return {
+        "guild_id": "999",
+        "settings": dict(initial_settings),
+        "config": dict(initial_settings),
+        "metadata": dict(initial_settings),
+        "meta": dict(initial_settings),
+    }
+
+
+def test_atomic_writer_sends_only_sparse_updates_not_rebuilt_neighbor_state(monkeypatch) -> None:
+    stale = _stale_row()
+    fake = _FakeSupabase(stale)
+    monkeypatch.setattr(guild_config, "get_supabase", lambda: fake)
+    monkeypatch.setattr(guild_config, "GUILD_CONFIG_TABLE_FALLBACKS", ("guild_configs",))
+    monkeypatch.setattr(guild_config, "_fetch_existing_row_sync", lambda _table, _gid: dict(stale))
+
+    guild_config._db_upsert_guild_config_sync(
+        999,
+        {
+            "naming_identity_v1": {"policy": {"mode": "search_safe"}},
+            "__config_write_mode": "explicit_override",
+            "__config_write_source": "naming_identity_runtime",
+            "__config_write_allow_keys": ["naming_identity_v1"],
+        },
+    )
+
+    assert len(fake.calls) == 1
+    patch = dict(fake.calls[0][1]["p_patch"])  # type: ignore[arg-type]
+    assert patch["naming_identity_v1"] == {"policy": {"mode": "search_safe"}}
+    assert "member_setup_state" not in patch
+    assert "neighboring_setting" not in patch
+    assert fake.calls[0][1]["p_clear_keys"] == []
+
+
+def test_atomic_compare_and_swap_rejects_stale_same_key_writer(monkeypatch) -> None:
+    stale = _stale_row()
+    fake = _FakeSupabase(stale)
+    monkeypatch.setattr(guild_config, "get_supabase", lambda: fake)
+
+    expected = {"policy": {"mode": "preserve"}}
+    winner = {"policy": {"mode": "search_safe"}}
+    stale_loser = {"policy": {"mode": "preserve"}, "records": {"role:1": {"aliases": ["old"]}}}
+
+    applied, first = asyncio.run(
+        guild_config.compare_and_swap_guild_config_key(
+            999,
+            "naming_identity_v1",
+            expected=expected,
+            value=winner,
+            source="naming_identity_runtime",
+        )
+    )
+    assert applied is True
+    assert first["naming_identity_v1"] == winner
+
+    applied, second = asyncio.run(
+        guild_config.compare_and_swap_guild_config_key(
+            999,
+            "naming_identity_v1",
+            expected=expected,
+            value=stale_loser,
+            source="naming_identity_runtime",
+        )
+    )
+    assert applied is False
+    assert second["naming_identity_v1"] == winner
+    assert fake.row["settings"]["naming_identity_v1"] == winner  # type: ignore[index]
+
+
+def test_atomic_compare_and_swap_rejects_protected_setup_keys(monkeypatch) -> None:
+    fake = _FakeSupabase(_stale_row())
+    monkeypatch.setattr(guild_config, "get_supabase", lambda: fake)
+
+    async def scenario() -> None:
+        try:
+            await guild_config.compare_and_swap_guild_config_key(
+                999,
+                "verified_role_id",
+                expected="1",
+                value="2",
+                source="test",
+            )
+        except ValueError:
+            return
+        raise AssertionError("protected role/channel/category config keys must not use CAS bypass")
+
+    asyncio.run(scenario())
+    assert fake.calls == []
+
+
+def test_concurrent_naming_and_member_setup_writes_preserve_each_other(monkeypatch) -> None:
+    stale = _stale_row()
+    fake = _FakeSupabase(stale)
+    monkeypatch.setattr(guild_config, "get_supabase", lambda: fake)
+    monkeypatch.setattr(guild_config, "GUILD_CONFIG_TABLE_FALLBACKS", ("guild_configs",))
+    # Both callers deliberately see the same old row. The database RPC, not the
+    # client snapshot, must merge their sparse patches.
+    monkeypatch.setattr(guild_config, "_fetch_existing_row_sync", lambda _table, _gid: dict(stale))
+
+    async def scenario() -> None:
+        naming = asyncio.to_thread(
+            guild_config._db_upsert_guild_config_sync,
+            999,
+            {
+                "naming_identity_v1": {"policy": {"mode": "search_safe"}},
+                "__config_write_mode": "explicit_override",
+                "__config_write_source": "naming_identity_runtime",
+                "__config_write_allow_keys": ["naming_identity_v1"],
+            },
+        )
+        member_setup = asyncio.to_thread(
+            guild_config._db_upsert_guild_config_sync,
+            999,
+            {
+                "member_setup_state": {"current_revision": 2},
+                "__config_write_mode": "explicit_override",
+                "__config_write_source": "member_setup",
+                "__config_write_allow_keys": ["member_setup_state"],
+            },
+        )
+        await asyncio.gather(naming, member_setup)
+
+    asyncio.run(scenario())
+
+    saved = dict(fake.row["settings"])  # type: ignore[arg-type]
+    assert saved["naming_identity_v1"] == {"policy": {"mode": "search_safe"}}
+    assert saved["member_setup_state"] == {"current_revision": 2}
+    assert saved["neighboring_setting"] == {"keep": True}
+
+
+def test_concurrent_clear_and_naming_write_preserve_unrelated_state(monkeypatch) -> None:
+    stale = _stale_row()
+    stale_settings = dict(stale["settings"])  # type: ignore[arg-type]
+    stale_settings["obsolete_setup_key"] = "remove-me"
+    for key in ("settings", "config", "metadata", "meta"):
+        stale[key] = dict(stale_settings)
+
+    fake = _FakeSupabase(stale)
+    monkeypatch.setattr(guild_config, "get_supabase", lambda: fake)
+    monkeypatch.setattr(guild_config, "GUILD_CONFIG_TABLE_FALLBACKS", ("guild_configs",))
+    monkeypatch.setattr(guild_config, "_fetch_existing_row_sync", lambda _table, _gid: dict(stale))
+
+    async def scenario() -> None:
+        clear = asyncio.to_thread(
+            guild_config.clear_guild_config_keys_sync,
+            999,
+            ("obsolete_setup_key",),
+            source="member setup reconciliation",
+        )
+        naming = asyncio.to_thread(
+            guild_config._db_upsert_guild_config_sync,
+            999,
+            {
+                "naming_identity_v1": {"policy": {"mode": "search_safe"}},
+                "__config_write_mode": "explicit_override",
+                "__config_write_source": "naming_identity_runtime",
+                "__config_write_allow_keys": ["naming_identity_v1"],
+            },
+        )
+        await asyncio.gather(clear, naming)
+
+    asyncio.run(scenario())
+
+    saved = dict(fake.row["settings"])  # type: ignore[arg-type]
+    assert "obsolete_setup_key" not in saved
+    assert saved["naming_identity_v1"] == {"policy": {"mode": "search_safe"}}
+    assert saved["member_setup_state"] == {"current_revision": 1}
+    assert saved["neighboring_setting"] == {"keep": True}
+
+
+def test_reachable_service_mode_compat_has_no_direct_guild_config_writer() -> None:
+    source = (
+        ROOT / "stoney_verify/startup_guards/setup_service_modes.py"
+    ).read_text(encoding="utf-8")
+
+    assert '.table("guild_configs").upsert' not in source
+    assert "get_supabase" not in source
+    assert "Canonical guild config writer is unavailable." in source
+
+
+def test_setup_group_fallback_delegates_to_canonical_writer() -> None:
+    source = (
+        ROOT / "stoney_verify/commands_ext/public_setup_group.py"
+    ).read_text(encoding="utf-8")
+
+    assert "_fetch_existing_config_row_sync" not in source
+    assert "_settings_payload_update" not in source
+    assert "sb.table(table).update(" not in source
+    assert "_canonical_upsert_guild_config_sync(" in source
+    assert "_canonical_upsert_guild_config(" in source
+
+
+def test_onboarding_stale_id_purge_uses_canonical_atomic_clear() -> None:
+    source = (
+        ROOT / "stoney_verify/commands_ext/public_onboarding.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'sb.table(table).update(' not in source
+    assert "get_supabase" not in source
+    assert "clear_guild_config_keys(" in source
+    assert "public onboarding stale setup ID purge" in source
+
+
+def test_atomic_patch_migration_uses_server_side_json_merge_and_service_role_only() -> None:
+    sql = MIGRATION.read_text(encoding="utf-8")
+
+    assert "create or replace function public.patch_dank_guild_config" in sql.lower()
+    assert "(coalesce(%I, ''{}''::jsonb) - $3) || $2" in sql
+    assert "on conflict (guild_id) do nothing" in sql.lower()
+    assert "p_expected jsonb default null" in sql.lower()
+    assert "'__atomic_patch_applied', false" in sql.lower()
+    assert "for update" in sql.lower()
+    assert "revoke all on function public.patch_dank_guild_config(text, jsonb, text[], jsonb) from public" in sql.lower()
+    assert "grant execute on function public.patch_dank_guild_config(text, jsonb, text[], jsonb) to service_role" in sql.lower()

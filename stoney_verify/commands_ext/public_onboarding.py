@@ -14,14 +14,12 @@ This is the production-friendly first-run layer:
 The goal is TicketTool-simple onboarding without hidden cross-server state.
 """
 
-import os
 from datetime import datetime, timezone
-from typing import Any, Mapping, Optional
+from typing import Any, Optional
 
 import discord
 
-from .public_setup_config_writer import upsert_guild_config
-from ..globals import get_supabase
+from .public_setup_config_writer import clear_guild_config_keys, upsert_guild_config
 from ..guild_config import invalidate_guild_config
 
 _LISTENERS_REGISTERED = False
@@ -60,9 +58,6 @@ _STALE_SETUP_ID_KEYS: tuple[str, ...] = (
     "perm_role_id",
 )
 
-_JSON_CONFIG_KEYS: tuple[str, ...] = ("settings", "config", "metadata", "meta")
-
-
 def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -75,29 +70,6 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(text) if text else int(default)
     except Exception:
         return int(default)
-
-
-def _config_table_name() -> str:
-    try:
-        return (os.getenv("DANK_GUILD_CONFIG_TABLE") or "guild_configs").strip() or "guild_configs"
-    except Exception:
-        return "guild_configs"
-
-
-def _mapping(value: Any) -> dict[str, Any]:
-    try:
-        if isinstance(value, Mapping):
-            return dict(value)
-    except Exception:
-        pass
-    return {}
-
-
-def _strip_stale_setup_ids(value: Any) -> dict[str, Any]:
-    out = _mapping(value)
-    for key in _STALE_SETUP_ID_KEYS:
-        out.pop(key, None)
-    return out
 
 
 def _can_send_setup_prompt(channel: Any, guild: discord.Guild) -> bool:
@@ -178,72 +150,18 @@ def _setup_embed(guild: discord.Guild) -> discord.Embed:
         value="Until setup is saved for this server, staff/ticket workflows stay locked instead of guessing.",
         inline=False,
     )
-    embed.set_footer(text=f"Guild {guild.id} • isolated per-server config")
+    embed.set_footer(text="Setup is isolated to this server.")
     return embed
 
 
-def _purge_stale_existing_ids_sync(guild_id: int, neutral_payload: Mapping[str, Any]) -> None:
-    """Clear copied/stale setup snowflakes from an existing row before onboarding.
+async def _purge_stale_existing_ids(guild_id: int) -> None:
+    """Atomically clear stale setup snowflakes through the canonical writer."""
 
-    The public setup writer intentionally protects existing role/channel/category
-    IDs from accidental overwrite. That is correct during normal setup, but on a
-    fresh guild join it means an old row can keep another server's IDs forever.
-    This pre-flight purge only runs for the joining guild and only removes known
-    setup snowflake keys.
-    """
-
-    try:
-        sb = get_supabase()
-        if sb is None:
-            return
-        table = _config_table_name()
-        gid = str(int(guild_id))
-        res = sb.table(table).select("*").eq("guild_id", gid).limit(1).execute()
-        rows = getattr(res, "data", None) or []
-        if not rows or not isinstance(rows[0], Mapping):
-            return
-        row = dict(rows[0])
-        columns = {str(k) for k in row.keys()}
-
-        base = {str(k): v for k, v in dict(neutral_payload).items() if v is not None}
-        flat_clear = {key: None for key in _STALE_SETUP_ID_KEYS if key in columns}
-        json_updates: dict[str, Any] = {}
-        for json_key in _JSON_CONFIG_KEYS:
-            if json_key not in columns:
-                continue
-            current = _strip_stale_setup_ids(row.get(json_key))
-            current.update(base)
-            json_updates[json_key] = current
-
-        attempts: list[dict[str, Any]] = []
-        if json_updates or flat_clear:
-            attempts.append({**base, **json_updates, **flat_clear})
-        if json_updates:
-            attempts.append({**base, **json_updates})
-        if flat_clear:
-            attempts.append({**base, **flat_clear})
-        attempts.append(base)
-
-        for payload in attempts:
-            try:
-                sb.table(table).update(payload).eq("guild_id", gid).execute()
-                print(f"✅ public_onboarding purged stale setup IDs guild={guild_id} cleared_flat={len(flat_clear)} json={list(json_updates.keys())}")
-                return
-            except Exception:
-                continue
-    except Exception as e:
-        try:
-            print(f"⚠️ public_onboarding stale setup ID purge failed guild={guild_id}: {repr(e)}")
-        except Exception:
-            pass
-
-
-async def _purge_stale_existing_ids(guild_id: int, neutral_payload: Mapping[str, Any]) -> None:
-    try:
-        import asyncio
-        await asyncio.to_thread(_purge_stale_existing_ids_sync, int(guild_id), dict(neutral_payload))
-    except Exception:
-        pass
+    await clear_guild_config_keys(
+        int(guild_id),
+        _STALE_SETUP_ID_KEYS,
+        source="public onboarding stale setup ID purge",
+    )
 
 
 async def _create_neutral_config_row(guild: discord.Guild, *, joined: bool) -> None:
@@ -264,7 +182,7 @@ async def _create_neutral_config_row(guild: discord.Guild, *, joined: bool) -> N
                 "configured": False,
             }
         )
-        await _purge_stale_existing_ids(int(guild.id), payload)
+        await _purge_stale_existing_ids(int(guild.id))
     else:
         payload.update(
             {

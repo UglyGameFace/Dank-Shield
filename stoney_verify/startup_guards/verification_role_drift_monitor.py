@@ -168,7 +168,7 @@ async def _post_review_card(before: discord.Member, after: discord.Member, *, sa
             value="Confirm the member still has the correct Verified/Resident/member role, or update `/dank setup` if your safe role changed.",
             inline=False,
         )
-        embed.set_footer(text=f"Guild {after.guild.id} • verification role drift monitor")
+        embed.set_footer(text="Verification role changed • review the member or update setup")
         await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
     except Exception:
         pass

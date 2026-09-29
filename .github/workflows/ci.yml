@@ -219,6 +219,101 @@ jobs:
           insert into public.guild_configs(guild_id) values ('smoke-guild-1');
           SQL
 
+      - name: Verify atomic guild config sparse patch under concurrent writers
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          alter table public.guild_configs
+              add column if not exists settings jsonb not null default '{}'::jsonb,
+              add column if not exists config jsonb not null default '{}'::jsonb,
+              add column if not exists metadata jsonb not null default '{}'::jsonb,
+              add column if not exists meta jsonb not null default '{}'::jsonb,
+              add column if not exists updated_at timestamptz not null default now();
+          SQL
+
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260929143000_atomic_guild_config_patch.sql
+
+          psql -v ON_ERROR_STOP=1 -c "select public.patch_dank_guild_config('smoke-guild-1', '{\"member_setup_state\":{\"current_revision\":2}}'::jsonb);" &
+          writer_one=$!
+          psql -v ON_ERROR_STOP=1 -c "select public.patch_dank_guild_config('smoke-guild-1', '{\"naming_identity_v1\":{\"policy\":{\"mode\":\"search_safe\"}}}'::jsonb);" &
+          writer_two=$!
+          wait "$writer_one"
+          wait "$writer_two"
+
+          psql -v ON_ERROR_STOP=1 -c "select public.patch_dank_guild_config('smoke-guild-1', '{\"obsolete_setup_key\":\"remove-me\",\"stable_neighbor\":{\"keep\":true}}'::jsonb);"
+          psql -v ON_ERROR_STOP=1 -c "select public.patch_dank_guild_config('smoke-guild-1', '{}'::jsonb, array['obsolete_setup_key']);" &
+          clear_writer=$!
+          psql -v ON_ERROR_STOP=1 -c "select public.patch_dank_guild_config('smoke-guild-1', '{\"race_neighbor\":{\"value\":1}}'::jsonb);" &
+          patch_writer=$!
+          wait "$clear_writer"
+          wait "$patch_writer"
+
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $audit$
+          declare
+              saved jsonb;
+              first_cas jsonb;
+              stale_cas jsonb;
+          begin
+              perform public.patch_dank_guild_config(
+                  'smoke-guild-1',
+                  '{"cas_probe":{"version":1}}'::jsonb
+              );
+
+              select public.patch_dank_guild_config(
+                  'smoke-guild-1',
+                  '{"cas_probe":{"version":2}}'::jsonb,
+                  array[]::text[],
+                  '{"cas_probe":{"version":1}}'::jsonb
+              ) into first_cas;
+
+              select public.patch_dank_guild_config(
+                  'smoke-guild-1',
+                  '{"cas_probe":{"version":3}}'::jsonb,
+                  array[]::text[],
+                  '{"cas_probe":{"version":1}}'::jsonb
+              ) into stale_cas;
+
+              if first_cas ->> '__atomic_patch_applied' <> 'true' then
+                  raise exception 'first guild config compare-and-swap did not apply: %', first_cas;
+              end if;
+
+              if stale_cas ->> '__atomic_patch_applied' <> 'false' then
+                  raise exception 'stale guild config compare-and-swap was not rejected: %', stale_cas;
+              end if;
+
+              select settings into saved
+                from public.guild_configs
+               where guild_id = 'smoke-guild-1';
+
+              if saved -> 'member_setup_state' ->> 'current_revision' <> '2' then
+                  raise exception 'member setup state was lost during concurrent guild config patches: %', saved;
+              end if;
+
+              if saved -> 'naming_identity_v1' -> 'policy' ->> 'mode' <> 'search_safe' then
+                  raise exception 'naming identity state was lost during concurrent guild config patches: %', saved;
+              end if;
+
+              if saved ? 'obsolete_setup_key' then
+                  raise exception 'atomic clear did not remove obsolete_setup_key: %', saved;
+              end if;
+
+              if saved -> 'stable_neighbor' ->> 'keep' <> 'true' then
+                  raise exception 'atomic clear removed an unrelated neighbor: %', saved;
+              end if;
+
+              if saved -> 'race_neighbor' ->> 'value' <> '1' then
+                  raise exception 'concurrent patch was lost during atomic clear: %', saved;
+              end if;
+
+              if saved -> 'cas_probe' ->> 'version' <> '2' then
+                  raise exception 'stale compare-and-swap overwrote the winning config value: %', saved;
+              end if;
+          end;
+          $audit$;
+          SQL
+
       - name: Apply managed category migrations twice
         shell: bash
         run: |

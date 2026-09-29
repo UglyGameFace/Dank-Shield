@@ -132,7 +132,7 @@ def _build_embed(guild: discord.Guild, scores: list[Any]) -> discord.Embed:
     embed.add_field(name="Suggested Actions", value=_actions_value(scores), inline=False)
     embed.add_field(name="Fix Details", value=_fixes_value(scores), inline=False)
     embed.add_field(name="Product Readiness", value=readiness[:1024], inline=False)
-    embed.set_footer(text=f"Guild {guild.id} • /dank setup health")
+    embed.set_footer(text="Setup health summary")
     return embed
 
 

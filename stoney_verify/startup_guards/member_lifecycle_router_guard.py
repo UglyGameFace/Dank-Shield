@@ -321,7 +321,7 @@ def _member_lifecycle_embed(
     try:
         embed.set_footer(
             text=(
-                f"Guild {member.guild.id} • operational member lifecycle log"
+                "Member lifecycle log"
             )
         )
     except Exception:

@@ -150,7 +150,7 @@ def _build_summary_embed(ts: Any, *, ticket_channel: discord.TextChannel, delete
     embed.add_field(name="Location", value=_truncate(_channel_location(ticket_channel), 256), inline=True)
     embed.add_field(name="Reason", value=_truncate(reason_text, 1024), inline=False)
     embed.add_field(name="Channel ID", value=f"`{ticket_channel.id}`", inline=True)
-    embed.set_footer(text=getattr(ts, "_TRANSCRIPT_MARKER", "dank_shield:transcript_posted"))
+    embed.set_footer(text=getattr(ts, "_TRANSCRIPT_MARKER", "Transcript posted"))
     return embed
 
 

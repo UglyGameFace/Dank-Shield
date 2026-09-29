@@ -15,7 +15,8 @@ from typing import Any, Mapping, Optional
 DEFAULT_ID_VERIFY_ALLOWED_GUILD_IDS: frozenset[int] = frozenset({1357215261001912320})
 DEFAULT_ID_VERIFY_ALLOWED_GUILD_NAMES: frozenset[str] = frozenset()
 BASIC_VERIFY_CUSTOM_ID = "dank:basic_verify:v1"
-BASIC_VERIFY_FOOTER = "dank_shield:basic_verify:v1"
+BASIC_VERIFY_FOOTER = "Dank Shield Basic Verify"
+LEGACY_BASIC_VERIFY_FOOTERS = ("dank_shield:basic_verify:v1",)
 
 _ID_MODE_VALUES: frozenset[str] = frozenset(
     {
@@ -348,6 +349,7 @@ def id_verify_disabled_reason(guild: Any, cfg: Any = None) -> str:
 __all__ = [
     "BASIC_VERIFY_CUSTOM_ID",
     "BASIC_VERIFY_FOOTER",
+    "LEGACY_BASIC_VERIFY_FOOTERS",
     "DEFAULT_ID_VERIFY_ALLOWED_GUILD_IDS",
     "basic_verify_allowed_for_guild",
     "basic_verify_disabled_reason",

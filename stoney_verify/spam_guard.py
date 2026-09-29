@@ -27,6 +27,7 @@ QUARANTINE_CASES_TABLE = "guild_security_quarantine_cases"
 
 SPAM_PANEL_FOOTER_BASE = "stoney_verify:spam_guard_panel:v11"
 SPAM_PANEL_FOOTER_PREFIX = "stoney_verify:spam_guard_panel:"
+SPAM_PANEL_PUBLIC_PREFIX = "Spam Guard •"
 SPAM_PANEL_PAGES = ("overview", "detection", "enforcement", "access")
 
 SPAM_INCIDENT_FOOTER_PREFIX = "stoney_verify:spam_guard_incident"
@@ -382,7 +383,7 @@ def _message_mentions_everyone(message: discord.Message) -> bool:
 
 def _panel_footer(page: str) -> str:
     clean_page = page if page in SPAM_PANEL_PAGES else "overview"
-    return f"{SPAM_PANEL_FOOTER_BASE} • page={clean_page}"
+    return f"{SPAM_PANEL_PUBLIC_PREFIX} {clean_page.title()}"
 
 
 def _page_title(page: str) -> str:
@@ -673,7 +674,8 @@ def _build_quarantine_case_id(guild_id: int, user_id: int) -> str:
 
 
 def _incident_footer(case_id: str, guild_id: int, user_id: int) -> str:
-    return f"{SPAM_INCIDENT_FOOTER_PREFIX}|case={case_id}|guild={guild_id}|user={user_id}"
+    _ = case_id, guild_id, user_id
+    return "Spam Guard incident • restore available"
 
 
 def _parse_incident_footer(text: str) -> Optional[Dict[str, str]]:
@@ -821,6 +823,73 @@ def _fetch_case_sync(case_id: str) -> Optional[Dict[str, Any]]:
             _CASES_TABLE_AVAILABLE = False
             return None
         raise
+
+
+def _fetch_case_by_modlog_message_sync(
+    guild_id: int,
+    message_id: int,
+) -> Optional[Dict[str, Any]]:
+    sb = _sb()
+    if sb is None:
+        return None
+
+    try:
+        res = (
+            sb.table(QUARANTINE_CASES_TABLE)
+            .select("*")
+            .eq("guild_id", str(int(guild_id)))
+            .eq("modlog_message_id", str(int(message_id)))
+            .limit(1)
+            .execute()
+        )
+        rows = getattr(res, "data", None) or []
+        if rows:
+            return dict(rows[0])
+        return None
+    except Exception as e:
+        if _is_table_missing_error(e, QUARANTINE_CASES_TABLE):
+            return None
+        raise
+
+
+async def get_quarantine_case_by_modlog_message(
+    guild_id: int,
+    message_id: int,
+) -> Optional[Dict[str, Any]]:
+    gid = _safe_int(guild_id, 0)
+    mid = _safe_int(message_id, 0)
+    if gid <= 0 or mid <= 0:
+        return None
+
+    for runtime in list(_QUARANTINE_CASES.values()):
+        normalized = _normalize_case(runtime)
+        if not normalized:
+            continue
+        if (
+            _safe_int(normalized.get("guild_id"), 0) == gid
+            and _safe_int(normalized.get("modlog_message_id"), 0) == mid
+        ):
+            return normalized
+
+    if _CASES_TABLE_AVAILABLE is False:
+        return None
+
+    try:
+        row = await asyncio.to_thread(
+            _fetch_case_by_modlog_message_sync,
+            gid,
+            mid,
+        )
+        normalized = _normalize_case(row)
+        if normalized and normalized.get("case_id"):
+            _QUARANTINE_CASES[str(normalized["case_id"])] = dict(normalized)
+        return normalized
+    except Exception as e:
+        _debug(
+            "case fetch by modlog message failed "
+            f"guild={gid} message={mid} error={repr(e)}"
+        )
+        return None
 
 
 def _upsert_case_sync(payload: Dict[str, Any]) -> bool:
@@ -1495,7 +1564,11 @@ async def _find_existing_panel(channel: discord.TextChannel) -> Optional[discord
                 continue
             for emb in (msg.embeds or []):
                 footer = _safe_str(getattr(getattr(emb, "footer", None), "text", ""))
-                if SPAM_PANEL_FOOTER_PREFIX in footer or SPAM_PANEL_FOOTER_BASE in footer:
+                if (
+                    SPAM_PANEL_PUBLIC_PREFIX in footer
+                    or SPAM_PANEL_FOOTER_PREFIX in footer
+                    or SPAM_PANEL_FOOTER_BASE in footer
+                ):
                     return msg
     except Exception:
         pass
@@ -2117,12 +2190,19 @@ class SpamIncidentRestoreButton(discord.ui.Button):
         if guild is None or message is None or not message.embeds:
             return await _reply_ephemeral(interaction, "Invalid restore context.")
 
-        footer_text = _safe_str(getattr(getattr(message.embeds[0], "footer", None), "text", ""))
-        parsed = _parse_incident_footer(footer_text)
-        if not parsed:
-            return await _reply_ephemeral(interaction, "Could not find quarantine case information.")
-
-        case = await get_quarantine_case(parsed["case_id"])
+        case = await get_quarantine_case_by_modlog_message(
+            int(guild.id),
+            int(message.id),
+        )
+        if not case:
+            # Backward compatibility for incident cards posted before the
+            # footer stopped exposing internal case/guild/user identifiers.
+            footer_text = _safe_str(
+                getattr(getattr(message.embeds[0], "footer", None), "text", "")
+            )
+            parsed = _parse_incident_footer(footer_text)
+            if parsed:
+                case = await get_quarantine_case(parsed["case_id"])
         if not case:
             return await _reply_ephemeral(interaction, "Quarantine case not found.")
 

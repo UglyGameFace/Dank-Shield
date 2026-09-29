@@ -175,7 +175,7 @@ def _home_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text=f"Guild {guild.id} • Config source: {getattr(cfg, 'source', 'unknown')}")
+    embed.set_footer(text="Server setup selection")
     return embed
 
 

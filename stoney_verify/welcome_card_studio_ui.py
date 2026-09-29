@@ -200,7 +200,7 @@ def _studio_embed(
             ),
             inline=False,
         )
-    embed.set_footer(text="Welcome Card Studio • canonical live runtime")
+    embed.set_footer(text="Welcome Card Studio")
     return embed
 
 
@@ -550,7 +550,7 @@ async def send_studio_preview(interaction: discord.Interaction) -> None:
     file, error = await _preview_file(interaction.user, cfg)
     if file is None:
         live_embed.set_footer(
-            text="Preview fallback • dank_shield:welcome_card_runtime:v1"
+            text="Preview fallback • simplified preview"
         )
         return await _private(
             interaction,
@@ -562,7 +562,7 @@ async def send_studio_preview(interaction: discord.Interaction) -> None:
             view=WelcomeCardStudioView(owner_id=int(interaction.user.id)),
         )
     live_embed.set_image(url=f"attachment://{file.filename}")
-    live_embed.set_footer(text="Preview only • dank_shield:welcome_card_runtime:v1")
+    live_embed.set_footer(text="Preview only • nothing was published")
     await _private(
         interaction,
         content=(

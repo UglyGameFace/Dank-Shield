@@ -189,7 +189,7 @@ def _studio_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text="Exit Card Studio • dank_shield:exit_card_runtime:v1")
+    embed.set_footer(text="Exit Card Studio")
     return embed
 
 
@@ -204,7 +204,7 @@ async def send_exit_studio_preview(interaction: discord.Interaction) -> None:
         card = await exit_card_file(interaction.user, cfg)
         embed = build_exit_card_embed(interaction.user, cfg)
         embed.set_image(url=f"attachment://{card.filename}")
-        embed.set_footer(text="Preview only • dank_shield:exit_card_runtime:v1")
+        embed.set_footer(text="Preview only • nothing was published")
         await _private(
             interaction,
             content="Preview only — nothing was posted publicly.",
