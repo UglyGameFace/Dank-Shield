@@ -184,6 +184,17 @@ def test_setup_group_fallback_delegates_to_canonical_writer() -> None:
     assert "_canonical_upsert_guild_config(" in source
 
 
+def test_onboarding_stale_id_purge_uses_canonical_atomic_clear() -> None:
+    source = (
+        ROOT / "stoney_verify/commands_ext/public_onboarding.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'sb.table(table).update(' not in source
+    assert "get_supabase" not in source
+    assert "clear_guild_config_keys(" in source
+    assert "public onboarding stale setup ID purge" in source
+
+
 def test_atomic_patch_migration_uses_server_side_json_merge_and_service_role_only() -> None:
     sql = MIGRATION.read_text(encoding="utf-8")
 
