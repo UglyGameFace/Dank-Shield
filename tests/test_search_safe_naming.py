@@ -609,3 +609,51 @@ def test_resource_lock_registry_has_no_manual_release_pop_race() -> None:
     assert "WeakValueDictionary" in source
     assert "def _release_resource_lock" not in source
     assert "_release_resource_lock(" not in source
+
+
+def test_search_safe_mutations_use_shared_rest_budget_and_retry_owner() -> None:
+    source = (
+        ROOT / "stoney_verify/services/search_safe_naming.py"
+    ).read_text(encoding="utf-8")
+
+    assert "reserve_bulk_discord_rest_requests(" in source
+    assert "return await with_retry(" in source
+    assert source.count("await _safe_name_edit(") >= 3
+
+    direct_edits = [
+        line.strip()
+        for line in source.splitlines()
+        if ".edit(" in line and "resource.edit(" not in line
+    ]
+    assert direct_edits == []
+
+
+def test_live_naming_mutation_paths_force_fresh_policy_reads() -> None:
+    service = (
+        ROOT / "stoney_verify/services/search_safe_naming.py"
+    ).read_text(encoding="utf-8")
+    design = (
+        ROOT / "stoney_verify/commands_ext/public_design_studio_v2.py"
+    ).read_text(encoding="utf-8")
+    ui = (
+        ROOT / "stoney_verify/commands_ext/public_search_safe_naming.py"
+    ).read_text(encoding="utf-8")
+
+    assert service.count("get_naming_policy(") >= 4
+    assert service.count("refresh=True") >= 4
+    assert "get_naming_policy(int(guild.id), refresh=True)" in design
+    assert "get_naming_policy(guild.id, refresh=True)" in ui
+
+
+def test_internal_batch_mutations_load_fresh_policy_once_per_operation() -> None:
+    builder = (
+        ROOT / "stoney_verify/services/channel_builder_execution.py"
+    ).read_text(encoding="utf-8")
+    setup = (
+        ROOT / "stoney_verify/commands_ext/public_setup_assistant.py"
+    ).read_text(encoding="utf-8")
+    stats = (ROOT / "stoney_verify/security_stats.py").read_text(encoding="utf-8")
+
+    assert "get_naming_policy(gid, refresh=True)" in builder
+    assert "get_naming_policy(int(guild.id), refresh=True)" in setup
+    assert stats.count("get_naming_policy(gid, refresh=True)") >= 3
