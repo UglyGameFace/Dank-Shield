@@ -447,6 +447,67 @@ def test_naming_state_cas_replays_transform_on_concurrent_worker_winner(monkeypa
     assert naming_identity.aliases_for(saved, kind="role", resource_id=2) == ("winner",)
 
 
+def test_shutdown_flush_persists_pending_aliases_without_debounce(monkeypatch) -> None:
+    naming_identity._PENDING_ALIASES.clear()  # noqa: SLF001
+    naming_identity._PENDING_DELETES.clear()  # noqa: SLF001
+    naming_identity._FLUSH_TASKS.clear()  # noqa: SLF001
+    naming_identity._PENDING_ALIASES[999] = {  # noqa: SLF001
+        "role:42": ["alpha", "beta"],
+    }
+
+    saved: list[dict[str, object]] = []
+
+    async def fake_mutate(_guild_id: int, transform, **_kwargs):
+        current = naming_identity._normalize_state({})  # noqa: SLF001
+        updated = transform(current)
+        saved.append(updated)
+        return updated
+
+    monkeypatch.setattr(naming_identity, "_mutate_state_cas", fake_mutate)
+
+    result = asyncio.run(
+        naming_identity.flush_pending_naming_identity(timeout_seconds=1.0)
+    )
+
+    assert result == {"guilds": 1, "flushed": 1, "pending": 0}
+    assert len(saved) == 1
+    assert naming_identity.aliases_for(saved[0], kind="role", resource_id=42) == (
+        "beta",
+        "alpha",
+    )
+    assert naming_identity._PENDING_ALIASES == {}  # noqa: SLF001
+
+
+def test_cancelled_claimed_flush_requeues_events(monkeypatch) -> None:
+    naming_identity._PENDING_ALIASES.clear()  # noqa: SLF001
+    naming_identity._PENDING_DELETES.clear()  # noqa: SLF001
+    naming_identity._FLUSH_TASKS.clear()  # noqa: SLF001
+    naming_identity._PENDING_ALIASES[999] = {"role:42": ["alpha"]}  # noqa: SLF001
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocked_mutate(_guild_id: int, _transform, **_kwargs):
+        entered.set()
+        await release.wait()
+        return {}
+
+    monkeypatch.setattr(naming_identity, "_mutate_state_cas", blocked_mutate)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(naming_identity._flush_pending_once(999))  # noqa: SLF001
+        await entered.wait()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(scenario())
+
+    assert naming_identity._PENDING_ALIASES[999]["role:42"] == ["alpha"]  # noqa: SLF001
+
+
 def test_future_naming_schema_reads_fail_closed_without_reinterpreting_records() -> None:
     future = {
         "version": naming_identity.NAMING_IDENTITY_VERSION + 1,
