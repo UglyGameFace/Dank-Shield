@@ -120,6 +120,15 @@ def _ping_permission_ready(role: discord.Role, permissions: discord.Permissions)
     return bool(role.mentionable or permissions.mention_everyone)
 
 
+def _toke_allowed_mentions(role: discord.abc.Snowflake) -> discord.AllowedMentions:
+    return discord.AllowedMentions(
+        users=False,
+        roles=[role],
+        everyone=False,
+        replied_user=False,
+    )
+
+
 async def _config(guild: discord.Guild) -> Mapping[str, Any]:
     from stoney_verify.guild_config import get_guild_config
     return await get_guild_config(int(guild.id), refresh=True)
@@ -716,12 +725,7 @@ async def open_toke_command(
                 content=ping_role.mention,
                 embed=embed,
                 view=TokeCheersView(member.id),
-                allowed_mentions=discord.AllowedMentions(
-                    users=False,
-                    roles=[ping_role],
-                    everyone=False,
-                    replied_user=False,
-                ),
+                allowed_mentions=_toke_allowed_mentions(ping_role),
             )
         except discord.Forbidden:
             return await _reply(interaction, f"Discord blocked the sesh ping in {channel.mention}.")
@@ -752,6 +756,7 @@ __all__ = [
     "_cooldown_remaining",
     "_member_has_role_id",
     "_ping_permission_ready",
+    "_toke_allowed_mentions",
     "open_community_ping_setup",
     "open_member_community_pings",
     "open_toke_command",
