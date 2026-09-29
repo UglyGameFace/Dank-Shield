@@ -12,6 +12,7 @@ server-design engine.
 """
 
 import asyncio
+import weakref
 from typing import Any
 
 import discord
@@ -23,7 +24,7 @@ from stoney_verify.share_router_resources import is_share_router_design_resource
 DEFAULT_REPAIR_BATCH_SIZE = 25
 MAX_REPAIR_BATCH_SIZE = 25
 
-_RESOURCE_LOCKS: dict[str, asyncio.Lock] = {}
+_RESOURCE_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -42,12 +43,6 @@ def _resource_lock(kind: str, guild_id: int, resource_id: int) -> asyncio.Lock:
         lock = asyncio.Lock()
         _RESOURCE_LOCKS[key] = lock
     return lock
-
-
-def _release_resource_lock(kind: str, guild_id: int, resource_id: int, lock: asyncio.Lock) -> None:
-    key = f"{kind}:{int(guild_id)}:{int(resource_id)}"
-    if _RESOURCE_LOCKS.get(key) is lock and not lock.locked():
-        _RESOURCE_LOCKS.pop(key, None)
 
 
 def _role_blocker(role: Any, *, actor: Any = None) -> str:
@@ -343,8 +338,6 @@ async def enforce_role_name(role: discord.Role) -> bool:
             return True
     except (discord.Forbidden, discord.HTTPException):
         return False
-    finally:
-        _release_resource_lock("role", gid, rid, lock)
 
 
 async def enforce_channel_name(channel: discord.abc.GuildChannel) -> bool:
@@ -386,8 +379,6 @@ async def enforce_channel_name(channel: discord.abc.GuildChannel) -> bool:
             return True
     except (discord.Forbidden, discord.HTTPException):
         return False
-    finally:
-        _release_resource_lock("channel", gid, cid, lock)
 
 
 async def apply_search_safe_batch(
@@ -474,8 +465,6 @@ async def apply_search_safe_batch(
             changed.append({**row, "before": before, "after": after})
         except (discord.Forbidden, discord.HTTPException) as exc:
             failed.append({**row, "before": before, "after": after, "error": type(exc).__name__})
-        finally:
-            _release_resource_lock(kind, int(guild.id), rid, lock)
 
     remaining_rows = scan_search_safe_targets(guild, actor=actor)
     return {
