@@ -18,6 +18,7 @@ from typing import Any
 import discord
 
 from stoney_verify.services import naming_identity
+from stoney_verify.services import naming_observability
 from stoney_verify.services import naming_mutation_locks
 from stoney_verify.services import role_mutation_authority
 from stoney_verify.operation_queue import with_retry
@@ -385,6 +386,7 @@ async def enforce_role_name(role: discord.Role) -> bool:
         return False
 
     if _role_blocker(role):
+        naming_observability.increment("auto_blocked")
         return False
     policy = await naming_identity.get_naming_policy(gid, refresh=True)
     if policy.get("mode") != naming_identity.NAMING_MODE_SEARCH_SAFE or not bool(policy.get("roles", True)):
@@ -409,8 +411,10 @@ async def enforce_role_name(role: discord.Role) -> bool:
                     guild_id=gid,
                     kind="role",
                 )
+                naming_observability.increment("auto_change_role")
                 return True
     except (discord.Forbidden, discord.HTTPException):
+        naming_observability.increment("auto_failed")
         return False
 
 
@@ -431,6 +435,7 @@ async def enforce_channel_name(channel: discord.abc.GuildChannel) -> bool:
         return False
 
     if _channel_blocker(channel):
+        naming_observability.increment("auto_blocked")
         return False
     policy = await naming_identity.get_naming_policy(gid, refresh=True)
     if policy.get("mode") != naming_identity.NAMING_MODE_SEARCH_SAFE or not bool(policy.get("channels", True)):
@@ -455,8 +460,10 @@ async def enforce_channel_name(channel: discord.abc.GuildChannel) -> bool:
                     guild_id=gid,
                     kind="channel",
                 )
+                naming_observability.increment("auto_change_channel")
                 return True
     except (discord.Forbidden, discord.HTTPException):
+        naming_observability.increment("auto_failed")
         return False
 
 
@@ -615,6 +622,19 @@ async def _apply_search_safe_batch_locked(
                     "error": type(exc).__name__,
                 }
             )
+
+    naming_observability.increment("repair_changed", len(changed))
+    naming_observability.increment("repair_failed", len(failed))
+    naming_observability.increment(
+        "repair_blocked",
+        sum(
+            1
+            for row in failed
+            if "highest role" in str(row.get("error") or "").casefold()
+            or "missing manage" in str(row.get("error") or "").casefold()
+            or "cannot be edited" in str(row.get("error") or "").casefold()
+        ),
+    )
 
     remaining_rows = scan_search_safe_targets(guild, actor=actor)
     return {
