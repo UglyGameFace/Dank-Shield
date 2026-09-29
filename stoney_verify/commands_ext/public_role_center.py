@@ -546,12 +546,13 @@ def _center_embed(*, staff: bool, role_manager: bool, setup_manager: bool) -> di
     )
     embed.add_field(
         name="Your profile",
-        value="🪪 **My Profile** • 🎭 **Profile Tags & Cosmetics** • 🌿 **Community & Pings**",
+        value="🪪 **Member Setup** • 👤 **My Profile** • 🎭 **Profile Tags & Cosmetics** • 🌿 **Community & Pings**",
         inline=False,
     )
     if staff:
         staff_tools = ["👥 **Member Role Manager**"]
         if setup_manager:
+            staff_tools.append("🧭 **Member Setup Manager**")
             staff_tools.append("🌿 **Profile Builder**")
         embed.add_field(
             name="Staff tools",
@@ -670,13 +671,20 @@ class RolesProfilesView(_OwnedView):
         if not self.staff:
             self.remove_item(self.member_roles)
         if not (self.staff and self.setup_manager):
+            self.remove_item(self.member_setup_admin)
             self.remove_item(self.profile_builder)
         if not self.role_manager:
             self.remove_item(self.server_roles)
             self.remove_item(self.create_role)
             self.remove_item(self.role_health)
 
-    @discord.ui.button(label="My Profile", emoji="🪪", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Member Setup", emoji="🪪", style=discord.ButtonStyle.primary, row=0)
+    async def member_setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_member_setup import open_member_setup
+        await open_member_setup(interaction)
+
+    @discord.ui.button(label="My Profile", emoji="👤", style=discord.ButtonStyle.secondary, row=0)
     async def my_profile(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_command_hub import open_profile_entry
@@ -708,6 +716,14 @@ class RolesProfilesView(_OwnedView):
         from .public_member_role_browser import _open_member_browser
 
         await _open_member_browser(interaction)
+
+    @discord.ui.button(label="Member Setup Manager", emoji="🧭", style=discord.ButtonStyle.primary, row=1)
+    async def member_setup_admin(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _recognized_staff(interaction) or not _can_manage_setup(interaction):
+            return await _reply(interaction, "❌ Member Setup management requires authorized server management access.")
+        from .public_member_setup import open_member_setup_admin
+        await open_member_setup_admin(interaction)
 
     @discord.ui.button(label="Profile Builder", emoji="🌿", style=discord.ButtonStyle.secondary, row=1)
     async def profile_builder(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1888,13 +1904,41 @@ async def open_roles_profiles_center(interaction: discord.Interaction) -> None:
     staff = await _recognized_staff(interaction)
     role_manager = _actor_can_manage_roles(guild, interaction.user)
     setup_manager = _can_manage_setup(interaction)
+    embed = _center_embed(
+        staff=staff,
+        role_manager=role_manager,
+        setup_manager=setup_manager,
+    )
+    try:
+        from stoney_verify.member_setup_service import (
+            load_guild_setup_state,
+            load_member_setup_state,
+            member_review_status,
+        )
+
+        guild_setup, member_setup = await asyncio.gather(
+            load_guild_setup_state(guild.id),
+            load_member_setup_state(guild.id, interaction.user.id),
+        )
+        setup_status = member_review_status(guild_setup, member_setup)
+        current_revision = int(setup_status.get("current_revision") or 0)
+        if current_revision > 0:
+            if setup_status.get("is_current"):
+                setup_text = f"✅ Current on revision **{current_revision}**."
+            else:
+                pending = list(setup_status.get("pending_sections") or [])
+                gate_note = " • **Member Access review required**" if setup_status.get("access_gated") else ""
+                setup_text = (
+                    f"⚠️ Revision **{current_revision}** needs review{gate_note}. "
+                    f"Changed sections: **{len(pending)}**. Open **Member Setup**."
+                )
+            embed.add_field(name="Your Member Setup", value=setup_text, inline=False)
+    except Exception:
+        pass
+
     await _replace(
         interaction,
-        embed=_center_embed(
-            staff=staff,
-            role_manager=role_manager,
-            setup_manager=setup_manager,
-        ),
+        embed=embed,
         view=RolesProfilesView(
             int(interaction.user.id),
             staff=staff,

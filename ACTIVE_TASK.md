@@ -80,7 +80,7 @@ Authorized admin opens **Server Design → Search-Safe Naming**
 
 ## Changes
 
-- Branch: `feat/search-safe-naming-identity-20260929`, based on merged production main `afa5930d8f0fd55762d19c04471605906bbaf5c8`.
+- Branch: `feat/search-safe-naming-identity-20260929`, originally based on PR #360 main `afa5930d8f0fd55762d19c04471605906bbaf5c8` and reconciled with merged PR #361 production main `3427a1700fe522ce95239bbf96690aab3aaeb3b8`.
 - Draft PR: **#362 — Add scalable search-safe naming identity**.
 - Added `services/naming_identity.py` with semantic normalization, bounded previous aliases (3 per tracked resource), bounded tracked resources (128 per guild), bounded process cache, lazy durable lookup, event listeners, and per-guild debounced writes.
 - Added persistent per-guild naming policy with **Preserve Full Styling** as the default and **Search-Safe** as an explicit opt-in.
@@ -94,6 +94,7 @@ Authorized admin opens **Server Design → Search-Safe Naming**
 - Canonical guild runtime discovery compares both raw and semantic names, so styled Verified/verification resources can be discovered without stripping their style.
 - Added focused naming-identity, Search-Safe policy/batch, role-doorway, and Server Design workflow regression coverage.
 - No new public slash-command root was added; the existing nine-item public application-command contract remains intentional.
+- Reconciliation with PR #361 preserves the versioned Member Setup runtime, `/role` Member Setup status/entry points, strict access-gate recovery, persistent setup panel ownership, and its focused regression suite.
 
 ## Validation / results
 
@@ -101,7 +102,7 @@ PR #362 remains **draft** and must not be merged until exact-head validation is 
 
 A prior PR head reached Dank Design Regression CI with **131 passed / 1 failed**. The single failure was a stale consolidation contract that still asserted Server Design had exactly five workflows after **Search-Safe Naming** intentionally became the sixth. The product code was not the failing assertion. That regression contract was updated to the intentional six-workflow layout.
 
-Because this task-record correction is itself a new commit, all final claims must use the new exact PR head after this commit, not an earlier green/failed head.
+PR #361 advanced production `main` while PR #362 was open. This branch is now explicitly reconciled with that merged Member Setup work. The reconciliation commit becomes the only valid exact-head CI target; earlier runs are historical evidence only.
 
 Required before merge:
 - focused naming-identity, Search-Safe policy/batch, role-doorway, and Server Design tests green;
@@ -137,6 +138,105 @@ Validate the exact PR #362 head produced by this task-record cleanup. Inspect an
 ## Prior task closure
 
 PR #360, **Add self-service community roles, /toke, and smart /role**, merged into production `main` as `afa5930d8f0fd55762d19c04471605906bbaf5c8`.
+
+---
+
+# Prior completed task record: MEMBER-SETUP-REVISION-GATE-017
+
+## Completed task / desired outcome
+
+**MEMBER-SETUP-REVISION-GATE-017 — add guild-scoped versioned Member Setup reviews with optional strict Discord access gating**
+
+Desired outcome: every Dank Shield server may publish versioned member setup changes without wiping valid member role/profile choices. Members review only changed sections. Minor updates require no action, Recommended updates surface new choices, Required updates require an explicit review, and Access-Gated updates may temporarily withhold a dedicated Member Access role until the member confirms the current setup. All setup definitions, completion state, role/channel mappings, and gate behavior must remain isolated by guild.
+
+## Scope / single active task lock
+
+Included:
+- repurpose the existing permanent profile panel as the member-facing **Member Setup & Profile** doorway;
+- `/role → Member Setup` for live member revision status and review;
+- `/role → Member Setup Manager` for authorized server managers;
+- durable guild setup revision state in canonical `guild_configs`;
+- durable per-member/per-guild completion state in existing service-role-only `dank_profile_guild_settings.settings`;
+- setup severities: Minor, Recommended, Required, Access-Gated;
+- changed-section tracking for Community, Notifications, Profile & Cosmetics, and Interests;
+- preserve existing valid selections instead of resetting roles;
+- one explicit **Confirm Current Choices** acceptance action after review;
+- configurable permanent setup channel;
+- configurable dedicated/reused Member Access role;
+- optional prerequisite role such as Verified;
+- explicit protected-category list;
+- strict gate health checks before activation;
+- block activation when setup recovery channel is inaccessible, bot role/channel authority is insufficient, access role is unsafe, or protected categories contain unsynced child permissions;
+- exact-server-name confirmation before activation/suspension;
+- grandfather existing eligible members before changing category visibility;
+- preserve and restore pre-gate category view-channel overwrite state;
+- strict-gate join/member-role/guild-available reconciliation;
+- paged guild member setup-state reads for scalable reconciliation;
+- exact-head CI and final diff review before merge.
+
+Excluded:
+- forcing Discord Community Onboarding to be enabled;
+- replacing Discord Rules Screening;
+- hardcoding The 420 Lobby channel names or Stoner role names into the generic setup engine;
+- unrelated moderation, tickets, AntiNuke, Invite Shield, Live Captions, or Community Hub changes.
+
+## Product model
+
+- One permanent member-facing channel, currently renamed by the owner to **#member-setup**, hosts the persistent Member Setup & Profile panel.
+- Guild configuration is authoritative by Discord IDs, not names.
+- Each guild has its own current revision, setup channel, access role, prerequisite role, protected categories, severity history, and gate-active state.
+- Each member has an independent completion revision and per-section review revisions for each guild.
+- New members always review the whole current setup; returning members review only sections changed since their completed revision.
+- Minor revisions never force review.
+- Recommended/Required revisions do not remove Discord access.
+- Access-Gated revisions remove only the configured Member Access role when Strict Gate is already active.
+- Completing setup restores Member Access only when any configured prerequisite role is also present.
+- Server owner and Administrator members are exempt because they bypass channel visibility restrictions; bots are excluded from member gating. Manage Server/Manage Roles staff still receive Member Access because those permissions do not bypass channel visibility denies.
+
+## Safety / failure behavior
+
+- Configuring Strict Gate and activating it are separate operations.
+- Strict Gate does not activate merely because a role/channel was selected.
+- Member Setup channel must remain visible without Member Access.
+- Protected categories must have synced child permissions before activation.
+- Existing category overwrite values are snapshotted before gating and restored on confirmed suspension.
+- Existing eligible members are marked current and given Member Access before category visibility is changed.
+- Activation rolls back category changes when a category mutation fails.
+- Access role must be non-managed, below Dank Shield, and free of privileged administration/moderation permissions.
+- Gate reconciliation is derived from durable revision state after restarts instead of relying on process memory.
+- Guild-wide reconciliation reads stored member state in PostgREST pages instead of issuing one database query per member.
+
+## Changes
+
+- Branch: `feat/versioned-member-setup-review-20260929`, based exactly on merged PR #360 production main `afa5930d8f0fd55762d19c04471605906bbaf5c8`.
+- Added `member_setup_service.py` as the canonical revision/completion state owner.
+- Added safe generic per-guild member namespace persistence and paged guild-settings reads to `profile_card_service.py`; no new database table or migration is required for v1.
+- Added `commands_ext/public_member_setup.py` owning member review UI, manager UI, gate health, confirmed activation/suspension, and access reconciliation.
+- Member Setup runtime installs strictly during command bootstrap with join, member-update, and guild-available listeners.
+- Roles & Profiles now exposes **Member Setup** to members and **Member Setup Manager** to authorized setup managers.
+- `/role` dynamically surfaces whether the caller is current or has setup changes to review.
+- The persistent Profile panel now exposes **Member Setup / Review** and is presented as **Member Setup & Profile**.
+- Profile Builder exposes **Member Setup Manager** without replacing existing profile/cosmetic role tooling.
+- Added focused regression coverage in `tests/test_member_setup_revision_runtime.py`.
+- New Member Setup/Profile panel posts persist the canonical channel/message ID. **Refresh Public Panel** upgrades one uniquely identifiable legacy bot-authored profile panel in place; zero/multiple candidates fail closed rather than editing an arbitrary message.
+
+## Validation / completion
+
+PR #361 exact head `0e1705e44e8de7f43e5756979241dce95e73335a` completed all six triggered repository workflows successfully: Dank Shield CI, Profile Runtime Diagnostics, Dank Design Regression CI, Application Command Size Diagnostics, Ticket Owner Emergency Override, and Ticket Panel Single Owner.
+
+PR #361 then merged into production `main` as `3427a1700fe522ce95239bbf96690aab3aaeb3b8`. The Search-Safe Naming branch must preserve this Member Setup runtime and its access-gate invariants while adding naming behavior.
+
+## Completed state
+
+Merged and retained here as a completed task record. Any later changes to Member Setup require an explicit task switch rather than being folded into Search-Safe Naming.
+
+## Prior task closure
+
+PR #360, **Add self-service community roles, /toke, and smart /role**, merged to production `main` as `afa5930d8f0fd55762d19c04471605906bbaf5c8` after all six exact-head workflows passed.
+
+## Prior completed task closure
+
+PR #359, **Add staff-only Roles & Profiles role editor**, merged to production `main` as `3e4252e8ea0d381d0fbb5c633df489b2b52c9048` after all six exact-head workflows passed.
 
 ---
 
