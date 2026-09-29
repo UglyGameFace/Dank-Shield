@@ -11,6 +11,7 @@ from discord import app_commands
 from .public_setup_group import _require_setup_permission, dank_group
 from stoney_verify.panel_lifecycle import public_panel_lifecycle_text
 from stoney_verify.ui.picker import DankChoice, DankMultiPickerView
+from .role_center_navigation import BackToRoleCenterButton, CloseRolePanelButton, close_panel, replace_panel
 
 
 SELF_ROLE_PREFIX = "dank:selfrole:v1:"
@@ -726,6 +727,7 @@ class ProfileRoleAddPickerView(DankMultiPickerView):
         self.add_item(ProfileRolePickerPageButton(delta=-1, disabled=self.page <= 0, row=1))
         self.add_item(ProfileRolePickerPageButton(delta=1, disabled=self.page >= self.pages - 1, row=1))
         self.add_item(ProfileRolePickerBackButton(row=2))
+        self.add_item(CloseRolePanelButton(row=2))
 
 
 class ProfileRolePickerPageButton(discord.ui.Button):
@@ -792,36 +794,74 @@ async def _open_profile_role_add_picker(interaction: discord.Interaction, *, pag
     )
 
 
+async def _back_to_roles_profiles(interaction: discord.Interaction) -> None:
+    from .public_role_center import open_roles_profiles_center
+    await open_roles_profiles_center(interaction)
+
+
+async def _close_profile_role_panel(interaction: discord.Interaction) -> None:
+    await close_panel(interaction, fallback_text="Profile Tags & Cosmetics closed.")
+
+
 async def _open_profile_cosmetics(
     interaction: discord.Interaction,
     guild: discord.Guild,
     member: discord.Member,
+    *,
+    replace: bool = False,
 ) -> None:
     roles = await _profile_configured_cosmetic_roles(guild, validate=True)
 
     if not roles:
+        embed = discord.Embed(
+            title="🎭 Profile Tags & Cosmetics",
+            description=(
+                "No profile tags/cosmetics are available yet. Authorized staff can add them from "
+                "**Roles & Profiles → Profile Builder → Profile Tags & Cosmetics**."
+            ),
+            color=discord.Color.blurple(),
+        )
+        view = discord.ui.View(timeout=300)
+        view.add_item(BackToRoleCenterButton(row=0))
+        view.add_item(CloseRolePanelButton(row=0))
+        if replace:
+            await replace_panel(interaction, embed=embed, view=view)
+        else:
+            await interaction.response.send_message(
+                embed=embed,
+                view=view,
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        return
+
+    view = DankMultiPickerView(
+        author_id=int(member.id),
+        choices=_profile_cosmetic_choices(member, roles),
+        on_pick=_handle_profile_cosmetics_pick,
+        custom_id=f"{PROFILE_PREFIX}cosmetics_select",
+        placeholder="Choose your profile tags/cosmetics…",
+        min_values=0,
+        max_values=len(roles),
+        allow_anyone=False,
+        on_home=_back_to_roles_profiles,
+        home_label="Roles & Profiles",
+        on_cancel=_close_profile_role_panel,
+        cancel_label="Close",
+    )
+    if replace:
+        await replace_panel(
+            interaction,
+            embed=_profile_cosmetics_embed(guild, member, roles),
+            view=view,
+        )
+    else:
         await interaction.response.send_message(
-            "🎭 No profile tags/cosmetics are available yet. Authorized staff can add them from `/dank home` → **Roles & Profiles** → **Profile Builder** → **Profile Tags & Cosmetics**.",
+            embed=_profile_cosmetics_embed(guild, member, roles),
+            view=view,
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
-        return
-
-    await interaction.response.send_message(
-        embed=_profile_cosmetics_embed(guild, member, roles),
-        view=DankMultiPickerView(
-            author_id=int(member.id),
-            choices=_profile_cosmetic_choices(member, roles),
-            on_pick=_handle_profile_cosmetics_pick,
-            custom_id=f"{PROFILE_PREFIX}cosmetics_select",
-            placeholder="Choose your profile tags/cosmetics…",
-            min_values=0,
-            max_values=len(roles),
-            allow_anyone=False,
-        ),
-        ephemeral=True,
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
 
 
 PROFILE_CARD_PAGE_SIZE = 8
@@ -1693,6 +1733,8 @@ class ProfileCosmeticRoleManagerView(discord.ui.View):
     def __init__(self, *, author_id: int) -> None:
         super().__init__(timeout=300)
         self.author_id = int(author_id)
+        self.add_item(BackToRoleCenterButton(row=2))
+        self.add_item(CloseRolePanelButton(row=2))
 
     @discord.ui.button(label="Browse / Add Profile Tags", emoji="🧩", style=discord.ButtonStyle.primary, custom_id="dank:profile:v1:builder:cosmetics_add_browser", row=0)
     async def browse_add_roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1746,7 +1788,14 @@ class ProfileCosmeticRoleManagerView(discord.ui.View):
             for role in roles[:PROFILE_COSMETIC_MAX_ROLES]
         ]
 
-        await interaction.response.send_message(
+        async def back_to_manager(next_interaction: discord.Interaction) -> None:
+            await replace_panel(
+                next_interaction,
+                embed=await _profile_cosmetic_manager_embed(guild),
+                view=ProfileCosmeticRoleManagerView(author_id=self.author_id),
+            )
+
+        await interaction.response.edit_message(
             embed=discord.Embed(
                 title="➖ Remove Profile Tags",
                 description="Choose one or more roles to remove from the Profile Builder roles/cosmetics allowlist.",
@@ -1762,8 +1811,11 @@ class ProfileCosmeticRoleManagerView(discord.ui.View):
                 min_values=1,
                 max_values=len(choices),
                 allow_anyone=False,
+                on_home=back_to_manager,
+                home_label="Back to Profile Tags",
+                on_cancel=_close_profile_role_panel,
+                cancel_label="Close",
             ),
-            ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
@@ -1778,6 +1830,32 @@ class ProfileCosmeticRoleManagerView(discord.ui.View):
             view=ProfileCosmeticRoleManagerView(author_id=self.author_id),
             allowed_mentions=discord.AllowedMentions.none(),
         )
+
+
+class _ProfileBuilderRoleCenterButton(discord.ui.Button):
+    def __init__(self) -> None:
+        super().__init__(
+            label="Roles & Profiles",
+            emoji="↩️",
+            style=discord.ButtonStyle.secondary,
+            row=4,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _back_to_roles_profiles(interaction)
+
+
+class _ProfileBuilderCloseButton(discord.ui.Button):
+    def __init__(self) -> None:
+        super().__init__(
+            label="Close",
+            emoji="✖️",
+            style=discord.ButtonStyle.danger,
+            row=4,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await close_panel(interaction, fallback_text="Profile Builder closed.")
 
 
 class ProfileBuilderView(discord.ui.View):
@@ -1796,6 +1874,8 @@ class ProfileBuilderView(discord.ui.View):
         self.add_item(discord.ui.Button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:community_pings", row=1))
         self.add_item(discord.ui.Button(label="Health", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}builder:health", row=1))
         self.add_item(discord.ui.Button(label="Member Setup Manager", emoji="🧭", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:member_setup", row=2))
+        self.add_item(_ProfileBuilderRoleCenterButton())
+        self.add_item(_ProfileBuilderCloseButton())
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.author_id:
@@ -1825,7 +1905,12 @@ async def _create_profile_roles(interaction: discord.Interaction, guild: discord
     return roles, created, reused
 
 
-async def _post_profile_builder(interaction: discord.Interaction, *, title: str = "Profile Panel") -> None:
+async def _post_profile_builder(
+    interaction: discord.Interaction,
+    *,
+    title: str = "Profile Panel",
+    replace: bool = False,
+) -> None:
     guild = interaction.guild
     channel = interaction.channel
 
@@ -1854,17 +1939,21 @@ async def _post_profile_builder(interaction: discord.Interaction, *, title: str 
     if manual:
         embed.add_field(name="Needs manual fix", value="\n".join(f"• {x}" for x in manual), inline=False)
 
-    await interaction.response.send_message(
-        embed=embed,
-        view=ProfileBuilderView(
-            author_id=int(interaction.user.id),
-            ready=ready,
-            fixable=bool(fixable),
-            title=title,
-        ),
-        ephemeral=True,
-        allowed_mentions=discord.AllowedMentions.none(),
+    view = ProfileBuilderView(
+        author_id=int(interaction.user.id),
+        ready=ready,
+        fixable=bool(fixable),
+        title=title,
     )
+    if replace:
+        await replace_panel(interaction, embed=embed, view=view)
+    else:
+        await interaction.response.send_message(
+            embed=embed,
+            view=view,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 async def _handle_builder_action(interaction: discord.Interaction, action: str) -> bool:
@@ -1878,10 +1967,9 @@ async def _handle_builder_action(interaction: discord.Interaction, action: str) 
     ready, fixable, manual = _profile_builder_status(guild, channel)
 
     if action == "cosmetics":
-        await interaction.response.send_message(
+        await interaction.response.edit_message(
             embed=await _profile_cosmetic_manager_embed(guild),
             view=ProfileCosmeticRoleManagerView(author_id=int(interaction.user.id)),
-            ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
         return True
