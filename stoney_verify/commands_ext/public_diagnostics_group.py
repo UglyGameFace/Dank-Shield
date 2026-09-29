@@ -242,7 +242,7 @@ def _startup_diagnostics_embed(
         ),
         inline=False,
     )
-    embed.set_footer(text="Dank Shield • diagnostics are per-process, per-guild, and read-only")
+    embed.set_footer(text="Read-only diagnostics • no settings were changed.")
     return embed
 
 
