@@ -15,7 +15,8 @@
 
 create or replace function public.patch_dank_guild_config(
     p_guild_id text,
-    p_patch jsonb
+    p_patch jsonb,
+    p_clear_keys text[] default array[]::text[]
 )
 returns jsonb
 language plpgsql
@@ -24,6 +25,7 @@ set search_path = public, pg_temp
 as $$
 declare
     clean_patch jsonb := coalesce(p_patch, '{}'::jsonb);
+    clear_keys text[] := coalesce(p_clear_keys, array[]::text[]);
     assignments text[] := array[]::text[];
     json_column text;
     column_row record;
@@ -37,7 +39,7 @@ begin
         raise exception 'guild config patch must be a JSON object';
     end if;
 
-    -- These fields are database-owned and must never be client patched.
+    -- These fields are database-owned and must never be client patched or cleared.
     clean_patch := clean_patch
         - 'id'
         - 'guild_id'
@@ -47,6 +49,21 @@ begin
         - 'config'
         - 'metadata'
         - 'meta';
+
+    select coalesce(array_agg(distinct key_name), array[]::text[])
+      into clear_keys
+      from unnest(clear_keys) key_name
+     where nullif(btrim(key_name), '') is not null
+       and key_name not in (
+           'id',
+           'guild_id',
+           'created_at',
+           'updated_at',
+           'settings',
+           'config',
+           'metadata',
+           'meta'
+       );
 
     insert into public.guild_configs (guild_id)
     values (btrim(p_guild_id))
@@ -69,7 +86,7 @@ begin
             assignments := array_append(
                 assignments,
                 format(
-                    '%I = coalesce(%I, ''{}''::jsonb) || $2',
+                    '%I = (coalesce(%I, ''{}''::jsonb) - $3) || $2',
                     json_column,
                     json_column
                 )
@@ -111,6 +128,36 @@ begin
         );
     end loop;
 
+    -- Clearing is equally sparse. Compatibility flat columns are nulled only
+    -- when the caller explicitly names them; sibling columns and JSON keys
+    -- remain untouched.
+    for column_row in
+        select a.attname as column_name
+        from pg_attribute a
+        where a.attrelid = 'public.guild_configs'::regclass
+          and a.attnum > 0
+          and not a.attisdropped
+          and coalesce(a.attgenerated, '') = ''
+          and a.attnotnull = false
+          and a.attname = any(clear_keys)
+          and a.attname not in (
+              'id',
+              'guild_id',
+              'created_at',
+              'updated_at',
+              'settings',
+              'config',
+              'metadata',
+              'meta'
+          )
+          and not (clean_patch ? a.attname)
+    loop
+        assignments := array_append(
+            assignments,
+            format('%I = null', column_row.column_name)
+        );
+    end loop;
+
     if exists (
         select 1
           from pg_attribute a
@@ -134,14 +181,14 @@ begin
         'update public.guild_configs as gc set %s where gc.guild_id = $1 returning to_jsonb(gc)',
         array_to_string(assignments, ', ')
     )
-    using btrim(p_guild_id), clean_patch
+    using btrim(p_guild_id), clean_patch, clear_keys
     into result;
 
     return coalesce(result, '{}'::jsonb);
 end;
 $$;
 
-revoke all on function public.patch_dank_guild_config(text, jsonb) from public;
-revoke all on function public.patch_dank_guild_config(text, jsonb) from anon;
-revoke all on function public.patch_dank_guild_config(text, jsonb) from authenticated;
-grant execute on function public.patch_dank_guild_config(text, jsonb) to service_role;
+revoke all on function public.patch_dank_guild_config(text, jsonb, text[]) from public;
+revoke all on function public.patch_dank_guild_config(text, jsonb, text[]) from anon;
+revoke all on function public.patch_dank_guild_config(text, jsonb, text[]) from authenticated;
+grant execute on function public.patch_dank_guild_config(text, jsonb, text[]) to service_role;
