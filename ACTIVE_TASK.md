@@ -75,55 +75,92 @@ Validation evidence:
 
 Production closure still requires the migration to deploy after the final remediation PR merges; pre-merge green CI proves the migration behavior, not that production Supabase has received it.
 
-## Current implementation focus: P0 Search-Safe actor-vs-target role hierarchy
+## Completed remediation slice: P0 Search-Safe actor-vs-target role hierarchy
 
-Root cause:
-- Search-Safe reviewed repair previously decided role editability from Dank Shield's own Manage Roles permission and bot hierarchy only.
-- A human with Manage Roles could therefore ask Dank Shield to rename a role at or above that human's own highest role as long as Dank Shield itself outranked the target.
-- the canonical `/role` editor already blocks that privilege escalation, so Search-Safe was inconsistent with the existing authority boundary.
+The reviewed Search-Safe repair privilege boundary has been repaired and validated.
 
-Implementation on branch `audit/search-safe-master-remediation-20260929`:
+Implemented:
 - added `stoney_verify/services/role_mutation_authority.py` as the shared live Discord role-mutation authority helper;
-- canonical `/role` actor permission, owner, bot Manage Roles, and actor/bot hierarchy checks now delegate to that shared owner without changing the public Role Editor surface;
-- Search-Safe preview accepts the initiating actor and marks roles outside that actor's hierarchy as blocked;
-- reviewed Search-Safe batch Apply requires the initiating actor explicitly;
-- role authority is rechecked again after resource lookup and again inside the per-resource mutation lock immediately before the Discord PATCH;
-- every Search-Safe UI preview/apply/next-batch path passes `interaction.user`;
-- automatic event-driven Search-Safe enforcement remains a server-policy action with no synthetic human actor and therefore retains its bot-policy boundary rather than pretending an actor exists;
-- focused regressions cover a Manage Roles actor below the target role, preview blocking, and authority changing between preview and locked mutation.
+- canonical `/role` actor permission, owner, bot Manage Roles, and actor/bot hierarchy checks delegate to that shared owner;
+- Search-Safe preview and reviewed Apply bind the initiating interaction actor;
+- role authority is rechecked against the live guild member and again inside the resource lock immediately before the Discord PATCH;
+- a Manage Roles actor cannot use Dank Shield to rename a role at or above that actor's highest role merely because Dank Shield itself outranks it;
+- automatic event-driven policy enforcement remains actorless and retains its explicit bot/policy authority boundary.
+
+Validation evidence:
+- exact hierarchy head `361fe24e126a7126379025a3a76f988dd7d96bca` completed all six triggered workflows successfully;
+- full Python unit suite and compile checks passed;
+- existing Role Editor regressions remained green;
+- focused Search-Safe hierarchy regressions passed;
+- Dank Design Regression CI, Application Command Size Diagnostics, Schema Authority SQL, Ticket Owner Emergency Override, and Profile Runtime Diagnostics all passed.
+
+## Current implementation focus: P1 Dank Design ↔ Search-Safe authority consistency
+
+Root causes:
+- the production Dank Design preview/apply paths did not consume the existing Search-Safe plan-normalization helper;
+- a preview could therefore display a styled channel target while an enabled Search-Safe gateway listener normalized the live result after Apply;
+- direct Rename could save a literal styled exact-name rule that disagreed with the active Search-Safe policy;
+- Undo could restore a Search-Safe-invalid styled-letter target and then be immediately contradicted by policy enforcement;
+- a naming-policy change between Preview and Apply/Undo was not part of preview staleness validation.
+
+Implementation now on branch `audit/search-safe-master-remediation-20260929`:
+- added stable naming-policy fingerprints and policy snapshot comparison helpers;
+- added `normalize_design_plan_for_guild()` so reviewed Design previews render the final names permitted by the current Search-Safe policy;
+- every active V2 reviewed preview producer now stores the naming-policy snapshot with its pending preview: Server Design, separator-only change, and Smart Repair;
+- surviving legacy exact-item/scoped/separator preview producers do the same before handing off to the consolidated Apply owner;
+- reviewed Apply reloads the current naming policy and fails closed before any Discord mutation if the policy differs from the preview snapshot;
+- direct Rename computes the Search-Safe effective name before the Discord PATCH and persists the actual final live name as the exact-name rule;
+- direct-Rename rollback also respects the current Search-Safe policy rather than deliberately restoring a policy-invalid styled-letter channel name;
+- Undo loads the current naming policy, previews effective restore targets under that policy, and rechecks the policy before mutation;
+- when Search-Safe is enabled, Undo may preserve decoration while restoring ordinary searchable letters instead of reintroducing styled compatibility letters;
+- focused regressions cover policy-bound plan normalization, stale-policy detection, effective Undo targets, Preserve mode, all active preview producers, and direct Rename ordering.
 
 ## Validation / results
 
-The hierarchy implementation is **pending exact-head CI**. No P0 closure claim is permitted until:
-- full Python tests and compile checks pass on the exact hierarchy head;
-- the existing Role Editor regressions remain green, proving the shared authority extraction did not weaken its behavior;
-- Search-Safe hierarchy regressions pass;
-- Application Command Size and focused Dank Design workflows remain green;
-- final diff review confirms there is one shared actor-role authority owner and no alternate weaker Search-Safe path.
+Current P1 implementation head before this task-record update: `56256e36119beabf18ab86639813235b3de70885`.
+
+Validation for this P1 slice is **pending on the final exact head that includes this task record**. Do not treat the earlier P0-green head as proof for these changes.
+
+Required closure evidence:
+- exact-head compile and full Python test suite;
+- Dank Design focused regression workflow;
+- Application Command Size Diagnostics and Profile Runtime Diagnostics;
+- final source sweep showing every active reviewed `_store_pending()` producer stores `naming_policy`;
+- no active `UndoConfirmView` construction missing the policy snapshot;
+- branch remains 0 behind production `main`.
 
 ## Cleanup / conflicts
 
-- Canonical `stoney_verify.guild_config` remains the only application-side guild config owner.
-- `role_mutation_authority.py` is the reusable Discord role mutation permission/hierarchy primitive; feature UIs may add stricter gates but must not weaken it.
-- Search-Safe reviewed repair and the Role Editor now share the same human hierarchy rule.
-- Do not begin P1 integration work or footer/UI cleanup until this second P0 is validated.
+- canonical `guild_config` remains the only application-side guild config owner.
+- `role_mutation_authority.py` remains the shared human role-mutation authority primitive.
+- Search-Safe policy is the final authority over searchable role/channel letter glyphs when enabled; Dank Design remains the visual styling/rule owner for decoration, categories, and policy-permitted names.
+- old pending Design previews created without a naming-policy snapshot intentionally fail closed and require a fresh preview.
+- do not begin footer/UI cleanup while P1 reliability/integration findings remain active.
 
-## Blockers / risks
+## Remaining P1 backlog inside this same master audit
 
-- production still needs the atomic guild-config migration after the eventual merge.
-- Search-Safe automatic event enforcement is intentionally actorless because it executes an already-enabled guild policy. The current P0 is the human-reviewed mutation boundary; server-policy authority will be rechecked during the later policy/integration audit rather than silently conflated with a fake actor.
-- if exact-head tests reveal another direct human-triggered role mutation path that bypasses the shared authority helper, it belongs to this P0 and must be fixed before proceeding.
+- wire Search-Safe policy adjustment into additional Dank Shield-owned role/channel creation and edit paths so internal actions do not intentionally create a styled name and then require a second gateway PATCH;
+- repair naming resource-lock lifecycle so queued waiters cannot split onto a second lock;
+- preserve semantic alias chronology during rapid rename debounce;
+- retry/retain pending alias/delete persistence on durable config failure;
+- reject or explicitly migrate unknown naming-state schema versions;
+- narrow Unicode normalization to the intended styled compatibility-letter scope rather than unrelated compatibility symbols;
+- bind reviewed Search-Safe repair to the reviewed target set/revalidation instead of silently rescanning a different batch;
+- reconcile Search-Safe and Dank Design mutation locking/authority;
+- fix alias autocomplete priority when an exact previous alias competes with partial live-name matches;
+- harden cross-process naming-policy/cache behavior;
+- integrate Search-Safe repair with a proven aggregate Discord API pacing owner.
 
-## Backlog inside this same master audit
+## P2 backlog inside this same master audit
 
-- P1 integration/concurrency/cache/debounce/Unicode/repair transaction findings from the audit ledger.
-- P2 Member Setup Access Role/Prerequisite Role UX redesign.
-- P2 global user-facing footer cleanup/audit.
-- final 100-point PASS/FAIL/NEEDS HARDENING/N/A ledger and exact-head re-audit.
+- clarify Member Setup Access Role versus Prerequisite Role and show the eligibility → completion → Member Access → protected categories rule chain before Strict Gate activation;
+- perform the global user-facing footer audit and remove debug/operator metadata while preserving useful user guidance;
+- add requested naming observability/metrics and remaining product-polish findings;
+- finish the 100-point PASS/FAIL/NEEDS HARDENING/N/A re-audit, final diff inspection, migration deployment proof, Discloud startup validation, and live canary/soak evidence.
 
 ## Next step
 
-Run exact-head CI for the hierarchy implementation, inspect any failure at the job/step level, and close the second P0 only after the shared Role Editor + Search-Safe authority boundary is proven green. Then move to the P1 integration block in severity order.
+Run exact-head CI for the Dank Design/Search-Safe authority slice. Fix only failures from this root-cause cluster. Once green, record the exact validated SHA and move to the next P1 in severity order rather than starting the P2 footer or Member Setup cleanup early.
 
 ## Prior merged task record: SEARCH-SAFE-NAMING-017
 
