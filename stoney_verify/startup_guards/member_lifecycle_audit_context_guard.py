@@ -281,7 +281,7 @@ async def _send_staff_join_audit_full(
         ),
         inline=False,
     )
-    embed.set_footer(text="dank_shield:staff_join_audit:v3")
+    embed.set_footer(text="Staff join audit • risk context")
     view = None
     try:
         from stoney_verify.modlog import build_quick_mod_view
