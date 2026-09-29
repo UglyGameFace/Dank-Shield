@@ -563,7 +563,7 @@ def build_session_embed(
 
     sid = _safe_str(session.get("id"))
     version = _safe_int(session.get("version"), 1)
-    embed.set_footer(text=f"Dank Shield Community Hub • Session {sid[:8]} • v{version}")
+    embed.set_footer(text="Dank Shield Community Hub • live session")
     return embed
 
 
