@@ -39,7 +39,7 @@ PERSIST_DEBOUNCE_SECONDS = 1.5
 
 _RUNTIME_FLAG = "_dank_naming_identity_runtime_v1"
 _STATE_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
-_PENDING_ALIASES: dict[int, dict[str, set[str]]] = {}
+_PENDING_ALIASES: dict[int, dict[str, list[str]]] = {}
 _PENDING_DELETES: dict[int, set[str]] = {}
 _FLUSH_TASKS: dict[int, asyncio.Task[Any]] = {}
 
@@ -362,9 +362,38 @@ def queue_rename(
     if gid <= 0 or not key or not alias:
         return False
     rows = _PENDING_ALIASES.setdefault(gid, {})
-    rows.setdefault(key, set()).add(alias)
+    aliases = rows.setdefault(key, [])
+    if alias in aliases:
+        aliases.remove(alias)
+    aliases.append(alias)
     _queue_flush(gid)
     return True
+
+
+def _requeue_failed_flush(
+    guild_id: int,
+    aliases: Mapping[str, Sequence[str]],
+    deletes: set[str],
+) -> None:
+    """Restore a failed flush ahead of newer queued events without losing chronology."""
+
+    gid = int(guild_id)
+    if aliases:
+        rows = _PENDING_ALIASES.setdefault(gid, {})
+        for key, failed_aliases in aliases.items():
+            newer_aliases = list(rows.get(key) or [])
+            merged: list[str] = []
+            for alias in [*list(failed_aliases or []), *newer_aliases]:
+                clean = semantic_key(alias)
+                if not clean:
+                    continue
+                if clean in merged:
+                    merged.remove(clean)
+                merged.append(clean)
+            if merged:
+                rows[key] = merged
+    if deletes:
+        _PENDING_DELETES.setdefault(gid, set()).update(deletes)
 
 
 def queue_delete(*, guild_id: Any, kind: str, resource_id: Any) -> bool:
@@ -379,6 +408,8 @@ def queue_delete(*, guild_id: Any, kind: str, resource_id: Any) -> bool:
 
 async def _debounced_flush(guild_id: int) -> None:
     gid = int(guild_id)
+    pending_aliases: dict[str, list[str]] = {}
+    pending_deletes: set[str] = set()
     try:
         await asyncio.sleep(PERSIST_DEBOUNCE_SECONDS)
         pending_aliases = _PENDING_ALIASES.pop(gid, {})
@@ -399,7 +430,9 @@ async def _debounced_flush(guild_id: int) -> None:
             kind, _, rid = key.partition(":")
             if key in pending_deletes:
                 continue
-            for alias in sorted(aliases):
+            # Queue order is event order. remember_alias prepends each alias, so
+            # replaying oldest -> newest leaves the newest previous name first.
+            for alias in aliases:
                 updated = remember_alias(
                     updated,
                     kind=kind,
@@ -413,6 +446,7 @@ async def _debounced_flush(guild_id: int) -> None:
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        _requeue_failed_flush(gid, pending_aliases, pending_deletes)
         try:
             print(
                 "⚠️ naming_identity flush failed "
@@ -449,13 +483,13 @@ def _live_match_score(resource: Any, query_text: str, query_key: str) -> int | N
     if query_key and semantic == query_key:
         return 1
     if query_text and raw_fold.startswith(query_text):
-        return 2
-    if query_key and semantic.startswith(query_key):
         return 3
-    if query_text and query_text in raw_fold:
+    if query_key and semantic.startswith(query_key):
         return 4
-    if query_key and query_key in semantic:
+    if query_text and query_text in raw_fold:
         return 5
+    if query_key and query_key in semantic:
+        return 6
     return None
 
 
@@ -468,7 +502,7 @@ def _alias_match_score(
         return None
     normalized = [semantic_key(alias) for alias in aliases]
     if query_key in normalized:
-        return 6
+        return 2
     if any(alias.startswith(query_key) for alias in normalized if alias):
         return 7
     if any(query_key in alias for alias in normalized if alias):
@@ -530,9 +564,16 @@ async def role_autocomplete(
         return []
     roles = list(getattr(guild, "roles", []) or [])
 
-    # Common case: current stylized name can be decoded live without DB I/O.
+    # Exact live names need no alias-state read. Partial live matches do, because
+    # an exact previous alias must outrank an unrelated prefix/substring match.
     live = _search_resources(roles, kind="role", current=current, state=None, limit=25)
-    if live or not str(current or "").strip():
+    query_text = str(current or "").strip().casefold()
+    query_key = semantic_key(current)
+    has_live_exact = any(
+        (_live_match_score(role, query_text, query_key) or 99) <= 1
+        for role in live
+    )
+    if has_live_exact or not str(current or "").strip():
         return [
             app_commands.Choice(name=_choice_name(role), value=str(_resource_id(role)))
             for role in live
@@ -555,7 +596,13 @@ async def channel_autocomplete(
         return []
     channels = list(getattr(guild, "channels", []) or [])
     live = _search_resources(channels, kind="channel", current=current, state=None, limit=25)
-    if live or not str(current or "").strip():
+    query_text = str(current or "").strip().casefold()
+    query_key = semantic_key(current)
+    has_live_exact = any(
+        (_live_match_score(channel, query_text, query_key) or 99) <= 1
+        for channel in live
+    )
+    if has_live_exact or not str(current or "").strip():
         return [
             app_commands.Choice(name=_choice_name(channel), value=str(_resource_id(channel)))
             for channel in live
