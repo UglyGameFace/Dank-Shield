@@ -403,10 +403,17 @@ def member_review_status(
                     revision_number,
                 )
 
-    pending_sections = [
-        section for section in SETUP_SECTIONS if section in pending_latest
-    ]
-    severity = max_severity(severities) if pending_sections else SEVERITY_MINOR
+    first_time = completed_revision <= 0 and current_revision > 0
+    if first_time:
+        pending_sections = list(SETUP_SECTIONS)
+        pending_latest = {section: current_revision for section in SETUP_SECTIONS}
+        severity = max_severity([*severities, SEVERITY_REQUIRED])
+    else:
+        pending_sections = [
+            section for section in SETUP_SECTIONS if section in pending_latest
+        ]
+        severity = max_severity(severities) if pending_sections else SEVERITY_MINOR
+
     return {
         "enabled": bool(guild.get("enabled", False)),
         "current_revision": current_revision,
@@ -415,7 +422,7 @@ def member_review_status(
         "pending_section_revisions": pending_latest,
         "severity": severity,
         "is_current": not pending_sections and completed_revision >= current_revision,
-        "first_time": completed_revision <= 0 and current_revision > 0,
+        "first_time": first_time,
         "access_gated": (
             bool(guild.get("enabled", False))
             and bool(guild.get("gate_active", False))
@@ -423,7 +430,7 @@ def member_review_status(
             and bool(pending_sections)
             and (
                 severity == SEVERITY_ACCESS_GATED
-                or (completed_revision <= 0 and current_revision > 0)
+                or first_time
             )
         ),
     }
