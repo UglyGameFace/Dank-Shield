@@ -23,8 +23,6 @@ RESTORE_MISSING = "missing"
 RESTORE_SELECTED = "selected"
 VALID_RESTORE_MODES = {RESTORE_ALL, RESTORE_MISSING, RESTORE_SELECTED}
 
-_CONTAINER_KEYS = ("settings", "config", "metadata", "meta")
-
 _SECTION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "Protection & Moderation",
