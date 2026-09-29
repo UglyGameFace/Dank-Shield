@@ -267,7 +267,7 @@ begin
     end if;
     return coalesce(result, '{}'::jsonb);
 end;
-$;
+$$;
 
 revoke all on function public.patch_dank_guild_config(text, jsonb, text[], jsonb) from public;
 revoke all on function public.patch_dank_guild_config(text, jsonb, text[], jsonb) from anon;

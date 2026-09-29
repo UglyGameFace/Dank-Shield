@@ -747,7 +747,7 @@ def test_enabled_missing_stats_category_self_heals_instead_of_silently_stopping(
         return True, "repaired"
 
     monkeypatch.setattr(security_stats, "get_guild_config", fake_get_guild_config)
-    monkeypatch.setattr(security_stats, "_find_owned_category", lambda _guild, _cfg: None)
+    monkeypatch.setattr(security_stats, "_find_owned_category", lambda _guild, _cfg, **_kwargs: None)
     monkeypatch.setattr(security_stats, "ensure_security_stats_display", fake_ensure)
 
     guild = SimpleNamespace(id=4242)

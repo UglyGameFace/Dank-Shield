@@ -155,7 +155,8 @@ def test_enabled_policy_enforces_new_styled_channel_without_guild_scan(monkeypat
 
     calls: list[int] = []
 
-    async def search_safe_policy(guild_id: int):
+    async def search_safe_policy(guild_id: int, *, refresh: bool = False):
+        assert refresh is True
         calls.append(int(guild_id))
         return {
             "mode": naming_identity.NAMING_MODE_SEARCH_SAFE,
@@ -180,7 +181,8 @@ def test_preserve_policy_leaves_styled_live_name_untouched(monkeypatch) -> None:
     guild.channels = [channel]
     monkeypatch.setattr(search_safe_naming, "_channel_blocker", lambda _channel: "")
 
-    async def preserve_policy(_guild_id: int):
+    async def preserve_policy(_guild_id: int, *, refresh: bool = False):
+        assert refresh is True
         return {
             "mode": naming_identity.NAMING_MODE_PRESERVE,
             "roles": True,
@@ -370,7 +372,8 @@ def test_search_safe_ui_binds_preview_and_apply_to_interaction_actor() -> None:
 
 
 def test_design_plan_normalization_binds_effective_policy_snapshot(monkeypatch) -> None:
-    async def policy(_guild_id: int):
+    async def policy(_guild_id: int, *, refresh: bool = False):
+        assert refresh is True
         return {
             "mode": naming_identity.NAMING_MODE_SEARCH_SAFE,
             "roles": True,
@@ -500,7 +503,7 @@ def test_channel_builder_loads_one_policy_and_uses_effective_names() -> None:
         ROOT / "stoney_verify/services/channel_builder_execution.py"
     ).read_text(encoding="utf-8")
 
-    assert "naming_policy = await naming_identity.get_naming_policy(gid)" in source
+    assert "naming_policy = await naming_identity.get_naming_policy(gid, refresh=True)" in source
     assert "policy_adjusted_name_for_policy(" in source
     assert 'policy_kind = "category" if kind == "category" else "channel"' in source
     assert '"search_safe_adjusted": policy_adjusted' in source
@@ -512,7 +515,7 @@ def test_setup_assistant_custom_names_use_one_search_safe_policy_snapshot() -> N
         ROOT / "stoney_verify/commands_ext/public_setup_assistant.py"
     ).read_text(encoding="utf-8")
 
-    assert "naming_policy = await naming_identity.get_naming_policy(int(guild.id))" in source
+    assert "naming_policy = await naming_identity.get_naming_policy(int(guild.id), refresh=True)" in source
     assert source.count("policy_adjusted_name_for_policy(") >= 4
     assert 'kind="role"' in source
     assert 'kind="channel"' in source
@@ -523,7 +526,7 @@ def test_setup_assistant_custom_names_use_one_search_safe_policy_snapshot() -> N
 def test_server_stats_design_names_are_search_safe_before_create_or_refresh() -> None:
     source = (ROOT / "stoney_verify/security_stats.py").read_text(encoding="utf-8")
 
-    assert "naming_policy = await naming_identity.get_naming_policy(gid)" in source
+    assert "naming_policy = await naming_identity.get_naming_policy(gid, refresh=True)" in source
     assert source.count("policy_adjusted_name_for_policy(") >= 4
     assert "_find_owned_category(guild, cfg, naming_policy=naming_policy)" in source
     assert source.count("naming_policy=naming_policy") >= 8
@@ -539,7 +542,8 @@ def test_dank_design_and_search_safe_share_one_guild_naming_lock(monkeypatch) ->
     guild.channels = [channel]
     monkeypatch.setattr(search_safe_naming, "_channel_blocker", lambda _channel: "")
 
-    async def search_safe_policy(_guild_id: int):
+    async def search_safe_policy(_guild_id: int, *, refresh: bool = False):
+        assert refresh is True
         return {
             "mode": naming_identity.NAMING_MODE_SEARCH_SAFE,
             "roles": True,

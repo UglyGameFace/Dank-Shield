@@ -143,7 +143,10 @@ def parse_live_card_config(config: Mapping[str, Any]) -> LiveCardConfig:
     )
 
 
-def live_card_footer(user_id: int, trigger_message_id: int) -> str:
+def live_card_footer(
+    user_id: Optional[int] = None,
+    trigger_message_id: Optional[int] = None,
+) -> str:
     _ = user_id, trigger_message_id
     return LIVE_CARD_FOOTER_PREFIX
 
@@ -354,7 +357,7 @@ async def render_live_profile_card(
         if lines:
             embed.add_field(name="Connected identities", value="\n".join(lines)[:1024], inline=False)
 
-    embed.set_footer(text=live_card_footer(member.id, trigger_message_id))
+    embed.set_footer(text=live_card_footer())
     return LiveCardRender(embed=embed, view=_platform_view(platforms, owner_user_id=member.id))
 
 

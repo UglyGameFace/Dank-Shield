@@ -248,7 +248,7 @@ def test_member_setup_manager_explains_prerequisite_vs_access_role_chain() -> No
     assert 'label="Eligibility Prerequisite"' in RUNTIME
     assert 'label="Clear Eligibility Rule"' in RUNTIME
     assert "Dank Shield will grant this role automatically" in RUNTIME
-    assert "Dank Shield does **not** grant this prerequisite role" in RUNTIME
+    assert "Member must already have this role; Dank Shield does not grant it." in RUNTIME
     assert "**1. Eligibility:**" in RUNTIME
     assert "**2. Setup:**" in RUNTIME
     assert "**3. Access:**" in RUNTIME

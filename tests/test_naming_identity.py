@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 from stoney_verify import guild_config
 from stoney_verify.services import naming_identity
 from stoney_verify.services import naming_observability
 from stoney_verify.services import server_design_studio as design
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class _FakeResource:

@@ -73,7 +73,8 @@ def test_welcome_and_profiles_are_separate_ui_destinations() -> None:
     assert "Add Welcome Channel" not in profile_source
     assert "Canonical live Welcome Card" in welcome_source
     assert 'label="Join Card Studio"' in welcome_source
-    assert "canonical live runtime" in studio_source
+    assert "canonical live runtime" not in studio_source
+    assert "Preview only • nothing was published" in studio_source
     assert "Profile Signatures" in profile_source
 
 
