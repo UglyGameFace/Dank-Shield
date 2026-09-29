@@ -15,8 +15,10 @@ PUBLIC_GLOBAL_COMMAND_NAMES: tuple[str, ...] = (
     "dank",
     "captions",
     "mod",
+    "role",
     "ticket",
     "tickets",
+    "toke",
     "verify",
     "View Dank Profile",
 )

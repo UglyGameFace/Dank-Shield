@@ -2,6 +2,101 @@
 
 ## Active task / desired outcome
 
+**PROFILE-COMMUNITY-TOKE-016 — unify self-service/community roles with safe `/toke` and a smart `/role` doorway**
+
+Desired outcome: Dank Shield Profile Builder must let staff map existing safe community roles without recreating them. Members can self-select the configured **Stoner** identity/community role and optional **Sesh Pings** notification role, use one smart `/role` doorway for approved self-service/profile roles, and use `/toke` from the Stoner role to ping the opt-in sesh audience. Staff/member-role and full server-role shortcuts must reuse the existing guarded Roles & Profiles owners rather than creating parallel role engines.
+
+## Scope / single active task lock
+
+Included:
+- staff **Community & Pings** setup inside Profile Builder;
+- map an existing Stoner role;
+- map an existing Sesh Pings role (may intentionally be the same role for simple mode);
+- optional preferred smoke-session text channel;
+- member self-selection UI for Stoner / Sesh Pings alongside the existing cosmetic/profile tools;
+- `/toke` as one intentional member-facing global slash command;
+- `/role` as one intentional smart global slash command with optional `member` and `role` targets;
+- `/role` with no options opens the canonical Roles & Profiles center;
+- `/role member:@User` opens a role-focused Member Role Manager card; Add/Remove reuse the existing guarded MemberRoleActionView, while View Profile and an explicit Full Member Panel remain available;
+- `/role role:@Role` opens the existing Server Role Editor for live role managers, otherwise exposes Add/Remove only for roles already recognized by Profile Builder / Community & Pings;
+- only current Stoner-role members may invoke `/toke`;
+- only the configured sesh audience role may be mentioned;
+- no arbitrary user supplied role mentions;
+- per-member and per-guild cooldowns;
+- clear setup/permission errors instead of silent dead pings;
+- small Cheers interaction that does not send another role ping;
+- command-surface contract/docs/tests updated intentionally;
+- exact-head CI and final diff review before merge.
+
+Excluded:
+- cannabis procurement, dosage, consumption instructions, or marketplace behavior;
+- Community Hub matchmaking/session architecture;
+- unrelated moderation/protection/ticket/design work;
+- replacing Discord Onboarding or requiring it for profile roles.
+
+## Product model
+
+- **Stoner** = self-selected community/profile identity and authority to start `/toke`.
+- **Sesh Pings** = self-selected notification subscription that receives `/toke` role pings.
+- Servers that want one-role simplicity may map both settings to the same Stoner role.
+- Dank Shield Profile Builder remains canonical for these richer member role choices; Discord Onboarding may still be used independently for first-join essentials.
+
+## Safety / anti-abuse
+
+- role mappings are Discord IDs from staff-selected roles, never role-name guesses;
+- selected roles must pass existing profile-safe/manageability checks;
+- invocation re-resolves current config, member roles, target role, target channel, and bot permissions;
+- outbound AllowedMentions permits only the mapped Sesh Pings role and forbids users/everyone;
+- a non-mentionable target role requires Dank Shield's channel-level Mention @everyone/@here/all roles permission or Discord will not be treated as ping-ready;
+- default cooldown target: 15 minutes per invoking member and 5 minutes per guild, process-local and bounded;
+- Cheers is response-only and never emits the sesh role mention;
+- Cheers is also Stoner-only and tracks one response per member for the card lifetime;
+- community self-role mutations are serialized per guild/member and re-read current mappings before changing roles.
+
+## Changes
+
+- Branch: `feat/profile-community-toke-20260928`, based exactly on merged role-editor production main `3e4252e8ea0d381d0fbb5c633df489b2b52c9048`.
+- Added canonical `commands_ext/public_toke.py` owning Community & Pings setup, member self-selection, scoped `/toke`, cooldowns, and Cheers.
+- Profile Builder now exposes staff **Community & Pings** setup for mapping existing safe Stoner/Sesh Pings roles and an optional preferred text channel.
+- Member Profile Panel, Edit Profile, and Roles & Profiles center expose **Community & Pings** self-selection.
+- Separate-mode Sesh Pings requires Stoner; removing Stoner also removes the separate Sesh Pings subscription. Same-role mode remains supported.
+- Existing profile-safe role checks remain authoritative for both mapped roles; no second role-safety policy was created.
+- The configured Stoner role appears on Dank Profile cards as a **Community** identity label; Sesh Pings is intentionally hidden from profile identity display.
+- Added intentional top-level `/toke [message]` and smart top-level `/role [member] [role]`; the public application-command contract is now nine items total: eight slash roots plus **View Dank Profile**.
+- `/toke` acknowledges before config I/O, re-resolves live mappings and Discord permissions, requires the invoker's current Stoner role, serializes sends per guild, and records cooldowns only after a successful send.
+- Outbound role mention scope is constructed by one testable helper permitting only the configured Sesh Pings role, with users/everyone disabled.
+- Added focused behavioral coverage in `tests/test_profile_community_toke.py`; updated every known public-command guard, payload test, command-tree test, ownership doc, and production command-count contract for `/toke`.
+- Existing profile suggestion compatibility subclasses preserve the new controls; Profile Panel/Edit Profile component rows remain within Discord's five-component row limit.
+- `/role` is only a doorway: it routes normal members to existing self-service role ownership, staff member targets to a role-focused facade over the existing guarded member-role engine, and Manage Roles/Admin/owner role targets to the existing Server Role Editor.
+- Direct self-role toggles are serialized per guild/member, re-read current durable mappings before mutation, preserve the Stoner → Sesh Pings dependency, and never make arbitrary server roles self-assignable.
+- Added focused regression coverage in `tests/test_role_command_doorway.py` and updated all public command-surface contracts from eight to nine total application-command items.
+
+## Validation / results
+
+Implementation is frozen again after the `/role` expansion pending exact-head PR CI. Pre-PR compare against `main` shows the branch ahead with **0 behind**, and the diff is limited to Profile/Community roles, the canonical `/toke` owner, command-surface contracts/docs, and focused tests.
+
+Required before merge:
+- all six repository workflows green on the exact PR head;
+- full Dank Shield CI including `pytest tests/`, compile, standalone tools, and public-surface audits;
+- final compare against current `main` still 0 behind;
+- PR diff remains task-scoped with no unrelated runtime/migration/dependency changes.
+
+## Next step
+
+Open a draft PR from the frozen branch, inspect every exact-head workflow failure instead of blindly retrying, then merge only after all gates are green and the final main comparison is clean.
+
+## Prior task closure
+
+PR #359, **Add staff-only Roles & Profiles role editor**, merged to production `main` as `3e4252e8ea0d381d0fbb5c633df489b2b52c9048` after all six exact-head workflows passed.
+
+---
+
+# Prior completed task record
+
+# Active Task
+
+## Active task / desired outcome
+
 **ROLES-PROFILES-ROLE-EDITOR-015 — add one safe Roles & Profiles center with staff-only Discord role administration**
 
 Desired outcome: `/dank home → Roles & Profiles` must become one capability-aware center. Normal members see only their own profile/cosmetic surfaces. Recognized staff may reach existing member-role/profile management. Only the server owner, Administrator, or a member with live Discord **Manage Roles** permission may see or execute server-role creation, rename/edit, permissions, hierarchy movement, duplication, or deletion. Every mutation must re-check actor authority, bot authority, role hierarchy, managed/default-role restrictions, and relevant Dank Shield dependencies at execution time.

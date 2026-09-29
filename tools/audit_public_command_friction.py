@@ -65,8 +65,10 @@ def main() -> int:
         "dank",
         "captions",
         "mod",
+        "role",
         "ticket",
         "tickets",
+        "toke",
         "verify",
         "View Dank Profile",
     )

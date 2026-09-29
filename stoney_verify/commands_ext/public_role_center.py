@@ -17,12 +17,14 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Optional
 
 import discord
+from discord import app_commands
 
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 from stoney_verify.ui.picker import DankRoleSelect
 
 _ROLE_EDITOR_PREFIX = "dank:roles:v1:"
 _ROLE_ACTION_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+_SELF_SERVICE_ROLE_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 _HEX_RE = re.compile(r"^#?([0-9a-fA-F]{6})$")
 
 _PERMISSION_GROUP_BASE: tuple[tuple[str, str, tuple[str, ...]], ...] = (
@@ -153,6 +155,15 @@ def _role_action_lock(guild_id: int, role_id: int, action: str) -> asyncio.Lock:
     return lock
 
 
+def _self_service_role_lock(guild_id: int, member_id: int) -> asyncio.Lock:
+    key = f"{int(guild_id)}:member:{int(member_id)}"
+    lock = _SELF_SERVICE_ROLE_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _SELF_SERVICE_ROLE_LOCKS[key] = lock
+    return lock
+
+
 def _bool_text(value: bool) -> str:
     return "On" if bool(value) else "Off"
 
@@ -228,8 +239,10 @@ async def _replace(
     *,
     embed: discord.Embed,
     view: discord.ui.View,
+    content: str = "",
 ) -> None:
     kwargs = {
+        "content": content or None,
         "embed": embed,
         "view": view,
         "allowed_mentions": discord.AllowedMentions.none(),
@@ -533,7 +546,7 @@ def _center_embed(*, staff: bool, role_manager: bool, setup_manager: bool) -> di
     )
     embed.add_field(
         name="Your profile",
-        value="🪪 **My Profile** • 🎭 **Profile Tags & Cosmetics**",
+        value="🪪 **My Profile** • 🎭 **Profile Tags & Cosmetics** • 🌿 **Community & Pings**",
         inline=False,
     )
     if staff:
@@ -680,6 +693,12 @@ class RolesProfilesView(_OwnedView):
         from .public_self_roles_group import _open_profile_cosmetics
 
         await _open_profile_cosmetics(interaction, guild, member)
+
+    @discord.ui.button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.secondary, row=0)
+    async def community_pings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_toke import open_member_community_pings
+        await open_member_community_pings(interaction)
 
     @discord.ui.button(label="Member Role Manager", emoji="👥", style=discord.ButtonStyle.secondary, row=1)
     async def member_roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1617,6 +1636,229 @@ class DeleteRoleModal(discord.ui.Modal):
         )
 
 
+async def _self_service_role_kind(
+    guild: discord.Guild,
+    role: discord.Role,
+) -> tuple[str, str]:
+    """Return (kind, blocker). Empty kind means the role is not self-service."""
+    from stoney_verify.guild_config import get_guild_config
+    from .public_self_roles_group import (
+        PROFILE_CATEGORIES,
+        PROFILE_COSMETIC_ROLE_IDS_KEY,
+        _all_profile_role_names,
+        _can_manage,
+        _config_role_ids,
+        _profile_cosmetic_role_blocker,
+        _role_name_key,
+    )
+    from .public_toke import SESH_PING_ROLE_KEY, STONER_ROLE_KEY
+
+    config = await get_guild_config(int(guild.id), refresh=True)
+    blocker = _profile_cosmetic_role_blocker(guild, role, config)
+    if blocker:
+        return "", blocker
+    manageable, why = _can_manage(role, guild)
+    if not manageable:
+        return "", why
+
+    rid = int(role.id)
+    raw_stoner = str(config.get(STONER_ROLE_KEY) or "0")
+    raw_sesh = str(config.get(SESH_PING_ROLE_KEY) or "0")
+    stoner_id = int(raw_stoner) if raw_stoner.isdigit() else 0
+    sesh_id = int(raw_sesh) if raw_sesh.isdigit() else 0
+
+    if rid == stoner_id and rid == sesh_id and rid > 0:
+        return "Community + Notification", ""
+    if rid == stoner_id and rid > 0:
+        return "Community", ""
+    if rid == sesh_id and rid > 0:
+        return "Notification", ""
+
+    cosmetic_ids = set(_config_role_ids(config, PROFILE_COSMETIC_ROLE_IDS_KEY))
+    if rid in cosmetic_ids:
+        return "Profile Tag / Cosmetic", ""
+
+    role_key = _role_name_key(role.name)
+    profile_name_keys = {_role_name_key(name) for name in _all_profile_role_names()}
+    if role_key in profile_name_keys:
+        for _key, (_emoji, label, names, _desc) in PROFILE_CATEGORIES.items():
+            if role_key in {_role_name_key(name) for name in names}:
+                return str(label), ""
+        return "Profile Tag", ""
+
+    return "", "That role is not configured as a member self-service role."
+
+
+def _self_role_embed(
+    member: discord.Member,
+    role: discord.Role,
+    kind: str,
+) -> discord.Embed:
+    selected = role in member.roles
+    embed = discord.Embed(
+        title=f"🏷️ {role.name}",
+        description=(
+            f"{role.mention} is an approved **{kind}** role in this server.\n\n"
+            f"Current status: **{'Selected' if selected else 'Not selected'}**"
+        ),
+        color=role.colour if role.colour.value else discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(
+        name="What this means",
+        value=(
+            "This shortcut uses the same live role mapping and safety checks as Roles & Profiles. "
+            "It does not make arbitrary Discord roles self-assignable."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="/role • Dank Shield Roles & Profiles")
+    return embed
+
+
+class SelfServiceRoleView(_OwnedView):
+    def __init__(self, owner_id: int, role_id: int) -> None:
+        super().__init__(owner_id)
+        self.role_id = int(role_id)
+
+    @discord.ui.button(label="Add / Remove Role", emoji="🏷️", style=discord.ButtonStyle.primary, row=0)
+    async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild = interaction.guild
+        member = interaction.user if isinstance(interaction.user, discord.Member) else None
+        if guild is None or member is None:
+            return await _reply(interaction, "❌ This only works inside a server.")
+
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+
+        from stoney_verify.guild_config import get_guild_config
+        from .public_toke import SESH_PING_ROLE_KEY, STONER_ROLE_KEY
+
+        try:
+            async with _self_service_role_lock(guild.id, member.id):
+                role = guild.get_role(self.role_id)
+                if not isinstance(role, discord.Role):
+                    return await _reply(interaction, "❌ That role no longer exists.")
+
+                kind, blocker = await _self_service_role_kind(guild, role)
+                if not kind:
+                    return await _reply(interaction, "❌ " + (blocker or "That role is no longer self-service."))
+
+                config = await get_guild_config(int(guild.id), refresh=True)
+                raw_stoner = str(config.get(STONER_ROLE_KEY) or "0")
+                raw_sesh = str(config.get(SESH_PING_ROLE_KEY) or "0")
+                stoner_id = int(raw_stoner) if raw_stoner.isdigit() else 0
+                sesh_id = int(raw_sesh) if raw_sesh.isdigit() else 0
+
+                if role in member.roles:
+                    await member.remove_roles(role, reason="Dank Shield /role self-service toggle")
+                    if int(role.id) == stoner_id and sesh_id > 0 and sesh_id != stoner_id:
+                        sesh_role = guild.get_role(sesh_id)
+                        if isinstance(sesh_role, discord.Role) and sesh_role in member.roles:
+                            sesh_kind, sesh_blocker = await _self_service_role_kind(guild, sesh_role)
+                            if sesh_kind and not sesh_blocker:
+                                await member.remove_roles(sesh_role, reason="Dank Shield /role Stoner dependency")
+                    result = f"Removed {role.mention}."
+                else:
+                    if int(role.id) == sesh_id and sesh_id != stoner_id:
+                        stoner_role = guild.get_role(stoner_id)
+                        if not isinstance(stoner_role, discord.Role) or stoner_role not in member.roles:
+                            return await _reply(interaction, "❌ Select the configured Stoner role before enabling Sesh Pings.")
+                    await member.add_roles(role, reason="Dank Shield /role self-service toggle")
+                    result = f"Added {role.mention}."
+        except discord.Forbidden:
+            return await _reply(interaction, "❌ Dank Shield cannot manage that role. Staff should check role hierarchy.")
+        except discord.HTTPException as exc:
+            return await _reply(interaction, f"❌ Discord could not update that role: {_clip(exc, 300)}")
+
+        try:
+            from .public_profile_cards import invalidate_member_live_cards
+            await invalidate_member_live_cards(interaction.client, guild, member.id)
+        except Exception:
+            pass
+
+        refreshed = guild.get_role(self.role_id) or role
+        await _replace(
+            interaction,
+            embed=_self_role_embed(member, refreshed, kind),
+            view=SelfServiceRoleView(self.owner_id, self.role_id),
+            content="✅ " + result,
+        )
+
+    @discord.ui.button(label="Roles & Profiles", emoji="↩️", style=discord.ButtonStyle.secondary, row=0)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_roles_profiles_center(interaction)
+
+
+async def _open_direct_role(
+    interaction: discord.Interaction,
+    role: discord.Role,
+) -> None:
+    guild = interaction.guild
+    member = interaction.user if isinstance(interaction.user, discord.Member) else None
+    if guild is None or member is None:
+        return await _reply(interaction, "❌ Roles only work inside a server.")
+
+    if role.is_default():
+        return await _reply(interaction, "❌ @everyone cannot be managed from /role.")
+
+    if _actor_can_manage_roles(guild, member):
+        blockers = _role_mutation_blockers(guild, member, role)
+        if blockers:
+            return await _reply(interaction, "❌ " + "\n• ".join(["That role cannot be edited:", *blockers]))
+        await _replace(
+            interaction,
+            embed=await _role_embed(guild, role),
+            view=RoleDetailView(int(member.id), role.id),
+        )
+        return
+
+    kind, blocker = await _self_service_role_kind(guild, role)
+    if not kind:
+        return await _reply(
+            interaction,
+            "❌ " + (blocker or "That role is not available for self-service. Open /role to see your approved role tools."),
+        )
+
+    await _replace(
+        interaction,
+        embed=_self_role_embed(member, role, kind),
+        view=SelfServiceRoleView(int(member.id), role.id),
+    )
+
+
+@app_commands.describe(
+    member="Staff shortcut: open this member in the existing guarded member-role panel.",
+    role="Open an approved self-role, or the staff role editor when you have Manage Roles.",
+)
+async def open_role_command(
+    interaction: discord.Interaction,
+    member: Optional[discord.Member] = None,
+    role: Optional[discord.Role] = None,
+) -> None:
+    """One smart doorway into the canonical Roles & Profiles runtime."""
+    if interaction.guild is None:
+        return await _reply(interaction, "❌ /role only works inside a server.")
+    if member is not None and role is not None:
+        return await _reply(interaction, "❌ Choose either a member or a role, not both.")
+
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+    if member is not None:
+        from .member_command_center import open_member_target
+        await open_member_target(interaction, member)
+        return
+
+    if role is not None:
+        await _open_direct_role(interaction, role)
+        return
+
+    await open_roles_profiles_center(interaction)
+
+
 async def open_roles_profiles_center(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     if guild is None:
@@ -1645,10 +1887,13 @@ __all__ = [
     "RolesProfilesView",
     "RoleEditorHomeView",
     "RoleDetailView",
+    "SelfServiceRoleView",
     "PermissionGroupPickerView",
     "PermissionToggleView",
     "open_roles_profiles_center",
+    "open_role_command",
     "_actor_can_manage_roles",
+    "_self_service_role_kind",
     "_config_dependency_labels",
     "_parse_bool",
     "_parse_colour",

@@ -69,8 +69,10 @@ BORING_PUBLIC_TARGET = {
     "dank",
     "captions",
     "mod",
+    "role",
     "ticket",
     "tickets",
+    "toke",
     "ticket-intake",
     "ticket-category",
     "ticket-panel",
@@ -193,14 +195,14 @@ def _overview_embed() -> discord.Embed:
     _add_field(
         embed,
         "What the command groups mean",
-        "`/dank` setup, overview, protection, help, cleanup, members, welcome, roles, modlog, embed\n"
+        "`/dank` setup and the main app-style control center\n"
         "`/captions` ordinary-server Live Captions and personal voice consent\n"
+        "`/mod` moderation/member center\n"
+        "`/role` Roles & Profiles, self-service roles, and guarded staff shortcuts\n"
         "`/ticket` actions for the current ticket\n"
         "`/tickets` server-wide ticket management\n"
-        "`/ticket-panel` public Create Ticket panel tools\n"
-        "`/ticket-category` ticket menu/routing options\n"
-        "`/verify` verification repair and approval tools\n"
-        "`/mod` moderation tools",
+        "`/toke` ping the opt-in sesh crowd (Stoner role required)\n"
+        "`/verify` verification repair and approval tools",
     )
     return embed
 

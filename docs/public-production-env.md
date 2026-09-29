@@ -70,18 +70,20 @@ public_server_env_id_guard public mode active; deployment-level Discord IDs are 
 globals: startup summary: {'guild': 0, ...}
 globals: supabase status: state=ready ... service_role_present=True
 commands_ext registration complete. ... profile=public
-public_command_surface_v2 compact UI installed roots=['View Dank Profile', 'captions', 'dank', 'mod', 'ticket', 'tickets', 'verify'] dank_children=['home', 'purge', 'setup', 'upload'] ...
+public_command_surface_v2 compact UI installed roots=['View Dank Profile', 'captions', 'dank', 'mod', 'role', 'ticket', 'tickets', 'toke', 'verify'] dank_children=['home', 'purge', 'setup', 'upload'] ...
 ```
 
-The intentional **final** public global application-command surface is exactly **7** commands/items:
+The intentional **final** public global application-command surface is exactly **9** commands/items:
 
 1. `/dank` — app-style Dank Shield entry group
 2. `/captions` — ordinary-server Live Captions, session status, and personal voice consent
 3. `/mod` — one moderation/member center doorway
-4. `/ticket` — one current-ticket controls doorway
-5. `/tickets` — one ticket queues/setup/routing doorway
-6. `/verify` — one verification status/repair doorway
-7. `View Dank Profile` user context menu
+4. `/role` — smart Roles & Profiles doorway; optional member/role shortcuts reuse existing guarded surfaces
+5. `/ticket` — one current-ticket controls doorway
+6. `/tickets` — one ticket queues/setup/routing doorway
+7. `/toke` — ping the opt-in sesh crowd; configured Stoner role required
+8. `/verify` — one verification status/repair doorway
+9. `View Dank Profile` user context menu
 
 `/dank` intentionally exposes only four direct children:
 

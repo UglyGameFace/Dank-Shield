@@ -27,8 +27,10 @@ def main() -> int:
         "dank",
         "captions",
         "mod",
+        "role",
         "ticket",
         "tickets",
+        "toke",
         "verify",
         "View Dank Profile",
     )
@@ -73,7 +75,7 @@ def main() -> int:
         "install_compact_public_surface_v2",
         'for retired_root in ("ticket-intake", "ticket-category", "ticket-panel")',
         'dank_children != ["home", "setup", "upload"]',
-        'expected_roots = {"captions", "dank", "mod", "ticket", "tickets", "verify"}',
+        'expected_roots = {"captions", "dank", "mod", "role", "ticket", "tickets", "toke", "verify"}',
     )
     for marker in required_surface_markers:
         if marker not in surface:

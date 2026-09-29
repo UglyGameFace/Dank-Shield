@@ -1047,9 +1047,10 @@ def _profile_panel_embed(guild: discord.Guild, *, title: str = "Profile Panel") 
     embed = discord.Embed(
         title=title[:256],
         description=(
-            "Customize your server profile with optional pronoun, identity, and interest roles.\n\n"
-            "Press **Edit My Profile** to update your labels, or **View My Profile** to check what is currently shown. "
-            "These roles are cosmetic only. They never control verification, tickets, moderation, staff access, or server permissions."
+            "Customize your server profile with optional pronoun, identity, interest, community, and cosmetic roles.\n\n"
+            "Press **Edit My Profile** for profile labels, **Profile Tags & Cosmetics** for harmless extras, or "
+            "**Community & Pings** for the server's opt-in community/notification roles. "
+            "None of these controls grant verification, tickets, moderation, staff access, or protected server permissions."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
@@ -1112,6 +1113,14 @@ def _profile_terms_embed() -> discord.Embed:
         value=(
             "Interests are conversation tags. They help people find common topics. "
             "They do not ping you, unlock channels, verify you, or give permissions."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🌿 Community & Pings",
+        value=(
+            "Community roles can represent how you participate in this server. Notification roles are separate opt-ins. "
+            "For example, **Stoner** can identify community membership while **Sesh Pings** controls /toke notifications."
         ),
         inline=False,
     )
@@ -1367,6 +1376,7 @@ class ProfilePanelView(discord.ui.View):
         self.add_item(discord.ui.Button(label="Edit Interests", emoji="🎮", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}open:interests", row=1))
         self.add_item(discord.ui.Button(label="Signature Settings", emoji="🔐", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}privacy", row=1))
         self.add_item(discord.ui.Button(label="Profile Tags & Cosmetics", emoji="🎭", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}cosmetics", row=2))
+        self.add_item(discord.ui.Button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}community_pings", row=2))
 
         self.add_item(discord.ui.Button(label="Suggest Missing Interest", emoji="➕", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing_interest", row=2))
         self.add_item(discord.ui.Button(label="Missing Identity?", emoji="✍️", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing", row=2))
@@ -1378,7 +1388,8 @@ def _profile_edit_embed(member: discord.Member) -> discord.Embed:
         title="✏️ Edit Your Profile",
         description=(
             "Choose what you want to update. Changes apply immediately, and every section is optional. "
-            "These roles are cosmetic only; they never control access, verification, tickets, moderation, or staff permissions."
+            "Profile labels/cosmetics never grant protected access. **Community & Pings** is separate and may control "
+            "opt-in community behavior such as Stoner identity and sesh notifications."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
@@ -1397,8 +1408,8 @@ def _profile_edit_embed(member: discord.Member) -> discord.Embed:
     embed.add_field(
         name="How editing works",
         value=(
-            "Use **Edit Pronouns**, **Edit Identity**, or **Edit Interests** to pick from the available choices. "
-            "Use **Clear Profile Tags** to remove all optional profile labels."
+            "Use **Edit Pronouns**, **Edit Identity**, or **Edit Interests** for profile labels. "
+            "Use **Community & Pings** for Stoner/sesh choices, and **Clear Profile Tags** only for optional profile labels."
         ),
         inline=False,
     )
@@ -1418,6 +1429,7 @@ class ProfileEditView(discord.ui.View):
         self.add_item(discord.ui.Button(label="Signature Settings", emoji="🔐", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}privacy", row=1))
         self.add_item(discord.ui.Button(label="Missing Identity?", emoji="✍️", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing", row=2))
         self.add_item(discord.ui.Button(label="Suggest Missing Interest", emoji="➕", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}missing_interest", row=2))
+        self.add_item(discord.ui.Button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}community_pings", row=2))
 
 
 def register_profile_panel_runtime(bot: Any) -> bool:
@@ -1775,6 +1787,7 @@ class ProfileBuilderView(discord.ui.View):
             self.add_item(discord.ui.Button(label="Fix Channel Permissions", emoji="🛠️", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:fix", row=0))
 
         self.add_item(discord.ui.Button(label="Profile Tags & Cosmetics", emoji="🎭", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:cosmetics", row=1))
+        self.add_item(discord.ui.Button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.primary, custom_id=f"{PROFILE_PREFIX}builder:community_pings", row=1))
         self.add_item(discord.ui.Button(label="Health", emoji="🩺", style=discord.ButtonStyle.secondary, custom_id=f"{PROFILE_PREFIX}builder:health", row=1))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -1825,7 +1838,7 @@ async def _post_profile_builder(interaction: discord.Interaction, *, title: str 
         timestamp=discord.utils.utcnow(),
     )
     embed.add_field(name="Panel target", value=channel.mention, inline=False)
-    embed.add_field(name="Default profile sections", value="🪪 Pronouns\n🌈 Identity\n🎮 Interests\n✍️ Missing Identity request\n➕ Missing Interest request", inline=False)
+    embed.add_field(name="Default profile sections", value="🪪 Pronouns\n🌈 Identity\n🎮 Interests\n🎭 Profile Tags & Cosmetics\n🌿 Community & Pings\n✍️ Missing Identity request\n➕ Missing Interest request", inline=False)
     embed.add_field(name="Status", value="✅ Ready" if ready else "⚠️ Not ready", inline=False)
     embed.add_field(name="Panel lifetime", value=public_panel_lifecycle_text("Profile Builder result panel", "Private builder actions"), inline=False)
 
@@ -1864,6 +1877,11 @@ async def _handle_builder_action(interaction: discord.Interaction, action: str) 
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
+        return True
+
+    if action == "community_pings":
+        from .public_toke import open_community_ping_setup
+        await open_community_ping_setup(interaction)
         return True
 
     if action == "health":
@@ -2036,6 +2054,11 @@ async def _handle_profile_interaction(interaction: discord.Interaction) -> bool:
 
     if suffix == "cosmetics":
         await _open_profile_cosmetics(interaction, guild, member)
+        return True
+
+    if suffix == "community_pings":
+        from .public_toke import open_member_community_pings
+        await open_member_community_pings(interaction)
         return True
 
     if suffix == "pick_member":
