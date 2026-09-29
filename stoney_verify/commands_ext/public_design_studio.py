@@ -24,6 +24,7 @@ from .public_owner_authority import interaction_is_actual_guild_owner
 
 from stoney_verify.interaction_guard import run_guarded_interaction, safe_send_interaction
 from stoney_verify.share_router_resources import is_share_router_design_resource
+from stoney_verify.services import search_safe_naming
 from stoney_verify.services import server_design_plan_service as plan_service
 from stoney_verify.services import server_design_studio as studio
 from stoney_verify.services import server_design_rule_service as rule_service
@@ -2546,6 +2547,11 @@ async def _save_exact_and_preview(interaction: discord.Interaction, *, scope: st
         items = _filter_plan_for_channel(all_items, int(target_id))
         title = "👁️ Channel Format Preview"
 
+    items, naming_policy = await search_safe_naming.normalize_design_plan_for_guild(
+        int(guild.id),
+        [dict(item) for item in items],
+    )
+
     draft_key = _format_editor_key(int(guild.id), int(interaction.user.id), scope, int(target_id))
     draft = dict(_FORMAT_EDITOR_DRAFTS.get(draft_key) or {})
     return_page, return_category_filter_id = _editor_return_context(draft)
@@ -2561,6 +2567,7 @@ async def _save_exact_and_preview(interaction: discord.Interaction, *, scope: st
             "editor_category_filter_id": (
                 str(return_category_filter_id) if return_category_filter_id is not None else ""
             ),
+            "naming_policy": dict(naming_policy),
         },
     )
 
@@ -2957,6 +2964,11 @@ async def _preview_scope(
         else:
             items = all_items
 
+    items, naming_policy = await search_safe_naming.normalize_design_plan_for_guild(
+        int(guild.id),
+        [dict(item) for item in items],
+    )
+
     created_at = _store_pending(
         int(guild.id),
         int(interaction.user.id),
@@ -2973,6 +2985,7 @@ async def _preview_scope(
                 if editor_category_filter_id is not None
                 else ""
             ),
+            "naming_policy": dict(naming_policy),
         },
     )
     has_blockers = any(item.get("status") == "failed" for item in items)
@@ -3390,7 +3403,13 @@ async def _direct_rename_fetch_target(
         return cached if cached is not None else fallback
 
 
-def _direct_rename_result_value(old_name: str, requested_name: str, actual_name: str) -> str:
+def _direct_rename_result_value(
+    old_name: str,
+    requested_name: str,
+    actual_name: str,
+    *,
+    policy_adjusted: bool = False,
+) -> str:
     lines = [
         f"Old: `{old_name}`",
         f"Typed: `{requested_name}`",
@@ -3399,7 +3418,14 @@ def _direct_rename_result_value(old_name: str, requested_name: str, actual_name:
         "**Applied immediately. No Apply button is needed after Rename.**",
     ]
 
-    if actual_name != requested_name:
+    if policy_adjusted:
+        lines.extend(
+            [
+                "",
+                "🔎 Search-Safe Naming kept the decoration but normalized styled letters before the rename was sent to Discord.",
+            ]
+        )
+    elif actual_name != requested_name:
         lines.append("")
         lines.append("⚠️ Discord returned a different final name. The screen now shows the live Discord result.")
 
@@ -3481,9 +3507,16 @@ class DirectRenameModal(discord.ui.Modal):
                 )
                 return
 
+            effective_name = await search_safe_naming.policy_adjusted_name(
+                int(guild.id),
+                kind="category" if self.scope == "category" else "channel",
+                name=requested_name,
+            )
+            policy_adjusted = effective_name != requested_name
+
             try:
                 await channel.edit(
-                    name=requested_name,
+                    name=effective_name,
                     reason=f"Dank Design direct rename by {interaction.user} ({interaction.user.id})",
                 )
             except discord.Forbidden:
@@ -3515,9 +3548,14 @@ class DirectRenameModal(discord.ui.Modal):
                 )
             except Exception as exc:
                 rolled_back = False
+                rollback_name = await search_safe_naming.policy_adjusted_name(
+                    int(guild.id),
+                    kind="category" if self.scope == "category" else "channel",
+                    name=old_name,
+                )
                 try:
                     await refreshed.edit(
-                        name=old_name,
+                        name=rollback_name,
                         reason=f"Dank Design rename rollback after rule save failure by {interaction.user} ({interaction.user.id})",
                     )
                     rolled_back = True
@@ -3565,7 +3603,12 @@ class DirectRenameModal(discord.ui.Modal):
                 embed.title = "✅ Channel Renamed & Saved"
             embed.add_field(
                 name="Applied immediately",
-                value=_direct_rename_result_value(old_name, requested_name, actual_name),
+                value=_direct_rename_result_value(
+                    old_name,
+                    requested_name,
+                    actual_name,
+                    policy_adjusted=policy_adjusted,
+                ),
                 inline=False,
             )
             embed.add_field(
@@ -5200,6 +5243,10 @@ class StyleChangeView(LegacyDesignView):
 
         options = await _load_design_options(int(guild.id))
         items = _build_channel_separator_style_change_plan(guild, options, separator_id=self.separator_id)
+        items, naming_policy = await search_safe_naming.normalize_design_plan_for_guild(
+            int(guild.id),
+            [dict(item) for item in items],
+        )
         has_blockers = any(item.get("status") == "failed" for item in items)
         has_changes = any(item.get("status") == "changed" for item in items)
 
@@ -5212,6 +5259,7 @@ class StyleChangeView(LegacyDesignView):
                 "mode": "style_change_separator",
                 "style_change_dimension": "channel_separator",
                 "separator_id": self.separator_id,
+                "naming_policy": dict(naming_policy),
             },
         )
 
