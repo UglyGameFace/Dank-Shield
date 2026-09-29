@@ -10,7 +10,13 @@ from discord import app_commands
 from .public_owner_authority import interaction_has_manage_guild_authority
 
 from .common import reply_once, safe_defer
-from ..guild_config import get_guild_config, invalidate_guild_config, guild_config_cache_snapshot
+from ..guild_config import (
+    get_guild_config,
+    guild_config_cache_snapshot,
+    invalidate_guild_config,
+    upsert_guild_config as _canonical_upsert_guild_config,
+    upsert_guild_config_sync as _canonical_upsert_guild_config_sync,
+)
 from ..globals import get_supabase, now_utc
 from ..members_new.activity_scope import audit_activity_scope, format_activity_scope_problems
 
@@ -122,27 +128,12 @@ def _config_table_name() -> str:
         return "guild_configs"
 
 
-def _settings_payload_update(original: Optional[Mapping[str, Any]], updates: Mapping[str, Any]) -> dict[str, Any]:
-    base: dict[str, Any] = {}
-
-    try:
-        if isinstance(original, Mapping):
-            for key in ("settings", "config", "metadata", "meta"):
-                value = original.get(key)
-                if isinstance(value, Mapping):
-                    base.update(dict(value))
-
-            for key, value in original.items():
-                if key not in {"settings", "config", "metadata", "meta"} and value is not None:
-                    base[str(key)] = value
-    except Exception:
-        base = {}
-
-    for key, value in updates.items():
-        if value is not None:
-            base[str(key)] = value
-
-    return base
+def _setup_writer_patch(updates: Mapping[str, Any]) -> dict[str, Any]:
+    patch = dict(updates)
+    patch.setdefault("__config_write_mode", "setup_builder")
+    patch.setdefault("__config_write_source", "public_setup_group")
+    patch.setdefault("__config_write_invalidate_completion", True)
+    return patch
 
 
 # ============================================================
@@ -150,80 +141,20 @@ def _settings_payload_update(original: Optional[Mapping[str, Any]], updates: Map
 # ============================================================
 
 
-def _fetch_existing_config_row_sync(guild_id: int) -> Optional[dict[str, Any]]:
-    sb = get_supabase()
-    if sb is None:
-        return None
-
-    response = (
-        sb.table(_config_table_name())
-        .select("*")
-        .eq("guild_id", str(guild_id))
-        .limit(1)
-        .execute()
-    )
-    rows = getattr(response, "data", None) or []
-    if not rows:
-        return None
-
-    row = rows[0]
-    return dict(row) if isinstance(row, Mapping) else None
-
-
 def _upsert_config_sync(guild_id: int, updates: Mapping[str, Any]) -> dict[str, Any]:
-    sb = get_supabase()
-    if sb is None:
-        raise RuntimeError("Supabase is not configured/available.")
-
-    table = _config_table_name()
-    existing = _fetch_existing_config_row_sync(guild_id)
-    settings = _settings_payload_update(existing, updates)
-
-    base_fields = {
-        "guild_id": str(guild_id),
-        "updated_at": _utc_iso(),
-    }
-
-    attempts: list[dict[str, Any]] = [
-        {**base_fields, "settings": settings},
-        {**base_fields, "config": settings},
-        {**base_fields, **dict(updates)},
-    ]
-
-    last_error: Optional[Exception] = None
-
-    for payload in attempts:
-        clean_payload = {k: v for k, v in payload.items() if v is not None}
-
-        try:
-            if existing:
-                response = (
-                    sb.table(table)
-                    .update(clean_payload)
-                    .eq("guild_id", str(guild_id))
-                    .execute()
-                )
-            else:
-                try:
-                    response = sb.table(table).upsert(clean_payload, on_conflict="guild_id").execute()
-                except TypeError:
-                    response = sb.table(table).upsert(clean_payload).execute()
-
-            rows = getattr(response, "data", None) or []
-            if rows and isinstance(rows[0], Mapping):
-                return dict(rows[0])
-
-            refreshed = _fetch_existing_config_row_sync(guild_id)
-            return refreshed or clean_payload
-        except Exception as e:
-            last_error = e
-            continue
-
-    raise RuntimeError(f"Failed writing guild config: {last_error!r}")
+    saved = _canonical_upsert_guild_config_sync(
+        int(guild_id),
+        _setup_writer_patch(updates),
+    )
+    return dict(saved)
 
 
 async def _upsert_config(guild_id: int, updates: Mapping[str, Any]) -> dict[str, Any]:
-    return await asyncio.to_thread(_upsert_config_sync, int(guild_id), dict(updates))
+    saved = await _canonical_upsert_guild_config(
+        int(guild_id),
+        _setup_writer_patch(updates),
+    )
+    return dict(saved)
 
 
 # ============================================================
