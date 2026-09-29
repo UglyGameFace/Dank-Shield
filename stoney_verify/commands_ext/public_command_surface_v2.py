@@ -95,7 +95,7 @@ def _home_embed() -> discord.Embed:
         name="Tiny command surface",
         value=(
             "`/dank home` is the main doorway. New server owners can use `/dank setup` directly. "
-            "`/captions`, `/mod`, `/ticket`, `/tickets`, `/toke`, and `/verify` are optional fast doorways. `/dank upload` exists only because Discord "
+            "`/captions`, `/mod`, `/role`, `/ticket`, `/tickets`, `/toke`, and `/verify` are optional fast doorways. `/dank upload` exists only because Discord "
             "buttons cannot provide a file-attachment field."
         ),
         inline=False,
@@ -125,6 +125,7 @@ def _help_embed() -> discord.Embed:
         value=(
             "`/captions` — ordinary server voice captions and personal consent\n"
             "`/mod` — moderation/member center\n"
+            "`/role` — smart Roles & Profiles doorway with member/role shortcuts\n"
             "`/ticket` — current ticket controls\n"
             "`/tickets` — queues, ticket setup, routing, categories\n"
             "`/toke` — ping the opt-in sesh crowd (Stoner role required)\n"
@@ -455,6 +456,7 @@ def install_compact_public_surface_v2(bot: Any, tree: Any) -> dict[str, Any]:
 
     from .public_live_captions import open_server_live_captions_command
     from .public_mod_command_center import open_mod_command_center
+    from .public_role_center import open_role_command
     from .public_ticket_command_center import (
         open_current_ticket_center,
         open_ticket_operations_center,
@@ -465,6 +467,7 @@ def install_compact_public_surface_v2(bot: Any, tree: Any) -> dict[str, Any]:
     replacements = (
         ("captions", "Open Live Captions for ordinary server voice channels.", open_server_live_captions_command),
         ("mod", "Open the complete moderation and member action center.", open_mod_command_center),
+        ("role", "Open Roles & Profiles or jump to a member or role.", open_role_command),
         ("ticket", "Open controls for the current or selected ticket.", open_current_ticket_center),
         ("tickets", "Open ticket queues, lookup, setup, routing, and category tools.", open_ticket_operations_center),
         ("toke", "Ping the opt-in sesh crowd.", open_toke_command),
@@ -479,7 +482,7 @@ def install_compact_public_surface_v2(bot: Any, tree: Any) -> dict[str, Any]:
 
     size = _compact_dank_children(tree)
     roots = sorted(str(getattr(item, "name", "")) for item in tree.get_commands(guild=None))
-    expected_roots = {"captions", "dank", "mod", "ticket", "tickets", "toke", "verify"}
+    expected_roots = {"captions", "dank", "mod", "role", "ticket", "tickets", "toke", "verify"}
     command_roots = {name for name in roots if name != "View Dank Profile"}
     if command_roots != expected_roots:
         raise RuntimeError(
