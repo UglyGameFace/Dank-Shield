@@ -1,0 +1,133 @@
+# SEARCH-SAFE-MASTER-AUDIT-018 — Final 100-Point Ledger
+
+Scope: Search-Safe Naming, shared guild configuration, Dank Design integration, Role Editor integration, Member Setup coexistence, production-facing footer/UI cleanup, scale/concurrency, and validation evidence.
+
+Status meanings:
+- **PASS** — implementation and source/regression evidence support the requirement.
+- **NEEDS HARDENING** — not a current merge-blocking correctness defect unless explicitly stated; remaining evidence, observability, product clarity, or post-merge validation is still required.
+- **N/A** — intentionally outside the product contract.
+
+## A. Branch, ancestry, ownership, and task integrity
+
+1. **PASS** — PR #362 ancestry was reconciled against merged PR #361 rather than replacing Member Setup wholesale.
+2. **PASS** — remediation branch is based on production merge commit 7bf1bf0799ffaf70cb4b207da9e42750797123cf.
+3. **PASS** — branch has remained 0 behind production main at validation checkpoints.
+4. **PASS** — PR #363 is the single remediation PR for this master audit.
+5. **PASS** — ACTIVE_TASK.md contains one active master task rather than parallel implementation tasks.
+6. **PASS** — Search-Safe naming remains owned by the naming identity/Search-Safe services rather than duplicated across feature modules.
+7. **PASS** — Dank Design remains the Unicode font-map/style owner.
+8. **PASS** — Role Editor remains the canonical user-facing role mutation owner.
+9. **PASS** — Member Setup retains its own revision/access-gate owner and stored IDs.
+10. **PASS** — final changed-file review found suspicious-looking files were either footer-only edits or required atomic-config/validation work, not unrelated feature development.
+
+## B. Canonical guild configuration and persistence
+
+11. **PASS** — canonical guild config no longer relies on client-side whole-settings replacement for normal writes.
+12. **PASS** — PostgreSQL sparse JSON patch RPC preserves unrelated sibling config keys under concurrent writes.
+13. **PASS** — explicit clear operations use the same canonical database-side mutation boundary.
+14. **PASS** — concurrent Naming Identity and Member Setup writes have dedicated regression coverage.
+15. **PASS** — concurrent clear/write behavior has dedicated regression coverage.
+16. **PASS** — real PostgreSQL CI smoke coverage exercises concurrent sparse writes and clears.
+17. **PASS** — full config-history restore routes through canonical sparse writers instead of stale whole-row replacement.
+18. **PASS** — selective config-history restore routes through canonical sparse writers.
+19. **PASS** — nested shared feature blobs can use compare-and-swap expectations.
+20. **PASS** — stale nested CAS writers are rejected without overwriting the winning value.
+21. **PASS** — Naming Identity replays its pure transform against the winning state after a CAS conflict.
+22. **PASS** — protected setup keys cannot use CAS as a bypass around canonical write-safety controls.
+23. **PASS** — future Naming Identity schema versions cannot be silently downgraded by an older worker.
+24. **PASS** — unsupported future schema reads fail closed to Preserve/no-alias behavior.
+25. **PASS** — malformed persisted policy booleans such as string false are parsed explicitly instead of Python truthiness.
+
+## C. Permissions, authority, and hierarchy
+
+26. **PASS** — Search-Safe reviewed role repair binds the initiating Discord actor.
+27. **PASS** — human actor-vs-target hierarchy uses the same shared authority primitive as Role Editor.
+28. **PASS** — server owner/Administrator/Manage Roles rules remain explicit.
+29. **PASS** — bot Manage Roles authority is checked separately from human authority.
+30. **PASS** — bot top-role hierarchy is checked before role mutation.
+31. **PASS** — human top-role hierarchy is rechecked before reviewed role mutation.
+32. **PASS** — actor authority is re-resolved from the live guild member when available.
+33. **PASS** — authority is rechecked inside the resource lock immediately before the PATCH.
+34. **PASS** — @everyone remains non-editable.
+35. **PASS** — integration/managed roles remain non-editable.
+36. **PASS** — automatic policy enforcement remains explicitly actorless instead of inventing a fake human actor.
+37. **PASS** — automatic actorless enforcement still checks bot authority.
+38. **PASS** — reviewed channel repair checks bot Manage Channels authority.
+39. **PASS** — Share Router reserved infrastructure remains excluded from Search-Safe design mutation.
+40. **PASS** — /role autocomplete filters results before Discord returns them: role managers see manageable roles; normal members see only approved self-service roles.
+
+## D. Semantic naming and Unicode behavior
+
+41. **PASS** — Preserve remains the default naming mode.
+42. **PASS** — Search-Safe remains opt-in per guild.
+43. **PASS** — roles and channels can be Search-Safe independently of categories.
+44. **PASS** — categories remain visually styled by default unless explicitly enabled for Search-Safe.
+45. **PASS** — semantic lookup decodes known styled letters for matching.
+46. **PASS** — previous names are stored by resource identity rather than treated as free-floating aliases.
+47. **PASS** — alias history is bounded per resource.
+48. **PASS** — tracked naming resources are bounded per guild.
+49. **PASS** — process naming-state cache is bounded.
+50. **PASS** — rapid rename aliases preserve event chronology instead of set/alphabetical order.
+51. **PASS** — exact saved aliases outrank unrelated partial live-name matches.
+52. **PASS** — exact live-name matches retain a no-database autocomplete fast path.
+53. **PASS** — duplicate semantic role matches remain ambiguous rather than guessing.
+54. **PASS** — Search-Safe live rewriting reuses Dank Design's canonical known-font map.
+55. **PASS** — reverse font mapping is cached instead of rebuilt for every glyph.
+56. **PASS** — live rewriting is limited to known glyphs decoding to one ASCII alphabetic letter.
+57. **PASS** — unrelated compatibility symbols such as trademark/service marks are preserved.
+58. **PASS** — compatibility temperature symbols are preserved.
+59. **PASS** — ligatures unrelated to the known styled-letter map are preserved.
+60. **PASS** — decorative digits such as circled digits are preserved.
+
+## E. Reviewed Search-Safe repair transaction
+
+61. **PASS** — repair previews freeze the exact bounded resource identities the admin reviewed.
+62. **PASS** — Apply mutates only reviewed IDs rather than rescanning and choosing a different first batch.
+63. **PASS** — reviewed current name is revalidated before mutation.
+64. **PASS** — reviewed Search-Safe output is re-derived and revalidated before mutation.
+65. **PASS** — permission/hierarchy blockers are revalidated before mutation.
+66. **PASS** — resource disappearance after preview fails closed.
+67. **PASS** — resource rename after preview fails closed and requires a new preview.
+68. **PASS** — resources added after preview cannot silently enter the reviewed batch.
+69. **PASS** — repair batch remains capped at 25.
+70. **PASS** — Preview Next 25 creates another reviewed preview instead of immediately mutating a fresh rescan.
+71. **PASS** — Search-Safe role/channel PATCHes funnel through one edit helper.
+72. **PASS** — reviewed/automatic name PATCHes share the process-wide Discord REST budget.
+73. **PASS** — name PATCHes use the canonical retry helper for retryable Discord/API failures.
+74. **PASS** — Search-Safe no longer contains alternate direct name PATCH paths bypassing the pacing helper.
+75. **PASS** — per-resource locks use weak lifecycle ownership and cannot split queued waiters onto a second lock.
+
+## F. Dank Design and internal mutation integration
+
+76. **PASS** — reviewed Dank Design previews show Search-Safe-effective final names.
+77. **PASS** — every active reviewed Design preview stores the naming-policy snapshot used to render it.
+78. **PASS** — Design Apply fails closed if naming policy changed after Preview.
+79. **PASS** — direct Dank Design Rename applies Search-Safe before Discord mutation.
+80. **PASS** — direct Rename persists the actual effective live name instead of a contradictory styled exact-name rule.
+81. **PASS** — Dank Design Undo previews Search-Safe-effective restore names.
+82. **PASS** — Undo rechecks naming policy before mutation.
+83. **PASS** — Dank Design and Search-Safe share one per-guild naming mutation lock.
+84. **PASS** — automatic Search-Safe enforcement waits for in-flight Design Apply/Undo transactions.
+85. **PASS** — /role create/edit/duplicate pre-adjust names before Discord mutation.
+86. **PASS** — Channel Builder uses one fresh naming-policy snapshot per batch and pre-adjusts arbitrary create/rename names.
+87. **PASS** — Setup Assistant custom role/category/text/voice names are policy-adjusted before lookup/create.
+88. **PASS** — Server Stats Design-synced names are policy-adjusted before create/refresh and legacy/effective names remain discoverable.
+89. **PASS** — gateway enforcement is now a safety net for manual/external edits rather than the normal second PATCH for known internal paths.
+90. **PASS** — naming mutation/review boundaries force a fresh policy read rather than trusting a long-lived process cache.
+
+## G. Cache, debounce, shutdown, Member Setup, and UI
+
+91. **PASS** — naming cache TTL was reduced and an expired naming cache bypasses the guild-config cache, preventing stacked stale TTLs.
+92. **PASS** — failed alias/delete persistence requeues claimed changes instead of silently dropping them.
+93. **PASS** — cancellation after a flush claimed events requeues those events.
+94. **PASS** — bot shutdown cancels debounce timers and performs a bounded immediate naming-state flush before the Discord loop closes.
+95. **PASS** — Member Setup clearly distinguishes optional Eligibility Prerequisite from automatically managed Member Access Role.
+96. **PASS** — Member Setup shows the rule chain Eligibility → Setup → Member Access → Protected Categories before Strict Gate activation.
+97. **PASS** — global production footer hygiene removes raw IDs/debug/runtime/config metadata while preserving useful safety, pagination, count, and action guidance.
+98. **PASS** — persistent footer/runtime compatibility is retained for old Welcome, Verify, tickets/transcripts, live-profile, Spam Guard panel, and Spam Guard incident messages.
+99. **NEEDS HARDENING** — operational metrics, channel semantic product integration, stale-record cleanup, automatic-enforcement failure visibility, normalized-name collision preview, name-length preview consistency, and searchability-vs-mentionability explanation remain non-blocking product/observability follow-ups.
+100. **NEEDS HARDENING** — production closure still requires the final exact-head CI suite, post-merge Supabase migration deployment, Discloud startup, mobile /role canary, Search-Safe/Design/Member Setup live canary, and soak evidence.
+
+## Merge-blocker conclusion
+
+At the time this ledger was written, the audit has **no known unresolved P0 or P1 implementation blocker**. Items 99–100 are explicit remaining evidence/product-hardening gates and must not be misrepresented as production-complete. Final merge readiness still depends on the exact-head workflow set completing green.
