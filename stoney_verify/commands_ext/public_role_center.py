@@ -21,6 +21,7 @@ from discord import app_commands
 
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 from stoney_verify.ui.picker import DankRoleSelect
+from .role_center_navigation import CloseRolePanelButton, replace_panel
 
 _ROLE_EDITOR_PREFIX = "dank:roles:v1:"
 _ROLE_ACTION_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
@@ -241,19 +242,12 @@ async def _replace(
     view: discord.ui.View,
     content: str = "",
 ) -> None:
-    kwargs = {
-        "content": content or None,
-        "embed": embed,
-        "view": view,
-        "allowed_mentions": discord.AllowedMentions.none(),
-    }
-    if not interaction.response.is_done():
-        if interaction.message is not None:
-            await interaction.response.edit_message(**kwargs)
-        else:
-            await interaction.response.send_message(**kwargs, ephemeral=True)
-    else:
-        await interaction.edit_original_response(**kwargs)
+    await replace_panel(
+        interaction,
+        content=content,
+        embed=embed,
+        view=view,
+    )
 
 
 async def _followup_panel(
@@ -639,6 +633,7 @@ class _OwnedView(discord.ui.View):
     def __init__(self, owner_id: int) -> None:
         super().__init__(timeout=PRIVATE_MENU_TTL_SECONDS)
         self.owner_id = int(owner_id)
+        self.add_item(CloseRolePanelButton(row=4))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(getattr(interaction.user, "id", 0) or 0) == self.owner_id:
@@ -687,9 +682,9 @@ class RolesProfilesView(_OwnedView):
     @discord.ui.button(label="My Profile", emoji="👤", style=discord.ButtonStyle.secondary, row=0)
     async def my_profile(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        from .public_command_hub import open_profile_entry
+        from stoney_verify.profile_signature_studio import open_profile_signature_studio
 
-        await open_profile_entry(interaction)
+        await open_profile_signature_studio(interaction, replace=True)
 
     @discord.ui.button(label="Profile Tags & Cosmetics", emoji="🎭", style=discord.ButtonStyle.secondary, row=0)
     async def profile_tags(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -700,7 +695,7 @@ class RolesProfilesView(_OwnedView):
             return await _reply(interaction, "❌ This only works inside a server.")
         from .public_self_roles_group import _open_profile_cosmetics
 
-        await _open_profile_cosmetics(interaction, guild, member)
+        await _open_profile_cosmetics(interaction, guild, member, replace=True)
 
     @discord.ui.button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.secondary, row=0)
     async def community_pings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -732,7 +727,7 @@ class RolesProfilesView(_OwnedView):
             return await _reply(interaction, "❌ Profile Builder setup requires authorized server management access.")
         from .public_self_roles_group import _post_profile_builder
 
-        await _post_profile_builder(interaction, title="Profile Panel")
+        await _post_profile_builder(interaction, title="Profile Panel", replace=True)
 
     @discord.ui.button(label="Server Role Editor", emoji="🛠️", style=discord.ButtonStyle.primary, row=2)
     async def server_roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
