@@ -1485,7 +1485,7 @@ async def _open_undo_action(interaction: discord.Interaction) -> None:
         )
         return
     created_at = _safe_float(latest.get("created_at"), 0.0)
-    policy = await naming_identity.get_naming_policy(int(guild.id))
+    policy = await naming_identity.get_naming_policy(int(guild.id), refresh=True)
     policy_snapshot = search_safe_naming.policy_fingerprint(policy)
     effective = dict(latest)
     effective["items"] = search_safe_naming.normalize_undo_snapshot_items(
@@ -1556,7 +1556,7 @@ class UndoConfirmView(DesignView):
             return
 
         await interaction.response.defer(ephemeral=True, thinking=False)
-        current_policy = await naming_identity.get_naming_policy(int(guild.id))
+        current_policy = await naming_identity.get_naming_policy(int(guild.id), refresh=True)
         if not search_safe_naming.policy_matches_snapshot(self.naming_policy, current_policy):
             await interaction.edit_original_response(
                 content=(
@@ -2387,7 +2387,7 @@ class ReviewedPreviewView(DesignView):
             return
         mode = _safe_str(payload.get("mode"), "preview")
         preview_policy = payload.get("naming_policy")
-        current_policy = await naming_identity.get_naming_policy(int(guild.id))
+        current_policy = await naming_identity.get_naming_policy(int(guild.id), refresh=True)
         if not search_safe_naming.policy_matches_snapshot(preview_policy, current_policy):
             legacy._PENDING.pop(key, None)  # type: ignore[attr-defined]
             await safe_send_interaction(
