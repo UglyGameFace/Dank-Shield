@@ -23,6 +23,7 @@ ROLE_CENTER = ROOT / "stoney_verify/commands_ext/public_role_center.py"
 COMPACT_HOME = ROOT / "stoney_verify/commands_ext/public_command_surface_v2.py"
 COMPAT_HOME = ROOT / "stoney_verify/commands_ext/public_command_hub.py"
 ANTINUKE_PROVENANCE = ROOT / "stoney_verify/anti_nuke_self_action_runtime.py"
+PROFILE_ROLES = ROOT / "stoney_verify/commands_ext/public_self_roles_group.py"
 
 
 def _labels(view: discord.ui.View) -> set[str]:
@@ -162,6 +163,12 @@ def test_both_roles_and_profiles_doorways_use_one_authoritative_center() -> None
         assert "open_roles_profiles_center(interaction)" in route
         assert "_post_profile_builder(interaction" not in route
 
+
+
+def test_empty_cosmetic_guidance_uses_the_public_roles_profiles_path() -> None:
+    source = PROFILE_ROLES.read_text(encoding="utf-8")
+    assert '/dank home` → **Roles & Profiles** → **Profile Builder**' in source
+    assert 'Staff can add them in `/dank profile builder`' not in source
 
 def test_role_editor_mutations_remain_inside_antinuke_self_action_provenance() -> None:
     source = ANTINUKE_PROVENANCE.read_text(encoding="utf-8")
