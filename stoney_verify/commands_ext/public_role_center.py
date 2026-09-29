@@ -408,13 +408,35 @@ def _config_dependency_labels(config: Mapping[str, Any], role_id: int) -> list[s
 
 
 async def _role_dependencies(guild: discord.Guild, role: discord.Role) -> list[str]:
+    role_id = int(role.id)
+    dependencies: list[str] = []
+
     try:
         from stoney_verify.guild_config import get_guild_config
 
         config = await get_guild_config(int(guild.id), refresh=True)
     except Exception:
-        return ["Dank Shield configuration could not be verified"]
-    return _config_dependency_labels(config, int(role.id))
+        dependencies.append("Core Dank Shield role configuration could not be verified")
+    else:
+        dependencies.extend(_config_dependency_labels(config, role_id))
+
+    # Spam Guard owns a separate guild_security_settings persistence surface.
+    # Do not let Role Editor deletion strand its quarantine/exempt/invite-role
+    # references merely because they are not part of guild_config.
+    try:
+        from stoney_verify import spam_guard
+
+        spam_settings = await spam_guard.get_spam_settings(int(guild.id))
+        spam_labels = _config_dependency_labels(spam_settings, role_id)
+        dependencies.extend(f"Spam Guard · {label}" for label in spam_labels)
+
+        diag = dict(spam_guard._SETTINGS_LAST_DIAG_BY_GUILD.get(int(guild.id)) or {})
+        if str(diag.get("status") or "").strip().lower() in {"unavailable", "exception"}:
+            dependencies.append("Spam Guard role settings could not be verified")
+    except Exception:
+        dependencies.append("Spam Guard role settings could not be verified")
+
+    return sorted(dict.fromkeys(dependencies))
 
 
 def _permission_groups(role: discord.Role) -> list[tuple[str, str, tuple[str, ...]]]:
