@@ -1057,7 +1057,7 @@ async def _product_main_setup_payload(
         value="\n".join(issues)[:900] if issues else "✅ No required setup problem is blocking you.",
         inline=False,
     )
-    embed.set_footer(text=f"Guild {guild.id} • /dank setup")
+    embed.set_footer(text="/dank setup • server configuration")
     return embed, ProductSetupHomeView(ready=ready, started=started, completed=completed)
 
 class SetupChoiceSelect(discord.ui.Select):
@@ -2081,7 +2081,7 @@ async def _open_test_launch(interaction: discord.Interaction) -> None:
             ),
             inline=False,
         )
-    embed.set_footer(text=f"Guild {guild.id} • enabled features only")
+    embed.set_footer(text="Enabled features only")
     await solid._edit_or_followup(interaction, embed=embed, view=LaunchTestView(state))
 
 
