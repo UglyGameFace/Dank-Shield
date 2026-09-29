@@ -849,6 +849,12 @@ def _member_role_shortcut_embed(member: discord.Member) -> discord.Embed:
 
 
 class DirectMemberRoleActionView(MemberRoleActionView):
+    @discord.ui.button(
+        label="Back",
+        emoji="◀️",
+        style=discord.ButtonStyle.secondary,
+        row=1,
+    )
     async def back(
         self,
         interaction: discord.Interaction,
