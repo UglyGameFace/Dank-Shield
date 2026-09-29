@@ -20,6 +20,7 @@ import discord
 from stoney_verify.services import naming_identity
 from stoney_verify.services import naming_mutation_locks
 from stoney_verify.services import role_mutation_authority
+from stoney_verify.operation_queue import with_retry
 from stoney_verify.share_router_resources import is_share_router_design_resource
 
 DEFAULT_REPAIR_BATCH_SIZE = 25
@@ -35,6 +36,37 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(str(value).strip())
     except Exception:
         return int(default)
+
+
+async def _safe_name_edit(
+    resource: Any,
+    *,
+    name: str,
+    reason: str,
+    guild_id: int,
+    kind: str,
+) -> Any:
+    """Reserve process-wide REST headroom and retry one idempotent name PATCH."""
+
+    from stoney_verify.startup_guards.discord_api_safety import (
+        reserve_bulk_discord_rest_requests,
+    )
+
+    await reserve_bulk_discord_rest_requests(
+        1,
+        label=f"search_safe:{kind}:guild={int(guild_id)}",
+    )
+
+    async def _edit() -> Any:
+        return await resource.edit(name=name, reason=reason)
+
+    return await with_retry(
+        _edit,
+        attempts=3,
+        base_delay=0.75,
+        max_delay=8.0,
+        concurrency_key=f"search-safe-name:{int(guild_id)}:{kind}",
+    )
 
 
 def _resource_lock(kind: str, guild_id: int, resource_id: int) -> asyncio.Lock:
@@ -370,9 +402,12 @@ async def enforce_role_name(role: discord.Role) -> bool:
                 desired = naming_identity.search_safe_display_name(current).strip()
                 if not desired or desired == current or _role_blocker(fresh):
                     return False
-                await fresh.edit(
+                await _safe_name_edit(
+                    fresh,
                     name=desired[:100],
                     reason="Dank Shield Search-Safe Naming policy",
+                    guild_id=gid,
+                    kind="role",
                 )
                 return True
     except (discord.Forbidden, discord.HTTPException):
@@ -413,9 +448,12 @@ async def enforce_channel_name(channel: discord.abc.GuildChannel) -> bool:
                 desired = naming_identity.search_safe_display_name(current).strip()
                 if not desired or desired == current or _channel_blocker(fresh):
                     return False
-                await fresh.edit(
+                await _safe_name_edit(
+                    fresh,
                     name=desired[:100],
                     reason="Dank Shield Search-Safe Naming policy",
+                    guild_id=gid,
+                    kind="channel",
                 )
                 return True
     except (discord.Forbidden, discord.HTTPException):
@@ -554,9 +592,12 @@ async def _apply_search_safe_batch_locked(
                     )
                     continue
 
-                await fresh.edit(
+                await _safe_name_edit(
+                    fresh,
                     name=reviewed_after[:100],
                     reason="Dank Shield Search-Safe Naming reviewed repair",
+                    guild_id=int(guild.id),
+                    kind=kind,
                 )
                 changed.append(
                     {
