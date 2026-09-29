@@ -95,7 +95,7 @@ def _home_embed() -> discord.Embed:
         name="Tiny command surface",
         value=(
             "`/dank home` is the main doorway. New server owners can use `/dank setup` directly. "
-            "`/captions`, `/mod`, `/ticket`, `/tickets`, and `/verify` are optional fast doorways. `/dank upload` exists only because Discord "
+            "`/captions`, `/mod`, `/ticket`, `/tickets`, `/toke`, and `/verify` are optional fast doorways. `/dank upload` exists only because Discord "
             "buttons cannot provide a file-attachment field."
         ),
         inline=False,
@@ -458,6 +458,7 @@ def install_compact_public_surface_v2(bot: Any, tree: Any) -> dict[str, Any]:
         open_current_ticket_center,
         open_ticket_operations_center,
     )
+    from .public_toke import open_toke_command
     from .public_verify_command_center import open_verify_command_center
 
     replacements = (
@@ -465,6 +466,7 @@ def install_compact_public_surface_v2(bot: Any, tree: Any) -> dict[str, Any]:
         ("mod", "Open the complete moderation and member action center.", open_mod_command_center),
         ("ticket", "Open controls for the current or selected ticket.", open_current_ticket_center),
         ("tickets", "Open ticket queues, lookup, setup, routing, and category tools.", open_ticket_operations_center),
+        ("toke", "Ping the opt-in sesh crowd.", open_toke_command),
         ("verify", "Open the complete verification status and repair center.", open_verify_command_center),
     )
     for name, description, callback in replacements:
@@ -476,7 +478,7 @@ def install_compact_public_surface_v2(bot: Any, tree: Any) -> dict[str, Any]:
 
     size = _compact_dank_children(tree)
     roots = sorted(str(getattr(item, "name", "")) for item in tree.get_commands(guild=None))
-    expected_roots = {"captions", "dank", "mod", "ticket", "tickets", "verify"}
+    expected_roots = {"captions", "dank", "mod", "ticket", "tickets", "toke", "verify"}
     command_roots = {name for name in roots if name != "View Dank Profile"}
     if command_roots != expected_roots:
         raise RuntimeError(
