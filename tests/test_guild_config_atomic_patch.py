@@ -20,13 +20,41 @@ class _AtomicRPC:
     def execute(self):
         patch = dict(self.params["p_patch"])  # type: ignore[arg-type]
         clear_keys = list(self.params.get("p_clear_keys") or [])
+        expected = self.params.get("p_expected")
         with self.owner.lock:
+            if isinstance(expected, dict):
+                current_settings = dict(self.owner.row.get("settings") or {})
+                matches = True
+                for key, wanted in expected.items():
+                    if wanted is None:
+                        if key in current_settings and current_settings.get(key) is not None:
+                            matches = False
+                            break
+                    elif current_settings.get(key) != wanted:
+                        matches = False
+                        break
+                if not matches:
+                    return SimpleNamespace(
+                        data={
+                            "__atomic_patch_applied": False,
+                            "__atomic_patch_row": dict(self.owner.row),
+                        }
+                    )
+
             for key in ("settings", "config", "metadata", "meta"):
                 current = dict(self.owner.row.get(key) or {})
                 for clear_key in clear_keys:
                     current.pop(str(clear_key), None)
                 current.update(patch)
                 self.owner.row[key] = current
+
+            if isinstance(expected, dict):
+                return SimpleNamespace(
+                    data={
+                        "__atomic_patch_applied": True,
+                        "__atomic_patch_row": dict(self.owner.row),
+                    }
+                )
             return SimpleNamespace(data=dict(self.owner.row))
 
 
@@ -80,6 +108,62 @@ def test_atomic_writer_sends_only_sparse_updates_not_rebuilt_neighbor_state(monk
     assert "member_setup_state" not in patch
     assert "neighboring_setting" not in patch
     assert fake.calls[0][1]["p_clear_keys"] == []
+
+
+def test_atomic_compare_and_swap_rejects_stale_same_key_writer(monkeypatch) -> None:
+    stale = _stale_row()
+    fake = _FakeSupabase(stale)
+    monkeypatch.setattr(guild_config, "get_supabase", lambda: fake)
+
+    expected = {"policy": {"mode": "preserve"}}
+    winner = {"policy": {"mode": "search_safe"}}
+    stale_loser = {"policy": {"mode": "preserve"}, "records": {"role:1": {"aliases": ["old"]}}}
+
+    applied, first = asyncio.run(
+        guild_config.compare_and_swap_guild_config_key(
+            999,
+            "naming_identity_v1",
+            expected=expected,
+            value=winner,
+            source="naming_identity_runtime",
+        )
+    )
+    assert applied is True
+    assert first["naming_identity_v1"] == winner
+
+    applied, second = asyncio.run(
+        guild_config.compare_and_swap_guild_config_key(
+            999,
+            "naming_identity_v1",
+            expected=expected,
+            value=stale_loser,
+            source="naming_identity_runtime",
+        )
+    )
+    assert applied is False
+    assert second["naming_identity_v1"] == winner
+    assert fake.row["settings"]["naming_identity_v1"] == winner  # type: ignore[index]
+
+
+def test_atomic_compare_and_swap_rejects_protected_setup_keys(monkeypatch) -> None:
+    fake = _FakeSupabase(_stale_row())
+    monkeypatch.setattr(guild_config, "get_supabase", lambda: fake)
+
+    async def scenario() -> None:
+        try:
+            await guild_config.compare_and_swap_guild_config_key(
+                999,
+                "verified_role_id",
+                expected="1",
+                value="2",
+                source="test",
+            )
+        except ValueError:
+            return
+        raise AssertionError("protected role/channel/category config keys must not use CAS bypass")
+
+    asyncio.run(scenario())
+    assert fake.calls == []
 
 
 def test_concurrent_naming_and_member_setup_writes_preserve_each_other(monkeypatch) -> None:
@@ -201,5 +285,8 @@ def test_atomic_patch_migration_uses_server_side_json_merge_and_service_role_onl
     assert "create or replace function public.patch_dank_guild_config" in sql.lower()
     assert "(coalesce(%I, ''{}''::jsonb) - $3) || $2" in sql
     assert "on conflict (guild_id) do nothing" in sql.lower()
-    assert "revoke all on function public.patch_dank_guild_config(text, jsonb, text[]) from public" in sql.lower()
-    assert "grant execute on function public.patch_dank_guild_config(text, jsonb, text[]) to service_role" in sql.lower()
+    assert "p_expected jsonb default null" in sql.lower()
+    assert "'__atomic_patch_applied', false" in sql.lower()
+    assert "for update" in sql.lower()
+    assert "revoke all on function public.patch_dank_guild_config(text, jsonb, text[], jsonb) from public" in sql.lower()
+    assert "grant execute on function public.patch_dank_guild_config(text, jsonb, text[], jsonb) to service_role" in sql.lower()
