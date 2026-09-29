@@ -156,8 +156,9 @@ def _member_exempt(member: discord.Member) -> bool:
     if member.bot or int(member.id) == int(getattr(guild, "owner_id", 0) or 0):
         return True
     try:
-        perms = member.guild_permissions
-        return bool(perms.administrator or perms.manage_guild or perms.manage_roles)
+        # Administrator bypasses channel permission overwrites. Manage Guild and
+        # Manage Roles do not, so those staff members still need Member Access.
+        return bool(member.guild_permissions.administrator)
     except Exception:
         return False
 
