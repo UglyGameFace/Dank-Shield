@@ -21,6 +21,7 @@ from discord import app_commands
 
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 from stoney_verify.services import role_mutation_authority
+from stoney_verify.services import search_safe_naming
 from stoney_verify.ui.picker import DankRoleSelect
 
 _ROLE_EDITOR_PREFIX = "dank:roles:v1:"
@@ -889,8 +890,13 @@ class RoleDetailView(_OwnedView):
                 fresh_grant_blockers = _permission_grant_blockers(guild, actor, fresh_enabled)
                 if fresh_grant_blockers:
                     return await _reply(interaction, "❌ " + "\n• ".join(fresh_grant_blockers))
+                duplicate_name = await search_safe_naming.policy_adjusted_name(
+                    int(guild.id),
+                    kind="role",
+                    name=_clip(f"{fresh.name} Copy", 100),
+                )
                 create_fields: dict[str, Any] = {
-                    "name": _clip(f"{fresh.name} Copy", 100),
+                    "name": _clip(duplicate_name, 100),
                     "permissions": discord.Permissions(fresh.permissions.value),
                     "colour": fresh.colour,
                     "hoist": fresh.hoist,
@@ -1110,8 +1116,13 @@ class CreateRoleModal(discord.ui.Modal):
             async with _role_action_lock(guild.id, 0, "create"):
                 if not _actor_can_manage_roles(guild, actor) or not _bot_can_manage_roles(guild):
                     return await _reply(interaction, "❌ Manage Roles authority changed before creation. Nothing was created.")
+                effective_name = await search_safe_naming.policy_adjusted_name(
+                    int(guild.id),
+                    kind="role",
+                    name=name,
+                )
                 role = await guild.create_role(
-                    name=name[:100],
+                    name=effective_name[:100],
                     permissions=discord.Permissions.none(),
                     colour=colour,
                     hoist=hoist,
@@ -1221,6 +1232,13 @@ class EditRoleAppearanceModal(discord.ui.Modal):
                 fresh_blockers = _role_mutation_blockers(guild, actor, fresh)
                 if fresh_blockers:
                     return await _reply(interaction, "❌ " + "\n• ".join(fresh_blockers))
+                fields["name"] = (
+                    await search_safe_naming.policy_adjusted_name(
+                        int(guild.id),
+                        kind="role",
+                        name=fields.get("name"),
+                    )
+                )[:100]
                 edited = await fresh.edit(**fields)
                 if not isinstance(edited, discord.Role):
                     edited = guild.get_role(self.role_id) or fresh
