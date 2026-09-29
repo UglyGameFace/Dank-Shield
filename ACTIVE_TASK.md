@@ -235,6 +235,14 @@ Dedicated footer regression coverage now:
 - rejects known debug/footer phrases;
 - verifies human-readable current runtime markers plus backward legacy detection for persistent surfaces.
 
+Role autocomplete privacy is also hardened:
+- `/role` autocomplete filters choices before Discord returns them;
+- role managers see only roles they can actually manage under the shared hierarchy blocker;
+- ordinary members see only configured self-service roles;
+- normal-member filtering reuses one fresh guild config read for the whole suggestion batch rather than one read per role.
+
+Final audit ledger: `SEARCH_SAFE_MASTER_AUDIT_018.md`.
+
 ## Final validation / re-audit gate
 
 Implementation changes are now frozen except for concrete validation failures.
@@ -249,7 +257,7 @@ Required before this master remediation can be considered complete:
 - real PostgreSQL sparse write/clear/CAS smoke checks pass;
 - Ticket Owner Emergency Override and other triggered security regressions remain green;
 - final changed-file/diff review finds no unrelated task contamination or duplicate authority owners;
-- final 100-point audit ledger is updated to PASS / NEEDS HARDENING / N/A with unresolved findings explicitly listed;
+- final 100-point audit ledger in `SEARCH_SAFE_MASTER_AUDIT_018.md` is reviewed against the exact head;
 - Supabase migration deployment is observed after merge;
 - Discloud production startup is observed after merge;
 - live canary confirms Search-Safe reviewed repair, styled-role lookup, Member Setup manager wording, Design preview/apply/Undo consistency, and representative cleaned footers;
@@ -263,7 +271,6 @@ These must be classified in the final re-audit rather than silently forgotten:
 - eventual stale deleted-resource identity cleanup across downtime;
 - automatic enforcement failure visibility;
 - mobile/live canary for the intentional `/role` option schema change from Discord Role to semantic string autocomplete;
-- autocomplete privacy behavior for guilds with sensitive role naming;
 - normalized-name collision preview;
 - preview/name-length consistency;
 - searchability-versus-mentionability explanation.
