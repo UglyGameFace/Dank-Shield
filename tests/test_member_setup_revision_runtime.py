@@ -237,3 +237,19 @@ def test_new_profile_panel_persists_canonical_message_ownership() -> None:
     assert "panel_message_id=sent.id" in PROFILE
     assert "setup_channel_id=channel.id" in PROFILE
     assert "await sent.delete()" in PROFILE
+
+
+def test_member_setup_manager_explains_prerequisite_vs_access_role_chain() -> None:
+    assert 'name="Member Access role (automatic)"' in RUNTIME
+    assert 'name="Eligibility prerequisite (optional)"' in RUNTIME
+    assert 'name="How Strict Gate works"' in RUNTIME
+    assert "Dank Shield **does not grant** the eligibility prerequisite" in RUNTIME
+    assert 'label="Member Access Role"' in RUNTIME
+    assert 'label="Eligibility Prerequisite"' in RUNTIME
+    assert 'label="Clear Eligibility Rule"' in RUNTIME
+    assert "Dank Shield will grant this role automatically" in RUNTIME
+    assert "Dank Shield does **not** grant this prerequisite role" in RUNTIME
+    assert "**1. Eligibility:**" in RUNTIME
+    assert "**2. Setup:**" in RUNTIME
+    assert "**3. Access:**" in RUNTIME
+    assert "**4. Visibility:**" in RUNTIME
