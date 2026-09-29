@@ -621,3 +621,27 @@ def test_unsafe_keycap_blocker_still_routes_to_icon_repair() -> None:
     }
 
     assert legacy._style_change_missing_emoji_items([item]) == [item]
+
+
+def test_search_safe_policy_is_bound_to_every_reviewed_design_preview_and_apply() -> None:
+    assert V2.count("normalize_design_plan_for_guild(") >= 3
+    assert LEGACY.count("normalize_design_plan_for_guild(") >= 3
+    assert 'preview_policy = payload.get("naming_policy")' in V2
+    assert "policy_matches_snapshot(preview_policy, current_policy)" in V2
+    assert "normalize_undo_snapshot_items(" in V2
+    assert "policy_matches_snapshot(self.naming_policy, current_policy)" in V2
+
+
+def test_direct_rename_saves_the_search_safe_effective_name() -> None:
+    start = LEGACY.index("class DirectRenameModal")
+    end = LEGACY.index("def _category_action_embed", start)
+    block = LEGACY[start:end]
+
+    policy_adjust = block.index("policy_adjusted_name(")
+    discord_edit = block.index("await channel.edit(")
+    save_rule = block.index("await _save_manual_name_override(")
+
+    assert policy_adjust < discord_edit < save_rule
+    assert "name=effective_name" in block
+    assert "exact_name=actual_name" in block
+    assert "policy_adjusted=policy_adjusted" in block
