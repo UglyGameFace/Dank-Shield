@@ -363,7 +363,7 @@ async def intake_post_actions(
     embed.add_field(name="Channel", value=f"{ch.mention}\n`{ch.id}`", inline=False)
     embed.add_field(name="Status", value=f"`{status}`", inline=True)
     embed.add_field(name="Lifecycle", value=lifecycle, inline=True)
-    embed.set_footer(text="stoney_verify:ticket_staff_actions:v1")
+    embed.set_footer(text="Ticket Staff Actions • active tickets only")
 
     try:
         await ch.send(embed=embed, view=legacy.TicketChannelActionsView())
