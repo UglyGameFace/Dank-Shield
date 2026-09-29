@@ -13,6 +13,7 @@ import discord
 from discord import app_commands
 
 from stoney_verify.ui.picker import (
+from .role_center_navigation import BackToRoleCenterButton, CloseRolePanelButton, close_panel, defer_panel
     DankChannelSelect,
     DankChoice,
     DankMultiPickerView,
@@ -200,9 +201,7 @@ async def _reply(interaction: discord.Interaction, content: str, *, ok: bool = F
 
 
 async def _defer_private(interaction: discord.Interaction) -> None:
-    if interaction.response.is_done():
-        return
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    await defer_panel(interaction)
 
 
 async def _defer_update(interaction: discord.Interaction) -> None:
@@ -414,6 +413,17 @@ class CommunityPingSetupView(discord.ui.View):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
+    @discord.ui.button(label="Roles & Profiles", emoji="↩️", style=discord.ButtonStyle.secondary, row=4)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_role_center import open_roles_profiles_center
+        await open_roles_profiles_center(interaction)
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, row=4)
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await close_panel(interaction, fallback_text="Community & Pings closed.")
+
 
 async def open_community_ping_setup(interaction: discord.Interaction) -> None:
     if not await _staff_authorized(interaction):
@@ -586,6 +596,15 @@ async def _handle_member_pick(interaction: discord.Interaction, values: list[str
         changes.append("Removed: " + ", ".join(role.mention for role in to_remove))
     await _reply(interaction, "\n".join(changes) if changes else "No community-role changes needed.", ok=True)
 
+async def _back_to_roles_profiles(interaction: discord.Interaction) -> None:
+    from .public_role_center import open_roles_profiles_center
+    await open_roles_profiles_center(interaction)
+
+
+async def _close_member_roles_panel(interaction: discord.Interaction) -> None:
+    await close_panel(interaction, fallback_text="Community & Pings closed.")
+
+
 async def open_member_community_pings(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
@@ -612,6 +631,10 @@ async def open_member_community_pings(interaction: discord.Interaction) -> None:
             min_values=0,
             max_values=len(choices),
             allow_anyone=False,
+            on_home=_back_to_roles_profiles,
+            home_label="Roles & Profiles",
+            on_cancel=_close_member_roles_panel,
+            cancel_label="Close",
         ),
         allowed_mentions=discord.AllowedMentions.none(),
     )
