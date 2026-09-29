@@ -862,7 +862,7 @@ def _custom_services_embed(
         inline=False,
     )
     embed.set_footer(
-        text=f"Guild {guild.id} • choose core features"
+        text="Choose the core features you want to configure."
     )
     return embed
 
