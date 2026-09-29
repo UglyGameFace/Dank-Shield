@@ -1073,4 +1073,148 @@ class EditRoleAppearanceModal(discord.ui.Modal):
         current_colour = f"#{role.colour.value:06X}" if role.colour.value else "default"
         current_icon = role.display_icon if isinstance(role.display_icon, str) else ""
         self.name_input = discord.ui.TextInput(
-            la
+            label="Role name",
+            default=str(role.name)[:100],
+            min_length=1,
+            max_length=100,
+        )
+        self.colour_input = discord.ui.TextInput(
+            label="Colour",
+            default=current_colour,
+            placeholder="#5865F2 or default",
+            max_length=7,
+        )
+        self.icon_input = discord.ui.TextInput(
+            label="Unicode role icon (optional)",
+            default=str(current_icon)[:20],
+            placeholder="emoji, blank = keep, clear = remove",
+            max_length=20,
+            required=False,
+        )
+        self.hoist_input = discord.ui.TextInput(
+            label="Display separately? yes/no",
+            default="yes" if role.hoist else "no",
+            max_length=5,
+        )
+        self.mentionable_input = discord.ui.TextInput(
+            label="Mentionable? yes/no",
+            default="yes" if role.mentionable else "no",
+            max_length=5,
+        )
+        for item in (
+            self.name_input,
+            self.colour_input,
+            self.icon_input,
+            self.hoist_input,
+            self.mentionable_input,
+        ):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        guild, actor = await _require_role_manager(interaction)
+        if guild is None or actor is None:
+            return
+        role = guild.get_role(self.role_id)
+        if not isinstance(role, discord.Role):
+            return await _reply(interaction, "❌ That role no longer exists.")
+        blockers = _role_mutation_blockers(guild, actor, role)
+        if blockers:
+            return await _reply(interaction, "❌ " + "\n• ".join(blockers))
+
+        try:
+            colour = _parse_colour(str(self.colour_input.value), current=role.colour)
+            hoist = _parse_bool(str(self.hoist_input.value), field="Display separately")
+            mentionable = _parse_bool(str(self.mentionable_input.value), field="Mentionable")
+        except ValueError as exc:
+            return await _reply(interaction, f"❌ {exc}")
+
+        name = str(self.name_input.value or "").strip()
+        if not name:
+            return await _reply(interaction, "❌ Role name cannot be empty.")
+
+        icon_raw = str(self.icon_input.value or "").strip()
+        fields: dict[str, Any] = {
+            "name": name[:100],
+            "colour": colour,
+            "hoist": hoist,
+            "mentionable": mentionable,
+            "reason": _role_reason(f"edited role {role.id}", actor),
+        }
+        if icon_raw:
+            if "ROLE_ICONS" not in set(getattr(guild, "features", []) or []):
+                return await _reply(interaction, "❌ This server does not currently support custom role icons.")
+            fields["display_icon"] = None if icon_raw.casefold() in {"clear", "none"} else icon_raw
+
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            async with _role_action_lock(guild.id, self.role_id, "appearance"):
+                fresh = guild.get_role(self.role_id)
+                if not isinstance(fresh, discord.Role):
+                    return await _reply(interaction, "❌ That role no longer exists.")
+                fresh_blockers = _role_mutation_blockers(guild, actor, fresh)
+                if fresh_blockers:
+                    return await _reply(interaction, "❌ " + "\n• ".join(fresh_blockers))
+                edited = await fresh.edit(**fields)
+                if not isinstance(edited, discord.Role):
+                    edited = guild.get_role(self.role_id) or fresh
+        except discord.Forbidden:
+            return await _reply(interaction, "❌ Discord denied the role edit. Re-check permissions and hierarchy.")
+        except (discord.HTTPException, ValueError) as exc:
+            return await _reply(interaction, f"❌ Discord could not edit the role: {_clip(exc, 300)}")
+
+        await _followup_panel(
+            interaction,
+            content="✅ Role updated.",
+            embed=await _role_embed(guild, edited),
+            view=RoleDetailView(self.owner_id, edited.id),
+        )
+
+
+class PermissionGroupSelect(discord.ui.Select):
+    def __init__(
+        self,
+        parent: "PermissionGroupPickerView",
+        groups: list[tuple[str, str, tuple[str, ...]]],
+    ) -> None:
+        self.parent_view = parent
+        self.groups = {key: (label, names) for key, label, names in groups}
+        super().__init__(
+            placeholder="Choose a permission group…",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label=label[:100],
+                    value=key[:100],
+                    description=f"{len(names)} permissions",
+                    emoji="🔐",
+                )
+                for key, label, names in groups[:25]
+            ],
+            custom_id=f"{_ROLE_EDITOR_PREFIX}permission_group",
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guild, actor = await _require_role_manager(interaction)
+        if guild is None or actor is None:
+            return
+        role = guild.get_role(self.parent_view.role_id)
+        if not isinstance(role, discord.Role):
+            return await _reply(interaction, "❌ That role no longer exists.")
+        blockers = _role_mutation_blockers(guild, actor, role)
+        if blockers:
+            return await _reply(interaction, "❌ " + "\n• ".join(blockers))
+        key = str((self.values or [""])[0])
+        group = self.groups.get(key)
+        if group is None:
+            return await _reply(interaction, "❌ That permission group is no longer available.")
+        label, names = group
+        view = PermissionToggleView(
+            self.parent_view.owner_id,
+            role.id,
+            group_key=key,
+            group_label=label,
+            names=names,
+        ).attach_for_role(rol
