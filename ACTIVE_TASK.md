@@ -54,52 +54,68 @@ Confirmed P2/product findings include:
 - Member Setup **Access Role** is the role Dank Shield grants/removes to unlock protected categories, while **Prerequisite Role** is only an optional eligibility requirement such as Verified. The current UI presents them as near-identical role pickers and does not explain that relationship clearly.
 - Every production-facing Dank Shield embed footer must be audited. Internal/debug/operator metadata such as raw guild IDs, config sources, runtime identifiers, schema/version tags, monitor/service names, `dank_shield:...` identifiers, or phrases such as “canonical live runtime” must not leak into ordinary member/admin UI. Useful user guidance, safety context, pagination, counts, and confirmation semantics should remain.
 
-## Current implementation focus: P0 canonical guild-config atomicity
+## Completed remediation slice: P0 canonical guild-config atomicity
+
+The shared `guild_configs` lost-update root cause has been repaired on this branch.
+
+Implemented:
+- service-role-only PostgreSQL RPC `patch_dank_guild_config(guild_id, patch, clear_keys)`;
+- database-side sparse JSON set/clear behavior instead of client-side whole-object replacement;
+- canonical `guild_config` routes normal writes and explicit clears through that RPC;
+- setup/onboarding/service-mode compatibility paths that could write `guild_configs` directly were consolidated back into the canonical owner;
+- full and selective Core Settings restores now perform sparse canonical mutations rather than restoring stale whole JSON containers;
+- concurrent Naming Identity + Member Setup writes and concurrent clear/write behavior have dedicated regressions and a real PostgreSQL CI race.
+
+Validation evidence:
+- exact remediation head `d02bcde8381e0226de5f92443a6568ec33e119e5` completed all six triggered workflows successfully;
+- Dank Shield CI full unit suite passed;
+- the PostgreSQL atomic concurrent-writer/clear smoke test passed;
+- Schema Authority SQL, Dank Design Regression CI, Ticket Owner Emergency Override, Application Command Size Diagnostics, and Profile Runtime Diagnostics passed;
+- the branch was 0 behind production `main` at that checkpoint.
+
+Production closure still requires the migration to deploy after the final remediation PR merges; pre-merge green CI proves the migration behavior, not that production Supabase has received it.
+
+## Current implementation focus: P0 Search-Safe actor-vs-target role hierarchy
 
 Root cause:
-- `stoney_verify.guild_config._candidate_write_payloads()` reconstructs complete compatibility JSON objects from an earlier row snapshot.
-- separate async/process writers can therefore replace sibling settings that were committed after that snapshot.
-- process-local locks would not be sufficient for a sharded/multi-process public bot.
+- Search-Safe reviewed repair previously decided role editability from Dank Shield's own Manage Roles permission and bot hierarchy only.
+- A human with Manage Roles could therefore ask Dank Shield to rename a role at or above that human's own highest role as long as Dank Shield itself outranked the target.
+- the canonical `/role` editor already blocks that privilege escalation, so Search-Safe was inconsistent with the existing authority boundary.
 
 Implementation on branch `audit/search-safe-master-remediation-20260929`:
-- added migration `supabase/migrations/20260929143000_atomic_guild_config_patch.sql`;
-- added service-role-only PostgreSQL RPC `patch_dank_guild_config(guild_id, patch)`;
-- the RPC inserts the canonical guild row if needed, merges only supplied sparse keys into each compatibility JSON column inside the database UPDATE, and updates only flat compatibility columns explicitly named by the patch;
-- `stoney_verify.guild_config` now prefers this atomic sparse RPC for canonical `guild_configs` writes;
-- legacy read/merge/write remains only as a compatibility fallback when the RPC is genuinely unavailable before migration deployment;
-- added `tests/test_guild_config_atomic_patch.py`, including a regression where Naming Identity and Member Setup deliberately operate from the same stale row snapshot and must preserve both writes;
-- extended the existing PostgreSQL CI service job to launch two real concurrent RPC writers and assert both nested states survive.
+- added `stoney_verify/services/role_mutation_authority.py` as the shared live Discord role-mutation authority helper;
+- canonical `/role` actor permission, owner, bot Manage Roles, and actor/bot hierarchy checks now delegate to that shared owner without changing the public Role Editor surface;
+- Search-Safe preview accepts the initiating actor and marks roles outside that actor's hierarchy as blocked;
+- reviewed Search-Safe batch Apply requires the initiating actor explicitly;
+- role authority is rechecked again after resource lookup and again inside the per-resource mutation lock immediately before the Discord PATCH;
+- every Search-Safe UI preview/apply/next-batch path passes `interaction.user`;
+- automatic event-driven Search-Safe enforcement remains a server-policy action with no synthetic human actor and therefore retains its bot-policy boundary rather than pretending an actor exists;
+- focused regressions cover a Manage Roles actor below the target role, preview blocking, and authority changing between preview and locked mutation.
 
 ## Validation / results
 
-Current remediation branch was created directly from production baseline `7bf1bf0799ffaf70cb4b207da9e42750797123cf`.
-
-Validation is **pending** for the new P0 implementation. No completion claim is permitted until:
-- Python compile/full tests execute on the exact remediation head;
-- the PostgreSQL concurrency check executes successfully;
-- migration/version checks pass;
-- final diff inspection confirms the P0 patch is sparse and does not introduce a second config owner;
-- exact-head CI is green.
-
-The prior green PR #362 workflows are historical evidence only and do not validate this branch.
+The hierarchy implementation is **pending exact-head CI**. No P0 closure claim is permitted until:
+- full Python tests and compile checks pass on the exact hierarchy head;
+- the existing Role Editor regressions remain green, proving the shared authority extraction did not weaken its behavior;
+- Search-Safe hierarchy regressions pass;
+- Application Command Size and focused Dank Design workflows remain green;
+- final diff review confirms there is one shared actor-role authority owner and no alternate weaker Search-Safe path.
 
 ## Cleanup / conflicts
 
 - Canonical `stoney_verify.guild_config` remains the only application-side guild config owner.
-- Supabase migration/RPC is a transaction primitive for that owner, not a second feature config system.
-- Do not reactivate dormant `startup_guards.guild_config_write_safety` or setup operation-lock guards as a substitute for canonical atomic writes.
-- Do not proceed to the actor-hierarchy P0 until this persistence repair is validated or a concrete blocker is recorded.
-- Do not begin footer/UI cleanup while either P0 remains active.
+- `role_mutation_authority.py` is the reusable Discord role mutation permission/hierarchy primitive; feature UIs may add stricter gates but must not weaken it.
+- Search-Safe reviewed repair and the Role Editor now share the same human hierarchy rule.
+- Do not begin P1 integration work or footer/UI cleanup until this second P0 is validated.
 
 ## Blockers / risks
 
-- Until the new migration is deployed, code can detect a genuinely missing RPC and use the historical compatibility writer; production correctness therefore requires migration deployment evidence before this P0 is considered closed.
-- SQL dynamic flat-column casting must be validated against the repository's PostgreSQL CI service.
-- Cross-process correctness depends on the database-side sparse UPDATE, not Python locks.
+- production still needs the atomic guild-config migration after the eventual merge.
+- Search-Safe automatic event enforcement is intentionally actorless because it executes an already-enabled guild policy. The current P0 is the human-reviewed mutation boundary; server-policy authority will be rechecked during the later policy/integration audit rather than silently conflated with a fake actor.
+- if exact-head tests reveal another direct human-triggered role mutation path that bypasses the shared authority helper, it belongs to this P0 and must be fixed before proceeding.
 
 ## Backlog inside this same master audit
 
-- P0 Search-Safe actor hierarchy repair.
 - P1 integration/concurrency/cache/debounce/Unicode/repair transaction findings from the audit ledger.
 - P2 Member Setup Access Role/Prerequisite Role UX redesign.
 - P2 global user-facing footer cleanup/audit.
@@ -107,7 +123,7 @@ The prior green PR #362 workflows are historical evidence only and do not valida
 
 ## Next step
 
-Open a draft remediation PR from the current branch, run exact-head CI, inspect the PostgreSQL atomic-patch job and full unit suite, and correct only failures belonging to this P0 root cause before moving to the next audit finding.
+Run exact-head CI for the hierarchy implementation, inspect any failure at the job/step level, and close the second P0 only after the shared Role Editor + Search-Safe authority boundary is proven green. Then move to the P1 integration block in severity order.
 
 ## Prior merged task record: SEARCH-SAFE-NAMING-017
 
