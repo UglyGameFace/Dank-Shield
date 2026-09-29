@@ -118,6 +118,10 @@ def default_guild_setup_state() -> dict[str, Any]:
         "setup_channel_id": "",
         "access_mode": ACCESS_MODE_NORMAL,
         "access_role_id": "",
+        "prerequisite_role_id": "",
+        "protected_category_ids": [],
+        "gate_active": False,
+        "gate_snapshot": {},
         "current_revision": 0,
         "history": [],
     }
@@ -134,6 +138,20 @@ def normalize_guild_setup_state(value: Any) -> dict[str, Any]:
         else ACCESS_MODE_NORMAL
     )
     state["access_role_id"] = str(_safe_int(raw.get("access_role_id"), 0) or "")
+    state["prerequisite_role_id"] = str(_safe_int(raw.get("prerequisite_role_id"), 0) or "")
+    category_ids: list[str] = []
+    raw_categories = raw.get("protected_category_ids")
+    if isinstance(raw_categories, (list, tuple, set, frozenset)):
+        seen_categories: set[int] = set()
+        for item in raw_categories:
+            cid = _safe_int(item, 0)
+            if cid > 0 and cid not in seen_categories:
+                seen_categories.add(cid)
+                category_ids.append(str(cid))
+    state["protected_category_ids"] = category_ids[:100]
+    state["gate_active"] = bool(raw.get("gate_active", False))
+    snapshot = raw.get("gate_snapshot")
+    state["gate_snapshot"] = dict(snapshot) if isinstance(snapshot, Mapping) else {}
     state["current_revision"] = max(0, _safe_int(raw.get("current_revision"), 0))
 
     history: list[dict[str, Any]] = []
@@ -201,6 +219,10 @@ async def configure_guild_setup(
     setup_channel_id: Optional[int] = None,
     access_mode: Optional[str] = None,
     access_role_id: Optional[int] = None,
+    prerequisite_role_id: Optional[int] = None,
+    protected_category_ids: Optional[list[int]] = None,
+    gate_active: Optional[bool] = None,
+    gate_snapshot: Optional[Mapping[str, Any]] = None,
     actor_id: int = 0,
 ) -> dict[str, Any]:
     state = await load_guild_setup_state(int(guild_id), refresh=True)
@@ -215,6 +237,18 @@ async def configure_guild_setup(
         state["access_mode"] = clean_mode
     if access_role_id is not None:
         state["access_role_id"] = str(max(0, int(access_role_id)) or "")
+    if prerequisite_role_id is not None:
+        state["prerequisite_role_id"] = str(max(0, int(prerequisite_role_id)) or "")
+    if protected_category_ids is not None:
+        state["protected_category_ids"] = [
+            str(int(value))
+            for value in protected_category_ids
+            if int(value) > 0
+        ][:100]
+    if gate_active is not None:
+        state["gate_active"] = bool(gate_active)
+    if gate_snapshot is not None:
+        state["gate_snapshot"] = dict(gate_snapshot)
     return await save_guild_setup_state(
         int(guild_id),
         state,
@@ -384,9 +418,13 @@ def member_review_status(
         "first_time": completed_revision <= 0 and current_revision > 0,
         "access_gated": (
             bool(guild.get("enabled", False))
+            and bool(guild.get("gate_active", False))
             and str(guild.get("access_mode")) == ACCESS_MODE_STRICT
-            and severity == SEVERITY_ACCESS_GATED
             and bool(pending_sections)
+            and (
+                severity == SEVERITY_ACCESS_GATED
+                or (completed_revision <= 0 and current_revision > 0)
+            )
         ),
     }
 
