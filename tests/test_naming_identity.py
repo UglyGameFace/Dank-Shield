@@ -352,3 +352,77 @@ def test_exact_live_role_match_still_avoids_alias_state_read(monkeypatch) -> Non
     choices = asyncio.run(naming_identity.role_autocomplete(interaction, "Verified"))
 
     assert choices[0].value == "1"
+
+
+def test_future_naming_schema_reads_fail_closed_without_reinterpreting_records() -> None:
+    future = {
+        "version": naming_identity.NAMING_IDENTITY_VERSION + 1,
+        "policy": {
+            "mode": naming_identity.NAMING_MODE_SEARCH_SAFE,
+            "roles": True,
+            "channels": True,
+            "categories": True,
+        },
+        "records": {
+            "role:42": {
+                "aliases": ["future-alias"],
+                "updated_at": 1.0,
+            }
+        },
+    }
+
+    policy = naming_identity.naming_policy(future)
+    assert policy["mode"] == naming_identity.NAMING_MODE_PRESERVE
+    assert policy["categories"] is False
+    assert naming_identity.aliases_for(future, kind="role", resource_id=42) == ()
+
+
+def test_future_naming_schema_rejects_mutation_instead_of_downgrading() -> None:
+    future = {
+        "version": naming_identity.NAMING_IDENTITY_VERSION + 1,
+        "policy": {"mode": naming_identity.NAMING_MODE_SEARCH_SAFE},
+        "records": {},
+    }
+
+    try:
+        naming_identity.remember_alias(
+            future,
+            kind="role",
+            resource_id=42,
+            alias="Verified",
+        )
+    except naming_identity.UnsupportedNamingIdentityVersion:
+        pass
+    else:
+        raise AssertionError("future schema mutation must be rejected")
+
+
+def test_set_naming_mode_does_not_overwrite_future_schema(monkeypatch) -> None:
+    future = {
+        "version": naming_identity.NAMING_IDENTITY_VERSION + 1,
+        "policy": {"mode": naming_identity.NAMING_MODE_SEARCH_SAFE},
+        "records": {},
+    }
+    persisted: list[object] = []
+
+    async def fake_load(_guild_id: int):
+        return future
+
+    async def fake_persist(_guild_id: int, state):
+        persisted.append(state)
+
+    monkeypatch.setattr(naming_identity, "_load_state", fake_load)
+    monkeypatch.setattr(naming_identity, "_persist_state", fake_persist)
+
+    async def scenario() -> None:
+        try:
+            await naming_identity.set_naming_mode(
+                999,
+                naming_identity.NAMING_MODE_PRESERVE,
+            )
+        except naming_identity.UnsupportedNamingIdentityVersion:
+            return
+        raise AssertionError("set_naming_mode must reject a newer schema")
+
+    asyncio.run(scenario())
+    assert persisted == []
