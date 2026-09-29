@@ -193,7 +193,7 @@ def _compact_server_role_labels(member: discord.Member, config: Mapping[str, Any
         pass
 
     profile_name_keys = _profile_role_name_keys()
-    cosmetic_ids = _configured_role_ids(config, "profile_cosmetic_role_ids")
+    cosmetic_ids = _configured_role_ids(config, "profile_cosmetic_role_ids", "stoner_role_id")
     for role in sorted(list(getattr(member, "roles", []) or []), reverse=True):
         try:
             if role.is_default() or role.managed or int(role.id) in cosmetic_ids:
@@ -249,7 +249,16 @@ def _compact_profile_tag_labels(member: discord.Member, config: Mapping[str, Any
         suffix = " + more" if len(interests) > len(shown) else ""
         labels.append("Interests: " + " / ".join(shown) + suffix)
 
-    cosmetic_ids = _configured_role_ids(config, "profile_cosmetic_role_ids")
+    stoner_ids = _configured_role_ids(config, "stoner_role_id")
+    community = [
+        _short_role_label(role.name)
+        for role in sorted(list(getattr(member, "roles", []) or []), reverse=True)
+        if int(getattr(role, "id", 0) or 0) in stoner_ids
+    ]
+    if community:
+        labels.append("Community: " + " / ".join(community[:2]))
+
+    cosmetic_ids = _configured_role_ids(config, "profile_cosmetic_role_ids") - stoner_ids
     cosmetics = [
         _short_role_label(role.name)
         for role in sorted(list(getattr(member, "roles", []) or []), reverse=True)
