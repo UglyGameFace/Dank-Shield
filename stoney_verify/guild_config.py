@@ -49,6 +49,7 @@ GUILD_CONFIG_TABLE_FALLBACKS = tuple(
 
 _CACHE_TTL_SECONDS = 60
 _DB_MAX_ATTEMPTS = 5
+GUILD_CONFIG_PATCH_RPC = "patch_dank_guild_config"
 
 _CONFIG_CACHE: Dict[str, Dict[str, Any]] = {}
 _CONFIG_CACHE_TS: Dict[str, datetime] = {}
@@ -348,6 +349,16 @@ def _is_missing_table_error(error: Exception) -> bool:
         or "schema cache" in text
         or "undefinedtable" in text
         or ("relation" in text and "does not exist" in text)
+    )
+
+
+def _is_missing_atomic_patch_rpc_error(error: Exception) -> bool:
+    text = repr(error).lower()
+    return bool(
+        "pgrst202" in text
+        or "could not find the function" in text
+        or "patch_dank_guild_config" in text and "schema cache" in text
+        or "has no attribute 'rpc'" in text
     )
 
 
@@ -827,6 +838,41 @@ def _candidate_write_payloads(
     return unique
 
 
+def _rpc_mapping_row(response: Any) -> dict[str, Any]:
+    data = getattr(response, "data", None)
+    if isinstance(data, Mapping):
+        return dict(data)
+    if isinstance(data, list) and data and isinstance(data[0], Mapping):
+        return dict(data[0])
+    return {}
+
+
+def _atomic_patch_guild_config_sync(
+    sb: Any,
+    guild_id: int,
+    updates: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = {
+        str(key): value
+        for key, value in dict(updates).items()
+        if str(key) not in _CONTROL_KEYS and value is not None
+    }
+    if not payload:
+        return {}
+
+    response = _execute_db_op(
+        f"atomic guild config patch guild={int(guild_id)}",
+        lambda: sb.rpc(
+            GUILD_CONFIG_PATCH_RPC,
+            {
+                "p_guild_id": str(int(guild_id)),
+                "p_patch": payload,
+            },
+        ).execute(),
+    )
+    return _rpc_mapping_row(response)
+
+
 def _db_upsert_guild_config_sync(guild_id: Any, patch: Mapping[str, Any]) -> GuildRuntimeConfig:
     gid = _fallback_guild_id(guild_id)
     if gid <= 0:
@@ -860,6 +906,25 @@ def _db_upsert_guild_config_sync(guild_id: Any, patch: Mapping[str, Any]) -> Gui
             if existing:
                 return _normalize_config_row(existing, gid, table_name=table_name)
             continue
+
+        if table_name == "guild_configs":
+            try:
+                atomic_row = _atomic_patch_guild_config_sync(sb, gid, safe_updates)
+                if atomic_row:
+                    return _normalize_config_row(atomic_row, gid, table_name=table_name)
+                refreshed = _fetch_existing_row_sync(table_name, gid)
+                if refreshed:
+                    return _normalize_config_row(refreshed, gid, table_name=table_name)
+            except Exception as exc:
+                last_error = exc
+                if not _is_missing_atomic_patch_rpc_error(exc):
+                    if _is_missing_table_error(exc):
+                        break
+                    continue
+                _warn(
+                    f"atomic guild config patch RPC unavailable guild={gid}; "
+                    "falling back to compatibility read/merge/write until the migration is applied"
+                )
 
         for payload in _candidate_write_payloads(gid, safe_updates, existing):
             clean_payload = {
