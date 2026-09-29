@@ -1217,4 +1217,167 @@ class PermissionGroupSelect(discord.ui.Select):
             group_key=key,
             group_label=label,
             names=names,
-        ).attach_for_role(rol
+        ).attach_for_role(role)
+        await _replace(
+            interaction,
+            embed=discord.Embed(
+                title=f"🔐 {label} · {role.name}",
+                description=(
+                    "Select every permission this role should have in this group, then save. "
+                    "Permissions outside this group stay untouched."
+                ),
+                color=role.colour if role.colour.value else discord.Color.blurple(),
+            ),
+            view=view,
+        )
+
+
+class PermissionGroupPickerView(_OwnedView):
+    def __init__(self, owner_id: int, role_id: int) -> None:
+        super().__init__(owner_id)
+        self.role_id = int(role_id)
+        # The role object is resolved from the interaction guild again when used.
+        self._select_added = False
+
+    def attach_for_role(self, role: discord.Role) -> "PermissionGroupPickerView":
+        if not self._select_added:
+            self.add_item(PermissionGroupSelect(self, _permission_groups(role)))
+            self._select_added = True
+        return self
+
+    @discord.ui.button(label="Back to Role", emoji="↩️", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild, actor = await _require_role_manager(interaction)
+        if guild is None or actor is None:
+            return
+        role = guild.get_role(self.role_id)
+        if not isinstance(role, discord.Role):
+            return await _reply(interaction, "❌ That role no longer exists.")
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        await _replace(
+            interaction,
+            embed=await _role_embed(guild, role),
+            view=RoleDetailView(self.owner_id, role.id),
+        )
+
+
+class PermissionToggleSelect(discord.ui.Select):
+    def __init__(
+        self,
+        parent: "PermissionToggleView",
+        role: discord.Role,
+    ) -> None:
+        self.parent_view = parent
+        options = [
+            discord.SelectOption(
+                label=_permission_label(name),
+                value=name,
+                default=bool(getattr(role.permissions, name, False)),
+            )
+            for name in parent.names
+        ]
+        super().__init__(
+            placeholder="Select permissions to enable…",
+            min_values=0,
+            max_values=max(1, len(options)),
+            options=options,
+            custom_id=f"{_ROLE_EDITOR_PREFIX}permission_values",
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _apply_permission_selection(
+            interaction,
+            owner_id=self.parent_view.owner_id,
+            role_id=self.parent_view.role_id,
+            group_key=self.parent_view.group_key,
+            selected=set(str(value) for value in self.values),
+            allow_admin=False,
+        )
+
+
+class PermissionToggleView(_OwnedView):
+    def __init__(
+        self,
+        owner_id: int,
+        role_id: int,
+        *,
+        group_key: str,
+        group_label: str,
+        names: Sequence[str],
+    ) -> None:
+        super().__init__(owner_id)
+        self.role_id = int(role_id)
+        self.group_key = str(group_key)
+        self.group_label = str(group_label)
+        self.names = tuple(str(name) for name in names)[:25]
+
+    def attach_for_role(self, role: discord.Role) -> "PermissionToggleView":
+        self.add_item(PermissionToggleSelect(self, role))
+        return self
+
+    @discord.ui.button(label="Permission Groups", emoji="↩️", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild, actor = await _require_role_manager(interaction)
+        if guild is None or actor is None:
+            return
+        role = guild.get_role(self.role_id)
+        if not isinstance(role, discord.Role):
+            return await _reply(interaction, "❌ That role no longer exists.")
+        view = PermissionGroupPickerView(self.owner_id, role.id).attach_for_role(role)
+        await _replace(
+            interaction,
+            embed=discord.Embed(
+                title=f"🔐 Permissions · {role.name}",
+                description="Choose another permission group.",
+                color=role.colour if role.colour.value else discord.Color.blurple(),
+            ),
+            view=view,
+        )
+
+
+async def _apply_permission_selection(
+    interaction: discord.Interaction,
+    *,
+    owner_id: int,
+    role_id: int,
+    group_key: str,
+    selected: set[str],
+    allow_admin: bool,
+    from_modal: bool = False,
+) -> None:
+    guild, actor = await _require_role_manager(interaction)
+    if guild is None or actor is None:
+        return
+    role = guild.get_role(int(role_id))
+    if not isinstance(role, discord.Role):
+        return await _reply(interaction, "❌ That role no longer exists.")
+    blockers = _role_mutation_blockers(guild, actor, role)
+    if blockers:
+        return await _reply(interaction, "❌ " + "\n• ".join(blockers))
+
+    groups = {key: names for key, _label, names in _permission_groups(role)}
+    names = tuple(groups.get(str(group_key), ()))
+    if not names:
+        return await _reply(interaction, "❌ That permission group is no longer available.")
+
+    selected &= set(names)
+    newly_enabled = [
+        name
+        for name in names
+        if name in selected and not bool(getattr(role.permissions, name, False))
+    ]
+    grant_blockers = _permission_grant_blockers(guild, actor, newly_enabled)
+    if grant_blockers:
+        return await _reply(interaction, "❌ " + "\n• ".join(grant_blockers))
+
+    if "administrator" in newly_enabled and not allow_admin:
+        return await interaction.response.send_modal(
+            AdministratorPermissionConfirmModal(
+                owner_id,
+                role_id=role.id,
+                group_key=group_key,
+                selected=selected,
