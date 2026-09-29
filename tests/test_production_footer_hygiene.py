@@ -84,7 +84,7 @@ def test_spamguard_incident_footer_uses_durable_message_ownership_not_visible_id
     incident_block = source.split("def _incident_footer", 1)[1].split(
         "def _parse_incident_footer", 1
     )[0]
-    assert "SpamGuard quarantine" in incident_block
+    assert '"Spam Guard incident • restore available"' in incident_block
     assert "|case=" not in incident_block
     assert "get_quarantine_case_by_modlog_message(" in source
 
