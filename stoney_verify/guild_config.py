@@ -851,13 +851,25 @@ def _atomic_patch_guild_config_sync(
     sb: Any,
     guild_id: int,
     updates: Mapping[str, Any],
+    *,
+    clear_keys: Iterable[str] = (),
 ) -> dict[str, Any]:
     payload = {
         str(key): value
         for key, value in dict(updates).items()
         if str(key) not in _CONTROL_KEYS and value is not None
     }
-    if not payload:
+    clears = sorted(
+        {
+            str(key).strip()
+            for key in clear_keys
+            if str(key).strip()
+            and str(key).strip() not in _CONTROL_KEYS
+            and str(key).strip() not in _BASE_WRITE_KEYS
+            and str(key).strip() not in _JSON_CONFIG_KEYS
+        }
+    )
+    if not payload and not clears:
         return {}
 
     response = _execute_db_op(
@@ -867,6 +879,7 @@ def _atomic_patch_guild_config_sync(
             {
                 "p_guild_id": str(int(guild_id)),
                 "p_patch": payload,
+                "p_clear_keys": clears,
             },
         ).execute(),
     )
@@ -1059,6 +1072,35 @@ def clear_guild_config_keys_sync(
         if actor is not None:
             metadata["configured_by_id"] = str(getattr(actor, "id", "") or "")
             metadata["configured_by_name"] = str(actor)
+
+        if table_name == "guild_configs":
+            try:
+                atomic_row = _atomic_patch_guild_config_sync(
+                    sb,
+                    gid,
+                    metadata,
+                    clear_keys=clear_keys,
+                )
+                if atomic_row:
+                    config = _normalize_config_row(atomic_row, gid, table_name=table_name)
+                    clear_guild_config_cache(gid)
+                    _CONFIG_CACHE[_cache_key(gid)] = dict(config)
+                    _CONFIG_CACHE_TS[_cache_key(gid)] = _now()
+                    return config
+                refreshed = _fetch_existing_row_sync(table_name, gid)
+                if refreshed:
+                    config = _normalize_config_row(refreshed, gid, table_name=table_name)
+                    clear_guild_config_cache(gid)
+                    _CONFIG_CACHE[_cache_key(gid)] = dict(config)
+                    _CONFIG_CACHE_TS[_cache_key(gid)] = _now()
+                    return config
+            except Exception as exc:
+                if not _is_missing_atomic_patch_rpc_error(exc):
+                    raise
+                _warn(
+                    f"atomic guild config clear RPC unavailable guild={gid}; "
+                    "falling back to compatibility read/merge/write until the migration is applied"
+                )
 
         settings = _settings_payload_without_keys(existing, clear_keys, metadata)
         columns = {str(key) for key in existing.keys()}
