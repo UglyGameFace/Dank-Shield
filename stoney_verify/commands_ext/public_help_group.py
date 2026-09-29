@@ -71,6 +71,7 @@ BORING_PUBLIC_TARGET = {
     "mod",
     "ticket",
     "tickets",
+    "toke",
     "ticket-intake",
     "ticket-category",
     "ticket-panel",
@@ -196,7 +197,7 @@ def _overview_embed() -> discord.Embed:
         "`/dank` setup, overview, protection, help, cleanup, members, welcome, roles, modlog, embed\n"
         "`/captions` ordinary-server Live Captions and personal voice consent\n"
         "`/ticket` actions for the current ticket\n"
-        "`/tickets` server-wide ticket management\n"
+        "`/tickets` server-wide ticket management\n        `/toke` ping the opt-in sesh crowd (Stoner role required)\n"
         "`/ticket-panel` public Create Ticket panel tools\n"
         "`/ticket-category` ticket menu/routing options\n"
         "`/verify` verification repair and approval tools\n"
