@@ -675,7 +675,7 @@ def _build_quarantine_case_id(guild_id: int, user_id: int) -> str:
 
 def _incident_footer(case_id: str, guild_id: int, user_id: int) -> str:
     _ = case_id, guild_id, user_id
-    return "SpamGuard quarantine • use Restore Member to reverse this action"
+    return "Spam Guard incident • restore available"
 
 
 def _parse_incident_footer(text: str) -> Optional[Dict[str, str]]:
