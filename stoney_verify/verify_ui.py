@@ -33,7 +33,8 @@ except Exception:
 
 
 VERIFY_UI_TITLE = os.getenv("VERIFY_UI_TITLE", "Dank Shield Verification")
-VERIFY_UI_FOOTER = "stoney_verify:verify_ui:v9"
+VERIFY_UI_FOOTER = "Verification • secure access"
+LEGACY_VERIFY_UI_FOOTERS = ("stoney_verify:verify_ui:v9",)
 
 
 # ============================================================
@@ -599,7 +600,10 @@ async def post_or_replace_verify_ui(
             e0 = msg.embeds[0]
             title_ok = (e0.title or "") == VERIFY_UI_TITLE
             footer_text = str(getattr(getattr(e0, "footer", None), "text", "") or "")
-            footer_ok = VERIFY_UI_FOOTER.split(" • ")[0] in footer_text
+            footer_ok = (
+                VERIFY_UI_FOOTER.split(" • ")[0] in footer_text
+                or any(marker in footer_text for marker in LEGACY_VERIFY_UI_FOOTERS)
+            )
 
             if title_ok or footer_ok:
                 await msg.edit(embed=embed, view=view)
@@ -974,6 +978,7 @@ async def maybe_handle_verify_ui_interaction(interaction: discord.Interaction, *
 
 __all__ = [
     "VERIFY_UI_TITLE",
+    "LEGACY_VERIFY_UI_FOOTERS",
     "VERIFY_UI_FOOTER",
     "VerifyView",
     "build_verify_link",
