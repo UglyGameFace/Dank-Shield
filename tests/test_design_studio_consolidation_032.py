@@ -28,13 +28,14 @@ def _button_labels(view: object) -> list[str]:
     return [str(getattr(item, "label", "")) for item in getattr(view, "children", []) if getattr(item, "label", None)]
 
 
-def test_home_has_exactly_five_explicit_workflows() -> None:
+def test_home_has_exactly_six_explicit_workflows() -> None:
     view = studio_v2.DesignHomeView({})
     assert _button_labels(view) == [
         "Design Entire Server",
         "Edit One Category / Channel",
         "Fix Inconsistent Names",
         "Saved Rules & Protection",
+        "Search-Safe Naming",
         "Undo Last Apply",
     ]
 
