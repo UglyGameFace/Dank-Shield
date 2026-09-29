@@ -230,7 +230,7 @@ async def _on_webhooks_update(channel: discord.abc.GuildChannel) -> None:
         embed.add_field(name="Audit Action", value=f"`{action}`", inline=True)
         if reason:
             embed.add_field(name="Audit Reason", value=_trim(reason, 350), inline=False)
-        embed.set_footer(text=f"Guild {guild.id} • webhook audit")
+        embed.set_footer(text="Webhook audit")
         await _send(guild, embed)
     except Exception as e:
         _warn(f"on_webhooks_update failed: {e!r}")
@@ -258,7 +258,7 @@ async def _on_guild_emojis_update(guild: discord.Guild, before: list[discord.Emo
         embed.add_field(name="Audit Action", value=f"`{action}`", inline=True)
         if reason:
             embed.add_field(name="Audit Reason", value=_trim(reason, 350), inline=False)
-        embed.set_footer(text=f"Guild {guild.id} • emoji audit")
+        embed.set_footer(text="Emoji audit")
         await _send(guild, embed)
     except Exception as e:
         _warn(f"emoji update failed: {e!r}")
