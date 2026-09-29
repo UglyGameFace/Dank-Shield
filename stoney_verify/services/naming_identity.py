@@ -149,6 +149,25 @@ def previous_alias_for_rename(before_name: Any, after_name: Any) -> str:
     return ""
 
 
+def _policy_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return bool(default)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+        return bool(default)
+    text = str(value).strip().casefold()
+    if text in {"true", "1", "yes", "y", "on", "enabled"}:
+        return True
+    if text in {"false", "0", "no", "n", "off", "disabled", ""}:
+        return False
+    return bool(default)
+
+
 def _normalize_policy(value: Any) -> dict[str, Any]:
     source = value if isinstance(value, Mapping) else {}
     mode = str(source.get("mode") or NAMING_MODE_PRESERVE).strip().lower()
@@ -156,11 +175,11 @@ def _normalize_policy(value: Any) -> dict[str, Any]:
         mode = NAMING_MODE_PRESERVE
     return {
         "mode": mode,
-        "roles": bool(source.get("roles", True)),
-        "channels": bool(source.get("channels", True)),
+        "roles": _policy_bool(source.get("roles"), True),
+        "channels": _policy_bool(source.get("channels"), True),
         # Categories can keep the heavy visual font while searchable channel
         # words and roles use ordinary letters.
-        "categories": bool(source.get("categories", False)),
+        "categories": _policy_bool(source.get("categories"), False),
     }
 
 
