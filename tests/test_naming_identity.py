@@ -58,6 +58,25 @@ def test_search_safe_display_name_preserves_decoration_but_normalizes_letters() 
     assert naming_identity.has_stylized_search_text(styled) is True
 
 
+def test_search_safe_display_name_preserves_unrelated_compatibility_symbols() -> None:
+    raw = "™ ℠ ℃ ① ﬁ"
+    assert naming_identity.search_safe_display_name(raw) == raw
+
+
+def test_search_safe_display_name_decodes_fullwidth_letters_but_not_decorative_digits() -> None:
+    fullwidth = _styled("Verified", style="fullwidth")
+    circled_digit = "①"
+
+    assert naming_identity.search_safe_display_name(fullwidth) == "Verified"
+    assert naming_identity.search_safe_display_name(circled_digit) == circled_digit
+
+
+def test_exact_font_glyph_decoder_does_not_apply_broad_nfkc() -> None:
+    assert design.decode_known_unicode_font_glyph("™") == "™"
+    assert design.decode_known_unicode_font_glyph("℃") == "℃"
+    assert design.decode_known_unicode_font_glyph("ﬁ") == "ﬁ"
+
+
 def test_style_only_rename_needs_no_persisted_alias() -> None:
     styled = f"✅・{_styled('Verified')}"
     assert naming_identity.previous_alias_for_rename("✅・Verified", styled) == ""
