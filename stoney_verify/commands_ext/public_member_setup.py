@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import weakref
+from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
 import discord
@@ -27,7 +28,6 @@ from stoney_verify.member_setup_service import (
     member_review_status,
     normalize_sections,
     publish_revision,
-    save_member_setup_state,
 )
 from stoney_verify.ui.picker import DankChannelSelect, DankRoleSelect
 from .public_setup_group import _require_setup_permission
@@ -221,7 +221,7 @@ async def _restore_category_gate(
     category: discord.CategoryChannel,
     *,
     everyone: discord.Role,
-    access_role: discord.Role,
+    access_role: Optional[discord.Role],
     snapshot: Mapping[str, Any],
     reason: str,
 ) -> None:
@@ -229,9 +229,10 @@ async def _restore_category_gate(
     everyone_ow.view_channel = _from_tri_state(snapshot.get("everyone_view_channel"))
     await category.set_permissions(everyone, overwrite=everyone_ow, reason=reason)
 
-    access_ow = category.overwrites_for(access_role)
-    access_ow.view_channel = _from_tri_state(snapshot.get("access_view_channel"))
-    await category.set_permissions(access_role, overwrite=access_ow, reason=reason)
+    if isinstance(access_role, discord.Role):
+        access_ow = category.overwrites_for(access_role)
+        access_ow.view_channel = _from_tri_state(snapshot.get("access_view_channel"))
+        await category.set_permissions(access_role, overwrite=access_ow, reason=reason)
 
 
 def gate_health(guild: discord.Guild, state: Mapping[str, Any]) -> dict[str, Any]:
@@ -350,6 +351,52 @@ def gate_health(guild: discord.Guild, state: Mapping[str, Any]) -> dict[str, Any
     }
 
 
+def _parse_utc(value: Any) -> Optional[datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _effective_member_state(
+    member: discord.Member,
+    guild_state: Mapping[str, Any],
+    member_state: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Apply the durable pre-gate grandfather checkpoint without mass DB writes."""
+    effective = dict(member_state or default_member_setup_state())
+    effective["section_revisions"] = dict(effective.get("section_revisions") or {})
+
+    baseline_revision = _safe_int(guild_state.get("grandfather_revision"), 0)
+    grandfather_before = _parse_utc(guild_state.get("grandfather_before"))
+    joined_at = getattr(member, "joined_at", None)
+    if joined_at is not None and getattr(joined_at, "tzinfo", None) is None:
+        joined_at = joined_at.replace(tzinfo=timezone.utc)
+
+    if (
+        baseline_revision > 0
+        and grandfather_before is not None
+        and isinstance(joined_at, datetime)
+        and joined_at.astimezone(timezone.utc) <= grandfather_before
+        and _safe_int(effective.get("completed_revision"), 0) < baseline_revision
+    ):
+        effective["completed_revision"] = baseline_revision
+        section_revisions = dict(effective.get("section_revisions") or {})
+        for section in SETUP_SECTIONS:
+            section_revisions[section] = max(
+                _safe_int(section_revisions.get(section), 0),
+                baseline_revision,
+            )
+        effective["section_revisions"] = section_revisions
+    return effective
+
+
 async def _member_payload(
     member: discord.Member,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -357,10 +404,11 @@ async def _member_payload(
         load_guild_setup_state(member.guild.id, refresh=True),
         load_member_setup_state(member.guild.id, member.id, refresh=True),
     )
-    status = member_review_status(guild_state, member_state)
+    effective_state = _effective_member_state(member, guild_state, member_state)
+    status = member_review_status(guild_state, effective_state)
     if _member_exempt(member):
         status["access_gated"] = False
-    return guild_state, member_state, status
+    return guild_state, effective_state, status
 
 
 def _severity_label(value: str) -> str:
