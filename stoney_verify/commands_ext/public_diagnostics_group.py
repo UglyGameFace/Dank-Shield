@@ -16,6 +16,7 @@ from ..guild_context import GuildContext, get_guild_context
 from ..interaction_guard import recent_interaction_failures, run_guarded_interaction, safe_send_interaction
 from ..members_new.activity_scope import ActivityScopeReport, audit_activity_scope, format_activity_scope_problems
 from ..startup_diagnostics import build_startup_health_report
+from ..services import naming_observability
 from .public_setup_group import dank_group
 from .public_owner_authority import interaction_has_manage_guild_authority
 from .public_access_control import scoped_interaction_is_ticket_staff
@@ -112,6 +113,26 @@ def _native_interaction_failure_field(guild_id: int) -> str:
 
     details = _field_text(lines, empty="✅ None recorded for this server in this process.", limit=850)
     return ("Newest first • current server • current process\n" + details)[:1000]
+
+
+def _naming_runtime_metrics_field() -> str:
+    metrics = naming_observability.snapshot()
+    return (
+        f"Role resolution: live `{metrics['role_resolution_live']}` • "
+        f"semantic `{metrics['role_resolution_semantic']}` • "
+        f"alias `{metrics['role_resolution_alias']}` • "
+        f"ambiguous `{metrics['role_resolution_ambiguous']}`\n"
+        f"State writes: success `{metrics['state_write_success']}` • "
+        f"conflict/retry `{metrics['state_write_conflict']}` • "
+        f"failed `{metrics['state_write_failure']}`\n"
+        f"Automatic Search-Safe: roles `{metrics['auto_change_role']}` • "
+        f"channels `{metrics['auto_change_channel']}` • "
+        f"blocked `{metrics['auto_blocked']}` • failed `{metrics['auto_failed']}`\n"
+        f"Reviewed repair: changed `{metrics['repair_changed']}` • "
+        f"blocked `{metrics['repair_blocked']}` • failed `{metrics['repair_failed']}`\n"
+        f"Pruning: aliases `{metrics['alias_pruned']}` • "
+        f"resources `{metrics['resource_pruned']}`"
+    )[:1000]
 
 
 def _yes_no(value: bool) -> str:
@@ -227,6 +248,12 @@ def _startup_diagnostics_embed(
     embed.add_field(
         name="Recent Native Interaction Failures",
         value=interaction_failure_summary or "⚠️ Native interaction failure history was not checked.",
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Search-Safe Naming Runtime",
+        value=_naming_runtime_metrics_field(),
         inline=False,
     )
 
