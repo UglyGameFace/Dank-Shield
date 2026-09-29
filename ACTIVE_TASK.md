@@ -2,6 +2,105 @@
 
 ## Active task / desired outcome
 
+**ROLES-PROFILES-ROLE-EDITOR-015 — add one safe Roles & Profiles center with staff-only Discord role administration**
+
+Desired outcome: `/dank home → Roles & Profiles` must become one capability-aware center. Normal members see only their own profile/cosmetic surfaces. Recognized staff may reach existing member-role/profile management. Only the server owner, Administrator, or a member with live Discord **Manage Roles** permission may see or execute server-role creation, rename/edit, permissions, hierarchy movement, duplication, or deletion. Every mutation must re-check actor authority, bot authority, role hierarchy, managed/default-role restrictions, and relevant Dank Shield dependencies at execution time.
+
+## Scope / single active task lock
+
+Only the Roles & Profiles center and server-role editor behavior required for this feature are active.
+
+Included:
+- replace the current staff `Roles & Profiles` shortcut to Profile Builder with a real role/profile center;
+- capability-aware member vs staff vs role-manager surfaces;
+- create role;
+- select and inspect a role;
+- rename / colour / hoist / mentionable / unicode role icon editing where supported;
+- grouped server-permission editing with grant-safety checks;
+- safe hierarchy movement;
+- duplicate role;
+- dependency-aware, confirmed role deletion;
+- reuse existing Profile Builder, profile/cosmetic role manager, Member Role Manager, permission/hierarchy safety helpers where structurally correct;
+- targeted regression tests, full repository validation, cleanup, final diff review, PR/CI/deployment evidence before any completion claim.
+
+Excluded:
+- Server Design naming/category/channel behavior;
+- Invite Shield, AntiNuke policy redesign, tickets, verification redesign, Live Captions, Community Hub feature work;
+- unrelated role-system cleanup.
+
+## Switch record
+
+User explicitly issued:
+
+`FORCE SWITCH: Dank Shield Roles & Profiles Role Editor`
+
+Reason: build the staff-only server role creation, editing, rename, hierarchy, permissions, duplicate, and deletion system.
+
+### Suspended task state: Community Hub / Live Captions
+
+The previously active **COMMUNITY-HUB-COMPLETION-RELIABILITY-014** task is suspended, not abandoned. Its full prior task record is preserved below under **Suspended prior task record**. At suspension:
+- production `main` advanced through Live Captions work to merge `b774ab13f8fba18819f453f165108e6aa1d29e97` (PR #358);
+- the Community Hub / Live Captions scope, findings, implementation history, validation evidence, cleanup constraints, blockers/risks, backlog, and next soak/validation steps remain exactly documented in the archived record;
+- no Community Hub code is part of this Role Editor branch unless directly required by shared command-surface correctness.
+
+## Findings / root cause
+
+1. Dank Shield already has role-adjacent features, but no authoritative general Discord role editor.
+2. `/dank home → Roles & Profiles` currently sends server managers directly to the Profile Builder, while normal members go to their profile entry.
+3. Existing role systems are fragmented by purpose: profile/cosmetic roles, member-role assignment/browser, verification/setup role mapping, and AntiNuke rollback. None owns general role mutation.
+4. Existing member-role authorization intentionally treats configured staff / moderation permissions more broadly than Discord `Manage Roles`. That broader staff gate is appropriate for browsing/review but is too permissive for server-role mutation.
+5. Discord's own contract requires Manage Roles for create/edit/delete/reorder and hierarchy limits role mutation to roles below the actor; Dank Shield must independently enforce the same boundary for both the actor and bot before API calls.
+6. Existing `member_role_browser_common.py` already contains reusable protected-role/config and actor/bot hierarchy concepts, but server-role editing needs a dedicated authority check because member moderation actions and role-definition mutations are different capabilities.
+7. Server Design explicitly excludes roles, so the canonical home for the full editor is **Roles & Profiles**, not Server Design. A future visual-only shortcut can route into the same editor without creating duplicate ownership.
+
+## Execution path
+
+`/dank home`
+→ `CompactDankHomeView.roles`
+→ new canonical Roles & Profiles center
+→ member-safe profile route OR recognized-staff tools
+→ role-manager-only server role administration
+→ fresh role resolution + fresh authority/hierarchy/dependency checks
+→ Discord role mutation
+→ refreshed editor/center.
+
+## Changes
+
+- Branch created from current production main `b774ab13f8fba18819f453f165108e6aa1d29e97`: `feat/roles-profiles-role-editor-20260928`.
+- Implementation pending.
+
+## Validation / results
+
+Pending implementation.
+
+## Cleanup / conflicts
+
+Must not create a second member-role assignment engine or a second profile/cosmetic manager. Reuse the current owners. Must not move full role administration into Server Design.
+
+## Blockers / risks
+
+- Discord role hierarchy and permission-grant restrictions must be enforced before mutations instead of relying on HTTP failures.
+- Managed/integration roles and `@everyone` must remain immutable.
+- Deleting a role referenced by Dank Shield config can break verification/staff/ticket/profile behavior; destructive deletion must fail closed on known dependencies until remapped.
+- Role permission editing must stay within Discord select limits and preserve permissions outside the edited group.
+
+## Backlog
+
+- Suspended Community Hub / Live Captions completion task, with full state preserved below.
+- Optional future Server Design → Role Appearance shortcut into this same authoritative editor after this task is complete.
+
+## Next step
+
+Implement the canonical Roles & Profiles center and dedicated role-editor module on this branch, then add focused tests before running the repository's full validation gates.
+
+---
+
+# Suspended prior task record
+
+# Active Task
+
+## Active task / desired outcome
+
 **COMMUNITY-HUB-COMPLETION-RELIABILITY-014 — finish the Dank Shield Community Hub as a reliable, general-use product instead of a one-pass scaffold**
 
 Desired outcome: Community Hub interactions must acknowledge reliably, stale private Hub panels must recover without red Discord failures, the user-facing flow must match the intended plain-English experience, and missing promised Hub capabilities must be completed without weakening public-session persistence, permissions, cleanup, rate-limit safety, or privacy boundaries.
