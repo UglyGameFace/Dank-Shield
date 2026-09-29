@@ -1399,7 +1399,7 @@ async def ensure_security_stats_display(guild: discord.Guild) -> Tuple[bool, str
 
         preferences = security_stats_preferences(cfg)
         counts = _stats_counts(cfg)
-        naming_policy = await naming_identity.get_naming_policy(gid)
+        naming_policy = await naming_identity.get_naming_policy(gid, refresh=True)
         names = await _display_names_for_guild(
             guild,
             counts=counts,
@@ -1523,7 +1523,7 @@ async def disable_security_stats_display(
     gid = int(guild.id)
     async with _lock_for(_DISPLAY_LOCKS, gid):
         cfg = await get_guild_config(gid, refresh=True)
-        naming_policy = await naming_identity.get_naming_policy(gid)
+        naming_policy = await naming_identity.get_naming_policy(gid, refresh=True)
         category = _find_owned_category(guild, cfg, naming_policy=naming_policy)
         saved_ids = _saved_channel_ids(cfg)
         preferences = security_stats_preferences(cfg)
@@ -1642,7 +1642,7 @@ async def refresh_security_stats_display(
         return False
     _ACTIVE_DISPLAY_GUILDS.add(gid)
 
-    naming_policy = await naming_identity.get_naming_policy(gid)
+    naming_policy = await naming_identity.get_naming_policy(gid, refresh=True)
     category = _find_owned_category(guild, cfg, naming_policy=naming_policy)
     if category is None:
         ok, _note = await ensure_security_stats_display(guild)
