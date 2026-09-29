@@ -10,17 +10,18 @@ COMMANDS = Path("stoney_verify/commands_ext/__init__.py").read_text(encoding="ut
 
 
 def test_public_production_docs_match_current_command_surface():
-    assert PUBLIC_GLOBAL_COMMAND_COUNT == 7
+    assert PUBLIC_GLOBAL_COMMAND_COUNT == 8
     assert PUBLIC_GLOBAL_COMMAND_NAMES == (
         "dank",
         "captions",
         "mod",
         "ticket",
         "tickets",
+        "toke",
         "verify",
         "View Dank Profile",
     )
-    assert "exactly **7** commands/items" in DOC
+    assert "exactly **8** commands/items" in DOC
     assert "final_global=9 final_guild=0 profile=public" not in DOC
     assert "public_command_surface_v2 compact UI installed" in DOC
     for command_name in PUBLIC_GLOBAL_COMMAND_NAMES:
