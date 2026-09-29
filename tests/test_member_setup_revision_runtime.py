@@ -154,8 +154,13 @@ def test_activation_grandfathers_before_category_visibility_changes() -> None:
     block = RUNTIME.split("async def activate_strict_gate", 1)[1].split(
         "async def suspend_strict_gate", 1
     )[0]
-    assert block.index("await _mark_member_current") < block.index("await _set_category_gate")
-    assert block.index("await member.add_roles") < block.index("await _set_category_gate")
+    checkpoint = block.index('gate_transition="activating"')
+    role_grant = block.index("await member.add_roles")
+    category_gate = block.index("await _set_category_gate")
+    assert checkpoint < role_grant < category_gate
+    assert "grandfather_revision=current_revision" in block
+    assert "grandfather_before=grandfather_before" in block
+    assert "await _restore_gate_snapshot(" in block
     assert "activation rollback" in block
 
 
@@ -163,8 +168,11 @@ def test_suspend_restores_recorded_visibility_snapshot() -> None:
     block = RUNTIME.split("async def suspend_strict_gate", 1)[1].split(
         "async def reconcile_member_access", 1
     )[0]
-    assert "_restore_category_gate(" in block
-    assert "gate_snapshot={}" in block
+    transition = block.index('gate_transition="suspending"')
+    restore = block.index("await _restore_gate_snapshot(")
+    clear_snapshot = block.index("gate_snapshot={}")
+    assert transition < restore < clear_snapshot
+    assert 'gate_transition=""' in block
     assert "gate_active=False" in block
 
 
