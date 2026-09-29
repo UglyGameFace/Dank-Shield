@@ -17,6 +17,7 @@ from typing import Any
 import discord
 
 from stoney_verify.services import naming_identity
+from stoney_verify.share_router_resources import is_share_router_design_resource
 
 DEFAULT_REPAIR_BATCH_SIZE = 25
 MAX_REPAIR_BATCH_SIZE = 25
@@ -95,6 +96,8 @@ def _channel_blocker(channel: Any) -> str:
 
 
 def _target_row(kind: str, resource: Any) -> dict[str, Any] | None:
+    if kind == "channel" and is_share_router_design_resource(resource):
+        return None
     before = str(getattr(resource, "name", "") or "").strip()
     after = naming_identity.search_safe_display_name(before).strip()
     if not before or not after or before == after:
@@ -141,6 +144,77 @@ def scan_search_safe_targets(guild: discord.Guild) -> list[dict[str, Any]]:
         )
     )
     return rows
+
+
+def normalize_design_plan_items(
+    items: list[dict[str, Any]],
+    policy: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Apply Search-Safe policy to preview rows before transactional Apply.
+
+    Doing this at plan time keeps preview, snapshot, Apply and Undo aligned.
+    Categories and protected/failed rows are intentionally untouched.
+    """
+    if policy.get("mode") != naming_identity.NAMING_MODE_SEARCH_SAFE:
+        return [dict(item) for item in items]
+    if not bool(policy.get("channels", True)):
+        return [dict(item) for item in items]
+
+    out: list[dict[str, Any]] = []
+    warning = "Search-Safe Naming normalized styled letter glyphs; decoration was preserved."
+    for raw in items:
+        item = dict(raw)
+        kind = str(item.get("kind") or "").strip().lower()
+        status = str(item.get("status") or "").strip().lower()
+        if kind == "category" or status in {"protected", "failed"}:
+            out.append(item)
+            continue
+
+        before = str(item.get("before") or "")
+        after = str(item.get("after") or "")
+        safe_after = naming_identity.search_safe_display_name(after).strip()
+        if safe_after and safe_after != after:
+            item["after"] = safe_after
+            if safe_after == before:
+                item["status"] = "unchanged"
+            elif status in {"", "unchanged", "changed"}:
+                item["status"] = "changed"
+            warnings = [
+                str(value)
+                for value in list(item.get("warnings") or [])
+                if str(value).strip()
+            ]
+            if warning not in warnings:
+                warnings.append(warning)
+            item["warnings"] = warnings
+            item["search_safe_naming"] = True
+        out.append(item)
+    return out
+
+
+async def policy_adjusted_name(
+    guild_id: Any,
+    *,
+    kind: str,
+    name: Any,
+) -> str:
+    """Return the final live name an enabled guild policy permits."""
+    raw = str(name or "").strip()
+    if not raw:
+        return raw
+    clean_kind = str(kind or "").strip().lower()
+    policy = await naming_identity.get_naming_policy(guild_id)
+    if policy.get("mode") != naming_identity.NAMING_MODE_SEARCH_SAFE:
+        return raw
+    if clean_kind == "role" and not bool(policy.get("roles", True)):
+        return raw
+    if clean_kind == "channel" and not bool(policy.get("channels", True)):
+        return raw
+    if clean_kind == "category" and not bool(policy.get("categories", False)):
+        return raw
+    if clean_kind not in {"role", "channel", "category"}:
+        return raw
+    return naming_identity.search_safe_display_name(raw).strip() or raw
 
 
 def search_safe_summary(guild: discord.Guild) -> dict[str, int]:
@@ -196,7 +270,7 @@ async def enforce_role_name(role: discord.Role) -> bool:
 
 async def enforce_channel_name(channel: discord.abc.GuildChannel) -> bool:
     """Enforce an enabled guild policy after a channel create/rename event."""
-    if isinstance(channel, discord.CategoryChannel):
+    if isinstance(channel, discord.CategoryChannel) or is_share_router_design_resource(channel):
         return False
 
     before = str(getattr(channel, "name", "") or "").strip()
@@ -320,6 +394,8 @@ __all__ = [
     "apply_search_safe_batch",
     "enforce_channel_name",
     "enforce_role_name",
+    "normalize_design_plan_items",
+    "policy_adjusted_name",
     "scan_search_safe_targets",
     "search_safe_summary",
 ]
