@@ -474,7 +474,7 @@ async def build_spamguard_setup_embed(guild: discord.Guild, *, save_note: str = 
         ),
         inline=False,
     )
-    embed.set_footer(text=f"Guild {guild.id} • /dank setup → Services → SpamGuard Setup")
+    embed.set_footer(text="/dank setup → Services → SpamGuard Setup")
     return embed
 
 
