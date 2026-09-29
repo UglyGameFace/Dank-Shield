@@ -2,142 +2,116 @@
 
 ## Active task / desired outcome
 
-**SEARCH-SAFE-NAMING-017 — preserve server styling while making Dank Shield naming semantic, alias-aware, and optionally native-search-safe at public scale**
+**SEARCH-SAFE-MASTER-AUDIT-018 — prove and harden Search-Safe Naming, shared guild configuration, Server Design integration, Member Setup coexistence, and production-facing UI from first principles**
 
-Desired outcome: every guild using Dank Shield can keep its own decorative naming style without forcing admins to repeatedly enable/disable fonts. Dank Shield-controlled lookup must understand normal semantic names such as `Verified` even when the live Discord role/channel is stylized. Servers that also want Discord's own native role/channel search to work can explicitly enable a per-guild **Search-Safe Naming** policy that preserves emojis, separators, brackets, and category styling while normalizing only the searchable role/channel letters.
+Production baseline at audit start: `main` = `7bf1bf0799ffaf70cb4b207da9e42750797123cf`, the merge of PR #362.
 
-The implementation must remain guild-isolated and practical for 300,000+ servers without startup sweeps, continuous polling, unbounded rename history, or one durable database row per Discord resource.
+The active outcome is the 100-point master audit requested for Search-Safe Naming plus the later explicit global footer audit. The work is not complete when individual tests turn green. Completion requires the final exact-head branch to be re-audited for architecture ownership, integration wiring, persistence/concurrency, permissions, Unicode behavior, command schema, scaling, CI coverage, final diff, deployment startup, and live canary behavior.
 
 ## Scope / single active task lock
 
-Included:
-- one shared semantic-name normalizer reusing the existing Dank Design Unicode decoding owner;
-- Dank Shield-controlled role lookup/autocomplete using ordinary text for currently stylized role names;
-- bounded previous semantic aliases for real role/channel renames, keyed by Discord resource ID;
-- a persistent per-guild naming policy with **Preserve Full Styling** as the safe default and optional **Search-Safe** enforcement;
-- reviewed Search-Safe repair for existing role/channel names, capped to 25 editable resources per batch;
-- Search-Safe enforcement for future role/channel create/rename events only when that guild explicitly enables it;
-- categories remain fully styled by default;
-- emojis, separators, brackets, frames, and other non-letter decoration remain intact during Search-Safe normalization;
-- event-driven role/channel create/update/delete handling with per-guild debounced persistence;
-- bounded process cache and bounded alias/resource history;
-- canonical `guild_config` storage only, with no second database/persistence engine;
-- Unicode-aware guild runtime discovery for configured roles/channels;
-- integration through the existing **Server Design** home without creating another public slash-command root;
-- preservation of existing role-management, self-service, hierarchy, permission, and Dank Design authority boundaries;
-- focused regression tests, exact-head CI, cleanup/conflict review, and final diff review.
+This is the only active implementation task.
 
-Excluded:
-- pretending Discord native `@role` autocomplete or the native Share To picker supports hidden aliases; Discord owns those UIs;
-- silently rewriting every existing guild on install/startup;
-- enabling Search-Safe mode for a guild without an authorized admin's reviewed action;
-- continuous or periodic full-guild scans;
-- unlimited rename history or one database row per Discord role/channel;
-- changing category font styling by default;
-- creating duplicate "alias roles" or "alias channels";
-- unrelated moderation, tickets, verification, Community Hub, Live Captions, or protection redesigns.
+The remediation order is severity-driven:
+1. P0 canonical guild-config lost-update race.
+2. P0 Search-Safe actor-vs-target role hierarchy authorization.
+3. P1 Search-Safe/Dank Design/Role Editor/runtime integration and concurrency defects.
+4. P2 reliability/UX/observability hardening, including Member Setup Access Role vs Prerequisite Role clarity and the global Dank Shield footer cleanup.
+5. Exact-head re-audit, deployment evidence, and live canary/soak validation.
 
-## Findings / root cause
+Do not switch to unrelated Dank Shield work. Findings outside this master-audit scope are backlog only unless they share the same root cause or are required to validate the active repair.
 
-1. Decorative Discord "fonts" are distinct Unicode code points, so Discord native role/channel search can fail when a user types ordinary letters.
-2. Dank Design already owns reliable Unicode font decoding in `server_design_studio.strip_known_unicode_fonts` / `normalize_base_name`; a second Unicode map would create competing truth.
-3. Discord exposes no hidden alias field for roles/channels. Dank Shield can provide semantic aliases inside bot-controlled search, but Discord native search can only see the live display name.
-4. Discord snowflake IDs are the stable resource identity. Names are mutable display metadata and must never become primary keys.
-5. Style-only changes such as `Verified → 𝖵𝖾𝗋𝗂𝖿𝗂𝖾𝖽` do not need durable history because the current name can be normalized live.
-6. Real semantic renames do need a small previous-name history so old normal names can still resolve the current Discord object in Dank Shield.
-7. At public scale, event-driven updates plus bounded state are appropriate; startup/on-ready scans across every guild are not.
-8. `stoney_verify.guild_config` remains the canonical config/runtime-discovery owner; the retired startup validator must not be restored.
+## Read-only audit baseline / findings
 
-## Execution paths
+The initial audit was completed without modifying code.
 
-**Dank Shield semantic lookup**
+Confirmed baseline:
+- PR #362 merged to production `main`; it is not draft.
+- PR #362 head: `f5204ebb5297e90c0e94b16337e29dac30425202`.
+- PR #362 merge base: `3427a1700fe522ce95239bbf96690aab3aaeb3b8`, exactly merged PR #361.
+- PR #362 merge commit/current production baseline: `7bf1bf0799ffaf70cb4b207da9e42750797123cf`.
+- PR #361 Member Setup files survived reconciliation; the overlap is primarily the role doorway/task record.
+- Exact PR-head workflows observed for #362 were green, and push CI on the merge commit was green. Those results do not validate fixes made by this remediation branch.
 
-`/role role:<text>`
-→ live display-name match
-→ live semantic Unicode-normalized match
-→ lazy durable previous-alias lookup only if live matching misses
-→ current Discord role resolved by snowflake ID
-→ existing self-service/staff role authority and mutation paths.
+Confirmed P0 findings:
+- **P0 config lost update:** canonical `guild_config` previously did client-side read → rebuild complete JSON compatibility payloads → update. Concurrent writers such as Naming Identity and Member Setup could read the same old row and overwrite each other's unrelated nested changes.
+- **P0 actor hierarchy:** Search-Safe role mutation checks the bot hierarchy but does not yet reuse the human actor-vs-target hierarchy boundary already enforced by the canonical Role Editor.
 
-**Rename/history tracking**
+Confirmed P1 findings include:
+- Search-Safe Design-plan adjustment helper exists but is not wired into the production Dank Design plan/apply path.
+- `policy_adjusted_name()` exists but has no production caller, so Dank Shield-created styled resources can require a second gateway-triggered PATCH.
+- Dank Design direct rename/saved-rule/Undo behavior can disagree with Search-Safe enforcement.
+- rapid alias debounce uses unordered sets, losing semantic rename chronology.
+- naming policy/config caches are process-local and stacked over canonical guild config.
+- naming resource lock cleanup can race waiters.
+- naming persistence failure can discard already-popped pending aliases/deletes.
+- unknown naming schema versions are not rejected explicitly.
+- Search-Safe normalization currently applies compatibility normalization more broadly than the stated known-styled-letter contract.
+- reviewed repair preview is not an immutable/revalidated transaction input.
+- naming mutation traffic does not yet share one proven aggregate pacing owner.
 
-Discord role/channel update event
-→ compare semantic before/after names
-→ ignore style-only changes for durable alias history
-→ queue only real semantic previous-name aliases
-→ debounce by guild
-→ bounded `naming_identity_v1` object in canonical guild config.
+Confirmed P2/product findings include:
+- Member Setup **Access Role** is the role Dank Shield grants/removes to unlock protected categories, while **Prerequisite Role** is only an optional eligibility requirement such as Verified. The current UI presents them as near-identical role pickers and does not explain that relationship clearly.
+- Every production-facing Dank Shield embed footer must be audited. Internal/debug/operator metadata such as raw guild IDs, config sources, runtime identifiers, schema/version tags, monitor/service names, `dank_shield:...` identifiers, or phrases such as “canonical live runtime” must not leak into ordinary member/admin UI. Useful user guidance, safety context, pagination, counts, and confirmation semantics should remain.
 
-**Optional native Search-Safe policy**
+## Current implementation focus: P0 canonical guild-config atomicity
 
-Authorized admin opens **Server Design → Search-Safe Naming**
-→ read-only scan and preview
-→ explicit enable/apply
-→ repair at most 25 currently editable role/channel names in the reviewed batch
-→ preserve decoration while normalizing stylized letters
-→ future create/rename events enforce the saved guild policy one resource at a time
-→ no on-ready sweep and no continuous guild polling.
+Root cause:
+- `stoney_verify.guild_config._candidate_write_payloads()` reconstructs complete compatibility JSON objects from an earlier row snapshot.
+- separate async/process writers can therefore replace sibling settings that were committed after that snapshot.
+- process-local locks would not be sufficient for a sharded/multi-process public bot.
 
-## Changes
-
-- Branch: `feat/search-safe-naming-identity-20260929`, originally based on PR #360 main `afa5930d8f0fd55762d19c04471605906bbaf5c8` and reconciled with merged PR #361 production main `3427a1700fe522ce95239bbf96690aab3aaeb3b8`.
-- Draft PR: **#362 — Add scalable search-safe naming identity**.
-- Added `services/naming_identity.py` with semantic normalization, bounded previous aliases (3 per tracked resource), bounded tracked resources (128 per guild), bounded process cache, lazy durable lookup, event listeners, and per-guild debounced writes.
-- Added persistent per-guild naming policy with **Preserve Full Styling** as the default and **Search-Safe** as an explicit opt-in.
-- Added `services/search_safe_naming.py` for reviewed existing-name repair and event-driven future enforcement. Existing repair is hard-capped at 25 editable resources per batch.
-- Added `commands_ext/public_search_safe_naming.py` and exposed it from the existing Server Design home as the sixth explicit workflow.
-- Search-Safe conversion preserves surrounding decoration. Example: `🌿・𝕊𝕥𝕠𝕟𝕖𝕣 → 🌿・Stoner`; categories remain untouched by default.
-- Style-only renames deliberately create no durable alias record; live semantic normalization already resolves them.
-- Real semantic renames preserve a bounded previous semantic key so prior ordinary names can still find the current object in Dank Shield-controlled lookup.
-- `/role` keeps the same public command/option name but uses string autocomplete backed by semantic/alias lookup; existing role editor/self-service gates remain authoritative.
-- Compact command installation attaches naming-identity listeners exactly once and does not register an `on_ready` guild sweep.
-- Canonical guild runtime discovery compares both raw and semantic names, so styled Verified/verification resources can be discovered without stripping their style.
-- Added focused naming-identity, Search-Safe policy/batch, role-doorway, and Server Design workflow regression coverage.
-- No new public slash-command root was added; the existing nine-item public application-command contract remains intentional.
-- Reconciliation with PR #361 preserves the versioned Member Setup runtime, `/role` Member Setup status/entry points, strict access-gate recovery, persistent setup panel ownership, and its focused regression suite.
+Implementation on branch `audit/search-safe-master-remediation-20260929`:
+- added migration `supabase/migrations/20260929143000_atomic_guild_config_patch.sql`;
+- added service-role-only PostgreSQL RPC `patch_dank_guild_config(guild_id, patch)`;
+- the RPC inserts the canonical guild row if needed, merges only supplied sparse keys into each compatibility JSON column inside the database UPDATE, and updates only flat compatibility columns explicitly named by the patch;
+- `stoney_verify.guild_config` now prefers this atomic sparse RPC for canonical `guild_configs` writes;
+- legacy read/merge/write remains only as a compatibility fallback when the RPC is genuinely unavailable before migration deployment;
+- added `tests/test_guild_config_atomic_patch.py`, including a regression where Naming Identity and Member Setup deliberately operate from the same stale row snapshot and must preserve both writes;
+- extended the existing PostgreSQL CI service job to launch two real concurrent RPC writers and assert both nested states survive.
 
 ## Validation / results
 
-PR #362 remains **draft** and must not be merged until exact-head validation is green.
+Current remediation branch was created directly from production baseline `7bf1bf0799ffaf70cb4b207da9e42750797123cf`.
 
-A prior PR head reached Dank Design Regression CI with **131 passed / 1 failed**. The single failure was a stale consolidation contract that still asserted Server Design had exactly five workflows after **Search-Safe Naming** intentionally became the sixth. The product code was not the failing assertion. That regression contract was updated to the intentional six-workflow layout.
+Validation is **pending** for the new P0 implementation. No completion claim is permitted until:
+- Python compile/full tests execute on the exact remediation head;
+- the PostgreSQL concurrency check executes successfully;
+- migration/version checks pass;
+- final diff inspection confirms the P0 patch is sparse and does not introduce a second config owner;
+- exact-head CI is green.
 
-PR #361 advanced production `main` while PR #362 was open. This branch is now explicitly reconciled with that merged Member Setup work. The reconciliation commit becomes the only valid exact-head CI target; earlier runs are historical evidence only.
+The prior green PR #362 workflows are historical evidence only and do not validate this branch.
 
-Required before merge:
-- focused naming-identity, Search-Safe policy/batch, role-doorway, and Server Design tests green;
-- all repository workflows green on the exact final PR head;
-- full Dank Shield CI compile/unit/static/tool/public-surface audits green;
-- command payload/public-surface checks confirm the nine-command contract is unchanged;
-- final compare against current `main` remains 0 behind;
-- final diff contains only naming identity/Search-Safe integration, the existing role doorway/runtime-discovery integrations, tests, and this task record;
-- PR remains draft until those checks complete.
+## Cleanup / conflicts
 
-## Cleanup / conflict rules
-
-- There must be exactly **one** `# Active Task` heading in this file. Older tasks remain below only as explicitly completed/suspended records.
-- Reuse the existing Dank Design Unicode decoder instead of introducing a competing font map.
-- Reuse canonical guild config rather than adding a per-resource database table or migration.
-- Do not reactivate `startup_guards.guild_config_runtime_validator`; native `guild_config` remains authoritative.
-- Do not create a second role editor, role assignment path, permission repair implementation, or design engine.
-- Search-Safe Naming is a naming/searchability policy, not a permission-repair substitute.
-- Existing Dank Design rules/Undo remain the visual-style history owner; disabling Search-Safe stops future enforcement and must not invent/reconstruct old glyph styling.
+- Canonical `stoney_verify.guild_config` remains the only application-side guild config owner.
+- Supabase migration/RPC is a transaction primitive for that owner, not a second feature config system.
+- Do not reactivate dormant `startup_guards.guild_config_write_safety` or setup operation-lock guards as a substitute for canonical atomic writes.
+- Do not proceed to the actor-hierarchy P0 until this persistence repair is validated or a concrete blocker is recorded.
+- Do not begin footer/UI cleanup while either P0 remains active.
 
 ## Blockers / risks
 
-- Discord native `@role` search and native Share To cannot consume Dank Shield's hidden semantic/previous aliases while the live resource remains fully stylized.
-- Native Discord search therefore requires the actual searchable word in the live role/channel name to use ordinary letters; this is exactly what optional Search-Safe mode does.
-- Historical aliases can only be captured from rename events observed while Dank Shield is present; arbitrary pre-install rename history cannot be reconstructed.
-- Existing resources are never silently mass-renamed. An authorized admin must preview and apply bounded batches.
-- Exact-head CI and final branch/diff validation are still pending after this task-record correction.
+- Until the new migration is deployed, code can detect a genuinely missing RPC and use the historical compatibility writer; production correctness therefore requires migration deployment evidence before this P0 is considered closed.
+- SQL dynamic flat-column casting must be validated against the repository's PostgreSQL CI service.
+- Cross-process correctness depends on the database-side sparse UPDATE, not Python locks.
+
+## Backlog inside this same master audit
+
+- P0 Search-Safe actor hierarchy repair.
+- P1 integration/concurrency/cache/debounce/Unicode/repair transaction findings from the audit ledger.
+- P2 Member Setup Access Role/Prerequisite Role UX redesign.
+- P2 global user-facing footer cleanup/audit.
+- final 100-point PASS/FAIL/NEEDS HARDENING/N/A ledger and exact-head re-audit.
 
 ## Next step
 
-Validate the exact PR #362 head produced by this task-record cleanup. Inspect any failure at its real root cause, change only task-scoped code/tests, then perform final branch-behind/diff/mergeability review before removing draft status or merging.
+Open a draft remediation PR from the current branch, run exact-head CI, inspect the PostgreSQL atomic-patch job and full unit suite, and correct only failures belonging to this P0 root cause before moving to the next audit finding.
 
-## Prior task closure
+## Prior merged task record: SEARCH-SAFE-NAMING-017
 
-PR #360, **Add self-service community roles, /toke, and smart /role**, merged into production `main` as `afa5930d8f0fd55762d19c04471605906bbaf5c8`.
+PR #362, **Add scalable search-safe naming identity**, merged into production `main` as `7bf1bf0799ffaf70cb4b207da9e42750797123cf`. Its implementation established the naming identity/Search-Safe foundation but the master audit found the P0/P1/P2 issues recorded above. Prior PR-head CI remains historical evidence and must not be used as proof for remediation changes.
 
 ---
 
