@@ -148,13 +148,18 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
             "✏️ **Edit One Category / Channel** — rename or style one exact item.\n"
             "🩺 **Fix Inconsistent Names** — scan first, then build a safe Smart Repair preview.\n"
             "🔐 **Saved Rules & Protection** — manage what future previews enforce; this does not rename anything by itself.\n"
+            "🔎 **Search-Safe Naming** — keep decoration while making role/channel words searchable in normal letters.\n"
             "↩️ **Undo Last Apply** — review and restore the previous names from the latest applied batch."
         ),
         inline=False,
     )
     embed.add_field(
         name="What Dank Design never redesigns",
-        value="Permissions, roles, topics, channel order, ticket placement, slowmode, NSFW settings, verification, or category placement.",
+        value=(
+            "The visual styling engine never changes permissions, roles, topics, channel order, ticket placement, "
+            "slowmode, NSFW settings, verification, or category placement. Search-Safe Naming is a separate reviewed "
+            "accessibility tool and only normalizes styled letter glyphs in role/channel names."
+        ),
         inline=False,
     )
     embed.set_footer(text="Names only • Preview before batch changes • Narrow saved rules always win")
@@ -1321,6 +1326,13 @@ class DesignHomeView(DesignView):
         await interaction.response.defer(ephemeral=True, thinking=False)
         options = await _load_design_options(int(guild.id))
         await interaction.edit_original_response(embed=_saved_rules_embed(guild, options), view=SavedRulesView())
+
+    @discord.ui.button(label="Search-Safe Naming", emoji="🔎", style=discord.ButtonStyle.secondary, custom_id="dank_design_v2:search_safe", row=2)
+    async def search_safe(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_search_safe_naming import open_search_safe_naming
+
+        await open_search_safe_naming(interaction)
 
     @discord.ui.button(label="Undo Last Apply", emoji="↩️", style=discord.ButtonStyle.danger, custom_id="dank_design_v2:rollback", row=2)
     async def rollback(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

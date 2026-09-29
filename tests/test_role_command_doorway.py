@@ -45,6 +45,9 @@ def test_role_is_one_intentional_public_doorway() -> None:
     command = _standalone("role", "Open Roles & Profiles.", open_role_command)
     assert isinstance(command, app_commands.Command)
     assert set(getattr(command, "_params", {})) == {"member", "role"}
+    role_param = command._params["role"]
+    assert role_param.type == discord.AppCommandOptionType.string
+    assert getattr(role_param, "autocomplete", None) is not None
 
 
 def test_role_callback_exposes_only_member_and_role_shortcuts() -> None:
@@ -52,6 +55,11 @@ def test_role_callback_exposes_only_member_and_role_shortcuts() -> None:
     assert list(signature.parameters) == ["interaction", "member", "role"]
     assert signature.parameters["member"].default is None
     assert signature.parameters["role"].default is None
+
+    source = (ROOT / "stoney_verify/commands_ext/public_role_center.py").read_text(encoding="utf-8")
+    assert "@app_commands.autocomplete(role=_role_name_autocomplete)" in source
+    assert "resolve_role_query(interaction.guild, role_query)" in source
+    assert "Optional[str] = None" in source
 
 
 def test_member_shortcut_is_role_focused_and_reuses_guarded_role_actions() -> None:

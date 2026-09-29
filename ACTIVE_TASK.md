@@ -2,6 +2,149 @@
 
 ## Active task / desired outcome
 
+**SEARCH-SAFE-NAMING-017 — preserve server styling while making Dank Shield naming semantic, alias-aware, and optionally native-search-safe at public scale**
+
+Desired outcome: every guild using Dank Shield can keep its own decorative naming style without forcing admins to repeatedly enable/disable fonts. Dank Shield-controlled lookup must understand normal semantic names such as `Verified` even when the live Discord role/channel is stylized. Servers that also want Discord's own native role/channel search to work can explicitly enable a per-guild **Search-Safe Naming** policy that preserves emojis, separators, brackets, and category styling while normalizing only the searchable role/channel letters.
+
+The implementation must remain guild-isolated and practical for 300,000+ servers without startup sweeps, continuous polling, unbounded rename history, or one durable database row per Discord resource.
+
+## Scope / single active task lock
+
+Included:
+- one shared semantic-name normalizer reusing the existing Dank Design Unicode decoding owner;
+- Dank Shield-controlled role lookup/autocomplete using ordinary text for currently stylized role names;
+- bounded previous semantic aliases for real role/channel renames, keyed by Discord resource ID;
+- a persistent per-guild naming policy with **Preserve Full Styling** as the safe default and optional **Search-Safe** enforcement;
+- reviewed Search-Safe repair for existing role/channel names, capped to 25 editable resources per batch;
+- Search-Safe enforcement for future role/channel create/rename events only when that guild explicitly enables it;
+- categories remain fully styled by default;
+- emojis, separators, brackets, frames, and other non-letter decoration remain intact during Search-Safe normalization;
+- event-driven role/channel create/update/delete handling with per-guild debounced persistence;
+- bounded process cache and bounded alias/resource history;
+- canonical `guild_config` storage only, with no second database/persistence engine;
+- Unicode-aware guild runtime discovery for configured roles/channels;
+- integration through the existing **Server Design** home without creating another public slash-command root;
+- preservation of existing role-management, self-service, hierarchy, permission, and Dank Design authority boundaries;
+- focused regression tests, exact-head CI, cleanup/conflict review, and final diff review.
+
+Excluded:
+- pretending Discord native `@role` autocomplete or the native Share To picker supports hidden aliases; Discord owns those UIs;
+- silently rewriting every existing guild on install/startup;
+- enabling Search-Safe mode for a guild without an authorized admin's reviewed action;
+- continuous or periodic full-guild scans;
+- unlimited rename history or one database row per Discord role/channel;
+- changing category font styling by default;
+- creating duplicate "alias roles" or "alias channels";
+- unrelated moderation, tickets, verification, Community Hub, Live Captions, or protection redesigns.
+
+## Findings / root cause
+
+1. Decorative Discord "fonts" are distinct Unicode code points, so Discord native role/channel search can fail when a user types ordinary letters.
+2. Dank Design already owns reliable Unicode font decoding in `server_design_studio.strip_known_unicode_fonts` / `normalize_base_name`; a second Unicode map would create competing truth.
+3. Discord exposes no hidden alias field for roles/channels. Dank Shield can provide semantic aliases inside bot-controlled search, but Discord native search can only see the live display name.
+4. Discord snowflake IDs are the stable resource identity. Names are mutable display metadata and must never become primary keys.
+5. Style-only changes such as `Verified → 𝖵𝖾𝗋𝗂𝖿𝗂𝖾𝖽` do not need durable history because the current name can be normalized live.
+6. Real semantic renames do need a small previous-name history so old normal names can still resolve the current Discord object in Dank Shield.
+7. At public scale, event-driven updates plus bounded state are appropriate; startup/on-ready scans across every guild are not.
+8. `stoney_verify.guild_config` remains the canonical config/runtime-discovery owner; the retired startup validator must not be restored.
+
+## Execution paths
+
+**Dank Shield semantic lookup**
+
+`/role role:<text>`
+→ live display-name match
+→ live semantic Unicode-normalized match
+→ lazy durable previous-alias lookup only if live matching misses
+→ current Discord role resolved by snowflake ID
+→ existing self-service/staff role authority and mutation paths.
+
+**Rename/history tracking**
+
+Discord role/channel update event
+→ compare semantic before/after names
+→ ignore style-only changes for durable alias history
+→ queue only real semantic previous-name aliases
+→ debounce by guild
+→ bounded `naming_identity_v1` object in canonical guild config.
+
+**Optional native Search-Safe policy**
+
+Authorized admin opens **Server Design → Search-Safe Naming**
+→ read-only scan and preview
+→ explicit enable/apply
+→ repair at most 25 currently editable role/channel names in the reviewed batch
+→ preserve decoration while normalizing stylized letters
+→ future create/rename events enforce the saved guild policy one resource at a time
+→ no on-ready sweep and no continuous guild polling.
+
+## Changes
+
+- Branch: `feat/search-safe-naming-identity-20260929`, originally based on PR #360 main `afa5930d8f0fd55762d19c04471605906bbaf5c8` and reconciled with merged PR #361 production main `3427a1700fe522ce95239bbf96690aab3aaeb3b8`.
+- Draft PR: **#362 — Add scalable search-safe naming identity**.
+- Added `services/naming_identity.py` with semantic normalization, bounded previous aliases (3 per tracked resource), bounded tracked resources (128 per guild), bounded process cache, lazy durable lookup, event listeners, and per-guild debounced writes.
+- Added persistent per-guild naming policy with **Preserve Full Styling** as the default and **Search-Safe** as an explicit opt-in.
+- Added `services/search_safe_naming.py` for reviewed existing-name repair and event-driven future enforcement. Existing repair is hard-capped at 25 editable resources per batch.
+- Added `commands_ext/public_search_safe_naming.py` and exposed it from the existing Server Design home as the sixth explicit workflow.
+- Search-Safe conversion preserves surrounding decoration. Example: `🌿・𝕊𝕥𝕠𝕟𝕖𝕣 → 🌿・Stoner`; categories remain untouched by default.
+- Style-only renames deliberately create no durable alias record; live semantic normalization already resolves them.
+- Real semantic renames preserve a bounded previous semantic key so prior ordinary names can still find the current object in Dank Shield-controlled lookup.
+- `/role` keeps the same public command/option name but uses string autocomplete backed by semantic/alias lookup; existing role editor/self-service gates remain authoritative.
+- Compact command installation attaches naming-identity listeners exactly once and does not register an `on_ready` guild sweep.
+- Canonical guild runtime discovery compares both raw and semantic names, so styled Verified/verification resources can be discovered without stripping their style.
+- Added focused naming-identity, Search-Safe policy/batch, role-doorway, and Server Design workflow regression coverage.
+- No new public slash-command root was added; the existing nine-item public application-command contract remains intentional.
+- Reconciliation with PR #361 preserves the versioned Member Setup runtime, `/role` Member Setup status/entry points, strict access-gate recovery, persistent setup panel ownership, and its focused regression suite.
+
+## Validation / results
+
+PR #362 remains **draft** and must not be merged until exact-head validation is green.
+
+A prior PR head reached Dank Design Regression CI with **131 passed / 1 failed**. The single failure was a stale consolidation contract that still asserted Server Design had exactly five workflows after **Search-Safe Naming** intentionally became the sixth. The product code was not the failing assertion. That regression contract was updated to the intentional six-workflow layout.
+
+PR #361 advanced production `main` while PR #362 was open. This branch is now explicitly reconciled with that merged Member Setup work. The reconciliation commit becomes the only valid exact-head CI target; earlier runs are historical evidence only.
+
+Required before merge:
+- focused naming-identity, Search-Safe policy/batch, role-doorway, and Server Design tests green;
+- all repository workflows green on the exact final PR head;
+- full Dank Shield CI compile/unit/static/tool/public-surface audits green;
+- command payload/public-surface checks confirm the nine-command contract is unchanged;
+- final compare against current `main` remains 0 behind;
+- final diff contains only naming identity/Search-Safe integration, the existing role doorway/runtime-discovery integrations, tests, and this task record;
+- PR remains draft until those checks complete.
+
+## Cleanup / conflict rules
+
+- There must be exactly **one** `# Active Task` heading in this file. Older tasks remain below only as explicitly completed/suspended records.
+- Reuse the existing Dank Design Unicode decoder instead of introducing a competing font map.
+- Reuse canonical guild config rather than adding a per-resource database table or migration.
+- Do not reactivate `startup_guards.guild_config_runtime_validator`; native `guild_config` remains authoritative.
+- Do not create a second role editor, role assignment path, permission repair implementation, or design engine.
+- Search-Safe Naming is a naming/searchability policy, not a permission-repair substitute.
+- Existing Dank Design rules/Undo remain the visual-style history owner; disabling Search-Safe stops future enforcement and must not invent/reconstruct old glyph styling.
+
+## Blockers / risks
+
+- Discord native `@role` search and native Share To cannot consume Dank Shield's hidden semantic/previous aliases while the live resource remains fully stylized.
+- Native Discord search therefore requires the actual searchable word in the live role/channel name to use ordinary letters; this is exactly what optional Search-Safe mode does.
+- Historical aliases can only be captured from rename events observed while Dank Shield is present; arbitrary pre-install rename history cannot be reconstructed.
+- Existing resources are never silently mass-renamed. An authorized admin must preview and apply bounded batches.
+- Exact-head CI and final branch/diff validation are still pending after this task-record correction.
+
+## Next step
+
+Validate the exact PR #362 head produced by this task-record cleanup. Inspect any failure at its real root cause, change only task-scoped code/tests, then perform final branch-behind/diff/mergeability review before removing draft status or merging.
+
+## Prior task closure
+
+PR #360, **Add self-service community roles, /toke, and smart /role**, merged into production `main` as `afa5930d8f0fd55762d19c04471605906bbaf5c8`.
+
+---
+
+# Prior completed task record: MEMBER-SETUP-REVISION-GATE-017
+
+## Completed task / desired outcome
+
 **MEMBER-SETUP-REVISION-GATE-017 — add guild-scoped versioned Member Setup reviews with optional strict Discord access gating**
 
 Desired outcome: every Dank Shield server may publish versioned member setup changes without wiping valid member role/profile choices. Members review only changed sections. Minor updates require no action, Recommended updates surface new choices, Required updates require an explicit review, and Access-Gated updates may temporarily withhold a dedicated Member Access role until the member confirms the current setup. All setup definitions, completion state, role/channel mappings, and gate behavior must remain isolated by guild.
@@ -77,20 +220,15 @@ Excluded:
 - Added focused regression coverage in `tests/test_member_setup_revision_runtime.py`.
 - New Member Setup/Profile panel posts persist the canonical channel/message ID. **Refresh Public Panel** upgrades one uniquely identifiable legacy bot-authored profile panel in place; zero/multiple candidates fail closed rather than editing an arbitrary message.
 
-## Validation / results
+## Validation / completion
 
-Implementation remains unmerged on the feature branch. Exact-head CI has not yet been accepted as evidence for this task.
+PR #361 exact head `0e1705e44e8de7f43e5756979241dce95e73335a` completed all six triggered repository workflows successfully: Dank Shield CI, Profile Runtime Diagnostics, Dank Design Regression CI, Application Command Size Diagnostics, Ticket Owner Emergency Override, and Ticket Panel Single Owner.
 
-Required before merge:
-- compile and full unit suite green;
-- all six standard repository workflows green on the same exact head;
-- startup/profile runtime diagnostics confirm the added persistent/runtime ownership does not orphan existing buttons;
-- final compare against current `main` is 0 behind;
-- final diff remains limited to Member Setup / Roles & Profiles persistence, UI, runtime, tests, and documentation.
+PR #361 then merged into production `main` as `3427a1700fe522ce95239bbf96690aab3aaeb3b8`. The Search-Safe Naming branch must preserve this Member Setup runtime and its access-gate invariants while adding naming behavior.
 
-## Next step
+## Completed state
 
-Finish source/regression compatibility review, open a draft PR from the feature branch, inspect every exact-head CI failure at its real root cause, and merge only after all gates are green.
+Merged and retained here as a completed task record. Any later changes to Member Setup require an explicit task switch rather than being folded into Search-Safe Naming.
 
 ## Prior task closure
 
@@ -102,11 +240,102 @@ PR #359, **Add staff-only Roles & Profiles role editor**, merged to production `
 
 ---
 
-# Prior completed task record
+# Prior completed task record: PROFILE-COMMUNITY-TOKE-016
 
-# Active Task
+## Completed task / desired outcome
 
-## Active task / desired outcome
+**PROFILE-COMMUNITY-TOKE-016 — unify self-service/community roles with safe `/toke` and a smart `/role` doorway**
+
+Desired outcome: Dank Shield Profile Builder must let staff map existing safe community roles without recreating them. Members can self-select the configured **Stoner** identity/community role and optional **Sesh Pings** notification role, use one smart `/role` doorway for approved self-service/profile roles, and use `/toke` from the Stoner role to ping the opt-in sesh audience. Staff/member-role and full server-role shortcuts must reuse the existing guarded Roles & Profiles owners rather than creating parallel role engines.
+
+## Scope / single active task lock
+
+Included:
+- staff **Community & Pings** setup inside Profile Builder;
+- map an existing Stoner role;
+- map an existing Sesh Pings role (may intentionally be the same role for simple mode);
+- optional preferred smoke-session text channel;
+- member self-selection UI for Stoner / Sesh Pings alongside the existing cosmetic/profile tools;
+- `/toke` as one intentional member-facing global slash command;
+- `/role` as one intentional smart global slash command with optional `member` and `role` targets;
+- `/role` with no options opens the canonical Roles & Profiles center;
+- `/role member:@User` opens a role-focused Member Role Manager card; Add/Remove reuse the existing guarded MemberRoleActionView, while View Profile and an explicit Full Member Panel remain available;
+- `/role role:@Role` opens the existing Server Role Editor for live role managers, otherwise exposes Add/Remove only for roles already recognized by Profile Builder / Community & Pings;
+- only current Stoner-role members may invoke `/toke`;
+- only the configured sesh audience role may be mentioned;
+- no arbitrary user supplied role mentions;
+- per-member and per-guild cooldowns;
+- clear setup/permission errors instead of silent dead pings;
+- small Cheers interaction that does not send another role ping;
+- command-surface contract/docs/tests updated intentionally;
+- exact-head CI and final diff review before merge.
+
+Excluded:
+- cannabis procurement, dosage, consumption instructions, or marketplace behavior;
+- Community Hub matchmaking/session architecture;
+- unrelated moderation/protection/ticket/design work;
+- replacing Discord Onboarding or requiring it for profile roles.
+
+## Product model
+
+- **Stoner** = self-selected community/profile identity and authority to start `/toke`.
+- **Sesh Pings** = self-selected notification subscription that receives `/toke` role pings.
+- Servers that want one-role simplicity may map both settings to the same Stoner role.
+- Dank Shield Profile Builder remains canonical for these richer member role choices; Discord Onboarding may still be used independently for first-join essentials.
+
+## Safety / anti-abuse
+
+- role mappings are Discord IDs from staff-selected roles, never role-name guesses;
+- selected roles must pass existing profile-safe/manageability checks;
+- invocation re-resolves current config, member roles, target role, target channel, and bot permissions;
+- outbound AllowedMentions permits only the mapped Sesh Pings role and forbids users/everyone;
+- a non-mentionable target role requires Dank Shield's channel-level Mention @everyone/@here/all roles permission or Discord will not be treated as ping-ready;
+- default cooldown target: 15 minutes per invoking member and 5 minutes per guild, process-local and bounded;
+- Cheers is response-only and never emits the sesh role mention;
+- Cheers is also Stoner-only and tracks one response per member for the card lifetime;
+- community self-role mutations are serialized per guild/member and re-read current mappings before changing roles.
+
+## Changes
+
+- Branch: `feat/profile-community-toke-20260928`, based exactly on merged role-editor production main `3e4252e8ea0d381d0fbb5c633df489b2b52c9048`.
+- Added canonical `commands_ext/public_toke.py` owning Community & Pings setup, member self-selection, scoped `/toke`, cooldowns, and Cheers.
+- Profile Builder now exposes staff **Community & Pings** setup for mapping existing safe Stoner/Sesh Pings roles and an optional preferred text channel.
+- Member Profile Panel, Edit Profile, and Roles & Profiles center expose **Community & Pings** self-selection.
+- Separate-mode Sesh Pings requires Stoner; removing Stoner also removes the separate Sesh Pings subscription. Same-role mode remains supported.
+- Existing profile-safe role checks remain authoritative for both mapped roles; no second role-safety policy was created.
+- The configured Stoner role appears on Dank Profile cards as a **Community** identity label; Sesh Pings is intentionally hidden from profile identity display.
+- Added intentional top-level `/toke [message]` and smart top-level `/role [member] [role]`; the public application-command contract is now nine items total: eight slash roots plus **View Dank Profile**.
+- `/toke` acknowledges before config I/O, re-resolves live mappings and Discord permissions, requires the invoker's current Stoner role, serializes sends per guild, and records cooldowns only after a successful send.
+- Outbound role mention scope is constructed by one testable helper permitting only the configured Sesh Pings role, with users/everyone disabled.
+- Added focused behavioral coverage in `tests/test_profile_community_toke.py`; updated every known public-command guard, payload test, command-tree test, ownership doc, and production command-count contract for `/toke`.
+- Existing profile suggestion compatibility subclasses preserve the new controls; Profile Panel/Edit Profile component rows remain within Discord's five-component row limit.
+- `/role` is only a doorway: it routes normal members to existing self-service role ownership, staff member targets to a role-focused facade over the existing guarded member-role engine, and Manage Roles/Admin/owner role targets to the existing Server Role Editor.
+- Direct self-role toggles are serialized per guild/member, re-read current durable mappings before mutation, preserve the Stoner → Sesh Pings dependency, and never make arbitrary server roles self-assignable.
+- Added focused regression coverage in `tests/test_role_command_doorway.py` and updated all public command-surface contracts from eight to nine total application-command items.
+
+## Validation / results
+
+Implementation is frozen again after the `/role` expansion pending exact-head PR CI. Pre-PR compare against `main` shows the branch ahead with **0 behind**, and the diff is limited to Profile/Community roles, the canonical `/toke` owner, command-surface contracts/docs, and focused tests.
+
+Required before merge:
+- all six repository workflows green on the exact PR head;
+- full Dank Shield CI including `pytest tests/`, compile, standalone tools, and public-surface audits;
+- final compare against current `main` still 0 behind;
+- PR diff remains task-scoped with no unrelated runtime/migration/dependency changes.
+
+## Next step
+
+Open a draft PR from the frozen branch, inspect every exact-head workflow failure instead of blindly retrying, then merge only after all gates are green and the final main comparison is clean.
+
+## Prior task closure
+
+PR #359, **Add staff-only Roles & Profiles role editor**, merged to production `main` as `3e4252e8ea0d381d0fbb5c633df489b2b52c9048` after all six exact-head workflows passed.
+
+---
+
+# Prior completed task record: ROLES-PROFILES-ROLE-EDITOR-015
+
+## Completed task / desired outcome
 
 **ROLES-PROFILES-ROLE-EDITOR-015 — add one safe Roles & Profiles center with staff-only Discord role administration**
 
@@ -229,11 +458,9 @@ Confirm every workflow triggered by this documentation-only final head is green,
 
 ---
 
-# Suspended prior task record
+# Suspended prior task record: COMMUNITY-HUB-COMPLETION-RELIABILITY-014
 
-# Active Task
-
-## Active task / desired outcome
+## Suspended task / desired outcome
 
 **COMMUNITY-HUB-COMPLETION-RELIABILITY-014 — finish the Dank Shield Community Hub as a reliable, general-use product instead of a one-pass scaffold**
 
