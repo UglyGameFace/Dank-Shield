@@ -141,6 +141,8 @@ The live Android Share Router canary after PR #363 merged exposed a consumer-int
 - Consumer inventory found one additional live duplicate: Fix Access had its own `DankPickerView`-based channel/category discovery/search/paging implementation with the same literal-name filtering. It is consolidated onto `DankGuildResourceBrowserView` while retaining the Fix Access permission, visibility, mutation, audit, navigation, and error boundaries.
 - Normal public setup is already bound to `DankGuildResourceBrowserView`; the separate `/dank setup-find` implementation is listed in `PUBLIC_HIDDEN_DANK_CHILDREN`, so it is not treated as a normal public consumer requiring a second authority.
 - The literal custom role/channel/category search sweep now has one shared live search owner for these picker paths rather than two competing browser engines.
+- A separate selector inventory found remaining feature-owned Discord-native `RoleSelect`/`ChannelSelect` surfaces. They are not hidden-alias-aware because Discord owns their discovery. This addendum does not falsely classify them as shared-browser consumers or silently migrate unrelated feature contracts.
+- The corrected claim for this remediation is: Dank Shield-owned **searchable resource-browser** paths use the canonical semantic/alias-aware browser; `/role` remains a separate semantic/alias-aware text query. It is not a claim that every native Discord selector in the repository supports saved aliases.
 - Closure now additionally requires exact-head CI and a fresh Android canary proving a plain query such as `general news` finds the styled destination in Share Router.
 
 ## Merge-blocker conclusion
