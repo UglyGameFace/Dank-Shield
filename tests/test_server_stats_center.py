@@ -9,7 +9,7 @@ from stoney_verify import security_stats
 from stoney_verify.commands_ext import public_protection_center as protection
 from stoney_verify.commands_ext import public_server_stats as stats_ui
 from stoney_verify.commands_ext import public_command_surface_v2 as home_surface
-from stoney_verify.commands_ext.public_command_surface_v2 import CompactDankHomeView
+from stoney_verify.commands_ext.public_command_surface_v2 import FeatureCategoryView
 from stoney_verify.commands_ext.public_setup_group import dank_group
 
 
@@ -37,8 +37,8 @@ def _item(view: discord.ui.View, custom_id: str):
     )
 
 
-def test_dank_home_has_first_class_server_stats_destination() -> None:
-    assert "Server Stats" in _labels(CompactDankHomeView(1))
+def test_dank_navigation_has_first_class_server_stats_destination() -> None:
+    assert "Server Stats" in _labels(FeatureCategoryView(1, "ops"))
 
 
 def test_server_stats_center_exposes_management_and_customization_controls() -> None:
@@ -129,7 +129,7 @@ def test_dank_home_server_stats_button_opens_canonical_center(monkeypatch) -> No
 
         monkeypatch.setattr(stats_ui, "open_server_stats_center", fake_open)
 
-        view = home_surface.CompactDankHomeView(1)
+        view = home_surface.FeatureCategoryView(1, "ops")
         button = next(
             item
             for item in view.children
@@ -144,8 +144,8 @@ def test_dank_home_server_stats_button_opens_canonical_center(monkeypatch) -> No
     asyncio.run(scenario())
 
 
-def test_server_stats_home_destination_does_not_create_a_slash_child() -> None:
-    assert "Server Stats" in _labels(CompactDankHomeView(1))
+def test_server_stats_navigation_destination_does_not_create_a_slash_child() -> None:
+    assert "Server Stats" in _labels(FeatureCategoryView(1, "ops"))
     assert dank_group.get_command("server-stats") is None
 
 
