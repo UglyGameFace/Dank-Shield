@@ -110,7 +110,7 @@ def _home_embed() -> discord.Embed:
 def _help_embed() -> discord.Embed:
     embed = discord.Embed(
         title="❓ Dank Shield Help",
-        description="Use the category pages, **Find**, or the complete **Directory**. The underlying feature owners still enforce their own permissions. The underlying feature owners still enforce their own permissions.",
+        description="Use the category pages, **Find**, or the complete **Directory**. Feature owners still enforce their own permissions.",
         color=discord.Color.blurple(),
     )
     embed.add_field(
