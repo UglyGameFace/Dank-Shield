@@ -309,9 +309,14 @@ def _legacy_config(config: Mapping[str, Any]) -> CommunityPingsConfig:
 
 
 def parse_community_pings(config: Mapping[str, Any]) -> CommunityPingsConfig:
+    if COMMUNITY_PINGS_KEY not in config:
+        return _legacy_config(config)
+
     raw = config.get(COMMUNITY_PINGS_KEY)
     if not isinstance(raw, Mapping):
-        return _legacy_config(config)
+        # Presence establishes v2 authority. Corrupt v2 must fail closed instead
+        # of silently reactivating legacy Stoner/Sesh capabilities.
+        return CommunityPingsConfig(revision=1, groups=(), options=(), source="v2")
 
     groups_raw = raw.get("groups")
     groups = _dedupe_groups(
