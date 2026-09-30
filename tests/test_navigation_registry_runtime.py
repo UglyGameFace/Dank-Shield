@@ -173,3 +173,16 @@ def test_promoted_shortcuts_use_opt_in_in_place_navigation() -> None:
     assert profile_source.count("replace_message: bool = False") >= 2
     assert "interaction.response.edit_message(" in profile_source
     assert "interaction.response.send_message(" in profile_source
+
+    builder_start = profile_source.index("async def _post_profile_builder")
+    builder_end = profile_source.index("async def _handle_builder_action", builder_start)
+    builder = profile_source[builder_start:builder_end]
+    assert "await _require_setup_permission(interaction)" in builder
+
+
+def test_every_registry_feature_has_an_explicit_dispatch_branch() -> None:
+    from pathlib import Path
+
+    source = Path(surface.__file__).read_text(encoding="utf-8")
+    for feature in registry.FEATURES:
+        assert f'if key == "{feature.key}":' in source
