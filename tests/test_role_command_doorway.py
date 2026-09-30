@@ -120,9 +120,9 @@ def test_self_role_toggle_rechecks_live_mapping_under_member_lock() -> None:
     end = source.index("async def _open_direct_role", start)
     block = source[start:end]
 
-    assert "_self_service_role_lock(guild.id, member.id)" in block
-    assert "_self_service_role_kind(guild, role)" in block
+    assert "community_member_lock(guild.id, member.id)" in block
     assert "get_guild_config(int(guild.id), refresh=True)" in block
+    assert "_self_service_role_kind(guild, role, config=config)" in block
     assert "parse_community_pings(config)" in block
     assert "option_for_role(community_model, int(role.id))" in block
     assert "validate_member_selection(" in block
