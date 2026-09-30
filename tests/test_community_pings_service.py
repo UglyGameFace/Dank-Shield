@@ -107,6 +107,23 @@ def test_same_legacy_role_can_own_both_toke_capabilities() -> None:
     assert toke_role_ids(parsed) == (111, 111)
 
 
+def test_present_but_malformed_v2_fails_closed_instead_of_reactivating_legacy() -> None:
+    parsed = parse_community_pings(
+        {
+            COMMUNITY_PINGS_KEY: "corrupt",
+            "stoner_role_id": "111",
+            "sesh_ping_role_id": "222",
+        }
+    )
+
+    assert parsed.source == "v2"
+    assert parsed.options == ()
+    assert toke_role_ids(
+        parsed,
+        {"stoner_role_id": "111", "sesh_ping_role_id": "222"},
+    ) == (0, 0)
+
+
 def test_v2_parser_is_bounded_and_dedupes_duplicate_roles() -> None:
     raw_options = [
         {
