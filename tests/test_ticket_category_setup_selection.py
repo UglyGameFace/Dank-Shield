@@ -820,6 +820,33 @@ def test_ticket_context_reuses_canonical_selector_with_ticket_navigation() -> No
     assert defaults == {"support"}
 
 
+def test_ticket_context_keeps_custom_only_when_custom_rows_exist() -> None:
+    custom = {
+        "id": "custom-1",
+        "slug": "vip_help",
+        "name": "VIP Help",
+        "is_enabled": True,
+        "is_default": True,
+        "managed_by_dank": False,
+    }
+    state = categories.CategorySetupState(
+        rows=[*categories.catalog_category_rows(), custom],
+        active_rows=[custom],
+        selected_keys=(),
+        required=False,
+        reason="",
+        version=categories.CATEGORY_SETUP_VERSION,
+    )
+    view = setup_guard.CategorySetupManagerView(
+        state=state,
+        context="tickets",
+    )
+    labels = _component_labels(view)
+
+    assert "Custom Only" in labels
+    assert "Add Custom Ticket Choice" not in labels
+
+
 def test_ticket_context_uses_existing_ticket_staff_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
