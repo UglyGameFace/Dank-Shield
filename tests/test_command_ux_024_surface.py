@@ -11,7 +11,9 @@ from stoney_verify.commands_ext.public_cleanup_command_center import (
 from stoney_verify.commands_ext.public_command_surface_v2 import (
     CardAssetView,
     CompactDankHomeView,
+    FeatureCategoryView,
 )
+from stoney_verify.navigation_registry import CATEGORIES, features_for_category
 from stoney_verify.commands_ext.public_lifecycle_menu_compat import (
     build_compact_welcome_setup_view,
 )
@@ -46,26 +48,21 @@ def _select_values(view: discord.ui.View, custom_id: str) -> set[str]:
     raise AssertionError(f"select not found: {custom_id}")
 
 
-def test_home_exposes_all_major_centers() -> None:
+def test_home_uses_categories_without_hiding_feature_destinations() -> None:
     labels = _labels(CompactDankHomeView(1))
-    assert {
-        "Setup & Settings",
-        "Protection",
-        "Tickets",
-        "Verification",
-        "Welcome, Join & Exit",
-        "Members & Moderation",
-        "Server Design",
-        "Roles & Profiles",
-        "Logs & Activity",
-        "My Profile",
-        "Server Stats",
-        "Status",
-        "Diagnostics",
-        "Card Assets",
-        "Help",
-        "Close",
-    } <= labels
+    assert {category.label for category in CATEGORIES} <= labels
+    assert {"Find a Feature", "All Features", "Close"} <= labels
+
+    feature_labels = {feature.label for category in CATEGORIES for feature in features_for_category(category.key)}
+    home_feature_overlap = feature_labels & labels
+    assert home_feature_overlap == set()
+
+    surfaced = {
+        label
+        for category in CATEGORIES
+        for label in _labels(FeatureCategoryView(1, category.key))
+    }
+    assert feature_labels <= surfaced
 
 
 def test_current_ticket_center_preserves_complete_action_menu() -> None:
