@@ -233,7 +233,7 @@ def test_both_roles_and_profiles_doorways_use_one_authoritative_center() -> None
 
 def test_empty_cosmetic_guidance_uses_the_public_roles_profiles_path() -> None:
     source = PROFILE_ROLES.read_text(encoding="utf-8")
-    assert '/dank home` → **Roles & Profiles** → **Profile Builder**' in source
+    assert '/dank home` → **Members, Roles & Profiles** → **Profile Builder**' in source
     assert 'Staff can add them in `/dank profile builder`' not in source
 
 def test_role_editor_mutations_remain_inside_antinuke_self_action_provenance() -> None:
