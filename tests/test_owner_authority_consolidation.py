@@ -109,8 +109,8 @@ def test_role_builder_routes_share_central_authority_contract() -> None:
     home = (root / "stoney_verify" / "commands_ext" / "public_command_surface_v2.py").read_text(encoding="utf-8")
     roles = (root / "stoney_verify" / "commands_ext" / "public_self_roles_group.py").read_text(encoding="utf-8")
 
-    home_start = home.index('label="Roles & Profiles"')
-    home_end = home.index('label="Logs & Activity"', home_start)
+    home_start = home.index('if key == "roles_profiles":')
+    home_end = home.index('if key == "profile_builder":', home_start)
     home_route = home[home_start:home_end]
     assert "open_roles_profiles_center(interaction)" in home_route
     assert "_post_profile_builder(interaction" not in home_route
