@@ -419,7 +419,10 @@ def test_staff_management_entrypoints_check_staff_before_native_permission_copy(
         assert 'content="❌ Staff only."' in source
         assert source.index('content="❌ Staff only."') < source.index(native_text)
 
-    surface_logs = surface[surface.index("async def logs("):surface.index("async def profile(", surface.index("async def logs("))]
+    surface_logs = surface[
+        surface.index('if key == "logs_activity":'):
+        surface.index('if key == "server_stats":', surface.index('if key == "logs_activity":'))
+    ]
     assert "_require_setup_permission(interaction)" in surface_logs
     assert "Log settings require **Manage Server**" not in surface_logs
 
