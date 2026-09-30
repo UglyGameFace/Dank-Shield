@@ -41,6 +41,10 @@ Admin-only legacy fallback setup pickers stay outside the public-path task until
 
 - Font/layout/separator/exact-format menus should use `DankPickerView` and show previews where visual choice matters.
 
+## Search-Safe lookup boundary
+
+The shared resource browser owns semantic current/styled-name and saved-previous-name lookup. Discord-native `RoleSelect` / `ChannelSelect` components cannot receive hidden aliases from Dank Shield because Discord owns their entity discovery. Feature-owned native selectors therefore must not be described as alias-aware. Migrating those surfaces requires a feature-by-feature component-contract review, especially for multi-select workflows.
+
 ## Migration rule
 
 Each migration PR should include:
