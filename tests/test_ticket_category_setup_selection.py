@@ -630,10 +630,17 @@ def test_community_core_preset_saves_only_that_subset(monkeypatch: pytest.Monkey
             version=0,
         )
         captured: list[tuple[str, ...]] = []
+        contexts: list[str] = []
 
-        async def fake_save(interaction: Any, selected_keys: Any):
+        async def fake_save(
+            interaction: Any,
+            selected_keys: Any,
+            *,
+            context: str = "setup",
+        ):
             keys = tuple(selected_keys)
             captured.append(keys)
+            contexts.append(context)
             return categories.CategorySetupState(
                 rows=rows,
                 active_rows=[row for row in rows if row["category_key"] in set(keys)],
@@ -663,6 +670,7 @@ def test_community_core_preset_saves_only_that_subset(monkeypatch: pytest.Monkey
         await view._use_core_preset(interaction)
 
         assert captured == [setup_guard._COMMUNITY_CORE_PRESET_KEYS]
+        assert contexts == ["setup"]
         assert set(captured[0]) != set(setup_guard._ALL_MANAGED_PRESET_KEYS)
 
     asyncio.run(scenario())
