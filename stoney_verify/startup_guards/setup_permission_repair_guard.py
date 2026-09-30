@@ -532,7 +532,7 @@ def _result_embed(result: dict[str, Any]) -> discord.Embed:
         embed.add_field(name="Failed While Applying", value=_line_list(list(result.get("failed") or []), empty="None"), inline=False)
     if result.get("notes"):
         embed.add_field(name="Notes", value=_line_list(list(result.get("notes") or []), empty="None"), inline=False)
-    embed.set_footer(text="Safe scope: saved setup items, ticket/archive/staff-tool children, bot/staff/control/public baselines. Join/leave event channels preserve existing visibility.")
+    embed.set_footer(text="Repair changes only the selected setup areas and preserves join/leave channel visibility.")
     return embed
 
 
