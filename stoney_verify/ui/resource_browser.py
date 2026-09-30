@@ -327,8 +327,8 @@ class _ClearSearchButton(discord.ui.Button):
 
 class DankResourceSearchModal(discord.ui.Modal, title="Search Server Items"):
     query = discord.ui.TextInput(
-        label="Name, Discord ID, or mention",
-        placeholder="Example: staff, modlog, 123456789…",
+        label="Name, previous name, ID, or mention",
+        placeholder="Example: general news, modlog, 123456789…",
         required=False,
         max_length=100,
     )
@@ -466,7 +466,8 @@ class DankGuildResourceBrowserView(DankPickerView):
             title=self.browser_title,
             description=(
                 intro
-                + "\n\nDank Shield is listing the server cache directly, so this browser can page and search instead of relying on Discord's generic entity picker."
+                + "\n\nUse **🔎 Search** below for a current/styled name, saved previous name, Discord ID, or mention. "
+                "Dank Shield searches its own server cache instead of relying on Discord's generic entity picker."
             ),
             color=discord.Color.blurple(),
         )
