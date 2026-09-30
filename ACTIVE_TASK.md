@@ -90,7 +90,7 @@ Current remediation:
 - the browser supplies Search, paging, Back to Member Setup, and Close consistently;
 - Access Role and Eligibility Prerequisite retain distinct guidance inside the picker;
 - the picker hides the already-configured conflicting counterpart role, `@everyone` is excluded from both role modes, and integration-managed roles are excluded from automatic Member Access while remaining valid as an Eligibility Prerequisite;
-- the save path and `gate_health()` independently reject Access Role == Eligibility Prerequisite so stale state or a race cannot create a role-grant deadlock;
+- picker save, **Create Member Access** reuse, and `gate_health()` independently reject Access Role == Eligibility Prerequisite so stale state, a race, or an alternate button path cannot create a role-grant deadlock;
 - a dedicated admin panel-update defer uses Discord’s deferred-message-update path while the public member confirmation flow keeps its existing private thinking response;
 - shared resource Search and Fix Access Search edit the originating picker message when available, with a private-message fallback only when no originating message exists;
 - the manager has an explicit Close control;
