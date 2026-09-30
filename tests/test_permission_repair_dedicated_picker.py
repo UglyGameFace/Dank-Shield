@@ -74,6 +74,17 @@ def _state_and_actor(channels, *, actor_id: int = 44):
     return permission_repair.PermissionRepairState(guild=guild, actor_id=actor_id), actor
 
 
+def test_fix_access_keeps_feature_search_modal_contract_on_shared_browser(monkeypatch) -> None:
+    monkeypatch.setattr(permission_repair_core, "_target_supported", lambda _channel: True)
+    state, actor = _state_and_actor([FakeChannel(101, "mod-log")])
+
+    browser = permission_repair_ui.TargetChannelPickerView(state, actor=actor)
+    modal = browser.search_modal()
+
+    assert isinstance(modal, permission_repair_ui.TargetSearchModal)
+    assert modal.state is state
+
+
 def test_target_browser_pages_bot_owned_candidates_without_discord_entity_select(monkeypatch) -> None:
     monkeypatch.setattr(permission_repair_core, "_target_supported", lambda _channel: True)
     channels = [FakeChannel(index + 1, f"channel-{index + 1}") for index in range(61)]
