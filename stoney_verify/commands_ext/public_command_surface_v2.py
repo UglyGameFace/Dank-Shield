@@ -358,11 +358,15 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
 
     if key == "profile_builder":
         from .public_self_roles_group import _post_profile_builder
-        return await _post_profile_builder(interaction, title="Profile Panel")
+        return await _post_profile_builder(
+            interaction,
+            title="Profile Panel",
+            replace_message=True,
+        )
 
     if key == "community_pings_manager":
         from .public_toke import open_community_ping_setup
-        return await open_community_ping_setup(interaction)
+        return await open_community_ping_setup(interaction, replace_message=True)
 
     if key == "community_tools":
         from .public_community_tools import open_community_tools
@@ -420,7 +424,7 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
 
     if key == "my_member_setup":
         from .public_member_setup import open_member_setup
-        return await open_member_setup(interaction)
+        return await open_member_setup(interaction, replace_message=True)
 
     if key == "profile_tags":
         guild = interaction.guild
@@ -428,11 +432,16 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
         if guild is None or member is None:
             return await _private(interaction, "❌ Profile Tags & Cosmetics only works inside a server.")
         from .public_self_roles_group import _open_profile_cosmetics
-        return await _open_profile_cosmetics(interaction, guild, member)
+        return await _open_profile_cosmetics(
+            interaction,
+            guild,
+            member,
+            replace_message=True,
+        )
 
     if key == "my_community_pings":
         from .public_toke import open_member_community_pings
-        return await open_member_community_pings(interaction)
+        return await open_member_community_pings(interaction, replace_message=True)
 
     if key == "help":
         return await _replace_panel(
