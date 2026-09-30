@@ -23,7 +23,7 @@ from ..navigation_registry import (
     features_for_category,
     search_features,
 )
-from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS, private_menu_lifecycle_text
+from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 from ..ui import DankChoice, DankPickerView
 from .public_setup_group import dank_group
 
@@ -94,49 +94,16 @@ class _OwnedView(discord.ui.View):
 
 def _home_embed() -> discord.Embed:
     embed = discord.Embed(
-        title="🛡️ Dank Shield Control Center",
+        title="🛡️ Dank Shield",
         description=(
-            "Choose an area, then the feature you need. Nothing was removed: "
-            "**🔎 Find a Feature** searches the registry and **📚 All Features** shows the complete directory."
+            "**Control Center**\n"
+            "Choose a section below, or use **🔎 Find** to jump straight to a feature.\n\n"
+            f"**{len(FEATURES)} destinations • {len(CATEGORIES)} sections**\n"
+            "Nothing is hidden. Manager tools check your live permissions when opened."
         ),
         color=discord.Color.blurple(),
-        timestamp=discord.utils.utcnow(),
     )
-    embed.add_field(
-        name="Configure & protect",
-        value=(
-            "⚙️ Setup & Server Settings • 🚪 Onboarding & Access • 🛡️ Safety & Moderation • "
-            "🎫 Tickets & Support"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="People & community",
-        value=(
-            "👥 Members, Roles & Profiles • 🌿 Community & Engagement • "
-            "🎨 Design & Branding • 🔊 Voice & Accessibility"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Operate & personal",
-        value="📊 Logs, Stats & Diagnostics • 👤 My Dank Shield • 🧰 Utilities & Help",
-        inline=False,
-    )
-    embed.add_field(
-        name="Navigation",
-        value=(
-            "Use **Find a Feature** when you know what you want but not where Dank Shield put it. "
-            "Manager-only features stay visible; their real owner explains the required permission when opened."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Control lifetime",
-        value=private_menu_lifecycle_text(),
-        inline=False,
-    )
-    embed.set_footer(text="Dank Shield • Home › choose an area")
+    embed.set_footer(text="Dank Shield • Home • private controls ~15 min")
     return embed
 
 
@@ -535,15 +502,10 @@ class FeatureSearchModal(discord.ui.Modal, title="Find a Dank Shield Feature"):
 
 class _HomeCategoryButton(discord.ui.Button):
     def __init__(self, category: NavigationCategory, *, row: int) -> None:
-        style = (
-            discord.ButtonStyle.primary
-            if category.key in {"setup", "access", "safety", "tickets"}
-            else discord.ButtonStyle.secondary
-        )
         super().__init__(
-            label=category.label,
+            label=category.home_label or category.label,
             emoji=category.emoji,
-            style=style,
+            style=discord.ButtonStyle.primary,
             custom_id=f"dank:home:category:{category.key}:v1",
             row=row,
         )
@@ -571,7 +533,7 @@ class _FeatureButton(discord.ui.Button):
 class _FindFeatureButton(discord.ui.Button):
     def __init__(self, *, row: int = 3) -> None:
         super().__init__(
-            label="Find a Feature",
+            label="Find",
             emoji="🔎",
             style=discord.ButtonStyle.success,
             custom_id="dank:navigation:find:v1",
@@ -585,7 +547,7 @@ class _FindFeatureButton(discord.ui.Button):
 class _AllFeaturesButton(discord.ui.Button):
     def __init__(self, *, row: int = 3) -> None:
         super().__init__(
-            label="All Features",
+            label="Directory",
             emoji="📚",
             style=discord.ButtonStyle.secondary,
             custom_id="dank:navigation:all:v1",
@@ -654,8 +616,8 @@ class CompactDankHomeView(_OwnedView):
         super().__init__(owner_id)
         for index, category in enumerate(CATEGORIES):
             self.add_item(_HomeCategoryButton(category, row=index // 3))
-        self.add_item(_FindFeatureButton(row=3))
-        self.add_item(_AllFeaturesButton(row=3))
+        self.add_item(_FindFeatureButton(row=4))
+        self.add_item(_AllFeaturesButton(row=4))
         self.add_item(_CloseNavigationButton(row=4))
 
 
@@ -683,7 +645,7 @@ class FeatureDirectoryView(_OwnedView):
         super().__init__(owner_id)
         for index, category in enumerate(CATEGORIES):
             self.add_item(_HomeCategoryButton(category, row=index // 3))
-        self.add_item(_FindFeatureButton(row=3))
+        self.add_item(_FindFeatureButton(row=4))
         self.add_item(_HomeButton(row=4))
         self.add_item(_CloseNavigationButton(row=4))
 
