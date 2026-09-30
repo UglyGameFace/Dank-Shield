@@ -320,9 +320,31 @@ def test_member_setup_admin_resource_choices_use_shared_search_safe_browser() ->
     assert [item.resource_id for item in browser.candidates] == [20]
     assert [item.resource_id for item in prerequisite.candidates] == [21, 20]
     assert [item.resource_id for item in searched.candidates] == [20]
+
+    access_with_conflict = MemberSetupResourceBrowserView(
+        77,
+        guild,
+        mode="access_role",
+        conflicting_role_id=20,
+    )
+    prerequisite_with_conflict = MemberSetupResourceBrowserView(
+        77,
+        guild,
+        mode="prerequisite_role",
+        conflicting_role_id=20,
+    )
+    assert [item.resource_id for item in access_with_conflict.candidates] == []
+    assert [item.resource_id for item in prerequisite_with_conflict.candidates] == [21]
     labels = {str(getattr(child, "label", "") or "") for child in browser.children}
     assert {"Back to Member Setup", "Close", "Search"}.issubset(labels)
     assert not any(isinstance(child, (discord.ui.RoleSelect, discord.ui.ChannelSelect)) for child in browser.children)
+
+
+def test_member_setup_rejects_same_access_and_prerequisite_role() -> None:
+    assert "Member Access and Eligibility Prerequisite must be different roles." in RUNTIME
+    assert "Eligibility Prerequisite cannot be the Member Access role." in RUNTIME
+    assert "Otherwise members would need the Access role before Dank Shield can grant it." in RUNTIME
+    assert "conflicting_role_id" in RUNTIME
 
 
 def test_member_setup_manager_is_single_message_and_dismissible() -> None:
