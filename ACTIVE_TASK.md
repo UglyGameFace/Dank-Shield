@@ -34,9 +34,11 @@ Current implementation:
 - focused regressions cover styled-name lookup, saved-alias lookup, alias ranking, alias snapshot loading, the exact-live no-state-read fast path, Fix Access visibility filtering, paging, styled-name lookup, and previous-name lookup.
 
 Validation status:
-- implementation is in progress on the continuation branch;
-- exact-head CI, final diff inspection, mergeability, post-merge deployment, and a fresh Android Share Router search canary are still required;
-- this slice must not be called complete until `general news` finds the styled real destination through the live Dank Shield picker.
+- PR #364 merged to production `main` as `6de49652efeb133dd0c54a07f517a8ea4775f1b5`;
+- all six exact-head PR workflows passed before merge;
+- post-merge Dank Shield CI, DS Backlog 027 Validation, Ticket Owner Emergency Override, and Supabase migration deployment all completed successfully on/for the merged production state;
+- the merge commit tree is content-identical to the green PR head;
+- the fresh Android Share Router `general news` canary is intentionally deferred until the owner is available to test after work; it remains production evidence, not a blocker for continuing the rest of this audit.
 
 The active outcome is the 100-point master audit requested for Search-Safe Naming plus the later explicit global footer audit. The work is not complete when individual tests turn green. Completion requires the final exact-head branch to be re-audited for architecture ownership, integration wiring, persistence/concurrency, permissions, Unicode behavior, command schema, scaling, CI coverage, final diff, deployment startup, and live canary behavior.
 
@@ -54,6 +56,35 @@ The remediation order is severity-driven:
 3. P1 Search-Safe/Dank Design/Role Editor/runtime integration and concurrency defects.
 4. P2 reliability/UX/observability hardening, including Member Setup Access Role vs Prerequisite Role clarity and the global Dank Shield footer cleanup.
 5. Exact-head re-audit, deployment evidence, and live canary/soak validation.
+
+### Footer-hygiene consumer re-audit — reopened after item 97
+
+The earlier footer PASS was too syntactic. The tests correctly blocked raw IDs and known runtime markers, but they did not prove that every production footer was actually user-facing copy. Several direct footers still contained implementation/process commentary while avoiding the blacklist.
+
+Confirmed escaped examples included:
+- Community Tools explaining webhook-secret storage and persistent replacement order;
+- Welcome/Exit setup saying there is “one canonical join sender” and “one canonical exit sender”;
+- Community Tools describing “provider-backed features”;
+- Setup Check saying it was “grouped from existing health evidence”;
+- Share Router calling proxy channels “reserved infrastructure”;
+- Help describing “redundant command entry points” being consolidated;
+- the public ticket panel exposing the internal `category-menu` label;
+- permission repair describing internal bot/staff/control/public “baselines.”
+
+Root cause:
+- footer regression coverage mostly scanned direct `set_footer()` source for a blacklist of known debug tokens;
+- it did not enforce a positive product-copy contract and could miss developer/process language that used different words;
+- helper-generated footer text such as the ticket panel refresh helper also sat outside the direct-call blacklist boundary.
+
+Current remediation branch:
+`fix/footer-hygiene-consumer-audit-20260929`
+
+Current remediation:
+- rewrites the escaped footers as concise user guidance while retaining useful safety, permission, preview, pagination, and product context;
+- keeps persistent ticket-panel behavior intact while replacing the visible `category-menu` marker in both the canonical panel and live-guild-name refresh owner;
+- expands footer regression coverage with the newly escaped developer phrases and exact expected user-facing replacements.
+
+Item 97 is reopened until this branch passes exact-head CI and final diff review.
 
 Do not switch to unrelated Dank Shield work. Findings outside this master-audit scope are backlog only unless they share the same root cause or are required to validate the active repair.
 
