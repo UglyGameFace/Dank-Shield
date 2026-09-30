@@ -627,12 +627,12 @@ class RolesProfilesView(_OwnedView):
             self.remove_item(self.community_pings)
         else:
             self.remove_item(self.community_pings_admin)
-        if not self.staff:
             self.remove_item(self.member_roles)
         if not (self.staff and self.setup_manager):
             self.remove_item(self.member_setup_admin)
             self.remove_item(self.profile_builder)
-            self.remove_item(self.community_pings_admin)
+            if self.staff:
+                self.remove_item(self.community_pings_admin)
         if not self.role_manager:
             self.remove_item(self.server_roles)
             self.remove_item(self.create_role)
