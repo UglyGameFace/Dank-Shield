@@ -896,6 +896,7 @@ class MemberSetupResourceBrowserView(DankGuildResourceBrowserView):
         title: str
         placeholder: str
         empty_message: str
+        predicate = None
 
         if clean_mode == "setup_channel":
             resource_kinds = ("text",)
@@ -906,12 +907,26 @@ class MemberSetupResourceBrowserView(DankGuildResourceBrowserView):
             resource_kinds = ("role",)
             title = "🔑 Choose Member Access Role"
             placeholder = "Choose the role Dank Shield should grant/remove…"
-            empty_message = "No roles matched. Use 🔎 Search with a current/styled name, previous name, ID, or mention."
+            empty_message = "No eligible roles matched. Use 🔎 Search with a current/styled name, previous name, ID, or mention."
+
+            def predicate(resource: Any) -> bool:
+                try:
+                    if bool(resource.is_default()):
+                        return False
+                except Exception:
+                    pass
+                return not bool(getattr(resource, "managed", False))
         elif clean_mode == "prerequisite_role":
             resource_kinds = ("role",)
             title = "✅ Choose Eligibility Prerequisite"
             placeholder = "Choose the optional role members must already have…"
             empty_message = "No roles matched. Use 🔎 Search with a current/styled name, previous name, ID, or mention."
+
+            def predicate(resource: Any) -> bool:
+                try:
+                    return not bool(resource.is_default())
+                except Exception:
+                    return True
         else:
             resource_kinds = ("category",)
             title = "🔒 Add Protected Category"
@@ -942,6 +957,7 @@ class MemberSetupResourceBrowserView(DankGuildResourceBrowserView):
             placeholder=placeholder,
             query=query,
             page=page,
+            predicate=predicate,
             alias_index=alias_index,
             on_home=back,
             home_label="Back to Member Setup",
