@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from types import SimpleNamespace
 
 import discord
@@ -9,6 +10,7 @@ from stoney_verify.setup_resource_picker_binding import (
     _resource_kinds,
     apply_setup_resource_picker_binding,
 )
+from stoney_verify.ui import resource_browser
 from stoney_verify.ui.resource_browser import (
     DankGuildResourceBrowserView,
     build_resource_candidates,
@@ -96,6 +98,14 @@ def test_resource_candidates_rank_exact_saved_alias_before_partial_live_match() 
     )
 
     assert [item.label for item in matches] == ["daily-bulletin", "general-news-feed"]
+
+
+def test_resource_search_modal_updates_originating_picker_message() -> None:
+    source = inspect.getsource(resource_browser.DankResourceSearchModal.on_submit)
+
+    assert "if interaction.message is not None" in source
+    assert "interaction.response.edit_message" in source
+    assert "interaction.response.send_message" in source
 
 
 def test_resource_browser_exact_semantic_search_skips_alias_state(monkeypatch) -> None:

@@ -17,6 +17,7 @@ This tracks migration from one-off Discord dropdowns/selects to the shared Dank 
 - Fix Access moved off Discord's generic channel picker in PR #240 after the native selector failed to surface expected resources reliably. The Search-Safe continuation now consolidates its discovery/search/paging onto `DankGuildResourceBrowserView` so it does not maintain a second resource-browser search engine.
 - `/dank setup` role/channel/category mapping is being migrated to `DankGuildResourceBrowserView` in PR #241.
 - The normal public setup path keeps validation and persistence inside its feature owners; the shared browser owns discovery/search/paging only.
+- Member Setup Manager role/channel/category mapping now follows the same ownership rule: `DankGuildResourceBrowserView` owns Search-Safe discovery/search/paging/Back/Close while Member Setup retains validation, Strict Gate rules, and persistence.
 - Other feature modules still need one-by-one migration.
 
 ## Current migration targets
@@ -44,6 +45,8 @@ Admin-only legacy fallback setup pickers stay outside the public-path task until
 ## Search-Safe lookup boundary
 
 The shared resource browser owns semantic current/styled-name and saved-previous-name lookup. Discord-native `RoleSelect` / `ChannelSelect` components cannot receive hidden aliases from Dank Shield because Discord owns their entity discovery. Feature-owned native selectors therefore must not be described as alias-aware. Migrating those surfaces requires a feature-by-feature component-contract review, especially for multi-select workflows.
+
+Member Setup Manager is now migrated for its four admin resource choices: setup channel, automatic Member Access role, optional Eligibility Prerequisite role, and protected category. Its public member-review controls remain feature-owned and are not resource-discovery pickers.
 
 ## Migration rule
 

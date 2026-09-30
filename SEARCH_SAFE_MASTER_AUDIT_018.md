@@ -121,9 +121,9 @@ Status meanings:
 92. **PASS** — failed alias/delete persistence requeues claimed changes instead of silently dropping them.
 93. **PASS** — cancellation after a flush claimed events requeues those events.
 94. **PASS** — bot shutdown cancels debounce timers and performs a bounded immediate naming-state flush before the Discord loop closes.
-95. **PASS** — Member Setup clearly distinguishes optional Eligibility Prerequisite from automatically managed Member Access Role.
-96. **PASS** — Member Setup shows the rule chain Eligibility → Setup → Member Access → Protected Categories before Strict Gate activation.
-97. **REOPENED / IN REMEDIATION** — the first footer pass removed raw IDs and known runtime/config markers, but a consumer-level re-audit found additional developer/process commentary that escaped the blacklist. The current continuation rewrites those footers as user guidance and hardens regression coverage beyond known token matching.
+95. **REOPENED / IN REMEDIATION** — the semantic distinction is correct, but the live admin selectors spawned separate ephemeral native-picker panels without shared Search-Safe lookup or consistent Back/Close behavior. The current continuation consolidates these onto the shared resource browser and single-message lifecycle.
+96. **REOPENED / IN REMEDIATION** — the rule-chain copy is correct, but the original audit did not validate the manager/picker interaction lifecycle. Selection, search, save, Back, and Close now require single-message regression coverage before this item returns to PASS.
+97. **PASS** — PR #365 completed the consumer-level footer re-audit: escaped developer/process commentary was replaced with user guidance, helper-generated ticket footer refresh was kept compatible, expanded footer regressions passed exact-head CI, and the PR merged as `93cab4fdbe693f91808a99deab8fe32b560cbc47`.
 98. **PASS** — persistent footer/runtime compatibility is retained for old Welcome, Verify, tickets/transcripts, live-profile, Spam Guard panel, and Spam Guard incident messages.
 99. **PASS** — stale identity records for resources deleted while the bot was offline are opportunistically CAS-pruned only when an authorized admin opens Search-Safe Naming; there is still no startup/global guild sweep. Fixed-cardinality naming metrics, automatic failure visibility, normalized-name collision warnings, one-to-one preview/live name-length behavior, searchability-vs-mentionability guidance, and removal of the unused channel autocomplete surface are all regression-covered.
 100. **NEEDS HARDENING** — production closure still requires the final exact-head CI suite, post-merge Supabase migration deployment, Discloud startup, mobile /role canary, Search-Safe/Design/Member Setup live canary, and soak evidence.
@@ -153,6 +153,18 @@ Escaped examples: webhook-secret/persistent-replacement implementation order, �
 
 The continuation branch `fix/footer-hygiene-consumer-audit-20260929` replaces these with user-facing guidance and expands the regression contract to forbid the escaped phrases. Ticket-panel footer refresh behavior remains intact and now refreshes to the human-readable footer.
 
+PR #365 passed every exact-head workflow and merged to production `main` as `93cab4fdbe693f91808a99deab8fe32b560cbc47`, restoring item 97 to PASS.
+
+## Member Setup lifecycle escaped-defect addendum — 2026-09-29
+
+Items 95–96 were originally validated as copy/semantic requirements, but the mobile interaction lifecycle was not tested. Production still opened four Member Setup resource choices as new ephemeral native-selector messages, provided no shared Back/Close/Search-Safe browser contract, and used a thinking defer before returning a fresh manager panel. The shared Search modal also created a new ephemeral result panel.
+
+The continuation branch `fix/member-setup-picker-lifecycle-20260929` moves Member Setup admin resource discovery onto `DankGuildResourceBrowserView`, keeps selection/search/save/back/close on the same manager message, preserves the public member flow’s separate private response contract, adds explicit manager dismissal, and removes raw panel message-ID/debug-style status copy.
+
+The re-audit also found a semantic safety edge: saved Access Role and Eligibility Prerequisite could be the same role. That produces a dependency deadlock because the member would need the Access role before Dank Shield is allowed to grant that Access role. The continuation hides the conflicting role in the picker and revalidates the invariant in picker save, **Create Member Access** reuse, and `gate_health()`.
+
 ## Merge-blocker conclusion
 
-The original pre-merge conclusion below has been superseded by the post-merge escaped-defect evidence above. There is now one known reopened P1 consumer-integration blocker until the shared resource-browser continuation passes exact-head validation and the live Android canary. Item 100 remains the production-evidence gate and must not be represented as complete early.
+The earlier Search-Safe shared-browser consumer blocker was remediated and merged by PR #364. Footer item 97 was remediated and merged by PR #365. The current known implementation blocker is items 95–96: PR #366 must pass exact-head validation and merge before Member Setup lifecycle can return to PASS.
+
+Item 100 remains the final production-evidence gate. Even after PR #366 merges, closure still requires canonical `main` CI, deployment acceptance on that same `main` SHA, and the deferred mobile/live canaries. It must not be represented as production-complete early.
