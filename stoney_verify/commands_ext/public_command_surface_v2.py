@@ -94,16 +94,17 @@ class _OwnedView(discord.ui.View):
 
 def _home_embed() -> discord.Embed:
     embed = discord.Embed(
-        title="🛡️ Dank Shield",
+        title="🛡️ DANK SHIELD",
         description=(
-            "**Control Center**\n"
-            "Choose a section below, or use **🔎 Find** to jump straight to a feature.\n\n"
-            f"**{len(FEATURES)} destinations • {len(CATEGORIES)} sections**\n"
-            "Nothing is hidden. Manager tools check your live permissions when opened."
+            "**CONTROL CENTER**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"🧭 **{len(CATEGORIES)} sections**  •  ✨ **{len(FEATURES)} destinations**\n\n"
+            "Choose where you want to go. Can't remember where something lives? "
+            "Use **🔎 Find Feature**."
         ),
         color=discord.Color.blurple(),
     )
-    embed.set_footer(text="Dank Shield • Home • private controls ~15 min")
+    embed.set_footer(text="Private controls • about 15 minutes")
     return embed
 
 
@@ -503,7 +504,7 @@ class FeatureSearchModal(discord.ui.Modal, title="Find a Dank Shield Feature"):
 class _HomeSectionSelect(discord.ui.Select):
     def __init__(self) -> None:
         super().__init__(
-            placeholder="Choose a section…",
+            placeholder="🧭 Choose a section…",
             min_values=1,
             max_values=1,
             custom_id="dank:home:sections:v1",
@@ -542,7 +543,7 @@ class _FeatureButton(discord.ui.Button):
 class _FindFeatureButton(discord.ui.Button):
     def __init__(self, *, row: int = 3) -> None:
         super().__init__(
-            label="Find",
+            label="Find Feature",
             emoji="🔎",
             style=discord.ButtonStyle.success,
             custom_id="dank:navigation:find:v1",
@@ -565,6 +566,20 @@ class _AllFeaturesButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         await _open_directory(interaction)
+
+
+class _HelpNavigationButton(discord.ui.Button):
+    def __init__(self, *, row: int = 1) -> None:
+        super().__init__(
+            label="Help",
+            emoji="❓",
+            style=discord.ButtonStyle.secondary,
+            custom_id="dank:navigation:help:v1",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _route_feature(interaction, "help")
 
 
 class _HomeButton(discord.ui.Button):
@@ -626,6 +641,7 @@ class CompactDankHomeView(_OwnedView):
         self.add_item(_HomeSectionSelect())
         self.add_item(_FindFeatureButton(row=1))
         self.add_item(_AllFeaturesButton(row=1))
+        self.add_item(_HelpNavigationButton(row=1))
         self.add_item(_CloseNavigationButton(row=1))
 
 
@@ -653,6 +669,7 @@ class FeatureDirectoryView(_OwnedView):
         super().__init__(owner_id)
         self.add_item(_HomeSectionSelect())
         self.add_item(_FindFeatureButton(row=1))
+        self.add_item(_HelpNavigationButton(row=1))
         self.add_item(_HomeButton(row=1))
         self.add_item(_CloseNavigationButton(row=1))
 
