@@ -2,43 +2,66 @@
 
 ## Active task / desired outcome
 
-**SHARE-ROUTER-DESTINATION-UX-019 — make Add / Change Route destination selection search-first and obvious on Discord mobile without changing routing semantics**
+**DANK-SHIELD-NAVIGATION-UX-020 — issue #367 slice 1: establish one canonical, mobile-first navigation architecture without removing or hiding existing features**
 
-Production baseline: `main` = `46e095cd25bd724dd527d3283f4cc2dafc0b6109`, the merge of PR #366.
+Production baseline: `main` = `c46cd5753ca208468837240be11462f7e330b953`, the merge of PR #368.
+
+### Force-switch authority
+
+The owner explicitly switched from the completed Share Router destination UX task to issue #367:
+`FORCE SWITCH: #367 unified navigation + verification/community/actions/member lifecycle`.
+
+Issue #367 is an umbrella epic and must still be delivered in separate validated slices. This branch implements **slice 1 only: Unified navigation + feature registry/page contract**.
 
 ### Root cause
 
-The Search-Safe master audit fixed Share Router destination matching, but the destination step still renders a populated `DankGuildResourceBrowserView` immediately. On Discord mobile, tapping that select opens a large native sheet of up to 25 channels. The real Dank Shield text-search control is a separate button below the select, so the first interaction encourages browsing the entire channel list and can make the sheet look like a text-search field even though it is not one.
+The final public `/dank home` owner was canonical but feature-flat. It rendered nearly every major product area directly as a Home button, while deeper configuration such as **Member Setup Manager** and **Community & Pings Manager** remained buried under implementation-history menus. Existing tests reinforced that layout by requiring the old feature labels directly on `CompactDankHomeView`.
 
-### Scope
+The result was technically reachable functionality that was practically hard to discover on Discord mobile.
+
+### Current branch
+
+`feat/unified-navigation-registry-20260930`
+
+### Slice 1 scope
 
 Included:
-- Share Router **Add / Change Route** destination UX only;
-- preserve the canonical Search-Safe resource browser for candidate discovery, styled/current names, saved aliases, ID/mention lookup, filtering, paging, and final selection;
-- present a search-first destination landing panel before the large channel dropdown;
-- provide explicit **Search Destination**, **Browse Channels**, **Back to Proxy Sources**, and **Close** actions;
-- keep the flow single-message on mobile;
-- retain all existing route safety, permission, age-restriction, proxy privacy, persistence, and delete-source behavior;
-- focused regression coverage proving the default destination step no longer drops directly into the populated browser.
+- a central navigation registry with category, label, description, aliases, and manager/member metadata;
+- one canonical category for every feature destination registered in this slice;
+- categorized `/dank home` instead of the flat feature wall;
+- **🔎 Find a Feature** with normal-language aliases;
+- **📚 All Features** complete categorized directory;
+- direct discoverability for previously buried **Member Setup Manager**, **Community & Pings Manager**, **Share Router**, **My Member Setup**, **Profile Tags & Cosmetics**, and **My Community & Pings**;
+- manager-only features remain visible and let their canonical owner explain missing permissions;
+- category pages follow a common breadcrumb/purpose/features/permissions + Back/Home/Refresh/Close contract;
+- registry/route import guard so a registered feature cannot silently lose its route;
+- CI reachability tests so categories/features cannot become orphaned;
+- opt-in in-place entry modes for promoted private navigation shortcuts while existing public/persistent panel entrypoints preserve their private-response defaults.
 
-Out of scope:
-- Share Router runtime forwarding behavior;
-- proxy creation/repair semantics;
-- generic shared-browser behavior for other features;
-- the broader navigation / verification / lifecycle epic tracked separately in issue #367.
+Out of scope for this slice:
+- Generic Community & Pings data model;
+- Configurable Verification Framework;
+- Action & Reminder Center;
+- Member Activity & Reverification Lifecycle;
+- rewriting every deep legacy feature screen in one PR;
+- changing business logic, authorization, persistence, or permission ownership of existing features.
 
 ### Definition of Done
 
-- inspect the real Share Router execution path and preserve its canonical owners;
-- first destination screen is search-first and does not immediately expose the 25-item dropdown;
-- Search opens the existing Search-Safe modal and filtered results edit the same message;
-- Browse explicitly opens the existing paged browser;
-- browser Back returns to destination options; destination-options Back returns to proxy sources;
-- Close actually closes the destination flow;
-- existing target predicate and route safety checks remain unchanged;
-- focused tests and full exact-head CI pass;
-- final diff is scoped and clean;
-- merge/deploy evidence is green before calling this fixed.
+- every previous `/dank home` destination remains reachable through the registry/category model;
+- the newly promoted buried destinations are directly discoverable;
+- Find a Feature resolves common aliases to the correct canonical owner;
+- All Features lists every registry destination;
+- no registry feature lacks a route or category;
+- Home/category/directory views stay within Discord component limits;
+- promoted private shortcuts do not create avoidable duplicate response panels;
+- public/persistent panel behavior is not changed by the new in-place navigation option;
+- focused tests, compile, full exact-head CI, final diff review, mergeability, merge/deploy evidence, and an Android navigation canary pass before closure.
+
+## Prior completed task record: SHARE-ROUTER-DESTINATION-UX-019
+
+PR #368 merged as `c46cd5753ca208468837240be11462f7e330b953`.
+The search-first Share Router destination landing is deployed; Discloud and ticket-owner safety acceptance were green at task switch. The owner explicitly force-switched to issue #367.
 
 ## Prior completed task record: SEARCH-SAFE-MASTER-AUDIT-018
 
