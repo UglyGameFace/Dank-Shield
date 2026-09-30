@@ -5,7 +5,7 @@ This tracks migration from one-off Discord dropdowns/selects to the shared Dank 
 ## Available primitives
 
 - `DankPickerView` — normal option/dropdown menu.
-- `DankGuildResourceBrowserView` — Dank Shield-owned role/channel/category browser with guild-cache discovery, 25-item paging, name/ID/mention search, owner locking, Back/Close, and explicit error handling.
+- `DankGuildResourceBrowserView` — Dank Shield-owned role/channel/category browser with guild-cache discovery, 25-item paging, Search-Safe current/styled-name and saved-previous-name lookup, ID/mention search, owner locking, Back/Close, and explicit error handling.
 - `DankRoleSelect` — Discord-native role picker with shared owner-lock behavior. Keep this only where native Discord entity discovery is intentionally acceptable.
 - `DankChannelSelect` — Discord-native channel/category picker with shared owner-lock behavior. Keep this only where native Discord entity discovery is intentionally acceptable.
 - `DankUserSelect` — Discord-native user/member picker with shared owner-lock behavior.
@@ -14,7 +14,7 @@ This tracks migration from one-off Discord dropdowns/selects to the shared Dank 
 ## Current status
 
 - Shared picker foundation was added and merged through PR #82.
-- Fix Access moved off Discord's generic channel picker in PR #240 after the native selector failed to surface expected resources reliably.
+- Fix Access moved off Discord's generic channel picker in PR #240 after the native selector failed to surface expected resources reliably. The Search-Safe continuation now consolidates its discovery/search/paging onto `DankGuildResourceBrowserView` so it does not maintain a second resource-browser search engine.
 - `/dank setup` role/channel/category mapping is being migrated to `DankGuildResourceBrowserView` in PR #241.
 - The normal public setup path keeps validation and persistence inside its feature owners; the shared browser owns discovery/search/paging only.
 - Other feature modules still need one-by-one migration.
