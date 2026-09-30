@@ -43,6 +43,13 @@ def test_cleaned_production_footers_do_not_restore_known_debug_copy() -> None:
         "stoney_verify/startup_guards/resource_modlog_coverage.py",
         "stoney_verify/startup_guards/full_setup_health_autofix.py",
         "stoney_verify/tickets_new/channel_panel_repair.py",
+        "stoney_verify/commands_ext/public_community_tools.py",
+        "stoney_verify/welcome_setup_ui.py",
+        "stoney_verify/commands_ext/public_share_router.py",
+        "stoney_verify/commands_ext/public_command_surface_v2.py",
+        "stoney_verify/commands_ext/public_ticket_panel_clean.py",
+        "stoney_verify/startup_guards/live_guild_name_footer_guard.py",
+        "stoney_verify/startup_guards/setup_permission_repair_guard.py",
     )
     forbidden = (
         "Welcome Card Studio • canonical live runtime",
@@ -54,6 +61,14 @@ def test_cleaned_production_footers_do_not_restore_known_debug_copy() -> None:
         'embed.set_footer(text=f"Guild {guild.id} • setup assistant")',
         'embed.set_footer(text=f"Guild {guild.id} • setup check groups existing health evidence")',
         'embed.set_footer(text=f"Guild {guild.id} • source: /mod_ban_toggle")',
+        "No raw webhook secrets are stored • persistent replacements are recorded before old messages are removed",
+        "Lifecycle setup • one canonical join sender • one canonical exit sender",
+        "Unavailable provider-backed features are not advertised as buttons",
+        "Setup check • grouped from existing health evidence",
+        "Plain proxy names are reserved infrastructure and are excluded from Dank Design.",
+        "No hidden capability was removed; only redundant command entry points were consolidated.",
+        "Dank Shield ticket panel • category-menu",
+        "Safe scope: saved setup items, ticket/archive/staff-tool children, bot/staff/control/public baselines.",
     )
 
     combined = "\n".join(_source(path) for path in files)
@@ -101,3 +116,25 @@ def test_ticket_runtime_markers_are_human_with_legacy_aliases() -> None:
     assert '_TRANSCRIPT_POSTED_MARKER = "Transcript posted"' in source
     assert '_OPEN_CONTROLS_MARKER = "Ticket controls"' in source
     assert "_LEGACY_MARKERS" in source
+
+
+
+def test_footer_copy_uses_user_guidance_instead_of_implementation_notes() -> None:
+    community = _source("stoney_verify/commands_ext/public_community_tools.py")
+    welcome = _source("stoney_verify/welcome_setup_ui.py")
+    setup = _source("stoney_verify/commands_ext/public_setup_solid.py")
+    share = _source("stoney_verify/commands_ext/public_share_router.py")
+    help_surface = _source("stoney_verify/commands_ext/public_command_surface_v2.py")
+    ticket = _source("stoney_verify/commands_ext/public_ticket_panel_clean.py")
+    refresh = _source("stoney_verify/startup_guards/live_guild_name_footer_guard.py")
+    repair = _source("stoney_verify/startup_guards/setup_permission_repair_guard.py")
+
+    assert "Community Tools • previews stay private until you publish or post a test" in community
+    assert "Only currently available tools are shown" in community
+    assert "Welcome & Exit setup • choose where join and exit messages are sent" in welcome
+    assert "Setup check • review warnings before changing settings" in setup
+    assert "Share Router proxy channels keep plain names so mobile sharing stays reliable." in share
+    assert "Dank Shield • open a feature center to manage settings" in help_surface
+    assert "Dank Shield ticket panel • choose a category" in ticket
+    assert "Dank Shield ticket panel • choose a category" in refresh
+    assert "Repair changes only the selected setup areas and preserves join/leave channel visibility." in repair
