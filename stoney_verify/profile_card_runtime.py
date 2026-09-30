@@ -191,6 +191,8 @@ def _community_identity_role_ids(config: Mapping[str, Any]) -> set[int]:
             if option.enabled and option.kind == "community" and int(option.role_id) > 0
         }
     except Exception:
+        if "community_pings_v2" in config:
+            return set()
         return _configured_role_ids(config, "stoner_role_id")
 
 
