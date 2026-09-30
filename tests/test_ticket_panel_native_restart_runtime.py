@@ -55,6 +55,13 @@ def _isolated_runtime_state():
         _reset_runtime_state()
 
 
+def test_public_ticket_panel_footer_is_user_facing() -> None:
+    embed = panel._panel_embed(SimpleNamespace(name="Guild"))
+
+    assert embed.footer.text == "Guild • Dank Shield ticket panel • choose a category"
+    assert "category-menu" not in str(embed.footer.text or "")
+
+
 def test_runtime_installs_persistent_view_and_independent_fallback(monkeypatch) -> None:
     fake_bot = FakeBot()
     sentinel_view = object()
