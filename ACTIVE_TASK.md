@@ -6,11 +6,11 @@
 
 Replace the fixed Stoner/Sesh product model with a bounded, revisioned, per-guild Community & Pings system while preserving legacy compatibility and keeping later #367 slices separate.
 
-Production baseline: `main` = `de411259220db39690f959510d3004679ced845e` (PR #370).
+Production baseline: `main` = `2dd78604255026561c22a97507a6d7afd5b8b93f` (PR #371 merged and deployed).
 
-Active branch: `feat/community-pings-builder-20260930`.
+Active branch: `fix/367-role-staff-community-pings-ux`.
 
-Active PR: #371 — **Build generic Community & Pings configuration**.
+Active PR: #372 — **Fix staff /role Community & Pings navigation**.
 
 Issue #367 remains the umbrella epic. Slice 1 is complete. This record covers slice 2 only.
 
@@ -44,11 +44,11 @@ Explicitly out of scope:
 
 ## Status
 
-**Implementation in final remediation/validation. Not merge-ready yet after the final audit found same-slice concurrency hazards.**
+**PR #371 is merged and production gates are green. Slice 2 remains open because the Android canary found one same-slice /role UX defect.**
 
-Earlier exact head `25713057ffcfaf938da5d8f3c5ad5d036be3d1b6` had all six PR workflows green, but subsequent correctness fixes changed the head. Fresh exact-head CI is therefore required before readiness or merge.
+The canary showed owner/staff users the member-facing **Community & Pings** shortcut inside `/role` and then appended staff tools beneath it. PR #372 is the focused follow-up: member and staff Community & Pings surfaces are now audience-aware.
 
-PR #371 remains the only active implementation task.
+PR #372 is the only active implementation task. No later #367 slice has started.
 
 ## Findings / root cause
 
@@ -65,6 +65,7 @@ Final pre-merge audit found additional same-slice correctness issues:
 6. `public_toke.py` retained an unused legacy Community-role lock after the generic member picker replaced that path.
 7. `ACTIVE_TASK.md` contained more than 1,000 lines of stale historical task state, including an obsolete Live Captions “Next step,” despite the current #367 Slice 2 header.
 8. A malformed-but-present `community_pings_v2` value fell back to legacy Stoner/Sesh because parsing treated non-mapping v2 as “missing.” That violated the authority contract that legacy fallback is allowed only when v2 is absent.
+9. Production Android canary found that `/role` rendered the member-facing **Community & Pings** shortcut for owner/staff users, then appended management tools. The same concept therefore appeared in two different contexts and made the staff doorway ambiguous.
 
 ## Runtime execution path
 
@@ -151,26 +152,19 @@ Final audit remediation added:
 
 ## Validation / results
 
-Completed on earlier head `25713057ffcfaf938da5d8f3c5ad5d036be3d1b6`:
-- Dank Shield CI #3287 — success;
-- Dank Design Regression CI #1384 — success;
-- Application Command Size Diagnostics #2162 — success;
-- Community Hub CI #312 — success;
-- Ticket Owner Emergency Override #1858 — success;
-- Profile Runtime Diagnostics #1852 — success;
-- branch was mergeable and 0 behind production main.
+PR #371 production evidence:
+- final PR head `4e1056083fd7ef26c410092eef801a0387392648` passed all required PR workflows;
+- merge commit `2dd78604255026561c22a97507a6d7afd5b8b93f` had a tree identical to the final PR head;
+- canonical Dank Shield CI #3301 — success;
+- chained Deploy Supabase migrations run `36777460887` — success on the exact merge SHA;
+- Discloud commit status — success on the exact merge SHA;
+- production `main` remained the exact merge SHA through validation.
 
-Those results do **not** validate the final remediation commits. Required now:
-- fresh exact-head triggered workflows;
-- focused Community & Pings tests including new concurrency/identity guards;
-- final diff/hygiene review;
-- branch still 0 behind main;
-- mark PR ready only after exact-head validation;
-- merge with expected-head SHA guard;
-- post-merge canonical CI;
-- Supabase migration workflow if triggered;
-- Discloud deployment;
-- Android manager/member live canaries.
+Android canary:
+- found one remaining same-slice UX issue in `/role`: owner/staff saw the member Community & Pings shortcut alongside staff management controls;
+- PR #372 contains the focused fix and regression tests;
+- fresh exact-head PR #372 CI is required before merge;
+- after merge, rerun the `/role` owner/staff + normal-member canary before closing Slice 2.
 
 ## Cleanup / conflicts
 
@@ -185,7 +179,7 @@ The final audit removed one obsolete Community-role lock and consolidated member
 
 ## Blockers / risks
 
-Current blocker: exact-head CI has not yet validated the final remediation commits.
+Current blocker: PR #372 exact-head CI and the focused post-deploy `/role` Android canary have not yet completed.
 
 Live behavior cannot be called complete until deployment and Android canaries verify manager and member interactions on the merged production SHA.
 
@@ -219,4 +213,4 @@ Slice 2 is complete only when:
 
 ## Next step
 
-Observe the workflows triggered by the final remediation head. If any fail, inspect the exact failing job/log and patch only the root cause. If all are green, recheck main/branch divergence and final diff hygiene, mark PR #371 ready, merge with the exact expected head SHA, verify post-merge CI/Supabase/Discloud, then run the Android live-canary checklist before closing Slice 2.
+Validate PR #372 on its exact head. If CI is green, recheck branch divergence and diff hygiene, mark it ready, merge with the exact expected head SHA, verify post-merge CI/Supabase/Discloud, then rerun the focused Android `/role` canary for owner/staff and a normal member. Close Slice 2 only after that passes.
