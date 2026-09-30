@@ -20,6 +20,7 @@ from stoney_verify.community_pings_service import (
     validate_config,
     validate_member_selection,
     with_option,
+    without_group,
     without_option,
 )
 
@@ -380,3 +381,33 @@ def test_remove_and_reorder_bump_revision_only_when_changed() -> None:
 
     missing = without_option(removed, "does-not-exist")
     assert missing is removed
+
+
+def test_empty_group_can_be_deleted_but_in_use_group_is_blocked() -> None:
+    config = CommunityPingsConfig(
+        revision=7,
+        groups=(
+            CommunityPingGroup(key="games", label="Games", order=0),
+            CommunityPingGroup(key="empty", label="Empty", order=1),
+        ),
+        options=(
+            CommunityPingOption(
+                key="minecraft",
+                role_id=101,
+                label="Minecraft",
+                group_key="games",
+            ),
+        ),
+        source="v2",
+    )
+
+    with pytest.raises(ValueError, match="Move or delete the options"):
+        without_group(config, "games")
+
+    updated = without_group(config, "empty")
+    assert updated.revision == 8
+    assert [group.key for group in updated.groups] == ["games"]
+    assert [group.order for group in updated.groups] == [0]
+
+    unchanged = without_group(updated, "missing")
+    assert unchanged is updated
