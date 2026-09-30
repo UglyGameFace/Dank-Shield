@@ -64,6 +64,7 @@ Final pre-merge audit found additional same-slice correctness issues:
 5. Identical option/group updates still bumped the model revision even though the contract says revisions represent meaningful changes.
 6. `public_toke.py` retained an unused legacy Community-role lock after the generic member picker replaced that path.
 7. `ACTIVE_TASK.md` contained more than 1,000 lines of stale historical task state, including an obsolete Live Captions “Next step,” despite the current #367 Slice 2 header.
+8. A malformed-but-present `community_pings_v2` value fell back to legacy Stoner/Sesh because parsing treated non-mapping v2 as “missing.” That violated the authority contract that legacy fallback is allowed only when v2 is absent.
 
 ## Runtime execution path
 
@@ -124,6 +125,7 @@ Final audit remediation added:
 - Add Group refuses to overwrite an existing group key;
 - removal of the dead legacy Community-role lock in `public_toke.py`;
 - generic Cheers denial copy now refers to the configured `/toke` starter role without changing Cheers behavior.
+- malformed-but-present v2 now fails closed as an empty v2 model, so legacy Stoner/Sesh IDs cannot reactivate `/toke` capabilities or profile Community identity.
 
 ## Legacy compatibility contract
 
@@ -131,6 +133,7 @@ Final audit remediation added:
 - First Community & Pings model save converts that preset to v2.
 - Conversion does not delete Discord roles.
 - Once v2 exists, v2 is authoritative.
+- If the stored v2 blob is malformed, the system fails closed as v2 rather than falling back to legacy IDs.
 - Legacy Stoner/Sesh IDs cannot silently reactivate removed v2 capabilities.
 - The old Stoner/Sesh setup remains only a legacy helper; normal public entrypoints use the generic manager/member owner.
 - Preferred `/toke` channel remains a separate delivery setting.
