@@ -25,6 +25,7 @@ from stoney_verify.verification_flow_service import (
     parse_verification_flow,
     preset_flow,
     replace_with_preset,
+    steps_for_context,
     validate_flow,
 )
 
@@ -222,6 +223,53 @@ def test_v2_parser_keeps_one_overflow_sentinel_for_validation() -> None:
     )
     assert len(config.steps) == 11
     assert "too many steps" in validate_flow(config)
+
+
+def test_step_contexts_allow_different_explicit_flows_per_member_context() -> None:
+    config = VerificationFlowConfig(
+        revision=1,
+        preset=PRESET_STANDARD,
+        enabled=False,
+        contexts=("new_member", "returning"),
+        steps=(
+            VerificationStep(
+                key="rules",
+                step_type=STEP_RULES_ACK,
+                label="Rules",
+                order=0,
+                contexts=("new_member",),
+            ),
+            VerificationStep(
+                key="verify",
+                step_type=STEP_SIMPLE_VERIFY,
+                label="Verify",
+                order=1,
+            ),
+        ),
+    )
+    assert [step.key for step in steps_for_context(config, "new_member")] == ["rules", "verify"]
+    assert [step.key for step in steps_for_context(config, "returning")] == ["verify"]
+    assert steps_for_context(config, "trusted") == ()
+
+
+def test_unknown_or_disabled_step_context_fails_validation() -> None:
+    config = VerificationFlowConfig(
+        revision=1,
+        preset=PRESET_STANDARD,
+        enabled=False,
+        contexts=("new_member",),
+        steps=(
+            VerificationStep(
+                key="rules",
+                step_type=STEP_RULES_ACK,
+                label="Rules",
+                contexts=("returning", "mystery"),
+            ),
+        ),
+    )
+    errors = validate_flow(config)
+    assert "rules: unknown step context" in errors
+    assert "rules: step context is not enabled by the flow" in errors
 
 
 def test_active_flow_requires_real_required_steps() -> None:
