@@ -273,7 +273,7 @@ def _compact_profile_tag_labels(member: discord.Member, config: Mapping[str, Any
     if community:
         labels.append("Community: " + " / ".join(community[:2]))
 
-    cosmetic_ids = _configured_role_ids(config, "profile_cosmetic_role_ids") - stoner_ids
+    cosmetic_ids = _configured_role_ids(config, "profile_cosmetic_role_ids") - community_ids
     cosmetics = [
         _short_role_label(role.name)
         for role in sorted(list(getattr(member, "roles", []) or []), reverse=True)
