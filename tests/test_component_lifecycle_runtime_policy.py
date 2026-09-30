@@ -66,6 +66,7 @@ def test_control_center_navigation_has_stable_semantic_component_ids() -> None:
         "dank:home:sections:v1",
         "dank:navigation:find:v1",
         "dank:navigation:all:v1",
+        "dank:navigation:help:v1",
         "dank:navigation:close:1:v1",
     }
 
