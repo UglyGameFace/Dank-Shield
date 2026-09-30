@@ -36,6 +36,23 @@ and business logic. Navigation must never become a second implementation of a fe
 
 ## Home categories
 
+Home is optimized for Discord mobile. Full category names remain canonical in the
+registry and category pages, while Home uses compact labels so three buttons fit per
+row without turning the control center into a vertical wall.
+
+Expected Home rows:
+
+```text
+[⚙️ Setup]      [🚪 Access]      [🛡️ Safety]
+[👥 Members]    [🌿 Community]   [🎫 Tickets]
+[🎨 Design]     [🔊 Voice]       [📊 Operations]
+[👤 My Account] [🧰 Utilities]
+[🔎 Find]       [📚 Directory]   [✖ Close]
+```
+
+The Home embed must not repeat the full category directory. It should identify the
+Control Center, explain Find, and keep lifecycle/status copy compact.
+
 | Key | Category | Purpose |
 | --- | --- | --- |
 | `setup` | ⚙️ Setup & Server Settings | Initial setup, mappings, permissions, configuration |
