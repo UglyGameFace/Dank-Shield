@@ -346,6 +346,12 @@ def test_member_setup_rejects_same_access_and_prerequisite_role() -> None:
     assert "Otherwise members would need the Access role before Dank Shield can grant it." in RUNTIME
     assert "conflicting_role_id" in RUNTIME
 
+    create_region = RUNTIME.split("async def create_access", 1)[1].split(
+        "async def prerequisite", 1
+    )[0]
+    assert create_region.count("load_guild_setup_state(guild.id, refresh=True)") >= 2
+    assert "existing **Member Access** role is currently the Eligibility Prerequisite" in create_region
+
 
 def test_member_setup_manager_is_single_message_and_dismissible() -> None:
     manager_region = RUNTIME.split("class MemberSetupAdminView", 1)[1].split(
