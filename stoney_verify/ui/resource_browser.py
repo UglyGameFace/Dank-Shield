@@ -336,12 +336,7 @@ class _SearchButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction) -> None:
         if int(getattr(interaction.user, "id", 0) or 0) != self.owner_view.author_id:
             return await _safe_ephemeral(interaction, "❌ This resource browser belongs to another admin.")
-        await interaction.response.send_modal(
-            DankResourceSearchModal(
-                browser=self.owner_view,
-                current_query=self.owner_view.query,
-            )
-        )
+        await interaction.response.send_modal(self.owner_view.search_modal())
 
 
 class _ClearSearchButton(discord.ui.Button):
@@ -477,6 +472,12 @@ class DankGuildResourceBrowserView(DankPickerView):
             cancel_label=self.browser_cancel_label,
             include_cancel=self.browser_include_cancel,
             empty_message=self.empty_message,
+        )
+
+    def search_modal(self) -> discord.ui.Modal:
+        return DankResourceSearchModal(
+            browser=self,
+            current_query=self.query,
         )
 
     async def search(self, query: str) -> "DankGuildResourceBrowserView":
