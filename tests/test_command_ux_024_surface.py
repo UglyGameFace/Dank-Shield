@@ -50,8 +50,8 @@ def _select_values(view: discord.ui.View, custom_id: str) -> set[str]:
 
 def test_home_uses_categories_without_hiding_feature_destinations() -> None:
     labels = _labels(CompactDankHomeView(1))
-    assert {category.label for category in CATEGORIES} <= labels
-    assert {"Find a Feature", "All Features", "Close"} <= labels
+    assert {category.home_label for category in CATEGORIES} <= labels
+    assert {"Find", "Directory", "Close"} <= labels
 
     feature_labels = {feature.label for category in CATEGORIES for feature in features_for_category(category.key)}
     home_feature_overlap = feature_labels & labels
