@@ -14,6 +14,8 @@ from stoney_verify.commands_ext.public_self_roles_group import (
     ProfilePanelView,
 )
 from stoney_verify.commands_ext import public_toke
+from stoney_verify.commands_ext.public_community_pings import CommunityPingsManagerView
+from stoney_verify.community_pings_service import COMMUNITY_PINGS_KEY
 from stoney_verify.profile_card_runtime import _compact_profile_tag_labels
 
 
@@ -183,6 +185,53 @@ def test_stoner_is_profile_identity_but_sesh_subscription_is_not() -> None:
         },
     )
     assert all("Sesh Pings" not in label for label in labels)
+
+
+def test_generic_community_identity_is_not_duplicated_as_cosmetic_tag() -> None:
+    community_id = 323456789012345678
+    member = SimpleNamespace(
+        roles=[SimpleNamespace(id=community_id, name="Gaming Crew")]
+    )
+    labels = _compact_profile_tag_labels(
+        member,
+        {
+            COMMUNITY_PINGS_KEY: {
+                "version": 2,
+                "revision": 3,
+                "groups": [{"key": "community", "label": "Community"}],
+                "options": [
+                    {
+                        "key": "gaming-crew",
+                        "role_id": str(community_id),
+                        "label": "Gaming Crew",
+                        "kind": "community",
+                        "group_key": "community",
+                    }
+                ],
+            },
+            "profile_cosmetic_role_ids": [str(community_id)],
+        },
+    )
+    assert "Community: Gaming Crew" in labels
+    assert all(not label.startswith("Tags:") for label in labels)
+
+
+def test_generic_manager_exposes_add_edit_and_safe_remove_controls() -> None:
+    labels = _labels(CommunityPingsManagerView(1))
+    assert {
+        "Add Option",
+        "Edit Option",
+        "Add Group",
+        "Edit Group",
+        "Delete Group",
+        "Member Preview",
+        "Toke Channel",
+        "Clear Toke Channel",
+        "Refresh",
+        "Home",
+        "Close",
+    } <= labels
+    assert len(CommunityPingsManagerView(1).children) <= 25
 
 
 def test_cheers_card_is_response_only_and_has_one_button() -> None:
