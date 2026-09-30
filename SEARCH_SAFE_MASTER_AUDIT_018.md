@@ -121,12 +121,12 @@ Status meanings:
 92. **PASS** — failed alias/delete persistence requeues claimed changes instead of silently dropping them.
 93. **PASS** — cancellation after a flush claimed events requeues those events.
 94. **PASS** — bot shutdown cancels debounce timers and performs a bounded immediate naming-state flush before the Discord loop closes.
-95. **REOPENED / IN REMEDIATION** — the semantic distinction is correct, but the live admin selectors spawned separate ephemeral native-picker panels without shared Search-Safe lookup or consistent Back/Close behavior. The current continuation consolidates these onto the shared resource browser and single-message lifecycle.
-96. **REOPENED / IN REMEDIATION** — the rule-chain copy is correct, but the original audit did not validate the manager/picker interaction lifecycle. Selection, search, save, Back, and Close now require single-message regression coverage before this item returns to PASS.
+95. **PASS** — PR #366 moved Member Setup admin resource selection onto the shared Search-Safe browser with single-message Search/Back/Close behavior, passed exact-head CI, merged to production, and canonical post-merge CI/deployment acceptance passed.
+96. **PASS** — Member Setup's Eligibility → Setup → Member Access → Protected Categories rule chain now has regression-covered single-message selection/search/save/navigation behavior, same-role dependency deadlock protection, and green production acceptance from PR #366.
 97. **PASS** — PR #365 completed the consumer-level footer re-audit: escaped developer/process commentary was replaced with user guidance, helper-generated ticket footer refresh was kept compatible, expanded footer regressions passed exact-head CI, and the PR merged as `93cab4fdbe693f91808a99deab8fe32b560cbc47`.
 98. **PASS** — persistent footer/runtime compatibility is retained for old Welcome, Verify, tickets/transcripts, live-profile, Spam Guard panel, and Spam Guard incident messages.
 99. **PASS** — stale identity records for resources deleted while the bot was offline are opportunistically CAS-pruned only when an authorized admin opens Search-Safe Naming; there is still no startup/global guild sweep. Fixed-cardinality naming metrics, automatic failure visibility, normalized-name collision warnings, one-to-one preview/live name-length behavior, searchability-vs-mentionability guidance, and removal of the unused channel autocomplete surface are all regression-covered.
-100. **NEEDS HARDENING** — production closure still requires the final exact-head CI suite, post-merge Supabase migration deployment, Discloud startup, mobile /role canary, Search-Safe/Design/Member Setup live canary, and soak evidence.
+100. **PASS** — final production `main` `46e095cd25bd724dd527d3283f4cc2dafc0b6109` passed canonical Dank Shield CI, Ticket Owner Emergency Override, Supabase migration deployment, and Discloud acceptance; the owner then confirmed the deferred live/mobile canary works.
 
 ## Post-merge escaped-defect addendum — 2026-09-29
 
