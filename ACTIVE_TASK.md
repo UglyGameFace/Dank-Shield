@@ -163,6 +163,8 @@ PR #371 production evidence:
 Android canary:
 - found one remaining same-slice UX issue in `/role`: owner/staff saw the member Community & Pings shortcut alongside staff management controls;
 - PR #372 contains the focused fix and regression tests;
+- exact head `4aa2e4e759b9188026a883837e730b825de49cb9` failed Dank Shield CI only because one older profile regression still expected the old member button label `Community & Pings`; runtime behavior was correct and 2355 other tests passed;
+- the stale assertion is updated to the audience-aware member label `My Community & Pings`;
 - fresh exact-head PR #372 CI is required before merge;
 - after merge, rerun the `/role` owner/staff + normal-member canary before closing Slice 2.
 
@@ -179,7 +181,7 @@ The final audit removed one obsolete Community-role lock and consolidated member
 
 ## Blockers / risks
 
-Current blocker: PR #372 exact-head CI and the focused post-deploy `/role` Android canary have not yet completed.
+Current blocker: fresh PR #372 exact-head CI after the stale-label test correction, followed by the focused post-deploy `/role` Android canary.
 
 Live behavior cannot be called complete until deployment and Android canaries verify manager and member interactions on the merged production SHA.
 
