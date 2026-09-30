@@ -156,6 +156,7 @@ class VerificationStep:
     required: bool = True
     enabled: bool = True
     order: int = 0
+    contexts: tuple[str, ...] = ()
     settings: tuple[tuple[str, str], ...] = ()
 
     def to_payload(self) -> dict[str, Any]:
@@ -166,6 +167,7 @@ class VerificationStep:
             "required": bool(self.required),
             "enabled": bool(self.enabled),
             "order": int(self.order),
+            "contexts": list(self.contexts),
             "settings": _settings_payload(self.settings),
         }
 
@@ -272,6 +274,15 @@ def _step_from_raw(raw: Mapping[str, Any], index: int) -> VerificationStep:
     step_type = str(raw.get("type") or raw.get("step_type") or "").strip().lower() or "invalid"
     key = _clean_key(raw.get("key"), fallback=f"step-{index + 1}")
     label = _clean_label(raw.get("label"), fallback=step_type.replace("_", " ").title())
+    contexts_raw = raw.get("contexts")
+    contexts: list[str] = []
+    if isinstance(contexts_raw, Sequence) and not isinstance(contexts_raw, (str, bytes)):
+        for value in contexts_raw:
+            clean = str(value or "").strip().lower()
+            if clean and clean not in contexts:
+                contexts.append(clean)
+            if len(contexts) >= len(CONTEXTS) + 1:
+                break
     return VerificationStep(
         key=key,
         step_type=step_type,
@@ -279,6 +290,7 @@ def _step_from_raw(raw: Mapping[str, Any], index: int) -> VerificationStep:
         required=_safe_bool(raw.get("required"), True),
         enabled=_safe_bool(raw.get("enabled"), True),
         order=max(0, _safe_int(raw.get("order"), index)),
+        contexts=tuple(contexts),
         settings=_normalize_settings(raw.get("settings")),
     )
 
@@ -428,11 +440,30 @@ def validate_flow(config: VerificationFlowConfig) -> list[str]:
             errors.append(f"{step.key}: missing label")
         if len(step.settings) > MAX_STEP_SETTINGS:
             errors.append(f"{step.key}: too many settings")
+        if any(context not in CONTEXTS for context in step.contexts):
+            errors.append(f"{step.key}: unknown step context")
+        if step.contexts and any(context not in config.contexts for context in step.contexts):
+            errors.append(f"{step.key}: step context is not enabled by the flow")
 
     if config.enabled and not any(step.enabled and step.required for step in config.steps):
         errors.append("active flow has no required steps")
 
     return errors
+
+
+def steps_for_context(
+    config: VerificationFlowConfig,
+    context: str,
+) -> tuple[VerificationStep, ...]:
+    """Return enabled steps that apply to one explicit verification context."""
+    wanted = str(context or "").strip().lower()
+    if wanted not in CONTEXTS or wanted not in config.contexts:
+        return ()
+    return tuple(
+        step
+        for step in config.steps
+        if step.enabled and (not step.contexts or wanted in step.contexts)
+    )
 
 
 def activation_blockers(
@@ -509,5 +540,6 @@ __all__ = [
     "parse_verification_flow",
     "preset_flow",
     "replace_with_preset",
+    "steps_for_context",
     "validate_flow",
 ]
