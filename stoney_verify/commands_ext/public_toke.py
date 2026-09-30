@@ -610,6 +610,15 @@ async def open_member_community_pings(
     stoner, ping, _cfg = await _member_roles(guild)
     choices = _member_choices(member, stoner, ping)
     if not choices:
+        message = "ℹ️ This server has not configured its Community & Pings self-roles yet."
+        if replace_message:
+            await interaction.edit_original_response(
+                content=message,
+                embed=None,
+                view=None,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
         return await _reply(
             interaction,
             "This server has not configured its Stoner / Sesh Pings self-roles yet.",
