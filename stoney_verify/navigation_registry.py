@@ -17,6 +17,7 @@ class NavigationCategory:
     label: str
     emoji: str
     description: str
+    home_label: str = ""
 
 
 @dataclass(frozen=True)
@@ -36,66 +37,77 @@ CATEGORIES: tuple[NavigationCategory, ...] = (
         "Setup & Server Settings",
         "⚙️",
         "Initial setup, server mappings, permissions, and configuration.",
+        home_label="Setup",
     ),
     NavigationCategory(
         "access",
         "Onboarding & Access",
         "🚪",
         "Verification, Member Setup, welcome flows, and access requirements.",
+        home_label="Access",
     ),
     NavigationCategory(
         "safety",
         "Safety & Moderation",
         "🛡️",
         "Protection, moderation, cleanup, spam, invites, and member safety.",
+        home_label="Safety",
     ),
     NavigationCategory(
         "people",
         "Members, Roles & Profiles",
         "👥",
         "Server roles, profile configuration, and staff member-management tools.",
+        home_label="Members",
     ),
     NavigationCategory(
         "community",
         "Community & Engagement",
         "🌿",
         "Community roles, pings, sharing, Hub features, stickies, polls, and utilities.",
+        home_label="Community",
     ),
     NavigationCategory(
         "tickets",
         "Tickets & Support",
         "🎫",
         "Ticket queues, panels, categories, routing, forms, and support workflows.",
+        home_label="Tickets",
     ),
     NavigationCategory(
         "design",
         "Design & Branding",
         "🎨",
         "Server naming/design, card appearance, artwork, fonts, and visual settings.",
+        home_label="Design",
     ),
     NavigationCategory(
         "voice",
         "Voice & Accessibility",
         "🔊",
         "Live Captions and voice accessibility controls.",
+        home_label="Voice",
     ),
     NavigationCategory(
         "ops",
         "Logs, Stats & Diagnostics",
         "📊",
         "Logs, activity, live counters, health, status, and diagnostics.",
+        home_label="Operations",
     ),
     NavigationCategory(
         "my",
         "My Dank Shield",
         "👤",
         "Your profile, Member Setup, optional tags, and personal community choices.",
+        home_label="My Account",
     ),
     NavigationCategory(
         "utilities",
         "Utilities & Help",
         "🧰",
         "Help and cross-feature guidance.",
+        home_label="Utilities",
     ),
 )
 
