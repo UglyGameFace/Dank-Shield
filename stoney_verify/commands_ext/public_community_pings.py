@@ -13,6 +13,7 @@ from stoney_verify.community_pings_service import (
     CAP_TOKE_NOTIFY,
     CAP_TOKE_START,
     COMMUNITY_PINGS_KEY,
+    LEGACY_TOKE_CHANNEL_KEY,
     MAX_COMMUNITY_OPTIONS,
     CommunityPingGroup,
     CommunityPingOption,
@@ -21,6 +22,7 @@ from stoney_verify.community_pings_service import (
     move_option,
     option_for_role,
     parse_community_pings,
+    toke_role_ids,
     upsert_group,
     validate_config,
     validate_member_selection,
@@ -184,7 +186,11 @@ def _group_map(model: CommunityPingsConfig) -> dict[str, CommunityPingGroup]:
     return {group.key: group for group in model.groups}
 
 
-def _manager_embed(guild: discord.Guild, model: CommunityPingsConfig) -> discord.Embed:
+def _manager_embed(
+    guild: discord.Guild,
+    raw_config: Mapping[str, Any],
+    model: CommunityPingsConfig,
+) -> discord.Embed:
     embed = discord.Embed(
         title="🌿 Community & Pings Manager",
         description=(
@@ -198,6 +204,21 @@ def _manager_embed(guild: discord.Guild, model: CommunityPingsConfig) -> discord
     embed.add_field(name="Revision", value=str(int(model.revision)), inline=True)
     embed.add_field(name="Options", value=f"{len(model.options)} / {MAX_COMMUNITY_OPTIONS}", inline=True)
     embed.add_field(name="Groups", value=str(len(model.groups)), inline=True)
+
+    starter_id, notify_id = toke_role_ids(model, raw_config)
+    starter = guild.get_role(starter_id) if starter_id else None
+    notify = guild.get_role(notify_id) if notify_id else None
+    channel_id = _safe_int(raw_config.get(LEGACY_TOKE_CHANNEL_KEY), 0)
+    channel = guild.get_channel(channel_id) if channel_id else None
+    embed.add_field(
+        name="/toke integration",
+        value=(
+            f"Starter: {starter.mention if isinstance(starter, discord.Role) else 'Not configured'}\n"
+            f"Notify: {notify.mention if isinstance(notify, discord.Role) else 'Not configured'}\n"
+            f"Preferred channel: {channel.mention if isinstance(channel, discord.TextChannel) else 'Use the command channel'}"
+        ),
+        inline=False,
+    )
 
     if model.source == "legacy":
         embed.add_field(
@@ -375,10 +396,10 @@ async def _open_manager_message(interaction: discord.Interaction, *, owner_id: O
     guild = interaction.guild
     if guild is None:
         return await _reply(interaction, "This only works inside a server.")
-    _raw, model = await _load(guild)
+    raw, model = await _load(guild)
     await _replace(
         interaction,
-        embed=_manager_embed(guild, model),
+        embed=_manager_embed(guild, raw, model),
         view=CommunityPingsManagerView(owner_id or int(interaction.user.id)),
     )
 
@@ -1040,13 +1061,66 @@ class CommunityPingsManagerView(_OwnedView):
             view=CommunityPreviewView(self.owner_id),
         )
 
-    @discord.ui.button(label="Legacy Toke Setup", emoji="💨", style=discord.ButtonStyle.secondary, row=1)
-    async def legacy_toke(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="Toke Channel", emoji="💨", style=discord.ButtonStyle.secondary, row=1)
+    async def toke_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _staff_authorized(interaction):
             return
-        from .public_toke import open_toke_preset_setup
-        await open_toke_preset_setup(interaction, replace_message=True)
+        guild = interaction.guild
+        if guild is None:
+            return await _reply(interaction, "This only works inside a server.")
+
+        async def picked(pick_interaction: discord.Interaction, resource: Any) -> None:
+            if not isinstance(resource, discord.TextChannel):
+                return await _reply(pick_interaction, "Choose a normal text or announcement channel.")
+            from stoney_verify.guild_config import upsert_guild_config
+
+            await upsert_guild_config(
+                int(guild.id),
+                {
+                    LEGACY_TOKE_CHANNEL_KEY: str(int(resource.id)),
+                    "__config_write_mode": "explicit_override",
+                    "__config_write_source": "community_pings_builder_toke_channel",
+                    "__config_write_actor_id": str(getattr(pick_interaction.user, "id", "") or ""),
+                    "__config_write_allow_keys": [LEGACY_TOKE_CHANNEL_KEY],
+                },
+            )
+            await _open_manager_message(pick_interaction, owner_id=self.owner_id)
+
+        async def back(back_interaction: discord.Interaction) -> None:
+            await _open_manager_message(back_interaction, owner_id=self.owner_id)
+
+        browser = DankGuildResourceBrowserView(
+            guild=guild,
+            author_id=self.owner_id,
+            resource_kinds=("text",),
+            on_pick=picked,
+            custom_id="dank:community_pings:toke_channel",
+            title="Choose /toke Preferred Channel",
+            placeholder="Choose a text channel…",
+            predicate=lambda resource: isinstance(resource, discord.TextChannel),
+            on_home=back,
+            home_label="Back to manager",
+        )
+        await _replace(interaction, embed=browser.embed(), view=browser)
+
+    @discord.ui.button(label="Clear Toke Channel", emoji="🧹", style=discord.ButtonStyle.secondary, row=2)
+    async def clear_toke_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _staff_authorized(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await _reply(interaction, "This only works inside a server.")
+        from stoney_verify.guild_config import clear_guild_config_keys
+
+        await clear_guild_config_keys(
+            int(guild.id),
+            (LEGACY_TOKE_CHANNEL_KEY,),
+            source="community pings builder toke channel",
+            actor=interaction.user,
+        )
+        await _open_manager_message(interaction, owner_id=self.owner_id)
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=1)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
