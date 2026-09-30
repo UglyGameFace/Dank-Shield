@@ -925,7 +925,7 @@ def _panel_embed(guild: discord.Guild) -> discord.Embed:
     e = discord.Embed(title="🎫 Need help? Open a ticket", description="Press **Create Ticket** below, then pick the ticket type.\n\nNo form first. No guessing. You can confirm the category before anything is created.", color=discord.Color.blurple(), timestamp=discord.utils.utcnow())
     e.add_field(name="How it works", value="1. Press **Create Ticket**\n2. Pick a ticket type\n3. Confirm or go back\n4. A private ticket channel opens", inline=False)
     e.add_field(name="Panel lifetime", value=public_panel_lifecycle_text("Create Ticket panel", "Private ticket type menus/confirm screens"), inline=False)
-    e.set_footer(text=f"{guild.name} • Dank Shield ticket panel • category-menu")
+    e.set_footer(text=f"{guild.name} • Dank Shield ticket panel • choose a category")
     return e
 
 

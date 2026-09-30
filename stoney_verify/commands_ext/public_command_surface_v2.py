@@ -135,7 +135,7 @@ def _help_embed() -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text="No hidden capability was removed; only redundant command entry points were consolidated.")
+    embed.set_footer(text="Dank Shield • open a feature center to manage settings")
     return embed
 
 

@@ -190,7 +190,7 @@ def _center_embed() -> discord.Embed:
         value="🌦️ Weather • 📚 Wikipedia • 🛠️ WikiHow • 🔞 Urban Dictionary • 🎲 custom dice • 🪙 coin flip • 💘 compatibility",
         inline=False,
     )
-    embed.set_footer(text="No raw webhook secrets are stored • persistent replacements are recorded before old messages are removed")
+    embed.set_footer(text="Community Tools • previews stay private until you publish or post a test")
     return embed
 
 
@@ -218,7 +218,7 @@ def _sticky_status_embed(config: Optional[StickyConfig], poll: Optional[StickyPo
             ),
             inline=False,
         )
-        embed.set_footer(text="Default: on human activity, move after 15s have elapsed or after 5 new human messages")
+        embed.set_footer(text="Default movement: after 15 seconds or 5 new human messages")
         return embed
 
     state = "▶️ Active" if config.enabled else "⏸️ Paused"
@@ -254,7 +254,7 @@ def _sticky_status_embed(config: Optional[StickyConfig], poll: Optional[StickyPo
         inline=True,
     )
     embed.add_field(name="Repeated pings", value="Suppressed", inline=True)
-    embed.set_footer(text="Preview/test is private until you deliberately post a temporary test or publish a draft")
+    embed.set_footer(text="Preview stays private until you post a test or publish the draft")
     return embed
 
 
@@ -284,7 +284,7 @@ def _sticky_settings_embed(config: StickyConfig) -> discord.Embed:
             value="Custom Sender is unavailable because the bot must own persistent vote buttons.",
             inline=False,
         )
-    embed.set_footer(text="Pause keeps the current copy visible but stops movement; Remove deletes saved state and the managed live copy")
+    embed.set_footer(text="Pause stops movement without deleting the current sticky • Remove deletes the sticky")
     return embed
 
 
@@ -1145,7 +1145,7 @@ class EmbedBuilderModal(discord.ui.Modal, title="Build an embed"):
             embed.set_image(url=image)
         if thumbnail:
             embed.set_thumbnail(url=thumbnail)
-        embed.set_footer(text=f"Prepared with Dank Shield by {interaction.user}")
+        embed.set_footer(text="Private preview • nothing is published until you choose a destination")
         await _private(
             interaction,
             "👁️ **Private embed preview** — review it before publishing.",
@@ -1230,7 +1230,7 @@ class InfoMemberSelect(discord.ui.UserSelect):
             if len(visible_roles) > len(shown):
                 role_text += f"\n+{len(visible_roles) - len(shown)} more"
             embed.add_field(name=f"Roles ({len(visible_roles)})", value=role_text, inline=False)
-        embed.set_footer(text="This view only shows ordinary Discord server/account metadata")
+        embed.set_footer(text="Only standard Discord server and account information is shown")
         await _replace(interaction, embed=embed, view=InfoView(view.owner_id))
 
 
@@ -1319,7 +1319,7 @@ async def show_permission_check(interaction: discord.Interaction) -> None:
         ),
         inline=False,
     )
-    embed.set_footer(text="Custom Sender requires both Manage Webhooks and Manage Messages so old webhook-authored sticky copies can be cleaned up reliably")
+    embed.set_footer(text="Custom Sender needs Manage Webhooks and Manage Messages in this channel")
     await _private(interaction, embed=embed)
 
 
@@ -1379,7 +1379,7 @@ def _fun_embed() -> discord.Embed:
         inline=False,
     )
     embed.add_field(name="Quick games", value="Custom dice notation • coin flip • deterministic-for-the-same-pair compatibility joke", inline=False)
-    embed.set_footer(text="Unavailable provider-backed features are not advertised as buttons")
+    embed.set_footer(text="Only currently available tools are shown")
     return embed
 
 

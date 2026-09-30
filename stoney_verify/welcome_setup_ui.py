@@ -176,7 +176,7 @@ async def _welcome_embed(guild: discord.Guild, config: Any) -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text="Lifecycle setup • one canonical join sender • one canonical exit sender")
+    embed.set_footer(text="Welcome & Exit setup • choose where join and exit messages are sent")
     return embed
 
 

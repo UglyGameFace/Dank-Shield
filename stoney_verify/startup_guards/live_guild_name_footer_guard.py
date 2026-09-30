@@ -73,7 +73,7 @@ async def _load_cfg(guild: discord.Guild) -> Any:
 
 def _expected_ticket_footer(guild: discord.Guild) -> str:
     name = str(getattr(guild, "name", "This server") or "This server").strip() or "This server"
-    return f"{name} • Dank Shield ticket panel • category-menu"
+    return f"{name} • Dank Shield ticket panel • choose a category"
 
 
 async def refresh_ticket_panel_footer(guild: discord.Guild, *, reason: str = "live guild name refresh") -> bool:

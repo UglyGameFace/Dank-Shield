@@ -195,7 +195,7 @@ async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
         )[:1024],
         inline=False,
     )
-    embed.set_footer(text="Plain proxy names are reserved infrastructure and are excluded from Dank Design.")
+    embed.set_footer(text="Share Router proxy channels keep plain names so mobile sharing stays reliable.")
     return embed
 
 
