@@ -115,6 +115,37 @@ def test_share_router_is_reachable_from_community_tools_with_dank_browser() -> N
     assert 'resource_kinds=("text",)' in PUBLIC_UI
 
 
+def test_share_router_destination_selection_is_search_first_on_mobile() -> None:
+    target_region = PUBLIC_UI.split("async def _open_target_browser", 1)[1].split(
+        "async def _open_remove_picker", 1
+    )[0]
+
+    assert "class ShareRouterTargetLandingView(_OwnedView)" in PUBLIC_UI
+    assert 'label="Search Destination"' in PUBLIC_UI
+    assert 'label="Browse Channels"' in PUBLIC_UI
+    assert 'label="Back to Proxy Sources"' in PUBLIC_UI
+    assert 'label="Close"' in PUBLIC_UI
+
+    assert "DankGuildResourceBrowserView(" in target_region
+    assert 'title=f"Browse Destinations for #{source.name}"' in target_region
+    assert 'placeholder="Choose a destination channel…"' in target_region
+    assert 'home_label="Destination options"' in target_region
+
+    assert "embed=_target_options_embed(source)" in target_region
+    assert "view=ShareRouterTargetLandingView(" in target_region
+    assert "await _open_target_browser(back_interaction, source)" in target_region
+
+    final_replace = target_region.rsplit("await _replace(", 1)[1]
+    assert "view=browser" not in final_replace
+
+
+def test_share_router_search_first_copy_explains_search_vs_browse() -> None:
+    assert "Search is the fastest way to find the real destination on mobile." in PUBLIC_UI
+    assert "current/styled name, a saved previous name, Discord ID, or mention" in PUBLIC_UI
+    assert "type the channel name instead of scrolling through the server" in PUBLIC_UI
+    assert "open the paged destination list when you want to look manually" in PUBLIC_UI
+
+
 def test_transaction_preflight_skips_reserved_share_router_resources() -> None:
     category = SimpleNamespace(id=101, name="✦──── 🔗 share-routes ────✦", category=None)
     proxy = SimpleNamespace(id=102, name="「🤡」share-memes", category=category)
