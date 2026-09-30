@@ -16,7 +16,7 @@ Production baseline: `main` = `3803bc9131fa187cb5a2ea24091f41220dc028ed` (PR #37
 
 Active branch: `fix/ticket-managed-category-selection`.
 
-Active PR: not opened yet.
+Active PR: #374 — **Expose built-in ticket category selection in /tickets**.
 
 ## Paused prior task
 
@@ -74,6 +74,12 @@ This fix is complete only when:
 - PR merge and post-merge production CI/deploy are green;
 - Android owner/staff canary confirms another server can enable additional built-in categories without creating duplicates or custom copies.
 
+## Validation status
+
+PR #374 is open as the focused fix. The implementation reuses the existing managed catalog and saved-selection authority; no schema change is required.
+
+Fresh exact-head CI is required after this task-record update.
+
 ## Next step
 
-Finish focused tests and static diff hygiene on this branch. Open a dedicated PR only after the branch implementation is internally coherent. Then validate the exact PR head before merge.
+Validate PR #374 on its exact head. If green, perform final diff/branch hygiene, mark ready, merge with the exact expected head, then verify post-merge CI/Supabase/Discloud and run the Android canary on the affected server.
