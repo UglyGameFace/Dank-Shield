@@ -28,12 +28,12 @@ The result was technically reachable functionality that was practically hard to 
 PR #369 merged as `573612094253dc6910980d09227a065aac061f8e`. Live Android validation showed the category architecture works but the Home presentation is too tall: full category names force mostly one-button-wide rows and the embed duplicates the same directory above the buttons.
 
 This follow-up keeps the registry/category architecture and changes only the Home presentation contract:
-- compact button labels;
-- deterministic 3 / 3 / 3 / 2 / 3 mobile grid;
-- consistent category button styling;
-- Find / Directory / Close on the final row;
-- compact Home embed with no repeated category directory;
-- full canonical category names retained inside category pages, search, and documentation.
+- preserve every canonical category name on Home;
+- replace the tall category-button wall with one full-name section selector;
+- use a compact dashboard header instead of repeating the entire category directory;
+- place Find Feature / Directory / Help / Close together as one utility row;
+- keep category pages, search, aliases, routes, permissions, and business logic unchanged;
+- regression-test that Home never substitutes shortened category nicknames for the canonical names.
 
 ### Slice 1 scope
 
