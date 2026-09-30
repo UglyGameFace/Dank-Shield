@@ -60,15 +60,16 @@ def test_repair_flow_is_scan_then_preview_then_apply() -> None:
 
 def test_public_guidance_uses_compact_server_design_front_door() -> None:
     assert "`/dank home`" in V2
-    assert "choose **Server Design**" in V2
-    assert "`/dank home` → **Server Design**" in BRIDGE
+    assert "**Design & Branding**" in V2
+    assert "**Server Design**" in V2
+    assert "`/dank home` → **Design & Branding** → **Server Design**" in BRIDGE
     assert "Try `/dank design`" not in BRIDGE
     assert "Reopen `/dank design`" not in V2
 
 
 def test_compact_home_preserves_manage_channels_design_authority() -> None:
-    start = SURFACE.index('label="Server Design"')
-    end = SURFACE.index('label="Roles & Profiles"', start)
+    start = SURFACE.index('if key == "server_design":')
+    end = SURFACE.index('if key == "card_assets":', start)
     design_route = SURFACE[start:end]
     assert "public_design_bridge.open_design_studio_from_setup(interaction)" in design_route
     assert "_admin_or_manage" not in design_route

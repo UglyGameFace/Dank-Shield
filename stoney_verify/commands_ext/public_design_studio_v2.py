@@ -3,7 +3,7 @@ from __future__ import annotations
 """Consolidated public Dank Design Studio.
 
 This is the one public workflow owner for Server Design. The production front
-door is ``/dank home`` → **Server Design**. The historical Studio module remains
+door is ``/dank home`` → **Design & Branding** → **Server Design**. The historical Studio module remains
 a compatibility backend for mature exact-item editors and saved rule controls
 while all public navigation, batch preview/apply, Smart Repair, and Undo are
 owned here.
@@ -47,7 +47,7 @@ _require_design_permission = legacy._require_design_permission  # type: ignore[a
 _load_design_options = legacy._load_design_options  # type: ignore[attr-defined]
 
 _DESIGN_V2_MUTATION_ERROR_GUIDANCE = (
-    "Do not retry this design mutation blindly. Reopen `/dank home`, choose **Server Design**, "
+    "Do not retry this design mutation blindly. Reopen `/dank home`, choose **Design & Branding**, then **Server Design**, "
     "and review the current preview/Undo state before trying again. Use the Error ID in "
     "`/dank diagnostics` if the failure repeats."
 )
@@ -96,7 +96,7 @@ class DesignView(discord.ui.View):
                 interaction,
                 content=(
                     "❌ Dank Design stopped because something unexpected happened. "
-                    "Reopen `/dank home`, choose **Server Design**, and build a fresh preview before trying the action again."
+                    "Reopen `/dank home`, choose **Design & Branding**, then **Server Design**, and build a fresh preview before trying the action again."
                 ),
                 ephemeral=True,
                 action_name="design.v2.component_error",

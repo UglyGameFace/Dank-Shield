@@ -62,8 +62,14 @@ def test_control_center_uses_one_shared_private_session_lifetime() -> None:
 def test_control_center_navigation_has_stable_semantic_component_ids() -> None:
     home_ids = _custom_ids(CompactDankHomeView(1))
     assert len(home_ids) == len(set(home_ids))
-    assert len(home_ids) >= 17
-    assert all(custom_id.startswith("dank:home:") for custom_id in home_ids)
+    assert len(home_ids) >= 14
+    assert all(
+        custom_id.startswith(("dank:home:", "dank:navigation:"))
+        for custom_id in home_ids
+    )
+    assert sum(custom_id.startswith("dank:home:category:") for custom_id in home_ids) == 11
+    assert "dank:navigation:find:v1" in home_ids
+    assert "dank:navigation:all:v1" in home_ids
 
     help_ids = _custom_ids(CompactHelpView(1))
     asset_ids = _custom_ids(CardAssetView(1))

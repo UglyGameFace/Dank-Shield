@@ -45,7 +45,7 @@ _LAST_GOOD_OPTIONS: dict[str, dict[str, Any]] = {}
 
 _DESIGN_ERROR_GUIDANCE = (
     "Nothing was changed unless the success message says it was. Reopen `/dank home`, "
-    "choose **Server Design**, then check `/dank diagnostics` with the Error ID if it keeps happening."
+    "choose **Design & Branding**, then **Server Design**, then check `/dank diagnostics` with the Error ID if it keeps happening."
 )
 
 
@@ -366,7 +366,7 @@ class LegacyDesignView(discord.ui.View):
                 interaction,
                 content=(
                     "❌ Dank Design stopped this action safely. Nothing else was changed. "
-                    "Reopen /dank home → **Server Design** and try again."
+                    "Reopen /dank home → **Design & Branding** → **Server Design** and try again."
                 ),
                 ephemeral=True,
                 action_name="design.legacy.component_error",
@@ -939,7 +939,7 @@ def _home_embed(guild: discord.Guild, options: Mapping[str, Any] | None = None) 
     _ = guild, options
     embed = discord.Embed(
         title="🎨 Dank Design Studio",
-        description="Open `/dank home`, then choose **Server Design** to use the consolidated Studio.",
+        description="Open `/dank home`, choose **Design & Branding**, then **Server Design** to use the consolidated Studio.",
         color=discord.Color.blurple(),
     )
     embed.set_footer(text="Compatibility fallback only • Public home is owned by V2")

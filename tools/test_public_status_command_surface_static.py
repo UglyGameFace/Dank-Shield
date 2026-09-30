@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INIT = (ROOT / "stoney_verify/commands_ext/__init__.py").read_text(encoding="utf-8")
 STATUS = (ROOT / "stoney_verify/commands_ext/public_status_reporter.py").read_text(encoding="utf-8")
 SURFACE = (ROOT / "stoney_verify/commands_ext/public_command_surface_v2.py").read_text(encoding="utf-8")
+REGISTRY = (ROOT / "stoney_verify/navigation_registry.py").read_text(encoding="utf-8")
 CONTRACT = (ROOT / "stoney_verify/command_surface_contract.py").read_text(encoding="utf-8")
 
 
@@ -20,9 +21,12 @@ def test_status_implementation_remains_loaded() -> None:
     assert "Send a fresh Dank Shield status report now." in STATUS
 
 
-def test_status_is_reached_from_compact_home_not_a_direct_dank_child() -> None:
-    assert 'label="Status"' in SURFACE
-    assert 'await _invoke_saved("status", interaction)' in SURFACE
+def test_status_is_reached_from_registry_navigation_not_a_direct_dank_child() -> None:
+    assert '"status"' in REGISTRY
+    assert '"Status"' in REGISTRY
+    assert '"ops"' in REGISTRY
+    assert 'if key == "status":' in SURFACE
+    assert 'return await _invoke_saved("status", interaction)' in SURFACE
     assert 'PUBLIC_DANK_CHILDREN: frozenset[str] = frozenset({"home", "purge", "setup", "upload"})' in CONTRACT
 
 
@@ -40,7 +44,7 @@ if __name__ == "__main__":
     for test in (
         test_status_reporter_is_public_core,
         test_status_implementation_remains_loaded,
-        test_status_is_reached_from_compact_home_not_a_direct_dank_child,
+        test_status_is_reached_from_registry_navigation_not_a_direct_dank_child,
         test_setup_status_implementation_can_remain_loaded_but_final_tree_hides_it,
         test_status_on_ready_logs_task_start,
     ):

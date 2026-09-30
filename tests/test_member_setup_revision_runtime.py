@@ -377,15 +377,18 @@ def test_member_setup_removes_one_off_native_resource_pickers() -> None:
 
 
 def test_member_setup_admin_and_member_defers_keep_separate_response_contracts() -> None:
-    member_region = RUNTIME.split("class MemberSetupView", 1)[1].split(
+    member_opener = RUNTIME.split("async def open_member_setup(", 1)[1].split(
         "def _message_component_ids", 1
     )[0]
     admin_region = RUNTIME.split("class MemberSetupResourceBrowserView", 1)[1].split(
         "async def _restore_gate_snapshot", 1
     )[0]
 
-    assert "await _defer(interaction)" in member_region
-    assert "_defer_panel_update(interaction)" not in member_region
+    assert "replace_message: bool = False" in member_opener
+    assert "if replace_message:" in member_opener
+    assert "await _defer_panel_update(interaction)" in member_opener
+    assert "else:" in member_opener
+    assert "await _defer(interaction)" in member_opener
     assert "_defer_panel_update(interaction)" in admin_region
     assert "await interaction.response.defer(thinking=False)" in RUNTIME
 

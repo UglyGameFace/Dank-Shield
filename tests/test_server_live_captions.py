@@ -14,7 +14,7 @@ from stoney_verify.community_voice_caption_runtime import (
     server_caption_scope_id,
 )
 from stoney_verify.community_voice_receive import PerSpeakerFrameBridge
-from stoney_verify.commands_ext.public_command_surface_v2 import CompactDankHomeView
+from stoney_verify.commands_ext.public_command_surface_v2 import FeatureCategoryView
 from stoney_verify.commands_ext.public_live_captions import (
     CAPTION_ALLOWED_VOICE_CATEGORIES_KEY,
     CAPTION_ALLOWED_VOICE_CHANNELS_KEY,
@@ -59,12 +59,12 @@ def _labels(view) -> set[str]:
     }
 
 
-def test_general_live_captions_are_first_class_on_dank_home() -> None:
-    assert "Live Captions" in _labels(CompactDankHomeView(1))
+def test_general_live_captions_are_first_class_in_voice_navigation() -> None:
+    assert "Live Captions" in _labels(FeatureCategoryView(1, "voice"))
     source = _text(SURFACE)
-    assert 'custom_id="dank:home:live_captions:v1"' in source
+    assert "dank:navigation:feature:" in source
     assert "open_server_live_captions" in source
-    assert "📝 Live Captions" in source
+    assert "live_captions" in source
 
 
 def test_general_live_caption_setup_is_reachable_and_supports_existing_server_vcs() -> None:

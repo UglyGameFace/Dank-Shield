@@ -154,7 +154,8 @@ def test_rules_surface_has_one_counter_and_retired_submenus_are_absent() -> None
 
 def test_legacy_recovery_guidance_uses_canonical_public_route() -> None:
     assert "Reopen `/dank home`" in PUBLIC
-    assert "choose **Server Design**" in PUBLIC
+    assert "**Design & Branding**" in PUBLIC
+    assert "**Server Design**" in PUBLIC
     assert "Reopen `/dank design`" not in PUBLIC
 
 

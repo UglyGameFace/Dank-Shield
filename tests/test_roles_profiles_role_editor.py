@@ -215,20 +215,25 @@ def test_role_mutations_recheck_live_authority_and_destructive_dependencies() ->
 
 
 def test_both_roles_and_profiles_doorways_use_one_authoritative_center() -> None:
-    for path in (COMPACT_HOME, COMPAT_HOME):
-        source = path.read_text(encoding="utf-8")
-        start = source.index('label="Roles & Profiles"')
-        end_marker = 'label="Logs & Activity"'
-        end = source.index(end_marker, start)
-        route = source[start:end]
-        assert "open_roles_profiles_center(interaction)" in route
-        assert "_post_profile_builder(interaction" not in route
+    compact = COMPACT_HOME.read_text(encoding="utf-8")
+    compact_start = compact.index('if key == "roles_profiles":')
+    compact_end = compact.index('if key == "profile_builder":', compact_start)
+    compact_route = compact[compact_start:compact_end]
+    assert "open_roles_profiles_center(interaction)" in compact_route
+    assert "_post_profile_builder(interaction" not in compact_route
+
+    compat = COMPAT_HOME.read_text(encoding="utf-8")
+    compat_start = compat.index('label="Roles & Profiles"')
+    compat_end = compat.index('label="Logs & Activity"', compat_start)
+    compat_route = compat[compat_start:compat_end]
+    assert "open_roles_profiles_center(interaction)" in compat_route
+    assert "_post_profile_builder(interaction" not in compat_route
 
 
 
 def test_empty_cosmetic_guidance_uses_the_public_roles_profiles_path() -> None:
     source = PROFILE_ROLES.read_text(encoding="utf-8")
-    assert '/dank home` → **Roles & Profiles** → **Profile Builder**' in source
+    assert '/dank home` → **Members, Roles & Profiles** → **Profile Builder**' in source
     assert 'Staff can add them in `/dank profile builder`' not in source
 
 def test_role_editor_mutations_remain_inside_antinuke_self_action_provenance() -> None:
