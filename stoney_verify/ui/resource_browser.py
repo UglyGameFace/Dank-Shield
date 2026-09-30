@@ -11,9 +11,11 @@ persistence with the feature that requested the selection.
 
 from dataclasses import dataclass
 from math import ceil
-from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence
+from typing import Any, Awaitable, Callable, Iterable, Mapping, Optional, Sequence
 
 import discord
+
+from stoney_verify.services import naming_identity
 
 from .picker import DankChoice, DankPickerView
 
@@ -141,23 +143,84 @@ def _iter_resources(guild: discord.Guild, allowed: frozenset[str]) -> Iterable[t
                 yield kind, channel
 
 
+def _alias_key(kind: str, resource_id: int) -> str:
+    identity_kind = "role" if kind == "role" else "channel"
+    return f"{identity_kind}:{int(resource_id)}"
+
+
+def _search_score(
+    resource: Any,
+    *,
+    kind: str,
+    query: str,
+    aliases: Sequence[str] = (),
+) -> int | None:
+    raw_query = str(query or "").strip()
+    if not raw_query:
+        return 50
+
+    rid = _resource_id(resource)
+    mention = str(getattr(resource, "mention", "") or "").strip()
+    cleaned = _clean_query(raw_query)
+    if cleaned and (cleaned == str(rid) or cleaned == mention.casefold()):
+        return 0
+
+    name = _resource_name(resource)
+    raw_fold = name.casefold()
+    query_fold = raw_query.casefold()
+    semantic_name = naming_identity.semantic_key(name)
+    semantic_query = naming_identity.semantic_key(raw_query)
+    semantic_aliases = tuple(
+        value
+        for alias in aliases
+        if (value := naming_identity.semantic_key(alias))
+    )
+
+    if query_fold and raw_fold == query_fold:
+        return 1
+    if semantic_query and semantic_name == semantic_query:
+        return 2
+    if semantic_query and semantic_query in semantic_aliases:
+        return 3
+    if query_fold and raw_fold.startswith(query_fold):
+        return 4
+    if semantic_query and semantic_name.startswith(semantic_query):
+        return 5
+    if semantic_query and any(alias.startswith(semantic_query) for alias in semantic_aliases):
+        return 6
+    if query_fold and query_fold in raw_fold:
+        return 7
+    if semantic_query and semantic_query in semantic_name:
+        return 8
+    if semantic_query and any(semantic_query in alias for alias in semantic_aliases):
+        return 9
+    return None
+
+
 def build_resource_candidates(
     guild: discord.Guild,
     *,
     resource_kinds: Sequence[str],
     query: str = "",
     predicate: Optional[ResourcePredicate] = None,
+    alias_index: Optional[Mapping[str, Sequence[str]]] = None,
 ) -> list[DankResourceCandidate]:
-    """Build deterministic cache-backed candidates for a guild resource browser."""
+    """Build deterministic cache-backed candidates for a guild resource browser.
+
+    Search is Search-Safe aware for live styled names. When a bounded naming
+    alias index is supplied, previous semantic names participate too.
+    """
 
     allowed = frozenset(str(kind or "").strip().lower() for kind in resource_kinds)
     allowed = frozenset(kind for kind in allowed if kind in _ALLOWED_KINDS)
     if not allowed:
         return []
 
-    needle = _clean_query(query)
-    out: list[DankResourceCandidate] = []
+    query_text = str(query or "").strip()
+    aliases_by_key = alias_index if isinstance(alias_index, Mapping) else {}
+    rows: list[tuple[int, int, DankResourceCandidate]] = []
     seen: set[tuple[str, int]] = set()
+    ordinal = 0
 
     for kind, resource in _iter_resources(guild, allowed):
         rid = _resource_id(resource)
@@ -175,22 +238,29 @@ def build_resource_candidates(
             except Exception:
                 continue
 
-        name = _resource_name(resource)
-        mention = str(getattr(resource, "mention", "") or "")
-        if needle and needle not in name.casefold() and needle not in str(rid) and needle not in mention.casefold():
+        aliases = tuple(aliases_by_key.get(_alias_key(kind, rid), ()) or ())
+        score = _search_score(resource, kind=kind, query=query_text, aliases=aliases)
+        if score is None:
             continue
 
-        out.append(
-            DankResourceCandidate(
-                resource_id=rid,
-                resource_type=kind,
-                label=name,
-                description=_resource_description(resource, kind),
-                emoji=_resource_emoji(kind),
+        rows.append(
+            (
+                score,
+                ordinal,
+                DankResourceCandidate(
+                    resource_id=rid,
+                    resource_type=kind,
+                    label=_resource_name(resource),
+                    description=_resource_description(resource, kind),
+                    emoji=_resource_emoji(kind),
+                ),
             )
         )
+        ordinal += 1
 
-    return out
+    if query_text:
+        rows.sort(key=lambda row: (row[0], row[1]))
+    return [row[2] for row in rows]
 
 
 def _candidate_choice(candidate: DankResourceCandidate) -> DankChoice:
@@ -272,7 +342,12 @@ class DankResourceSearchModal(discord.ui.Modal, title="Search Server Items"):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if int(getattr(interaction.user, "id", 0) or 0) != self.browser.author_id:
             return await _safe_ephemeral(interaction, "❌ This resource browser belongs to another admin.")
-        view = self.browser.clone(query=str(self.query.value or ""), page=0)
+        alias_index = await naming_identity.get_search_alias_index(getattr(self.browser.guild, "id", 0))
+        view = self.browser.clone(
+            query=str(self.query.value or ""),
+            page=0,
+            alias_index=alias_index,
+        )
         await interaction.response.send_message(
             embed=view.embed(),
             view=view,
@@ -297,6 +372,7 @@ class DankGuildResourceBrowserView(DankPickerView):
         query: str = "",
         page: int = 0,
         predicate: Optional[ResourcePredicate] = None,
+        alias_index: Optional[Mapping[str, Sequence[str]]] = None,
         on_home: Optional[Callable[[discord.Interaction], Awaitable[None]]] = None,
         home_label: str = "Back",
         cancel_label: str = "Close",
@@ -312,6 +388,7 @@ class DankGuildResourceBrowserView(DankPickerView):
         self.browser_placeholder = str(placeholder or "Choose a server item…")[:150]
         self.query = str(query or "").strip()
         self.predicate = predicate
+        self.alias_index = dict(alias_index or {})
         self.browser_home = on_home
         self.browser_home_label = home_label
         self.browser_cancel_label = cancel_label
@@ -323,6 +400,7 @@ class DankGuildResourceBrowserView(DankPickerView):
             resource_kinds=self.resource_kinds,
             query=self.query,
             predicate=predicate,
+            alias_index=self.alias_index,
         )
         self.page_count = max(1, int(ceil(len(self.candidates) / _PAGE_SIZE)))
         self.page = max(0, min(int(page), self.page_count - 1))
@@ -352,7 +430,13 @@ class DankGuildResourceBrowserView(DankPickerView):
         if self.query:
             self.add_item(_ClearSearchButton(self))
 
-    def clone(self, *, query: Optional[str] = None, page: Optional[int] = None) -> "DankGuildResourceBrowserView":
+    def clone(
+        self,
+        *,
+        query: Optional[str] = None,
+        page: Optional[int] = None,
+        alias_index: Optional[Mapping[str, Sequence[str]]] = None,
+    ) -> "DankGuildResourceBrowserView":
         return DankGuildResourceBrowserView(
             guild=self.guild,
             author_id=self.author_id,
@@ -364,6 +448,7 @@ class DankGuildResourceBrowserView(DankPickerView):
             query=self.query if query is None else query,
             page=self.page if page is None else page,
             predicate=self.predicate,
+            alias_index=self.alias_index if alias_index is None else alias_index,
             on_home=self.browser_home,
             home_label=self.browser_home_label,
             cancel_label=self.browser_cancel_label,
