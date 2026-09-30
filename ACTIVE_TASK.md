@@ -29,7 +29,9 @@ Current implementation:
 - Fix Access now subclasses the canonical `DankGuildResourceBrowserView`; its existing actor authority, visibility predicate, target validation, mutation/audit core, Back flow, and explicit error reporting remain feature-owned while shared discovery/search/paging becomes authoritative;
 - the old `/dank setup-find` search implementation is confirmed in `PUBLIC_HIDDEN_DANK_CHILDREN` and is not the normal public setup consumer; normal setup role/channel/category selection already routes through the shared resource browser;
 - a source sweep for the literal custom resource-search pattern found the shared browser plus Fix Access; the latter is now consolidated instead of patched as a second search engine;
-- focused regressions cover styled-name lookup, saved-alias lookup, alias ranking, alias snapshot loading, Fix Access visibility filtering, paging, styled-name lookup, and previous-name lookup.
+- the selector inventory also found feature-owned Discord-native role/channel selectors outside this shared searchable-browser path. Native Discord discovery cannot consume hidden Naming Identity aliases; replacing all of those selectors would be a broader cross-feature picker migration and is explicitly not being smuggled into this remediation PR;
+- this continuation's completion claim is therefore scoped precisely to **Dank Shield-owned searchable role/channel/category browser paths**, plus the already alias-aware `/role` query path. It must not be restated later as “every Discord selector in the bot is alias-aware”;
+- focused regressions cover styled-name lookup, saved-alias lookup, alias ranking, alias snapshot loading, the exact-live no-state-read fast path, Fix Access visibility filtering, paging, styled-name lookup, and previous-name lookup.
 
 Validation status:
 - implementation is in progress on the continuation branch;
@@ -37,6 +39,10 @@ Validation status:
 - this slice must not be called complete until `general news` finds the styled real destination through the live Dank Shield picker.
 
 The active outcome is the 100-point master audit requested for Search-Safe Naming plus the later explicit global footer audit. The work is not complete when individual tests turn green. Completion requires the final exact-head branch to be re-audited for architecture ownership, integration wiring, persistence/concurrency, permissions, Unicode behavior, command schema, scaling, CI coverage, final diff, deployment startup, and live canary behavior.
+
+## Backlog boundary discovered during consumer inventory
+
+A separate future picker-migration task may replace remaining feature-owned Discord-native `RoleSelect`/`ChannelSelect` surfaces with the shared browser where product UX requires hidden-alias lookup. Current examples include Role Center, Member Setup, Toke setup, Live Captions setup, Spam Guard/AntiNuke role management, Verify role mapping, and several channel-placement utilities. They remain outside this PR because changing their component contracts, multi-select behavior, validation, and feature-specific save flows is not required to repair the escaped shared-browser defect and would materially broaden regression risk.
 
 ## Scope / single active task lock
 
