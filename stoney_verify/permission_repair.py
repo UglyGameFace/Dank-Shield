@@ -5,7 +5,7 @@ from __future__ import annotations
 The stable public API stays here. Mutation/audit behavior is retained in
 ``permission_repair_core`` while the production UI is owned by
 ``permission_repair_ui`` so channel/category discovery can use Dank Shield's
-dedicated browser instead of Discord's generic native entity picker.
+shared Dank Shield resource browser instead of Discord's generic native entity picker.
 """
 
 from . import permission_repair_core as _core
