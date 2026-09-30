@@ -262,12 +262,29 @@ def test_member_setup_manager_explains_prerequisite_vs_access_role_chain() -> No
 
 
 def test_member_setup_admin_resource_choices_use_shared_search_safe_browser() -> None:
+    everyone = SimpleNamespace(
+        id=1,
+        name="@everyone",
+        mention="@everyone",
+        members=[],
+        managed=False,
+        is_default=lambda: True,
+    )
+    managed_role = SimpleNamespace(
+        id=21,
+        name="Integration Verified",
+        mention="<@&21>",
+        members=[],
+        managed=True,
+        is_default=lambda: False,
+    )
     styled_role = SimpleNamespace(
         id=20,
         name="「✅」𝕍𝕖𝕣𝕚𝕗𝕚𝕖𝕕",
         mention="<@&20>",
         members=[],
         managed=False,
+        is_default=lambda: False,
     )
     text_channel = SimpleNamespace(
         id=10,
@@ -277,11 +294,12 @@ def test_member_setup_admin_resource_choices_use_shared_search_safe_browser() ->
         category=None,
         channels=[],
     )
+    roles = [everyone, managed_role, styled_role]
     guild = SimpleNamespace(
         id=123,
-        roles=[styled_role],
+        roles=roles,
         channels=[text_channel],
-        get_role=lambda role_id: styled_role if int(role_id) == 20 else None,
+        get_role=lambda role_id: next((role for role in roles if role.id == int(role_id)), None),
         get_channel=lambda channel_id: text_channel if int(channel_id) == 10 else None,
     )
 
@@ -290,10 +308,17 @@ def test_member_setup_admin_resource_choices_use_shared_search_safe_browser() ->
         guild,
         mode="access_role",
     )
+    prerequisite = MemberSetupResourceBrowserView(
+        77,
+        guild,
+        mode="prerequisite_role",
+    )
     searched = browser.clone(query="verified")
 
     assert isinstance(browser, DankGuildResourceBrowserView)
     assert isinstance(searched, MemberSetupResourceBrowserView)
+    assert [item.resource_id for item in browser.candidates] == [20]
+    assert [item.resource_id for item in prerequisite.candidates] == [21, 20]
     assert [item.resource_id for item in searched.candidates] == [20]
     labels = {str(getattr(child, "label", "") or "") for child in browser.children}
     assert {"Back to Member Setup", "Close", "Search"}.issubset(labels)
