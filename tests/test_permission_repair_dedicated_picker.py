@@ -6,6 +6,7 @@ import discord
 
 from stoney_verify import permission_repair, permission_repair_core, permission_repair_ui
 from stoney_verify.ui import DankGuildResourceBrowserView, DankPickerView
+from stoney_verify.ui import resource_browser
 
 
 def _component(view: discord.ui.View, custom_id: str):
@@ -126,7 +127,7 @@ def test_fix_access_search_uses_saved_previous_name_aliases(monkeypatch) -> None
         return {"channel:404": ("general-news",)}
 
     monkeypatch.setattr(
-        permission_repair_ui.naming_identity,
+        resource_browser.naming_identity,
         "get_search_alias_index",
         fake_alias_index,
     )
