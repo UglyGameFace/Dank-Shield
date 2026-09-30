@@ -126,7 +126,7 @@ def test_public_control_center_and_db_check_footers_hide_operator_metadata() -> 
     control_surface = (PACKAGE / "commands_ext/public_command_surface_v2.py").read_text(encoding="utf-8")
     setup_review = (PACKAGE / "commands_ext/public_setup_review.py").read_text(encoding="utf-8")
 
-    assert 'embed.set_footer(text="Dank Shield • Home • private controls ~15 min")' in control_surface
+    assert 'embed.set_footer(text="Private controls • about 15 minutes")' in control_surface
     assert "runtime_release_label" not in control_surface
     assert 'embed.set_footer(text="Read-only check • no settings were changed.")' in setup_review
     assert "refresh Supabase REST schema cache" not in setup_review
