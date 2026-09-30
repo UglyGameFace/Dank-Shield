@@ -25,7 +25,11 @@ Current implementation:
 - exact saved aliases rank ahead of unrelated partial live-name matches;
 - ID/mention search and paging remain supported;
 - Share Router no longer labels its dropdown as if the opened Discord sheet itself were a text-search field; it points admins to the separate Dank Shield **🔎 Search** control;
-- focused regressions cover styled-name lookup, saved-alias lookup, alias ranking, and the alias snapshot boundary.
+- the consumer sweep found Fix Access maintaining a second hand-built Dank-owned channel/category browser with the same literal-name search defect;
+- Fix Access now subclasses the canonical `DankGuildResourceBrowserView`; its existing actor authority, visibility predicate, target validation, mutation/audit core, Back flow, and explicit error reporting remain feature-owned while shared discovery/search/paging becomes authoritative;
+- the old `/dank setup-find` search implementation is confirmed in `PUBLIC_HIDDEN_DANK_CHILDREN` and is not the normal public setup consumer; normal setup role/channel/category selection already routes through the shared resource browser;
+- a source sweep for the literal custom resource-search pattern found the shared browser plus Fix Access; the latter is now consolidated instead of patched as a second search engine;
+- focused regressions cover styled-name lookup, saved-alias lookup, alias ranking, alias snapshot loading, Fix Access visibility filtering, paging, styled-name lookup, and previous-name lookup.
 
 Validation status:
 - implementation is in progress on the continuation branch;
