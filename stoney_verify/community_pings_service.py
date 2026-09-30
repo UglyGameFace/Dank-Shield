@@ -349,11 +349,15 @@ def with_option(
     config: CommunityPingsConfig,
     option: CommunityPingOption,
 ) -> CommunityPingsConfig:
+    replacing = any(
+        item.key == option.key or int(item.role_id) == int(option.role_id)
+        for item in config.options
+    )
+    if not replacing and len(config.options) >= MAX_COMMUNITY_OPTIONS:
+        raise ValueError(f"Community & Pings supports at most {MAX_COMMUNITY_OPTIONS} options.")
     options = [item for item in config.options if item.key != option.key and item.role_id != option.role_id]
     options.append(option)
     normalized = _dedupe_options(options)
-    if len(normalized) > MAX_COMMUNITY_OPTIONS:
-        raise ValueError(f"Community & Pings supports at most {MAX_COMMUNITY_OPTIONS} options.")
 
     groups = list(config.groups)
     if option.group_key not in {group.key for group in groups}:
@@ -411,11 +415,12 @@ def upsert_group(
     config: CommunityPingsConfig,
     group: CommunityPingGroup,
 ) -> CommunityPingsConfig:
+    replacing = any(item.key == group.key for item in config.groups)
+    if not replacing and len(config.groups) >= MAX_COMMUNITY_GROUPS:
+        raise ValueError(f"Community & Pings supports at most {MAX_COMMUNITY_GROUPS} groups.")
     groups = [item for item in config.groups if item.key != group.key]
     groups.append(group)
     normalized = _dedupe_groups(groups)
-    if len(normalized) > MAX_COMMUNITY_GROUPS:
-        raise ValueError(f"Community & Pings supports at most {MAX_COMMUNITY_GROUPS} groups.")
     return CommunityPingsConfig(
         revision=next_revision(config),
         groups=normalized,
@@ -487,10 +492,16 @@ def validate_member_selection(
         if role_id in current and role_id not in selected and not option.removable:
             return f"{option.label} cannot be removed by members."
 
+    active_role_ids = set(active)
     for role_id in selected:
         option = active[role_id]
         prerequisite = int(option.prerequisite_role_id)
-        if prerequisite > 0 and prerequisite not in selected and prerequisite not in current:
+        if prerequisite <= 0:
+            continue
+        if prerequisite in active_role_ids:
+            if prerequisite not in selected:
+                return f"{option.label} requires its configured prerequisite option."
+        elif prerequisite not in current:
             return f"{option.label} requires its configured prerequisite role first."
 
     exclusive: dict[str, list[CommunityPingOption]] = {}
