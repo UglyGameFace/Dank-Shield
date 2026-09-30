@@ -123,7 +123,7 @@ Status meanings:
 94. **PASS** — bot shutdown cancels debounce timers and performs a bounded immediate naming-state flush before the Discord loop closes.
 95. **PASS** — Member Setup clearly distinguishes optional Eligibility Prerequisite from automatically managed Member Access Role.
 96. **PASS** — Member Setup shows the rule chain Eligibility → Setup → Member Access → Protected Categories before Strict Gate activation.
-97. **PASS** — global production footer hygiene removes raw IDs/debug/runtime/config metadata while preserving useful safety, pagination, count, and action guidance.
+97. **REOPENED / IN REMEDIATION** — the first footer pass removed raw IDs and known runtime/config markers, but a consumer-level re-audit found additional developer/process commentary that escaped the blacklist. The current continuation rewrites those footers as user guidance and hardens regression coverage beyond known token matching.
 98. **PASS** — persistent footer/runtime compatibility is retained for old Welcome, Verify, tickets/transcripts, live-profile, Spam Guard panel, and Spam Guard incident messages.
 99. **PASS** — stale identity records for resources deleted while the bot was offline are opportunistically CAS-pruned only when an authorized admin opens Search-Safe Naming; there is still no startup/global guild sweep. Fixed-cardinality naming metrics, automatic failure visibility, normalized-name collision warnings, one-to-one preview/live name-length behavior, searchability-vs-mentionability guidance, and removal of the unused channel autocomplete surface are all regression-covered.
 100. **NEEDS HARDENING** — production closure still requires the final exact-head CI suite, post-merge Supabase migration deployment, Discloud startup, mobile /role canary, Search-Safe/Design/Member Setup live canary, and soak evidence.
@@ -144,6 +144,14 @@ The live Android Share Router canary after PR #363 merged exposed a consumer-int
 - A separate selector inventory found remaining feature-owned Discord-native `RoleSelect`/`ChannelSelect` surfaces. They are not hidden-alias-aware because Discord owns their discovery. This addendum does not falsely classify them as shared-browser consumers or silently migrate unrelated feature contracts.
 - The corrected claim for this remediation is: Dank Shield-owned **searchable resource-browser** paths use the canonical semantic/alias-aware browser; `/role` remains a separate semantic/alias-aware text query. It is not a claim that every native Discord selector in the repository supports saved aliases.
 - Closure now additionally requires exact-head CI and a fresh Android canary proving a plain query such as `general news` finds the styled destination in Share Router.
+
+## Footer-hygiene escaped-defect addendum — 2026-09-29
+
+The post-merge consumer audit reopened item 97. Direct footer scanning successfully removed raw IDs and known encoded/runtime markers, but several production footers still exposed implementation language without matching the blacklist.
+
+Escaped examples: webhook-secret/persistent-replacement implementation order, “canonical” lifecycle sender ownership, “provider-backed” feature availability, “health evidence,” Share Router “reserved infrastructure,” consolidated command-entry implementation notes, the ticket-panel `category-menu` internal label, and permission-repair “baseline” terminology.
+
+The continuation branch `fix/footer-hygiene-consumer-audit-20260929` replaces these with user-facing guidance and expands the regression contract to forbid the escaped phrases. Ticket-panel footer refresh behavior remains intact and now refreshes to the human-readable footer.
 
 ## Merge-blocker conclusion
 
