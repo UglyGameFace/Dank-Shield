@@ -10,7 +10,7 @@ Production baseline: `main` = `fd1b95a6bc2128388e9cfb0d2bc9b09ad21bc4ab` (PR #37
 
 Active branch: `feat/367-verification-framework-foundation`.
 
-Active PR: not opened yet.
+Active PR: #373 — **Add configurable verification flow policy foundation**.
 
 Issue #367 remains the umbrella epic. Slice 1 and Slice 2 are complete. This record covers Slice 3 only.
 
@@ -151,6 +151,19 @@ Slice 3 is complete only when:
 - merge/deploy evidence is green;
 - Android owner + member live canaries pass.
 
+## Validation status
+
+PR #373 is open as the focused policy-foundation PR. Static review has confirmed:
+- no live verification behavior changes;
+- no guild-specific IDs/defaults;
+- no debug/TODO leftovers;
+- malformed/unknown-version v2 policy is preserved as invalid and fails closed at activation;
+- duplicate/unknown steps are not silently normalized away;
+- per-step context applicability supports different explicit step subsets for new/returning/trusted/manual-review contexts;
+- branch is current with production main.
+
+Fresh exact-head CI is required after the final task-record update.
+
 ## Next step
 
-Validate the policy foundation on its exact branch head. If green, open/prepare the focused foundation PR and perform diff hygiene. Only after that foundation is merged should the next Slice 3 integration add the canonical manager and CAS-protected draft persistence.
+Let PR #373 exact-head CI finish. If green, perform final diff/branch hygiene, mark #373 ready, and merge with the exact expected head. Verify post-merge canonical CI/Supabase/Discloud before beginning the next Slice 3 integration: the canonical manager with CAS-protected draft persistence.
