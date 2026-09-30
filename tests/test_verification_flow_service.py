@@ -108,7 +108,7 @@ def test_v2_presence_is_authoritative_even_when_payload_is_malformed() -> None:
     assert config.steps == ()
 
 
-def test_v2_parser_bounds_dedupes_and_normalizes_steps() -> None:
+def test_v2_parser_preserves_duplicate_keys_so_validation_fails_closed() -> None:
     raw_steps = [
         {
             "key": "Rules",
@@ -142,8 +142,62 @@ def test_v2_parser_bounds_dedupes_and_normalizes_steps() -> None:
         }
     )
     assert config.revision == 4
-    assert [step.key for step in config.steps] == ["rules", "verify"]
-    assert [step.order for step in config.steps] == [0, 1]
+    assert [step.key for step in config.steps] == ["rules", "rules", "verify"]
+    assert [step.order for step in config.steps] == [0, 1, 2]
+    assert "duplicate step key" in validate_flow(config)
+
+
+def test_v2_parser_preserves_unknown_policy_values_for_fail_closed_validation() -> None:
+    config = parse_verification_flow(
+        {
+            VERIFICATION_FLOW_KEY: {
+                "version": 2,
+                "revision": 9,
+                "preset": "mystery",
+                "enabled": True,
+                "failure_action": "teleport",
+                "contexts": ["new_member", "unknown_context"],
+                "steps": [
+                    {
+                        "key": "mystery",
+                        "type": "mystery_step",
+                        "label": "Mystery",
+                        "required": True,
+                    }
+                ],
+            }
+        }
+    )
+    errors = validate_flow(config)
+    assert "unknown preset" in errors
+    assert "unknown failure action" in errors
+    assert "unknown context" in errors
+    assert "mystery: unknown step type" in errors
+    blockers = activation_blockers(config, supported_step_types={STEP_SIMPLE_VERIFY})
+    assert "mystery: unknown step type" in blockers
+
+
+def test_v2_parser_keeps_one_overflow_sentinel_for_validation() -> None:
+    steps = [
+        {
+            "key": f"step-{index}",
+            "type": STEP_SIMPLE_VERIFY,
+            "label": f"Step {index}",
+            "order": index,
+        }
+        for index in range(20)
+    ]
+    config = parse_verification_flow(
+        {
+            VERIFICATION_FLOW_KEY: {
+                "version": 2,
+                "preset": PRESET_SIMPLE,
+                "steps": steps,
+            }
+        }
+    )
+    assert len(config.steps) == 11
+    assert "too many steps" in validate_flow(config)
 
 
 def test_active_flow_requires_real_required_steps() -> None:
