@@ -148,10 +148,15 @@ def main() -> int:
         "class TargetChannelPickerView(DankGuildResourceBrowserView)",
         "class TargetPermissionRepairView(core.TargetPermissionRepairView)",
         "Choose Channel / Category",
-        "Search",
-        "Clear Search",
         "shared Dank Shield resource browser",
         "async def on_error",
+    )
+    require(
+        "stoney_verify/ui/resource_browser.py",
+        'label="Search"',
+        'label="Clear Search"',
+        "get_search_alias_index",
+        "semantic_key",
     )
     forbid(
         "stoney_verify/permission_repair_ui.py",
