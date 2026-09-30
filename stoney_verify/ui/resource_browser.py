@@ -151,7 +151,6 @@ def _alias_key(kind: str, resource_id: int) -> str:
 def _search_score(
     resource: Any,
     *,
-    kind: str,
     query: str,
     aliases: Sequence[str] = (),
 ) -> int | None:
@@ -239,7 +238,7 @@ def build_resource_candidates(
                 continue
 
         aliases = tuple(aliases_by_key.get(_alias_key(kind, rid), ()) or ())
-        score = _search_score(resource, kind=kind, query=query_text, aliases=aliases)
+        score = _search_score(resource, query=query_text, aliases=aliases)
         if score is None:
             continue
 
