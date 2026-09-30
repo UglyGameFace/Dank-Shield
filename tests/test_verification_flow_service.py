@@ -147,6 +147,30 @@ def test_v2_parser_preserves_duplicate_keys_so_validation_fails_closed() -> None
     assert "duplicate step key" in validate_flow(config)
 
 
+def test_v2_parser_rejects_unknown_version_and_legacy_preset_inside_v2() -> None:
+    config = parse_verification_flow(
+        {
+            VERIFICATION_FLOW_KEY: {
+                "version": 999,
+                "revision": 1,
+                "preset": PRESET_LEGACY,
+                "enabled": False,
+                "contexts": [CONTEXT_NEW_MEMBER],
+                "steps": [
+                    {
+                        "key": "verify",
+                        "type": STEP_SIMPLE_VERIFY,
+                        "label": "Verify",
+                    }
+                ],
+            }
+        }
+    )
+    errors = validate_flow(config)
+    assert "unsupported verification flow version" in errors
+    assert "legacy preset is not valid for v2 policy" in errors
+
+
 def test_v2_parser_preserves_unknown_policy_values_for_fail_closed_validation() -> None:
     config = parse_verification_flow(
         {
@@ -242,6 +266,7 @@ def test_replace_with_preset_bumps_revision_and_never_activates_implicitly() -> 
 def test_payload_round_trip_preserves_policy_shape() -> None:
     original = replace(preset_flow(PRESET_APPROVAL), revision=3)
     parsed = parse_verification_flow({VERIFICATION_FLOW_KEY: original.to_payload()})
+    assert parsed.version == 2
     assert parsed.revision == 3
     assert parsed.preset == PRESET_APPROVAL
     assert parsed.enabled is False
