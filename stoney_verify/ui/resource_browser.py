@@ -196,6 +196,35 @@ def _search_score(
     return None
 
 
+def _has_exact_live_match(
+    guild: discord.Guild,
+    *,
+    resource_kinds: Sequence[str],
+    query: str,
+    predicate: Optional[ResourcePredicate] = None,
+) -> bool:
+    raw_query = str(query or "").strip()
+    if not raw_query:
+        return True
+
+    allowed = frozenset(str(kind or "").strip().lower() for kind in resource_kinds)
+    allowed = frozenset(kind for kind in allowed if kind in _ALLOWED_KINDS)
+    if not allowed:
+        return True
+
+    for _kind, resource in _iter_resources(guild, allowed):
+        if predicate is not None:
+            try:
+                if not bool(predicate(resource)):
+                    continue
+            except Exception:
+                continue
+        score = _search_score(resource, query=raw_query, aliases=())
+        if score is not None and score <= 2:
+            return True
+    return False
+
+
 def build_resource_candidates(
     guild: discord.Guild,
     *,
@@ -451,8 +480,17 @@ class DankGuildResourceBrowserView(DankPickerView):
         )
 
     async def search(self, query: str) -> "DankGuildResourceBrowserView":
+        clean_query = str(query or "").strip()
+        if _has_exact_live_match(
+            self.guild,
+            resource_kinds=self.resource_kinds,
+            query=clean_query,
+            predicate=self.predicate,
+        ):
+            return self.clone(query=clean_query, page=0, alias_index={})
+
         alias_index = await naming_identity.get_search_alias_index(getattr(self.guild, "id", 0))
-        return self.clone(query=str(query or ""), page=0, alias_index=alias_index)
+        return self.clone(query=clean_query, page=0, alias_index=alias_index)
 
     def embed(self) -> discord.Embed:
         total = len(self.candidates)
