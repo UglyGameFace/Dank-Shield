@@ -2,7 +2,61 @@
 
 ## Active task / desired outcome
 
+**SHARE-ROUTER-DESTINATION-UX-019 — make Add / Change Route destination selection search-first and obvious on Discord mobile without changing routing semantics**
+
+Production baseline: `main` = `46e095cd25bd724dd527d3283f4cc2dafc0b6109`, the merge of PR #366.
+
+### Root cause
+
+The Search-Safe master audit fixed Share Router destination matching, but the destination step still renders a populated `DankGuildResourceBrowserView` immediately. On Discord mobile, tapping that select opens a large native sheet of up to 25 channels. The real Dank Shield text-search control is a separate button below the select, so the first interaction encourages browsing the entire channel list and can make the sheet look like a text-search field even though it is not one.
+
+### Scope
+
+Included:
+- Share Router **Add / Change Route** destination UX only;
+- preserve the canonical Search-Safe resource browser for candidate discovery, styled/current names, saved aliases, ID/mention lookup, filtering, paging, and final selection;
+- present a search-first destination landing panel before the large channel dropdown;
+- provide explicit **Search Destination**, **Browse Channels**, **Back to Proxy Sources**, and **Close** actions;
+- keep the flow single-message on mobile;
+- retain all existing route safety, permission, age-restriction, proxy privacy, persistence, and delete-source behavior;
+- focused regression coverage proving the default destination step no longer drops directly into the populated browser.
+
+Out of scope:
+- Share Router runtime forwarding behavior;
+- proxy creation/repair semantics;
+- generic shared-browser behavior for other features;
+- the broader navigation / verification / lifecycle epic tracked separately in issue #367.
+
+### Definition of Done
+
+- inspect the real Share Router execution path and preserve its canonical owners;
+- first destination screen is search-first and does not immediately expose the 25-item dropdown;
+- Search opens the existing Search-Safe modal and filtered results edit the same message;
+- Browse explicitly opens the existing paged browser;
+- browser Back returns to destination options; destination-options Back returns to proxy sources;
+- Close actually closes the destination flow;
+- existing target predicate and route safety checks remain unchanged;
+- focused tests and full exact-head CI pass;
+- final diff is scoped and clean;
+- merge/deploy evidence is green before calling this fixed.
+
+## Prior completed task record: SEARCH-SAFE-MASTER-AUDIT-018
+
 **SEARCH-SAFE-MASTER-AUDIT-018 — prove and harden Search-Safe Naming, shared guild configuration, Server Design integration, Member Setup coexistence, and production-facing UI from first principles**
+
+Final production SHA: `46e095cd25bd724dd527d3283f4cc2dafc0b6109`.
+
+Completion evidence:
+- PR #364 fixed shared Search-Safe browser consumer integration and merged;
+- PR #365 completed the consumer-level footer hygiene remediation and merged;
+- PR #366 completed Member Setup single-message Search-Safe picker lifecycle remediation and merged;
+- every exact-head PR workflow required by those continuations passed;
+- canonical post-merge Dank Shield CI #3255 passed;
+- Ticket Owner Emergency Override #1826 passed;
+- Supabase migration deployment #162 passed;
+- Discloud reported success on the final production SHA;
+- the owner confirmed the deferred live/mobile canary works.
+
 
 Production baseline at audit start: `main` = `7bf1bf0799ffaf70cb4b207da9e42750797123cf`, the merge of PR #362.
 
