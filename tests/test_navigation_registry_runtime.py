@@ -130,3 +130,46 @@ def test_directory_lists_every_registry_category() -> None:
         assert f"{category.emoji} {category.label}" in field_names
 
     assert len(surface.FeatureDirectoryView(100).children) <= 25
+
+
+def test_promoted_shortcuts_use_opt_in_in_place_navigation() -> None:
+    surface_source = (
+        __import__("pathlib").Path(surface.__file__).read_text(encoding="utf-8")
+    )
+    member_setup_source = (
+        __import__("pathlib").Path(__import__(
+            "stoney_verify.commands_ext.public_member_setup",
+            fromlist=["x"],
+        ).__file__).read_text(encoding="utf-8")
+    )
+    toke_source = (
+        __import__("pathlib").Path(__import__(
+            "stoney_verify.commands_ext.public_toke",
+            fromlist=["x"],
+        ).__file__).read_text(encoding="utf-8")
+    )
+    profile_source = (
+        __import__("pathlib").Path(__import__(
+            "stoney_verify.commands_ext.public_self_roles_group",
+            fromlist=["x"],
+        ).__file__).read_text(encoding="utf-8")
+    )
+
+    assert "open_member_setup(interaction, replace_message=True)" in surface_source
+    assert "open_community_ping_setup(interaction, replace_message=True)" in surface_source
+    assert "open_member_community_pings(interaction, replace_message=True)" in surface_source
+    assert "replace_message=True," in surface_source
+
+    assert "replace_message: bool = False" in member_setup_source
+    assert "if replace_message:" in member_setup_source
+    assert "await _defer_panel_update(interaction)" in member_setup_source
+    assert "await _defer(interaction)" in member_setup_source
+
+    assert toke_source.count("replace_message: bool = False") >= 2
+    assert toke_source.count("if replace_message:") >= 2
+    assert "await _defer_update(interaction)" in toke_source
+    assert "await _defer_private(interaction)" in toke_source
+
+    assert profile_source.count("replace_message: bool = False") >= 2
+    assert "interaction.response.edit_message(" in profile_source
+    assert "interaction.response.send_message(" in profile_source
