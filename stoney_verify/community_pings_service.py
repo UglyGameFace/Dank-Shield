@@ -429,6 +429,26 @@ def upsert_group(
     )
 
 
+def without_group(config: CommunityPingsConfig, group_key: str) -> CommunityPingsConfig:
+    wanted = str(group_key or "").strip()
+    if not wanted:
+        return config
+    if any(option.group_key == wanted for option in config.options):
+        raise ValueError(
+            "Move or delete the options in this group before deleting the group."
+        )
+    groups = tuple(item for item in config.groups if item.key != wanted)
+    if len(groups) == len(config.groups):
+        return config
+    groups = tuple(replace(item, order=index) for index, item in enumerate(groups))
+    return CommunityPingsConfig(
+        revision=next_revision(config),
+        groups=groups,
+        options=config.options,
+        source="v2",
+    )
+
+
 def option_for_role(config: CommunityPingsConfig, role_id: int) -> Optional[CommunityPingOption]:
     rid = int(role_id or 0)
     return next((item for item in config.options if int(item.role_id) == rid), None)
@@ -585,6 +605,7 @@ __all__ = [
     "self_service_kind",
     "toke_role_ids",
     "upsert_group",
+    "without_group",
     "validate_config",
     "validate_member_selection",
     "with_option",
