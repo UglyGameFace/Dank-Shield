@@ -366,12 +366,18 @@ class DankResourceSearchModal(discord.ui.Modal, title="Search Server Items"):
         if int(getattr(interaction.user, "id", 0) or 0) != self.browser.author_id:
             return await _safe_ephemeral(interaction, "❌ This resource browser belongs to another admin.")
         view = await self.browser.search(str(self.query.value or ""))
-        await interaction.response.send_message(
-            embed=view.embed(),
-            view=view,
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        kwargs = {
+            "embed": view.embed(),
+            "view": view,
+            "allowed_mentions": discord.AllowedMentions.none(),
+        }
+        if interaction.message is not None:
+            await interaction.response.edit_message(**kwargs)
+        else:
+            await interaction.response.send_message(
+                **kwargs,
+                ephemeral=True,
+            )
 
 
 class DankGuildResourceBrowserView(DankPickerView):
