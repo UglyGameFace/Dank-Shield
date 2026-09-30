@@ -54,12 +54,18 @@ class TargetSearchModal(discord.ui.Modal, title="Search Dank Shield Targets"):
             actor=interaction.user,
         )
         view = await browser.search(str(self.query.value or ""))
-        await interaction.response.send_message(
-            embed=view.embed(),
-            view=view,
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        kwargs = {
+            "embed": view.embed(),
+            "view": view,
+            "allowed_mentions": discord.AllowedMentions.none(),
+        }
+        if interaction.message is not None:
+            await interaction.response.edit_message(**kwargs)
+        else:
+            await interaction.response.send_message(
+                **kwargs,
+                ephemeral=True,
+            )
 
 
 async def _safe_ephemeral(interaction: discord.Interaction, message: str) -> None:
