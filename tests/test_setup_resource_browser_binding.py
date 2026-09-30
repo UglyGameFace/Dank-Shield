@@ -98,6 +98,41 @@ def test_resource_candidates_rank_exact_saved_alias_before_partial_live_match() 
     assert [item.label for item in matches] == ["daily-bulletin", "general-news-feed"]
 
 
+def test_resource_browser_exact_semantic_search_skips_alias_state(monkeypatch) -> None:
+    styled = "「📰」𝔾𝕖𝕟𝕖𝕣𝕒𝕝-ℕ𝕖𝕨𝕤"
+    guild = FakeGuild(
+        guild_id=4242,
+        channels=[_channel(1, styled, discord.ChannelType.text)],
+    )
+
+    async def fail_alias_index(_guild_id: int):
+        raise AssertionError("exact live semantic matches must not load alias state")
+
+    from stoney_verify.ui import resource_browser
+
+    monkeypatch.setattr(
+        resource_browser.naming_identity,
+        "get_search_alias_index",
+        fail_alias_index,
+    )
+
+    async def picked(_interaction, _resource):
+        return None
+
+    async def scenario() -> None:
+        browser = DankGuildResourceBrowserView(
+            guild=guild,
+            author_id=123,
+            resource_kinds=("text",),
+            on_pick=picked,
+            custom_id="test:channels-fast",
+        )
+        searched = await browser.search("general news")
+        assert [item.label for item in searched.candidates] == [styled]
+
+    asyncio.run(scenario())
+
+
 def test_resource_browser_search_loads_saved_alias_index(monkeypatch) -> None:
     guild = FakeGuild(
         guild_id=4242,
