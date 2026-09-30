@@ -12,6 +12,7 @@ from stoney_verify.command_surface_contract import (
 )
 from stoney_verify.commands_ext.public_command_surface_v2 import _standalone
 from stoney_verify.commands_ext.public_role_center import (
+    RolesProfilesView,
     SelfServiceRoleView,
     open_role_command,
 )
@@ -112,6 +113,55 @@ def test_normal_members_only_receive_existing_self_service_roles() -> None:
 def test_direct_self_role_card_is_small_and_routes_back_to_canonical_center() -> None:
     labels = _labels(SelfServiceRoleView(1, 123))
     assert labels == {"Add / Remove Role", "Roles & Profiles"}
+
+
+def test_role_center_separates_member_and_staff_community_pings_surfaces() -> None:
+    member_labels = _labels(
+        RolesProfilesView(
+            1,
+            staff=False,
+            role_manager=False,
+            setup_manager=False,
+        )
+    )
+    assert "My Community & Pings" in member_labels
+    assert "Community & Pings Manager" not in member_labels
+
+    staff_labels = _labels(
+        RolesProfilesView(
+            1,
+            staff=True,
+            role_manager=True,
+            setup_manager=True,
+        )
+    )
+    assert "My Community & Pings" not in staff_labels
+    assert "Community & Pings Manager" in staff_labels
+    assert "Member Role Manager" in staff_labels
+    assert "Server Role Editor" in staff_labels
+
+    limited_staff_labels = _labels(
+        RolesProfilesView(
+            1,
+            staff=True,
+            role_manager=False,
+            setup_manager=False,
+        )
+    )
+    assert "My Community & Pings" not in limited_staff_labels
+    assert "Community & Pings Manager" not in limited_staff_labels
+
+
+def test_staff_community_pings_manager_reuses_canonical_manager() -> None:
+    source = (ROOT / "stoney_verify/commands_ext/public_role_center.py").read_text(encoding="utf-8")
+    start = source.index("class RolesProfilesView")
+    end = source.index("class RoleEditorHomeView", start)
+    block = source[start:end]
+
+    assert 'label="My Community & Pings"' in block
+    assert 'label="Community & Pings Manager"' in block
+    assert "from .public_community_pings import open_community_ping_setup" in block
+    assert "await open_community_ping_setup(interaction)" in block
 
 
 def test_self_role_toggle_rechecks_live_mapping_under_member_lock() -> None:
