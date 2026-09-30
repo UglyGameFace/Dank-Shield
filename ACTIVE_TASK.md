@@ -57,34 +57,45 @@ The remediation order is severity-driven:
 4. P2 reliability/UX/observability hardening, including Member Setup Access Role vs Prerequisite Role clarity and the global Dank Shield footer cleanup.
 5. Exact-head re-audit, deployment evidence, and live canary/soak validation.
 
-### Footer-hygiene consumer re-audit — reopened after item 97
+### Footer-hygiene consumer re-audit — completed by PR #365
 
-The earlier footer PASS was too syntactic. The tests correctly blocked raw IDs and known runtime markers, but they did not prove that every production footer was actually user-facing copy. Several direct footers still contained implementation/process commentary while avoiding the blacklist.
+The earlier footer PASS was too syntactic. A consumer-level re-audit found production footers that still exposed implementation/process commentary while avoiding the original blacklist.
 
-Confirmed escaped examples included:
-- Community Tools explaining webhook-secret storage and persistent replacement order;
-- Welcome/Exit setup saying there is “one canonical join sender” and “one canonical exit sender”;
-- Community Tools describing “provider-backed features”;
-- Setup Check saying it was “grouped from existing health evidence”;
-- Share Router calling proxy channels “reserved infrastructure”;
-- Help describing “redundant command entry points” being consolidated;
-- the public ticket panel exposing the internal `category-menu` label;
-- permission repair describing internal bot/staff/control/public “baselines.”
+PR #365 corrected the escaped footer copy, expanded regression coverage beyond raw IDs/known runtime tokens, preserved persistent ticket-panel footer refresh behavior, passed every exact-head workflow, and merged to production `main` as `93cab4fdbe693f91808a99deab8fe32b560cbc47`.
+
+Item 97 is restored to PASS for implementation/PR validation. Post-merge push CI and Discloud deployment remain normal production evidence gates rather than reasons to keep the footer remediation branch open.
+
+### Member Setup picker/panel lifecycle re-audit — items 95–96 reopened
+
+The prior Member Setup audit proved that the words **Member Access Role** and **Eligibility Prerequisite** were correctly explained, but it did not validate the actual mobile interaction lifecycle.
+
+Concrete escaped behavior on production `main` after PR #365:
+- **Setup Channel**, **Member Access Role**, **Eligibility Prerequisite**, and **Add Protected Category** each used `interaction.response.send_message(..., ephemeral=True)` to spawn a second child picker panel;
+- the child views were one-off `discord.ui.View` wrappers around Discord-native `DankRoleSelect` / `DankChannelSelect`, so they had no shared Search-Safe alias lookup, Back, or Close controls;
+- after selecting a resource, the callback used the module-wide private `_defer(... thinking=True)` and then `_replace()`, which could turn the child interaction into yet another response panel rather than updating the panel the admin was already using;
+- the generic shared resource Search modal and Fix Access compatibility modal also returned search results with `send_message(..., ephemeral=True)`, creating another result panel;
+- the admin embed exposed the raw saved public panel message ID and “Legacy/untracked” implementation terminology.
 
 Root cause:
-- footer regression coverage mostly scanned direct `set_footer()` source for a blacklist of known debug tokens;
-- it did not enforce a positive product-copy contract and could miss developer/process language that used different words;
-- helper-generated footer text such as the ticket panel refresh helper also sat outside the direct-call blacklist boundary.
+- items 95–96 tested explanatory strings and rule-chain copy, not message ownership/navigation;
+- Member Setup predated the canonical `DankGuildResourceBrowserView` adoption and retained three one-off native entity-selector views;
+- the module-wide defer helper intentionally serves the public member flow, so reusing it for admin component updates conflated two different response contracts.
 
 Current remediation branch:
-`fix/footer-hygiene-consumer-audit-20260929`
+`fix/member-setup-picker-lifecycle-20260929`
 
 Current remediation:
-- rewrites the escaped footers as concise user guidance while retaining useful safety, permission, preview, pagination, and product context;
-- keeps persistent ticket-panel behavior intact while replacing the visible `category-menu` marker in both the canonical panel and live-guild-name refresh owner;
-- expands footer regression coverage with the newly escaped developer phrases and exact expected user-facing replacements.
+- Member Setup admin role/channel/category selection now subclasses the canonical Search-Safe `DankGuildResourceBrowserView`;
+- all four manager selection actions edit the current panel instead of spawning child ephemeral messages;
+- the browser supplies Search, paging, Back to Member Setup, and Close consistently;
+- Access Role and Eligibility Prerequisite retain distinct guidance inside the picker;
+- a dedicated admin panel-update defer uses Discord’s deferred-message-update path while the public member confirmation flow keeps its existing private thinking response;
+- shared resource Search and Fix Access Search edit the originating picker message when available, with a private-message fallback only when no originating message exists;
+- the manager has an explicit Close control;
+- raw public panel message IDs and “Legacy/untracked/canonical panel” user-facing copy were removed;
+- focused regressions cover picker ownership, styled semantic search, navigation/dismissal, defer separation, and same-message search behavior.
 
-Item 97 is reopened until this branch passes exact-head CI and final diff review.
+Items 95–96 remain reopened until exact-head CI, final diff review, mergeability, and production merge evidence support closure.
 
 Do not switch to unrelated Dank Shield work. Findings outside this master-audit scope are backlog only unless they share the same root cause or are required to validate the active repair.
 
