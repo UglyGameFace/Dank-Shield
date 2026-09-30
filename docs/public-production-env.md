@@ -81,7 +81,7 @@ The intentional **final** public global application-command surface is exactly *
 4. `/role` — smart Roles & Profiles doorway; optional member/role shortcuts reuse existing guarded surfaces
 5. `/ticket` — one current-ticket controls doorway
 6. `/tickets` — one ticket queues/setup/routing doorway
-7. `/toke` — ping the opt-in sesh crowd; configured Stoner role required
+7. `/toke` — ping the configured opt-in crowd; Community & Pings starter role required
 8. `/verify` — one verification status/repair doorway
 9. `View Dank Profile` user context menu
 
