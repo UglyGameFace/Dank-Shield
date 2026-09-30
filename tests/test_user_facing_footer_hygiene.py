@@ -25,6 +25,13 @@ _FORBIDDEN_SOURCE_PATTERNS = (
     "modlog_channel_id",
     "runtime:v",
     "schema:v",
+    "persistent replacements are recorded",
+    "one canonical join sender",
+    "provider-backed features",
+    "grouped from existing health evidence",
+    "reserved infrastructure",
+    "redundant command entry points",
+    "category-menu",
 )
 
 
