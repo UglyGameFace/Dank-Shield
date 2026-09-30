@@ -36,6 +36,40 @@ and business logic. Navigation must never become a second implementation of a fe
 
 ## Home categories
 
+Home is optimized for Discord mobile without renaming product areas.
+
+The registry's canonical category label is the label users see in the Home section
+picker and on the category page. Do not introduce shortened Home-only aliases such as
+`Access` for `Onboarding & Access`.
+
+Expected Home composition:
+
+```text
+🛡️ DANK SHIELD
+CONTROL CENTER
+━━━━━━━━━━━━━━━━━━━━
+🧭 11 sections  •  ✨ 26 destinations
+
+[ 🧭 Choose a section… ▾ ]
+  ⚙️ Setup & Server Settings
+  🚪 Onboarding & Access
+  🛡️ Safety & Moderation
+  👥 Members, Roles & Profiles
+  🌿 Community & Engagement
+  🎫 Tickets & Support
+  🎨 Design & Branding
+  🔊 Voice & Accessibility
+  📊 Logs, Stats & Diagnostics
+  👤 My Dank Shield
+  🧰 Utilities & Help
+
+[🔎 Find Feature] [📚 Directory] [❓ Help] [✖ Close]
+```
+
+The Home embed must not repeat the full category directory. Compactness comes from
+using one full-name section selector plus one utility row, not from shortening category
+names.
+
 | Key | Category | Purpose |
 | --- | --- | --- |
 | `setup` | ⚙️ Setup & Server Settings | Initial setup, mappings, permissions, configuration |

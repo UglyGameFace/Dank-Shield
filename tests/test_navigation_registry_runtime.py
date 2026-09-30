@@ -32,9 +32,22 @@ def test_navigation_registry_is_complete_and_internally_valid() -> None:
 
 
 def test_every_registered_category_and_feature_is_reachable_from_navigation() -> None:
-    home_labels = _labels(surface.CompactDankHomeView(100))
-    assert {category.label for category in registry.CATEGORIES} <= home_labels
-    assert {"Find a Feature", "All Features", "Close"} <= home_labels
+    home = surface.CompactDankHomeView(100)
+    home_labels = _labels(home)
+    assert {"Find Feature", "Directory", "Help", "Close"} <= home_labels
+
+    section_select = next(
+        item
+        for item in home.children
+        if isinstance(item, discord.ui.Select)
+        and str(getattr(item, "custom_id", "")) == "dank:home:sections:v1"
+    )
+    assert [str(option.label) for option in section_select.options] == [
+        category.label for category in registry.CATEGORIES
+    ]
+    assert [str(option.value) for option in section_select.options] == [
+        category.key for category in registry.CATEGORIES
+    ]
 
     reached: set[str] = set()
     for category in registry.CATEGORIES:
@@ -186,3 +199,39 @@ def test_every_registry_feature_has_an_explicit_dispatch_branch() -> None:
     source = Path(surface.__file__).read_text(encoding="utf-8")
     for feature in registry.FEATURES:
         assert f'if key == "{feature.key}":' in source
+
+
+def test_home_is_mobile_compact_full_name_section_picker() -> None:
+    view = surface.CompactDankHomeView(100)
+    assert len(view.children) == 5
+
+    section_select = next(
+        item
+        for item in view.children
+        if isinstance(item, discord.ui.Select)
+        and str(getattr(item, "custom_id", "")) == "dank:home:sections:v1"
+    )
+    assert int(getattr(section_select, "row", 0) or 0) == 0
+    assert str(section_select.placeholder) == "🧭 Choose a section…"
+    assert [str(option.label) for option in section_select.options] == [
+        category.label for category in registry.CATEGORIES
+    ]
+
+    button_labels = [
+        str(getattr(item, "label", "") or "")
+        for item in view.children
+        if isinstance(item, discord.ui.Button)
+    ]
+    assert button_labels == ["Find Feature", "Directory", "Help", "Close"]
+    assert all(int(getattr(item, "row", 0) or 0) == 1 for item in view.children if isinstance(item, discord.ui.Button))
+
+
+def test_home_embed_does_not_repeat_the_full_category_directory() -> None:
+    embed = surface._home_embed()
+    assert str(embed.title) == "🛡️ DANK SHIELD"
+    assert len(embed.fields) == 0
+    assert "CONTROL CENTER" in str(embed.description)
+    assert f"{len(registry.FEATURES)} destinations" in str(embed.description)
+    assert f"{len(registry.CATEGORIES)} sections" in str(embed.description)
+    assert "Setup & Server Settings" not in str(embed.description)
+    assert "Members, Roles & Profiles" not in str(embed.description)

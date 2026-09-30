@@ -4,7 +4,7 @@
 
 **DANK-SHIELD-NAVIGATION-UX-020 — issue #367 slice 1: establish one canonical, mobile-first navigation architecture without removing or hiding existing features**
 
-Production baseline: `main` = `c46cd5753ca208468837240be11462f7e330b953`, the merge of PR #368.
+Production baseline: `main` = `573612094253dc6910980d09227a065aac061f8e`, the merge of PR #369.
 
 ### Force-switch authority
 
@@ -21,7 +21,19 @@ The result was technically reachable functionality that was practically hard to 
 
 ### Current branch
 
-`feat/unified-navigation-registry-20260930`
+`fix/navigation-home-mobile-layout-20260930`
+
+### Production follow-up
+
+PR #369 merged as `573612094253dc6910980d09227a065aac061f8e`. Live Android validation showed the category architecture works but the Home presentation is too tall: full category names force mostly one-button-wide rows and the embed duplicates the same directory above the buttons.
+
+This follow-up keeps the registry/category architecture and changes only the Home presentation contract:
+- preserve every canonical category name on Home;
+- replace the tall category-button wall with one full-name section selector;
+- use a compact dashboard header instead of repeating the entire category directory;
+- place Find Feature / Directory / Help / Close together as one utility row;
+- keep category pages, search, aliases, routes, permissions, and business logic unchanged;
+- regression-test that Home never substitutes shortened category nicknames for the canonical names.
 
 ### Slice 1 scope
 
