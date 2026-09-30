@@ -342,12 +342,7 @@ class DankResourceSearchModal(discord.ui.Modal, title="Search Server Items"):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if int(getattr(interaction.user, "id", 0) or 0) != self.browser.author_id:
             return await _safe_ephemeral(interaction, "❌ This resource browser belongs to another admin.")
-        alias_index = await naming_identity.get_search_alias_index(getattr(self.browser.guild, "id", 0))
-        view = self.browser.clone(
-            query=str(self.query.value or ""),
-            page=0,
-            alias_index=alias_index,
-        )
+        view = await self.browser.search(str(self.query.value or ""))
         await interaction.response.send_message(
             embed=view.embed(),
             view=view,
@@ -455,6 +450,10 @@ class DankGuildResourceBrowserView(DankPickerView):
             include_cancel=self.browser_include_cancel,
             empty_message=self.empty_message,
         )
+
+    async def search(self, query: str) -> "DankGuildResourceBrowserView":
+        alias_index = await naming_identity.get_search_alias_index(getattr(self.guild, "id", 0))
+        return self.clone(query=str(query or ""), page=0, alias_index=alias_index)
 
     def embed(self) -> discord.Embed:
         total = len(self.candidates)
