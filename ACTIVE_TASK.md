@@ -2,168 +2,84 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-VERIFICATION-FRAMEWORK-022 — issue #367 slice 3: Configurable Verification Framework**
+**DANK-SHIELD-TICKET-CATEGORIES-023 — expose built-in managed ticket categories from /tickets**
 
-Build a generic, versioned, per-guild verification-flow policy that composes existing verification runtimes instead of replacing their authority.
+FORCE SWITCH accepted from issue #367 Slice 3.
 
-Production baseline: `main` = `fd1b95a6bc2128388e9cfb0d2bc9b09ad21bc4ab` (PR #372 merged and deployed).
+User-reported production defect:
+- `/tickets → Categories` can inventory Dank Shield's stored/recognized managed ticket categories;
+- **Sync Managed Catalog** restores/updates those rows but intentionally does not enable every category;
+- the actual per-guild built-in selector exists only in the setup flow;
+- a server can therefore have the full managed catalog stored while owners/staff see no direct way in `/tickets` to enable additional supported categories.
 
-Active branch: `feat/367-verification-framework-foundation`.
+Production baseline: `main` = `3803bc9131fa187cb5a2ea24091f41220dc028ed` (PR #373 merged).
 
-Active PR: #373 — **Add configurable verification flow policy foundation**.
+Active branch: `fix/ticket-managed-category-selection`.
 
-Issue #367 remains the umbrella epic. Slice 1 and Slice 2 are complete. This record covers Slice 3 only.
+Active PR: #374 — **Expose built-in ticket category selection in /tickets**.
 
-## Completed prior slice
+## Paused prior task
 
-Slice 2 — Generic Community & Pings Builder — is complete:
-- PR #371 shipped the generic v2 Community & Pings model/runtime;
-- PR #372 fixed the production-canary `/role` staff/member navigation ambiguity;
-- final PR #372 head `20eba3e20b553bb0a01dd1fef9ac7cd4c76db6d7` passed all exact-head workflows;
-- production merge `fd1b95a6bc2128388e9cfb0d2bc9b09ad21bc4ab` passed canonical Dank Shield CI #3307;
-- chained Supabase deploy #167 passed on the exact merge SHA;
-- Discloud deployment is green on the exact merge SHA;
-- Android `/role` canary passed after deployment.
+Issue #367 Slice 3 — Configurable Verification Framework — is paused by explicit FORCE SWITCH.
 
-## Slice 3 architecture contract
+Its policy foundation is already merged in PR #373. Do not continue the manager/CAS integration until this ticket-category fix reaches its own Definition of Done, unless another explicit FORCE SWITCH is given.
 
-Verification is not allowed to become a second role/access authority.
+## Root cause
 
-Canonical ownership:
-- **Verification Flow Policy** owns the ordered requirements, preset, contexts, failure behavior, revision, and activation readiness.
-- **role_truth** owns per-guild verified/pending/member role truth.
-- **Basic Verify** owns its button/runtime action.
-- **Voice Verify** owns voice verification execution.
-- **ID/Web verification** remains protected/allowlisted and owns its ticket/evidence path.
-- **Member Setup** owns Member Setup completion/revision truth.
-- **Access Gate** owns effective protected-category/member access.
-- **Ticket system** owns verification-ticket lifecycle.
-- **Staff approval** continues through guarded existing staff verification actions.
-- No opaque AI routing or AI verification decision.
+Dank Shield already has one canonical managed ticket-category catalog and one canonical per-guild selection authority:
+- `tickets_new/managed_category_service.py` owns catalog rows and `ticket_category_setup_selected_keys`;
+- `startup_guards/ticket_category_setup_guard.py` owns the existing full managed multi-select and preset shortcuts;
+- member-facing ticket menus consume the resulting active rows.
 
-The framework may coordinate those owners, but must not duplicate their authorization or completion engines.
+The product gap is navigation/UI ownership:
+- `public_ticket_command_center.py` exposes inventory, catalog sync, and custom-category CRUD;
+- it never exposes the existing managed selector;
+- `Sync Managed Catalog` is maintenance/repair, not enablement.
 
-## Root cause / current state
+## Current implementation
 
-Verification is currently distributed across:
-- `setup_service_state.py` feature switches;
-- `setup_engine/verification_modes.py` legacy Basic/Voice/ID precedence;
-- `verification_new/basic_verify.py`;
-- Voice/ID verification services;
-- `members_new/join_verification_service.py`;
-- `role_truth.py`;
-- verification tickets;
-- startup guards;
-- `public_verify_command_center.py`;
-- Member Setup / Access Gate.
+- add a prominent **Choose Built-ins** action to `/tickets → Categories`;
+- reuse the existing managed selector and `save_category_selection` persistence;
+- add a ticket-manager context to the shared selector so it:
+  - uses the existing Dank Shield ticket/staff permission scope;
+  - returns to **Ticket Categories** rather than Setup Home;
+  - keeps custom-category CRUD in the ticket manager instead of duplicating it;
+  - preserves the normal setup context unchanged;
+- clarify that **Sync Managed Catalog** repairs/updates definitions and does not enable all categories;
+- keep save failures inside the ticket manager rather than routing to setup;
+- add focused regression coverage.
 
-The existing mode model answers roughly “which verification service is enabled?” It does not model an ordered multi-step flow such as rules → account-age requirement → Member Setup → verify, nor separate new/returning/trusted/manual-review contexts.
+## Safety / compatibility
 
-Rules acknowledgement/version does not currently have a canonical durable owner. It must be added deliberately rather than inferred from “the rules channel exists.”
-
-## Current implementation slice
-
-**Slice 3 foundation — verification policy model only.**
-
-Included now:
-- `verification_flow_v2` authority key;
-- bounded versioned flow model;
-- ordered step definitions;
-- product presets:
-  - Simple;
-  - Standard;
-  - Guarded;
-  - Approval;
-  - Application;
-  - Custom;
-- supported context vocabulary:
-  - new member;
-  - returning member;
-  - trusted/invited member;
-  - manual review;
-- configurable failure-action vocabulary:
-  - wait;
-  - limited access;
-  - staff review;
-  - ticket;
-  - deny;
-- legacy Simple/Voice/ID configuration adapter for inspection/migration;
-- fail-closed malformed-v2 behavior;
-- activation blockers so a preset cannot be considered runnable before every required step has a real runtime integration;
-- focused regression tests.
-
-This foundation does **not** change live verification behavior and exposes no incomplete member UI.
-
-## Planned Slice 3 integration order
-
-1. Policy foundation and presets.
-2. Canonical Verification Framework manager with CAS-protected draft writes and Preview/Activation readiness.
-3. Existing Simple Verify integration through the policy without changing its role-truth owner.
-4. Member Setup, account-age, membership-delay, verification-ticket, Voice, and staff-approval step adapters.
-5. Durable rules acknowledgement/version owner.
-6. Standard / Guarded / Approval / Application activation paths.
-7. Context-specific flow selection and configurable failure behavior through canonical Access Gate/ticket owners.
-8. Migration/legacy compatibility, diagnostics, exact-head CI, deployment, and Android owner/member canaries.
-
-One integration at a time. Do not stack Action & Reminder Center or Activity/Reverification work into this slice.
-
-## Explicitly out of scope
-
-- Action & Reminder Center;
-- Member Activity & Reverification Lifecycle;
-- quiet-server / active-VC behavior;
-- Cheers timeout;
-- Live Captions;
-- AntiNuke;
-- Minecraft;
-- Unity;
-- Idle Grow;
-- unrelated backlog.
-
-## Safety requirements
-
-- no guild-specific hardcoding;
-- no global guild sweeps for routine verification;
-- no implicit downgrade from protected ID/Voice verification to Simple Verify;
-- malformed v2 policy fails closed;
-- presets are drafts by default;
-- a preset cannot become active while required step integrations/settings are unavailable;
-- no invented account-age or membership-delay threshold;
-- all Discord role/access mutations retain live permission and hierarchy checks;
-- stale admin writes must eventually use CAS at the policy key;
-- migration must preserve existing working Simple/Voice/ID setups until an owner deliberately activates v2.
+- no new ticket-category database owner;
+- no duplicate catalog;
+- no automatic enable-all behavior;
+- no deletion of existing custom categories;
+- no change to member-facing routing semantics beyond the owner-selected built-in set;
+- no global guild sweep;
+- no Verification Framework changes in this branch;
+- `/dank setup → Ticket Menu Options` must retain its existing setup permissions/navigation;
+- `/tickets` ticket-context selection must preserve existing recognized-staff authority.
 
 ## Definition of Done
 
-Slice 3 is complete only when:
-- owners can configure and preview the supported presets/custom ordered flow;
-- live activation is refused when a required step is unsupported or incomplete;
-- Simple Verify remains a valid preset;
-- Standard, Guarded, Approval, and Application flows use canonical step owners;
-- rules acknowledgement has durable versioned truth;
-- account-age and server-membership-delay checks are deterministic and owner-configured;
-- Member Setup completion is consumed from Member Setup truth;
-- staff approval/ticket/Voice/ID flows reuse existing guarded owners;
-- context-specific policies behave deterministically;
-- failure behavior routes through canonical Access Gate/ticket owners;
-- legacy working setups do not silently change on deployment;
+This fix is complete only when:
+- `/tickets → Categories` visibly exposes built-in category selection;
+- the picker shows the supported managed catalog and current saved defaults;
+- saving changes updates the existing per-guild selection authority;
+- the Create Ticket menu consumes that selection through the existing canonical loaders;
+- ticket-context Back/Close/error behavior stays in the ticket area;
+- normal setup-context navigation still behaves as before;
 - exact-head CI is green;
-- merge/deploy evidence is green;
-- Android owner + member live canaries pass.
+- PR merge and post-merge production CI/deploy are green;
+- Android owner/staff canary confirms another server can enable additional built-in categories without creating duplicates or custom copies.
 
 ## Validation status
 
-PR #373 is open as the focused policy-foundation PR. Static review has confirmed:
-- no live verification behavior changes;
-- no guild-specific IDs/defaults;
-- no debug/TODO leftovers;
-- malformed/unknown-version v2 policy is preserved as invalid and fails closed at activation;
-- duplicate/unknown steps are not silently normalized away;
-- per-step context applicability supports different explicit step subsets for new/returning/trusted/manual-review contexts;
-- branch is current with production main.
+PR #374 is open as the focused fix. The implementation reuses the existing managed catalog and saved-selection authority; no schema change is required.
 
-Fresh exact-head CI is required after the final task-record update.
+Fresh exact-head CI is required after this task-record update.
 
 ## Next step
 
-Let PR #373 exact-head CI finish. If green, perform final diff/branch hygiene, mark #373 ready, and merge with the exact expected head. Verify post-merge canonical CI/Supabase/Discloud before beginning the next Slice 3 integration: the canonical manager with CAS-protected draft persistence.
+Validate PR #374 on its exact head. If green, perform final diff/branch hygiene, mark ready, merge with the exact expected head, then verify post-merge CI/Supabase/Discloud and run the Android canary on the affected server.

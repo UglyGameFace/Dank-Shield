@@ -908,7 +908,7 @@ class TicketCategoryActionSelect(discord.ui.Select):
             min_values=1,
             max_values=1,
             options=[
-                discord.SelectOption(label="Sync Managed Catalog", value="sync", emoji="🔄", description="Restore/update Dank Shield-managed categories"),
+                discord.SelectOption(label="Sync Managed Catalog", value="sync", emoji="🔄", description="Repair/update built-in definitions; does not enable all"),
                 discord.SelectOption(label="Create Custom Category", value="create", emoji="➕"),
                 discord.SelectOption(label="Edit Custom Category", value="edit", emoji="✏️"),
                 discord.SelectOption(label="Delete Custom Category", value="delete", emoji="🗑️"),
@@ -950,10 +950,21 @@ class TicketCategoryToolsView(_OwnedView):
         return discord.Embed(
             title="🗂️ Ticket Category Manager",
             description=(
-                "Managed Dank Shield categories stay globally governed. Custom server categories can be "
-                "created, edited, deleted, reordered, given a local default, and assigned routing keywords here."
+                "Use **Choose Built-ins** to turn supported Dank Shield ticket categories on or off for this server. "
+                "Use the action menu for catalog repair and custom server categories. "
+                "**Sync Managed Catalog** updates stored definitions; it does not enable every category."
             ),
             color=discord.Color.blurple(),
+        )
+
+    @discord.ui.button(label="Choose Built-ins", emoji="📚", style=discord.ButtonStyle.primary, row=1)
+    async def builtins(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from ..startup_guards import ticket_category_setup_guard
+
+        await ticket_category_setup_guard.open_category_setup_manager(
+            interaction,
+            context="tickets",
         )
 
     @discord.ui.button(label="View Inventory", emoji="👀", style=discord.ButtonStyle.secondary, row=1)
