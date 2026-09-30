@@ -19,6 +19,7 @@ from typing import Any, Optional
 import discord
 from discord import app_commands
 
+from stoney_verify.community_pings_service import community_member_lock
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 from stoney_verify.services import role_mutation_authority
 from stoney_verify.services import search_safe_naming
@@ -26,7 +27,6 @@ from stoney_verify.ui.picker import DankRoleSelect
 
 _ROLE_EDITOR_PREFIX = "dank:roles:v1:"
 _ROLE_ACTION_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
-_SELF_SERVICE_ROLE_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 _HEX_RE = re.compile(r"^#?([0-9a-fA-F]{6})$")
 
 _PERMISSION_GROUP_BASE: tuple[tuple[str, str, tuple[str, ...]], ...] = (
@@ -143,15 +143,6 @@ def _role_action_lock(guild_id: int, role_id: int, action: str) -> asyncio.Lock:
     if lock is None:
         lock = asyncio.Lock()
         _ROLE_ACTION_LOCKS[key] = lock
-    return lock
-
-
-def _self_service_role_lock(guild_id: int, member_id: int) -> asyncio.Lock:
-    key = f"{int(guild_id)}:member:{int(member_id)}"
-    lock = _SELF_SERVICE_ROLE_LOCKS.get(key)
-    if lock is None:
-        lock = asyncio.Lock()
-        _SELF_SERVICE_ROLE_LOCKS[key] = lock
     return lock
 
 
@@ -1730,16 +1721,16 @@ class SelfServiceRoleView(_OwnedView):
         )
 
         try:
-            async with _self_service_role_lock(guild.id, member.id):
+            async with community_member_lock(guild.id, member.id):
                 role = guild.get_role(self.role_id)
                 if not isinstance(role, discord.Role):
                     return await _reply(interaction, "❌ That role no longer exists.")
 
-                kind, blocker = await _self_service_role_kind(guild, role)
+                config = await get_guild_config(int(guild.id), refresh=True)
+                kind, blocker = await _self_service_role_kind(guild, role, config=config)
                 if not kind:
                     return await _reply(interaction, "❌ " + (blocker or "That role is no longer self-service."))
 
-                config = await get_guild_config(int(guild.id), refresh=True)
                 community_model = parse_community_pings(config)
                 community_option = option_for_role(community_model, int(role.id))
 
