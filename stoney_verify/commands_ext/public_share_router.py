@@ -211,6 +211,67 @@ class _OwnedView(discord.ui.View):
         return False
 
 
+def _target_options_embed(source: discord.TextChannel) -> discord.Embed:
+    embed = discord.Embed(
+        title=f"🔗 Destination for #{source.name}",
+        description=(
+            "Search is the fastest way to find the real destination on mobile. "
+            "Dank Shield can match the current/styled name, a saved previous name, Discord ID, or mention."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Recommended",
+        value="🔎 **Search Destination** — type the channel name instead of scrolling through the server.",
+        inline=False,
+    )
+    embed.add_field(
+        name="Browse instead",
+        value="📋 **Browse Channels** — open the paged destination list when you want to look manually.",
+        inline=False,
+    )
+    embed.set_footer(text="Nothing is changed until you choose a destination.")
+    return embed
+
+
+class ShareRouterTargetLandingView(_OwnedView):
+    def __init__(
+        self,
+        owner_id: int,
+        *,
+        source: discord.TextChannel,
+        browser: DankGuildResourceBrowserView,
+    ) -> None:
+        super().__init__(owner_id)
+        self.source = source
+        self.browser = browser
+
+    @discord.ui.button(label="Search Destination", emoji="🔎", style=discord.ButtonStyle.primary, row=0)
+    async def search_destination(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.send_modal(self.browser.search_modal())
+
+    @discord.ui.button(label="Browse Channels", emoji="📋", style=discord.ButtonStyle.secondary, row=0)
+    async def browse_channels(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _replace(interaction, embed=self.browser.embed(), view=self.browser)
+
+    @discord.ui.button(label="Back to Proxy Sources", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_source_picker(interaction)
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=1)
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _replace(
+            interaction,
+            content="Share Router destination selection closed.",
+            embed=None,
+            view=None,
+        )
+
+
 async def open_share_router(
     interaction: discord.Interaction,
     *,
@@ -313,7 +374,7 @@ async def _open_target_browser(
         return await _private(interaction, "❌ Use Share Router inside a server.")
 
     async def back(back_interaction: discord.Interaction) -> None:
-        await _open_source_picker(back_interaction)
+        await _open_target_browser(back_interaction, source)
 
     async def picked_target(
         pick_interaction: discord.Interaction,
@@ -369,17 +430,25 @@ async def _open_target_browser(
         resource_kinds=("text",),
         on_pick=picked_target,
         custom_id="dank:share_router:target",
-        title=f"Choose Destination for #{source.name}",
-        placeholder="Choose a destination; use 🔎 Search below…",
+        title=f"Browse Destinations for #{source.name}",
+        placeholder="Choose a destination channel…",
         predicate=allowed_target,
         on_home=back,
-        home_label="Back to proxy sources",
+        home_label="Destination options",
         empty_message=(
             "No eligible text-channel destinations matched. Use 🔎 Search with the current/styled name, "
             "a saved previous name, Discord ID, or mention."
         ),
     )
-    await _replace(interaction, embed=browser.embed(), view=browser)
+    await _replace(
+        interaction,
+        embed=_target_options_embed(source),
+        view=ShareRouterTargetLandingView(
+            int(interaction.user.id),
+            source=source,
+            browser=browser,
+        ),
+    )
 
 
 async def _open_remove_picker(interaction: discord.Interaction) -> None:
@@ -518,6 +587,7 @@ def register_public_share_router(bot: Any, tree: Any) -> None:
 
 
 __all__ = [
+    "ShareRouterTargetLandingView",
     "ShareRouterView",
     "open_share_router",
     "register_public_share_router",
