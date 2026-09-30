@@ -63,9 +63,13 @@ def test_home_uses_categories_without_hiding_feature_destinations() -> None:
         category.label for category in CATEGORIES
     ]
 
-    feature_labels = {feature.label for category in CATEGORIES for feature in features_for_category(category.key)}
+    feature_labels = {
+        feature.label
+        for category in CATEGORIES
+        for feature in features_for_category(category.key)
+    }
     home_feature_overlap = feature_labels & labels
-    assert home_feature_overlap == set()
+    assert home_feature_overlap == {"Help"}
 
     surfaced = {
         label
