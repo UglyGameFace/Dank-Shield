@@ -138,6 +138,9 @@ The live Android Share Router canary after PR #363 merged exposed a consumer-int
 - `DankGuildResourceBrowserView.build_resource_candidates()` still performed literal current-name/ID/mention matching, so Share Router could miss a styled destination when the admin searched its plain semantic name.
 - This is a reopened **P1 Search-Safe consumer-integration defect**, not a new unrelated task.
 - The continuation branch `fix/search-safe-resource-browser-integration-20260929` wires the shared resource browser to semantic live-name matching plus the existing bounded previous-name alias index and adds focused regressions.
+- Consumer inventory found one additional live duplicate: Fix Access had its own `DankPickerView`-based channel/category discovery/search/paging implementation with the same literal-name filtering. It is consolidated onto `DankGuildResourceBrowserView` while retaining the Fix Access permission, visibility, mutation, audit, navigation, and error boundaries.
+- Normal public setup is already bound to `DankGuildResourceBrowserView`; the separate `/dank setup-find` implementation is listed in `PUBLIC_HIDDEN_DANK_CHILDREN`, so it is not treated as a normal public consumer requiring a second authority.
+- The literal custom role/channel/category search sweep now has one shared live search owner for these picker paths rather than two competing browser engines.
 - Closure now additionally requires exact-head CI and a fresh Android canary proving a plain query such as `general news` finds the styled destination in Share Router.
 
 ## Merge-blocker conclusion
