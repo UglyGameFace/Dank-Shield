@@ -1642,7 +1642,10 @@ async def _self_service_role_kind(
         _profile_cosmetic_role_blocker,
         _role_name_key,
     )
-    from .public_toke import SESH_PING_ROLE_KEY, STONER_ROLE_KEY
+    from stoney_verify.community_pings_service import (
+        parse_community_pings,
+        self_service_kind as community_self_service_kind,
+    )
 
     if config is None:
         config = await get_guild_config(int(guild.id), refresh=True)
@@ -1654,17 +1657,12 @@ async def _self_service_role_kind(
         return "", why
 
     rid = int(role.id)
-    raw_stoner = str(config.get(STONER_ROLE_KEY) or "0")
-    raw_sesh = str(config.get(SESH_PING_ROLE_KEY) or "0")
-    stoner_id = int(raw_stoner) if raw_stoner.isdigit() else 0
-    sesh_id = int(raw_sesh) if raw_sesh.isdigit() else 0
-
-    if rid == stoner_id and rid == sesh_id and rid > 0:
-        return "Community + Notification", ""
-    if rid == stoner_id and rid > 0:
-        return "Community", ""
-    if rid == sesh_id and rid > 0:
-        return "Notification", ""
+    community_kind = community_self_service_kind(
+        parse_community_pings(config),
+        rid,
+    )
+    if community_kind:
+        return community_kind, ""
 
     cosmetic_ids = set(_config_role_ids(config, PROFILE_COSMETIC_ROLE_IDS_KEY))
     if rid in cosmetic_ids:
@@ -1725,7 +1723,11 @@ class SelfServiceRoleView(_OwnedView):
             await interaction.response.defer()
 
         from stoney_verify.guild_config import get_guild_config
-        from .public_toke import SESH_PING_ROLE_KEY, STONER_ROLE_KEY
+        from stoney_verify.community_pings_service import (
+            option_for_role,
+            parse_community_pings,
+            validate_member_selection,
+        )
 
         try:
             async with _self_service_role_lock(guild.id, member.id):
@@ -1738,25 +1740,35 @@ class SelfServiceRoleView(_OwnedView):
                     return await _reply(interaction, "❌ " + (blocker or "That role is no longer self-service."))
 
                 config = await get_guild_config(int(guild.id), refresh=True)
-                raw_stoner = str(config.get(STONER_ROLE_KEY) or "0")
-                raw_sesh = str(config.get(SESH_PING_ROLE_KEY) or "0")
-                stoner_id = int(raw_stoner) if raw_stoner.isdigit() else 0
-                sesh_id = int(raw_sesh) if raw_sesh.isdigit() else 0
+                community_model = parse_community_pings(config)
+                community_option = option_for_role(community_model, int(role.id))
+
+                if community_option is not None and community_option.enabled:
+                    current_ids = {
+                        int(getattr(member_role, "id", 0) or 0)
+                        for member_role in list(member.roles or [])
+                    }
+                    selected_ids = {
+                        int(option.role_id)
+                        for option in community_model.options
+                        if option.enabled and int(option.role_id) in current_ids
+                    }
+                    if role in member.roles:
+                        selected_ids.discard(int(role.id))
+                    else:
+                        selected_ids.add(int(role.id))
+                    selection_error = validate_member_selection(
+                        community_model,
+                        selected_role_ids=selected_ids,
+                        current_role_ids=current_ids,
+                    )
+                    if selection_error:
+                        return await _reply(interaction, "❌ " + selection_error)
 
                 if role in member.roles:
                     await member.remove_roles(role, reason="Dank Shield /role self-service toggle")
-                    if int(role.id) == stoner_id and sesh_id > 0 and sesh_id != stoner_id:
-                        sesh_role = guild.get_role(sesh_id)
-                        if isinstance(sesh_role, discord.Role) and sesh_role in member.roles:
-                            sesh_kind, sesh_blocker = await _self_service_role_kind(guild, sesh_role)
-                            if sesh_kind and not sesh_blocker:
-                                await member.remove_roles(sesh_role, reason="Dank Shield /role Stoner dependency")
                     result = f"Removed {role.mention}."
                 else:
-                    if int(role.id) == sesh_id and sesh_id != stoner_id:
-                        stoner_role = guild.get_role(stoner_id)
-                        if not isinstance(stoner_role, discord.Role) or stoner_role not in member.roles:
-                            return await _reply(interaction, "❌ Select the configured Stoner role before enabling Sesh Pings.")
                     await member.add_roles(role, reason="Dank Shield /role self-service toggle")
                     result = f"Added {role.mention}."
         except discord.Forbidden:
