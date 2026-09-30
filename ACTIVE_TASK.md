@@ -6,6 +6,32 @@
 
 Production baseline at audit start: `main` = `7bf1bf0799ffaf70cb4b207da9e42750797123cf`, the merge of PR #362.
 
+### Post-merge integration continuation — shared resource picker
+
+PR #363 merged to production `main` as `0c86911ad73484bfd4de5c24cfd424eeaf899109`. A live Android Share Router canary then exposed an escaped Search-Safe integration defect that keeps this master task open.
+
+Concrete evidence:
+- Share Router correctly uses `DankGuildResourceBrowserView`, not Discord's native `ChannelSelect`.
+- The shared browser's `build_resource_candidates()` still matched only the literal current name, Discord ID, or mention.
+- It did not consume `naming_identity.semantic_key()` or saved semantic rename aliases, so a plain query such as `general news` could miss a styled channel such as `「📰」𝔾𝕖𝕟𝕖𝕣𝕒𝕝-ℕ𝕖𝕨𝕤`.
+- The prior audit proved the Naming Identity semantic engine and `/role` autocomplete, but did not prove every Dank Shield-owned picker/search consumer used that engine. The consumer-integration completion claim was therefore too broad.
+
+Current continuation branch:
+`fix/search-safe-resource-browser-integration-20260929`
+
+Current implementation:
+- the shared resource browser applies the canonical Search-Safe semantic key to styled live role/channel/category names;
+- manual browser searches load the existing bounded naming alias index so saved previous semantic names also participate;
+- exact saved aliases rank ahead of unrelated partial live-name matches;
+- ID/mention search and paging remain supported;
+- Share Router no longer labels its dropdown as if the opened Discord sheet itself were a text-search field; it points admins to the separate Dank Shield **🔎 Search** control;
+- focused regressions cover styled-name lookup, saved-alias lookup, alias ranking, and the alias snapshot boundary.
+
+Validation status:
+- implementation is in progress on the continuation branch;
+- exact-head CI, final diff inspection, mergeability, post-merge deployment, and a fresh Android Share Router search canary are still required;
+- this slice must not be called complete until `general news` finds the styled real destination through the live Dank Shield picker.
+
 The active outcome is the 100-point master audit requested for Search-Safe Naming plus the later explicit global footer audit. The work is not complete when individual tests turn green. Completion requires the final exact-head branch to be re-audited for architecture ownership, integration wiring, persistence/concurrency, permissions, Unicode behavior, command schema, scaling, CI coverage, final diff, deployment startup, and live canary behavior.
 
 ## Scope / single active task lock
