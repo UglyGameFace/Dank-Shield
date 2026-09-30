@@ -220,6 +220,21 @@ def test_generic_community_identity_is_not_duplicated_as_cosmetic_tag() -> None:
     assert all(not label.startswith("Tags:") for label in labels)
 
 
+def test_malformed_v2_does_not_restore_legacy_profile_identity() -> None:
+    legacy_id = 423456789012345678
+    member = SimpleNamespace(
+        roles=[SimpleNamespace(id=legacy_id, name="Stoner")]
+    )
+    labels = _compact_profile_tag_labels(
+        member,
+        {
+            COMMUNITY_PINGS_KEY: "corrupt",
+            public_toke.STONER_ROLE_KEY: str(legacy_id),
+        },
+    )
+    assert all("Community: Stoner" not in label for label in labels)
+
+
 def test_generic_manager_exposes_add_edit_and_safe_remove_controls() -> None:
     labels = _labels(CommunityPingsManagerView(1))
     assert {
