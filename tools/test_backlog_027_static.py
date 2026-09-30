@@ -145,13 +145,20 @@ def main() -> int:
     )
     require(
         "stoney_verify/permission_repair_ui.py",
-        "class TargetChannelPickerView(DankPickerView)",
+        "class TargetChannelPickerView(DankGuildResourceBrowserView)",
         "class TargetPermissionRepairView(core.TargetPermissionRepairView)",
         "Choose Channel / Category",
-        "Search",
-        "Clear Search",
-        "guild cache instead of Discord's generic entity picker",
+        "shared Dank Shield resource browser",
+        "class TargetSearchModal(discord.ui.Modal",
+        "view = await browser.search",
         "async def on_error",
+    )
+    require(
+        "stoney_verify/ui/resource_browser.py",
+        'label="Search"',
+        'label="Clear Search"',
+        "get_search_alias_index",
+        "semantic_key",
     )
     forbid(
         "stoney_verify/permission_repair_ui.py",

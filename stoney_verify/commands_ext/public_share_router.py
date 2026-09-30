@@ -370,11 +370,14 @@ async def _open_target_browser(
         on_pick=picked_target,
         custom_id="dank:share_router:target",
         title=f"Choose Destination for #{source.name}",
-        placeholder="Search or choose the real destination…",
+        placeholder="Choose a destination; use 🔎 Search below…",
         predicate=allowed_target,
         on_home=back,
         home_label="Back to proxy sources",
-        empty_message="No eligible text-channel destinations are visible in the server cache.",
+        empty_message=(
+            "No eligible text-channel destinations matched. Use 🔎 Search with the current/styled name, "
+            "a saved previous name, Discord ID, or mention."
+        ),
     )
     await _replace(interaction, embed=browser.embed(), view=browser)
 

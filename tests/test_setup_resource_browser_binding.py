@@ -37,7 +37,8 @@ def _channel(index: int, name: str, channel_type: discord.ChannelType):
 
 
 class FakeGuild:
-    def __init__(self, *, roles=None, channels=None):
+    def __init__(self, *, roles=None, channels=None, guild_id: int = 999):
+        self.id = int(guild_id)
         self.roles = list(roles or [])
         self.channels = list(channels or [])
         self._roles = {int(item.id): item for item in self.roles}
@@ -64,6 +65,108 @@ def test_resource_candidates_search_name_id_and_mentions() -> None:
     assert [item.label for item in build_resource_candidates(guild, resource_kinds=("text",), query="20001")] == ["mod-log"]
     assert [item.label for item in build_resource_candidates(guild, resource_kinds=("voice",), query="<#20002>")] == ["Voice Verify"]
     assert [item.label for item in build_resource_candidates(guild, resource_kinds=("category",), query="Tickets")] == ["Tickets"]
+
+
+def test_resource_candidates_search_styled_names_semantically() -> None:
+    styled = "「📰」𝔾𝕖𝕟𝕖𝕣𝕒𝕝-ℕ𝕖𝕨𝕤"
+    guild = FakeGuild(channels=[_channel(1, styled, discord.ChannelType.text)])
+
+    matches = build_resource_candidates(
+        guild,
+        resource_kinds=("text",),
+        query="general news",
+    )
+
+    assert [item.label for item in matches] == [styled]
+
+
+def test_resource_candidates_rank_exact_saved_alias_before_partial_live_match() -> None:
+    guild = FakeGuild(
+        channels=[
+            _channel(1, "general-news-feed", discord.ChannelType.text),
+            _channel(2, "daily-bulletin", discord.ChannelType.text),
+        ],
+    )
+
+    matches = build_resource_candidates(
+        guild,
+        resource_kinds=("text",),
+        query="general news",
+        alias_index={"channel:20002": ("general-news",)},
+    )
+
+    assert [item.label for item in matches] == ["daily-bulletin", "general-news-feed"]
+
+
+def test_resource_browser_exact_semantic_search_skips_alias_state(monkeypatch) -> None:
+    styled = "「📰」𝔾𝕖𝕟𝕖𝕣𝕒𝕝-ℕ𝕖𝕨𝕤"
+    guild = FakeGuild(
+        guild_id=4242,
+        channels=[_channel(1, styled, discord.ChannelType.text)],
+    )
+
+    async def fail_alias_index(_guild_id: int):
+        raise AssertionError("exact live semantic matches must not load alias state")
+
+    from stoney_verify.ui import resource_browser
+
+    monkeypatch.setattr(
+        resource_browser.naming_identity,
+        "get_search_alias_index",
+        fail_alias_index,
+    )
+
+    async def picked(_interaction, _resource):
+        return None
+
+    async def scenario() -> None:
+        browser = DankGuildResourceBrowserView(
+            guild=guild,
+            author_id=123,
+            resource_kinds=("text",),
+            on_pick=picked,
+            custom_id="test:channels-fast",
+        )
+        searched = await browser.search("general news")
+        assert [item.label for item in searched.candidates] == [styled]
+
+    asyncio.run(scenario())
+
+
+def test_resource_browser_search_loads_saved_alias_index(monkeypatch) -> None:
+    guild = FakeGuild(
+        guild_id=4242,
+        channels=[_channel(1, "daily-bulletin", discord.ChannelType.text)],
+    )
+
+    async def fake_alias_index(guild_id: int):
+        assert guild_id == 4242
+        return {"channel:20001": ("general-news",)}
+
+    from stoney_verify.ui import resource_browser
+
+    monkeypatch.setattr(
+        resource_browser.naming_identity,
+        "get_search_alias_index",
+        fake_alias_index,
+    )
+
+    async def picked(_interaction, _resource):
+        return None
+
+    async def scenario() -> None:
+        browser = DankGuildResourceBrowserView(
+            guild=guild,
+            author_id=123,
+            resource_kinds=("text",),
+            on_pick=picked,
+            custom_id="test:channels",
+        )
+        searched = await browser.search("general news")
+        assert [item.label for item in searched.candidates] == ["daily-bulletin"]
+        assert searched.query == "general news"
+
+    asyncio.run(scenario())
 
 
 def test_resource_browser_pages_more_than_discord_option_limit() -> None:

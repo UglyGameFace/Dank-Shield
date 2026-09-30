@@ -5,7 +5,8 @@ from types import SimpleNamespace
 import discord
 
 from stoney_verify import permission_repair, permission_repair_core, permission_repair_ui
-from stoney_verify.ui import DankPickerView
+from stoney_verify.ui import DankGuildResourceBrowserView, DankPickerView
+from stoney_verify.ui import resource_browser
 
 
 def _component(view: discord.ui.View, custom_id: str):
@@ -29,6 +30,7 @@ def test_fix_access_target_control_is_dedicated_browser_button() -> None:
     assert isinstance(target, discord.ui.Button)
     assert "Choose" in str(target.label)
     assert not any(isinstance(child, discord.ui.ChannelSelect) for child in view.children)
+    assert issubclass(permission_repair.TargetChannelPickerView, DankGuildResourceBrowserView)
     assert issubclass(permission_repair.TargetChannelPickerView, DankPickerView)
 
 
@@ -39,27 +41,54 @@ def test_canonical_wrapper_binds_core_return_points_to_dedicated_ui() -> None:
     assert permission_repair_core.open_target_permission_repair is permission_repair_ui.open_target_permission_repair
 
 
-def test_target_browser_pages_bot_owned_candidates_without_discord_entity_select(monkeypatch) -> None:
-    candidates = [
-        permission_repair_ui.TargetCandidate(
-            channel_id=index + 1,
-            label=f"channel-{index + 1}",
-            description="Text • Text channel",
-            emoji="💬",
-        )
-        for index in range(61)
-    ]
-    monkeypatch.setattr(
-        permission_repair_ui,
-        "_channel_candidates",
-        lambda *_args, **_kwargs: candidates,
-    )
+class FakeChannel:
+    def __init__(self, channel_id: int, name: str, *, visible: bool = True) -> None:
+        self.id = channel_id
+        self.name = name
+        self.mention = f"<#{channel_id}>"
+        self.type = discord.ChannelType.text
+        self.category = None
+        self.visible = visible
 
-    state = permission_repair.PermissionRepairState(
-        guild=SimpleNamespace(me=None),
-        actor_id=77,
+    def permissions_for(self, _actor):
+        return SimpleNamespace(
+            view_channel=self.visible,
+            manage_channels=False,
+        )
+
+
+def _state_and_actor(channels, *, actor_id: int = 44):
+    guild = SimpleNamespace(
+        id=9876,
+        channels=list(channels),
+        owner_id=999,
+        get_channel=lambda channel_id: next(
+            (item for item in channels if int(item.id) == int(channel_id)),
+            None,
+        ),
     )
-    actor = SimpleNamespace(id=77)
+    actor = SimpleNamespace(
+        id=actor_id,
+        guild_permissions=SimpleNamespace(administrator=False),
+    )
+    return permission_repair.PermissionRepairState(guild=guild, actor_id=actor_id), actor
+
+
+def test_fix_access_keeps_feature_search_modal_contract_on_shared_browser(monkeypatch) -> None:
+    monkeypatch.setattr(permission_repair_core, "_target_supported", lambda _channel: True)
+    state, actor = _state_and_actor([FakeChannel(101, "mod-log")])
+
+    browser = permission_repair_ui.TargetChannelPickerView(state, actor=actor)
+    modal = browser.search_modal()
+
+    assert isinstance(modal, permission_repair_ui.TargetSearchModal)
+    assert modal.state is state
+
+
+def test_target_browser_pages_bot_owned_candidates_without_discord_entity_select(monkeypatch) -> None:
+    monkeypatch.setattr(permission_repair_core, "_target_supported", lambda _channel: True)
+    channels = [FakeChannel(index + 1, f"channel-{index + 1}") for index in range(61)]
+    state, actor = _state_and_actor(channels, actor_id=77)
 
     first = permission_repair_ui.TargetChannelPickerView(state, actor=actor, page=0)
     middle = permission_repair_ui.TargetChannelPickerView(state, actor=actor, page=1)
@@ -73,44 +102,55 @@ def test_target_browser_pages_bot_owned_candidates_without_discord_entity_select
     assert any(str(getattr(child, "label", "")) == "Search" for child in first.children)
 
 
-def test_target_catalog_filters_hidden_channels_and_searches_name_id(monkeypatch) -> None:
-    class FakeChannel:
-        def __init__(self, channel_id: int, name: str, *, visible: bool) -> None:
-            self.id = channel_id
-            self.name = name
-            self.type = discord.ChannelType.text
-            self.category = None
-            self.visible = visible
-
-        def permissions_for(self, _actor):
-            return SimpleNamespace(
-                view_channel=self.visible,
-                manage_channels=False,
-            )
-
+def test_target_catalog_filters_hidden_channels_and_searches_semantic_name_id(monkeypatch) -> None:
     monkeypatch.setattr(permission_repair_core, "_target_supported", lambda _channel: True)
 
     visible = FakeChannel(101, "mod-log", visible=True)
     hidden = FakeChannel(202, "owner-secret", visible=False)
-    tickets = FakeChannel(303, "ticket-help", visible=True)
-    guild = SimpleNamespace(
-        channels=[visible, hidden, tickets],
-        owner_id=999,
+    tickets = FakeChannel(303, "「🎫」𝕋𝕚𝕔𝕜𝕖𝕥-ℍ𝕖𝕝𝕡", visible=True)
+    state, actor = _state_and_actor([visible, hidden, tickets])
+
+    all_items = permission_repair_ui.TargetChannelPickerView(state, actor=actor)
+    assert [item.resource_id for item in all_items.candidates] == [101, 303]
+
+    name_search = permission_repair_ui.TargetChannelPickerView(
+        state,
+        actor=actor,
+        query="ticket help",
     )
-    actor = SimpleNamespace(
-        id=44,
-        guild_permissions=SimpleNamespace(administrator=False),
+    assert [item.resource_id for item in name_search.candidates] == [303]
+
+    id_search = permission_repair_ui.TargetChannelPickerView(
+        state,
+        actor=actor,
+        query="<#101>",
     )
-    state = permission_repair.PermissionRepairState(guild=guild, actor_id=44)
+    assert [item.resource_id for item in id_search.candidates] == [101]
 
-    all_candidates = permission_repair_ui._channel_candidates(state, actor)
-    assert [item.channel_id for item in all_candidates] == [101, 303]
 
-    name_search = permission_repair_ui._channel_candidates(state, actor, query="ticket")
-    assert [item.channel_id for item in name_search] == [303]
+def test_fix_access_search_uses_saved_previous_name_aliases(monkeypatch) -> None:
+    monkeypatch.setattr(permission_repair_core, "_target_supported", lambda _channel: True)
+    current = FakeChannel(404, "daily-bulletin", visible=True)
+    state, actor = _state_and_actor([current])
 
-    id_search = permission_repair_ui._channel_candidates(state, actor, query="<#101>")
-    assert [item.channel_id for item in id_search] == [101]
+    async def fake_alias_index(guild_id: int):
+        assert guild_id == 9876
+        return {"channel:404": ("general-news",)}
+
+    monkeypatch.setattr(
+        resource_browser.naming_identity,
+        "get_search_alias_index",
+        fake_alias_index,
+    )
+
+    async def scenario() -> None:
+        browser = permission_repair_ui.TargetChannelPickerView(state, actor=actor)
+        searched = await browser.search("general news")
+        assert isinstance(searched, permission_repair_ui.TargetChannelPickerView)
+        assert [item.resource_id for item in searched.candidates] == [404]
+
+    import asyncio
+    asyncio.run(scenario())
 
 
 def test_dedicated_picker_has_explicit_error_handlers() -> None:
