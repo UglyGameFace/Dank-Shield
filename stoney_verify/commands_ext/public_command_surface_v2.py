@@ -500,19 +500,28 @@ class FeatureSearchModal(discord.ui.Modal, title="Find a Dank Shield Feature"):
         await _replace_panel(interaction, embed=_search_embed(text, results), view=view)
 
 
-class _HomeCategoryButton(discord.ui.Button):
-    def __init__(self, category: NavigationCategory, *, row: int) -> None:
+class _HomeSectionSelect(discord.ui.Select):
+    def __init__(self) -> None:
         super().__init__(
-            label=category.home_label or category.label,
-            emoji=category.emoji,
-            style=discord.ButtonStyle.primary,
-            custom_id=f"dank:home:category:{category.key}:v1",
-            row=row,
+            placeholder="Choose a section…",
+            min_values=1,
+            max_values=1,
+            custom_id="dank:home:sections:v1",
+            row=0,
+            options=[
+                discord.SelectOption(
+                    label=category.label[:100],
+                    value=category.key,
+                    emoji=category.emoji,
+                    description=category.description[:100],
+                )
+                for category in CATEGORIES
+            ],
         )
-        self.category_key = category.key
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await _open_category(interaction, self.category_key)
+        value = str(self.values[0] if self.values else "").strip()
+        await _open_category(interaction, value)
 
 
 class _FeatureButton(discord.ui.Button):
@@ -614,11 +623,10 @@ class _CategoryNavButton(discord.ui.Button):
 class CompactDankHomeView(_OwnedView):
     def __init__(self, owner_id: int) -> None:
         super().__init__(owner_id)
-        for index, category in enumerate(CATEGORIES):
-            self.add_item(_HomeCategoryButton(category, row=index // 3))
-        self.add_item(_FindFeatureButton(row=4))
-        self.add_item(_AllFeaturesButton(row=4))
-        self.add_item(_CloseNavigationButton(row=4))
+        self.add_item(_HomeSectionSelect())
+        self.add_item(_FindFeatureButton(row=1))
+        self.add_item(_AllFeaturesButton(row=1))
+        self.add_item(_CloseNavigationButton(row=1))
 
 
 class FeatureCategoryView(_OwnedView):
@@ -643,11 +651,10 @@ class FeatureCategoryView(_OwnedView):
 class FeatureDirectoryView(_OwnedView):
     def __init__(self, owner_id: int) -> None:
         super().__init__(owner_id)
-        for index, category in enumerate(CATEGORIES):
-            self.add_item(_HomeCategoryButton(category, row=index // 3))
-        self.add_item(_FindFeatureButton(row=4))
-        self.add_item(_HomeButton(row=4))
-        self.add_item(_CloseNavigationButton(row=4))
+        self.add_item(_HomeSectionSelect())
+        self.add_item(_FindFeatureButton(row=1))
+        self.add_item(_HomeButton(row=1))
+        self.add_item(_CloseNavigationButton(row=1))
 
 
 class FeatureSearchEmptyView(_OwnedView):
