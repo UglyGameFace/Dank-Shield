@@ -39,10 +39,18 @@ def test_ui_first_surface_has_tiny_explicit_entry_set() -> None:
         assert required in source
 
 
-def test_home_mega_menu_preserves_all_previous_ui_destinations() -> None:
+def test_home_navigation_uses_registry_instead_of_flat_feature_buttons() -> None:
     surface = (ROOT / "stoney_verify/commands_ext/public_command_surface_v2.py").read_text(
         encoding="utf-8"
     )
+    registry = (ROOT / "stoney_verify/navigation_registry.py").read_text(encoding="utf-8")
+
+    assert "for index, category in enumerate(CATEGORIES)" in surface
+    assert "FeatureCategoryView" in surface
+    assert "FeatureSearchModal" in surface
+    assert "FeatureDirectoryView" in surface
+    assert "_FEATURE_ROUTE_KEYS" in surface
+
     for label in (
         "Setup & Settings",
         "Protection",
@@ -59,7 +67,8 @@ def test_home_mega_menu_preserves_all_previous_ui_destinations() -> None:
         "Card Assets",
         "Help",
     ):
-        assert f'label="{label}"' in surface
+        assert f'"{label}"' in registry
+
     assert "consolidated_asset_upload" in surface
 
 
