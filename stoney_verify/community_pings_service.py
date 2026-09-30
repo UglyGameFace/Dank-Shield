@@ -6,8 +6,10 @@ The service owns parsing, validation, legacy compatibility, revisions, and
 member-selection rules. Discord UI modules own presentation only.
 """
 
+import asyncio
 from dataclasses import dataclass, replace
 import re
+import weakref
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 
@@ -23,6 +25,18 @@ LEGACY_TOKE_CHANNEL_KEY = "toke_channel_id"
 OPTION_KINDS = frozenset({"community", "notification"})
 CAP_TOKE_START = "toke_start"
 CAP_TOKE_NOTIFY = "toke_notify"
+
+_COMMUNITY_MEMBER_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+
+
+def community_member_lock(guild_id: int, member_id: int) -> asyncio.Lock:
+    """Serialize all Community & Pings self-service mutations for one member."""
+    key = f"{int(guild_id)}:{int(member_id)}"
+    lock = _COMMUNITY_MEMBER_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _COMMUNITY_MEMBER_LOCKS[key] = lock
+    return lock
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -349,18 +363,35 @@ def with_option(
     config: CommunityPingsConfig,
     option: CommunityPingOption,
 ) -> CommunityPingsConfig:
-    replacing = any(
-        item.key == option.key or int(item.role_id) == int(option.role_id)
-        for item in config.options
+    key_match = next((item for item in config.options if item.key == option.key), None)
+    role_match = next(
+        (item for item in config.options if int(item.role_id) == int(option.role_id)),
+        None,
     )
+    if key_match is not None and int(key_match.role_id) != int(option.role_id):
+        raise ValueError(
+            f"Another Community & Pings option already uses the key {option.key!r}."
+        )
+    if role_match is not None and role_match.key != option.key:
+        raise ValueError(
+            "That Discord role is already mapped to another Community & Pings option."
+        )
+
+    replacing = key_match is not None or role_match is not None
     if not replacing and len(config.options) >= MAX_COMMUNITY_OPTIONS:
         raise ValueError(f"Community & Pings supports at most {MAX_COMMUNITY_OPTIONS} options.")
+
+    group_keys = {group.key for group in config.groups}
+    existing = key_match or role_match
+    if existing == option and option.group_key in group_keys:
+        return config
+
     options = [item for item in config.options if item.key != option.key and item.role_id != option.role_id]
     options.append(option)
     normalized = _dedupe_options(options)
 
     groups = list(config.groups)
-    if option.group_key not in {group.key for group in groups}:
+    if option.group_key not in group_keys:
         if len(groups) >= MAX_COMMUNITY_GROUPS:
             raise ValueError(f"Community & Pings supports at most {MAX_COMMUNITY_GROUPS} groups.")
         groups.append(
@@ -415,9 +446,12 @@ def upsert_group(
     config: CommunityPingsConfig,
     group: CommunityPingGroup,
 ) -> CommunityPingsConfig:
-    replacing = any(item.key == group.key for item in config.groups)
+    existing = next((item for item in config.groups if item.key == group.key), None)
+    replacing = existing is not None
     if not replacing and len(config.groups) >= MAX_COMMUNITY_GROUPS:
         raise ValueError(f"Community & Pings supports at most {MAX_COMMUNITY_GROUPS} groups.")
+    if existing == group:
+        return config
     groups = [item for item in config.groups if item.key != group.key]
     groups.append(group)
     normalized = _dedupe_groups(groups)
@@ -596,6 +630,7 @@ __all__ = [
     "MAX_COMMUNITY_GROUPS",
     "MAX_COMMUNITY_OPTIONS",
     "OPTION_KINDS",
+    "community_member_lock",
     "enabled_options",
     "move_option",
     "next_revision",
