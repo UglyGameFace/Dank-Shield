@@ -149,6 +149,8 @@ def main() -> int:
         "class TargetPermissionRepairView(core.TargetPermissionRepairView)",
         "Choose Channel / Category",
         "shared Dank Shield resource browser",
+        "class TargetSearchModal(discord.ui.Modal",
+        "view = await browser.search",
         "async def on_error",
     )
     require(
