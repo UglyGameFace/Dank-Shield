@@ -594,12 +594,19 @@ class MemberSetupView(discord.ui.View):
         await open_member_setup(interaction)
 
 
-async def open_member_setup(interaction: discord.Interaction) -> None:
+async def open_member_setup(
+    interaction: discord.Interaction,
+    *,
+    replace_message: bool = False,
+) -> None:
     guild = interaction.guild
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
     if guild is None or member is None:
         return await _reply(interaction, "Member Setup only works inside a server.", ok=False)
-    await _defer(interaction)
+    if replace_message:
+        await _defer_panel_update(interaction)
+    else:
+        await _defer(interaction)
     guild_state, _member_state, status = await _member_payload(member)
     await _replace(
         interaction,
