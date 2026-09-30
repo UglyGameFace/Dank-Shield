@@ -87,7 +87,7 @@ The intentional **final** public global application-command surface is exactly *
 
 `/dank` intentionally exposes only four direct children:
 
-- `/dank home` — the complete mega menu for Setup, Protection, Tickets, Verification, Welcome/Exit, Members & Moderation, Design, Roles/Profiles, Logs, Server Stats, Status, Diagnostics, Card Assets, Help, and profile access.
+- `/dank home` — the categorized Dank Shield control center. It exposes Setup & Server Settings, Onboarding & Access, Safety & Moderation, Members/Roles/Profiles, Community & Engagement, Tickets & Support, Design & Branding, Voice & Accessibility, Logs/Stats/Diagnostics, My Dank Shield, Utilities & Help, plus Find a Feature and All Features.
 - `/dank purge` — the compact destructive-cleanup entrypoint that remains a direct command for explicit targeting and confirmation.
 - `/dank setup` — the guided onboarding/setup entrypoint restored for discoverability while advanced setup tools stay inside the UI. Its **Live Captions** section can select/create the ordinary-server caption output, allow all VCs or selected VCs/categories/exclusions, and choose **Original**, **English**, or **Original + English** caption text. Gemini Live input defaults to automatic detection across its supported languages and code-switching.
 - `/dank upload` — the single attachment command for a Join Card background, Exit Card background, or custom card font. This remains a command because Discord buttons cannot provide an attachment field.
@@ -134,7 +134,7 @@ Discord voice control-plane health is not treated as proof that media is flowing
 For each Discord server:
 
 1. Invite the bot with the required permissions, including Manage Threads for authoritative activity coverage.
-2. Run `/dank home`, then press **Setup & Settings**.
+2. Run `/dank home`, open **Setup & Server Settings**, then choose **Setup & Settings**.
 3. Choose a setup plan and follow **Set Up This Step** (or **Continue Setup** for Choose Core Features) until Setup Check runs automatically.
 4. Fix any required blocker, then use **Test Your Setup**. When the enabled features work, press **Finish Setup**.
 5. SpamGuard defaults to ON for new/missing settings rows unless an owner explicitly turns it off.
