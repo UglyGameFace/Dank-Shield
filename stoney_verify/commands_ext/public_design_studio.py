@@ -45,7 +45,7 @@ _LAST_GOOD_OPTIONS: dict[str, dict[str, Any]] = {}
 
 _DESIGN_ERROR_GUIDANCE = (
     "Nothing was changed unless the success message says it was. Reopen `/dank home`, "
-    "choose **Server Design**, then check `/dank diagnostics` with the Error ID if it keeps happening."
+    "choose **Design & Branding**, then **Server Design**, then check `/dank diagnostics` with the Error ID if it keeps happening."
 )
 
 
