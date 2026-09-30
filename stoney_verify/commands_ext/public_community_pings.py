@@ -2,7 +2,6 @@ from __future__ import annotations
 
 """Generic Community & Pings manager and member self-selection UI."""
 
-import asyncio
 import re
 from dataclasses import replace
 from typing import Any, Mapping, Optional
@@ -18,6 +17,7 @@ from stoney_verify.community_pings_service import (
     CommunityPingGroup,
     CommunityPingOption,
     CommunityPingsConfig,
+    community_member_lock,
     enabled_options,
     move_option,
     option_for_role,
@@ -35,8 +35,6 @@ from stoney_verify.ui.picker import DankChoice, DankMultiPickerView, DankPickerV
 from stoney_verify.ui.resource_browser import DankGuildResourceBrowserView
 
 
-_MEMBER_LOCKS: dict[str, asyncio.Lock] = {}
-
 
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
@@ -45,19 +43,6 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(str(value).strip())
     except Exception:
         return int(default)
-
-
-def _member_lock(guild_id: int, member_id: int) -> asyncio.Lock:
-    key = f"{int(guild_id)}:{int(member_id)}"
-    lock = _MEMBER_LOCKS.get(key)
-    if lock is None:
-        lock = asyncio.Lock()
-        _MEMBER_LOCKS[key] = lock
-    if len(_MEMBER_LOCKS) > 4096:
-        for old_key, old_lock in list(_MEMBER_LOCKS.items())[:1024]:
-            if not old_lock.locked() and old_key != key:
-                _MEMBER_LOCKS.pop(old_key, None)
-    return lock
 
 
 async def _reply(interaction: discord.Interaction, message: str, *, ok: bool = False) -> None:
@@ -555,6 +540,11 @@ class CommunityGroupModal(discord.ui.Modal, title="Community & Pings Group"):
 
         _raw_now, model = await _load(guild)
         live_group = next((item for item in model.groups if item.key == key), None)
+        if self.group is None and live_group is not None:
+            return await _reply(
+                interaction,
+                "That group key already exists. Use Edit Group instead of replacing it from Add Group.",
+            )
         group = CommunityPingGroup(
             key=key,
             label=str(self.label_input.value or key)[:80],
@@ -1249,7 +1239,12 @@ class CommunityPreviewView(_OwnedView):
         await _replace(interaction, content="Community & Pings preview closed.", embed=None, view=None)
 
 
-async def _handle_member_pick(interaction: discord.Interaction, values: list[str]) -> None:
+async def _handle_member_pick(
+    interaction: discord.Interaction,
+    values: list[str],
+    *,
+    expected_model: Optional[CommunityPingsConfig] = None,
+) -> None:
     guild = interaction.guild
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
     if guild is None or member is None:
@@ -1258,8 +1253,13 @@ async def _handle_member_pick(interaction: discord.Interaction, values: list[str
     if not interaction.response.is_done():
         await interaction.response.defer()
 
-    async with _member_lock(guild.id, member.id):
+    async with community_member_lock(guild.id, member.id):
         raw, model = await _load(guild)
+        if expected_model is not None and model != expected_model:
+            return await _reply(
+                interaction,
+                "Community & Pings changed since this panel opened. Reopen or refresh it before saving your choices.",
+            )
         resolved = _resolved_options(guild, raw, model)
         available = {int(role.id): (option, role) for option, role in resolved}
         selected = {
@@ -1374,13 +1374,21 @@ async def open_member_community_pings(
         )
         for option, role in resolved
     ]
+
+    async def apply_selection(pick_interaction: discord.Interaction, values: list[str]) -> None:
+        await _handle_member_pick(
+            pick_interaction,
+            values,
+            expected_model=model,
+        )
+
     await _replace(
         interaction,
         embed=_member_embed(guild, member, model, resolved),
         view=DankMultiPickerView(
             author_id=int(member.id),
             choices=choices,
-            on_pick=_handle_member_pick,
+            on_pick=apply_selection,
             custom_id="dank:community_pings:member:v2",
             placeholder="Choose your Community & Pings roles…",
             min_values=0,
