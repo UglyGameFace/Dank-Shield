@@ -11,6 +11,7 @@ from stoney_verify.community_pings_service import (
     CommunityPingGroup,
     CommunityPingOption,
     CommunityPingsConfig,
+    community_member_lock,
     move_option,
     parse_community_pings,
     role_dependency_labels,
@@ -156,6 +157,47 @@ def test_adding_option_creates_group_and_bumps_revision() -> None:
     assert updated.revision == 5
     assert updated.options[0].role_id == 55
     assert updated.groups[0].key == "events"
+
+
+def test_option_identity_conflicts_do_not_silently_replace_existing_mapping() -> None:
+    config = _base()
+
+    with pytest.raises(ValueError, match="already uses the key"):
+        with_option(
+            config,
+            CommunityPingOption(
+                key="minecraft",
+                role_id=999,
+                label="Different Role",
+                group_key="games",
+            ),
+        )
+
+    with pytest.raises(ValueError, match="already mapped"):
+        with_option(
+            config,
+            CommunityPingOption(
+                key="minecraft-alt",
+                role_id=101,
+                label="Minecraft Alt",
+                group_key="games",
+            ),
+        )
+
+
+def test_noop_option_and_group_updates_do_not_bump_revision() -> None:
+    config = _base()
+    assert with_option(config, config.options[0]) is config
+    assert upsert_group(config, config.groups[0]) is config
+
+
+def test_community_member_lock_is_shared_for_same_guild_member() -> None:
+    first = community_member_lock(123, 456)
+    second = community_member_lock(123, 456)
+    other = community_member_lock(123, 789)
+
+    assert first is second
+    assert first is not other
 
 
 def test_option_and_group_hard_limits_reject_overflow() -> None:
