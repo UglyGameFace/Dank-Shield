@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
 import discord
@@ -72,6 +73,14 @@ def _state_and_actor(channels, *, actor_id: int = 44):
         guild_permissions=SimpleNamespace(administrator=False),
     )
     return permission_repair.PermissionRepairState(guild=guild, actor_id=actor_id), actor
+
+
+def test_fix_access_search_modal_updates_originating_picker_message() -> None:
+    source = inspect.getsource(permission_repair_ui.TargetSearchModal.on_submit)
+
+    assert "if interaction.message is not None" in source
+    assert "interaction.response.edit_message" in source
+    assert "interaction.response.send_message" in source
 
 
 def test_fix_access_keeps_feature_search_modal_contract_on_shared_browser(monkeypatch) -> None:
