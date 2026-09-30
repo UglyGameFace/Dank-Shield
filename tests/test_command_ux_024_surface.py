@@ -51,7 +51,7 @@ def _select_values(view: discord.ui.View, custom_id: str) -> set[str]:
 def test_home_uses_categories_without_hiding_feature_destinations() -> None:
     view = CompactDankHomeView(1)
     labels = _labels(view)
-    assert {"Find", "Directory", "Close"} <= labels
+    assert {"Find Feature", "Directory", "Help", "Close"} <= labels
 
     section_select = next(
         item
