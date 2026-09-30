@@ -525,7 +525,7 @@ async def open_toke_command(
             "A configured /toke Community & Pings role no longer exists. Staff should repair the mapping.",
         )
     if not _member_has_role_id(member, stoner_id):
-        return await _reply(interaction, f"You need the {stoner_role.mention} role to use /toke.")
+        return await _reply(interaction, f"You need the configured Community & Pings starter role {stoner_role.mention} to use /toke.")
     channel = _target_channel(guild, interaction, channel_id)
     if not isinstance(channel, discord.TextChannel):
         return await _reply(
@@ -567,7 +567,7 @@ async def open_toke_command(
             color=discord.Color.green(),
             timestamp=discord.utils.utcnow(),
         )
-        embed.set_footer(text="Only members who opted into Sesh Pings were notified.")
+        embed.set_footer(text="Only members with the configured /toke notification role were notified.")
         try:
             sent = await channel.send(
                 content=ping_role.mention,
