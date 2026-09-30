@@ -263,10 +263,11 @@ def preset_flow(
     )
 
 
-def _step_from_raw(raw: Mapping[str, Any], index: int) -> VerificationStep | None:
-    step_type = str(raw.get("type") or raw.get("step_type") or "").strip().lower()
-    if step_type not in STEP_TYPES:
-        return None
+def _step_from_raw(raw: Mapping[str, Any], index: int) -> VerificationStep:
+    # Preserve unknown/missing types so validate_flow() can fail closed. An
+    # access-policy parser must never silently drop an unrecognized required
+    # step and accidentally leave a weaker executable flow behind.
+    step_type = str(raw.get("type") or raw.get("step_type") or "").strip().lower() or "invalid"
     key = _clean_key(raw.get("key"), fallback=f"step-{index + 1}")
     label = _clean_label(raw.get("label"), fallback=step_type.replace("_", " ").title())
     return VerificationStep(
@@ -280,18 +281,13 @@ def _step_from_raw(raw: Mapping[str, Any], index: int) -> VerificationStep | Non
     )
 
 
-def _dedupe_steps(steps: Iterable[VerificationStep]) -> tuple[VerificationStep, ...]:
+def _normalize_steps(steps: Iterable[VerificationStep]) -> tuple[VerificationStep, ...]:
+    # Keep one overflow sentinel step and duplicate keys so validate_flow() can
+    # reject malformed persisted policy instead of normalizing it into a
+    # different, potentially weaker policy.
     ordered = sorted(steps, key=lambda step: (int(step.order), step.key))
-    out: list[VerificationStep] = []
-    seen: set[str] = set()
-    for step in ordered:
-        if step.key in seen:
-            continue
-        seen.add(step.key)
-        out.append(replace(step, order=len(out)))
-        if len(out) >= MAX_VERIFICATION_STEPS:
-            break
-    return tuple(out)
+    bounded = ordered[: MAX_VERIFICATION_STEPS + 1]
+    return tuple(replace(step, order=index) for index, step in enumerate(bounded))
 
 
 def _legacy_flow(config: Mapping[str, Any]) -> VerificationFlowConfig:
@@ -323,7 +319,7 @@ def _legacy_flow(config: Mapping[str, Any]) -> VerificationFlowConfig:
         enabled=bool(steps),
         failure_action=FAIL_WAIT,
         contexts=(CONTEXT_NEW_MEMBER,),
-        steps=_dedupe_steps(steps),
+        steps=_normalize_steps(steps),
         source="legacy" if steps else "empty",
     )
 
@@ -342,35 +338,32 @@ def parse_verification_flow(config: Mapping[str, Any]) -> VerificationFlowConfig
     if not isinstance(raw, Mapping):
         return VerificationFlowConfig(source="v2")
 
+    # Unknown persisted values are preserved and rejected by validate_flow();
+    # coercing them to a permissive default would weaken fail-closed behavior.
     preset = str(raw.get("preset") or PRESET_CUSTOM).strip().lower()
-    if preset not in PRESETS - {PRESET_LEGACY}:
-        preset = PRESET_CUSTOM
-
     failure_action = str(raw.get("failure_action") or FAIL_WAIT).strip().lower()
-    if failure_action not in FAILURE_ACTIONS:
-        failure_action = FAIL_WAIT
 
     contexts_raw = raw.get("contexts")
     contexts: list[str] = []
     if isinstance(contexts_raw, Sequence) and not isinstance(contexts_raw, (str, bytes)):
         for value in contexts_raw:
             clean = str(value or "").strip().lower()
-            if clean in CONTEXTS and clean not in contexts:
+            if clean and clean not in contexts:
                 contexts.append(clean)
+            if len(contexts) >= len(CONTEXTS) + 1:
+                break
     if not contexts:
         contexts = [CONTEXT_NEW_MEMBER]
 
     steps_raw = raw.get("steps")
-    steps = _dedupe_steps(
-        step
+    steps = _normalize_steps(
+        _step_from_raw(item, index)
         for index, item in enumerate(
             steps_raw
             if isinstance(steps_raw, Sequence) and not isinstance(steps_raw, (str, bytes))
             else []
         )
         if isinstance(item, Mapping)
-        for step in [_step_from_raw(item, index)]
-        if step is not None
     )
 
     return VerificationFlowConfig(
