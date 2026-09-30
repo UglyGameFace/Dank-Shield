@@ -352,11 +352,17 @@ def test_toke_capabilities_prefer_v2_and_fall_back_to_legacy_ids() -> None:
         {"stoner_role_id": "111", "sesh_ping_role_id": "222"},
     ) == (700, 701)
 
-    empty = CommunityPingsConfig(revision=1, groups=(), options=())
+    legacy = CommunityPingsConfig(revision=1, groups=(), options=(), source="legacy")
     assert toke_role_ids(
-        empty,
+        legacy,
         {"stoner_role_id": "111", "sesh_ping_role_id": "222"},
     ) == (111, 222)
+
+    migrated = CommunityPingsConfig(revision=3, groups=(), options=(), source="v2")
+    assert toke_role_ids(
+        migrated,
+        {"stoner_role_id": "111", "sesh_ping_role_id": "222"},
+    ) == (0, 0)
 
 
 def test_remove_and_reorder_bump_revision_only_when_changed() -> None:
