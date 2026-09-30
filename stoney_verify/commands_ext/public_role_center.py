@@ -491,9 +491,16 @@ def _center_embed(*, staff: bool, role_manager: bool, setup_manager: bool) -> di
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
     )
+    profile_tools = [
+        "🪪 **Member Setup**",
+        "👤 **My Profile**",
+        "🎭 **Profile Tags & Cosmetics**",
+    ]
+    if not staff:
+        profile_tools.append("🌿 **My Community & Pings**")
     embed.add_field(
         name="Your profile",
-        value="🪪 **Member Setup** • 👤 **My Profile** • 🎭 **Profile Tags & Cosmetics** • 🌿 **Community & Pings**",
+        value=" • ".join(profile_tools),
         inline=False,
     )
     if staff:
@@ -501,6 +508,7 @@ def _center_embed(*, staff: bool, role_manager: bool, setup_manager: bool) -> di
         if setup_manager:
             staff_tools.append("🧭 **Member Setup Manager**")
             staff_tools.append("🌿 **Profile Builder**")
+            staff_tools.append("🌿 **Community & Pings Manager**")
         embed.add_field(
             name="Staff tools",
             value=" • ".join(staff_tools),
@@ -615,11 +623,16 @@ class RolesProfilesView(_OwnedView):
         self.role_manager = bool(role_manager)
         self.setup_manager = bool(setup_manager)
 
-        if not self.staff:
+        if self.staff:
+            self.remove_item(self.community_pings)
+        else:
+            self.remove_item(self.community_pings_admin)
             self.remove_item(self.member_roles)
         if not (self.staff and self.setup_manager):
             self.remove_item(self.member_setup_admin)
             self.remove_item(self.profile_builder)
+            if self.staff:
+                self.remove_item(self.community_pings_admin)
         if not self.role_manager:
             self.remove_item(self.server_roles)
             self.remove_item(self.create_role)
@@ -649,7 +662,7 @@ class RolesProfilesView(_OwnedView):
 
         await _open_profile_cosmetics(interaction, guild, member)
 
-    @discord.ui.button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="My Community & Pings", emoji="🌿", style=discord.ButtonStyle.secondary, row=0)
     async def community_pings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_toke import open_member_community_pings
@@ -680,6 +693,15 @@ class RolesProfilesView(_OwnedView):
         from .public_self_roles_group import _post_profile_builder
 
         await _post_profile_builder(interaction, title="Profile Panel")
+
+    @discord.ui.button(label="Community & Pings Manager", emoji="🌿", style=discord.ButtonStyle.secondary, row=1)
+    async def community_pings_admin(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _recognized_staff(interaction) or not _can_manage_setup(interaction):
+            return await _reply(interaction, "❌ Community & Pings management requires authorized server management access.")
+        from .public_community_pings import open_community_ping_setup
+
+        await open_community_ping_setup(interaction)
 
     @discord.ui.button(label="Server Role Editor", emoji="🛠️", style=discord.ButtonStyle.primary, row=2)
     async def server_roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

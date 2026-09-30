@@ -51,7 +51,7 @@ def test_profile_surfaces_expose_community_and_pings() -> None:
     assert "Community & Pings" in _labels(
         ProfileBuilderView(author_id=1, ready=True, fixable=False, title="Profile Panel")
     )
-    assert "Community & Pings" in _labels(
+    assert "My Community & Pings" in _labels(
         RolesProfilesView(
             1,
             staff=False,
