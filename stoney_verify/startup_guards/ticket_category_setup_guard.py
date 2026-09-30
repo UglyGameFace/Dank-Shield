@@ -61,6 +61,10 @@ _ALL_MANAGED_PRESET_KEYS: tuple[str, ...] = tuple(
     str(row["category_key"]) for row in service.CATEGORY_CATALOG
 )
 
+_MANAGER_CONTEXT_SETUP = "setup"
+_MANAGER_CONTEXT_TICKETS = "tickets"
+_MANAGER_CONTEXTS = {_MANAGER_CONTEXT_SETUP, _MANAGER_CONTEXT_TICKETS}
+
 
 def _log(message: str) -> None:
     try:
@@ -135,6 +139,28 @@ def _active_line(rows: Iterable[Mapping[str, Any]], *, empty: str) -> str:
     return "\n".join(f"• **{_short(name, 70)}**" for name in names[:16])[:1024]
 
 
+async def _manager_allowed(
+    interaction: discord.Interaction,
+    *,
+    context: str,
+) -> bool:
+    clean = str(context or _MANAGER_CONTEXT_SETUP).strip().lower()
+    if clean == _MANAGER_CONTEXT_TICKETS:
+        from ..commands_ext.common import _staff_check, reply_once
+
+        if _staff_check(interaction):
+            return True
+        await reply_once(
+            interaction,
+            {"content": "❌ Staff only.", "ephemeral": True},
+        )
+        return False
+
+    from ..commands_ext import public_setup_solid as solid
+
+    return bool(await solid._require_setup_permission(interaction))
+
+
 async def _save_selection(
     interaction: discord.Interaction,
     selected_keys: Iterable[str],
@@ -182,7 +208,17 @@ async def _save_selection(
 
 
 class ManagedCategorySelection(discord.ui.Select):
-    def __init__(self, state: service.CategorySetupState) -> None:
+    def __init__(
+        self,
+        state: service.CategorySetupState,
+        *,
+        context: str = _MANAGER_CONTEXT_SETUP,
+    ) -> None:
+        self.context = (
+            str(context or _MANAGER_CONTEXT_SETUP).strip().lower()
+            if str(context or _MANAGER_CONTEXT_SETUP).strip().lower() in _MANAGER_CONTEXTS
+            else _MANAGER_CONTEXT_SETUP
+        )
         options: List[discord.SelectOption] = []
         for row in _catalog_rows_from_state(state):
             key = _catalog_key(row)
@@ -210,7 +246,7 @@ class ManagedCategorySelection(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction) -> None:
         from ..commands_ext import public_setup_solid as solid
 
-        if not await solid._require_setup_permission(interaction):
+        if not await _manager_allowed(interaction, context=self.context):
             return
         state = await _save_selection(interaction, self.values)
         if state is None or interaction.guild is None:
@@ -220,6 +256,7 @@ class ManagedCategorySelection(discord.ui.Select):
             interaction.guild,
             title="✅ Ticket Choices Saved",
             state=state,
+            context=self.context,
         )
         embed.add_field(
             name="Applied Everywhere",
@@ -240,16 +277,21 @@ class CategorySetupManagerView(discord.ui.View):
         *,
         state: Optional[service.CategorySetupState],
         db_error: str = "",
+        context: str = _MANAGER_CONTEXT_SETUP,
     ) -> None:
         from ..commands_ext import public_setup_solid as solid
 
         super().__init__(timeout=900)
         self.state = state
         self.db_error = db_error
+        clean_context = str(context or _MANAGER_CONTEXT_SETUP).strip().lower()
+        self.context = (
+            clean_context if clean_context in _MANAGER_CONTEXTS else _MANAGER_CONTEXT_SETUP
+        )
         custom_rows: List[Dict[str, Any]] = []
 
         if state is not None and not db_error:
-            self.add_item(ManagedCategorySelection(state))
+            self.add_item(ManagedCategorySelection(state, context=self.context))
 
             core = discord.ui.Button(
                 label="Community Core",
@@ -282,7 +324,7 @@ class CategorySetupManagerView(discord.ui.View):
             self.add_item(all_builtins)
 
             custom_rows = _custom_rows_from_state(state)
-            if custom_rows:
+            if self.context == _MANAGER_CONTEXT_SETUP and custom_rows:
                 self.add_item(
                     solid.CategorySelect(
                         custom_rows,
@@ -302,15 +344,16 @@ class CategorySetupManagerView(discord.ui.View):
                 custom_only.callback = self._use_custom_only
                 self.add_item(custom_only)
 
-        add = discord.ui.Button(
-            label="Add Custom Ticket Choice",
-            emoji="➕",
-            style=discord.ButtonStyle.primary,
-            custom_id="dank_ticket_category_setup:add_custom",
-            row=3,
-        )
-        add.callback = self._add_custom
-        self.add_item(add)
+        if self.context == _MANAGER_CONTEXT_SETUP:
+            add = discord.ui.Button(
+                label="Add Custom Ticket Choice",
+                emoji="➕",
+                style=discord.ButtonStyle.primary,
+                custom_id="dank_ticket_category_setup:add_custom",
+                row=3,
+            )
+            add.callback = self._add_custom
+            self.add_item(add)
 
         refresh = discord.ui.Button(
             label="Refresh",
@@ -323,10 +366,18 @@ class CategorySetupManagerView(discord.ui.View):
         self.add_item(refresh)
 
         home = discord.ui.Button(
-            label="Setup Home",
-            emoji="🏠",
+            label=(
+                "Ticket Categories"
+                if self.context == _MANAGER_CONTEXT_TICKETS
+                else "Setup Home"
+            ),
+            emoji=("🗂️" if self.context == _MANAGER_CONTEXT_TICKETS else "🏠"),
             style=discord.ButtonStyle.secondary,
-            custom_id="dank_ticket_category_setup:home",
+            custom_id=(
+                "dank_ticket_category_setup:ticket_categories"
+                if self.context == _MANAGER_CONTEXT_TICKETS
+                else "dank_ticket_category_setup:home"
+            ),
             row=4,
         )
         home.callback = self._home
@@ -343,9 +394,7 @@ class CategorySetupManagerView(discord.ui.View):
         self.add_item(close)
 
     async def _allowed(self, interaction: discord.Interaction) -> bool:
-        from ..commands_ext import public_setup_solid as solid
-
-        return await solid._require_setup_permission(interaction)
+        return await _manager_allowed(interaction, context=self.context)
 
     async def _apply_managed_preset(
         self,
@@ -366,6 +415,7 @@ class CategorySetupManagerView(discord.ui.View):
             interaction.guild,
             title=title,
             state=state,
+            context=self.context,
         )
         embed.add_field(name="Preset Applied", value=summary, inline=False)
         await solid._edit_or_followup(interaction, embed=embed, view=view)
@@ -415,6 +465,7 @@ class CategorySetupManagerView(discord.ui.View):
             interaction.guild,
             title="✅ Custom Ticket Choices Confirmed",
             state=state,
+            context=self.context,
         )
         embed.add_field(
             name="Built-in Choices",
@@ -447,15 +498,45 @@ class CategorySetupManagerView(discord.ui.View):
         if guild is None:
             return
         await solid._safe_defer_update(interaction)
-        embed, view = await _build_category_manager_payload(guild)
+        embed, view = await _build_category_manager_payload(
+            guild,
+            context=self.context,
+        )
         await solid._edit_or_followup(interaction, embed=embed, view=view)
 
     async def _home(self, interaction: discord.Interaction) -> None:
+        if self.context == _MANAGER_CONTEXT_TICKETS:
+            from ..commands_ext import public_ticket_command_center as ticket_center
+            from ..commands_ext import public_setup_solid as solid
+
+            view = ticket_center.TicketCategoryToolsView(int(interaction.user.id))
+            return await solid._edit_or_followup(
+                interaction,
+                embed=view.embed(),
+                view=view,
+            )
+
         from ..commands_ext import public_setup_recommend as recommend
 
         await recommend._home_edit(interaction)
 
     async def _close(self, interaction: discord.Interaction) -> None:
+        if self.context == _MANAGER_CONTEXT_TICKETS:
+            try:
+                if interaction.response.is_done():
+                    return await interaction.edit_original_response(
+                        content="Ticket category manager closed.",
+                        embed=None,
+                        view=None,
+                    )
+                return await interaction.response.edit_message(
+                    content="Ticket category manager closed.",
+                    embed=None,
+                    view=None,
+                )
+            except Exception:
+                return
+
         from ..commands_ext import public_setup_recommend as recommend
 
         await recommend._close_setup(interaction)
@@ -466,7 +547,10 @@ async def _build_category_manager_payload(
     *,
     title: str = "🗂️ Choose Ticket Menu Options",
     state: Optional[service.CategorySetupState] = None,
+    context: str = _MANAGER_CONTEXT_SETUP,
 ) -> tuple[discord.Embed, CategorySetupManagerView]:
+    clean_context = str(context or _MANAGER_CONTEXT_SETUP).strip().lower()
+    context = clean_context if clean_context in _MANAGER_CONTEXTS else _MANAGER_CONTEXT_SETUP
     error = ""
     if state is None:
         try:
@@ -477,9 +561,17 @@ async def _build_category_manager_payload(
     embed = discord.Embed(
         title=title,
         description=(
-            "Choose **only** the ticket types this server actually uses. "
-            "The full template library stays available here, but unselected "
-            "choices never appear to members."
+            (
+                "Choose which **built-in Dank Shield ticket categories** this server should show. "
+                "The full managed library stays available here, while unselected choices stay hidden. "
+                "Return to **Ticket Categories** for custom-category tools."
+            )
+            if context == _MANAGER_CONTEXT_TICKETS
+            else (
+                "Choose **only** the ticket types this server actually uses. "
+                "The full template library stays available here, but unselected "
+                "choices never appear to members."
+            )
         ),
         color=discord.Color.red() if error else discord.Color.blurple(),
     )
@@ -490,7 +582,11 @@ async def _build_category_manager_payload(
             value=(error or "Ticket category state could not be loaded.")[:1024],
             inline=False,
         )
-        return embed, CategorySetupManagerView(state=None, db_error=error)
+        return embed, CategorySetupManagerView(
+            state=None,
+            db_error=error,
+            context=context,
+        )
 
     managed_active = [row for row in state.active_rows if _catalog_key(row)]
     custom_active = _custom_rows_from_state(state)
@@ -536,8 +632,48 @@ async def _build_category_manager_payload(
         ),
         inline=False,
     )
-    embed.set_footer(text="Ticket category setup • changes require confirmation")
-    return embed, CategorySetupManagerView(state=state)
+    embed.set_footer(
+        text=(
+            "Ticket categories • built-in selection"
+            if context == _MANAGER_CONTEXT_TICKETS
+            else "Ticket category setup • changes require confirmation"
+        )
+    )
+    return embed, CategorySetupManagerView(state=state, context=context)
+
+
+async def open_category_setup_manager(
+    interaction: discord.Interaction,
+    *,
+    context: str = _MANAGER_CONTEXT_SETUP,
+) -> None:
+    clean_context = str(context or _MANAGER_CONTEXT_SETUP).strip().lower()
+    context = clean_context if clean_context in _MANAGER_CONTEXTS else _MANAGER_CONTEXT_SETUP
+    if not await _manager_allowed(interaction, context=context):
+        return
+
+    guild = interaction.guild
+    if guild is None:
+        if interaction.response.is_done():
+            await interaction.followup.send(
+                "❌ This must be used inside a server.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                "❌ This must be used inside a server.",
+                ephemeral=True,
+            )
+        return
+
+    from ..commands_ext import public_setup_solid as solid
+
+    await solid._safe_defer_update(interaction)
+    embed, view = await _build_category_manager_payload(
+        guild,
+        context=context,
+    )
+    await solid._edit_or_followup(interaction, embed=embed, view=view)
 
 
 async def _setup_category_load(guild: discord.Guild) -> Any:
@@ -748,4 +884,5 @@ __all__ = [
     "CategorySetupManagerView",
     "ManagedCategorySelection",
     "apply",
+    "open_category_setup_manager",
 ]
