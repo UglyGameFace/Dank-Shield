@@ -802,8 +802,28 @@ async def _open_profile_cosmetics(
     roles = await _profile_configured_cosmetic_roles(guild, validate=True)
 
     if not roles:
+        message = (
+            "🎭 No profile tags/cosmetics are available yet. Authorized staff can add them from "
+            "`/dank home` → **Members, Roles & Profiles** → **Profile Builder** → **Profile Tags & Cosmetics**."
+        )
+        if replace_message and interaction.message is not None:
+            if interaction.response.is_done():
+                await interaction.edit_original_response(
+                    content=message,
+                    embed=None,
+                    view=None,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            else:
+                await interaction.response.edit_message(
+                    content=message,
+                    embed=None,
+                    view=None,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            return
         await interaction.response.send_message(
-            "🎭 No profile tags/cosmetics are available yet. Authorized staff can add them from `/dank home` → **Roles & Profiles** → **Profile Builder** → **Profile Tags & Cosmetics**.",
+            message,
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
