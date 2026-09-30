@@ -172,6 +172,7 @@ class VerificationStep:
 
 @dataclass(frozen=True)
 class VerificationFlowConfig:
+    version: int = VERIFICATION_FLOW_VERSION
     revision: int = 1
     preset: str = PRESET_CUSTOM
     enabled: bool = False
@@ -182,7 +183,7 @@ class VerificationFlowConfig:
 
     def to_payload(self) -> dict[str, Any]:
         return {
-            "version": VERIFICATION_FLOW_VERSION,
+            "version": int(self.version),
             "revision": max(1, int(self.revision)),
             "preset": self.preset,
             "enabled": bool(self.enabled),
@@ -253,6 +254,7 @@ def preset_flow(
     }
     failure = FAIL_STAFF_REVIEW if wanted in {PRESET_APPROVAL, PRESET_APPLICATION} else FAIL_WAIT
     return VerificationFlowConfig(
+        version=VERIFICATION_FLOW_VERSION,
         revision=max(1, int(revision)),
         preset=wanted,
         enabled=bool(enabled),
@@ -314,6 +316,7 @@ def _legacy_flow(config: Mapping[str, Any]) -> VerificationFlowConfig:
         steps.append(_step("legacy-approval", STEP_STAFF_APPROVAL, "Staff Approval", len(steps)))
 
     return VerificationFlowConfig(
+        version=VERIFICATION_FLOW_VERSION,
         revision=1,
         preset=PRESET_LEGACY,
         enabled=bool(steps),
@@ -336,7 +339,7 @@ def parse_verification_flow(config: Mapping[str, Any]) -> VerificationFlowConfig
 
     raw = config.get(VERIFICATION_FLOW_KEY)
     if not isinstance(raw, Mapping):
-        return VerificationFlowConfig(source="v2")
+        return VerificationFlowConfig(version=VERIFICATION_FLOW_VERSION, source="v2")
 
     # Unknown persisted values are preserved and rejected by validate_flow();
     # coercing them to a permissive default would weaken fail-closed behavior.
@@ -367,6 +370,7 @@ def parse_verification_flow(config: Mapping[str, Any]) -> VerificationFlowConfig
     )
 
     return VerificationFlowConfig(
+        version=_safe_int(raw.get("version"), VERIFICATION_FLOW_VERSION),
         revision=max(1, _safe_int(raw.get("revision"), 1)),
         preset=preset,
         enabled=_safe_bool(raw.get("enabled"), False),
@@ -394,10 +398,14 @@ def replace_with_preset(
 
 def validate_flow(config: VerificationFlowConfig) -> list[str]:
     errors: list[str] = []
+    if int(config.version) != VERIFICATION_FLOW_VERSION:
+        errors.append("unsupported verification flow version")
     if int(config.revision) < 1:
         errors.append("revision must be positive")
     if config.preset not in PRESETS:
         errors.append("unknown preset")
+    elif config.source == "v2" and config.preset == PRESET_LEGACY:
+        errors.append("legacy preset is not valid for v2 policy")
     if config.failure_action not in FAILURE_ACTIONS:
         errors.append("unknown failure action")
     if not config.contexts:
