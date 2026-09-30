@@ -180,6 +180,22 @@ def _configured_role_ids(config: Mapping[str, Any], *keys: str) -> set[int]:
     return out
 
 
+def _community_identity_role_ids(config: Mapping[str, Any]) -> set[int]:
+    try:
+        from .community_pings_service import parse_community_pings
+
+        model = parse_community_pings(config)
+        return {
+            int(option.role_id)
+            for option in model.options
+            if option.enabled and option.kind == "community" and int(option.role_id) > 0
+        }
+    except Exception:
+        if "community_pings_v2" in config:
+            return set()
+        return _configured_role_ids(config, "stoner_role_id")
+
+
 def _compact_server_role_labels(member: discord.Member, config: Mapping[str, Any]) -> list[str]:
     # Return truthful complete server roles, with Discord owner status first.
     from .commands_ext.public_self_roles_group import _role_name_key, _short_role_label
@@ -193,7 +209,8 @@ def _compact_server_role_labels(member: discord.Member, config: Mapping[str, Any
         pass
 
     profile_name_keys = _profile_role_name_keys()
-    cosmetic_ids = _configured_role_ids(config, "profile_cosmetic_role_ids", "stoner_role_id")
+    cosmetic_ids = _configured_role_ids(config, "profile_cosmetic_role_ids")
+    cosmetic_ids.update(_community_identity_role_ids(config))
     for role in sorted(list(getattr(member, "roles", []) or []), reverse=True):
         try:
             if role.is_default() or role.managed or int(role.id) in cosmetic_ids:
@@ -249,16 +266,16 @@ def _compact_profile_tag_labels(member: discord.Member, config: Mapping[str, Any
         suffix = " + more" if len(interests) > len(shown) else ""
         labels.append("Interests: " + " / ".join(shown) + suffix)
 
-    stoner_ids = _configured_role_ids(config, "stoner_role_id")
+    community_ids = _community_identity_role_ids(config)
     community = [
         _short_role_label(role.name)
         for role in sorted(list(getattr(member, "roles", []) or []), reverse=True)
-        if int(getattr(role, "id", 0) or 0) in stoner_ids
+        if int(getattr(role, "id", 0) or 0) in community_ids
     ]
     if community:
         labels.append("Community: " + " / ".join(community[:2]))
 
-    cosmetic_ids = _configured_role_ids(config, "profile_cosmetic_role_ids") - stoner_ids
+    cosmetic_ids = _configured_role_ids(config, "profile_cosmetic_role_ids") - community_ids
     cosmetics = [
         _short_role_label(role.name)
         for role in sorted(list(getattr(member, "roles", []) or []), reverse=True)

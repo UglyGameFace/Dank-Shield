@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import discord
@@ -14,7 +15,12 @@ from stoney_verify.commands_ext.public_self_roles_group import (
     ProfilePanelView,
 )
 from stoney_verify.commands_ext import public_toke
+from stoney_verify.commands_ext.public_community_pings import CommunityPingsManagerView
+from stoney_verify.community_pings_service import COMMUNITY_PINGS_KEY
 from stoney_verify.profile_card_runtime import _compact_profile_tag_labels
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _labels(view: discord.ui.View) -> set[str]:
@@ -183,6 +189,85 @@ def test_stoner_is_profile_identity_but_sesh_subscription_is_not() -> None:
         },
     )
     assert all("Sesh Pings" not in label for label in labels)
+
+
+def test_generic_community_identity_is_not_duplicated_as_cosmetic_tag() -> None:
+    community_id = 323456789012345678
+    member = SimpleNamespace(
+        roles=[SimpleNamespace(id=community_id, name="Gaming Crew")]
+    )
+    labels = _compact_profile_tag_labels(
+        member,
+        {
+            COMMUNITY_PINGS_KEY: {
+                "version": 2,
+                "revision": 3,
+                "groups": [{"key": "community", "label": "Community"}],
+                "options": [
+                    {
+                        "key": "gaming-crew",
+                        "role_id": str(community_id),
+                        "label": "Gaming Crew",
+                        "kind": "community",
+                        "group_key": "community",
+                    }
+                ],
+            },
+            "profile_cosmetic_role_ids": [str(community_id)],
+        },
+    )
+    assert "Community: Gaming Crew" in labels
+    assert all(not label.startswith("Tags:") for label in labels)
+
+
+def test_malformed_v2_does_not_restore_legacy_profile_identity() -> None:
+    legacy_id = 423456789012345678
+    member = SimpleNamespace(
+        roles=[SimpleNamespace(id=legacy_id, name="Stoner")]
+    )
+    labels = _compact_profile_tag_labels(
+        member,
+        {
+            COMMUNITY_PINGS_KEY: "corrupt",
+            public_toke.STONER_ROLE_KEY: str(legacy_id),
+        },
+    )
+    assert all("Community: Stoner" not in label for label in labels)
+
+
+def test_generic_manager_exposes_add_edit_and_safe_remove_controls() -> None:
+    labels = _labels(CommunityPingsManagerView(1))
+    assert {
+        "Add Option",
+        "Edit Option",
+        "Add Group",
+        "Edit Group",
+        "Delete Group",
+        "Member Preview",
+        "Toke Channel",
+        "Clear Toke Channel",
+        "Refresh",
+        "Home",
+        "Close",
+    } <= labels
+    assert len(CommunityPingsManagerView(1).children) <= 25
+
+
+def test_member_picker_rejects_stale_configuration_before_mutation() -> None:
+    source = (ROOT / "stoney_verify/commands_ext/public_community_pings.py").read_text(encoding="utf-8")
+    start = source.index("async def _handle_member_pick")
+    end = source.index("async def open_community_ping_setup", start)
+    block = source[start:end]
+
+    assert "expected_model: Optional[CommunityPingsConfig]" in block
+    assert "model != expected_model" in block
+    assert "Community & Pings changed since this panel opened" in block
+    assert "community_member_lock(guild.id, member.id)" in block
+
+    member_open_start = source.index("async def open_member_community_pings")
+    member_block = source[member_open_start:]
+    assert "expected_model=model" in member_block
+    assert "on_pick=apply_selection" in member_block
 
 
 def test_cheers_card_is_response_only_and_has_one_button() -> None:

@@ -101,8 +101,8 @@ def test_normal_members_only_receive_existing_self_service_roles() -> None:
     end = source.index("def _self_role_embed", start)
     block = source[start:end]
 
-    assert "STONER_ROLE_KEY" in block
-    assert "SESH_PING_ROLE_KEY" in block
+    assert "parse_community_pings" in block
+    assert "community_self_service_kind" in block
     assert "PROFILE_COSMETIC_ROLE_IDS_KEY" in block
     assert "PROFILE_CATEGORIES" in block
     assert "_profile_cosmetic_role_blocker" in block
@@ -120,11 +120,13 @@ def test_self_role_toggle_rechecks_live_mapping_under_member_lock() -> None:
     end = source.index("async def _open_direct_role", start)
     block = source[start:end]
 
-    assert "_self_service_role_lock(guild.id, member.id)" in block
-    assert "_self_service_role_kind(guild, role)" in block
+    assert "community_member_lock(guild.id, member.id)" in block
     assert "get_guild_config(int(guild.id), refresh=True)" in block
-    assert "Select the configured Stoner role before enabling Sesh Pings." in block
-    assert "remove_roles(sesh_role" in block
+    assert "_self_service_role_kind(guild, role, config=config)" in block
+    assert "parse_community_pings(config)" in block
+    assert "option_for_role(community_model, int(role.id))" in block
+    assert "validate_member_selection(" in block
+    assert "selection_error" in block
 
 
 def test_role_autocomplete_filters_choices_before_discord_returns_them() -> None:
