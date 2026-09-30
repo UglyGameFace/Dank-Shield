@@ -29,7 +29,7 @@ from stoney_verify.member_setup_service import (
     normalize_sections,
     publish_revision,
 )
-from stoney_verify.ui.picker import DankChannelSelect, DankRoleSelect
+from stoney_verify.ui.resource_browser import DankGuildResourceBrowserView
 from .public_setup_group import _require_setup_permission
 
 
@@ -111,6 +111,17 @@ async def _replace(
 
 async def _defer(interaction: discord.Interaction) -> None:
     if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+
+async def _defer_panel_update(interaction: discord.Interaction) -> None:
+    """Acknowledge an admin panel action without creating a second response panel."""
+
+    if interaction.response.is_done():
+        return
+    if interaction.message is not None:
+        await interaction.response.defer(thinking=False)
+    else:
         await interaction.response.defer(ephemeral=True, thinking=True)
 
 
@@ -657,12 +668,12 @@ async def _find_or_fetch_member_setup_panel(
 
     if not matches:
         return None, (
-            "No canonical Dank Shield profile/setup panel was found in the configured channel. "
+            "No Dank Shield Member Setup & Profile panel was found in the configured channel. "
             "Use Profile Builder to post one."
         )
     if len(matches) > 1:
         return None, (
-            "More than one canonical profile/setup panel exists in the configured channel. "
+            "More than one Member Setup & Profile panel exists in the configured channel. "
             "Delete the obsolete duplicate before refreshing so Dank Shield cannot edit the wrong panel."
         )
     return matches[0], ""
@@ -800,7 +811,11 @@ def _admin_embed(guild: discord.Guild, state: Mapping[str, Any]) -> discord.Embe
     panel_message_id = _safe_int(state.get("panel_message_id"), 0)
     embed.add_field(
         name="Public setup panel",
-        value=(f"Tracked message: `{panel_message_id}`" if panel_message_id > 0 else "Legacy/untracked — use **Refresh Public Panel** to adopt it."),
+        value=(
+            "Connected — **Refresh Public Panel** updates it after setup changes."
+            if panel_message_id > 0
+            else "Needs refresh — use **Refresh Public Panel** to connect the live member setup panel."
+        ),
         inline=False,
     )
     embed.add_field(
@@ -849,112 +864,227 @@ async def _staff_authorized(interaction: discord.Interaction) -> bool:
     return bool(await _require_setup_permission(interaction))
 
 
-class SetupChannelPickerView(discord.ui.View):
-    def __init__(self, owner_id: int) -> None:
-        super().__init__(timeout=300)
+class MemberSetupResourceBrowserView(DankGuildResourceBrowserView):
+    """Single-message Search-Safe browser for Member Setup admin resources."""
+
+    _MODES = {
+        "setup_channel",
+        "access_role",
+        "prerequisite_role",
+        "protected_category",
+    }
+
+    def __init__(
+        self,
+        owner_id: int,
+        guild: discord.Guild,
+        *,
+        mode: str,
+        query: str = "",
+        page: int = 0,
+        alias_index: Optional[Mapping[str, tuple[str, ...]]] = None,
+    ) -> None:
+        clean_mode = str(mode or "").strip().lower()
+        if clean_mode not in self._MODES:
+            raise ValueError(f"Unsupported Member Setup resource mode: {clean_mode}")
+
         self.owner_id = int(owner_id)
-        self.add_item(
-            DankChannelSelect(
-                author_id=self.owner_id,
-                on_pick=self._picked,
-                placeholder="Choose the permanent Member Setup channel…",
-                channel_types=[discord.ChannelType.text],
-                row=0,
+        self.member_setup_guild = guild
+        self.mode = clean_mode
+
+        resource_kinds: tuple[str, ...]
+        title: str
+        placeholder: str
+        empty_message: str
+
+        if clean_mode == "setup_channel":
+            resource_kinds = ("text",)
+            title = "🪪 Choose Member Setup Channel"
+            placeholder = "Choose the permanent Member Setup text channel…"
+            empty_message = "No text channels matched. Use 🔎 Search with a current/styled name, previous name, ID, or mention."
+        elif clean_mode == "access_role":
+            resource_kinds = ("role",)
+            title = "🔑 Choose Member Access Role"
+            placeholder = "Choose the role Dank Shield should grant/remove…"
+            empty_message = "No roles matched. Use 🔎 Search with a current/styled name, previous name, ID, or mention."
+        elif clean_mode == "prerequisite_role":
+            resource_kinds = ("role",)
+            title = "✅ Choose Eligibility Prerequisite"
+            placeholder = "Choose the optional role members must already have…"
+            empty_message = "No roles matched. Use 🔎 Search with a current/styled name, previous name, ID, or mention."
+        else:
+            resource_kinds = ("category",)
+            title = "🔒 Add Protected Category"
+            placeholder = "Choose one member category to protect…"
+            empty_message = "No categories matched. Use 🔎 Search with a current/styled name, previous name, ID, or mention."
+
+        async def picked(interaction: discord.Interaction, resource: Any) -> None:
+            await self._picked(interaction, resource)
+
+        async def back(interaction: discord.Interaction) -> None:
+            if not await _staff_authorized(interaction):
+                return
+            await _defer_panel_update(interaction)
+            state = await load_guild_setup_state(guild.id, refresh=True)
+            await _replace(
+                interaction,
+                embed=_admin_embed(guild, state),
+                view=MemberSetupAdminView(self.owner_id),
             )
+
+        super().__init__(
+            guild=guild,
+            author_id=self.owner_id,
+            resource_kinds=resource_kinds,
+            on_pick=picked,
+            custom_id=f"dank:member_setup:{clean_mode}",
+            title=title,
+            placeholder=placeholder,
+            query=query,
+            page=page,
+            alias_index=alias_index,
+            on_home=back,
+            home_label="Back to Member Setup",
+            cancel_label="Close",
+            include_cancel=True,
+            empty_message=empty_message,
         )
 
-    async def _picked(self, interaction: discord.Interaction, channel: discord.abc.GuildChannel) -> None:
+    def clone(
+        self,
+        *,
+        query: Optional[str] = None,
+        page: Optional[int] = None,
+        alias_index: Optional[Mapping[str, tuple[str, ...]]] = None,
+    ) -> "MemberSetupResourceBrowserView":
+        return MemberSetupResourceBrowserView(
+            self.owner_id,
+            self.member_setup_guild,
+            mode=self.mode,
+            query=self.query if query is None else query,
+            page=self.page if page is None else page,
+            alias_index=self.alias_index if alias_index is None else alias_index,
+        )
+
+    def embed(self) -> discord.Embed:
+        embed = super().embed()
+        if self.mode == "access_role":
+            guidance = (
+                "Dank Shield **grants/removes** this role automatically after an eligible member completes setup. "
+                "This is the role that unlocks protected categories."
+            )
+        elif self.mode == "prerequisite_role":
+            guidance = (
+                "Optional eligibility check only. The member must **already have** this role; "
+                "Dank Shield does **not** grant it."
+            )
+        elif self.mode == "setup_channel":
+            guidance = (
+                "This is the permanent Member Setup channel. It must remain visible while members are gated."
+            )
+        else:
+            guidance = (
+                "This category becomes part of Strict Gate. Add categories one at a time; repeat this picker for more."
+            )
+        embed.add_field(name="What this selection does", value=guidance, inline=False)
+        return embed
+
+    async def _picked(self, interaction: discord.Interaction, resource: Any) -> None:
         if not await _staff_authorized(interaction):
             return
+
         guild = interaction.guild
-        if guild is None or not isinstance(channel, discord.TextChannel):
+        if guild is None or int(guild.id) != int(self.member_setup_guild.id):
+            return await _reply(interaction, "This picker no longer matches the current server.", ok=False)
+
+        if self.mode == "setup_channel" and not isinstance(resource, discord.TextChannel):
             return await _reply(interaction, "Choose a text channel.", ok=False)
-        state = await load_guild_setup_state(guild.id, refresh=True)
-        if state.get("gate_active"):
-            return await _reply(interaction, "Suspend Strict Gate before changing its setup channel.", ok=False)
-        await _defer(interaction)
-        state = await configure_guild_setup(
-            guild.id,
-            setup_channel_id=channel.id,
-            actor_id=interaction.user.id,
-        )
-        await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(interaction.user.id))
+        if self.mode in {"access_role", "prerequisite_role"} and not isinstance(resource, discord.Role):
+            return await _reply(interaction, "Choose a server role.", ok=False)
+        if self.mode == "protected_category" and not isinstance(resource, discord.CategoryChannel):
+            return await _reply(interaction, "Choose a category.", ok=False)
 
-
-class AccessRolePickerView(discord.ui.View):
-    def __init__(self, owner_id: int, *, prerequisite: bool = False) -> None:
-        super().__init__(timeout=300)
-        self.owner_id = int(owner_id)
-        self.prerequisite = bool(prerequisite)
-        self.add_item(
-            DankRoleSelect(
-                author_id=self.owner_id,
-                on_pick=self._picked,
-                placeholder=(
-                    "Choose the optional eligibility role members must already have…"
-                    if self.prerequisite
-                    else "Choose the role Dank Shield should grant/remove automatically…"
-                ),
-                row=0,
-            )
-        )
-
-    async def _picked(self, interaction: discord.Interaction, role: discord.Role) -> None:
-        if not await _staff_authorized(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await _reply(interaction, "This only works inside a server.", ok=False)
-        state = await load_guild_setup_state(guild.id, refresh=True)
-        if state.get("gate_active"):
-            return await _reply(interaction, "Suspend Strict Gate before changing its role mapping.", ok=False)
-        if not self.prerequisite:
-            blocker = _access_role_blocker(guild, role)
+        if self.mode == "access_role":
+            blocker = _access_role_blocker(guild, resource)
             if blocker:
                 return await _reply(interaction, blocker, ok=False)
-        await _defer(interaction)
-        state = await configure_guild_setup(
-            guild.id,
-            prerequisite_role_id=role.id if self.prerequisite else None,
-            access_role_id=None if self.prerequisite else role.id,
-            actor_id=interaction.user.id,
-        )
-        await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(interaction.user.id))
 
-
-class ProtectedCategoryPickerView(discord.ui.View):
-    def __init__(self, owner_id: int) -> None:
-        super().__init__(timeout=300)
-        self.owner_id = int(owner_id)
-        self.add_item(
-            DankChannelSelect(
-                author_id=self.owner_id,
-                on_pick=self._picked,
-                placeholder="Add one member category to the Strict Gate…",
-                channel_types=[discord.ChannelType.category],
-                row=0,
-            )
-        )
-
-    async def _picked(self, interaction: discord.Interaction, channel: discord.abc.GuildChannel) -> None:
-        if not await _staff_authorized(interaction):
-            return
-        guild = interaction.guild
-        if guild is None or not isinstance(channel, discord.CategoryChannel):
-            return await _reply(interaction, "Choose a category.", ok=False)
+        await _defer_panel_update(interaction)
         state = await load_guild_setup_state(guild.id, refresh=True)
         if state.get("gate_active"):
-            return await _reply(interaction, "Suspend Strict Gate before changing protected categories.", ok=False)
-        ids = [_safe_int(value, 0) for value in state.get("protected_category_ids", [])]
-        if channel.id not in ids:
-            ids.append(channel.id)
-        await _defer(interaction)
-        state = await configure_guild_setup(
-            guild.id,
-            protected_category_ids=ids,
-            actor_id=interaction.user.id,
+            await _replace(
+                interaction,
+                content="❌ Suspend Strict Gate before changing Member Setup resource mappings.",
+                embed=_admin_embed(guild, state),
+                view=MemberSetupAdminView(self.owner_id),
+            )
+            return
+
+        if self.mode == "setup_channel":
+            state = await configure_guild_setup(
+                guild.id,
+                setup_channel_id=resource.id,
+                actor_id=interaction.user.id,
+            )
+            confirmation = f"✅ Member Setup channel set to {resource.mention}."
+        elif self.mode == "access_role":
+            state = await configure_guild_setup(
+                guild.id,
+                access_role_id=resource.id,
+                actor_id=interaction.user.id,
+            )
+            confirmation = f"✅ Member Access role set to {resource.mention}."
+        elif self.mode == "prerequisite_role":
+            state = await configure_guild_setup(
+                guild.id,
+                prerequisite_role_id=resource.id,
+                actor_id=interaction.user.id,
+            )
+            confirmation = (
+                f"✅ Eligibility prerequisite set to {resource.mention}. "
+                "Members must already have it; Dank Shield will not grant it."
+            )
+        else:
+            ids = [_safe_int(value, 0) for value in state.get("protected_category_ids", [])]
+            if resource.id not in ids:
+                ids.append(resource.id)
+            state = await configure_guild_setup(
+                guild.id,
+                protected_category_ids=ids,
+                actor_id=interaction.user.id,
+            )
+            confirmation = f"✅ Added **{resource.name}** to Strict Gate protected categories."
+
+        await _replace(
+            interaction,
+            content=confirmation,
+            embed=_admin_embed(guild, state),
+            view=MemberSetupAdminView(self.owner_id),
         )
-        await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(interaction.user.id))
+
+
+async def _open_member_setup_resource_browser(
+    interaction: discord.Interaction,
+    *,
+    owner_id: int,
+    mode: str,
+) -> None:
+    if not await _staff_authorized(interaction):
+        return
+    guild = interaction.guild
+    if guild is None:
+        return await _reply(interaction, "Member Setup only works inside a server.", ok=False)
+
+    browser = MemberSetupResourceBrowserView(
+        owner_id,
+        guild,
+        mode=mode,
+    )
+    await _replace(
+        interaction,
+        embed=browser.embed(),
+        view=browser,
+    )
 
 
 class PublishRevisionModal(discord.ui.Modal):
@@ -999,7 +1129,7 @@ class PublishRevisionModal(discord.ui.Modal):
                 ok=False,
             )
 
-        await _defer(interaction)
+        await _defer_panel_update(interaction)
         state = await publish_revision(
             guild.id,
             severity=self.severity,
@@ -1050,7 +1180,7 @@ class GateActivationConfirmModal(discord.ui.Modal):
             return await _reply(interaction, "This confirmation no longer matches the server.", ok=False)
         if str(self.confirm.value or "").strip() != self.guild_name:
             return await _reply(interaction, "Server-name confirmation did not match. Nothing changed.", ok=False)
-        await _defer(interaction)
+        await _defer_panel_update(interaction)
         try:
             state = await activate_strict_gate(guild, actor_id=interaction.user.id)
         except Exception as exc:
@@ -1084,7 +1214,7 @@ class GateSuspendConfirmModal(discord.ui.Modal):
             return await _reply(interaction, "This confirmation no longer matches the server.", ok=False)
         if str(self.confirm.value or "").strip() != self.guild_name:
             return await _reply(interaction, "Server-name confirmation did not match. Nothing changed.", ok=False)
-        await _defer(interaction)
+        await _defer_panel_update(interaction)
         try:
             state = await suspend_strict_gate(guild, actor_id=interaction.user.id)
         except Exception as exc:
@@ -1111,11 +1241,10 @@ class MemberSetupAdminView(discord.ui.View):
     @discord.ui.button(label="Setup Channel", emoji="🪪", style=discord.ButtonStyle.secondary, row=0)
     async def setup_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await interaction.response.send_message(
-            content="Choose the permanent Member Setup channel. It must remain visible while members are gated.",
-            view=SetupChannelPickerView(self.owner_id),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
+        await _open_member_setup_resource_browser(
+            interaction,
+            owner_id=self.owner_id,
+            mode="setup_channel",
         )
 
     @discord.ui.button(label="Use This Channel", emoji="📍", style=discord.ButtonStyle.secondary, row=0)
@@ -1130,7 +1259,7 @@ class MemberSetupAdminView(discord.ui.View):
         state = await load_guild_setup_state(guild.id, refresh=True)
         if state.get("gate_active"):
             return await _reply(interaction, "Suspend Strict Gate before changing its setup channel.", ok=False)
-        await _defer(interaction)
+        await _defer_panel_update(interaction)
         state = await configure_guild_setup(
             guild.id,
             setup_channel_id=channel.id,
@@ -1141,15 +1270,10 @@ class MemberSetupAdminView(discord.ui.View):
     @discord.ui.button(label="Member Access Role", emoji="🔑", style=discord.ButtonStyle.secondary, row=0)
     async def access_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await interaction.response.send_message(
-            content=(
-                "Choose the **Member Access** role. Dank Shield will grant this role automatically "
-                "after an eligible member completes the current setup, and remove it when an active "
-                "Access-Gated revision requires review. This is the role that unlocks your protected categories."
-            ),
-            view=AccessRolePickerView(self.owner_id),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
+        await _open_member_setup_resource_browser(
+            interaction,
+            owner_id=self.owner_id,
+            mode="access_role",
         )
 
     @discord.ui.button(label="Create Member Access", emoji="➕", style=discord.ButtonStyle.secondary, row=0)
@@ -1169,7 +1293,7 @@ class MemberSetupAdminView(discord.ui.View):
         me = guild.me
         if not isinstance(me, discord.Member) or not (me.guild_permissions.manage_roles or me.guild_permissions.administrator):
             return await _reply(interaction, "Dank Shield needs Manage Roles.", ok=False)
-        await _defer(interaction)
+        await _defer_panel_update(interaction)
         existing = discord.utils.find(lambda role: role.name.casefold() == "member access", guild.roles)
         try:
             role = existing if isinstance(existing, discord.Role) else await guild.create_role(
@@ -1190,15 +1314,10 @@ class MemberSetupAdminView(discord.ui.View):
     @discord.ui.button(label="Eligibility Prerequisite", emoji="✅", style=discord.ButtonStyle.secondary, row=1)
     async def prerequisite(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await interaction.response.send_message(
-            content=(
-                "Optional eligibility check: choose a role such as **Verified** that the member must "
-                "already have before Member Access can be granted. Dank Shield does **not** grant this "
-                "prerequisite role. If you leave it empty, completing Member Setup is enough to qualify."
-            ),
-            view=AccessRolePickerView(self.owner_id, prerequisite=True),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
+        await _open_member_setup_resource_browser(
+            interaction,
+            owner_id=self.owner_id,
+            mode="prerequisite_role",
         )
 
     @discord.ui.button(label="Clear Eligibility Rule", emoji="🧹", style=discord.ButtonStyle.secondary, row=1)
@@ -1212,7 +1331,7 @@ class MemberSetupAdminView(discord.ui.View):
         state = await load_guild_setup_state(guild.id, refresh=True)
         if state.get("gate_active"):
             return await _reply(interaction, "Suspend Strict Gate before changing its prerequisite.", ok=False)
-        await _defer(interaction)
+        await _defer_panel_update(interaction)
         state = await configure_guild_setup(
             guild.id,
             prerequisite_role_id=0,
@@ -1223,11 +1342,10 @@ class MemberSetupAdminView(discord.ui.View):
     @discord.ui.button(label="Add Protected Category", emoji="🔒", style=discord.ButtonStyle.secondary, row=1)
     async def add_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await interaction.response.send_message(
-            content="Choose one member category to protect. Repeat this action for additional categories.",
-            view=ProtectedCategoryPickerView(self.owner_id),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
+        await _open_member_setup_resource_browser(
+            interaction,
+            owner_id=self.owner_id,
+            mode="protected_category",
         )
 
     @discord.ui.button(label="Clear Protected Categories", emoji="🧹", style=discord.ButtonStyle.secondary, row=1)
@@ -1241,7 +1359,7 @@ class MemberSetupAdminView(discord.ui.View):
         state = await load_guild_setup_state(guild.id, refresh=True)
         if state.get("gate_active"):
             return await _reply(interaction, "Suspend Strict Gate before changing protected categories.", ok=False)
-        await _defer(interaction)
+        await _defer_panel_update(interaction)
         state = await configure_guild_setup(guild.id, protected_category_ids=[], actor_id=interaction.user.id)
         await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(self.owner_id))
 
@@ -1273,7 +1391,7 @@ class MemberSetupAdminView(discord.ui.View):
         guild = interaction.guild
         if guild is None:
             return await _reply(interaction, "This only works inside a server.", ok=False)
-        await _defer(interaction)
+        await _defer_panel_update(interaction)
         message, error = await refresh_public_member_setup_panel(
             guild,
             actor_id=interaction.user.id,
@@ -1283,7 +1401,7 @@ class MemberSetupAdminView(discord.ui.View):
         state = await load_guild_setup_state(guild.id, refresh=True)
         await _replace(
             interaction,
-            content=f"✅ Refreshed the canonical Member Setup & Profile panel in {message.channel.mention}.",
+            content=f"✅ Refreshed the Member Setup & Profile panel in {message.channel.mention}.",
             embed=_admin_embed(guild, state),
             view=MemberSetupAdminView(self.owner_id),
         )
@@ -1325,13 +1443,23 @@ class MemberSetupAdminView(discord.ui.View):
         await open_member_setup_admin(interaction)
 
 
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=4)
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.edit_message(
+            content="Member Setup Manager closed.",
+            embed=None,
+            view=None,
+        )
+
+
 async def open_member_setup_admin(interaction: discord.Interaction) -> None:
     if not await _staff_authorized(interaction):
         return
     guild = interaction.guild
     if guild is None:
         return await _reply(interaction, "Member Setup only works inside a server.", ok=False)
-    await _defer(interaction)
+    await _defer_panel_update(interaction)
     state = await load_guild_setup_state(guild.id, refresh=True)
     await _replace(
         interaction,
