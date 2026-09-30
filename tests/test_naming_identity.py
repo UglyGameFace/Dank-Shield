@@ -110,6 +110,38 @@ def test_search_safe_policy_survives_bounded_alias_updates() -> None:
     assert naming_identity.naming_policy(state)["mode"] == naming_identity.NAMING_MODE_SEARCH_SAFE
 
 
+def test_search_alias_index_exposes_only_bounded_semantic_history(monkeypatch) -> None:
+    state: dict[str, object] = {}
+    state = naming_identity.remember_alias(
+        state,
+        kind="role",
+        resource_id=11,
+        alias="Verified",
+        updated_at=1.0,
+    )
+    state = naming_identity.remember_alias(
+        state,
+        kind="channel",
+        resource_id=22,
+        alias="General News",
+        updated_at=2.0,
+    )
+
+    async def fake_load(guild_id: int, *, refresh: bool = False):
+        assert guild_id == 999
+        assert refresh is False
+        return state
+
+    monkeypatch.setattr(naming_identity, "_load_state", fake_load)
+
+    index = asyncio.run(naming_identity.get_search_alias_index(999))
+
+    assert index == {
+        "role:11": ("verified",),
+        "channel:22": ("general-news",),
+    }
+
+
 def test_policy_boolean_strings_are_parsed_instead_of_python_truthiness() -> None:
     policy = naming_identity.naming_policy(
         {
