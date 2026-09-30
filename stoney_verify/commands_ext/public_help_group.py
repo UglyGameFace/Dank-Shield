@@ -201,7 +201,7 @@ def _overview_embed() -> discord.Embed:
         "`/role` Roles & Profiles, self-service roles, and guarded staff shortcuts\n"
         "`/ticket` actions for the current ticket\n"
         "`/tickets` server-wide ticket management\n"
-        "`/toke` ping the opt-in sesh crowd (Stoner role required)\n"
+        "`/toke` ping the configured opt-in crowd (Community & Pings starter role required)\n"
         "`/verify` verification repair and approval tools",
     )
     return embed
