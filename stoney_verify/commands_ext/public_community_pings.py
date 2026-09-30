@@ -594,6 +594,8 @@ class ExclusiveKeyModal(discord.ui.Modal, title="Mutual Exclusion"):
         self.key_input.default = current
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if _safe_int(getattr(interaction.user, "id", 0), 0) != self.owner_id:
+            return await _reply(interaction, "This editor belongs to another admin.")
         guild = interaction.guild
         if guild is None:
             return await _reply(interaction, "This only works inside a server.")
@@ -1174,8 +1176,14 @@ async def _handle_member_pick(interaction: discord.Interaction, values: list[str
             for role in list(member.roles or [])
         }
 
+        effective_model = CommunityPingsConfig(
+            revision=model.revision,
+            groups=model.groups,
+            options=tuple(option for option, _role in resolved),
+            source=model.source,
+        )
         error = validate_member_selection(
-            model,
+            effective_model,
             selected_role_ids=selected,
             current_role_ids=current_ids,
         )
