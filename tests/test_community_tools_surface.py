@@ -4,7 +4,7 @@ from pathlib import Path
 
 import discord
 
-from stoney_verify.commands_ext.public_command_surface_v2 import CompactDankHomeView
+from stoney_verify.commands_ext.public_command_surface_v2 import FeatureCategoryView
 from stoney_verify.commands_ext.public_community_tools import (
     CommunityToolsView,
     FunLookupView,
@@ -25,8 +25,8 @@ def _labels(view: discord.ui.View) -> set[str]:
     }
 
 
-def test_home_exposes_community_tools_without_new_slash_child() -> None:
-    assert "Community Tools" in _labels(CompactDankHomeView(1))
+def test_community_navigation_exposes_tools_without_new_slash_child() -> None:
+    assert "Community Tools" in _labels(FeatureCategoryView(1, "community"))
 
     surface = (ROOT / "stoney_verify/commands_ext/public_command_surface_v2.py").read_text(encoding="utf-8")
     contract = (ROOT / "stoney_verify/command_surface_contract.py").read_text(encoding="utf-8")
