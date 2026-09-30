@@ -1850,6 +1850,9 @@ async def _post_profile_builder(
     title: str = "Profile Panel",
     replace_message: bool = False,
 ) -> None:
+    if not await _require_setup_permission(interaction):
+        return
+
     guild = interaction.guild
     channel = interaction.channel
 
