@@ -128,6 +128,18 @@ Status meanings:
 99. **PASS** — stale identity records for resources deleted while the bot was offline are opportunistically CAS-pruned only when an authorized admin opens Search-Safe Naming; there is still no startup/global guild sweep. Fixed-cardinality naming metrics, automatic failure visibility, normalized-name collision warnings, one-to-one preview/live name-length behavior, searchability-vs-mentionability guidance, and removal of the unused channel autocomplete surface are all regression-covered.
 100. **NEEDS HARDENING** — production closure still requires the final exact-head CI suite, post-merge Supabase migration deployment, Discloud startup, mobile /role canary, Search-Safe/Design/Member Setup live canary, and soak evidence.
 
+## Post-merge escaped-defect addendum — 2026-09-29
+
+The live Android Share Router canary after PR #363 merged exposed a consumer-integration gap that the original ledger did not prove.
+
+- Item 45 remains true for the canonical Naming Identity semantic engine: known styled letters decode to the same semantic key.
+- The original audit also proved that `/role` autocomplete consumes that semantic/alias-aware engine.
+- It did **not** prove that every Dank Shield-owned role/channel/category picker consumed the same identity layer.
+- `DankGuildResourceBrowserView.build_resource_candidates()` still performed literal current-name/ID/mention matching, so Share Router could miss a styled destination when the admin searched its plain semantic name.
+- This is a reopened **P1 Search-Safe consumer-integration defect**, not a new unrelated task.
+- The continuation branch `fix/search-safe-resource-browser-integration-20260929` wires the shared resource browser to semantic live-name matching plus the existing bounded previous-name alias index and adds focused regressions.
+- Closure now additionally requires exact-head CI and a fresh Android canary proving a plain query such as `general news` finds the styled destination in Share Router.
+
 ## Merge-blocker conclusion
 
-At the time this ledger was written, the audit has **no known unresolved P0, P1, or P2 implementation blocker**. Item 100 is the remaining exact-head/post-merge production-evidence gate and must not be misrepresented as production-complete. Final merge readiness still depends on the exact-head workflow set completing green.
+The original pre-merge conclusion below has been superseded by the post-merge escaped-defect evidence above. There is now one known reopened P1 consumer-integration blocker until the shared resource-browser continuation passes exact-head validation and the live Android canary. Item 100 remains the production-evidence gate and must not be represented as complete early.
