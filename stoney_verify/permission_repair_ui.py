@@ -13,13 +13,53 @@ from typing import Any, Mapping, Optional, Sequence
 import discord
 
 from . import permission_repair_core as core
-from .ui.resource_browser import DankGuildResourceBrowserView, DankResourceSearchModal
+from .ui.resource_browser import DankGuildResourceBrowserView
 
 
-# Stable compatibility export. The shared browser owns the actual Search button
-# and modal lifecycle; older callers importing TargetSearchModal still resolve
-# to the canonical search modal rather than a second implementation.
-TargetSearchModal = DankResourceSearchModal
+class TargetSearchModal(discord.ui.Modal, title="Search Dank Shield Targets"):
+    """Compatibility/auth boundary delegating matching to the shared browser."""
+
+    query = discord.ui.TextInput(
+        label="Name, previous name, ID, or mention",
+        placeholder="Example: modlog, tickets, 123456789…",
+        required=False,
+        max_length=100,
+    )
+
+    def __init__(
+        self,
+        *,
+        state: core.PermissionRepairState,
+        current_query: str = "",
+    ) -> None:
+        super().__init__()
+        self.state = state
+        if current_query:
+            self.query.default = current_query[:100]
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if int(getattr(interaction.user, "id", 0) or 0) != int(self.state.actor_id):
+            return await _safe_ephemeral(
+                interaction,
+                "❌ This target picker belongs to another admin.",
+            )
+        if not core._actor_can_manage(interaction):
+            return await _safe_ephemeral(
+                interaction,
+                "❌ Server owner or Manage Server, Manage Channels, or Administrator authority is required.",
+            )
+
+        browser = TargetChannelPickerView(
+            self.state,
+            actor=interaction.user,
+        )
+        view = await browser.search(str(self.query.value or ""))
+        await interaction.response.send_message(
+            embed=view.embed(),
+            view=view,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 async def _safe_ephemeral(interaction: discord.Interaction, message: str) -> None:
@@ -116,6 +156,12 @@ class TargetChannelPickerView(DankGuildResourceBrowserView):
                 "No visible repair targets matched. Use 🔎 Search with the current/styled name, "
                 "a saved previous name, Discord ID, or mention."
             ),
+        )
+
+    def search_modal(self) -> discord.ui.Modal:
+        return TargetSearchModal(
+            state=self.state,
+            current_query=self.query,
         )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
