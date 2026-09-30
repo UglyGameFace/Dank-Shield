@@ -796,6 +796,8 @@ async def _open_profile_cosmetics(
     interaction: discord.Interaction,
     guild: discord.Guild,
     member: discord.Member,
+    *,
+    replace_message: bool = False,
 ) -> None:
     roles = await _profile_configured_cosmetic_roles(guild, validate=True)
 
@@ -807,18 +809,35 @@ async def _open_profile_cosmetics(
         )
         return
 
+    embed = _profile_cosmetics_embed(guild, member, roles)
+    view = DankMultiPickerView(
+        author_id=int(member.id),
+        choices=_profile_cosmetic_choices(member, roles),
+        on_pick=_handle_profile_cosmetics_pick,
+        custom_id=f"{PROFILE_PREFIX}cosmetics_select",
+        placeholder="Choose your profile tags/cosmetics…",
+        min_values=0,
+        max_values=len(roles),
+        allow_anyone=False,
+    )
+    if replace_message and interaction.message is not None:
+        if interaction.response.is_done():
+            await interaction.edit_original_response(
+                embed=embed,
+                view=view,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        else:
+            await interaction.response.edit_message(
+                embed=embed,
+                view=view,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        return
+
     await interaction.response.send_message(
-        embed=_profile_cosmetics_embed(guild, member, roles),
-        view=DankMultiPickerView(
-            author_id=int(member.id),
-            choices=_profile_cosmetic_choices(member, roles),
-            on_pick=_handle_profile_cosmetics_pick,
-            custom_id=f"{PROFILE_PREFIX}cosmetics_select",
-            placeholder="Choose your profile tags/cosmetics…",
-            min_values=0,
-            max_values=len(roles),
-            allow_anyone=False,
-        ),
+        embed=embed,
+        view=view,
         ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),
     )
@@ -1825,7 +1844,12 @@ async def _create_profile_roles(interaction: discord.Interaction, guild: discord
     return roles, created, reused
 
 
-async def _post_profile_builder(interaction: discord.Interaction, *, title: str = "Profile Panel") -> None:
+async def _post_profile_builder(
+    interaction: discord.Interaction,
+    *,
+    title: str = "Profile Panel",
+    replace_message: bool = False,
+) -> None:
     guild = interaction.guild
     channel = interaction.channel
 
@@ -1854,14 +1878,30 @@ async def _post_profile_builder(interaction: discord.Interaction, *, title: str 
     if manual:
         embed.add_field(name="Needs manual fix", value="\n".join(f"• {x}" for x in manual), inline=False)
 
+    view = ProfileBuilderView(
+        author_id=int(interaction.user.id),
+        ready=ready,
+        fixable=bool(fixable),
+        title=title,
+    )
+    if replace_message and interaction.message is not None:
+        if interaction.response.is_done():
+            await interaction.edit_original_response(
+                embed=embed,
+                view=view,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        else:
+            await interaction.response.edit_message(
+                embed=embed,
+                view=view,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        return
+
     await interaction.response.send_message(
         embed=embed,
-        view=ProfileBuilderView(
-            author_id=int(interaction.user.id),
-            ready=ready,
-            fixable=bool(fixable),
-            title=title,
-        ),
+        view=view,
         ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),
     )
