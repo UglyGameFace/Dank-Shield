@@ -161,6 +161,8 @@ Items 95–96 were originally validated as copy/semantic requirements, but the m
 
 The continuation branch `fix/member-setup-picker-lifecycle-20260929` moves Member Setup admin resource discovery onto `DankGuildResourceBrowserView`, keeps selection/search/save/back/close on the same manager message, preserves the public member flow’s separate private response contract, adds explicit manager dismissal, and removes raw panel message-ID/debug-style status copy.
 
+The re-audit also found a semantic safety edge: saved Access Role and Eligibility Prerequisite could be the same role. That produces a dependency deadlock because the member would need the Access role before Dank Shield is allowed to grant that Access role. The continuation hides the conflicting role in the picker and revalidates the invariant in both the save path and `gate_health()`.
+
 ## Merge-blocker conclusion
 
 The original pre-merge conclusion below has been superseded by the post-merge escaped-defect evidence above. There is now one known reopened P1 consumer-integration blocker until the shared resource-browser continuation passes exact-head validation and the live Android canary. Item 100 remains the production-evidence gate and must not be represented as complete early.
