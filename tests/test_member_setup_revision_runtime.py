@@ -3,10 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import discord
+
 from stoney_verify.commands_ext.public_member_setup import (
+    MemberSetupAdminView,
+    MemberSetupResourceBrowserView,
     _looks_like_member_setup_panel,
     _message_component_ids,
 )
+from stoney_verify.ui import DankGuildResourceBrowserView
 from stoney_verify.member_setup_service import (
     ACCESS_MODE_STRICT,
     SETUP_SECTIONS,
@@ -226,7 +231,7 @@ def test_live_panel_adoption_requires_bot_author_and_profile_components() -> Non
 
 
 def test_public_panel_refresh_fails_closed_on_ambiguous_legacy_panels() -> None:
-    assert "More than one canonical profile/setup panel exists" in RUNTIME
+    assert "More than one Member Setup & Profile panel exists" in RUNTIME
     assert "Delete the obsolete duplicate before refreshing" in RUNTIME
     assert 'channel.history(limit=100)' in RUNTIME
     assert 'panel_message_id=message.id' in RUNTIME
@@ -247,9 +252,94 @@ def test_member_setup_manager_explains_prerequisite_vs_access_role_chain() -> No
     assert 'label="Member Access Role"' in RUNTIME
     assert 'label="Eligibility Prerequisite"' in RUNTIME
     assert 'label="Clear Eligibility Rule"' in RUNTIME
-    assert "Dank Shield will grant this role automatically" in RUNTIME
-    assert "Member must already have this role; Dank Shield does not grant it." in RUNTIME
+    assert "Dank Shield **grants/removes** this role automatically" in RUNTIME
+    assert "member must **already have** this role" in RUNTIME
+    assert "Dank Shield does **not** grant it" in RUNTIME
     assert "**1. Eligibility:**" in RUNTIME
     assert "**2. Setup:**" in RUNTIME
     assert "**3. Access:**" in RUNTIME
     assert "**4. Visibility:**" in RUNTIME
+
+
+def test_member_setup_admin_resource_choices_use_shared_search_safe_browser() -> None:
+    styled_role = SimpleNamespace(
+        id=20,
+        name="「✅」𝕍𝕖𝕣𝕚𝕗𝕚𝕖𝕕",
+        mention="<@&20>",
+        members=[],
+        managed=False,
+    )
+    text_channel = SimpleNamespace(
+        id=10,
+        name="member-setup",
+        mention="<#10>",
+        type=discord.ChannelType.text,
+        category=None,
+        channels=[],
+    )
+    guild = SimpleNamespace(
+        id=123,
+        roles=[styled_role],
+        channels=[text_channel],
+        get_role=lambda role_id: styled_role if int(role_id) == 20 else None,
+        get_channel=lambda channel_id: text_channel if int(channel_id) == 10 else None,
+    )
+
+    browser = MemberSetupResourceBrowserView(
+        77,
+        guild,
+        mode="access_role",
+    )
+    searched = browser.clone(query="verified")
+
+    assert isinstance(browser, DankGuildResourceBrowserView)
+    assert isinstance(searched, MemberSetupResourceBrowserView)
+    assert [item.resource_id for item in searched.candidates] == [20]
+    labels = {str(getattr(child, "label", "") or "") for child in browser.children}
+    assert {"Back to Member Setup", "Close", "Search"}.issubset(labels)
+    assert not any(isinstance(child, (discord.ui.RoleSelect, discord.ui.ChannelSelect)) for child in browser.children)
+
+
+def test_member_setup_manager_is_single_message_and_dismissible() -> None:
+    manager_region = RUNTIME.split("class MemberSetupAdminView", 1)[1].split(
+        "async def open_member_setup_admin", 1
+    )[0]
+
+    assert "interaction.response.send_message(" not in manager_region
+    assert manager_region.count("_open_member_setup_resource_browser(") == 4
+    assert 'label="Close"' in manager_region
+
+    view = MemberSetupAdminView(77)
+    labels = {str(getattr(child, "label", "") or "") for child in view.children}
+    assert "Close" in labels
+
+
+def test_member_setup_removes_one_off_native_resource_pickers() -> None:
+    assert "DankRoleSelect" not in RUNTIME
+    assert "DankChannelSelect" not in RUNTIME
+    assert "SetupChannelPickerView" not in RUNTIME
+    assert "AccessRolePickerView" not in RUNTIME
+    assert "ProtectedCategoryPickerView" not in RUNTIME
+    assert "class MemberSetupResourceBrowserView(DankGuildResourceBrowserView)" in RUNTIME
+
+
+def test_member_setup_admin_and_member_defers_keep_separate_response_contracts() -> None:
+    member_region = RUNTIME.split("class MemberSetupView", 1)[1].split(
+        "def _message_component_ids", 1
+    )[0]
+    admin_region = RUNTIME.split("class MemberSetupResourceBrowserView", 1)[1].split(
+        "async def _restore_gate_snapshot", 1
+    )[0]
+
+    assert "await _defer(interaction)" in member_region
+    assert "_defer_panel_update(interaction)" not in member_region
+    assert "_defer_panel_update(interaction)" in admin_region
+    assert "await interaction.response.defer(thinking=False)" in RUNTIME
+
+
+def test_member_setup_admin_hides_internal_panel_identity_copy() -> None:
+    assert "Tracked message:" not in RUNTIME
+    assert "Legacy/untracked" not in RUNTIME
+    assert "canonical Member Setup & Profile panel" not in RUNTIME
+    assert "Connected — **Refresh Public Panel**" in RUNTIME
+    assert "Needs refresh — use **Refresh Public Panel**" in RUNTIME
