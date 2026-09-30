@@ -4,7 +4,7 @@
 
 **DANK-SHIELD-NAVIGATION-UX-020 — issue #367 slice 1: establish one canonical, mobile-first navigation architecture without removing or hiding existing features**
 
-Production baseline: `main` = `c46cd5753ca208468837240be11462f7e330b953`, the merge of PR #368.
+Production baseline: `main` = `573612094253dc6910980d09227a065aac061f8e`, the merge of PR #369.
 
 ### Force-switch authority
 
@@ -34,8 +34,6 @@ This follow-up keeps the registry/category architecture and changes only the Hom
 - Find / Directory / Close on the final row;
 - compact Home embed with no repeated category directory;
 - full canonical category names retained inside category pages, search, and documentation.
-
-`feat/unified-navigation-registry-20260930`
 
 ### Slice 1 scope
 
