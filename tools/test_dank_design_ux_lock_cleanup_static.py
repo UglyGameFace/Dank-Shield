@@ -67,8 +67,8 @@ def test_public_guidance_uses_compact_server_design_front_door() -> None:
 
 
 def test_compact_home_preserves_manage_channels_design_authority() -> None:
-    start = SURFACE.index('label="Server Design"')
-    end = SURFACE.index('label="Roles & Profiles"', start)
+    start = SURFACE.index('if key == "server_design":')
+    end = SURFACE.index('if key == "card_assets":', start)
     design_route = SURFACE[start:end]
     assert "public_design_bridge.open_design_studio_from_setup(interaction)" in design_route
     assert "_admin_or_manage" not in design_route
