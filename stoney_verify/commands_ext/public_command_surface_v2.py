@@ -110,12 +110,12 @@ def _home_embed() -> discord.Embed:
 def _help_embed() -> discord.Embed:
     embed = discord.Embed(
         title="❓ Dank Shield Help",
-        description="Use the category pages, Find a Feature, or the complete feature directory. The underlying feature owners still enforce their own permissions.",
+        description="Use the category pages, **Find**, or the complete **Directory**. The underlying feature owners still enforce their own permissions. The underlying feature owners still enforce their own permissions.",
         color=discord.Color.blurple(),
     )
     embed.add_field(
         name="Normal entry",
-        value="`/dank home` — categorized control center\n**🔎 Find a Feature** — search by normal words and aliases\n**📚 All Features** — complete categorized directory",
+        value="`/dank home` — categorized control center\n**🔎 Find** — search by normal words and aliases\n**📚 Directory** — complete categorized feature list",
         inline=False,
     )
     embed.add_field(
@@ -241,7 +241,7 @@ def _directory_embed() -> discord.Embed:
         title="📚 All Dank Shield Features",
         description=(
             "Complete registry of the current public UI. Choose a category below, "
-            "or use **🔎 Find a Feature** from Home when you know the name or purpose."
+            "or use **🔎 Find** from Home when you know the name or purpose."
         ),
         color=discord.Color.blurple(),
     )
@@ -270,7 +270,7 @@ def _search_embed(query: str, results: list[NavigationFeature]) -> discord.Embed
     if not results:
         embed.add_field(
             name="No matches",
-            value="Try a broader phrase, or open **📚 All Features** from Home.",
+            value="Try a broader phrase, or open **📚 Directory** from Home.",
             inline=False,
         )
     else:
