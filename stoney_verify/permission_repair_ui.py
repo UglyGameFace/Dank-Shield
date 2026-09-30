@@ -270,7 +270,7 @@ class _TargetBrowserButton(discord.ui.Button):
 
 
 class TargetPermissionRepairView(core.TargetPermissionRepairView):
-    """Fix Access view with a dedicated Dank Shield target browser."""
+    """Fix Access view backed by the shared Dank Shield resource browser."""
 
     def __init__(self, state: core.PermissionRepairState) -> None:
         super().__init__(state)
@@ -372,13 +372,12 @@ async def open_target_permission_repair(interaction: discord.Interaction) -> Non
 
 # The old implementation lives in the internal core module so mutation/audit
 # behavior remains byte-for-byte unchanged. Bind its UI return points to this
-# dedicated surface so inherited callbacks never fall back to the native picker.
+# shared surface so inherited callbacks never fall back to the native picker.
 core.TargetPermissionRepairView = TargetPermissionRepairView
 core.open_target_permission_repair = open_target_permission_repair
 
 
 __all__ = [
-    "TargetCandidate",
     "TargetChannelPickerView",
     "TargetPermissionRepairView",
     "TargetSearchModal",
