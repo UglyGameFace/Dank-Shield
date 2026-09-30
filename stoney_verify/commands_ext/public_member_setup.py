@@ -278,6 +278,16 @@ def gate_health(guild: discord.Guild, state: Mapping[str, Any]) -> dict[str, Any
     if state.get("prerequisite_role_id") and prerequisite is None:
         blockers.append("The configured prerequisite role no longer exists.")
 
+    if (
+        isinstance(access_role, discord.Role)
+        and isinstance(prerequisite, discord.Role)
+        and int(access_role.id) == int(prerequisite.id)
+    ):
+        blockers.append(
+            "Member Access and Eligibility Prerequisite must be different roles. "
+            "Otherwise members would need the Access role before Dank Shield can grant it."
+        )
+
     protected: list[discord.CategoryChannel] = []
     for raw_id in list(state.get("protected_category_ids") or []):
         channel_obj = guild.get_channel(_safe_int(raw_id, 0))
@@ -883,6 +893,7 @@ class MemberSetupResourceBrowserView(DankGuildResourceBrowserView):
         query: str = "",
         page: int = 0,
         alias_index: Optional[Mapping[str, tuple[str, ...]]] = None,
+        conflicting_role_id: int = 0,
     ) -> None:
         clean_mode = str(mode or "").strip().lower()
         if clean_mode not in self._MODES:
@@ -891,6 +902,7 @@ class MemberSetupResourceBrowserView(DankGuildResourceBrowserView):
         self.owner_id = int(owner_id)
         self.member_setup_guild = guild
         self.mode = clean_mode
+        self.conflicting_role_id = int(conflicting_role_id or 0)
 
         resource_kinds: tuple[str, ...]
         title: str
@@ -915,6 +927,8 @@ class MemberSetupResourceBrowserView(DankGuildResourceBrowserView):
                         return False
                 except Exception:
                     pass
+                if int(getattr(resource, "id", 0) or 0) == self.conflicting_role_id:
+                    return False
                 return not bool(getattr(resource, "managed", False))
         elif clean_mode == "prerequisite_role":
             resource_kinds = ("role",)
@@ -923,6 +937,8 @@ class MemberSetupResourceBrowserView(DankGuildResourceBrowserView):
             empty_message = "No roles matched. Use 🔎 Search with a current/styled name, previous name, ID, or mention."
 
             def predicate(resource: Any) -> bool:
+                if int(getattr(resource, "id", 0) or 0) == self.conflicting_role_id:
+                    return False
                 try:
                     return not bool(resource.is_default())
                 except Exception:
@@ -980,6 +996,7 @@ class MemberSetupResourceBrowserView(DankGuildResourceBrowserView):
             query=self.query if query is None else query,
             page=self.page if page is None else page,
             alias_index=self.alias_index if alias_index is None else alias_index,
+            conflicting_role_id=self.conflicting_role_id,
         )
 
     def embed(self) -> discord.Embed:
@@ -1036,6 +1053,33 @@ class MemberSetupResourceBrowserView(DankGuildResourceBrowserView):
             )
             return
 
+        if self.mode == "access_role":
+            prerequisite_id = _safe_int(state.get("prerequisite_role_id"), 0)
+            if prerequisite_id > 0 and int(resource.id) == prerequisite_id:
+                await _replace(
+                    interaction,
+                    content=(
+                        "❌ Member Access and Eligibility Prerequisite must be different roles. "
+                        "Choose a dedicated Member Access role."
+                    ),
+                    embed=_admin_embed(guild, state),
+                    view=MemberSetupAdminView(self.owner_id),
+                )
+                return
+        elif self.mode == "prerequisite_role":
+            access_role_id = _safe_int(state.get("access_role_id"), 0)
+            if access_role_id > 0 and int(resource.id) == access_role_id:
+                await _replace(
+                    interaction,
+                    content=(
+                        "❌ Eligibility Prerequisite cannot be the Member Access role. "
+                        "Members must already have the prerequisite before Dank Shield grants Member Access."
+                    ),
+                    embed=_admin_embed(guild, state),
+                    view=MemberSetupAdminView(self.owner_id),
+                )
+                return
+
         if self.mode == "setup_channel":
             state = await configure_guild_setup(
                 guild.id,
@@ -1091,10 +1135,18 @@ async def _open_member_setup_resource_browser(
     if guild is None:
         return await _reply(interaction, "Member Setup only works inside a server.", ok=False)
 
+    state = await load_guild_setup_state(guild.id, refresh=True)
+    conflicting_role_id = 0
+    if mode == "access_role":
+        conflicting_role_id = _safe_int(state.get("prerequisite_role_id"), 0)
+    elif mode == "prerequisite_role":
+        conflicting_role_id = _safe_int(state.get("access_role_id"), 0)
+
     browser = MemberSetupResourceBrowserView(
         owner_id,
         guild,
         mode=mode,
+        conflicting_role_id=conflicting_role_id,
     )
     await _replace(
         interaction,
