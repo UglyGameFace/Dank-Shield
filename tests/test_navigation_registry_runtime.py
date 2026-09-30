@@ -32,9 +32,22 @@ def test_navigation_registry_is_complete_and_internally_valid() -> None:
 
 
 def test_every_registered_category_and_feature_is_reachable_from_navigation() -> None:
-    home_labels = _labels(surface.CompactDankHomeView(100))
-    assert {category.home_label for category in registry.CATEGORIES} <= home_labels
+    home = surface.CompactDankHomeView(100)
+    home_labels = _labels(home)
     assert {"Find", "Directory", "Close"} <= home_labels
+
+    section_select = next(
+        item
+        for item in home.children
+        if isinstance(item, discord.ui.Select)
+        and str(getattr(item, "custom_id", "")) == "dank:home:sections:v1"
+    )
+    assert [str(option.label) for option in section_select.options] == [
+        category.label for category in registry.CATEGORIES
+    ]
+    assert [str(option.value) for option in section_select.options] == [
+        category.key for category in registry.CATEGORIES
+    ]
 
     reached: set[str] = set()
     for category in registry.CATEGORIES:
@@ -188,25 +201,29 @@ def test_every_registry_feature_has_an_explicit_dispatch_branch() -> None:
         assert f'if key == "{feature.key}":' in source
 
 
-def test_home_is_mobile_compact_three_column_grid() -> None:
+def test_home_is_mobile_compact_full_name_section_picker() -> None:
     view = surface.CompactDankHomeView(100)
-    rows: dict[int, list[str]] = {}
-    for item in view.children:
-        row = int(getattr(item, "row", 0) or 0)
-        rows.setdefault(row, []).append(str(getattr(item, "label", "") or ""))
+    assert len(view.children) == 4
 
-    assert [len(rows[index]) for index in range(5)] == [3, 3, 3, 2, 3]
-    assert rows[0] == ["Setup", "Access", "Safety"]
-    assert rows[1] == ["Members", "Community", "Tickets"]
-    assert rows[2] == ["Design", "Voice", "Operations"]
-    assert rows[3] == ["My Account", "Utilities"]
-    assert rows[4] == ["Find", "Directory", "Close"]
-
-    assert all(
-        getattr(item, "style", None) == discord.ButtonStyle.primary
+    section_select = next(
+        item
         for item in view.children
-        if str(getattr(item, "custom_id", "") or "").startswith("dank:home:category:")
+        if isinstance(item, discord.ui.Select)
+        and str(getattr(item, "custom_id", "")) == "dank:home:sections:v1"
     )
+    assert int(getattr(section_select, "row", 0) or 0) == 0
+    assert str(section_select.placeholder) == "Choose a section…"
+    assert [str(option.label) for option in section_select.options] == [
+        category.label for category in registry.CATEGORIES
+    ]
+
+    button_labels = [
+        str(getattr(item, "label", "") or "")
+        for item in view.children
+        if isinstance(item, discord.ui.Button)
+    ]
+    assert button_labels == ["Find", "Directory", "Close"]
+    assert all(int(getattr(item, "row", 0) or 0) == 1 for item in view.children if isinstance(item, discord.ui.Button))
 
 
 def test_home_embed_does_not_repeat_the_full_category_directory() -> None:
