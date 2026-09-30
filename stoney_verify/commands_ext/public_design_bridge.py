@@ -12,7 +12,7 @@ _PUBLIC_DESIGN_RECOVERY = (
 
 
 async def open_design_studio_from_setup(interaction: discord.Interaction) -> None:
-    """Open the same Studio hub used by /dank home → Server Design without duplicating UI."""
+    """Open the same Studio hub used by /dank home → Design & Branding → Server Design without duplicating UI."""
 
     try:
         from stoney_verify.commands_ext import public_design_studio_v2 as design
@@ -40,7 +40,7 @@ async def open_design_studio_from_setup(interaction: discord.Interaction) -> Non
         embed.add_field(
             name="Opened from Setup",
             value=(
-                "This is the exact same Dank Design Studio opened from `/dank home` → **Server Design**. "
+                "This is the exact same Dank Design Studio opened from `/dank home` → **Design & Branding** → **Server Design**. "
                 "Setup no longer maintains a competing design screen."
             ),
             inline=False,
@@ -61,7 +61,7 @@ async def open_design_studio_from_setup(interaction: discord.Interaction) -> Non
             description=(
                 f"Error: `{type(exc).__name__}: {str(exc)[:220]}`\n\n"
                 "Nothing was changed and your Setup page was left in place. "
-                "Reopen `/dank home`, then choose **Server Design** after this error is resolved."
+                "Reopen `/dank home`, choose **Design & Branding**, then **Server Design** after this error is resolved."
             ),
             color=discord.Color.orange(),
         )
