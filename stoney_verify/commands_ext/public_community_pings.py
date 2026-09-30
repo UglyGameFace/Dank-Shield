@@ -24,6 +24,7 @@ from stoney_verify.community_pings_service import (
     parse_community_pings,
     toke_role_ids,
     upsert_group,
+    without_group,
     validate_config,
     validate_member_selection,
     with_option,
@@ -890,6 +891,36 @@ async def _open_option_editor(interaction: discord.Interaction, owner_id: int, o
     )
 
 
+class DeleteGroupConfirmView(_OwnedView):
+    def __init__(self, owner_id: int, group_key: str, baseline: Mapping[str, Any]) -> None:
+        super().__init__(owner_id)
+        self.group_key = str(group_key)
+        self.baseline = dict(baseline)
+
+    @discord.ui.button(label="Delete Group", emoji="🗑️", style=discord.ButtonStyle.danger, row=0)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _staff_authorized(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await _reply(interaction, "This only works inside a server.")
+        _raw_now, model = await _load(guild)
+        try:
+            updated = without_group(model, self.group_key)
+        except ValueError as exc:
+            return await _reply(interaction, str(exc))
+        saved = await _save(interaction, expected_config=self.baseline, updated=updated)
+        if saved is None:
+            return
+        await _open_manager_message(interaction, owner_id=self.owner_id)
+
+    @discord.ui.button(label="Cancel", emoji="↩️", style=discord.ButtonStyle.secondary, row=0)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _open_manager_message(interaction, owner_id=self.owner_id)
+
+
 class CommunityPingsManagerView(_OwnedView):
     @discord.ui.button(label="Add Option", emoji="➕", style=discord.ButtonStyle.primary, row=0)
     async def add_option(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1043,6 +1074,71 @@ class CommunityPingsManagerView(_OwnedView):
                 on_pick=picked,
                 custom_id="dank:community_pings:edit_group",
                 placeholder="Choose a group…",
+                on_home=back,
+                home_label="Back to manager",
+            ),
+        )
+
+    @discord.ui.button(label="Delete Group", emoji="🗑️", style=discord.ButtonStyle.danger, row=0)
+    async def delete_group(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _staff_authorized(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await _reply(interaction, "This only works inside a server.")
+        raw, model = await _load(guild)
+        choices = [
+            DankChoice(
+                label=group.label,
+                value=group.key,
+                description="Empty group • safe to delete",
+                emoji=group.emoji,
+            )
+            for group in model.groups
+            if not any(option.group_key == group.key for option in model.options)
+        ]
+        if not choices:
+            return await _reply(
+                interaction,
+                "No empty groups are available to delete. Move or delete a group's options first.",
+                ok=True,
+            )
+
+        async def picked(pick_interaction: discord.Interaction, value: str) -> None:
+            selected = next((item for item in model.groups if item.key == value), None)
+            if selected is None:
+                return await _reply(pick_interaction, "That group changed. Refresh.")
+            embed = discord.Embed(
+                title="🗑️ Delete Community & Pings Group?",
+                description=(
+                    f"Delete **{selected.label}** from Community & Pings? "
+                    "Only empty groups can be deleted. Discord roles are never deleted here."
+                ),
+                color=discord.Color.red(),
+            )
+            await _replace(
+                pick_interaction,
+                embed=embed,
+                view=DeleteGroupConfirmView(self.owner_id, selected.key, raw),
+            )
+
+        async def back(back_interaction: discord.Interaction) -> None:
+            await _open_manager_message(back_interaction, owner_id=self.owner_id)
+
+        await _replace(
+            interaction,
+            embed=discord.Embed(
+                title="🗑️ Delete Community & Pings Group",
+                description="Choose an empty group. Groups that still contain options are intentionally hidden.",
+                color=discord.Color.red(),
+            ),
+            view=DankPickerView(
+                author_id=self.owner_id,
+                choices=choices,
+                on_pick=picked,
+                custom_id="dank:community_pings:delete_group",
+                placeholder="Choose an empty group…",
                 on_home=back,
                 home_label="Back to manager",
             ),
@@ -1298,6 +1394,7 @@ __all__ = [
     "CommunityOptionEditorView",
     "CommunityOptionModal",
     "CommunityPingsManagerView",
+    "DeleteGroupConfirmView",
     "open_community_ping_setup",
     "open_member_community_pings",
 ]
