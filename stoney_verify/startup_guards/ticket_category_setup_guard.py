@@ -338,15 +338,16 @@ class CategorySetupManagerView(discord.ui.View):
             self.add_item(all_builtins)
 
             custom_rows = _custom_rows_from_state(state)
-            if self.context == _MANAGER_CONTEXT_SETUP and custom_rows:
-                self.add_item(
-                    solid.CategorySelect(
-                        custom_rows,
-                        action="edit",
-                        placeholder="✏️ Edit a custom ticket choice",
-                        row=2,
+            if custom_rows:
+                if self.context == _MANAGER_CONTEXT_SETUP:
+                    self.add_item(
+                        solid.CategorySelect(
+                            custom_rows,
+                            action="edit",
+                            placeholder="✏️ Edit a custom ticket choice",
+                            row=2,
+                        )
                     )
-                )
 
                 custom_only = discord.ui.Button(
                     label="Custom Only",
