@@ -9,6 +9,7 @@ import discord
 
 from stoney_verify.commands_ext import public_setup_recommend as recommend
 from stoney_verify.commands_ext import public_setup_solid as solid
+from stoney_verify.commands_ext import public_ticket_command_center as ticket_center
 from stoney_verify.commands_ext import public_ticket_panel_clean as clean_panel
 from stoney_verify.setup_ui import public_setup_compact as compact_setup
 from stoney_verify.startup_guards import _STARTUP_GUARDS
@@ -761,3 +762,89 @@ def test_erased_selection_runtime_recovery_keeps_review_required(monkeypatch: py
     assert {categories.canonical_category_key(row) for row in state.active_rows if row.get("managed_by_dank")} == {
         "report", "staff-complaint", "cod-services", "partnership", "support"
     }
+
+
+def _component_labels(view: discord.ui.View) -> set[str]:
+    return {
+        str(getattr(child, "label", "") or "")
+        for child in view.children
+        if str(getattr(child, "label", "") or "")
+    }
+
+
+def test_ticket_category_manager_exposes_builtin_selection_directly() -> None:
+    view = ticket_center.TicketCategoryToolsView(123)
+    labels = _component_labels(view)
+
+    assert "Choose Built-ins" in labels
+    assert "View Inventory" in labels
+    assert "Back" in labels
+
+    embed = view.embed()
+    description = str(embed.description or "")
+    assert "Choose Built-ins" in description
+    assert "does not enable every category" in description
+
+
+def test_ticket_context_reuses_canonical_selector_with_ticket_navigation() -> None:
+    state = categories.CategorySetupState(
+        rows=categories.catalog_category_rows(),
+        active_rows=[],
+        selected_keys=("support",),
+        required=False,
+        reason="",
+        version=categories.CATEGORY_SETUP_VERSION,
+    )
+    view = setup_guard.CategorySetupManagerView(
+        state=state,
+        context="tickets",
+    )
+    labels = _component_labels(view)
+
+    assert "Community Core" in labels
+    assert "Service + Gaming" in labels
+    assert f"All {len(setup_guard._ALL_MANAGED_PRESET_KEYS)} Built-ins" in labels
+    assert "Ticket Categories" in labels
+    assert "Setup Home" not in labels
+    assert "Add Custom Ticket Choice" not in labels
+    assert "Custom Only" not in labels
+
+    selectors = [
+        child
+        for child in view.children
+        if isinstance(child, setup_guard.ManagedCategorySelection)
+    ]
+    assert len(selectors) == 1
+    assert selectors[0].context == "tickets"
+    defaults = {option.value for option in selectors[0].options if option.default}
+    assert defaults == {"support"}
+
+
+def test_ticket_context_uses_existing_ticket_staff_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from stoney_verify.commands_ext import common
+
+    interaction = SimpleNamespace()
+    monkeypatch.setattr(common, "_staff_check", lambda _interaction: True)
+
+    assert asyncio.run(
+        setup_guard._manager_allowed(
+            interaction,
+            context="tickets",
+        )
+    ) is True
+
+
+def test_ticket_center_routes_builtin_button_to_shared_selection_owner() -> None:
+    source = ticket_center.__file__
+    assert source is not None
+    text = open(source, "r", encoding="utf-8").read()
+
+    start = text.index("class TicketCategoryToolsView")
+    end = text.index("class CategoryCreateModal", start)
+    block = text[start:end]
+
+    assert 'label="Choose Built-ins"' in block
+    assert "ticket_category_setup_guard.open_category_setup_manager" in block
+    assert 'context="tickets"' in block
