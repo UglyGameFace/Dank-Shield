@@ -2,73 +2,87 @@
 
 ## Active task / desired outcome
 
-**DANK-SHIELD-NAVIGATION-UX-020 — issue #367 slice 1: establish one canonical, mobile-first navigation architecture without removing or hiding existing features**
+**DANK-SHIELD-COMMUNITY-PINGS-021 — issue #367 slice 2: replace the fixed Stoner/Sesh self-role model with a generic, revisioned per-guild Community & Pings Builder**
 
-Production baseline: `main` = `573612094253dc6910980d09227a065aac061f8e`, the merge of PR #369.
+Production baseline: `main` = `de411259220db39690f959510d3004679ced845e`, the merge of PR #370.
 
 ### Force-switch authority
 
-The owner explicitly switched from the completed Share Router destination UX task to issue #367:
+The owner explicitly switched to issue #367:
 `FORCE SWITCH: #367 unified navigation + verification/community/actions/member lifecycle`.
 
-Issue #367 is an umbrella epic and must still be delivered in separate validated slices. This branch implements **slice 1 only: Unified navigation + feature registry/page contract**.
+Issue #367 remains one umbrella epic delivered in separate validated slices. Navigation slice 1 is complete. This branch implements **slice 2 only: Generic Community & Pings Builder**.
+
+### Prior slice completion
+
+Navigation slice 1:
+- PR #369 merged as `573612094253dc6910980d09227a065aac061f8e`;
+- PR #370 mobile Home-layout follow-up merged as `de411259220db39690f959510d3004679ced845e`;
+- exact-head and canonical post-merge CI passed;
+- Supabase deployment #165 passed;
+- Discloud reported success.
 
 ### Root cause
 
-The final public `/dank home` owner was canonical but feature-flat. It rendered nearly every major product area directly as a Home button, while deeper configuration such as **Member Setup Manager** and **Community & Pings Manager** remained buried under implementation-history menus. Existing tests reinforced that layout by requiring the old feature labels directly on `CompactDankHomeView`.
+The existing Community & Pings UI was a fixed product model embedded in `public_toke.py`:
+- one hardcoded `stoner_role_id`;
+- one hardcoded `sesh_ping_role_id`;
+- one `toke_channel_id`;
+- member selection and `/role` self-service logic special-cased those two roles.
 
-The result was technically reachable functionality that was practically hard to discover on Discord mobile.
+That works for The 420 Lobby but is not a suitable public-bot configuration model for unrelated guilds.
 
 ### Current branch
 
-`fix/navigation-home-mobile-layout-20260930`
+`feat/community-pings-builder-20260930`
 
-### Production follow-up
-
-PR #369 merged as `573612094253dc6910980d09227a065aac061f8e`. Live Android validation showed the category architecture works but the Home presentation is too tall: full category names force mostly one-button-wide rows and the embed duplicates the same directory above the buttons.
-
-This follow-up keeps the registry/category architecture and changes only the Home presentation contract:
-- preserve every canonical category name on Home;
-- replace the tall category-button wall with one full-name section selector;
-- use a compact dashboard header instead of repeating the entire category directory;
-- place Find Feature / Directory / Help / Close together as one utility row;
-- keep category pages, search, aliases, routes, permissions, and business logic unchanged;
-- regression-test that Home never substitutes shortened category nicknames for the canonical names.
-
-### Slice 1 scope
+### Slice 2 scope
 
 Included:
-- a central navigation registry with category, label, description, aliases, and manager/member metadata;
-- one canonical category for every feature destination registered in this slice;
-- categorized `/dank home` instead of the flat feature wall;
-- **🔎 Find a Feature** with normal-language aliases;
-- **📚 All Features** complete categorized directory;
-- direct discoverability for previously buried **Member Setup Manager**, **Community & Pings Manager**, **Share Router**, **My Member Setup**, **Profile Tags & Cosmetics**, and **My Community & Pings**;
-- manager-only features remain visible and let their canonical owner explain missing permissions;
-- category pages follow a common breadcrumb/purpose/features/permissions + Back/Home/Refresh/Close contract;
-- registry/route import guard so a registered feature cannot silently lose its route;
-- CI reachability tests so categories/features cannot become orphaned;
-- opt-in in-place entry modes for promoted private navigation shortcuts while existing public/persistent panel entrypoints preserve their private-response defaults.
+- bounded per-guild `community_pings_v2` JSON model using the existing atomic guild-config infrastructure;
+- revision number incremented by meaningful configuration changes;
+- up to 25 member-selectable options and 10 groups;
+- Community vs Notification option semantics;
+- owner-defined label, emoji, description, group, enabled state, and ordering;
+- prerequisite role;
+- mutual-exclusion key;
+- group-level maximum selections;
+- member-removable policy;
+- Search-Safe role discovery for adding options and prerequisites;
+- generic manager and member-facing **My Community & Pings** UI;
+- current Stoner/Sesh configuration loads as a compatibility preset when v2 does not exist;
+- first Builder save converts that legacy preset into v2 without deleting Discord roles;
+- `/toke` starter/notification behavior becomes option capabilities instead of product-wide hardcoded role identity;
+- once v2 exists it is authoritative; stale legacy role IDs cannot silently reactivate removed capabilities;
+- preferred `/toke` channel remains a separate delivery setting but is managed from the generic manager;
+- `/role` self-service uses the same fresh generic selection rules;
+- generic Community options appear under the profile's Community identity while notification-only roles do not;
+- role deletion/dependency discovery continues to see mapped and prerequisite role IDs;
+- CAS persistence rejects stale concurrent admin saves instead of last-write-wins clobbering.
 
 Out of scope for this slice:
-- Generic Community & Pings data model;
-- Configurable Verification Framework;
-- Action & Reminder Center;
-- Member Activity & Reverification Lifecycle;
-- rewriting every deep legacy feature screen in one PR;
-- changing business logic, authorization, persistence, or permission ownership of existing features.
+- configurable Verification Framework;
+- Action & Reminder Center delivery engine;
+- Activity & Reverification lifecycle;
+- member acknowledgement/reminder delivery for Community & Pings revisions;
+- changing `/toke` cooldown/cheers/voice behavior;
+- quiet-server notice / active-VC behavior.
 
 ### Definition of Done
 
-- every previous `/dank home` destination remains reachable through the registry/category model;
-- the newly promoted buried destinations are directly discoverable;
-- Find a Feature resolves common aliases to the correct canonical owner;
-- All Features lists every registry destination;
-- no registry feature lacks a route or category;
-- Home/category/directory views stay within Discord component limits;
-- promoted private shortcuts do not create avoidable duplicate response panels;
-- public/persistent panel behavior is not changed by the new in-place navigation option;
-- focused tests, compile, full exact-head CI, final diff review, mergeability, merge/deploy evidence, and an Android navigation canary pass before closure.
+- existing legacy Stoner/Sesh guilds retain current member and `/toke` behavior before conversion;
+- generic configuration can add/edit/remove/reorder safe options and edit group rules;
+- unsafe/access/staff/verification roles cannot be offered for self-selection;
+- prerequisites, exclusivity, group caps, enabled state, and non-removable rules re-check fresh config at execution time;
+- generic mappings are available through member UI and `/role`;
+- v2 revision increments on changes and stale concurrent saves fail closed;
+- all UI remains within Discord component/select limits;
+- legacy hardcoded member picker is no longer a competing public owner;
+- focused tests, full exact-head CI, final diff review, mergeability, canonical post-merge CI/deploy, and Android canary pass before closure.
+
+## Prior completed task record: DANK-SHIELD-NAVIGATION-UX-020
+
+PR #369 built the registry-backed navigation foundation. PR #370 completed the mobile Home presentation follow-up. Production baseline after the completed slice is `de411259220db39690f959510d3004679ced845e`.
 
 ## Prior completed task record: SHARE-ROUTER-DESTINATION-UX-019
 
