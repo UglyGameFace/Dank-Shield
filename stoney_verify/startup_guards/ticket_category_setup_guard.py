@@ -164,6 +164,8 @@ async def _manager_allowed(
 async def _save_selection(
     interaction: discord.Interaction,
     selected_keys: Iterable[str],
+    *,
+    context: str = _MANAGER_CONTEXT_SETUP,
 ) -> Optional[service.CategorySetupState]:
     from ..commands_ext import public_setup_solid as solid
 
@@ -199,10 +201,18 @@ async def _save_selection(
             ),
             color=discord.Color.red(),
         )
+        if context == _MANAGER_CONTEXT_TICKETS:
+            from ..commands_ext import public_ticket_command_center as ticket_center
+
+            fallback_view: discord.ui.View = ticket_center.TicketCategoryToolsView(
+                int(getattr(interaction.user, "id", 0) or 0)
+            )
+        else:
+            fallback_view = solid.SetupNavView()
         await solid._edit_or_followup(
             interaction,
             embed=embed,
-            view=solid.SetupNavView(),
+            view=fallback_view,
         )
         return None
 
@@ -248,7 +258,11 @@ class ManagedCategorySelection(discord.ui.Select):
 
         if not await _manager_allowed(interaction, context=self.context):
             return
-        state = await _save_selection(interaction, self.values)
+        state = await _save_selection(
+            interaction,
+            self.values,
+            context=self.context,
+        )
         if state is None or interaction.guild is None:
             return
 
@@ -408,7 +422,11 @@ class CategorySetupManagerView(discord.ui.View):
 
         if not await self._allowed(interaction):
             return
-        state = await _save_selection(interaction, tuple(keys))
+        state = await _save_selection(
+            interaction,
+            tuple(keys),
+            context=self.context,
+        )
         if state is None or interaction.guild is None:
             return
         embed, view = await _build_category_manager_payload(
@@ -458,7 +476,11 @@ class CategorySetupManagerView(discord.ui.View):
 
         if not await self._allowed(interaction):
             return
-        state = await _save_selection(interaction, ())
+        state = await _save_selection(
+            interaction,
+            (),
+            context=self.context,
+        )
         if state is None or interaction.guild is None:
             return
         embed, view = await _build_category_manager_payload(
