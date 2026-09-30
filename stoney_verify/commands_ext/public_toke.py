@@ -415,13 +415,20 @@ class CommunityPingSetupView(discord.ui.View):
         )
 
 
-async def open_community_ping_setup(interaction: discord.Interaction) -> None:
+async def open_community_ping_setup(
+    interaction: discord.Interaction,
+    *,
+    replace_message: bool = False,
+) -> None:
     if not await _staff_authorized(interaction):
         return
     guild = interaction.guild
     if guild is None:
         return await _reply(interaction, "This only works inside a server.")
-    await _defer_private(interaction)
+    if replace_message:
+        await _defer_update(interaction)
+    else:
+        await _defer_private(interaction)
     await interaction.edit_original_response(
         embed=await _setup_embed(guild),
         view=CommunityPingSetupView(int(interaction.user.id)),
@@ -586,13 +593,20 @@ async def _handle_member_pick(interaction: discord.Interaction, values: list[str
         changes.append("Removed: " + ", ".join(role.mention for role in to_remove))
     await _reply(interaction, "\n".join(changes) if changes else "No community-role changes needed.", ok=True)
 
-async def open_member_community_pings(interaction: discord.Interaction) -> None:
+async def open_member_community_pings(
+    interaction: discord.Interaction,
+    *,
+    replace_message: bool = False,
+) -> None:
     guild = interaction.guild
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
     if guild is None or member is None:
         return await _reply(interaction, "This only works inside a server.")
 
-    await _defer_private(interaction)
+    if replace_message:
+        await _defer_update(interaction)
+    else:
+        await _defer_private(interaction)
     stoner, ping, _cfg = await _member_roles(guild)
     choices = _member_choices(member, stoner, ping)
     if not choices:
