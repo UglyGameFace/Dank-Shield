@@ -33,8 +33,8 @@ def test_navigation_registry_is_complete_and_internally_valid() -> None:
 
 def test_every_registered_category_and_feature_is_reachable_from_navigation() -> None:
     home_labels = _labels(surface.CompactDankHomeView(100))
-    assert {category.label for category in registry.CATEGORIES} <= home_labels
-    assert {"Find a Feature", "All Features", "Close"} <= home_labels
+    assert {category.home_label for category in registry.CATEGORIES} <= home_labels
+    assert {"Find", "Directory", "Close"} <= home_labels
 
     reached: set[str] = set()
     for category in registry.CATEGORIES:
@@ -186,3 +186,35 @@ def test_every_registry_feature_has_an_explicit_dispatch_branch() -> None:
     source = Path(surface.__file__).read_text(encoding="utf-8")
     for feature in registry.FEATURES:
         assert f'if key == "{feature.key}":' in source
+
+
+def test_home_is_mobile_compact_three_column_grid() -> None:
+    view = surface.CompactDankHomeView(100)
+    rows: dict[int, list[str]] = {}
+    for item in view.children:
+        row = int(getattr(item, "row", 0) or 0)
+        rows.setdefault(row, []).append(str(getattr(item, "label", "") or ""))
+
+    assert [len(rows[index]) for index in range(5)] == [3, 3, 3, 2, 3]
+    assert rows[0] == ["Setup", "Access", "Safety"]
+    assert rows[1] == ["Members", "Community", "Tickets"]
+    assert rows[2] == ["Design", "Voice", "Operations"]
+    assert rows[3] == ["My Account", "Utilities"]
+    assert rows[4] == ["Find", "Directory", "Close"]
+
+    assert all(
+        getattr(item, "style", None) == discord.ButtonStyle.primary
+        for item in view.children
+        if str(getattr(item, "custom_id", "") or "").startswith("dank:home:category:")
+    )
+
+
+def test_home_embed_does_not_repeat_the_full_category_directory() -> None:
+    embed = surface._home_embed()
+    assert str(embed.title) == "🛡️ Dank Shield"
+    assert len(embed.fields) == 0
+    assert "Control Center" in str(embed.description)
+    assert f"{len(registry.FEATURES)} destinations" in str(embed.description)
+    assert f"{len(registry.CATEGORIES)} sections" in str(embed.description)
+    assert "Setup & Server Settings" not in str(embed.description)
+    assert "Members, Roles & Profiles" not in str(embed.description)
