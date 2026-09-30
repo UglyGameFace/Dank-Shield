@@ -663,10 +663,15 @@ class FeatureCategoryView(_OwnedView):
     def __init__(self, owner_id: int, category_key: str) -> None:
         super().__init__(owner_id)
         self.category_key = str(category_key)
-        for index, feature in enumerate(features_for_category(self.category_key)):
+        features = features_for_category(self.category_key)
+        for index, feature in enumerate(features):
             self.add_item(_FeatureButton(feature, row=index // 5))
 
-        nav_row = 1
+        nav_row = max(1, (len(features) + 4) // 5)
+        if nav_row > 4:
+            raise RuntimeError(
+                f"Dank Shield category {self.category_key!r} exceeds the mobile component layout budget"
+            )
         self.add_item(_CategoryNavButton(category_key=self.category_key, action="back", row=nav_row))
         self.add_item(_CategoryNavButton(category_key=self.category_key, action="home", row=nav_row))
         self.add_item(_CategoryNavButton(category_key=self.category_key, action="refresh", row=nav_row))
