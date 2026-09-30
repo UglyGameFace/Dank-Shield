@@ -12,16 +12,22 @@ from typing import Any, Optional
 import discord
 from discord import app_commands
 
+from stoney_verify.community_pings_service import (
+    COMMUNITY_PINGS_KEY,
+    LEGACY_SESH_PING_ROLE_KEY,
+    LEGACY_STONER_ROLE_KEY,
+    LEGACY_TOKE_CHANNEL_KEY,
+    parse_community_pings,
+    toke_role_ids,
+)
 from stoney_verify.ui.picker import (
     DankChannelSelect,
-    DankChoice,
-    DankMultiPickerView,
     DankRoleSelect,
 )
 
-STONER_ROLE_KEY = "stoner_role_id"
-SESH_PING_ROLE_KEY = "sesh_ping_role_id"
-TOKE_CHANNEL_KEY = "toke_channel_id"
+STONER_ROLE_KEY = LEGACY_STONER_ROLE_KEY
+SESH_PING_ROLE_KEY = LEGACY_SESH_PING_ROLE_KEY
+TOKE_CHANNEL_KEY = LEGACY_TOKE_CHANNEL_KEY
 
 TOKE_USER_COOLDOWN_SECONDS = 15 * 60
 TOKE_GUILD_COOLDOWN_SECONDS = 5 * 60
@@ -415,7 +421,7 @@ class CommunityPingSetupView(discord.ui.View):
         )
 
 
-async def open_community_ping_setup(
+async def open_toke_preset_setup(
     interaction: discord.Interaction,
     *,
     replace_message: bool = False,
@@ -436,208 +442,24 @@ async def open_community_ping_setup(
     )
 
 
-async def _member_roles(
-    guild: discord.Guild,
-) -> tuple[Optional[discord.Role], Optional[discord.Role], Mapping[str, Any]]:
-    cfg = await _config(guild)
-    stoner_id, ping_id, _channel_id = _configured_ids(cfg)
-    stoner = guild.get_role(stoner_id) if stoner_id else None
-    ping = guild.get_role(ping_id) if ping_id else None
+async def open_community_ping_setup(
+    interaction: discord.Interaction,
+    *,
+    replace_message: bool = False,
+) -> None:
+    from .public_community_pings import open_community_ping_setup as open_generic_manager
 
-    if isinstance(stoner, discord.Role) and _profile_safe_blocker(guild, stoner, cfg):
-        stoner = None
-    if isinstance(ping, discord.Role) and _profile_safe_blocker(guild, ping, cfg):
-        ping = None
-    return stoner, ping, cfg
+    await open_generic_manager(interaction, replace_message=replace_message)
 
-
-def _member_choices(
-    member: discord.Member,
-    stoner: Optional[discord.Role],
-    ping: Optional[discord.Role],
-) -> list[DankChoice]:
-    if isinstance(stoner, discord.Role) and isinstance(ping, discord.Role) and stoner.id == ping.id:
-        return [
-            DankChoice(
-                label=str(stoner.name)[:100],
-                value=str(stoner.id),
-                description="Stoner identity + receives /toke pings",
-                emoji="🌿",
-                default=stoner in member.roles,
-            )
-        ]
-
-    choices: list[DankChoice] = []
-    if isinstance(stoner, discord.Role):
-        choices.append(
-            DankChoice(
-                label=str(stoner.name)[:100],
-                value=str(stoner.id),
-                description="Community role; required to start /toke",
-                emoji="🌿",
-                default=stoner in member.roles,
-            )
-        )
-    if isinstance(ping, discord.Role):
-        choices.append(
-            DankChoice(
-                label=str(ping.name)[:100],
-                value=str(ping.id),
-                description="Opt in to smoke-session /toke notifications",
-                emoji="💨",
-                default=ping in member.roles,
-            )
-        )
-    return choices
-
-
-def _member_embed(
-    member: discord.Member,
-    stoner: Optional[discord.Role],
-    ping: Optional[discord.Role],
-) -> discord.Embed:
-    embed = discord.Embed(
-        title="🌿 Community & Pings",
-        description=(
-            "Choose your community and notification roles. These are optional self-roles and never grant "
-            "staff, moderation, verification, ticket, or protected server access."
-        ),
-        color=discord.Color.green(),
-        timestamp=discord.utils.utcnow(),
-    )
-    if isinstance(stoner, discord.Role):
-        embed.add_field(
-            name="Stoner",
-            value=(
-                f"{stoner.mention} — {'Selected' if stoner in member.roles else 'Not selected'}\n"
-                "Members with this role may use /toke."
-            ),
-            inline=False,
-        )
-    if isinstance(ping, discord.Role):
-        same = isinstance(stoner, discord.Role) and stoner.id == ping.id
-        embed.add_field(
-            name="Sesh Pings",
-            value=(
-                f"{ping.mention} — {'Selected' if ping in member.roles else 'Not selected'}\n"
-                + ("This server uses the same role for Stoner + notifications." if same else "Opt in to /toke role notifications.")
-            ),
-            inline=False,
-        )
-    embed.set_footer(text="You can change these choices any time from your Dank Shield profile.")
-    return embed
-
-
-async def _handle_member_pick(interaction: discord.Interaction, values: list[str]) -> None:
-    guild = interaction.guild
-    member = interaction.user if isinstance(interaction.user, discord.Member) else None
-    if guild is None or member is None:
-        return await _reply(interaction, "This only works inside a server.")
-
-    await _defer_update(interaction)
-    async with _community_role_lock(int(guild.id), int(member.id)):
-        stoner, ping, _cfg = await _member_roles(guild)
-        available = {
-            int(role.id): role
-            for role in (stoner, ping)
-            if isinstance(role, discord.Role)
-        }
-        selected = {
-            int(value)
-            for value in values
-            if str(value).isdigit() and int(value) in available
-        }
-
-        stoner_id = int(stoner.id) if isinstance(stoner, discord.Role) else 0
-        ping_id = int(ping.id) if isinstance(ping, discord.Role) else 0
-        if stoner_id and ping_id and stoner_id != ping_id and ping_id in selected and stoner_id not in selected:
-            return await _reply(interaction, "Select the Stoner role too if you want Sesh Pings.")
-
-        to_add = [
-            role
-            for role_id, role in available.items()
-            if role_id in selected and role not in member.roles
-        ]
-        to_remove = [
-            role
-            for role_id, role in available.items()
-            if role_id not in selected and role in member.roles
-        ]
-
-        if stoner_id and stoner_id not in selected and ping_id and ping_id != stoner_id:
-            ping_role = available.get(ping_id)
-            if isinstance(ping_role, discord.Role) and ping_role in member.roles and ping_role not in to_remove:
-                to_remove.append(ping_role)
-
-        try:
-            if to_add:
-                await member.add_roles(*to_add, reason="Dank Shield Community & Pings self-selection")
-            if to_remove:
-                await member.remove_roles(*to_remove, reason="Dank Shield Community & Pings self-selection")
-        except discord.Forbidden:
-            return await _reply(interaction, "Dank Shield cannot manage one of those roles. Staff should check role hierarchy.")
-        except discord.HTTPException as exc:
-            return await _reply(interaction, f"Discord could not update those roles: {type(exc).__name__}.")
-
-    if to_add or to_remove:
-        try:
-            from .public_profile_cards import invalidate_member_live_cards
-            await invalidate_member_live_cards(interaction.client, guild, member.id)
-        except Exception:
-            pass
-
-    changes: list[str] = []
-    if to_add:
-        changes.append("Added: " + ", ".join(role.mention for role in to_add))
-    if to_remove:
-        changes.append("Removed: " + ", ".join(role.mention for role in to_remove))
-    await _reply(interaction, "\n".join(changes) if changes else "No community-role changes needed.", ok=True)
 
 async def open_member_community_pings(
     interaction: discord.Interaction,
     *,
     replace_message: bool = False,
 ) -> None:
-    guild = interaction.guild
-    member = interaction.user if isinstance(interaction.user, discord.Member) else None
-    if guild is None or member is None:
-        return await _reply(interaction, "This only works inside a server.")
+    from .public_community_pings import open_member_community_pings as open_generic_member
 
-    if replace_message:
-        await _defer_update(interaction)
-    else:
-        await _defer_private(interaction)
-    stoner, ping, _cfg = await _member_roles(guild)
-    choices = _member_choices(member, stoner, ping)
-    if not choices:
-        message = "ℹ️ This server has not configured its Community & Pings self-roles yet."
-        if replace_message:
-            await interaction.edit_original_response(
-                content=message,
-                embed=None,
-                view=None,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            return
-        return await _reply(
-            interaction,
-            "This server has not configured its Stoner / Sesh Pings self-roles yet.",
-        )
-
-    await interaction.edit_original_response(
-        embed=_member_embed(member, stoner, ping),
-        view=DankMultiPickerView(
-            author_id=int(member.id),
-            choices=choices,
-            on_pick=_handle_member_pick,
-            custom_id="dank:toke:member_roles:v1",
-            placeholder="Choose your community / sesh roles…",
-            min_values=0,
-            max_values=len(choices),
-            allow_anyone=False,
-        ),
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
+    await open_generic_member(interaction, replace_message=replace_message)
 
 
 class TokeCheersView(discord.ui.View):
@@ -686,11 +508,13 @@ async def open_toke_command(
 
     await _defer_private(interaction)
     cfg = await _config(guild)
-    stoner_id, ping_id, channel_id = _configured_ids(cfg)
+    community_model = parse_community_pings(cfg)
+    stoner_id, ping_id = toke_role_ids(community_model, cfg)
+    _legacy_stoner_id, _legacy_ping_id, channel_id = _configured_ids(cfg)
     if stoner_id <= 0 or ping_id <= 0:
         return await _reply(
             interaction,
-            "This server has not finished Community & Pings setup in Profile Builder.",
+            "This server has not configured the /toke starter and notification roles in Community & Pings.",
         )
 
     stoner_role = guild.get_role(stoner_id)
@@ -698,7 +522,7 @@ async def open_toke_command(
     if not isinstance(stoner_role, discord.Role) or not isinstance(ping_role, discord.Role):
         return await _reply(
             interaction,
-            "The configured Stoner/Sesh role no longer exists. Staff should repair Community & Pings.",
+            "A configured /toke Community & Pings role no longer exists. Staff should repair the mapping.",
         )
     if not _member_has_role_id(member, stoner_id):
         return await _reply(interaction, f"You need the {stoner_role.mention} role to use /toke.")
@@ -783,5 +607,6 @@ __all__ = [
     "_toke_allowed_mentions",
     "open_community_ping_setup",
     "open_member_community_pings",
+    "open_toke_preset_setup",
     "open_toke_command",
 ]
