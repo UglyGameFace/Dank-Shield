@@ -1376,6 +1376,21 @@ class MemberSetupAdminView(discord.ui.View):
         blocker = _access_role_blocker(guild, role)
         if blocker:
             return await _reply(interaction, blocker, ok=False)
+
+        state = await load_guild_setup_state(guild.id, refresh=True)
+        prerequisite_id = _safe_int(state.get("prerequisite_role_id"), 0)
+        if prerequisite_id > 0 and int(role.id) == prerequisite_id:
+            await _replace(
+                interaction,
+                content=(
+                    "❌ The existing **Member Access** role is currently the Eligibility Prerequisite. "
+                    "Choose a different prerequisite or a different dedicated Member Access role."
+                ),
+                embed=_admin_embed(guild, state),
+                view=MemberSetupAdminView(self.owner_id),
+            )
+            return
+
         state = await configure_guild_setup(guild.id, access_role_id=role.id, actor_id=interaction.user.id)
         await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(self.owner_id))
 
