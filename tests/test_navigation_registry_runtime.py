@@ -161,6 +161,12 @@ def test_promoted_shortcuts_use_opt_in_in_place_navigation() -> None:
             fromlist=["x"],
         ).__file__).read_text(encoding="utf-8")
     )
+    community_pings_source = (
+        __import__("pathlib").Path(__import__(
+            "stoney_verify.commands_ext.public_community_pings",
+            fromlist=["x"],
+        ).__file__).read_text(encoding="utf-8")
+    )
     profile_source = (
         __import__("pathlib").Path(__import__(
             "stoney_verify.commands_ext.public_self_roles_group",
@@ -178,10 +184,15 @@ def test_promoted_shortcuts_use_opt_in_in_place_navigation() -> None:
     assert "await _defer_panel_update(interaction)" in member_setup_source
     assert "await _defer(interaction)" in member_setup_source
 
-    assert toke_source.count("replace_message: bool = False") >= 2
-    assert toke_source.count("if replace_message:") >= 2
+    assert "replace_message: bool = False" in toke_source
+    assert "if replace_message:" in toke_source
     assert "await _defer_update(interaction)" in toke_source
     assert "await _defer_private(interaction)" in toke_source
+
+    assert community_pings_source.count("replace_message: bool = False") >= 2
+    assert community_pings_source.count("if replace_message and not interaction.response.is_done():") >= 2
+    assert "open_community_ping_setup" in community_pings_source
+    assert "open_member_community_pings" in community_pings_source
 
     assert profile_source.count("replace_message: bool = False") >= 2
     assert "interaction.response.edit_message(" in profile_source
