@@ -421,6 +421,12 @@ def validate_registry() -> list[str]:
         errors.append("duplicate navigation feature key")
 
     known_categories = set(category_keys)
+    home_labels = [item.home_label.strip() for item in CATEGORIES]
+    if any(not label for label in home_labels):
+        errors.append("navigation category missing compact home label")
+    if len(home_labels) != len(set(home_labels)):
+        errors.append("duplicate navigation category home label")
+
     for feature in FEATURES:
         if feature.category not in known_categories:
             errors.append(f"{feature.key}: unknown category {feature.category}")
