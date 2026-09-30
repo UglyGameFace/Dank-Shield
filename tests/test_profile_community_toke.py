@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import discord
@@ -17,6 +18,9 @@ from stoney_verify.commands_ext import public_toke
 from stoney_verify.commands_ext.public_community_pings import CommunityPingsManagerView
 from stoney_verify.community_pings_service import COMMUNITY_PINGS_KEY
 from stoney_verify.profile_card_runtime import _compact_profile_tag_labels
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _labels(view: discord.ui.View) -> set[str]:
@@ -232,6 +236,23 @@ def test_generic_manager_exposes_add_edit_and_safe_remove_controls() -> None:
         "Close",
     } <= labels
     assert len(CommunityPingsManagerView(1).children) <= 25
+
+
+def test_member_picker_rejects_stale_configuration_before_mutation() -> None:
+    source = (ROOT / "stoney_verify/commands_ext/public_community_pings.py").read_text(encoding="utf-8")
+    start = source.index("async def _handle_member_pick")
+    end = source.index("async def open_community_ping_setup", start)
+    block = source[start:end]
+
+    assert "expected_model: Optional[CommunityPingsConfig]" in block
+    assert "model != expected_model" in block
+    assert "Community & Pings changed since this panel opened" in block
+    assert "community_member_lock(guild.id, member.id)" in block
+
+    member_open_start = source.index("async def open_member_community_pings")
+    member_block = source[member_open_start:]
+    assert "expected_model=model" in member_block
+    assert "on_pick=apply_selection" in member_block
 
 
 def test_cheers_card_is_response_only_and_has_one_button() -> None:
