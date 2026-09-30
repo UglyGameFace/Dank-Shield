@@ -361,6 +361,38 @@ def aliases_for(
     return tuple(str(value) for value in list(record.get("aliases") or []) if str(value))
 
 
+async def get_search_alias_index(guild_id: Any) -> dict[str, tuple[str, ...]]:
+    """Return the bounded semantic alias index used by Dank Shield-owned pickers."""
+
+    gid = _safe_int(guild_id, 0)
+    if gid <= 0:
+        return {}
+
+    state = _normalize_state(await _load_state(gid))
+    if _is_unsupported_state(state):
+        return {}
+
+    out: dict[str, tuple[str, ...]] = {}
+    records = state.get("records") or {}
+    if not isinstance(records, Mapping):
+        return out
+
+    for raw_key, raw_record in records.items():
+        key = str(raw_key or "")
+        if not (key.startswith("role:") or key.startswith("channel:")):
+            continue
+        if not isinstance(raw_record, Mapping):
+            continue
+        aliases = tuple(
+            str(value)
+            for value in list(raw_record.get("aliases") or [])
+            if str(value)
+        )
+        if aliases:
+            out[key] = aliases[:MAX_ALIASES_PER_RESOURCE]
+    return out
+
+
 def _cache_state(guild_id: int, state: Mapping[str, Any]) -> dict[str, Any]:
     """Keep the process cache bounded even if hundreds of thousands of guilds exist."""
     gid = int(guild_id)
@@ -1017,6 +1049,7 @@ __all__ = [
     "aliases_for",
     "flush_pending_naming_identity",
     "get_naming_policy",
+    "get_search_alias_index",
     "has_stylized_search_text",
     "install_naming_identity_runtime",
     "previous_alias_for_rename",
