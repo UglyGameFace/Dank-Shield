@@ -49,9 +49,19 @@ def _select_values(view: discord.ui.View, custom_id: str) -> set[str]:
 
 
 def test_home_uses_categories_without_hiding_feature_destinations() -> None:
-    labels = _labels(CompactDankHomeView(1))
-    assert {category.home_label for category in CATEGORIES} <= labels
+    view = CompactDankHomeView(1)
+    labels = _labels(view)
     assert {"Find", "Directory", "Close"} <= labels
+
+    section_select = next(
+        item
+        for item in view.children
+        if isinstance(item, discord.ui.Select)
+        and str(getattr(item, "custom_id", "")) == "dank:home:sections:v1"
+    )
+    assert [str(option.label) for option in section_select.options] == [
+        category.label for category in CATEGORIES
+    ]
 
     feature_labels = {feature.label for category in CATEGORIES for feature in features_for_category(category.key)}
     home_feature_overlap = feature_labels & labels
