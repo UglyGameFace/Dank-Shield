@@ -35,7 +35,6 @@ TOKE_GUILD_COOLDOWN_SECONDS = 5 * 60
 _TOKE_USER_LAST: dict[tuple[int, int], float] = {}
 _TOKE_GUILD_LAST: dict[int, float] = {}
 _TOKE_LOCKS: weakref.WeakValueDictionary[int, asyncio.Lock] = weakref.WeakValueDictionary()
-_COMMUNITY_ROLE_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -110,15 +109,6 @@ def _toke_lock(guild_id: int) -> asyncio.Lock:
     if lock is None:
         lock = asyncio.Lock()
         _TOKE_LOCKS[gid] = lock
-    return lock
-
-
-def _community_role_lock(guild_id: int, user_id: int) -> asyncio.Lock:
-    key = f"{int(guild_id)}:{int(user_id)}"
-    lock = _COMMUNITY_ROLE_LOCKS.get(key)
-    if lock is None:
-        lock = asyncio.Lock()
-        _COMMUNITY_ROLE_LOCKS[key] = lock
     return lock
 
 
@@ -475,7 +465,7 @@ class TokeCheersView(discord.ui.View):
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
         user_id = _safe_int(getattr(member, "id", 0), 0)
         if member is None or user_id <= 0 or not _member_has_role_id(member, self.stoner_role_id):
-            return await _reply(interaction, "The configured Stoner role is required to join this cheers.")
+            return await _reply(interaction, "The configured /toke starter role is required to join this cheers.")
         if user_id in self.cheered_ids:
             return await _reply(interaction, "You already sent cheers on this call.")
         self.cheered_ids.add(user_id)
