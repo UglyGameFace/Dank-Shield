@@ -468,6 +468,9 @@ def toke_role_ids(
         (int(item.role_id) for item in config.options if item.enabled and CAP_TOKE_NOTIFY in item.capabilities),
         0,
     )
+    if config.source == "v2":
+        return starter, notify
+
     legacy = legacy_config or {}
     if starter <= 0:
         starter = _safe_int(legacy.get(LEGACY_STONER_ROLE_KEY), 0)
