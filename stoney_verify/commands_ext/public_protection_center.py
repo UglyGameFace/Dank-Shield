@@ -8,6 +8,7 @@ under the hood, while exposing one simple /dank protection command to guild
 owners.
 """
 
+import asyncio
 import re
 import unicodedata
 from typing import Any, Awaitable, Callable, Mapping
@@ -535,14 +536,11 @@ def _protection_embed(
     return embed
 
 
-async def _refresh_panel(interaction: discord.Interaction, *, content: str | None = None) -> None:
-    guild = interaction.guild
-    if guild is None:
-        await _send_ephemeral(interaction, "❌ This must be used inside a server.")
-        return
-
-    cfg = await get_guild_config(int(guild.id), refresh=True)
-    spam, spam_source = await _load_spam_settings(int(guild.id))
+async def _refresh_security_stats_after_panel(
+    interaction: discord.Interaction,
+    guild: discord.Guild,
+) -> None:
+    """Refresh optional live counters only after the Protection panel is visible."""
     try:
         await refresh_security_stats_display(guild, force=True)
     except Exception as exc:
@@ -553,6 +551,33 @@ async def _refresh_panel(interaction: discord.Interaction, *, content: str | Non
             action_name="protection.live_stats.refresh",
             fix_hint="The Protection Center still works; check Manage Channels/Manage Roles if the live stats display stops updating.",
         )
+
+
+async def _refresh_panel(interaction: discord.Interaction, *, content: str | None = None) -> None:
+    guild = interaction.guild
+    if guild is None:
+        await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        return
+
+    # Discord component interactions must be acknowledged quickly. Protection
+    # loads multiple persisted surfaces, so defer before any network/database I/O.
+    if not interaction.response.is_done():
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except Exception as exc:
+            log_interaction_failure(
+                interaction,
+                exc,
+                stage="protection_refresh_defer_failed",
+                action_name="protection.refresh.defer",
+                fix_hint="Dank Shield could not acknowledge the Protection interaction in time.",
+            )
+
+    cfg, spam_result = await asyncio.gather(
+        get_guild_config(int(guild.id), refresh=True),
+        _load_spam_settings(int(guild.id)),
+    )
+    spam, spam_source = spam_result
     embed = _protection_embed(
         guild,
         cfg,
@@ -562,20 +587,12 @@ async def _refresh_panel(interaction: discord.Interaction, *, content: str | Non
     )
     view = ProtectionCenterView(author_id=int(interaction.user.id), cfg=cfg, spam=spam)
 
-    if interaction.response.is_done():
-        await safe_send_interaction(
-            interaction,
+    try:
+        await interaction.edit_original_response(
             content=content or "Protection Center refreshed.",
             embed=embed,
             view=view,
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-            action_name="protection.refresh.followup",
         )
-        return
-
-    try:
-        await interaction.response.edit_message(content=content or "Protection Center refreshed.", embed=embed, view=view)
     except Exception as exc:
         log_interaction_failure(
             interaction,
@@ -593,6 +610,10 @@ async def _refresh_panel(interaction: discord.Interaction, *, content: str | Non
             allowed_mentions=discord.AllowedMentions.none(),
             action_name="protection.refresh.fallback_send",
         )
+        return
+
+    # Live counter repair is useful, but it must never hold the UI hostage.
+    await _refresh_security_stats_after_panel(interaction, guild)
 
 
 def _normalize_spam_mode_for_ui(value: Any) -> str:
@@ -1919,21 +1940,10 @@ async def protection_center(interaction: discord.Interaction) -> None:
         return
 
     async def action() -> None:
-        guild = interaction.guild
-        if guild is None:
-            await safe_send_interaction(interaction, content="❌ Protection Center must be opened inside a server.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none(), action_name="/dank protection")
-            return
-        cfg = await get_guild_config(int(guild.id), refresh=True)
-        spam, spam_source = await _load_spam_settings(int(guild.id))
-        embed = _protection_embed(
-            guild,
-            cfg,
-            spam,
-            spam_source,
-            channel=getattr(interaction, "channel", None),
+        await _refresh_panel(
+            interaction,
+            content="🛡️ Protection Center opened from `/dank protection`.",
         )
-        view = ProtectionCenterView(author_id=int(interaction.user.id), cfg=cfg, spam=spam)
-        await safe_send_interaction(interaction, embed=embed, view=view, ephemeral=True, allowed_mentions=discord.AllowedMentions.none(), action_name="/dank protection")
 
     await run_guarded_interaction(
         interaction,
