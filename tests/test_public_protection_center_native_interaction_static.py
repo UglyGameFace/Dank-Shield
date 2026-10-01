@@ -72,19 +72,47 @@ def test_protection_center_close_removes_panel_instead_of_greying_it_out() -> No
     assert "child.disabled = True" not in block
 
 
-def test_protection_refresh_acknowledges_before_persisted_reads_and_edits_original() -> None:
+def test_protection_refresh_acknowledges_and_shows_loading_before_state_reads() -> None:
     start = SOURCE.index("async def _refresh_panel")
     end = SOURCE.index("def _normalize_spam_mode_for_ui", start)
     block = SOURCE[start:end]
 
     assert "interaction.response.defer" in block
-    assert "await asyncio.gather(" in block
+    assert "await _show_protection_loading(interaction)" in block
+    assert "await _load_protection_panel_state(" in block
     assert "await interaction.edit_original_response(" in block
     assert "await _refresh_security_stats_after_panel(interaction, guild)" in block
-    assert block.index("interaction.response.defer") < block.index("await asyncio.gather(")
-    assert block.index("await interaction.edit_original_response(") < block.index(
+    assert block.index("interaction.response.defer") < block.index(
+        "await _show_protection_loading(interaction)"
+    )
+    assert block.index("await _show_protection_loading(interaction)") < block.index(
+        "await _load_protection_panel_state("
+    )
+    assert block.rindex("await interaction.edit_original_response(") < block.index(
         "await _refresh_security_stats_after_panel(interaction, guild)"
     )
+
+
+def test_protection_state_load_is_bounded_and_degrades_fail_closed() -> None:
+    start = SOURCE.index("async def _load_protection_panel_state")
+    end = SOURCE.index("async def _refresh_security_stats_after_panel", start)
+    block = SOURCE[start:end]
+
+    assert "asyncio.wait_for(" in block
+    assert "get_guild_config(int(guild_id), refresh=True)" in block
+    assert "get_guild_config(int(guild_id), refresh=False)" in block
+    assert '"enabled": False, "mode": "unknown"' in block
+    assert "Settings controls are locked until live state loads." in block
+
+
+def test_degraded_protection_view_only_leaves_retry_and_close_enabled() -> None:
+    start = SOURCE.index("class ProtectionCenterView")
+    end = SOURCE.index("@dank_group.command", start)
+    block = SOURCE[start:end]
+
+    assert "degraded: bool = False" in block
+    assert 'custom_id not in {"dank_protection:refresh", "dank_protection:close"}' in block
+    assert 'child.label = "Retry Live State"' in block
 
 
 def test_direct_protection_command_reuses_canonical_refresh_owner() -> None:
