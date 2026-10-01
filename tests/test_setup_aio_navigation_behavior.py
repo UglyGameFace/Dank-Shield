@@ -85,6 +85,10 @@ def test_manage_screen_is_one_compact_feature_picker() -> None:
         "Close",
     ]
     assert select_labels(view) == [category.label for category in CATEGORIES]
+    selector = next(
+        child for child in view.children if isinstance(child, discord.ui.Select)
+    )
+    assert str(selector.placeholder) == "Choose a section…"
 
 
 def test_feature_picker_does_not_repeat_areas_as_buttons() -> None:
