@@ -9,6 +9,7 @@ owners.
 """
 
 import asyncio
+import os
 import re
 import unicodedata
 from typing import Any, Awaitable, Callable, Mapping
@@ -122,6 +123,20 @@ PROTECTION_ERROR_GUIDANCE = (
     "Nothing was changed unless the success message says it was. Reopen `/dank protection`, "
     "press Refresh, and check `/dank diagnostics` with the Error ID if it repeats."
 )
+
+
+def _protection_panel_load_timeout_seconds() -> float:
+    """Bound Protection's read-only live-state load without guild-specific tuning."""
+    try:
+        raw = float(
+            str(
+                os.getenv("DANK_PROTECTION_PANEL_LOAD_TIMEOUT_SECONDS", "4")
+                or "4"
+            ).strip()
+        )
+    except Exception:
+        raw = 4.0
+    return max(1.0, min(raw, 15.0))
 
 
 def _clean_filter_item(value: Any) -> str:
@@ -440,6 +455,7 @@ def _protection_embed(
     spam_source: str,
     *,
     channel: Any | None = None,
+    load_warning: str = "",
 ) -> discord.Embed:
     bad_words = _csv_items(_cfg_value(cfg, "automod_bad_words", ""))
     automod_on = _cfg_bool(cfg, "automod_enabled", False)
@@ -450,13 +466,20 @@ def _protection_embed(
         {**antinuke, "antinuke_enabled": True},
     )
     both_on = automod_on and spam_on
+    description = (
+        "One product surface. Three protection engines underneath:\n"
+        "**Automod** filters content and links. **Spam Guard** watches message behavior and floods. "
+        "**AntiNuke** watches audit-log-attributed destructive admin actions."
+    )
+    if load_warning:
+        description += (
+            "\n\n⚠️ **Live state degraded**\n"
+            + str(load_warning)[:700]
+            + "\nNo protection setting is changed by this fallback."
+        )
     embed = discord.Embed(
         title="🛡️ Dank Shield Protection Center",
-        description=(
-            "One product surface. Three protection engines underneath:\n"
-            "**Automod** filters content and links. **Spam Guard** watches message behavior and floods. "
-            "**AntiNuke** watches audit-log-attributed destructive admin actions."
-        ),
+        description=description,
         color=discord.Color.green() if both_on else discord.Color.gold() if (automod_on or spam_on) else discord.Color.dark_grey(),
         timestamp=discord.utils.utcnow(),
     )
@@ -537,6 +560,97 @@ def _protection_embed(
     return embed
 
 
+async def _show_protection_loading(interaction: discord.Interaction) -> None:
+    embed = discord.Embed(
+        title="🛡️ Opening Protection Center",
+        description=(
+            "Loading this server's current Automod, Spam Guard, and AntiNuke state. "
+            "The panel will stay usable even if one backend is slow."
+        ),
+        color=discord.Color.blurple(),
+    )
+    try:
+        await interaction.edit_original_response(
+            content="⏳ Loading Protection Center…",
+            embed=embed,
+            view=None,
+        )
+    except Exception as exc:
+        log_interaction_failure(
+            interaction,
+            exc,
+            stage="protection_loading_edit_failed",
+            action_name="protection.refresh.loading",
+            fix_hint="Dank Shield acknowledged the click but could not replace the existing panel with its loading state.",
+        )
+        await safe_send_interaction(
+            interaction,
+            content="⏳ Loading Protection Center…",
+            embed=embed,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+            action_name="protection.refresh.loading_fallback",
+        )
+
+
+async def _load_protection_panel_state(
+    guild_id: int,
+    *,
+    timeout_seconds: float | None = None,
+) -> tuple[Any, dict[str, Any], str, list[str], list[tuple[str, BaseException]]]:
+    """Load independent read-only sources with bounded waits and safe fallbacks."""
+
+    timeout = (
+        _protection_panel_load_timeout_seconds()
+        if timeout_seconds is None
+        else max(0.01, float(timeout_seconds))
+    )
+    warnings: list[str] = []
+    failures: list[tuple[str, BaseException]] = []
+
+    async def load_config() -> Any:
+        try:
+            return await asyncio.wait_for(
+                get_guild_config(int(guild_id), refresh=True),
+                timeout=timeout,
+            )
+        except Exception as exc:
+            failures.append(("protection_config_refresh_failed", exc))
+            fallback_timeout = min(1.0, max(0.05, timeout / 4.0))
+            try:
+                cached = await asyncio.wait_for(
+                    get_guild_config(int(guild_id), refresh=False),
+                    timeout=fallback_timeout,
+                )
+                warnings.append(
+                    "Guild configuration refresh was slow/unavailable, so the most recent cached state is shown."
+                )
+                return cached
+            except Exception as fallback_exc:
+                failures.append(("protection_config_cache_failed", fallback_exc))
+                warnings.append(
+                    "Guild configuration is temporarily unavailable. Settings controls are locked until live state loads."
+                )
+                return {}
+
+    async def load_spam() -> tuple[dict[str, Any], str]:
+        try:
+            return await asyncio.wait_for(
+                _load_spam_settings(int(guild_id)),
+                timeout=timeout,
+            )
+        except Exception as exc:
+            failures.append(("protection_spam_load_failed", exc))
+            warnings.append(
+                "Spam Guard state is temporarily unavailable. Settings controls are locked until live state loads."
+            )
+            return {"enabled": False, "mode": "unknown"}, "unavailable:timeout"
+
+    cfg, spam_result = await asyncio.gather(load_config(), load_spam())
+    spam, spam_source = spam_result
+    return cfg, spam, spam_source, warnings, failures
+
+
 async def _refresh_security_stats_after_panel(
     interaction: discord.Interaction,
     guild: discord.Guild,
@@ -574,23 +688,44 @@ async def _refresh_panel(interaction: discord.Interaction, *, content: str | Non
                 fix_hint="Dank Shield could not acknowledge the Protection interaction in time.",
             )
 
-    cfg, spam_result = await asyncio.gather(
-        get_guild_config(int(guild.id), refresh=True),
-        _load_spam_settings(int(guild.id)),
+    # Make the acknowledgement visible immediately. A deferred interaction with
+    # no subsequent edit looks like a dead button on Discord mobile.
+    await _show_protection_loading(interaction)
+
+    cfg, spam, spam_source, load_warnings, load_failures = await _load_protection_panel_state(
+        int(guild.id)
     )
-    spam, spam_source = spam_result
+    for stage, exc in load_failures:
+        log_interaction_failure(
+            interaction,
+            exc,
+            stage=stage,
+            action_name="protection.refresh.load_state",
+            fix_hint="Protection opened in a fail-closed degraded state; retry Refresh or inspect /dank diagnostics.",
+        )
+
+    degraded = bool(load_warnings)
     embed = _protection_embed(
         guild,
         cfg,
         spam,
         spam_source,
         channel=getattr(interaction, "channel", None),
+        load_warning="\n".join(load_warnings),
     )
-    view = ProtectionCenterView(author_id=int(interaction.user.id), cfg=cfg, spam=spam)
+    view = ProtectionCenterView(
+        author_id=int(interaction.user.id),
+        cfg=cfg,
+        spam=spam,
+        degraded=degraded,
+    )
+    final_content = content or "Protection Center refreshed."
+    if degraded:
+        final_content += " ⚠️ Live state is incomplete; mutating controls are temporarily locked."
 
     try:
         await interaction.edit_original_response(
-            content=content or "Protection Center refreshed.",
+            content=final_content,
             embed=embed,
             view=view,
         )
@@ -604,7 +739,7 @@ async def _refresh_panel(interaction: discord.Interaction, *, content: str | Non
         )
         await safe_send_interaction(
             interaction,
-            content=content or "Protection Center refreshed.",
+            content=final_content,
             embed=embed,
             view=view,
             ephemeral=True,
@@ -1835,12 +1970,27 @@ class RestoreMemberModal(discord.ui.Modal, title="Restore Member"):
 
 
 class ProtectionCenterView(discord.ui.View):
-    def __init__(self, *, author_id: int, cfg: Any | None = None, spam: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        author_id: int,
+        cfg: Any | None = None,
+        spam: dict[str, Any] | None = None,
+        degraded: bool = False,
+    ) -> None:
         super().__init__(timeout=PRIVATE_MENU_TTL_SECONDS)
         self.author_id = int(author_id)
         self.cfg = cfg
         self.spam = dict(spam or {})
+        self.degraded = bool(degraded)
         _decorate_quick_mode_buttons(self, cfg, self.spam)
+        if self.degraded:
+            for child in list(self.children):
+                custom_id = str(getattr(child, "custom_id", "") or "")
+                if custom_id not in {"dank_protection:refresh", "dank_protection:close"}:
+                    child.disabled = True
+                elif custom_id == "dank_protection:refresh":
+                    child.label = "Retry Live State"
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.author_id:
