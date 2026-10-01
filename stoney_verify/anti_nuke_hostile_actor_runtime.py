@@ -976,10 +976,9 @@ async def _on_member_unban(guild: discord.Guild, user: discord.User) -> None:
     if gid <= 0 or uid <= 0:
         return
 
-    current = await get_actor_reputation(gid, uid, refresh=True)
-    if not current or not current.get("active"):
-        return
-
+    # Resolve owner intent first. Do not burn a Supabase reputation round-trip
+    # before checking the audit actor; that widens the rejoin/re-ban race after
+    # Discord has already removed the ban.
     actor_id = await _resolve_recent_unban_actor_id(guild, uid)
     if actor_id != _safe_int(getattr(guild, "owner_id", 0), 0):
         return
