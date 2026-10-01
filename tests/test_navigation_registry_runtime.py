@@ -185,9 +185,19 @@ def test_promoted_shortcuts_use_opt_in_in_place_navigation() -> None:
     assert "await _defer(interaction)" in member_setup_source
 
     assert "replace_message: bool = False" in toke_source
-    assert "if replace_message:" in toke_source
-    assert "await _defer_update(interaction)" in toke_source
-    assert "await _defer_private(interaction)" in toke_source
+    assert "await open_community_ping_setup(interaction, replace_message=replace_message)" in toke_source
+    assert "await open_generic_manager(interaction, replace_message=replace_message)" in toke_source
+    assert "await open_generic_member(interaction, replace_message=replace_message)" in toke_source
+
+    preset_start = toke_source.index("async def open_toke_preset_setup")
+    preset_end = toke_source.index("class TokeCheersView", preset_start)
+    preset_block = toke_source[preset_start:preset_end]
+    assert "await _defer_update(interaction)" not in preset_block
+    assert "await _defer_private(interaction)" not in preset_block
+
+    command_start = toke_source.index("async def open_toke_command")
+    command_block = toke_source[command_start:]
+    assert "await _defer_private(interaction)" in command_block
 
     assert community_pings_source.count("replace_message: bool = False") >= 2
     assert community_pings_source.count("if replace_message and not interaction.response.is_done():") >= 2
