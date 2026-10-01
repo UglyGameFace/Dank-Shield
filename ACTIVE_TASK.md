@@ -284,3 +284,17 @@ Correction:
 - the setup picker regression test now asserts every canonical category routes through `public_command_surface_v2._open_category`; it no longer preserves the retired route map.
 
 Current validation head: `71bb1c5375233a7595171d4153561062da20dfd3`. Dank Shield CI run #3346 and the companion workflows are in progress. Do not merge until this exact head passes.
+
+
+## PR #382 CI correction
+
+Exact-head Dank Shield CI on `17e4e74a259502582559431b08429377c1d39a86` finished with **2394 passed / 1 failed**. All companion workflows passed.
+
+The single failure was a stale navigation regression contract in `tests/test_navigation_registry_runtime.py`. It still required `public_toke.py` to own `if replace_message:`, `_defer_update`, and `_defer_private` even though this task intentionally retired the duplicate Toke setup owner and delegates setup to `public_community_pings.py`.
+
+Correction:
+- the test now requires the compatibility entrypoints to delegate `replace_message` into the canonical Community & Pings owner;
+- it explicitly rejects the retired local defer helpers from returning to `public_toke.py`;
+- the canonical `public_community_pings.py` replace-message acknowledgement contract remains required.
+
+Current validation head: `ca3299e7216474a7c961648c3c603d4f723a749c`. Do not merge until exact-head CI passes.
