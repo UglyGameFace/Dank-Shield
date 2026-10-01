@@ -2,123 +2,114 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-PROTECTION-024 — issue #375: Protection Center timeout and owner restore recovery**
+**DANK-SHIELD-PROTECTION-025 — issue #375 production-canary follow-up: Protection panel visible bounded loading**
 
-FORCE SWITCH accepted from the built-in ticket-category task.
+Explicit FORCE SWITCH accepted:
+**Fix Dank Protection timeout / dead Protection button.**
 
-Production baseline: `main` = `b2e75bc88ac8ff6b9bd4e0124c6b2c61ad9c1095` (PR #374 merged).
+Production baseline: `main` = `95ab6d7ec2a0159a146ac14b0d00a74c7895e307` (PR #376 merged and deployed).
 
-Active branch: `fix/dank-protection-timeout`.
+Active branch: `fix/protection-panel-load-fallback`.
 
-Active PR: #376 — **Fix Protection timeout and owner member restore**.
+Active PR: not opened yet.
 
-Issue: #375 — **Protection Center timeout and owner restore recovery**.
+Issue #375 is reopened because the production canary still fails.
 
-## Completed prior task
+## Paused work
 
-PR #374 — **Expose built-in ticket category selection in /tickets** — is merged into production main. This branch starts from that merge so the ticket-category fix is preserved.
+Issue #367 Slice 3 Verification Framework remains paused.
+The built-in ticket-category task is complete and merged as PR #374.
+Do not resume either without completing this Protection incident or receiving another explicit FORCE SWITCH.
 
-Issue #367 Slice 3 — Configurable Verification Framework — remains paused from the earlier FORCE SWITCH. Its policy foundation from PR #373 is already merged. Do not resume Verification Framework work until this Protection incident is complete unless another explicit FORCE SWITCH is given.
+## Production evidence
 
-## Production symptoms
+After PR #376 deployed successfully on Discloud:
+- the original red Discord timeout changed behavior;
+- pressing **Home → Safety & Moderation → Protection** can now appear to do nothing;
+- PR #376 already defers before persisted reads and edits the original panel after loading.
 
-### Protection navigation timeout
+The failed canary proves acknowledgement alone was insufficient.
 
-Android production screenshot shows:
-- `/dank → Safety & Moderation`;
-- pressing **Protection**;
-- Discord displays **Dank Shield didn't respond in time**.
+## Root cause found after PR #376
 
-### Owner unban does not restore the member
+The merged refresh owner acknowledges the interaction and then waits on:
 
-A previously AntiNuke-contained member was unbanned by the server owner, but the member still could not return normally.
+- fresh guild configuration load;
+- Spam Guard settings load.
 
-## Root cause
+Those reads were joined without any bounded completion deadline or degraded fallback.
+If either read stalls after Discord has already acknowledged the click, mobile no longer shows a timeout error; it simply leaves the user staring at an unchanged/deferred interaction.
 
-### Protection timeout
+Additionally, Spam Guard can return an `unavailable:...` source without throwing, so exception-only degradation would be incomplete.
 
-The shared `public_protection_center._refresh_panel()` performed all of the following before acknowledging the interaction:
-1. forced guild-config refresh;
-2. Spam Guard settings load;
-3. forced security-stats refresh;
-4. Protection embed/view construction;
-5. only then Discord response/edit.
+## Current fix
 
-That can exceed Discord's interaction acknowledgement deadline.
+The shared Protection owner now:
 
-The same shared function also used `interaction.response.is_done()` to choose a followup send. For a deferred component interaction, “response is done” means the interaction has been acknowledged, not that a new ephemeral message is desired. That could create a duplicate/fresh message instead of editing the panel that was clicked.
+1. acknowledges the interaction before backend I/O;
+2. immediately edits the original interaction to a visible **Opening Protection Center** loading state;
+3. loads guild config and Spam Guard behind bounded, independent read-only waits;
+4. uses the existing cached guild config path when a fresh config refresh is slow/unavailable;
+5. falls back to explicit unknown/default-safe Spam Guard state when that source cannot load;
+6. treats returned `unavailable:...` Spam Guard state as degraded even without an exception;
+7. still renders the Protection Center in degraded mode instead of leaving the button visually dead;
+8. disables all mutating controls while live state is incomplete;
+9. leaves only **Retry Live State** and **Close** enabled in degraded mode;
+10. shows an explicit warning that no protection setting was changed by the fallback;
+11. keeps live security-stat repair after the panel is already visible;
+12. uses one generic runtime-configurable load budget:
+    `DANK_PROTECTION_PANEL_LOAD_TIMEOUT_SECONDS`.
 
-### Unban / hostile reputation
+## No hardcoding contract
 
-Dank Shield intentionally persists confirmed hostile identities in `guild_security_actor_reputation`.
+This fix contains:
+- no guild IDs;
+- no role IDs;
+- no channel IDs;
+- no server names;
+- no owner-specific exceptions;
+- no per-server timeout branch.
 
-In contain mode:
-- an active exact-ID reputation survives a normal Discord ban removal;
-- `anti_nuke_hostile_actor_runtime._on_member_join()` reloads the active record;
-- the re-entry runtime can immediately ban the same ID again.
+The load budget is process configuration and applies generically to every guild.
 
-The durable clear function already existed, but owner recovery was incomplete:
-- no normal Protection UI exposed it;
-- a native Discord owner unban was not interpreted as an explicit owner clear;
-- the canonical `/mod` Ban / Unban by ID path did not clear active hostile reputation first.
+## Safety
 
-## Current implementation
+- no guessed protection state may authorize mutations;
+- incomplete live state fails closed;
+- cached state may be displayed with an explicit degraded warning, but mutation remains locked;
+- existing AntiNuke owner-only controls remain owner-only;
+- no changes to AntiNuke hostile-reputation semantics from PR #376;
+- no global guild sweep;
+- no database migration;
+- no new persistence authority.
 
-### Protection interaction lifecycle
+## Validation required
 
-- `_refresh_panel()` immediately defers when the interaction is still unacknowledged;
-- guild config and Spam Guard load concurrently with `asyncio.gather`;
-- Protection edits the original interaction/panel after defer;
-- followup send is fallback-only when original edit fails;
-- forced security-stat refresh happens only after the Protection panel is visible;
-- direct `/dank protection` now reuses the same canonical refresh owner instead of duplicating state-loading logic.
+Before merge:
+- focused runtime tests for a hung config read;
+- focused runtime tests for a hung Spam Guard read;
+- cached-config fallback test;
+- returned `unavailable:...` Spam Guard degradation test;
+- degraded view enables only Retry + Close;
+- static check that loading UI appears before backend reads;
+- exact-head full CI;
+- exact-head Protection/AntiNuke focused checks;
+- branch 0 behind main;
+- diff hygiene.
 
-### Owner restore behavior
-
-- add owner-intent hostile reputation clear helper;
-- native `on_member_unban` resolves the recent unban audit entry;
-- only a **physical guild-owner** unban clears an active hostile reputation;
-- delegated admin/staff unban does **not** clear durable hostile reputation;
-- add **Restore Member** to Protection Center:
-  - owner-only;
-  - exact Discord user ID;
-  - clears active hostile reputation;
-  - verifies the clear durably;
-  - then removes the Discord ban if one still exists;
-- canonical `/mod` Ban / Unban by ID clears owner-restored hostile reputation before Discord unban, closing the fast re-entry race.
-
-## Safety / compatibility
-
-- no guild-specific hardcoding;
-- no schema change;
-- no weakening of AntiNuke for delegated admins;
-- physical server owner remains the only recovery authority for durable hostile reputation;
-- active hostile identities remain blocked on rejoin until explicit owner restore;
-- inactive/cleared exact-ID rows continue to suppress stale linked-identity inheritance;
-- existing Protection callers all reuse the same corrected refresh owner;
-- no ticket-category, Verification Framework, Captions, or unrelated implementation in this branch.
-
-## Definition of Done
-
-Issue #375 is complete only when:
-- Safety & Moderation → Protection acknowledges immediately and opens without Discord timeout;
-- direct `/dank protection`, setup Protection, Invite Shield back, AntiNuke back, and Refresh still render through the shared owner;
-- deferred component interactions edit the original panel rather than spawning a duplicate followup;
-- live stats failure/latency cannot block Protection from appearing;
-- physical-owner native unban clears active hostile reputation for that exact ID;
-- delegated admin unban does not clear it;
-- Protection **Restore Member** can recover an already-unbanned-but-still-hostile member;
-- canonical owner `/mod` unban clears hostile state before Discord unban;
-- exact-head CI is green;
-- merge and post-merge CI/Supabase/Discloud are green;
-- Android Protection open + owner member-restore canaries pass.
-
-## Validation status
-
-PR #376 is open as the focused issue #375 fix. The branch is current with production main and no schema change is required.
-
-Fresh exact-head CI is required after this task-record update.
+After merge:
+- exact merge SHA Discloud success;
+- canonical post-merge CI;
+- Supabase workflow if triggered;
+- Android canary:
+  1. open Safety & Moderation;
+  2. press Protection;
+  3. confirm immediate loading state;
+  4. confirm final Protection Center opens;
+  5. press Refresh;
+  6. confirm it remains responsive;
+  7. if backend is degraded, confirm Retry/Close only and no settings mutation.
 
 ## Next step
 
-Validate PR #376 on its exact head. If green, perform final diff/branch hygiene, mark ready, merge with the exact expected head, verify post-merge CI/Supabase/Discloud, then run the Android Protection open + Restore Member canaries before closing issue #375.
+Open a focused follow-up PR from this branch, run exact-head CI, and patch only evidence-backed failures. Do not close issue #375 until the Android production canary passes.
