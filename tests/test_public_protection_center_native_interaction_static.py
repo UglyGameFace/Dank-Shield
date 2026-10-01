@@ -73,16 +73,22 @@ def test_protection_center_close_removes_panel_instead_of_greying_it_out() -> No
 
 
 def test_protection_refresh_acknowledges_and_shows_loading_before_state_reads() -> None:
+    ack_start = SOURCE.index("async def _ack_protection_entry")
+    ack_end = SOURCE.index("async def _show_protection_loading", ack_start)
+    ack_block = SOURCE[ack_start:ack_end]
+    assert "interaction.response.is_done()" in ack_block
+    assert "interaction.response.defer" in ack_block
+
     start = SOURCE.index("async def _refresh_panel")
     end = SOURCE.index("def _normalize_spam_mode_for_ui", start)
     block = SOURCE[start:end]
 
-    assert "interaction.response.defer" in block
+    assert "await _ack_protection_entry(interaction)" in block
     assert "await _show_protection_loading(interaction)" in block
     assert "await _load_protection_panel_state(" in block
     assert "await interaction.edit_original_response(" in block
     assert "await _refresh_security_stats_after_panel(interaction, guild)" in block
-    assert block.index("interaction.response.defer") < block.index(
+    assert block.index("await _ack_protection_entry(interaction)") < block.index(
         "await _show_protection_loading(interaction)"
     )
     assert block.index("await _show_protection_loading(interaction)") < block.index(
