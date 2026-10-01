@@ -11,7 +11,7 @@ Production baseline: `main` = `95ab6d7ec2a0159a146ac14b0d00a74c7895e307` (PR #37
 
 Active branch: `fix/protection-panel-load-fallback`.
 
-Active PR: not opened yet.
+Active PR: #377 — **Make Protection loading visible and fail closed**.
 
 Issue #375 is reopened because the production canary still fails.
 
@@ -112,4 +112,4 @@ After merge:
 
 ## Next step
 
-Open a focused follow-up PR from this branch, run exact-head CI, and patch only evidence-backed failures. Do not close issue #375 until the Android production canary passes.
+Validate PR #377 on its exact head. Patch only evidence-backed failures. If CI is green, complete final diff/branch hygiene, mark ready, merge with the exact expected head, verify post-merge CI/Supabase/Discloud, then rerun the Android Protection canary. Do not close issue #375 until that live canary passes.
