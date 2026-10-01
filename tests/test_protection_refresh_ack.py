@@ -29,10 +29,12 @@ class _Interaction:
         self.channel = None
         self.response = _Response(events, done=response_done)
         self.events = events
+        self.edit_payloads: list[dict] = []
         self.last_payload = None
 
     async def edit_original_response(self, **payload):
         self.events.append("edit")
+        self.edit_payloads.append(dict(payload))
         self.last_payload = dict(payload)
 
 
@@ -72,12 +74,16 @@ def test_refresh_panel_acknowledges_before_slow_loads_and_edits_original(
     asyncio.run(center._refresh_panel(interaction, content="open"))
 
     assert events[0] == "defer"
-    assert events.index("config") > events.index("defer")
-    assert events.index("spam") > events.index("defer")
-    assert events.index("edit") > events.index("config")
-    assert events.index("edit") > events.index("spam")
-    assert events.index("stats") > events.index("edit")
+    assert events[1] == "edit"
+    assert events.index("config") > 1
+    assert events.index("spam") > 1
+    assert events.count("edit") == 2
+    final_edit_index = len(events) - 2
+    assert events[final_edit_index] == "edit"
+    assert events[-1] == "stats"
     assert interaction.response.defer_calls == 1
+    assert interaction.edit_payloads[0]["content"] == "⏳ Loading Protection Center…"
+    assert interaction.edit_payloads[0]["view"] is None
     assert interaction.last_payload == {
         "content": "open",
         "embed": "embed",
