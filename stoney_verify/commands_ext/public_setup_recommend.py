@@ -1630,10 +1630,11 @@ async def _open_protection_options(
 ) -> None:
     """Open the existing guild-scoped Protection Center."""
 
+    from . import public_protection_center
+
+    await public_protection_center._ack_protection_entry(interaction)
     if not await solid._require_setup_permission(interaction):
         return
-
-    from . import public_protection_center
 
     await public_protection_center._refresh_panel(
         interaction,
