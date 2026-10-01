@@ -18,6 +18,7 @@ This tracks migration from one-off Discord dropdowns/selects to the shared Dank 
 - `/dank setup` role/channel/category mapping is being migrated to `DankGuildResourceBrowserView` in PR #241.
 - The normal public setup path keeps validation and persistence inside its feature owners; the shared browser owns discovery/search/paging only.
 - Member Setup Manager role/channel/category mapping now follows the same ownership rule: `DankGuildResourceBrowserView` owns Search-Safe discovery/search/paging/Back/Close while Member Setup retains validation, Strict Gate rules, and persistence.
+- Community & Pings / `/toke` preferred-channel setup uses `DankGuildResourceBrowserView`. The retired preset setup no longer owns Discord-native role/channel selectors. For servers with more than 25 matching resources, the shared browser explicitly shows the current page/range and tells mobile users to use Next/Previous or Search.
 - Other feature modules still need one-by-one migration.
 
 ## Current migration targets
