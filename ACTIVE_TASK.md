@@ -148,3 +148,32 @@ This correction is part of the same Protection incident because the runtime repl
 ## Next step
 
 Validate PR #377 on the new exact head. Patch only evidence-backed failures. If CI is green, complete final diff/branch hygiene, mark ready, merge with the exact expected head, verify post-merge CI/Supabase/Discloud, then rerun the Android Protection canary. Do not close issue #375 until that live canary passes.
+
+
+## Post-merge Android canary failure — permanent loading card
+
+Production merge SHA: `1fac08e87c534328ee94263156bcbd1b3d33c3e7`.
+
+Android canary evidence after PR #377:
+- Home → Protection acknowledges successfully;
+- the original private response is replaced with **Loading Protection Center…**;
+- the loading card can remain indefinitely and the final controls never appear.
+
+Execution-path finding:
+- `_refresh_panel()` bounded only guild-config and Spam Guard reads;
+- after those reads, the real AntiNuke readiness/embed construction, Protection view construction, and final Discord edit were outside the terminal-state guarantee;
+- Home/navigation callers invoke the canonical refresh directly, so an exception after the loading edit can leave the loading card as the permanent UI;
+- existing tests stubbed `_protection_embed` and `ProtectionCenterView`, so they did not exercise the production render/send boundary;
+- the AntiNuke Permission health field could exceed Discord's 1,024-character embed field-value limit because multiple verbose hierarchy/channel blockers were joined without truncation. A Discord 400 on the final edit then retried the same invalid payload and could leave the loading card unchanged.
+
+Current hotfix branch: `fix/protection-loading-terminal-state`.
+
+Hotfix behavior:
+- cap the dynamic AntiNuke field to Discord's field-value limit;
+- make the canonical refresh owner catch unexpected state-load and panel-render failures;
+- bound the final Discord edit;
+- if the final panel cannot be rendered/sent, replace the loading card with a plain terminal error containing an Error ID;
+- never resend the same rejected full panel as the fallback;
+- add regression tests for overlong AntiNuke health content, render failure after loading, and final-edit rejection after loading.
+
+Issue #375 remains open. Do not claim the Protection incident resolved until exact-head CI, merge/deploy, and Android canary all pass.
