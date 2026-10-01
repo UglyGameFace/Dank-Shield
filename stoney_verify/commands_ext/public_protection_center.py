@@ -635,10 +635,15 @@ async def _load_protection_panel_state(
 
     async def load_spam() -> tuple[dict[str, Any], str]:
         try:
-            return await asyncio.wait_for(
+            settings, source = await asyncio.wait_for(
                 _load_spam_settings(int(guild_id)),
                 timeout=timeout,
             )
+            if str(source or "").strip().lower().startswith("unavailable:"):
+                warnings.append(
+                    "Spam Guard state is temporarily unavailable. Settings controls are locked until live state loads."
+                )
+            return settings, source
         except Exception as exc:
             failures.append(("protection_spam_load_failed", exc))
             warnings.append(
