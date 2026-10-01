@@ -139,6 +139,20 @@ def _protection_panel_load_timeout_seconds() -> float:
     return max(1.0, min(raw, 15.0))
 
 
+PROTECTION_FINAL_EDIT_TIMEOUT_SECONDS = 5.0
+
+
+def _embed_field_text(value: Any, *, limit: int = 1024) -> str:
+    """Keep dynamic embed fields within Discord's documented field-value limit."""
+    text = str(value or "")
+    safe_limit = max(1, int(limit))
+    if len(text) <= safe_limit:
+        return text
+    if safe_limit == 1:
+        return "…"
+    return text[: safe_limit - 1] + "…"
+
+
 def _clean_filter_item(value: Any) -> str:
     text = unicodedata.normalize("NFKC", str(value or ""))
     text = ZERO_WIDTH_RE.sub("", text)
@@ -525,7 +539,7 @@ def _protection_embed(
     )
     embed.add_field(
         name="AntiNuke — destructive action protection",
-        value=(
+        value=_embed_field_text(
             f"**Enabled:** {'✅ Yes' if antinuke['antinuke_enabled'] else '⚪ No — opt in when ready'}\n"
             f"**Mode:** `{antinuke['antinuke_mode']}`\n"
             "**Control:** `server owner only`\n"
@@ -611,6 +625,58 @@ async def _show_protection_loading(interaction: discord.Interaction) -> None:
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
             action_name="protection.refresh.loading_fallback",
+        )
+
+
+async def _replace_protection_loading_with_error(
+    interaction: discord.Interaction,
+    *,
+    error_id: str,
+) -> None:
+    """Guarantee that a visible loading card never becomes the terminal UI state."""
+
+    message = (
+        "❌ Protection Center could not finish opening. No protection setting was changed. "
+        f"Error ID: `{str(error_id or 'unknown')}`. "
+        "Reopen `/dank protection` after this deployment or check `/dank diagnostics`."
+    )
+    try:
+        await asyncio.wait_for(
+            interaction.edit_original_response(
+                content=message,
+                embed=None,
+                view=None,
+            ),
+            timeout=PROTECTION_FINAL_EDIT_TIMEOUT_SECONDS,
+        )
+        return
+    except Exception as exc:
+        log_interaction_failure(
+            interaction,
+            exc,
+            stage="protection_terminal_error_edit_failed",
+            action_name="protection.refresh.terminal_error",
+            fix_hint="Dank Shield could not replace the Protection loading card with its terminal error state.",
+        )
+
+    try:
+        await asyncio.wait_for(
+            safe_send_interaction(
+                interaction,
+                content=message,
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+                action_name="protection.refresh.terminal_error_fallback",
+            ),
+            timeout=PROTECTION_FINAL_EDIT_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        log_interaction_failure(
+            interaction,
+            exc,
+            stage="protection_terminal_error_followup_failed",
+            action_name="protection.refresh.terminal_error_fallback",
+            fix_hint="Discord did not accept either Protection terminal-state response.",
         )
 
 
@@ -708,9 +774,24 @@ async def _refresh_panel(interaction: discord.Interaction, *, content: str | Non
     # no subsequent edit looks like a dead button on Discord mobile.
     await _show_protection_loading(interaction)
 
-    cfg, spam, spam_source, load_warnings, load_failures = await _load_protection_panel_state(
-        int(guild.id)
-    )
+    try:
+        cfg, spam, spam_source, load_warnings, load_failures = await _load_protection_panel_state(
+            int(guild.id)
+        )
+    except Exception as exc:
+        record = log_interaction_failure(
+            interaction,
+            exc,
+            stage="protection_state_load_unhandled",
+            action_name="protection.refresh.load_state",
+            fix_hint="Protection could not finish its bounded state load.",
+        )
+        await _replace_protection_loading_with_error(
+            interaction,
+            error_id=record.error_id,
+        )
+        return
+
     for stage, exc in load_failures:
         log_interaction_failure(
             interaction,
@@ -721,46 +802,59 @@ async def _refresh_panel(interaction: discord.Interaction, *, content: str | Non
         )
 
     degraded = bool(load_warnings)
-    embed = _protection_embed(
-        guild,
-        cfg,
-        spam,
-        spam_source,
-        channel=getattr(interaction, "channel", None),
-        load_warning="\n".join(load_warnings),
-    )
-    view = ProtectionCenterView(
-        author_id=int(interaction.user.id),
-        cfg=cfg,
-        spam=spam,
-        degraded=degraded,
-    )
+    try:
+        embed = _protection_embed(
+            guild,
+            cfg,
+            spam,
+            spam_source,
+            channel=getattr(interaction, "channel", None),
+            load_warning="\n".join(load_warnings),
+        )
+        view = ProtectionCenterView(
+            author_id=int(interaction.user.id),
+            cfg=cfg,
+            spam=spam,
+            degraded=degraded,
+        )
+    except Exception as exc:
+        record = log_interaction_failure(
+            interaction,
+            exc,
+            stage="protection_panel_render_failed",
+            action_name="protection.refresh.render",
+            fix_hint="Protection live state loaded, but the final panel could not be constructed.",
+        )
+        await _replace_protection_loading_with_error(
+            interaction,
+            error_id=record.error_id,
+        )
+        return
+
     final_content = content or "Protection Center refreshed."
     if degraded:
         final_content += " ⚠️ Live state is incomplete; mutating controls are temporarily locked."
 
     try:
-        await interaction.edit_original_response(
-            content=final_content,
-            embed=embed,
-            view=view,
+        await asyncio.wait_for(
+            interaction.edit_original_response(
+                content=final_content,
+                embed=embed,
+                view=view,
+            ),
+            timeout=PROTECTION_FINAL_EDIT_TIMEOUT_SECONDS,
         )
     except Exception as exc:
-        log_interaction_failure(
+        record = log_interaction_failure(
             interaction,
             exc,
             stage="protection_refresh_edit_failed",
             action_name="protection.refresh",
-            fix_hint="Dank Shield could not edit the existing Protection Center panel, so it will try to send a fresh private panel.",
+            fix_hint="Dank Shield could not replace the Protection loading card with the final panel.",
         )
-        await safe_send_interaction(
+        await _replace_protection_loading_with_error(
             interaction,
-            content=final_content,
-            embed=embed,
-            view=view,
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-            action_name="protection.refresh.fallback_send",
+            error_id=record.error_id,
         )
         return
 

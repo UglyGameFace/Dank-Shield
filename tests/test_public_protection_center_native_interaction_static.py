@@ -86,7 +86,9 @@ def test_protection_refresh_acknowledges_and_shows_loading_before_state_reads() 
     assert "await _ack_protection_entry(interaction)" in block
     assert "await _show_protection_loading(interaction)" in block
     assert "await _load_protection_panel_state(" in block
-    assert "await interaction.edit_original_response(" in block
+    assert "await asyncio.wait_for(" in block
+    assert "interaction.edit_original_response(" in block
+    assert "await _replace_protection_loading_with_error(" in block
     assert "await _refresh_security_stats_after_panel(interaction, guild)" in block
     assert block.index("await _ack_protection_entry(interaction)") < block.index(
         "await _show_protection_loading(interaction)"
@@ -94,7 +96,7 @@ def test_protection_refresh_acknowledges_and_shows_loading_before_state_reads() 
     assert block.index("await _show_protection_loading(interaction)") < block.index(
         "await _load_protection_panel_state("
     )
-    assert block.rindex("await interaction.edit_original_response(") < block.index(
+    assert block.rindex("interaction.edit_original_response(") < block.index(
         "await _refresh_security_stats_after_panel(interaction, guild)"
     )
 

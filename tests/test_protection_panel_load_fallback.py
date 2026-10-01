@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from types import SimpleNamespace
 
 from stoney_verify.commands_ext import public_protection_center as protection
 
@@ -122,3 +123,27 @@ def test_degraded_protection_view_disables_mutations() -> None:
         if str(getattr(child, "custom_id", "") or "") == "dank_protection:refresh"
     )
     assert str(getattr(refresh, "label", "")) == "Retry Live State"
+
+
+def test_protection_embed_caps_dynamic_antinuke_health_field(monkeypatch) -> None:
+    long_blocker = "Role hierarchy blocker " + ("x" * 240)
+    monkeypatch.setattr(
+        protection,
+        "antinuke_permission_health",
+        lambda *_args, **_kwargs: [long_blocker for _ in range(8)],
+    )
+
+    embed = protection._protection_embed(
+        SimpleNamespace(me=None),
+        {},
+        {"enabled": False, "mode": "unknown"},
+        "loaded",
+    )
+
+    field = next(
+        item
+        for item in embed.fields
+        if item.name == "AntiNuke — destructive action protection"
+    )
+    assert len(field.value) <= 1024
+    assert field.value.endswith("…")
