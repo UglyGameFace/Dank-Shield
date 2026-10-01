@@ -12,9 +12,11 @@ Reason:
 
 Production baseline: `main` = `534614801e6c19dfbc248e100022e1d5c8c87bc1` (PR #379 merged; exact-head CI green).
 
-Active branch: `fix/toke-channel-picker-pagination`.
+Active branch: `fix/toke-direct-role-mapping`.
 
-Active issue: #381 — **Toke setup text-channel picker omits expected general channel**.\n\nActive PR: #382 — **Fix /toke large-server channel picker discovery** (draft).
+Active issue: #381 — **Toke setup text-channel picker omits expected general channel**.\n\nPR #382 — **Fix /toke large-server channel picker discovery** — merged as `63fe519431e90be7fb7f897c2b6a10a4f2d241fc`.
+
+Active PR: #383 — **Expose direct /toke starter and notify role setup** (draft).
 
 ## Scope
 
@@ -310,7 +312,7 @@ Correction:
 - the negative assertion is now scoped only to the retired setup compatibility block between `open_toke_preset_setup` and `TokeCheersView`;
 - the test explicitly confirms the live `open_toke_command` still owns its valid private defer.
 
-Current validation head: `e7d5b6a126611448d0b223492e9274f9adad3f9d`. Do not merge until exact-head CI passes.
+PR #382 subsequently passed exact-head CI and merged. The active follow-up is PR #383; validate its exact head before merge.
 
 
 ## Android canary follow-up — role mappings hidden
