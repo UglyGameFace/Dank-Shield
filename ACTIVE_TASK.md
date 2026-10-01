@@ -7,11 +7,11 @@
 Explicit FORCE SWITCH accepted:
 **Fix Dank Protection timeout / dead Protection button.**
 
-Production baseline: `main` = `95ab6d7ec2a0159a146ac14b0d00a74c7895e307` (PR #376 merged and deployed).
+Production baseline: `main` = `0ce2b74856262be1b74ef3066426d85b89136d9f` (PR #378 merged and deployed).
 
-Active branch: `fix/protection-panel-load-fallback`.
+Active branch: `fix/protection-native-ui-and-nav`.
 
-Active PR: #377 — **Make Protection loading visible and fail closed**.
+Active PR: not opened yet; validate the native-ownership hotfix branch first.
 
 Issue #375 is reopened because the production canary still fails.
 
@@ -177,3 +177,35 @@ Hotfix behavior:
 - add regression tests for overlong AntiNuke health content, render failure after loading, and final-edit rejection after loading.
 
 Issue #375 remains open. Do not claim the Protection incident resolved until exact-head CI, merge/deploy, and Android canary all pass.
+
+
+## PR #378 Android canary — actual render crash and stale setup navigation
+
+The post-merge Android canary on production `0ce2b74856262be1b74ef3066426d85b89136d9f` produced terminal Protection errors instead of hanging, which exposed the exact remaining runtime conflict.
+
+Production diagnostics/logs recorded both navigation routes failing at the same renderer boundary:
+
+- Error IDs `DANK-653ABC6A` and `DANK-50BEDB33`;
+- stage `protection_panel_render_failed`;
+- `TypeError: _patch_ui.<locals>.embed() got an unexpected keyword argument 'channel'`;
+- callers included `dank:navigation:feature:protection:v1` and `dank_setup_security:protection`.
+
+Root cause:
+- `anti_nuke_product_policy_runtime._patch_ui()` still replaced the canonical Protection embed, view class, and AntiNuke UI callbacks after import;
+- its replacement embed retained the old four-argument signature while the canonical Protection renderer now supplies `channel=` and `load_warning=`;
+- this was a live runtime monkey patch that the prior ownership audit did not prohibit.
+
+Related navigation evidence from the same canary:
+- `/dank home` already uses `navigation_registry.CATEGORIES`;
+- `/dank setup` still used a separate hard-coded nine-item `FEATURE_AREAS` list;
+- tests explicitly required those stale labels, so CI preserved the divergence.
+
+Current correction:
+- Strict Lockdown UI/state/toggles now live natively in `commands_ext/public_protection_center.py`;
+- canonical Protection accesses AntiNuke through the module service owner so post-import policy/readiness behavior is not bypassed by stale captured aliases;
+- `anti_nuke_product_policy_runtime.py` retains engine/policy behavior but no longer replaces Protection UI functions/classes;
+- obsolete self-applying Protection presentation guards are deleted after reference verification;
+- setup's feature picker derives from `navigation_registry.CATEGORIES` and routes through the canonical category owner;
+- unit/static tests and `tools/audit_setup_safety.py` now reject Protection UI rebindings, retired patch files, and a standalone setup taxonomy.
+
+Validation is still required. Do not claim issue #375 resolved until exact-head CI passes, the branch is merged/deployed, and Android canary confirms both Protection entry routes and the setup category picker.
