@@ -77,6 +77,27 @@ def test_protection_state_loader_uses_cached_config_fallback(monkeypatch) -> Non
     }
 
 
+def test_unavailable_spam_source_forces_degraded_state(monkeypatch) -> None:
+    async def config_loader(_guild_id: int, *, refresh: bool = False):
+        return {"automod_enabled": True, "source": "db"}
+
+    async def spam_loader(_guild_id: int):
+        return {"enabled": False, "mode": "unknown"}, "unavailable:RuntimeError"
+
+    monkeypatch.setattr(protection, "get_guild_config", config_loader)
+    monkeypatch.setattr(protection, "_load_spam_settings", spam_loader)
+
+    _cfg, _spam, source, warnings, failures = asyncio.run(
+        protection._load_protection_panel_state(789, timeout_seconds=0.05)
+    )
+
+    assert source == "unavailable:RuntimeError"
+    assert warnings == [
+        "Spam Guard state is temporarily unavailable. Settings controls are locked until live state loads."
+    ]
+    assert failures == []
+
+
 def test_degraded_protection_view_disables_mutations() -> None:
     view = protection.ProtectionCenterView(
         author_id=1,
