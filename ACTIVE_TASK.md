@@ -311,3 +311,30 @@ Correction:
 - the test explicitly confirms the live `open_toke_command` still owns its valid private defer.
 
 Current validation head: `e7d5b6a126611448d0b223492e9274f9adad3f9d`. Do not merge until exact-head CI passes.
+
+
+## Android canary follow-up — role mappings hidden
+
+The large-server channel picker now reaches and saves the expected `#general` channel. Android canary then exposed the next blocker in the same /toke setup flow:
+
+- manager shows `Starter: Not configured`;
+- manager shows `Notify: Not configured`;
+- preferred channel is correctly configured;
+- `/toke` rejects execution because both required role capabilities are absent;
+- the only configured option in the reported server is `Stoner`.
+
+Root cause:
+- `toke_start` / `toke_notify` are capabilities on Community & Pings options;
+- setup existed only inside the generic **Edit Option** editor via **Toke Starter** / **Toke Notify** buttons;
+- the manager exposed status but no direct role-mapping control, making the required setup effectively undiscoverable.
+
+Correction on the active branch:
+- Community & Pings Manager now exposes direct **Toke Starter** and **Toke Notify** controls beside the Toke channel controls;
+- each direct control picks from enabled, safe existing Community & Pings options;
+- selecting an option assigns that capability to exactly one option and removes the same capability from any previous option;
+- one option may own both capabilities, so an existing Stoner option can be both starter and notification role;
+- persistence remains the existing `community_pings_v2` model via `_save()`; no legacy duplicate role-ID settings are reintroduced;
+- manager text tells admins to use **Add Option** first if the desired role is not already a Community & Pings option;
+- regression coverage verifies exclusive capability reassignment and preservation of the other /toke capability.
+
+Do not close #381 until exact-head CI passes, PR #382 is merged/deployed, and Android verifies Starter + Notify + Channel all show configured and `/toke` successfully posts.
