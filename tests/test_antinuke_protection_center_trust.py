@@ -18,7 +18,7 @@ def test_antinuke_trust_lists_save_bot_targets_separately(
         captured["patch"] = dict(patch)
         return dict(patch)
 
-    monkeypatch.setattr(protection, "save_antinuke_settings", fake_save)
+    monkeypatch.setattr(protection.anti_nuke_service, "save_antinuke_settings", fake_save)
 
     users, roles, bots = asyncio.run(
         protection._save_antinuke_trust_lists(  # noqa: SLF001
@@ -98,12 +98,12 @@ def test_native_trusted_role_update_merges_roles_and_blocks_everyone(
         }
 
     monkeypatch.setattr(
-        protection,
+        protection.anti_nuke_service,
         "get_antinuke_settings",
         fake_get,
     )
     monkeypatch.setattr(
-        protection,
+        protection.anti_nuke_service,
         "save_antinuke_settings",
         fake_save,
     )
