@@ -430,16 +430,24 @@ class DankGuildResourceBrowserView(DankPickerView):
         self.page = max(0, min(int(page), self.page_count - 1))
         start = self.page * _PAGE_SIZE
         page_items = self.candidates[start : start + _PAGE_SIZE]
+        self.page_start = start
+        self.page_end = min(start + len(page_items), len(self.candidates))
 
         async def handle_pick(interaction: discord.Interaction, value: str) -> None:
             await self.pick_resource(interaction, value)
+
+        base_placeholder = f"Search: {self.query}" if self.query else self.browser_placeholder
+        if self.page_count > 1:
+            select_placeholder = f"Page {self.page + 1}/{self.page_count} • {base_placeholder}"
+        else:
+            select_placeholder = base_placeholder
 
         super().__init__(
             author_id=self.author_id,
             choices=[_candidate_choice(item) for item in page_items],
             on_pick=handle_pick,
             custom_id=f"{self.resource_custom_id}:pick"[:100],
-            placeholder=(f"Search: {self.query}" if self.query else self.browser_placeholder)[:150],
+            placeholder=select_placeholder[:150],
             timeout=900,
             title=self.browser_title,
             home_label=home_label,
@@ -506,10 +514,20 @@ class DankGuildResourceBrowserView(DankPickerView):
             if self.query
             else f"Browsing **{total}** server item{'s' if total != 1 else ''}."
         )
+        paging_help = ""
+        if self.page_count > 1:
+            paging_help = (
+                f"\n\nThis dropdown can show only 25 items at once. "
+                f"Page **{self.page + 1}/{self.page_count}** is showing "
+                f"**{self.page_start + 1}–{self.page_end} of {total}**. "
+                "If the channel/role you want is not in the opened list, close the list and use "
+                "**Next / Previous** or **🔎 Search** below."
+            )
         embed = discord.Embed(
             title=self.browser_title,
             description=(
                 intro
+                + paging_help
                 + "\n\nUse **🔎 Search** below for a current/styled name, saved previous name, Discord ID, or mention. "
                 "Dank Shield searches its own server cache instead of relying on Discord's generic entity picker."
             ),
