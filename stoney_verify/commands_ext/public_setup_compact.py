@@ -297,21 +297,6 @@ async def _ack_then_open_timers_behavior(interaction: discord.Interaction) -> No
     await original(interaction)
 
 
-async def _ack_then_open_protection_options(interaction: discord.Interaction) -> None:
-    """Delegate Protection entry to its canonical acknowledgement owner.
-
-    Protection now has a dedicated entry contract that must acknowledge Discord
-    before setup/staff authorization because that authorization can consult
-    persisted guild configuration. Do not duplicate permission or defer logic
-    here; the canonical Protection handler owns acknowledgement, authorization,
-    loading state, and degraded fallback.
-    """
-
-    setup = _implementation.setup
-    original = getattr(setup, "_DANK_SETUP_ORIGINAL_OPEN_PROTECTION_OPTIONS")
-    await original(interaction)
-
-
 def _install_ack_integrity() -> None:
     setup = _implementation.setup
 
@@ -336,9 +321,6 @@ def _install_ack_integrity() -> None:
         setup._DANK_SETUP_ORIGINAL_OPEN_TIMERS_BEHAVIOR = setup._open_timers_behavior
     setup._open_timers_behavior = _ack_then_open_timers_behavior
 
-    if not hasattr(setup, "_DANK_SETUP_ORIGINAL_OPEN_PROTECTION_OPTIONS"):
-        setup._DANK_SETUP_ORIGINAL_OPEN_PROTECTION_OPTIONS = setup._open_protection_options
-    setup._open_protection_options = _ack_then_open_protection_options
 
 
 def _install_feature_area_integrity() -> None:
@@ -407,10 +389,6 @@ def _assert_runtime_ownership_impl() -> None:
         ),
         (setup._open_guided_target is _ack_then_open_guided_target, "guided acknowledgement"),
         (setup._open_timers_behavior is _ack_then_open_timers_behavior, "timers acknowledgement"),
-        (
-            setup._open_protection_options is _ack_then_open_protection_options,
-            "protection acknowledgement",
-        ),
     )
     missing = [label for okay, label in checks if not okay]
     if missing:
