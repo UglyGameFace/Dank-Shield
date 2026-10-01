@@ -560,6 +560,27 @@ def _protection_embed(
     return embed
 
 
+async def _ack_protection_entry(interaction: discord.Interaction) -> None:
+    """Acknowledge a Protection interaction before permissions or backend reads.
+
+    Some delegated-staff permission checks can consult the configured role cache.
+    On a cold cache that path may perform synchronous configuration lookup, so
+    the acknowledgement must happen before even the authorization helper.
+    """
+    if interaction.response.is_done():
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+    except Exception as exc:
+        log_interaction_failure(
+            interaction,
+            exc,
+            stage="protection_entry_defer_failed",
+            action_name="protection.entry.defer",
+            fix_hint="Dank Shield could not acknowledge the Protection interaction in time.",
+        )
+
+
 async def _show_protection_loading(interaction: discord.Interaction) -> None:
     embed = discord.Embed(
         title="🛡️ Opening Protection Center",
@@ -679,19 +700,9 @@ async def _refresh_panel(interaction: discord.Interaction, *, content: str | Non
         await _send_ephemeral(interaction, "❌ This must be used inside a server.")
         return
 
-    # Discord component interactions must be acknowledged quickly. Protection
-    # loads multiple persisted surfaces, so defer before any network/database I/O.
-    if not interaction.response.is_done():
-        try:
-            await interaction.response.defer(ephemeral=True)
-        except Exception as exc:
-            log_interaction_failure(
-                interaction,
-                exc,
-                stage="protection_refresh_defer_failed",
-                action_name="protection.refresh.defer",
-                fix_hint="Dank Shield could not acknowledge the Protection interaction in time.",
-            )
+    # Idempotent: direct callers may already have acknowledged before
+    # authorization; internal refreshes still remain safe.
+    await _ack_protection_entry(interaction)
 
     # Make the acknowledgement visible immediately. A deferred interaction with
     # no subsequent edit looks like a dead button on Discord mobile.
@@ -2237,6 +2248,7 @@ class ProtectionCenterView(discord.ui.View):
 
 @dank_group.command(name="protection", description="Open the unified Automod + Spam Guard + AntiNuke protection center.")
 async def protection_center(interaction: discord.Interaction) -> None:
+    await _ack_protection_entry(interaction)
     if not await _require_setup_permission(interaction):
         return
 
