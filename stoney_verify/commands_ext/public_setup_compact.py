@@ -298,15 +298,16 @@ async def _ack_then_open_timers_behavior(interaction: discord.Interaction) -> No
 
 
 async def _ack_then_open_protection_options(interaction: discord.Interaction) -> None:
+    """Delegate Protection entry to its canonical acknowledgement owner.
+
+    Protection now has a dedicated entry contract that must acknowledge Discord
+    before setup/staff authorization because that authorization can consult
+    persisted guild configuration. Do not duplicate permission or defer logic
+    here; the canonical Protection handler owns acknowledgement, authorization,
+    loading state, and degraded fallback.
+    """
+
     setup = _implementation.setup
-    if not await setup.solid._require_setup_permission(interaction):
-        return
-    if interaction.guild is None:
-        return await interaction.response.send_message(
-            "❌ This must be used inside a server.",
-            ephemeral=True,
-        )
-    await _safe_setup_defer(interaction)
     original = getattr(setup, "_DANK_SETUP_ORIGINAL_OPEN_PROTECTION_OPTIONS")
     await original(interaction)
 
