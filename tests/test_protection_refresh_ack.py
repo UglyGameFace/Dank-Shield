@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 from stoney_verify.commands_ext import public_protection_center as center
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class _Response:
@@ -103,3 +107,34 @@ def test_refresh_panel_reuses_existing_ack_without_duplicate_defer(
     assert "defer" not in events
     assert interaction.response.defer_calls == 0
     assert events[-2:] == ["edit", "stats"]
+
+
+def test_protection_entry_ack_is_idempotent() -> None:
+    events: list[str] = []
+    interaction = _Interaction(events)
+
+    asyncio.run(center._ack_protection_entry(interaction))
+    asyncio.run(center._ack_protection_entry(interaction))
+
+    assert events == ["defer"]
+    assert interaction.response.defer_calls == 1
+
+
+def test_public_protection_entries_ack_before_permission_checks() -> None:
+    checks = (
+        ("stoney_verify/commands_ext/public_protection_center.py", "async def protection_center"),
+        ("stoney_verify/commands_ext/public_command_surface_v2.py", 'if key == "protection":'),
+        ("stoney_verify/commands_ext/public_command_hub.py", 'label="Protection"'),
+        ("stoney_verify/commands_ext/public_setup_solid.py", 'custom_id="stoney_solid:features_protection"'),
+        ("stoney_verify/commands_ext/public_setup_recommend.py", "async def _open_protection_options"),
+        ("stoney_verify/protection_center_services.py", "async def open_protection_center"),
+        ("stoney_verify/commands_ext/public_protection_invite_ui.py", "async def back_to_protection"),
+    )
+
+    for relative, anchor in checks:
+        source = (ROOT / relative).read_text(encoding="utf-8")
+        start = source.index(anchor)
+        block = source[start : start + 2600]
+        ack = block.index("_ack_protection_entry")
+        permission = block.index("_require_setup_permission")
+        assert ack < permission, relative
