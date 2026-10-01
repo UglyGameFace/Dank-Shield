@@ -148,7 +148,7 @@ async def _route_area(interaction: discord.Interaction, area: str) -> None:
 class FeatureAreaSelect(discord.ui.Select):
     def __init__(self) -> None:
         super().__init__(
-            placeholder="Choose a feature area…",
+            placeholder="Choose a section…",
             min_values=1,
             max_values=1,
             custom_id="dank_setup_compact:area",
@@ -309,7 +309,7 @@ def _help_embed() -> discord.Embed:
         title="❓ Setup Help",
         description=(
             "**Start / Continue Setup** handles one required item at a time.\n"
-            "**Choose a feature area** changes one part of Dank Shield.\n"
+            "**Choose a section** opens the same categorized Dank Shield navigation used by `/dank home`.\n"
             "**Check Configuration** automatically validates saved roles, channels, and permissions.\n"
             "**Test Features** walks through real member and staff behavior."
         ),
@@ -335,7 +335,7 @@ async def _main_payload(guild: discord.Guild) -> tuple[discord.Embed, discord.ui
         next_text = "Choose a plan. Setup will then show one required item at a time."
     elif completed:
         status = "Setup complete"
-        next_text = "Choose a feature area below whenever you need to change something."
+        next_text = "Choose a section below whenever you need to change something."
     elif ready:
         status = "Ready for real testing"
         next_text = "Test each enabled feature in Discord, then finish setup."
@@ -444,7 +444,7 @@ async def _open_manager(interaction: discord.Interaction) -> None:
         enabled = "Could not load right now"
     embed = discord.Embed(
         title="🧰 Manage Dank Shield",
-        description=f"Choose one feature area below.\nEnabled: **{enabled}**",
+        description=f"Choose one Dank Shield section below.\nEnabled: **{enabled}**",
         color=discord.Color.blurple(),
     )
     await setup.solid._edit_or_followup(interaction, embed=embed, view=CompactManagerView())
