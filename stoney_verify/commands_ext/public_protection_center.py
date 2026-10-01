@@ -17,6 +17,7 @@ from typing import Any, Awaitable, Callable, Mapping
 import discord
 
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+from .. import anti_nuke as anti_nuke_service
 
 from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
 from ..interaction_guard import log_interaction_failure, run_guarded_interaction, safe_send_interaction
@@ -123,6 +124,8 @@ PROTECTION_ERROR_GUIDANCE = (
     "Nothing was changed unless the success message says it was. Reopen `/dank protection`, "
     "press Refresh, and check `/dank diagnostics` with the Error ID if it repeats."
 )
+
+STRICT_LOCKDOWN_KEY = "antinuke_strict_lockdown"
 
 
 def _protection_panel_load_timeout_seconds() -> float:
@@ -268,6 +271,28 @@ def _cfg_bool(cfg: Any, key: str, default: bool = False) -> bool:
     if isinstance(raw, bool):
         return raw
     return str(raw or "").strip().lower() in {"1", "true", "yes", "y", "on", "enabled"}
+
+
+def _antinuke_health_message(prefix: str, missing: list[str], *, strict: bool) -> str:
+    items = [str(item) for item in missing if str(item).strip()]
+    message = prefix + " **" + "; ".join(items) + "**."
+    strict_items = [item for item in items if item.startswith("Strict Lockdown:")]
+    bot_items = [item for item in items if item not in strict_items]
+
+    if strict_items:
+        message += (
+            "\n\n**Strict Lockdown** is the blocker here. Normal **Contain** can remain "
+            "enabled with staff permissions; Strict Lockdown requires removing the listed "
+            "delegated authority first."
+        )
+    if bot_items:
+        message += (
+            "\n\nThese remaining items are Dank Shield containment/readiness requirements. "
+            "Fix only the items actually listed above; **Administrator is not required**."
+        )
+    elif strict and not strict_items:
+        message += "\n\nStrict Lockdown has no delegated-authority blocker."
+    return message
 
 
 def _cfg_int(cfg: Any, key: str, default: int = 0) -> int:
@@ -474,8 +499,9 @@ def _protection_embed(
     bad_words = _csv_items(_cfg_value(cfg, "automod_bad_words", ""))
     automod_on = _cfg_bool(cfg, "automod_enabled", False)
     spam_on = bool(spam.get("enabled"))
-    antinuke = normalize_antinuke_settings(cfg)
-    antinuke_missing = antinuke_permission_health(
+    antinuke = anti_nuke_service.normalize_antinuke_settings(cfg)
+    strict_lockdown = _cfg_bool(antinuke, STRICT_LOCKDOWN_KEY, False)
+    antinuke_missing = anti_nuke_service.antinuke_permission_health(
         guild,
         {**antinuke, "antinuke_enabled": True},
     )
@@ -542,6 +568,7 @@ def _protection_embed(
         value=_embed_field_text(
             f"**Enabled:** {'✅ Yes' if antinuke['antinuke_enabled'] else '⚪ No — opt in when ready'}\n"
             f"**Mode:** `{antinuke['antinuke_mode']}`\n"
+            f"**Strict Lockdown:** {'ON' if strict_lockdown else 'OFF'}\n"
             "**Control:** `server owner only`\n"
             f"**Permission health:** {'✅ Ready' if not antinuke_missing else '❌ Missing: ' + ', '.join(antinuke_missing)}\n"
             f"**Window:** `{antinuke['antinuke_window_seconds']}s` • "
@@ -560,6 +587,7 @@ def _protection_embed(
         name="What buttons do",
         value=(
             "**AntiNuke** = owner-only destructive-action protection, containment mode, trust lists, and thresholds.\n"
+            "**Strict Lockdown** = optional owner-only maximum-restriction policy; normal Contain keeps trusted staff on configured thresholds.\n"
             "**Trust Lists** = trusted delegated inviters plus bot IDs that are pre-approved before owner-added installs.\n"
             "**Restore Member** = owner-only recovery for a Discord ID that was unbanned but still has active AntiNuke hostile reputation.\n"
             "**Edit Spam Guard** = message speed, duplicate messages, invite-flood threshold, timeout length.\n"
@@ -898,7 +926,8 @@ def _decorate_quick_mode_buttons(view: discord.ui.View, cfg: Any, spam: dict[str
     state = _protection_state(cfg, spam or {})
     invite_on = _invite_shield_enabled_for_ui(cfg, spam or {})
     links_on = _link_shield_enabled_for_ui(cfg, spam or {})
-    antinuke = normalize_antinuke_settings(cfg)
+    antinuke = anti_nuke_service.normalize_antinuke_settings(cfg)
+    strict_lockdown = _cfg_bool(antinuke, STRICT_LOCKDOWN_KEY, False)
     for child in list(getattr(view, "children", []) or []):
         custom_id = str(getattr(child, "custom_id", "") or "")
         if custom_id == "dank_protection:safe":
@@ -936,6 +965,10 @@ def _decorate_quick_mode_buttons(view: discord.ui.View, cfg: Any, spam: dict[str
                 if antinuke["antinuke_mode"] == "contain"
                 else discord.ButtonStyle.secondary
             )
+        elif custom_id == "dank_protection:antinuke_strict_lockdown":
+            child.label = f"Lockdown: {'ON' if strict_lockdown else 'OFF'}"
+            child.style = discord.ButtonStyle.danger if strict_lockdown else discord.ButtonStyle.secondary
+            child.emoji = "🔐" if strict_lockdown else "🔓"
         elif custom_id == "dank_protection:live_stats":
             live_stats_on = _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False)
             child.label = f"Server Stats: {'ON' if live_stats_on else 'SET UP'}"
@@ -1153,33 +1186,27 @@ async def _toggle_antinuke(interaction: discord.Interaction) -> None:
         await _send_ephemeral(interaction, "❌ This must be used inside a server.")
         return
 
-    current = await get_antinuke_settings(int(guild.id))
+    current = await anti_nuke_service.get_antinuke_settings(int(guild.id))
     target_enabled = not bool(current["antinuke_enabled"])
-
-    candidate = {
-        **current,
-        "antinuke_enabled": target_enabled,
-    }
+    candidate = {**current, "antinuke_enabled": target_enabled}
 
     if target_enabled:
-        missing = antinuke_permission_health(guild, candidate)
+        missing = anti_nuke_service.antinuke_permission_health(guild, candidate)
         if missing:
             await _send_ephemeral(
                 interaction,
-                "❌ AntiNuke was **not enabled**. Missing: **"
-                + ", ".join(missing)
-                + "**.\n\n"
-                "AntiNuke needs **View Audit Log** to prove who performed destructive actions. "
-                "Contain mode also needs **Manage Roles** and **Kick Members** for definitive containment. "
-                "Administrator is **not required**.",
+                _antinuke_health_message(
+                    "❌ AntiNuke was not enabled. Readiness blockers:",
+                    missing,
+                    strict=_cfg_bool(candidate, STRICT_LOCKDOWN_KEY, False),
+                ),
             )
             return
 
-    saved = await save_antinuke_settings(
+    saved = await anti_nuke_service.save_antinuke_settings(
         int(guild.id),
         {"antinuke_enabled": target_enabled},
     )
-
     await _refresh_panel(
         interaction,
         content=(
@@ -1199,35 +1226,85 @@ async def _toggle_antinuke_mode(interaction: discord.Interaction) -> None:
         await _send_ephemeral(interaction, "❌ This must be used inside a server.")
         return
 
-    current = await get_antinuke_settings(int(guild.id))
+    current = await anti_nuke_service.get_antinuke_settings(int(guild.id))
     target_mode = "alert" if current["antinuke_mode"] == "contain" else "contain"
-
-    candidate = {
-        **current,
-        "antinuke_mode": target_mode,
-    }
+    candidate = {**current, "antinuke_mode": target_mode}
+    if target_mode == "alert":
+        candidate[STRICT_LOCKDOWN_KEY] = False
 
     if current["antinuke_enabled"]:
-        missing = antinuke_permission_health(guild, candidate)
+        missing = anti_nuke_service.antinuke_permission_health(guild, candidate)
         if missing:
             await _send_ephemeral(
                 interaction,
-                "❌ AntiNuke mode was **not changed**. Missing: **"
-                + ", ".join(missing)
-                + "**.\n"
-                "Use **Alert** mode without containment permissions, or grant only the missing permissions. "
-                "Administrator is not required.",
+                _antinuke_health_message(
+                    "❌ AntiNuke mode was not changed. Readiness blockers:",
+                    missing,
+                    strict=_cfg_bool(candidate, STRICT_LOCKDOWN_KEY, False),
+                ),
             )
             return
 
-    saved = await save_antinuke_settings(
-        int(guild.id),
-        {"antinuke_mode": target_mode},
-    )
+    patch: dict[str, Any] = {"antinuke_mode": target_mode}
+    if target_mode == "alert":
+        patch[STRICT_LOCKDOWN_KEY] = False
+    saved = await anti_nuke_service.save_antinuke_settings(int(guild.id), patch)
+    note = f"✅ AntiNuke response mode set to **{saved['antinuke_mode'].upper()}**."
+    if target_mode == "alert" and _cfg_bool(current, STRICT_LOCKDOWN_KEY, False):
+        note += " Strict Lockdown was turned off because it only applies to Contain mode."
+    await _refresh_panel(interaction, content=note)
 
+
+async def _toggle_antinuke_strict_lockdown(interaction: discord.Interaction) -> None:
+    if not await _require_antinuke_owner(interaction):
+        return
+
+    guild = interaction.guild
+    if guild is None:
+        await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+        return
+
+    current = await anti_nuke_service.get_antinuke_settings(int(guild.id))
+    if not current["antinuke_enabled"]:
+        await _send_ephemeral(
+            interaction,
+            "Enable AntiNuke first. Normal Contain is the recommended starting mode; "
+            "Strict Lockdown is an optional additional restriction.",
+        )
+        return
+    if current["antinuke_mode"] != "contain":
+        await _send_ephemeral(
+            interaction,
+            "Strict Lockdown only applies to **Contain** mode. Switch the response mode to Contain first.",
+        )
+        return
+
+    target = not _cfg_bool(current, STRICT_LOCKDOWN_KEY, False)
+    candidate = {**current, STRICT_LOCKDOWN_KEY: target}
+    if target:
+        missing = anti_nuke_service.antinuke_permission_health(guild, candidate)
+        if missing:
+            await _send_ephemeral(
+                interaction,
+                _antinuke_health_message(
+                    "❌ Strict Lockdown was not enabled. Readiness blockers:",
+                    missing,
+                    strict=True,
+                ),
+            )
+            return
+
+    saved = await anti_nuke_service.save_antinuke_settings(
+        int(guild.id),
+        {STRICT_LOCKDOWN_KEY: target},
+    )
     await _refresh_panel(
         interaction,
-        content=f"✅ AntiNuke response mode set to **{saved['antinuke_mode'].upper()}**.",
+        content=(
+            "✅ Strict Lockdown is now **ON**. Delegated restricted authority must remain removed."
+            if saved[STRICT_LOCKDOWN_KEY]
+            else "✅ Strict Lockdown is now **OFF**. Normal Contain remains active."
+        ),
     )
 
 
@@ -2233,6 +2310,20 @@ class ProtectionCenterView(discord.ui.View):
             "protection.server_stats",
             action,
             defer=False,
+        )
+
+    @discord.ui.button(label="Strict Lockdown", emoji="🔓", style=discord.ButtonStyle.secondary, custom_id="dank_protection:antinuke_strict_lockdown", row=3)
+    async def antinuke_strict_lockdown_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+
+        async def action() -> None:
+            await _toggle_antinuke_strict_lockdown(interaction)
+
+        await _guard_protection_action(
+            interaction,
+            "protection.antinuke.strict_lockdown",
+            action,
+            defer=True,
         )
 
     @discord.ui.button(label="AntiNuke", emoji="⚪", style=discord.ButtonStyle.secondary, custom_id="dank_protection:antinuke_toggle", row=4)
