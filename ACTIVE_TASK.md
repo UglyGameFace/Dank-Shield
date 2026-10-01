@@ -121,6 +121,12 @@ Exact head `3fea2335e2309f3318072ff6e591ea8b66dbec53` failed Dank Shield CI only
 
 That review also exposed and fixed the remaining pre-ack permission-check hole described above.
 
+Exact head `7bf5c3edca7960e708df4825f581d6f84453d47f` then failed only on two stale test contracts:
+- a static test still required the literal `interaction.response.defer` inside `_refresh_panel()` even though acknowledgement is now deliberately centralized in `_ack_protection_entry()`;
+- an advanced-setup test used a minimal fake response that never modeled acknowledgement because the old route performed permission checking first.
+
+Those tests now validate the new architecture directly: the shared ack helper owns Discord defer, and the setup route order is **ack → permission → Protection refresh**.
+
 ## Next step
 
 Validate PR #377 on the new exact head. Patch only evidence-backed failures. If CI is green, complete final diff/branch hygiene, mark ready, merge with the exact expected head, verify post-merge CI/Supabase/Discloud, then rerun the Android Protection canary. Do not close issue #375 until that live canary passes.
