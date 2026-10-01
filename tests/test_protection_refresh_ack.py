@@ -138,3 +138,60 @@ def test_public_protection_entries_ack_before_permission_checks() -> None:
         ack = block.index("_ack_protection_entry")
         permission = block.index("_require_setup_permission")
         assert ack < permission, relative
+
+
+def test_refresh_panel_replaces_loading_when_render_fails(monkeypatch) -> None:
+    events: list[str] = []
+    _install_refresh_fakes(monkeypatch, events)
+    interaction = _Interaction(events)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("render exploded")
+
+    monkeypatch.setattr(center, "_protection_embed", boom)
+    monkeypatch.setattr(
+        center,
+        "log_interaction_failure",
+        lambda *_args, **_kwargs: SimpleNamespace(error_id="render-test"),
+    )
+
+    asyncio.run(center._refresh_panel(interaction, content="open"))
+
+    assert interaction.edit_payloads[0]["content"] == "⏳ Loading Protection Center…"
+    terminal = interaction.edit_payloads[-1]
+    assert terminal["embed"] is None
+    assert terminal["view"] is None
+    assert "could not finish opening" in terminal["content"]
+    assert "render-test" in terminal["content"]
+    assert "stats" not in events
+
+
+def test_refresh_panel_replaces_loading_when_final_edit_fails(monkeypatch) -> None:
+    events: list[str] = []
+    _install_refresh_fakes(monkeypatch, events)
+
+    class FinalEditFailsInteraction(_Interaction):
+        async def edit_original_response(self, **payload):
+            self.events.append("edit")
+            self.edit_payloads.append(dict(payload))
+            self.last_payload = dict(payload)
+            if len(self.edit_payloads) == 2:
+                raise RuntimeError("discord rejected final panel")
+
+    interaction = FinalEditFailsInteraction(events)
+    monkeypatch.setattr(
+        center,
+        "log_interaction_failure",
+        lambda *_args, **_kwargs: SimpleNamespace(error_id="edit-test"),
+    )
+
+    asyncio.run(center._refresh_panel(interaction, content="open"))
+
+    assert interaction.edit_payloads[0]["content"] == "⏳ Loading Protection Center…"
+    assert interaction.edit_payloads[1]["content"] == "open"
+    terminal = interaction.edit_payloads[-1]
+    assert terminal["embed"] is None
+    assert terminal["view"] is None
+    assert "could not finish opening" in terminal["content"]
+    assert "edit-test" in terminal["content"]
+    assert "stats" not in events
