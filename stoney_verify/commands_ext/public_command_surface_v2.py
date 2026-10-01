@@ -307,10 +307,11 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
         return await open_member_setup_admin(interaction)
 
     if key == "protection":
+        from . import public_protection_center
+        await public_protection_center._ack_protection_entry(interaction)
         from .public_setup_group import _require_setup_permission
         if not await _require_setup_permission(interaction):
             return
-        from . import public_protection_center
         return await public_protection_center._refresh_panel(
             interaction,
             content="🛡️ Protection Center opened from Dank Shield navigation.",
