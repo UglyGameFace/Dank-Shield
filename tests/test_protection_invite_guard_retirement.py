@@ -19,6 +19,9 @@ RETIRED_GUARDS = (
     "spam_guard_invite_hard_block.py",
     "spam_guard_invite_override_options.py",
     "protection_invite_target_precedence_guard.py",
+    "protection_center_clear_categories_guard.py",
+    "protection_center_filter_list_guard.py",
+    "protection_center_embed_refresh_guard.py",
 )
 
 
@@ -37,15 +40,13 @@ def test_historical_registry_does_not_advertise_retired_invite_ui_owners() -> No
         assert filename.removesuffix(".py") not in registry
 
 
-def test_surviving_general_protection_guards_do_not_chain_retired_invite_ui() -> None:
-    survivors = (
-        GUARD_DIR / "protection_center_clear_categories_guard.py",
-        GUARD_DIR / "protection_center_filter_list_guard.py",
-    )
-    for path in survivors:
-        source = _text(path)
-        for filename in RETIRED_GUARDS:
-            assert filename.removesuffix(".py") not in source, f"{filename} referenced by {path}"
+def test_retired_general_protection_ui_guards_stay_deleted() -> None:
+    for filename in (
+        "protection_center_clear_categories_guard.py",
+        "protection_center_filter_list_guard.py",
+        "protection_center_embed_refresh_guard.py",
+    ):
+        assert not (GUARD_DIR / filename).exists(), filename
 
 
 def test_native_invite_owner_is_explicit_and_startup_guard_free() -> None:
