@@ -385,6 +385,63 @@ def test_role_dependency_and_self_service_helpers_cover_generic_options() -> Non
     assert self_service_kind(config, 999) == ""
 
 
+def test_toke_capabilities_survive_payload_parse_round_trip() -> None:
+    config = CommunityPingsConfig(
+        revision=5,
+        groups=(CommunityPingGroup(key="toke", label="Toke"),),
+        options=(
+            CommunityPingOption(
+                key="stoner",
+                role_id=700,
+                label="Stoner",
+                group_key="toke",
+                capabilities=(CAP_TOKE_START, CAP_TOKE_NOTIFY),
+            ),
+        ),
+        source="v2",
+    )
+
+    payload = config.to_payload()
+    assert payload["options"][0]["capabilities"] == [
+        CAP_TOKE_START,
+        CAP_TOKE_NOTIFY,
+    ]
+
+    reparsed = parse_community_pings({COMMUNITY_PINGS_KEY: payload})
+    assert reparsed.options[0].capabilities == (
+        CAP_TOKE_START,
+        CAP_TOKE_NOTIFY,
+    )
+    assert toke_role_ids(reparsed) == (700, 700)
+
+
+def test_toke_capability_parser_repairs_hyphenated_legacy_bug() -> None:
+    reparsed = parse_community_pings(
+        {
+            COMMUNITY_PINGS_KEY: {
+                "version": 2,
+                "revision": 6,
+                "groups": [{"key": "toke", "label": "Toke"}],
+                "options": [
+                    {
+                        "key": "stoner",
+                        "role_id": "700",
+                        "label": "Stoner",
+                        "group_key": "toke",
+                        "capabilities": ["toke-start", "toke-notify"],
+                    }
+                ],
+            }
+        }
+    )
+
+    assert reparsed.options[0].capabilities == (
+        CAP_TOKE_START,
+        CAP_TOKE_NOTIFY,
+    )
+    assert toke_role_ids(reparsed) == (700, 700)
+
+
 def test_toke_capabilities_prefer_v2_and_fall_back_to_legacy_ids() -> None:
     config = CommunityPingsConfig(
         revision=1,
