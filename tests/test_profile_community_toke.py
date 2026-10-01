@@ -235,6 +235,31 @@ def test_malformed_v2_does_not_restore_legacy_profile_identity() -> None:
     assert all("Community: Stoner" not in label for label in labels)
 
 
+def test_toke_setup_uses_only_shared_resource_browser_for_channel_discovery() -> None:
+    toke_source = Path(public_toke.__file__).read_text(encoding="utf-8")
+    manager_source = (
+        ROOT / "stoney_verify/commands_ext/public_community_pings.py"
+    ).read_text(encoding="utf-8")
+
+    assert "CommunityPingSetupView" not in toke_source
+    assert "DankChannelSelect" not in toke_source
+    assert "DankRoleSelect" not in toke_source
+    assert "await open_community_ping_setup(interaction, replace_message=replace_message)" in toke_source
+
+    start = manager_source.index(
+        '@discord.ui.button(label="Toke Channel"'
+    )
+    end = manager_source.index(
+        '@discord.ui.button(label="Clear Toke Channel"',
+        start,
+    )
+    block = manager_source[start:end]
+    assert "DankGuildResourceBrowserView(" in block
+    assert 'resource_kinds=("text",)' in block
+    assert 'placeholder="Choose a text channel…"' in block
+    assert "discord.ui.ChannelSelect" not in block
+
+
 def test_generic_manager_exposes_add_edit_and_safe_remove_controls() -> None:
     labels = _labels(CommunityPingsManagerView(1))
     assert {
