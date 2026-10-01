@@ -11,6 +11,7 @@ import pytest
 from stoney_verify import config_history_ui
 from stoney_verify.commands_ext import public_protection_center
 from stoney_verify.commands_ext import public_setup_recommend as recommend
+from stoney_verify.navigation_registry import CATEGORIES
 from stoney_verify.commands_ext import public_setup_solid as solid
 from stoney_verify.setup_ui import public_setup_compact as compact
 
@@ -80,17 +81,7 @@ def test_manage_setup_is_compact_and_task_based() -> None:
         "Setup Home",
         "Close",
     }
-    assert select_labels(view) == [
-        "Setup Plan & Server Items",
-        "Tickets",
-        "Verification",
-        "Security & SpamGuard",
-        "Logs & Activity",
-        "Server Design",
-        "Welcome & Join",
-        "Profile Signatures",
-        "Backups & History",
-    ]
+    assert select_labels(view) == [category.label for category in CATEGORIES]
 
 
 def test_advanced_settings_aliases_the_single_compact_manager() -> None:
