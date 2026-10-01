@@ -172,6 +172,49 @@ def _group_map(model: CommunityPingsConfig) -> dict[str, CommunityPingGroup]:
     return {group.key: group for group in model.groups}
 
 
+def _assign_toke_capability(
+    model: CommunityPingsConfig,
+    *,
+    option_key: str,
+    capability: str,
+) -> CommunityPingsConfig:
+    """Assign one /toke capability to exactly one configured option."""
+
+    if capability not in {CAP_TOKE_START, CAP_TOKE_NOTIFY}:
+        raise ValueError("Unsupported /toke capability.")
+
+    wanted = str(option_key or "").strip()
+    selected = next((item for item in model.options if item.key == wanted), None)
+    if selected is None:
+        raise ValueError("That Community & Pings option no longer exists.")
+
+    stripped_options = tuple(
+        replace(
+            item,
+            capabilities=tuple(
+                value for value in item.capabilities if value != capability
+            ),
+        )
+        for item in model.options
+    )
+    stripped_model = CommunityPingsConfig(
+        revision=model.revision,
+        groups=model.groups,
+        options=stripped_options,
+        source=model.source,
+    )
+    stripped_selected = next(
+        item for item in stripped_model.options if item.key == wanted
+    )
+    target = replace(
+        stripped_selected,
+        capabilities=tuple(
+            dict.fromkeys((*stripped_selected.capabilities, capability))
+        ),
+    )
+    return with_option(stripped_model, target)
+
+
 def _manager_embed(
     guild: discord.Guild,
     raw_config: Mapping[str, Any],
@@ -201,7 +244,9 @@ def _manager_embed(
         value=(
             f"Starter: {starter.mention if isinstance(starter, discord.Role) else 'Not configured'}\n"
             f"Notify: {notify.mention if isinstance(notify, discord.Role) else 'Not configured'}\n"
-            f"Preferred channel: {channel.mention if isinstance(channel, discord.TextChannel) else 'Use the command channel'}"
+            f"Preferred channel: {channel.mention if isinstance(channel, discord.TextChannel) else 'Use the command channel'}\n"
+            "Use **Toke Starter**, **Toke Notify**, and **Toke Channel** below. "
+            "Starter/Notify choose from enabled safe Community & Pings options; use **Add Option** first if a role is not listed."
         ),
         inline=False,
     )
@@ -912,6 +957,111 @@ class DeleteGroupConfirmView(_OwnedView):
 
 
 class CommunityPingsManagerView(_OwnedView):
+    async def _open_toke_capability_picker(
+        self,
+        interaction: discord.Interaction,
+        *,
+        capability: str,
+        title: str,
+        placeholder: str,
+    ) -> None:
+        if not await _staff_authorized(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await _reply(interaction, "This only works inside a server.")
+
+        raw, model = await _load(guild)
+        resolved = _resolved_options(guild, raw, model)
+        choices = [
+            DankChoice(
+                label=option.label,
+                value=option.key,
+                description=(
+                    f"{'Notification' if option.kind == 'notification' else 'Community'} role • "
+                    f"{role.name}"
+                ),
+                emoji=option.emoji,
+                default=capability in option.capabilities,
+            )
+            for option, role in resolved
+        ]
+        if not choices:
+            return await _reply(
+                interaction,
+                "No enabled safe Community & Pings options are available. Use **Add Option** first, then choose the /toke mapping.",
+            )
+
+        async def picked(
+            pick_interaction: discord.Interaction,
+            option_key: str,
+        ) -> None:
+            fresh_raw, fresh_model = await _load(guild)
+            selected = next(
+                (
+                    item
+                    for item in fresh_model.options
+                    if item.key == str(option_key or "").strip()
+                ),
+                None,
+            )
+            if (
+                selected is None
+                or not selected.enabled
+                or _option_role(guild, selected, fresh_raw) is None
+            ):
+                return await _reply(
+                    pick_interaction,
+                    "That Community & Pings option is no longer available. Refresh the manager and try again.",
+                )
+            try:
+                updated = _assign_toke_capability(
+                    fresh_model,
+                    option_key=selected.key,
+                    capability=capability,
+                )
+            except ValueError as exc:
+                return await _reply(pick_interaction, str(exc))
+
+            saved = await _save(
+                pick_interaction,
+                expected_config=fresh_raw,
+                updated=updated,
+            )
+            if saved is None:
+                return
+            await _open_manager_message(
+                pick_interaction,
+                owner_id=self.owner_id,
+            )
+
+        async def back(back_interaction: discord.Interaction) -> None:
+            await _open_manager_message(
+                back_interaction,
+                owner_id=self.owner_id,
+            )
+
+        await _replace(
+            interaction,
+            embed=discord.Embed(
+                title=title,
+                description=(
+                    "Choose which existing Community & Pings option owns this /toke role. "
+                    "Assigning it here automatically removes this same /toke capability from any previously mapped option."
+                ),
+                color=discord.Color.green(),
+            ),
+            view=DankPickerView(
+                author_id=self.owner_id,
+                choices=choices,
+                on_pick=picked,
+                custom_id=f"dank:community_pings:{capability}"[:100],
+                placeholder=placeholder,
+                on_home=back,
+                home_label="Back to manager",
+            ),
+        )
+
     @discord.ui.button(label="Add Option", emoji="➕", style=discord.ButtonStyle.primary, row=0)
     async def add_option(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -1191,6 +1341,26 @@ class CommunityPingsManagerView(_OwnedView):
             home_label="Back to manager",
         )
         await _replace(interaction, embed=browser.embed(), view=browser)
+
+    @discord.ui.button(label="Toke Starter", emoji="🌿", style=discord.ButtonStyle.primary, row=2)
+    async def toke_starter(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await self._open_toke_capability_picker(
+            interaction,
+            capability=CAP_TOKE_START,
+            title="Choose /toke Starter Role",
+            placeholder="Choose who may start /toke…",
+        )
+
+    @discord.ui.button(label="Toke Notify", emoji="💨", style=discord.ButtonStyle.primary, row=2)
+    async def toke_notify(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await self._open_toke_capability_picker(
+            interaction,
+            capability=CAP_TOKE_NOTIFY,
+            title="Choose /toke Notification Role",
+            placeholder="Choose who receives /toke pings…",
+        )
 
     @discord.ui.button(label="Clear Toke Channel", emoji="🧹", style=discord.ButtonStyle.secondary, row=2)
     async def clear_toke_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
