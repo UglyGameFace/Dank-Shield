@@ -207,6 +207,46 @@ def test_resource_browser_pages_more_than_discord_option_limit() -> None:
     asyncio.run(scenario())
 
 
+def test_large_text_channel_browser_keeps_general_discoverable_across_pages() -> None:
+    channels = [
+        _channel(index, f"channel-{index:02d}", discord.ChannelType.text)
+        for index in range(63)
+    ]
+    channels[40] = _channel(40, "general-chat", discord.ChannelType.text)
+    guild = FakeGuild(channels=channels)
+
+    async def picked(_interaction, _resource):
+        return None
+
+    async def scenario() -> None:
+        first = DankGuildResourceBrowserView(
+            guild=guild,
+            author_id=123,
+            resource_kinds=("text",),
+            on_pick=picked,
+            custom_id="test:toke-channels",
+            placeholder="Choose a text channel…",
+            page=0,
+        )
+        second = first.clone(page=1)
+        third = first.clone(page=2)
+
+        assert first.page_count == 3
+        assert len(first.candidates) == 63
+        assert len(first.children[0].options) == 25
+        assert len(second.children[0].options) == 25
+        assert len(third.children[0].options) == 13
+        assert "general-chat" in [option.label for option in second.children[0].options]
+        assert str(first.children[0].placeholder).startswith("Page 1/3")
+        assert "25 items at once" in str(first.embed().description or "")
+        assert "1–25 of 63" in str(first.embed().description or "")
+
+        searched = await first.search("general-chat")
+        assert [item.label for item in searched.candidates] == ["general-chat"]
+
+    asyncio.run(scenario())
+
+
 def test_resource_kind_mapping_keeps_setup_type_filters() -> None:
     assert _resource_kinds([discord.ChannelType.category]) == ("category",)
     assert _resource_kinds([discord.ChannelType.text]) == ("text",)
