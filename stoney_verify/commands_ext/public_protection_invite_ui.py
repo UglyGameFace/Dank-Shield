@@ -495,6 +495,7 @@ class InviteShieldView(discord.ui.View):
     async def back_to_protection(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         center = _center()
+        await center._ack_protection_entry(interaction)
         if not await center._require_setup_permission(interaction):
             return
         await center._refresh_panel(interaction, content="Back to Protection Center.")
