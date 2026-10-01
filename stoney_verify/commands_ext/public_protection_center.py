@@ -524,6 +524,7 @@ def _protection_embed(
         value=(
             "**AntiNuke** = owner-only destructive-action protection, containment mode, trust lists, and thresholds.\n"
             "**Trust Lists** = trusted delegated inviters plus bot IDs that are pre-approved before owner-added installs.\n"
+            "**Restore Member** = owner-only recovery for a Discord ID that was unbanned but still has active AntiNuke hostile reputation.\n"
             "**Edit Spam Guard** = message speed, duplicate messages, invite-flood threshold, timeout length.\n"
             "**Invite Blocker** = live ON/OFF for Discord invite links.\n"
             "**Block All Links** = stop every URL.\n"
@@ -1712,6 +1713,127 @@ class StarterPackImportModal(discord.ui.Modal, title="Import Starter Filter Pack
         await _guard_protection_action(interaction, "protection.import_filter_pack_modal", action, defer=True)
 
 
+class RestoreMemberModal(discord.ui.Modal, title="Restore Member"):
+    user_id = discord.ui.TextInput(
+        label="Discord user ID",
+        placeholder="Paste the exact user ID to restore",
+        min_length=5,
+        max_length=25,
+        required=True,
+    )
+    reason = discord.ui.TextInput(
+        label="Reason for owner restore",
+        placeholder="False positive, appeal approved, trusted again…",
+        max_length=300,
+        required=False,
+        style=discord.TextStyle.paragraph,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        async def action() -> None:
+            guild = interaction.guild
+            if guild is None:
+                await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+                return
+
+            actor_id = int(getattr(interaction.user, "id", 0) or 0)
+            owner_id = int(getattr(guild, "owner_id", 0) or 0)
+            if actor_id <= 0 or actor_id != owner_id:
+                await _send_ephemeral(
+                    interaction,
+                    "❌ Only the **physical server owner** can clear AntiNuke hostile reputation.",
+                )
+                return
+
+            raw_user_id = str(self.user_id.value or "").strip()
+            if not raw_user_id.isdigit():
+                await _send_ephemeral(interaction, "❌ Enter a numeric Discord user ID.")
+                return
+            target_id = int(raw_user_id)
+            if target_id <= 0 or target_id == owner_id:
+                await _send_ephemeral(interaction, "❌ That Discord user ID cannot be restored here.")
+                return
+
+            from .. import anti_nuke_hostile_actor_runtime as hostile_runtime
+
+            current = await hostile_runtime.get_actor_reputation(
+                int(guild.id),
+                target_id,
+                refresh=True,
+            )
+            hostile_cleared = False
+            if current and current.get("active"):
+                hostile_cleared = await hostile_runtime.clear_hostile_reputation_for_owner_intent(
+                    guild,
+                    target_id,
+                    actor_id=actor_id,
+                    reason=(
+                        str(self.reason.value or "").strip()
+                        or "Physical server owner restored this Discord ID from Protection Center"
+                    ),
+                )
+                if not hostile_cleared:
+                    await _send_ephemeral(
+                        interaction,
+                        "❌ The hostile record could not be cleared durably, so I stopped before changing the Discord ban.",
+                    )
+                    return
+
+            target = discord.Object(id=target_id)
+            was_banned = False
+            try:
+                ban_entry = await guild.fetch_ban(target)
+                target = getattr(ban_entry, "user", None) or target
+                was_banned = True
+            except discord.NotFound:
+                was_banned = False
+            except discord.Forbidden:
+                await _send_ephemeral(
+                    interaction,
+                    "❌ I could not check the Discord ban list. I need **Ban Members** permission.",
+                )
+                return
+
+            if was_banned:
+                try:
+                    await guild.unban(
+                        target,
+                        reason=(
+                            str(self.reason.value or "").strip()
+                            or f"Dank Shield owner restore by {interaction.user} ({actor_id})"
+                        ),
+                    )
+                except discord.Forbidden:
+                    await _send_ephemeral(
+                        interaction,
+                        "❌ The AntiNuke record was cleared, but Discord would not let me unban that user. Check **Ban Members** permission.",
+                    )
+                    return
+
+            notes = []
+            if hostile_cleared:
+                notes.append("AntiNuke hostile reputation cleared")
+            elif current and not current.get("active"):
+                notes.append("AntiNuke hostile reputation was already cleared")
+            else:
+                notes.append("no active AntiNuke hostile reputation existed")
+            notes.append("Discord ban removed" if was_banned else "user was not currently Discord-banned")
+            await _send_ephemeral(
+                interaction,
+                "✅ Restore complete for "
+                f"`{target_id}`: "
+                + "; ".join(notes)
+                + ".",
+            )
+
+        await _guard_protection_action(
+            interaction,
+            "protection.antinuke.restore_member",
+            action,
+            defer=True,
+        )
+
+
 class ProtectionCenterView(discord.ui.View):
     def __init__(self, *, author_id: int, cfg: Any | None = None, spam: dict[str, Any] | None = None) -> None:
         super().__init__(timeout=PRIVATE_MENU_TTL_SECONDS)
@@ -1905,6 +2027,30 @@ class ProtectionCenterView(discord.ui.View):
         await _guard_protection_action(
             interaction,
             "protection.antinuke.open_thresholds",
+            action,
+            defer=False,
+        )
+
+    @discord.ui.button(label="Restore Member", emoji="♻️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:antinuke_restore_member", row=4)
+    async def antinuke_restore_member_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+
+        async def action() -> None:
+            guild = interaction.guild
+            if guild is None:
+                await _send_ephemeral(interaction, "❌ This must be used inside a server.")
+                return
+            if int(getattr(interaction.user, "id", 0) or 0) != int(getattr(guild, "owner_id", 0) or 0):
+                await _send_ephemeral(
+                    interaction,
+                    "❌ Only the **physical server owner** can restore a hostile AntiNuke identity.",
+                )
+                return
+            await interaction.response.send_modal(RestoreMemberModal())
+
+        await _guard_protection_action(
+            interaction,
+            "protection.antinuke.open_restore_member",
             action,
             defer=False,
         )
