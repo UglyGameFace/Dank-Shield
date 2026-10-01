@@ -1367,10 +1367,11 @@ class ConfigureFeaturesHubView(SetupNavView):
 
     @discord.ui.button(label="Protection", emoji="🛡️", style=discord.ButtonStyle.primary, custom_id="stoney_solid:features_protection", row=0)
     async def protection(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        from . import public_protection_center
+        await public_protection_center._ack_protection_entry(interaction)
         if not await _require_setup_permission(interaction):
             return
         try:
-            from . import public_protection_center
             await public_protection_center._refresh_panel(interaction, content="🛡️ Protection Center opened from setup.")
         except Exception as e:
             await safe_interaction_error(

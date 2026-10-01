@@ -95,7 +95,8 @@ def test_active_slow_routes_are_acknowledgement_owned() -> None:
     assert compact.CompactReviewView._next.__name__ == "_ack_then_review_next"
     assert recommend._open_guided_target.__name__ == "_ack_then_open_guided_target"
     assert recommend._open_timers_behavior.__name__ == "_ack_then_open_timers_behavior"
-    assert recommend._open_protection_options.__name__ == "_ack_then_open_protection_options"
+    assert recommend._open_protection_options.__name__ == "_open_protection_options"
+    assert not hasattr(recommend, "_DANK_SETUP_ORIGINAL_OPEN_PROTECTION_OPTIONS")
 
 
 class _Response:

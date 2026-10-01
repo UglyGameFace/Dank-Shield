@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 from stoney_verify.commands_ext import public_protection_center as center
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class _Response:
@@ -29,10 +33,12 @@ class _Interaction:
         self.channel = None
         self.response = _Response(events, done=response_done)
         self.events = events
+        self.edit_payloads: list[dict] = []
         self.last_payload = None
 
     async def edit_original_response(self, **payload):
         self.events.append("edit")
+        self.edit_payloads.append(dict(payload))
         self.last_payload = dict(payload)
 
 
@@ -72,12 +78,16 @@ def test_refresh_panel_acknowledges_before_slow_loads_and_edits_original(
     asyncio.run(center._refresh_panel(interaction, content="open"))
 
     assert events[0] == "defer"
-    assert events.index("config") > events.index("defer")
-    assert events.index("spam") > events.index("defer")
-    assert events.index("edit") > events.index("config")
-    assert events.index("edit") > events.index("spam")
-    assert events.index("stats") > events.index("edit")
+    assert events[1] == "edit"
+    assert events.index("config") > 1
+    assert events.index("spam") > 1
+    assert events.count("edit") == 2
+    final_edit_index = len(events) - 2
+    assert events[final_edit_index] == "edit"
+    assert events[-1] == "stats"
     assert interaction.response.defer_calls == 1
+    assert interaction.edit_payloads[0]["content"] == "⏳ Loading Protection Center…"
+    assert interaction.edit_payloads[0]["view"] is None
     assert interaction.last_payload == {
         "content": "open",
         "embed": "embed",
@@ -97,3 +107,34 @@ def test_refresh_panel_reuses_existing_ack_without_duplicate_defer(
     assert "defer" not in events
     assert interaction.response.defer_calls == 0
     assert events[-2:] == ["edit", "stats"]
+
+
+def test_protection_entry_ack_is_idempotent() -> None:
+    events: list[str] = []
+    interaction = _Interaction(events)
+
+    asyncio.run(center._ack_protection_entry(interaction))
+    asyncio.run(center._ack_protection_entry(interaction))
+
+    assert events == ["defer"]
+    assert interaction.response.defer_calls == 1
+
+
+def test_public_protection_entries_ack_before_permission_checks() -> None:
+    checks = (
+        ("stoney_verify/commands_ext/public_protection_center.py", "async def protection_center"),
+        ("stoney_verify/commands_ext/public_command_surface_v2.py", 'if key == "protection":'),
+        ("stoney_verify/commands_ext/public_command_hub.py", 'label="Protection"'),
+        ("stoney_verify/commands_ext/public_setup_solid.py", 'custom_id="stoney_solid:features_protection"'),
+        ("stoney_verify/commands_ext/public_setup_recommend.py", "async def _open_protection_options"),
+        ("stoney_verify/protection_center_services.py", "async def open_protection_center"),
+        ("stoney_verify/commands_ext/public_protection_invite_ui.py", "async def back_to_protection"),
+    )
+
+    for relative, anchor in checks:
+        source = (ROOT / relative).read_text(encoding="utf-8")
+        start = source.index(anchor)
+        block = source[start : start + 2600]
+        ack = block.index("_ack_protection_entry")
+        permission = block.index("_require_setup_permission")
+        assert ack < permission, relative

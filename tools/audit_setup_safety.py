@@ -206,12 +206,22 @@ def _assert_runtime_integrity(failures: list[str]) -> None:
         "_ack_then_review_next",
         "_ack_then_open_guided_target",
         "_ack_then_open_timers_behavior",
-        "_ack_then_open_protection_options",
     )
     for marker in required_runtime_markers:
         if marker not in runtime_text:
             failures.append(
                 f"final setup runtime is missing integrity marker `{marker}`"
+            )
+
+    retired_protection_runtime_markers = (
+        "async def _ack_then_open_protection_options",
+        "_DANK_SETUP_ORIGINAL_OPEN_PROTECTION_OPTIONS",
+        "setup._open_protection_options = _ack_then_open_protection_options",
+    )
+    for marker in retired_protection_runtime_markers:
+        if marker in runtime_text:
+            failures.append(
+                f"retired Protection setup runtime monkey patch returned: `{marker}`"
             )
 
     guided_markers = (
