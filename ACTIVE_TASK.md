@@ -127,6 +127,24 @@ Exact head `7bf5c3edca7960e708df4825f581d6f84453d47f` then failed only on two st
 
 Those tests now validate the new architecture directly: the shared ack helper owns Discord defer, and the setup route order is **ack → permission → Protection refresh**.
 
+
+## Protection runtime-ownership correction
+
+The latest CI failure exposed a deeper architecture defect in the setup compatibility layer:
+
+- `stoney_verify/commands_ext/public_setup_compact.py` was still monkey-patching `setup._open_protection_options` at import/runtime;
+- that wrapper performed setup authorization before the canonical Protection acknowledgement owner;
+- the permanent setup audit and runtime-integrity test incorrectly required that monkey patch to exist, so the audit could pass while violating the stated native-ownership goal.
+
+Correction on this branch:
+
+- retired the Protection-specific runtime reassignment and saved-original-function attribute;
+- Protection setup navigation now calls the native `public_setup_recommend._open_protection_options` directly;
+- changed runtime-integrity coverage to require the native function and absence of `_DANK_SETUP_ORIGINAL_OPEN_PROTECTION_OPTIONS`;
+- changed `tools/audit_setup_safety.py` to fail if the retired Protection wrapper, saved-original marker, or reassignment returns.
+
+This correction is part of the same Protection incident because the runtime replacement directly caused the pre-ack permission regression. Other unrelated setup compatibility wrappers remain outside this active task unless evidence shows they affect Protection.
+
 ## Next step
 
 Validate PR #377 on the new exact head. Patch only evidence-backed failures. If CI is green, complete final diff/branch hygiene, mark ready, merge with the exact expected head, verify post-merge CI/Supabase/Discloud, then rerun the Android Protection canary. Do not close issue #375 until that live canary passes.
