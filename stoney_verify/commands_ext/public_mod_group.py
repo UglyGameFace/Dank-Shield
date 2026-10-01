@@ -325,6 +325,40 @@ async def mod_ban_unban_group_command(
 
         banned_user = getattr(ban_entry, "user", None) or discord.Object(id=int(user_id))
         action_reason = reason or f"Unban by {interaction.user} ({interaction.user.id})"
+        hostile_cleared = False
+
+        # A physical-owner restore is authoritative over Dank Shield's durable
+        # AntiNuke hostile disposition. Clear it before Discord reopens the door
+        # so the fast re-entry guard cannot immediately ban the same ID again.
+        try:
+            owner_id = int(getattr(guild, "owner_id", 0) or 0)
+            actor_id = int(getattr(interaction.user, "id", 0) or 0)
+        except Exception:
+            owner_id = actor_id = 0
+
+        if owner_id > 0 and actor_id == owner_id:
+            from .. import anti_nuke_hostile_actor_runtime as hostile_runtime
+
+            current_reputation = await hostile_runtime.get_actor_reputation(
+                int(guild.id),
+                int(user_id),
+                refresh=True,
+            )
+            if current_reputation and current_reputation.get("active"):
+                hostile_cleared = await hostile_runtime.clear_hostile_reputation_for_owner_intent(
+                    guild,
+                    int(user_id),
+                    actor_id=actor_id,
+                    reason="Physical server owner used /mod ban-unban to restore this Discord ID",
+                )
+                if not hostile_cleared:
+                    return await safe_followup(
+                        interaction,
+                        "❌ I did not unban that ID because its AntiNuke hostile record could not be cleared safely. "
+                        "Open **/dank protection** and use **Restore Member** instead.",
+                        ephemeral=True,
+                    )
+
         try:
             await guild.unban(banned_user, reason=action_reason)
             try:
@@ -338,10 +372,20 @@ async def mod_ban_unban_group_command(
                 actor=interaction.user,
                 target=banned_user,
                 reason=action_reason,
-                extra=f"Command: `/mod ban-unban`\nAction selected: `{selected}`\nResolved state before action: `banned`",
+                extra=(
+                    f"Command: `/mod ban-unban`\n"
+                    f"Action selected: `{selected}`\n"
+                    f"Resolved state before action: `banned`\n"
+                    f"Owner hostile-reputation clear: `{'yes' if hostile_cleared else 'not needed'}`"
+                ),
                 color=discord.Color.green(),
             )
-            return await safe_followup(interaction, f"✅ Unbanned {_target_reply_label(banned_user, user_id)}.{_modlog_suffix(logged)}", ephemeral=True)
+            restore_note = " AntiNuke hostile reputation was cleared too." if hostile_cleared else ""
+            return await safe_followup(
+                interaction,
+                f"✅ Unbanned {_target_reply_label(banned_user, user_id)}.{restore_note}{_modlog_suffix(logged)}",
+                ephemeral=True,
+            )
         except discord.NotFound:
             return await safe_followup(interaction, f"ℹ️ `{user_id}` is not currently banned. Nothing to unban.", ephemeral=True)
         except discord.Forbidden:
