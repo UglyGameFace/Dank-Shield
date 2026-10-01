@@ -2,24 +2,83 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-PROTECTION-025 — issue #375 production-canary follow-up: Protection panel visible bounded loading**
+**DANK-SHIELD-TOKE-381 — fix /toke preferred-channel discovery on large servers**
 
 Explicit FORCE SWITCH accepted:
-**Fix Dank Protection timeout / dead Protection button.**
+**Fix /toke channel picker**
 
-Production baseline: `main` = `0ce2b74856262be1b74ef3066426d85b89136d9f` (PR #378 merged and deployed).
+Reason:
+`/toke` setup cannot select the user's valid general chat channel from the visible picker.
 
-Active branch: `fix/protection-native-ui-and-nav`.
+Production baseline: `main` = `534614801e6c19dfbc248e100022e1d5c8c87bc1` (PR #379 merged; exact-head CI green).
 
-Active PR: #379 — **Make Protection UI and setup navigation natively owned** (draft).
+Active branch: `fix/toke-channel-picker-pagination`.
 
-Issue #375 is reopened because the production canary still fails.
+Active issue: #381 — **Toke setup text-channel picker omits expected general channel**.
 
-## Paused work
+## Scope
 
-Issue #367 Slice 3 Verification Framework remains paused.
-The built-in ticket-category task is complete and merged as PR #374.
-Do not resume either without completing this Protection incident or receiving another explicit FORCE SWITCH.
+Trace and fix only the `/toke` / Community & Pings preferred-channel picker and the shared resource-browser behavior required for correctness on large guilds. Preserve guild-scoped persistence, staff authorization, Community & Pings ownership, Search-Safe lookup, and existing /toke send semantics.
+
+## Findings / root cause
+
+The production screenshot contains exactly **25** channel options. That is Discord's maximum number of options in one string select.
+
+The current Community & Pings **Toke Channel** route already uses the canonical `DankGuildResourceBrowserView` and does not permission-filter normal text channels. The shared browser discovers from the guild cache, retains every matching resource, and pages at 25 items. On a server with more than 25 text channels, a valid channel can therefore be on page 2+ even though the opened mobile dropdown visually looks like a complete list.
+
+The shared browser currently leaves **Next / Previous / Search** outside the opened dropdown. On Discord mobile the 25-option sheet covers those controls, so a user can reasonably conclude a page-2 channel is missing.
+
+A second duplicate path also existed in `public_toke.py`: the legacy `CommunityPingSetupView` / `open_toke_preset_setup` used Discord-native `DankRoleSelect` / `DankChannelSelect` selectors. Repository reference search found no external caller for that old view, but retaining it would allow the same divergent discovery behavior to return later.
+
+## Execution path
+
+Current canonical manager path:
+`/dank home or /role -> Community & Pings Manager -> Toke Channel -> public_community_pings.CommunityPingsManagerView -> DankGuildResourceBrowserView -> guild.channels -> paged DankPickerView -> existing guild_config write`.
+
+The save owner remains `public_community_pings.py`; the shared browser owns discovery/search/paging only.
+
+## Changes on active branch
+
+- Shared resource browser now makes pagination explicit in the select placeholder when multiple pages exist, e.g. **Page 1/3**.
+- Its embed states the exact visible range, e.g. **1–25 of 63**, explains Discord's 25-item dropdown limit, and tells mobile users to close the list and use **Next / Previous** or **Search**.
+- Retired the unused legacy `CommunityPingSetupView` native-selector implementation from `public_toke.py`.
+- `open_toke_preset_setup` remains as a compatibility entrypoint but delegates to the canonical Community & Pings manager.
+- Added regression coverage for a 63-text-channel guild where `general-chat` is beyond page 1 and remains discoverable through page 2 and Search.
+- Added regression coverage forbidding `DankChannelSelect` / `DankRoleSelect` from returning to `public_toke.py` setup and requiring Toke Channel to use `DankGuildResourceBrowserView`.
+- Updated picker-adoption documentation.
+
+## Validation required
+
+Before merge:
+- compile;
+- focused resource-browser tests;
+- focused Community & Pings / /toke tests;
+- full pytest / Dank Shield CI;
+- existing picker/navigation regressions;
+- branch must remain based on current production main;
+- final diff/reference check must show no unrelated work and no live caller of the retired view.
+
+After merge/deploy:
+- Android canary in the affected large server;
+- open Community & Pings -> Toke Channel;
+- verify the picker visibly reports page/range when >25 channels exist;
+- verify Next reaches later channels;
+- verify Search finds the expected general chat by current/styled name;
+- save it;
+- run `/toke` and confirm the card posts to the selected channel.
+
+## Suspended work
+
+Issue #375 Protection/navigation is suspended by explicit FORCE SWITCH.
+Preserved state:
+- PR #379 merged to `main` as `534614801e6c19dfbc248e100022e1d5c8c87bc1`;
+- exact-head Dank Shield CI and companion workflows passed;
+- production/mobile canary is still required before issue #375 can be closed;
+- no additional Protection changes should be made while #381 is active.
+
+Issue #380 **True master runtime ownership + production-path audit** remains the next repo-wide audit task after the current active task unless another explicit FORCE SWITCH occurs.
+
+## Suspended Protection task record
 
 ## Production evidence
 
