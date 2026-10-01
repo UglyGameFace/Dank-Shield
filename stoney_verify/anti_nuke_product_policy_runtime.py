@@ -17,7 +17,6 @@ _INSTALL_FLAG = "_dank_antinuke_product_policy_installed"
 _SETTING_FLAG = "_dank_antinuke_strict_setting_installed"
 _PROCESS_FLAG = "_dank_antinuke_product_process_patched"
 _GUARDIAN_FLAG = "_dank_antinuke_product_guardian_patched"
-_UI_FLAG = "_dank_antinuke_product_ui_patched"
 STRICT_LOCKDOWN_KEY = readiness.STRICT_LOCKDOWN_KEY
 _ALWAYS_FIRST_STRIKE_ACTIONS = frozenset({"member_prune"})
 _DIRECT_STRICT_KEYS = frozenset(
@@ -252,222 +251,12 @@ def _health_message(prefix: str, missing: list[str], *, strict: bool) -> str:
     return message
 
 
-def _patch_ui() -> bool:
-    from .commands_ext import public_protection_center as center
-
-    if bool(getattr(center, _UI_FLAG, False)):
-        return False
-
-    center.normalize_antinuke_settings = anti_nuke.normalize_antinuke_settings
-
-    async def toggle(interaction: discord.Interaction) -> None:
-        if not await center._require_antinuke_owner(interaction):  # noqa: SLF001
-            return
-        guild = interaction.guild
-        if guild is None:
-            await center._send_ephemeral(interaction, "This must be used inside a server.")  # noqa: SLF001
-            return
-
-        current = await anti_nuke.get_antinuke_settings(int(guild.id))
-        target_enabled = not bool(current["antinuke_enabled"])
-        candidate = {**current, "antinuke_enabled": target_enabled}
-        if target_enabled:
-            missing = anti_nuke.antinuke_permission_health(guild, candidate)
-            if missing:
-                await center._send_ephemeral(  # noqa: SLF001
-                    interaction,
-                    _health_message(
-                        "AntiNuke was not enabled. Readiness blockers:",
-                        missing,
-                        strict=_safe_bool(candidate.get(STRICT_LOCKDOWN_KEY), False),
-                    ),
-                )
-                return
-
-        saved = await anti_nuke.save_antinuke_settings(
-            int(guild.id),
-            {"antinuke_enabled": target_enabled},
-        )
-        await center._refresh_panel(  # noqa: SLF001
-            interaction,
-            content=(
-                "AntiNuke is now **ON**."
-                if saved["antinuke_enabled"]
-                else "AntiNuke is now **OFF**. Detection settings are saved for later."
-            ),
-        )
-
-    async def toggle_mode(interaction: discord.Interaction) -> None:
-        if not await center._require_antinuke_owner(interaction):  # noqa: SLF001
-            return
-        guild = interaction.guild
-        if guild is None:
-            await center._send_ephemeral(interaction, "This must be used inside a server.")  # noqa: SLF001
-            return
-
-        current = await anti_nuke.get_antinuke_settings(int(guild.id))
-        target_mode = "alert" if current["antinuke_mode"] == "contain" else "contain"
-        candidate = {**current, "antinuke_mode": target_mode}
-        if target_mode == "alert":
-            candidate[STRICT_LOCKDOWN_KEY] = False
-
-        if current["antinuke_enabled"]:
-            missing = anti_nuke.antinuke_permission_health(guild, candidate)
-            if missing:
-                await center._send_ephemeral(  # noqa: SLF001
-                    interaction,
-                    _health_message(
-                        "AntiNuke mode was not changed. Readiness blockers:",
-                        missing,
-                        strict=_safe_bool(candidate.get(STRICT_LOCKDOWN_KEY), False),
-                    ),
-                )
-                return
-
-        patch: dict[str, Any] = {"antinuke_mode": target_mode}
-        if target_mode == "alert":
-            patch[STRICT_LOCKDOWN_KEY] = False
-        saved = await anti_nuke.save_antinuke_settings(int(guild.id), patch)
-        note = f"AntiNuke response mode set to **{saved['antinuke_mode'].upper()}**."
-        if target_mode == "alert" and _safe_bool(current.get(STRICT_LOCKDOWN_KEY), False):
-            note += " Strict Lockdown was turned off because it only applies to Contain mode."
-        await center._refresh_panel(interaction, content=note)  # noqa: SLF001
-
-    async def toggle_strict(interaction: discord.Interaction) -> None:
-        if not await center._require_antinuke_owner(interaction):  # noqa: SLF001
-            return
-        guild = interaction.guild
-        if guild is None:
-            await center._send_ephemeral(interaction, "This must be used inside a server.")  # noqa: SLF001
-            return
-
-        current = await anti_nuke.get_antinuke_settings(int(guild.id))
-        if not current["antinuke_enabled"]:
-            await center._send_ephemeral(  # noqa: SLF001
-                interaction,
-                "Enable AntiNuke first. Normal Contain is the recommended starting mode; "
-                "Strict Lockdown is an optional additional restriction.",
-            )
-            return
-        if current["antinuke_mode"] != "contain":
-            await center._send_ephemeral(  # noqa: SLF001
-                interaction,
-                "Strict Lockdown only applies to **Contain** mode. Switch the response mode to Contain first.",
-            )
-            return
-
-        target = not _safe_bool(current.get(STRICT_LOCKDOWN_KEY), False)
-        candidate = {**current, STRICT_LOCKDOWN_KEY: target}
-        if target:
-            missing = anti_nuke.antinuke_permission_health(guild, candidate)
-            if missing:
-                await center._send_ephemeral(  # noqa: SLF001
-                    interaction,
-                    _health_message(
-                        "Strict Lockdown was not enabled. Readiness blockers:",
-                        missing,
-                        strict=True,
-                    ),
-                )
-                return
-
-        saved = await anti_nuke.save_antinuke_settings(
-            int(guild.id),
-            {STRICT_LOCKDOWN_KEY: target},
-        )
-        await center._refresh_panel(  # noqa: SLF001
-            interaction,
-            content=(
-                "Strict Lockdown is now **ON**. Delegated restricted authority must remain removed."
-                if saved[STRICT_LOCKDOWN_KEY]
-                else "Strict Lockdown is now **OFF**. Normal Contain remains active."
-            ),
-        )
-
-    original_embed = center._protection_embed  # noqa: SLF001
-
-    def embed(guild: discord.Guild, cfg: Any, spam: dict[str, Any], spam_source: str):
-        built = original_embed(guild, cfg, spam, spam_source)
-        settings = anti_nuke.normalize_antinuke_settings(cfg)
-        strict = _safe_bool(settings.get(STRICT_LOCKDOWN_KEY), False)
-        for index, field in enumerate(list(built.fields)):
-            name = str(field.name or "")
-            value = str(field.value or "")
-            if name.startswith("AntiNuke"):
-                lines = value.splitlines()
-                insert_at = 2 if len(lines) >= 2 else len(lines)
-                lines.insert(
-                    insert_at,
-                    f"**Strict Lockdown:** {'ON' if strict else 'OFF'}",
-                )
-                lines.append(
-                    "Contain allows staff permissions; explicitly trusted staff use configured thresholds. "
-                    "Strict Lockdown is the optional maximum-restriction tier."
-                )
-                built.set_field_at(index, name=name, value="\n".join(lines)[:1024], inline=False)
-            elif name == "What buttons do":
-                extra = (
-                    "\n**Strict Lockdown** = optional owner-only maximum-restriction policy; "
-                    "normal Contain does not require removing staff permissions."
-                )
-                built.set_field_at(index, name=name, value=(value + extra)[:1024], inline=False)
-        return built
-
-    BaseView = center.ProtectionCenterView
-
-    class PolicyProtectionCenterView(BaseView):
-        @discord.ui.button(
-            label="Strict Lockdown",
-            emoji="🔐",
-            style=discord.ButtonStyle.secondary,
-            custom_id="dank_protection:antinuke_strict_lockdown",
-            row=4,
-        )
-        async def antinuke_strict_lockdown_button(
-            self,
-            interaction: discord.Interaction,
-            button: discord.ui.Button,
-        ) -> None:
-            _ = button
-
-            async def action() -> None:
-                await toggle_strict(interaction)
-
-            await center._guard_protection_action(  # noqa: SLF001
-                interaction,
-                "protection.antinuke.strict_lockdown",
-                action,
-                defer=True,
-            )
-
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            super().__init__(*args, **kwargs)
-            cfg = kwargs.get("cfg")
-            settings = anti_nuke.normalize_antinuke_settings(cfg or {})
-            strict = _safe_bool(settings.get(STRICT_LOCKDOWN_KEY), False)
-            for child in list(getattr(self, "children", []) or []):
-                if str(getattr(child, "custom_id", "") or "") != "dank_protection:antinuke_strict_lockdown":
-                    continue
-                child.label = f"Lockdown: {'ON' if strict else 'OFF'}"
-                child.style = discord.ButtonStyle.danger if strict else discord.ButtonStyle.secondary
-                child.emoji = "🔐" if strict else "🔓"
-
-    center._toggle_antinuke = toggle  # noqa: SLF001
-    center._toggle_antinuke_mode = toggle_mode  # noqa: SLF001
-    center._toggle_antinuke_strict_lockdown = toggle_strict  # noqa: SLF001
-    center._protection_embed = embed  # noqa: SLF001
-    center.ProtectionCenterView = PolicyProtectionCenterView
-    setattr(center, _UI_FLAG, True)
-    return True
-
-
 def install_anti_nuke_product_policy_runtime() -> bool:
     if bool(getattr(anti_nuke, _INSTALL_FLAG, False)):
         return False
     setting = _patch_setting_model()
     threshold = _patch_threshold_policy()
     guardian_policy = _patch_guardian_policy()
-    ui = _patch_ui()
     setattr(anti_nuke, _INSTALL_FLAG, True)
     print(
         "Security product policy active: normal contain supports trusted staff; "
@@ -475,7 +264,7 @@ def install_anti_nuke_product_policy_runtime() -> bool:
         f"setting={'patched' if setting else 'ready'}; "
         f"thresholds={'patched' if threshold else 'ready'}; "
         f"guardian={'patched' if guardian_policy else 'ready'}; "
-        f"ui={'patched' if ui else 'ready'}"
+        "ui=native"
     )
     return True
 

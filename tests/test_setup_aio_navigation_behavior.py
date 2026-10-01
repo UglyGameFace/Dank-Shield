@@ -8,6 +8,7 @@ from stoney_verify import setup_020_entitled_id_guard
 from stoney_verify.commands_ext import public_setup_compact as compact
 from stoney_verify.commands_ext import public_setup_fresh_choice as fresh
 from stoney_verify.setup_new.templates import build_setup_template_embed
+from stoney_verify.navigation_registry import CATEGORIES
 
 
 assert setup_020_entitled_id_guard.install() is True
@@ -60,7 +61,7 @@ def test_started_home_exposes_direct_area_picker_without_manage_hop() -> None:
         "Close",
     ]
     assert "Manage Setup" not in labels(view)
-    assert len(select_labels(view)) == 9
+    assert len(select_labels(view)) == len(CATEGORIES)
 
 
 def test_ready_home_calls_final_guided_feature_testing_by_name() -> None:
@@ -83,17 +84,11 @@ def test_manage_screen_is_one_compact_feature_picker() -> None:
         "Setup Home",
         "Close",
     ]
-    assert select_labels(view) == [
-        "Setup Plan & Server Items",
-        "Tickets",
-        "Verification",
-        "Security & SpamGuard",
-        "Logs & Activity",
-        "Server Design",
-        "Welcome & Join",
-        "Profile Signatures",
-        "Backups & History",
-    ]
+    assert select_labels(view) == [category.label for category in CATEGORIES]
+    selector = next(
+        child for child in view.children if isinstance(child, discord.ui.Select)
+    )
+    assert str(selector.placeholder) == "Choose a section…"
 
 
 def test_feature_picker_does_not_repeat_areas_as_buttons() -> None:

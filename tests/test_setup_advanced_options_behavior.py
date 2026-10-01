@@ -10,7 +10,9 @@ import pytest
 
 from stoney_verify import config_history_ui
 from stoney_verify.commands_ext import public_protection_center
+from stoney_verify.commands_ext import public_command_surface_v2 as navigation
 from stoney_verify.commands_ext import public_setup_recommend as recommend
+from stoney_verify.navigation_registry import CATEGORIES
 from stoney_verify.commands_ext import public_setup_solid as solid
 from stoney_verify.setup_ui import public_setup_compact as compact
 
@@ -80,17 +82,7 @@ def test_manage_setup_is_compact_and_task_based() -> None:
         "Setup Home",
         "Close",
     }
-    assert select_labels(view) == [
-        "Setup Plan & Server Items",
-        "Tickets",
-        "Verification",
-        "Security & SpamGuard",
-        "Logs & Activity",
-        "Server Design",
-        "Welcome & Join",
-        "Profile Signatures",
-        "Backups & History",
-    ]
+    assert select_labels(view) == [category.label for category in CATEGORIES]
 
 
 def test_advanced_settings_aliases_the_single_compact_manager() -> None:
@@ -232,35 +224,28 @@ def test_compact_advanced_button_opens_troubleshooting_hub(
     assert events == ["advanced"]
 
 
-@pytest.mark.parametrize(
-    ("area", "route_name"),
-    (
-        ("core", "_open_advanced_core_setup"),
-        ("tickets", "_open_advanced_member_experience"),
-        ("verification", "_open_advanced_verification"),
-        ("security", "_open_advanced_security"),
-        ("logs", "_open_advanced_logs_activity"),
-        ("design", "_open_advanced_appearance"),
-        ("history", "_open_config_history"),
-    ),
-)
-def test_feature_picker_routes_to_focused_submenus(
+def test_feature_picker_routes_to_canonical_navigation(
     monkeypatch: pytest.MonkeyPatch,
-    area: str,
-    route_name: str,
 ) -> None:
     events: list[str] = []
 
     async def allow(*args: Any, **kwargs: Any) -> bool:
         return True
 
-    async def route(*args: Any, **kwargs: Any) -> None:
-        events.append(route_name)
+    async def open_category(
+        interaction_arg: Any,
+        category_key: str,
+    ) -> None:
+        assert isinstance(interaction_arg, FakeInteraction)
+        events.append(str(category_key))
 
     monkeypatch.setattr(recommend.solid, "_require_setup_permission", allow)
-    monkeypatch.setattr(recommend, route_name, route)
-    run(compact._route_area(FakeInteraction(), area))
-    assert events == [route_name]
+    monkeypatch.setattr(navigation, "_open_category", open_category)
+
+    for category in CATEGORIES:
+        run(compact._route_area(FakeInteraction(), category.key))
+
+    assert events == [category.key for category in CATEGORIES]
 
 
 def test_manage_setup_screen_uses_canonical_compact_view(

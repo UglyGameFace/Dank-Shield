@@ -470,6 +470,101 @@ def _assert_native_setup_ux_owners(failures: list[str]) -> None:
             )
 
 
+def _assert_canonical_navigation_and_protection_ownership(
+    failures: list[str],
+) -> None:
+    compact = (
+        ROOT
+        / "stoney_verify"
+        / "setup_ui"
+        / "public_setup_compact.py"
+    )
+    policy = (
+        ROOT
+        / "stoney_verify"
+        / "anti_nuke_product_policy_runtime.py"
+    )
+    protection = (
+        ROOT
+        / "stoney_verify"
+        / "commands_ext"
+        / "public_protection_center.py"
+    )
+    guard_dir = ROOT / "stoney_verify" / "startup_guards"
+
+    compact_text = _read(compact)
+    policy_text = _read(policy)
+    protection_text = _read(protection)
+
+    required_navigation_markers = (
+        "from ..navigation_registry import CATEGORIES",
+        "for category in CATEGORIES",
+        "navigation._open_category(",
+    )
+    for marker in required_navigation_markers:
+        if marker not in compact_text:
+            failures.append(
+                "setup feature picker is not derived from the canonical "
+                f"navigation registry: missing `{marker}`"
+            )
+
+    stale_setup_taxonomy = (
+        '"Setup Plan & Server Items"',
+        '"Security & SpamGuard"',
+        '"Profile Signatures"',
+        '"Backups & History"',
+        '"Choose a feature area',
+        '"core": setup._open_advanced_core_setup',
+        '"security": setup._open_advanced_security',
+    )
+    for marker in stale_setup_taxonomy:
+        if marker in compact_text:
+            failures.append(
+                "setup feature picker reintroduced its retired standalone "
+                f"taxonomy/route: `{marker}`"
+            )
+
+    required_native_protection = (
+        "async def _toggle_antinuke_strict_lockdown",
+        'custom_id="dank_protection:antinuke_strict_lockdown"',
+        "anti_nuke_service.antinuke_permission_health",
+        "anti_nuke_service.save_antinuke_settings",
+    )
+    for marker in required_native_protection:
+        if marker not in protection_text:
+            failures.append(
+                "canonical Protection owner is missing native AntiNuke policy "
+                f"behavior: `{marker}`"
+            )
+
+    forbidden_policy_ui_rebinds = (
+        "def _patch_ui",
+        "center._protection_embed =",
+        "center.ProtectionCenterView =",
+        "center.ProtectionCenterView.__init__ =",
+        "center._toggle_antinuke =",
+        "center._toggle_antinuke_mode =",
+        "center._toggle_antinuke_strict_lockdown =",
+    )
+    for marker in forbidden_policy_ui_rebinds:
+        if marker in policy_text:
+            failures.append(
+                "AntiNuke product policy must not replace canonical Protection "
+                f"UI ownership: `{marker}`"
+            )
+
+    retired_protection_ui_guards = (
+        "protection_center_clear_categories_guard.py",
+        "protection_center_filter_list_guard.py",
+        "protection_center_embed_refresh_guard.py",
+    )
+    for filename in retired_protection_ui_guards:
+        if (guard_dir / filename).exists():
+            failures.append(
+                f"retired Protection UI monkey patch returned: `{filename}`"
+            )
+
+
 def _assert_native_verification_timer_controls(
     failures: list[str],
 ) -> None:
@@ -577,6 +672,7 @@ def main() -> int:
     _assert_no_private_markers(failures)
     _assert_runtime_integrity(failures)
     _assert_native_setup_ux_owners(failures)
+    _assert_canonical_navigation_and_protection_ownership(failures)
     _assert_native_verification_timer_controls(failures)
     _assert_idle_kick_is_per_guild_and_off_by_default(failures)
 

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from stoney_verify import anti_nuke
 from stoney_verify import anti_nuke_lockdown_runtime as lockdown
 from stoney_verify import anti_nuke_product_policy_runtime as policy
+from stoney_verify.commands_ext import public_protection_center as protection_center
 
 
 def _clear_flag(target, flag: str):
@@ -308,12 +309,19 @@ def test_health_message_reports_only_real_bot_readiness_items() -> None:
     assert "Strict Lockdown** is the blocker" not in message
 
 
-def test_strict_ui_control_is_owner_guarded_and_named() -> None:
-    source = inspect.getsource(policy._patch_ui)  # noqa: SLF001
+def test_strict_ui_control_is_native_and_runtime_does_not_patch_protection() -> None:
+    protection_source = inspect.getsource(protection_center)
+    policy_source = inspect.getsource(policy)
 
-    assert "_require_antinuke_owner" in source
-    assert "dank_protection:antinuke_strict_lockdown" in source
-    assert "Normal Contain is the recommended starting mode" in source
+    assert "async def _toggle_antinuke_strict_lockdown" in protection_source
+    assert "_require_antinuke_owner" in protection_source
+    assert "dank_protection:antinuke_strict_lockdown" in protection_source
+    assert "Normal Contain is the recommended starting mode" in protection_source
+
+    assert "def _patch_ui" not in policy_source
+    assert "center._protection_embed =" not in policy_source
+    assert "center.ProtectionCenterView =" not in policy_source
+    assert "center._toggle_antinuke =" not in policy_source
 
 
 def test_main_installs_post_app_policy_after_app_import_before_run() -> None:

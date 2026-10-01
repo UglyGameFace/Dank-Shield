@@ -128,7 +128,7 @@ def test_degraded_protection_view_disables_mutations() -> None:
 def test_protection_embed_caps_dynamic_antinuke_health_field(monkeypatch) -> None:
     long_blocker = "Role hierarchy blocker " + ("x" * 240)
     monkeypatch.setattr(
-        protection,
+        protection.anti_nuke_service,
         "antinuke_permission_health",
         lambda *_args, **_kwargs: [long_blocker for _ in range(8)],
     )

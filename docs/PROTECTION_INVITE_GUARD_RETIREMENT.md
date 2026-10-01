@@ -48,13 +48,17 @@ They no longer own any production path:
 
 This removes a duplicate listener implementation plus a compatibility bridge stack that could be accidentally reactivated by import.
 
-## Surviving guards adjusted
+## Protection UI ownership follow-up
 
-`protection_center_clear_categories_guard.py` remains a dormant general Protection Center wording compatibility guard. Its Invite Shield editor imports and editor monkey patches were removed; it no longer depends on any retired Invite Shield UI guard.
+The remaining dormant Protection presentation patchers were later retired as part of issue #375 after a production canary proved that runtime replacement of `_protection_embed` could drift from the canonical function signature.
 
-`protection_center_filter_list_guard.py` remains a dormant content-filter helper. Its hidden chain into the retired invite-cleanup picker was removed.
+The following compatibility modules are now deleted and must stay absent:
 
-The inert historical startup-guard inventory no longer advertises the retired Invite Shield UI owners.
+- `protection_center_clear_categories_guard.py`
+- `protection_center_filter_list_guard.py`
+- `protection_center_embed_refresh_guard.py`
+
+Protection presentation, refresh behavior, button state, and filter controls belong to `commands_ext/public_protection_center.py` and its explicit native feature modules. The inert historical startup-guard inventory no longer advertises these Protection UI owners.
 
 ## Validation contract
 

@@ -36,6 +36,7 @@ def test_protection_center_buttons_use_guarded_actions() -> None:
         "protection.spam_response_mode",
         "protection.spam_detection_modal",
         "protection.spam_action_modal",
+        "protection.antinuke.strict_lockdown",
     ]
     for action in required_actions:
         assert action in SOURCE
@@ -139,3 +140,36 @@ def test_protection_center_exposes_owner_only_restore_member_control() -> None:
     assert 'custom_id="dank_protection:antinuke_restore_member"' in SOURCE
     assert "physical server owner" in SOURCE.lower()
     assert "clear_hostile_reputation_for_owner_intent" in SOURCE
+
+
+def test_protection_center_natively_owns_strict_lockdown_ui() -> None:
+    assert "STRICT_LOCKDOWN_KEY" in SOURCE
+    assert "async def _toggle_antinuke_strict_lockdown" in SOURCE
+    assert 'custom_id="dank_protection:antinuke_strict_lockdown"' in SOURCE
+    assert "anti_nuke_service.antinuke_permission_health" in SOURCE
+    assert "anti_nuke_service.save_antinuke_settings" in SOURCE
+
+
+def test_product_policy_runtime_cannot_replace_protection_ui() -> None:
+    policy = Path("stoney_verify/anti_nuke_product_policy_runtime.py").read_text(encoding="utf-8")
+    forbidden = (
+        "def _patch_ui",
+        "center._protection_embed =",
+        "center.ProtectionCenterView =",
+        "center.ProtectionCenterView.__init__ =",
+        "center._toggle_antinuke =",
+        "center._toggle_antinuke_mode =",
+        "center._toggle_antinuke_strict_lockdown =",
+    )
+    for marker in forbidden:
+        assert marker not in policy, marker
+
+
+def test_retired_protection_ui_patch_modules_stay_absent() -> None:
+    guard_dir = Path("stoney_verify/startup_guards")
+    for filename in (
+        "protection_center_clear_categories_guard.py",
+        "protection_center_filter_list_guard.py",
+        "protection_center_embed_refresh_guard.py",
+    ):
+        assert not (guard_dir / filename).exists(), filename
