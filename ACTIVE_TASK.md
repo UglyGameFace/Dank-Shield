@@ -14,7 +14,7 @@ Production baseline: `main` = `534614801e6c19dfbc248e100022e1d5c8c87bc1` (PR #37
 
 Active branch: `fix/toke-channel-picker-pagination`.
 
-Active issue: #381 — **Toke setup text-channel picker omits expected general channel**.
+Active issue: #381 — **Toke setup text-channel picker omits expected general channel**.\n\nActive PR: #382 — **Fix /toke large-server channel picker discovery** (draft).
 
 ## Scope
 
