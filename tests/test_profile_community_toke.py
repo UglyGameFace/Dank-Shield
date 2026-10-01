@@ -24,6 +24,8 @@ from stoney_verify.community_pings_service import (
     CommunityPingGroup,
     CommunityPingOption,
     CommunityPingsConfig,
+    parse_community_pings,
+    toke_role_ids,
 )
 from stoney_verify.profile_card_runtime import _compact_profile_tag_labels
 
@@ -338,6 +340,43 @@ def test_direct_toke_mapping_moves_one_capability_without_losing_the_other() -> 
     assert CAP_TOKE_NOTIFY in by_key["stoner"].capabilities
     assert CAP_TOKE_START in by_key["sesh-pings"].capabilities
     assert CAP_TOKE_NOTIFY not in by_key["sesh-pings"].capabilities
+
+
+def test_direct_toke_mapping_survives_save_reload_round_trip() -> None:
+    model = CommunityPingsConfig(
+        revision=4,
+        groups=(CommunityPingGroup(key="community", label="Community"),),
+        options=(
+            CommunityPingOption(
+                key="stoner",
+                role_id=101,
+                label="Stoner",
+                group_key="community",
+            ),
+        ),
+        source="v2",
+    )
+
+    updated = community_ui._assign_toke_capability(
+        model,
+        option_key="stoner",
+        capability=CAP_TOKE_START,
+    )
+    updated = community_ui._assign_toke_capability(
+        updated,
+        option_key="stoner",
+        capability=CAP_TOKE_NOTIFY,
+    )
+
+    reloaded = parse_community_pings(
+        {COMMUNITY_PINGS_KEY: updated.to_payload()}
+    )
+
+    assert reloaded.options[0].capabilities == (
+        CAP_TOKE_START,
+        CAP_TOKE_NOTIFY,
+    )
+    assert toke_role_ids(reloaded) == (101, 101)
 
 
 def test_toke_manager_has_direct_mapping_instructions() -> None:

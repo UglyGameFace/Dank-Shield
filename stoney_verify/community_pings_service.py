@@ -71,6 +71,19 @@ def _slug(value: Any, *, fallback: str) -> str:
     return (clean or fallback)[:48]
 
 
+def _capability_id(value: Any) -> str:
+    """Normalize machine capability IDs without corrupting underscores.
+
+    Historical parsing reused the human-facing slug helper, which converted
+    `toke_start` into `toke-start` on reload. Accept both spellings and
+    preserve the canonical underscore identifier used by runtime checks.
+    """
+
+    clean = str(value or "").strip().lower().replace("-", "_")
+    clean = re.sub(r"[^a-z0-9_]+", "_", clean).strip("_")
+    return clean[:48]
+
+
 def _emoji(value: Any, fallback: str = "🏷️") -> str:
     clean = str(value or "").strip()
     return clean[:32] if clean else fallback
@@ -182,9 +195,10 @@ def _option_from_raw(raw: Mapping[str, Any], index: int) -> Optional[CommunityPi
         cap_values = []
     caps = tuple(
         dict.fromkeys(
-            _slug(item, fallback="")
+            capability
             for item in cap_values
-            if _slug(item, fallback="")
+            for capability in [_capability_id(item)]
+            if capability
         )
     )
 

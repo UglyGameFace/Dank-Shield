@@ -349,3 +349,28 @@ Issue #384 — **Audit repeated Discord 429s during/after activity recovery**.
 Production logs on 2026-10-01 show deliberate `discord_api_safety` recovery pacing during large activity-reconciliation passes plus separate raw `discord.http` 429 responses for repeated single-message GETs later in runtime. This is not on the /toke path and is intentionally backlogged under the single-task lock.
 
 Do not investigate #384 until #381 / PR #383 is complete unless the user explicitly FORCE SWITCHes.
+
+
+## Post-merge /toke persistence failure — capability ID round trip
+
+PR #383 merged to production main as `ecad2b00295cd4b10f01e070e0e755560fe719d5`.
+
+Android canary after deployment showed the new **Toke Starter** / **Toke Notify** controls could be pressed, but after refreshing the manager the mappings still displayed **Not configured**.
+
+Root cause is in `community_pings_service._option_from_raw()`:
+
+- canonical runtime capability IDs are `toke_start` and `toke_notify`;
+- `CommunityPingOption.to_payload()` correctly persists those underscore identifiers;
+- reload parsing incorrectly reused the generic human-facing `_slug()` helper;
+- `_slug()` converts underscores to hyphens, so persisted `toke_start` / `toke_notify` reloaded as `toke-start` / `toke-notify`;
+- `toke_role_ids()` checks for the canonical underscore constants, so it returned `(0, 0)` after refresh even though the database write succeeded.
+
+Correction:
+- capability identifiers now use a dedicated machine-ID normalizer that preserves underscores;
+- hyphenated values produced by the historical parser bug are normalized back to the canonical underscore form for compatibility;
+- service regression coverage now proves `to_payload() -> parse_community_pings() -> toke_role_ids()` preserves both mappings;
+- UI-path regression coverage now proves direct Starter/Notify assignment survives the same save/reload round trip.
+
+Active branch: `fix/toke-capability-roundtrip`.
+
+Do not close #381 until this exact-head fix passes CI, merges/deploys, and Android confirms both role mappings remain configured after Refresh and `/toke` posts successfully.
