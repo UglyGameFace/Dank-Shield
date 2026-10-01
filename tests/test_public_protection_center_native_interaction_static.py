@@ -70,3 +70,36 @@ def test_protection_center_close_removes_panel_instead_of_greying_it_out() -> No
     assert "embed=None" in block
     assert "view=None" in block
     assert "child.disabled = True" not in block
+
+
+def test_protection_refresh_acknowledges_before_persisted_reads_and_edits_original() -> None:
+    start = SOURCE.index("async def _refresh_panel")
+    end = SOURCE.index("def _normalize_spam_mode_for_ui", start)
+    block = SOURCE[start:end]
+
+    assert "interaction.response.defer" in block
+    assert "await asyncio.gather(" in block
+    assert "await interaction.edit_original_response(" in block
+    assert "await _refresh_security_stats_after_panel(interaction, guild)" in block
+    assert block.index("interaction.response.defer") < block.index("await asyncio.gather(")
+    assert block.index("await interaction.edit_original_response(") < block.index(
+        "await _refresh_security_stats_after_panel(interaction, guild)"
+    )
+
+
+def test_direct_protection_command_reuses_canonical_refresh_owner() -> None:
+    start = SOURCE.index("async def protection_center")
+    end = SOURCE.index("def register_public_protection_center_commands", start)
+    block = SOURCE[start:end]
+
+    assert "await _refresh_panel(" in block
+    assert "await get_guild_config(" not in block
+    assert "await _load_spam_settings(" not in block
+
+
+def test_protection_center_exposes_owner_only_restore_member_control() -> None:
+    assert "class RestoreMemberModal" in SOURCE
+    assert 'label="Restore Member"' in SOURCE
+    assert 'custom_id="dank_protection:antinuke_restore_member"' in SOURCE
+    assert "physical server owner" in SOURCE.lower()
+    assert "clear_hostile_reputation_for_owner_intent" in SOURCE

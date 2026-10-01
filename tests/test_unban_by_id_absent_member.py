@@ -264,3 +264,7 @@ def test_grouped_command_uses_canonical_resolver() -> None:
         in source
     )
     assert "await guild.unban(" in source
+    assert "clear_hostile_reputation_for_owner_intent" in source
+    assert source.index("clear_hostile_reputation_for_owner_intent") < source.index(
+        "await guild.unban("
+    )

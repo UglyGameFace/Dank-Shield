@@ -447,3 +447,120 @@ def test_owner_readding_known_hostile_bot_is_still_blocked(monkeypatch) -> None:
 
     assert guild.banned == [55]
     assert incidents == ["🛑 Known Hostile Bot Re-add Detected"]
+
+
+def test_owner_intent_clear_requires_physical_guild_owner(monkeypatch) -> None:
+    guild = SimpleNamespace(id=123, owner_id=999)
+    state = {"active": True}
+    clears: list[tuple[int, int, int | None, str]] = []
+
+    async def reputation(_guild_id, _user_id, *, refresh=False):
+        _ = refresh
+        return {
+            "guild_id": 123,
+            "user_id": 55,
+            "active": bool(state["active"]),
+            "classification": "confirmed_destructive_actor",
+        }
+
+    async def clear(guild_id, user_id, *, cleared_by=None, reason=""):
+        clears.append((guild_id, user_id, cleared_by, reason))
+        state["active"] = False
+        return {
+            "guild_id": guild_id,
+            "user_id": user_id,
+            "active": False,
+            "cleared_by": cleared_by,
+        }
+
+    monkeypatch.setattr(runtime, "get_actor_reputation", reputation)
+    monkeypatch.setattr(runtime, "clear_hostile_reputation", clear)
+
+    assert asyncio.run(
+        runtime.clear_hostile_reputation_for_owner_intent(
+            guild,
+            55,
+            actor_id=111,
+            reason="delegated admin tried",
+        )
+    ) is False
+    assert clears == []
+
+    assert asyncio.run(
+        runtime.clear_hostile_reputation_for_owner_intent(
+            guild,
+            55,
+            actor_id=999,
+            reason="owner restore",
+        )
+    ) is True
+    assert clears == [(123, 55, 999, "owner restore")]
+
+
+def test_owner_unban_event_clears_active_hostile_record(monkeypatch) -> None:
+    guild = SimpleNamespace(id=123, owner_id=999)
+    user = SimpleNamespace(id=55)
+    cleared: list[tuple[int, int]] = []
+
+    async def reputation(_guild_id, _user_id, *, refresh=False):
+        _ = refresh
+        return {
+            "guild_id": 123,
+            "user_id": 55,
+            "active": True,
+            "classification": "confirmed_destructive_actor",
+        }
+
+    async def actor(_guild, _user_id):
+        return 999
+
+    async def clear_owner(_guild, user_id, *, actor_id, reason):
+        assert actor_id == 999
+        assert "unbanned" in reason
+        cleared.append((123, user_id))
+        return True
+
+    monkeypatch.setattr(runtime, "get_actor_reputation", reputation)
+    monkeypatch.setattr(runtime, "_resolve_recent_unban_actor_id", actor)
+    monkeypatch.setattr(
+        runtime,
+        "clear_hostile_reputation_for_owner_intent",
+        clear_owner,
+    )
+
+    asyncio.run(runtime._on_member_unban(guild, user))
+    assert cleared == [(123, 55)]
+
+
+def test_delegated_admin_unban_does_not_clear_hostile_record(monkeypatch) -> None:
+    guild = SimpleNamespace(id=123, owner_id=999)
+    user = SimpleNamespace(id=55)
+    clears: list[int] = []
+
+    async def reputation(_guild_id, _user_id, *, refresh=False):
+        _ = refresh
+        return {
+            "guild_id": 123,
+            "user_id": 55,
+            "active": True,
+            "classification": "confirmed_destructive_actor",
+        }
+
+    async def actor(_guild, _user_id):
+        return 111
+
+    async def clear_owner(_guild, user_id, *, actor_id, reason):
+        _ = actor_id, reason
+        clears.append(user_id)
+        return True
+
+    monkeypatch.setattr(runtime, "get_actor_reputation", reputation)
+    monkeypatch.setattr(runtime, "_resolve_recent_unban_actor_id", actor)
+    monkeypatch.setattr(
+        runtime,
+        "clear_hostile_reputation_for_owner_intent",
+        clear_owner,
+    )
+
+    asyncio.run(runtime._on_member_unban(guild, user))
+    assert clears == []
