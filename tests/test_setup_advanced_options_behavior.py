@@ -329,7 +329,12 @@ def test_protection_reuses_protection_center(
     interaction = FakeInteraction()
     events: list[str] = []
 
+    async def ack(interaction_arg: Any) -> None:
+        assert interaction_arg is interaction
+        events.append("ack")
+
     async def allow(*args: Any, **kwargs: Any) -> bool:
+        events.append("permission")
         return True
 
     async def refresh(interaction_arg: Any, *, content: str) -> None:
@@ -337,10 +342,11 @@ def test_protection_reuses_protection_center(
         assert "All Features & Settings" in content
         events.append("protection")
 
+    monkeypatch.setattr(public_protection_center, "_ack_protection_entry", ack)
     monkeypatch.setattr(recommend.solid, "_require_setup_permission", allow)
     monkeypatch.setattr(public_protection_center, "_refresh_panel", refresh)
     run(recommend._open_protection_options(interaction))
-    assert events == ["protection"]
+    assert events == ["ack", "permission", "protection"]
 
 
 def test_backups_history_reuses_native_history_ui(
