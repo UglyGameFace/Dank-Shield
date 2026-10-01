@@ -11,7 +11,7 @@ Production baseline: `main` = `0ce2b74856262be1b74ef3066426d85b89136d9f` (PR #37
 
 Active branch: `fix/protection-native-ui-and-nav`.
 
-Active PR: not opened yet; validate the native-ownership hotfix branch first.
+Active PR: #379 — **Make Protection UI and setup navigation natively owned** (draft).
 
 Issue #375 is reopened because the production canary still fails.
 
