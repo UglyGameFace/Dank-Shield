@@ -15,8 +15,16 @@ from stoney_verify.commands_ext.public_self_roles_group import (
     ProfilePanelView,
 )
 from stoney_verify.commands_ext import public_toke
+from stoney_verify.commands_ext import public_community_pings as community_ui
 from stoney_verify.commands_ext.public_community_pings import CommunityPingsManagerView
-from stoney_verify.community_pings_service import COMMUNITY_PINGS_KEY
+from stoney_verify.community_pings_service import (
+    CAP_TOKE_NOTIFY,
+    CAP_TOKE_START,
+    COMMUNITY_PINGS_KEY,
+    CommunityPingGroup,
+    CommunityPingOption,
+    CommunityPingsConfig,
+)
 from stoney_verify.profile_card_runtime import _compact_profile_tag_labels
 
 
@@ -269,6 +277,8 @@ def test_generic_manager_exposes_add_edit_and_safe_remove_controls() -> None:
         "Edit Group",
         "Delete Group",
         "Member Preview",
+        "Toke Starter",
+        "Toke Notify",
         "Toke Channel",
         "Clear Toke Channel",
         "Refresh",
@@ -276,6 +286,70 @@ def test_generic_manager_exposes_add_edit_and_safe_remove_controls() -> None:
         "Close",
     } <= labels
     assert len(CommunityPingsManagerView(1).children) <= 25
+
+
+def test_direct_toke_mapping_moves_one_capability_without_losing_the_other() -> None:
+    model = CommunityPingsConfig(
+        revision=4,
+        groups=(
+            CommunityPingGroup(
+                key="community",
+                label="Community",
+            ),
+        ),
+        options=(
+            CommunityPingOption(
+                key="stoner",
+                role_id=101,
+                label="Stoner",
+                group_key="community",
+                capabilities=(CAP_TOKE_START,),
+            ),
+            CommunityPingOption(
+                key="sesh-pings",
+                role_id=202,
+                label="Sesh Pings",
+                kind="notification",
+                group_key="community",
+                capabilities=(CAP_TOKE_NOTIFY,),
+            ),
+        ),
+    )
+
+    moved_start = community_ui._assign_toke_capability(
+        model,
+        option_key="sesh-pings",
+        capability=CAP_TOKE_START,
+    )
+    by_key = {item.key: item for item in moved_start.options}
+
+    assert CAP_TOKE_START not in by_key["stoner"].capabilities
+    assert CAP_TOKE_START in by_key["sesh-pings"].capabilities
+    assert CAP_TOKE_NOTIFY in by_key["sesh-pings"].capabilities
+    assert moved_start.revision > model.revision
+
+    moved_notify = community_ui._assign_toke_capability(
+        moved_start,
+        option_key="stoner",
+        capability=CAP_TOKE_NOTIFY,
+    )
+    by_key = {item.key: item for item in moved_notify.options}
+
+    assert CAP_TOKE_NOTIFY in by_key["stoner"].capabilities
+    assert CAP_TOKE_START in by_key["sesh-pings"].capabilities
+    assert CAP_TOKE_NOTIFY not in by_key["sesh-pings"].capabilities
+
+
+def test_toke_manager_has_direct_mapping_instructions() -> None:
+    source = (
+        ROOT / "stoney_verify/commands_ext/public_community_pings.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'label="Toke Starter"' in source
+    assert 'label="Toke Notify"' in source
+    assert "Use **Toke Starter**, **Toke Notify**, and **Toke Channel** below." in source
+    assert "_open_toke_capability_picker" in source
+    assert "_assign_toke_capability" in source
 
 
 def test_member_picker_rejects_stale_configuration_before_mutation() -> None:

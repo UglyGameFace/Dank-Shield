@@ -12,9 +12,11 @@ Reason:
 
 Production baseline: `main` = `534614801e6c19dfbc248e100022e1d5c8c87bc1` (PR #379 merged; exact-head CI green).
 
-Active branch: `fix/toke-channel-picker-pagination`.
+Active branch: `fix/toke-direct-role-mapping`.
 
-Active issue: #381 — **Toke setup text-channel picker omits expected general channel**.\n\nActive PR: #382 — **Fix /toke large-server channel picker discovery** (draft).
+Active issue: #381 — **Toke setup text-channel picker omits expected general channel**.\n\nPR #382 — **Fix /toke large-server channel picker discovery** — merged as `63fe519431e90be7fb7f897c2b6a10a4f2d241fc`.
+
+Active PR: #383 — **Expose direct /toke starter and notify role setup** (draft).
 
 ## Scope
 
@@ -310,4 +312,40 @@ Correction:
 - the negative assertion is now scoped only to the retired setup compatibility block between `open_toke_preset_setup` and `TokeCheersView`;
 - the test explicitly confirms the live `open_toke_command` still owns its valid private defer.
 
-Current validation head: `e7d5b6a126611448d0b223492e9274f9adad3f9d`. Do not merge until exact-head CI passes.
+PR #382 subsequently passed exact-head CI and merged. The active follow-up is PR #383; validate its exact head before merge.
+
+
+## Android canary follow-up — role mappings hidden
+
+The large-server channel picker now reaches and saves the expected `#general` channel. Android canary then exposed the next blocker in the same /toke setup flow:
+
+- manager shows `Starter: Not configured`;
+- manager shows `Notify: Not configured`;
+- preferred channel is correctly configured;
+- `/toke` rejects execution because both required role capabilities are absent;
+- the only configured option in the reported server is `Stoner`.
+
+Root cause:
+- `toke_start` / `toke_notify` are capabilities on Community & Pings options;
+- setup existed only inside the generic **Edit Option** editor via **Toke Starter** / **Toke Notify** buttons;
+- the manager exposed status but no direct role-mapping control, making the required setup effectively undiscoverable.
+
+Correction on the active branch:
+- Community & Pings Manager now exposes direct **Toke Starter** and **Toke Notify** controls beside the Toke channel controls;
+- each direct control picks from enabled, safe existing Community & Pings options;
+- selecting an option assigns that capability to exactly one option and removes the same capability from any previous option;
+- one option may own both capabilities, so an existing Stoner option can be both starter and notification role;
+- persistence remains the existing `community_pings_v2` model via `_save()`; no legacy duplicate role-ID settings are reintroduced;
+- manager text tells admins to use **Add Option** first if the desired role is not already a Community & Pings option;
+- regression coverage verifies exclusive capability reassignment and preservation of the other /toke capability.
+
+Do not close #381 until exact-head CI passes, PR #382 is merged/deployed, and Android verifies Starter + Notify + Channel all show configured and `/toke` successfully posts.
+
+
+## Backlog — Discord REST 429 pressure
+
+Issue #384 — **Audit repeated Discord 429s during/after activity recovery**.
+
+Production logs on 2026-10-01 show deliberate `discord_api_safety` recovery pacing during large activity-reconciliation passes plus separate raw `discord.http` 429 responses for repeated single-message GETs later in runtime. This is not on the /toke path and is intentionally backlogged under the single-task lock.
+
+Do not investigate #384 until #381 / PR #383 is complete unless the user explicitly FORCE SWITCHes.
