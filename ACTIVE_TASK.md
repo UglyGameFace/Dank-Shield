@@ -10,7 +10,7 @@ Production baseline: `main` = `b2e75bc88ac8ff6b9bd4e0124c6b2c61ad9c1095` (PR #37
 
 Active branch: `fix/dank-protection-timeout`.
 
-Active PR: not opened yet.
+Active PR: #376 — **Fix Protection timeout and owner member restore**.
 
 Issue: #375 — **Protection Center timeout and owner restore recovery**.
 
@@ -113,6 +113,12 @@ Issue #375 is complete only when:
 - merge and post-merge CI/Supabase/Discloud are green;
 - Android Protection open + owner member-restore canaries pass.
 
+## Validation status
+
+PR #376 is open as the focused issue #375 fix. The branch is current with production main and no schema change is required.
+
+Fresh exact-head CI is required after this task-record update.
+
 ## Next step
 
-Run static diff hygiene and focused Protection/AntiNuke tests on the branch. Open a dedicated issue #375 PR only after the implementation is internally coherent, then validate that exact head before merge.
+Validate PR #376 on its exact head. If green, perform final diff/branch hygiene, mark ready, merge with the exact expected head, verify post-merge CI/Supabase/Discloud, then run the Android Protection open + Restore Member canaries before closing issue #375.
