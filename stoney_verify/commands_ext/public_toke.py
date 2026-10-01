@@ -20,11 +20,6 @@ from stoney_verify.community_pings_service import (
     parse_community_pings,
     toke_role_ids,
 )
-from stoney_verify.ui.picker import (
-    DankChannelSelect,
-    DankRoleSelect,
-)
-
 STONER_ROLE_KEY = LEGACY_STONER_ROLE_KEY
 SESH_PING_ROLE_KEY = LEGACY_SESH_PING_ROLE_KEY
 TOKE_CHANNEL_KEY = LEGACY_TOKE_CHANNEL_KEY
@@ -130,58 +125,6 @@ async def _config(guild: discord.Guild) -> Mapping[str, Any]:
     return await get_guild_config(int(guild.id), refresh=True)
 
 
-async def _staff_authorized(interaction: discord.Interaction) -> bool:
-    from .public_setup_group import _require_setup_permission
-    return bool(await _require_setup_permission(interaction))
-
-
-def _profile_safe_blocker(
-    guild: discord.Guild,
-    role: discord.Role,
-    config: Mapping[str, Any],
-) -> str:
-    from .public_self_roles_group import _profile_cosmetic_role_blocker
-    return str(_profile_cosmetic_role_blocker(guild, role, config) or "")
-
-
-async def _save_mapping(
-    interaction: discord.Interaction,
-    *,
-    key: str,
-    value: int,
-) -> Mapping[str, Any]:
-    guild = interaction.guild
-    if guild is None:
-        return {}
-    from stoney_verify.guild_config import upsert_guild_config
-    return await upsert_guild_config(
-        int(guild.id),
-        {
-            key: str(int(value)),
-            "__config_write_mode": "explicit_override",
-            "__config_write_source": "profile_builder_community_pings",
-            "__config_write_actor_id": str(getattr(interaction.user, "id", "") or ""),
-            "__config_write_allow_keys": [key],
-        },
-    )
-
-
-async def _clear_mappings(
-    interaction: discord.Interaction,
-    keys: tuple[str, ...],
-) -> Mapping[str, Any]:
-    guild = interaction.guild
-    if guild is None:
-        return {}
-    from stoney_verify.guild_config import clear_guild_config_keys
-    return await clear_guild_config_keys(
-        int(guild.id),
-        keys,
-        source="profile builder community pings",
-        actor=interaction.user,
-    )
-
-
 async def _reply(interaction: discord.Interaction, content: str, *, ok: bool = False) -> None:
     prefix = "✅ " if ok else "❌ "
     payload = {
@@ -201,235 +144,18 @@ async def _defer_private(interaction: discord.Interaction) -> None:
     await interaction.response.defer(ephemeral=True, thinking=True)
 
 
-async def _defer_update(interaction: discord.Interaction) -> None:
-    if interaction.response.is_done():
-        return
-    await interaction.response.defer()
-
-
-async def _setup_embed(guild: discord.Guild) -> discord.Embed:
-    cfg = await _config(guild)
-    stoner_id, ping_id, channel_id = _configured_ids(cfg)
-    stoner = guild.get_role(stoner_id) if stoner_id else None
-    ping = guild.get_role(ping_id) if ping_id else None
-    channel = guild.get_channel(channel_id) if channel_id else None
-
-    embed = discord.Embed(
-        title="🌿 Community & Pings",
-        description=(
-            "Map existing safe server roles. Stoner is the self-selected community role and "
-            "controls who may use /toke. Sesh Pings is the opt-in audience that /toke notifies."
-        ),
-        color=discord.Color.green(),
-        timestamp=discord.utils.utcnow(),
-    )
-    embed.add_field(
-        name="Stoner role",
-        value=stoner.mention if isinstance(stoner, discord.Role) else "Not configured",
-        inline=True,
-    )
-    embed.add_field(
-        name="Sesh Pings role",
-        value=ping.mention if isinstance(ping, discord.Role) else "Not configured",
-        inline=True,
-    )
-    embed.add_field(
-        name="Preferred sesh channel",
-        value=channel.mention if isinstance(channel, discord.TextChannel) else "Use the channel where /toke is run",
-        inline=False,
-    )
-    embed.add_field(
-        name="Simple mode",
-        value="Map Stoner as both roles if every Stoner should receive every /toke ping.",
-        inline=False,
-    )
-    embed.add_field(
-        name="Ping safety",
-        value=(
-            "The command only allows the mapped Sesh Pings role in AllowedMentions. "
-            "If that role is not mentionable, Dank Shield needs Mention @everyone, @here, and All Roles "
-            "in the target channel so Discord will deliver the role notification."
-        ),
-        inline=False,
-    )
-    return embed
-
-
-class CommunityPingSetupView(discord.ui.View):
-    def __init__(self, author_id: int) -> None:
-        super().__init__(timeout=900)
-        self.author_id = int(author_id)
-        self.add_item(
-            DankRoleSelect(
-                author_id=self.author_id,
-                on_pick=self._set_stoner,
-                placeholder="Choose the Stoner role…",
-                row=0,
-            )
-        )
-        self.add_item(
-            DankRoleSelect(
-                author_id=self.author_id,
-                on_pick=self._set_ping,
-                placeholder="Choose the Sesh Pings role…",
-                row=1,
-            )
-        )
-        self.add_item(
-            DankChannelSelect(
-                author_id=self.author_id,
-                on_pick=self._set_channel,
-                placeholder="Choose a preferred sesh text channel…",
-                channel_types=[discord.ChannelType.text, discord.ChannelType.news],
-                row=2,
-            )
-        )
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if _safe_int(getattr(interaction.user, "id", 0), 0) != self.author_id:
-            await _reply(interaction, "Only the staff member who opened this setup can use it.")
-            return False
-        return True
-
-    async def _set_role(
-        self,
-        interaction: discord.Interaction,
-        role: discord.Role,
-        *,
-        key: str,
-    ) -> None:
-        if not await _staff_authorized(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await _reply(interaction, "This only works inside a server.")
-        await _defer_update(interaction)
-        cfg = await _config(guild)
-        blocker = _profile_safe_blocker(guild, role, cfg)
-        if blocker:
-            return await _reply(interaction, blocker)
-        await _save_mapping(interaction, key=key, value=int(role.id))
-        await interaction.edit_original_response(
-            embed=await _setup_embed(guild),
-            view=CommunityPingSetupView(self.author_id),
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-
-    async def _set_stoner(self, interaction: discord.Interaction, role: discord.Role) -> None:
-        await self._set_role(interaction, role, key=STONER_ROLE_KEY)
-
-    async def _set_ping(self, interaction: discord.Interaction, role: discord.Role) -> None:
-        await self._set_role(interaction, role, key=SESH_PING_ROLE_KEY)
-
-    async def _set_channel(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.abc.GuildChannel,
-    ) -> None:
-        if not await _staff_authorized(interaction):
-            return
-        guild = interaction.guild
-        if guild is None or not isinstance(channel, discord.TextChannel):
-            return await _reply(interaction, "Choose a normal server text channel.")
-        await _defer_update(interaction)
-        await _save_mapping(interaction, key=TOKE_CHANNEL_KEY, value=int(channel.id))
-        await interaction.edit_original_response(
-            embed=await _setup_embed(guild),
-            view=CommunityPingSetupView(self.author_id),
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-
-    @discord.ui.button(label="Use Stoner for Both", emoji="🌿", style=discord.ButtonStyle.primary, row=3)
-    async def same_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if not await _staff_authorized(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await _reply(interaction, "This only works inside a server.")
-        await _defer_update(interaction)
-        cfg = await _config(guild)
-        stoner_id, _ping_id, _channel_id = _configured_ids(cfg)
-        role = guild.get_role(stoner_id) if stoner_id else None
-        if not isinstance(role, discord.Role):
-            return await _reply(interaction, "Choose the Stoner role first.")
-        blocker = _profile_safe_blocker(guild, role, cfg)
-        if blocker:
-            return await _reply(interaction, blocker)
-        await _save_mapping(interaction, key=SESH_PING_ROLE_KEY, value=int(role.id))
-        await interaction.edit_original_response(
-            embed=await _setup_embed(guild),
-            view=CommunityPingSetupView(self.author_id),
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-
-    @discord.ui.button(label="Clear Preferred Channel", emoji="🧹", style=discord.ButtonStyle.secondary, row=3)
-    async def clear_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if not await _staff_authorized(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await _reply(interaction, "This only works inside a server.")
-        await _defer_update(interaction)
-        await _clear_mappings(interaction, (TOKE_CHANNEL_KEY,))
-        await interaction.edit_original_response(
-            embed=await _setup_embed(guild),
-            view=CommunityPingSetupView(self.author_id),
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-
-    @discord.ui.button(label="Clear Role Mappings", emoji="🗑️", style=discord.ButtonStyle.danger, row=3)
-    async def clear_roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if not await _staff_authorized(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await _reply(interaction, "This only works inside a server.")
-        await _defer_update(interaction)
-        await _clear_mappings(interaction, (STONER_ROLE_KEY, SESH_PING_ROLE_KEY))
-        await interaction.edit_original_response(
-            embed=await _setup_embed(guild),
-            view=CommunityPingSetupView(self.author_id),
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-
-    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=4)
-    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if not await _staff_authorized(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return await _reply(interaction, "This only works inside a server.")
-        await _defer_update(interaction)
-        await interaction.edit_original_response(
-            embed=await _setup_embed(guild),
-            view=CommunityPingSetupView(self.author_id),
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-
-
 async def open_toke_preset_setup(
     interaction: discord.Interaction,
     *,
     replace_message: bool = False,
 ) -> None:
-    if not await _staff_authorized(interaction):
-        return
-    guild = interaction.guild
-    if guild is None:
-        return await _reply(interaction, "This only works inside a server.")
-    if replace_message:
-        await _defer_update(interaction)
-    else:
-        await _defer_private(interaction)
-    await interaction.edit_original_response(
-        embed=await _setup_embed(guild),
-        view=CommunityPingSetupView(int(interaction.user.id)),
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
+    """Compatibility entrypoint for the canonical Community & Pings manager.
+
+    The old preset view used Discord-native role/channel selectors and could
+    make valid resources appear missing in large servers. Keep one setup owner.
+    """
+
+    await open_community_ping_setup(interaction, replace_message=replace_message)
 
 
 async def open_community_ping_setup(
@@ -582,7 +308,6 @@ async def open_toke_command(
 
 
 __all__ = [
-    "CommunityPingSetupView",
     "SESH_PING_ROLE_KEY",
     "STONER_ROLE_KEY",
     "TOKE_CHANNEL_KEY",
