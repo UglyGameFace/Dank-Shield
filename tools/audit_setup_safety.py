@@ -513,6 +513,7 @@ def _assert_canonical_navigation_and_protection_ownership(
         '"Security & SpamGuard"',
         '"Profile Signatures"',
         '"Backups & History"',
+        '"Choose a feature area',
         '"core": setup._open_advanced_core_setup',
         '"security": setup._open_advanced_security',
     )
