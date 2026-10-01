@@ -298,3 +298,16 @@ Correction:
 - the canonical `public_community_pings.py` replace-message acknowledgement contract remains required.
 
 Current validation head: `ca3299e7216474a7c961648c3c603d4f723a749c`. Do not merge until exact-head CI passes.
+
+
+## PR #382 second CI correction
+
+Exact-head Dank Shield CI on `f87431cb52060ceab58a9a47414c392869cb0704` again finished with **2394 passed / 1 failed**. Companion workflows all passed.
+
+The single failure came from an overbroad negative assertion added in the previous correction. It banned `await _defer_private(interaction)` from the entire `public_toke.py` module even though the real member-facing `open_toke_command` legitimately uses that defer before config reads and message send work.
+
+Correction:
+- the negative assertion is now scoped only to the retired setup compatibility block between `open_toke_preset_setup` and `TokeCheersView`;
+- the test explicitly confirms the live `open_toke_command` still owns its valid private defer.
+
+Current validation head: `e7d5b6a126611448d0b223492e9274f9adad3f9d`. Do not merge until exact-head CI passes.
