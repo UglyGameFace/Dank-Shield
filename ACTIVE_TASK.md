@@ -340,3 +340,12 @@ Correction on the active branch:
 - regression coverage verifies exclusive capability reassignment and preservation of the other /toke capability.
 
 Do not close #381 until exact-head CI passes, PR #382 is merged/deployed, and Android verifies Starter + Notify + Channel all show configured and `/toke` successfully posts.
+
+
+## Backlog — Discord REST 429 pressure
+
+Issue #384 — **Audit repeated Discord 429s during/after activity recovery**.
+
+Production logs on 2026-10-01 show deliberate `discord_api_safety` recovery pacing during large activity-reconciliation passes plus separate raw `discord.http` 429 responses for repeated single-message GETs later in runtime. This is not on the /toke path and is intentionally backlogged under the single-task lock.
+
+Do not investigate #384 until #381 / PR #383 is complete unless the user explicitly FORCE SWITCHes.
