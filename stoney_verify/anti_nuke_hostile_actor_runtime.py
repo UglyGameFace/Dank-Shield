@@ -33,6 +33,8 @@ _NEGATIVE_TTL_SECONDS = 60.0
 _FILE_LOCK = threading.RLock()
 _ACTOR_LOCKS: dict[tuple[int, int], asyncio.Lock] = {}
 _TABLE_AVAILABLE: Optional[bool] = None
+_OWNER_UNBAN_AUDIT_WINDOW_SECONDS = 30.0
+_OWNER_UNBAN_AUDIT_RETRY_DELAYS = (0.0, 0.5, 1.0)
 
 
 def _utcnow_iso() -> str:
@@ -894,6 +896,110 @@ def _patch_guardian(guardian: Any, anti_nuke: Any) -> None:
     setattr(guardian, marker, True)
 
 
+def _recent_unban_entry(entry: Any) -> bool:
+    created_at = getattr(entry, "created_at", None)
+    if not isinstance(created_at, datetime):
+        return False
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - created_at).total_seconds()
+    return -5.0 <= age <= _OWNER_UNBAN_AUDIT_WINDOW_SECONDS
+
+
+async def clear_hostile_reputation_for_owner_intent(
+    guild: discord.Guild,
+    user_id: int,
+    *,
+    actor_id: int,
+    reason: str,
+) -> bool:
+    """Clear one hostile disposition only for the physical server owner's intent."""
+
+    gid = _safe_int(getattr(guild, "id", 0), 0)
+    uid = _safe_int(user_id, 0)
+    owner_id = _safe_int(getattr(guild, "owner_id", 0), 0)
+    actor_id = _safe_int(actor_id, 0)
+    if min(gid, uid, owner_id, actor_id) <= 0 or actor_id != owner_id:
+        return False
+
+    current = await get_actor_reputation(gid, uid, refresh=True)
+    if not current or not current.get("active"):
+        return False
+
+    await clear_hostile_reputation(
+        gid,
+        uid,
+        cleared_by=owner_id,
+        reason=_safe_text(reason, "Physical server owner restored this identity"),
+    )
+    verified = await get_actor_reputation(gid, uid, refresh=True)
+    return bool(verified is not None and not verified.get("active"))
+
+
+async def _resolve_recent_unban_actor_id(
+    guild: discord.Guild,
+    user_id: int,
+) -> int:
+    audit_logs = getattr(guild, "audit_logs", None)
+    if not callable(audit_logs):
+        return 0
+
+    wanted = _safe_int(user_id, 0)
+    if wanted <= 0:
+        return 0
+
+    for delay in _OWNER_UNBAN_AUDIT_RETRY_DELAYS:
+        if delay > 0:
+            await asyncio.sleep(delay)
+        try:
+            async for entry in audit_logs(
+                limit=8,
+                action=discord.AuditLogAction.unban,
+            ):
+                target_id = _safe_int(
+                    getattr(getattr(entry, "target", None), "id", 0),
+                    0,
+                )
+                if target_id != wanted or not _recent_unban_entry(entry):
+                    continue
+                return _actor_id(getattr(entry, "user", None))
+        except Exception:
+            return 0
+    return 0
+
+
+async def _on_member_unban(guild: discord.Guild, user: discord.User) -> None:
+    """Treat a physical-owner unban as an explicit hostile-reputation clear."""
+
+    gid = _safe_int(getattr(guild, "id", 0), 0)
+    uid = _safe_int(getattr(user, "id", 0), 0)
+    if gid <= 0 or uid <= 0:
+        return
+
+    current = await get_actor_reputation(gid, uid, refresh=True)
+    if not current or not current.get("active"):
+        return
+
+    actor_id = await _resolve_recent_unban_actor_id(guild, uid)
+    if actor_id != _safe_int(getattr(guild, "owner_id", 0), 0):
+        return
+
+    cleared = await clear_hostile_reputation_for_owner_intent(
+        guild,
+        uid,
+        actor_id=actor_id,
+        reason="Physical server owner unbanned this Discord ID",
+    )
+    if cleared:
+        try:
+            print(
+                "🛡️ AntiNuke owner restore cleared hostile reputation "
+                f"guild={gid} user={uid}"
+            )
+        except Exception:
+            pass
+
+
 async def _on_member_join(member: discord.Member) -> None:
     from . import anti_nuke
     from . import raidguard
@@ -1040,6 +1146,7 @@ def install_hostile_actor_runtime(bot: discord.Client) -> bool:
         return False
 
     adder(_on_member_join, "on_member_join")
+    adder(_on_member_unban, "on_member_unban")
     adder(_on_message_known_hostile, "on_message")
 
     async def _on_ready_hostile_reconcile() -> None:
@@ -1059,6 +1166,7 @@ def install_hostile_actor_runtime(bot: discord.Client) -> bool:
 __all__ = [
     "REPUTATION_TABLE",
     "clear_hostile_reputation",
+    "clear_hostile_reputation_for_owner_intent",
     "get_actor_reputation",
     "install_hostile_actor_runtime",
     "list_active_reputations",
