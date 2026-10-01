@@ -14,6 +14,7 @@ from typing import Any, Optional
 import discord
 
 from ..guild_config import get_guild_config
+from ..navigation_registry import CATEGORIES
 from ..setup_service_state import mark_setup_completed, service_state_from_config
 from . import public_setup_recommend as setup
 
@@ -22,16 +23,14 @@ _ORIGINAL_HEALTH = setup._build_plain_setup_health_embed
 _ORIGINAL_PROGRESS = setup._setup_progress
 _ORIGINAL_CATEGORY_PAYLOAD = setup.solid._build_category_manager_payload
 
-FEATURE_AREAS = (
-    ("core", "Setup Plan & Server Items", "🧩", "Features, roles, channels, timers, and rules."),
-    ("tickets", "Tickets", "🎫", "Panels, staff routing, folders, and choices."),
-    ("verification", "Verification", "✅", "Simple, Voice, and approved ID/Web flows."),
-    ("security", "Security & SpamGuard", "🛡️", "SpamGuard, raids, AntiNuke, access, and repairs."),
-    ("logs", "Logs & Activity", "🧾", "Logging choices, channels, and activity coverage."),
-    ("design", "Server Design", "🎨", "Auto-detect, previews, styling, and undo."),
-    ("welcome", "Welcome & Join", "👋", "Welcome messages, join cards, and announcements."),
-    ("profiles", "Profile Signatures", "🪪", "Signatures, appearance, privacy, and platforms."),
-    ("history", "Backups & History", "💾", "Back up and restore selected setup areas."),
+FEATURE_AREAS = tuple(
+    (
+        category.key,
+        category.label,
+        category.emoji,
+        category.description,
+    )
+    for category in CATEGORIES
 )
 
 TEST_SPECS = {
@@ -138,25 +137,12 @@ async def _action_error(interaction: discord.Interaction, label: str, exc: Excep
 async def _route_area(interaction: discord.Interaction, area: str) -> None:
     if not await setup.solid._require_setup_permission(interaction):
         return
-    routes = {
-        "core": setup._open_advanced_core_setup,
-        "tickets": setup._open_advanced_member_experience,
-        "verification": setup._open_advanced_verification,
-        "security": setup._open_advanced_security,
-        "logs": setup._open_advanced_logs_activity,
-        "design": setup._open_advanced_appearance,
-        "history": setup._open_config_history,
-    }
-    if area in routes:
-        await routes[area](interaction)
-    elif area == "welcome":
-        from stoney_verify import welcome_setup_ui
-        await welcome_setup_ui.open_welcome_setup(interaction)
-    elif area == "profiles":
-        from stoney_verify import profile_card_setup_ui
-        await profile_card_setup_ui.open_profile_card_setup(interaction)
-    else:
-        await _open_manager(interaction)
+
+    # Setup's feature picker shares the canonical Dank Shield category registry
+    # instead of maintaining a second, stale navigation taxonomy.
+    from ..commands_ext import public_command_surface_v2 as navigation
+
+    await navigation._open_category(interaction, str(area or "").strip())
 
 
 class FeatureAreaSelect(discord.ui.Select):
