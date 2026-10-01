@@ -42,11 +42,13 @@ If either read stalls after Discord has already acknowledged the click, mobile n
 
 Additionally, Spam Guard can return an `unavailable:...` source without throwing, so exception-only degradation would be incomplete.
 
+A second canary/CI pass exposed one more pre-ack hole: public Protection entry routes still called `_require_setup_permission()` before the shared refresh owner. For delegated staff, that permission path can consult configured control-role state and may synchronously fetch configuration on a cold cache. The protection refresh itself could therefore be perfectly deferred while the button still stalled before it ever reached that refresh.
+
 ## Current fix
 
 The shared Protection owner now:
 
-1. acknowledges the interaction before backend I/O;
+1. uses one idempotent Protection-entry acknowledgement helper **before authorization and backend I/O** across the slash command, categorized navigation, legacy home button, setup button, advanced setup route, service entry, and Invite Shield return path;
 2. immediately edits the original interaction to a visible **Opening Protection Center** loading state;
 3. loads guild config and Spam Guard behind bounded, independent read-only waits;
 4. uses the existing cached guild config path when a fresh config refresh is slow/unavailable;
@@ -86,6 +88,9 @@ The load budget is process configuration and applies generically to every guild.
 ## Validation required
 
 Before merge:
+- regression coverage that every public Protection entry acknowledges before its permission check;
+- focused runtime test that acknowledgement is idempotent;
+- focused runtime test for visible loading before slow reads;
 - focused runtime tests for a hung config read;
 - focused runtime tests for a hung Spam Guard read;
 - cached-config fallback test;
@@ -110,6 +115,12 @@ After merge:
   6. confirm it remains responsive;
   7. if backend is degraded, confirm Retry/Close only and no settings mutation.
 
+## CI failure already resolved
+
+Exact head `3fea2335e2309f3318072ff6e591ea8b66dbec53` failed Dank Shield CI only because the old acknowledgement regression expected the first panel edit to occur after config/spam reads. The new visible-loading contract intentionally performs a loading edit before those reads. The test now verifies the correct order: defer → loading edit → config/spam → final edit → stats.
+
+That review also exposed and fixed the remaining pre-ack permission-check hole described above.
+
 ## Next step
 
-Validate PR #377 on its exact head. Patch only evidence-backed failures. If CI is green, complete final diff/branch hygiene, mark ready, merge with the exact expected head, verify post-merge CI/Supabase/Discloud, then rerun the Android Protection canary. Do not close issue #375 until that live canary passes.
+Validate PR #377 on the new exact head. Patch only evidence-backed failures. If CI is green, complete final diff/branch hygiene, mark ready, merge with the exact expected head, verify post-merge CI/Supabase/Discloud, then rerun the Android Protection canary. Do not close issue #375 until that live canary passes.
