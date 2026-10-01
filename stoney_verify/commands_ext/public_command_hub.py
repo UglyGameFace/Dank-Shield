@@ -193,10 +193,11 @@ class DankHomeView(_OwnedView):
         button: discord.ui.Button,
     ) -> None:
         _ = button
+        from . import public_protection_center
+        await public_protection_center._ack_protection_entry(interaction)
         from .public_setup_group import _require_setup_permission
         if not await _require_setup_permission(interaction):
             return
-        from . import public_protection_center
 
         await public_protection_center._refresh_panel(
             interaction,
