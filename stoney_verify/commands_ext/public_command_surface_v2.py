@@ -127,7 +127,7 @@ def _help_embed() -> discord.Embed:
             "`/role` — smart Roles & Profiles doorway with member/role shortcuts\n"
             "`/ticket` — current ticket controls\n"
             "`/tickets` — queues, ticket setup, routing, categories\n"
-            "`/toke` — ping the configured opt-in crowd (Community & Pings starter role required)\n"
+            "`/toke` — ping the configured opt-in crowd with optional text/media (Community & Pings starter role required)\n"
             "`/verify` — verification status/repair center"
         ),
         inline=False,
@@ -148,8 +148,8 @@ def _asset_embed() -> discord.Embed:
     embed = discord.Embed(
         title="📎 Card Assets",
         description=(
-            "Discord cannot open an attachment picker from a button, so file uploads use the one compact "
-            "`/dank upload` command. Everything else is button-driven."
+            "Discord cannot open an attachment picker from a button, so **card asset** uploads use the compact "
+            "`/dank upload` command. Member-facing `/toke upload:` is a separate optional media attachment on the Toke post."
         ),
         color=discord.Color.blurple(),
     )
