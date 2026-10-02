@@ -303,7 +303,7 @@ def _setup_readiness(
         try:
             torrent_manager = get_torrent_manager()
             storage = torrent_manager.storage_status()
-            capacity = torrent_manager.capacity_status()
+            capacity = torrent_manager.capacity_status(guild_id=int(guild.id))
         except Exception:
             storage = {}
             capacity = {}
@@ -466,12 +466,17 @@ def _setup_embed(
                 f"Process RSS: **{rss_text} / {int(capacity.get('process_limit_mb') or 0)} MB**\n"
                 f"Protected reserve: **{int(capacity.get('protected_reserve_mb') or 0)} MB**\n"
                 f"Protected headroom: **{headroom_text}**\n"
+                f"Adaptive next-session estimate: **{int(capacity.get('estimated_session_mb') or 0)} MB** "
+                f"• samples: **{int(capacity.get('memory_samples') or 0)}**\n"
                 f"Unique torrents: **{int(capacity.get('active_unique_sessions') or 0)}** "
                 f"• leases: **{int(capacity.get('total_leases') or 0)}** "
                 f"• shared: **{int(capacity.get('shared_sessions') or 0)}**\n"
-                f"Admission slots: **{int(capacity.get('session_slots_available') or 0)}** "
+                f"Global slots: **{int(capacity.get('session_slots_available') or 0)}** "
                 f"• soft/hard: **{int(capacity.get('soft_session_limit') or 0)}"
                 f"/{int(capacity.get('hard_session_limit') or 0)}**\n"
+                f"This server: **{int(capacity.get('guild_unique_sessions') or 0)}"
+                f"/{int(capacity.get('per_guild_limit') or 0)} unique** "
+                f"• slots: **{int(capacity.get('guild_slots_available') or 0)}**\n"
                 f"Disk reserve: **{_format_bytes(capacity.get('disk_reserve_bytes'))}** "
                 f"• committed: **{_format_bytes(capacity.get('committed_file_bytes'))}**"
             )[:1024],
