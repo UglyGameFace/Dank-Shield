@@ -70,7 +70,7 @@ def test_movie_night_hub_and_setup_are_mobile_sized_and_action_complete() -> Non
         "Queue",
         "Vote Yes",
         "Vote No",
-        "Sources",
+        "Providers",
         "Setup",
         "Community & Pings",
         "End Session",
@@ -79,7 +79,7 @@ def test_movie_night_hub_and_setup_are_mobile_sized_and_action_complete() -> Non
     } <= _labels(hub)
     assert {
         "Create / Repair Role",
-        "Sources",
+        "Providers",
         "Test Media Endpoint",
         "Community & Pings",
         "Refresh",
@@ -127,17 +127,64 @@ def test_movie_source_modal_hides_internal_id_and_prefills_edits() -> None:
     assert {"Edit", "Enable", "Disable", "Remove", "Back"} <= _labels(actions)
 
 
-def test_movie_source_page_makes_builtin_search_the_default() -> None:
+def test_movie_provider_page_keeps_search_and_direct_media_simple(monkeypatch) -> None:
+    monkeypatch.delenv("DANK_TMDB_READ_TOKEN", raising=False)
     embed = movie_ui._sources_embed(MediaSourceRegistry())
     rendered = "\n".join(
         [str(embed.description or "")]
         + [str(field.value) for field in embed.fields]
     )
 
-    assert "Movie search works without adding a feed" in rendered
+    assert "Regular members only need **Search / Vote**" in rendered
     assert "Internet Archive Feature Films" in rendered
-    assert "No API key or feed URL" in rendered
+    assert "Magnet links" in rendered
+    assert ".torrent files" in rendered
+    assert "TMDB" in rendered
     assert "Add Custom API" in _labels(movie_ui.MovieNightSourcesView(1))
+
+
+def test_candidate_embed_shows_tmdb_watch_availability(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+    )
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+    candidate = manager.nominate(
+        room.room_id,
+        user_id=10,
+        title="Example Movie",
+        metadata={
+            "catalog": {
+                "catalog_id": "123",
+                "title": "Example Movie",
+                "year": 2026,
+                "overview": "Example overview.",
+                "poster_url": "https://image.tmdb.org/t/p/w342/example.jpg",
+                "watch": {
+                    "region": "US",
+                    "free": ["Tubi"],
+                    "ads": ["Pluto TV"],
+                    "flatrate": ["Plex"],
+                    "rent": [],
+                    "buy": [],
+                    "link": "https://www.themoviedb.org/movie/123/watch",
+                    "attribution": "JustWatch via TMDB",
+                },
+            }
+        },
+        auto_vote=False,
+    )
+
+    embed = movie_ui._candidate_embed(room, candidate)
+    fields = {str(field.name): str(field.value) for field in embed.fields}
+    where = next(value for name, value in fields.items() if name.startswith("Where to watch"))
+    assert "Tubi" in where
+    assert "Pluto TV" in where
+    assert "Plex" in where
+    assert "JustWatch via TMDB" in where
 
 
 def test_movie_night_hub_adds_signed_watch_link_when_media_is_active(monkeypatch) -> None:
