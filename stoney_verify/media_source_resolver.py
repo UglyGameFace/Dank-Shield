@@ -16,7 +16,7 @@ import aiohttp
 from stoney_verify.media_metadata import parse_release_name
 from stoney_verify.media_source_registry import (
     CustomMediaSource,
-    enabled_custom_sources,
+    enabled_structured_sources,
     load_media_source_registry,
 )
 
@@ -523,9 +523,9 @@ async def search_custom_media_sources(
     query: str,
 ) -> MediaSourceSearchOutcome:
     _raw, registry = await load_media_source_registry(int(guild_id), refresh=True)
-    sources = enabled_custom_sources(registry)
+    sources = enabled_structured_sources(registry)
     if not sources:
-        return MediaSourceSearchOutcome(variants=(), errors=("No custom sources are enabled.",))
+        return MediaSourceSearchOutcome(variants=(), errors=("No structured custom sources are enabled.",))
 
     semaphore = asyncio.Semaphore(_MAX_CONCURRENCY)
 
@@ -616,7 +616,7 @@ async def search_movie_sources(
         variants=tuple(builtin_rows),
         errors=(builtin_error,) if builtin_error else (),
     )
-    if custom.errors == ("No custom sources are enabled.",):
+    if custom.errors == ("No structured custom sources are enabled.",):
         custom = MediaSourceSearchOutcome(variants=custom.variants)
     return _merge_media_outcomes((builtin, custom))
 
