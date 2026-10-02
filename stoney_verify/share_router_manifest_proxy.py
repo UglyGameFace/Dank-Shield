@@ -582,13 +582,6 @@ class ManifestProxy:
                     headers={"Cache-Control": "no-store"},
                 )
 
-                passthrough = {}
-                for key in ("Content-Length", "Content-Type", "Accept-Ranges", "Content-Range"):
-                    value = response.headers.get(key)
-                    if value:
-                        passthrough[key] = value
-                return web.Response(status=response.status, headers=passthrough)
-
             declared = int(response.headers.get("Content-Length") or 0)
             remaining = await self._budget.remaining()
             if declared > 0 and declared > remaining:
