@@ -35,6 +35,7 @@ Status:
 - Ticket-panel and Basic Verify restart recovery already reserved aggregate capacity before their identity fetch, but each still called `fetch_message()` directly, so duplicate owners could not coalesce the same identity.
 - Invite Shield uncached raw-edit recovery created one task per `(channel_id, message_id)`. Different message IDs edited in the same channel could therefore issue concurrent GETs against the same Discord route family. This matches the observed cluster of 429s against one channel with multiple message IDs in the same second.
 - Existing cache-first protections are retained: Invite raw edits skip REST when `cached_message` exists; current ticket/basic-verify panel identities bind persistent views without REST when the saved application/component contract is already authoritative.
+- Live Profile Card was inspected and intentionally left unchanged: production registration instantiates `stoney_verify.profile_card_runtime.LiveProfileCardRuntime`, whose native `on_ready()` overrides the legacy core reconciler and does not perform the core startup `fetch_message()` sweep.
 
 ### Execution path / changes
 
