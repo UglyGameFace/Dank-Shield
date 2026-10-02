@@ -38,19 +38,21 @@ Status:
 - `stoney_verify/share_router_runtime.py`
   - resolves the configured memes destination from the canonical Share Router route;
   - detects already-inline video attachments/embeds;
-  - adds a direct-memes relay path that calls the existing `_prepare_native_video()` owner;
-  - replies with the uploaded native video and explicit member attribution while leaving the source post intact;
-  - records the same destination/source dedupe key only after a successful relay or when Discord already supplied inline video;
-  - leaves unsupported/extraction-failed media untouched and unmarked;
-  - ignores webhook-authored messages in addition to bot-authored messages;
+  - adds a direct-memes entry condition without adding another listener;
+  - consolidates native-video preparation, upload, file-close, mention safety, and send-failure handling into one `_relay_native_video_upload()` owner reused by both proxy routing and direct memes enhancement;
+  - replies to the member's original post with explicit attribution while leaving the source post untouched;
+  - records the same destination/source dedupe key only after a successful direct relay or when Discord already supplied inline video;
+  - leaves unsupported/extraction-failed/upload-rejected media untouched and unmarked;
+  - ignores webhook-authored messages only for the new direct-destination enhancement, preserving existing proxy-source webhook behavior;
   - keeps one `route_message` listener.
 - `tests/test_share_router_native_runtime.py`
   - covers canonical `share-memes` target discovery versus unrelated same-name channels;
   - covers existing inline-video detection;
   - verifies supported direct video uses the canonical native relay and closes the file;
-  - verifies extraction failure leaves the original path untouched/unmarked;
+  - verifies extraction and upload-send failures leave the original path untouched/unmarked;
   - verifies recent-route dedupe suppresses duplicate relay;
-  - locks one-listener ownership and webhook exclusion.
+  - verifies guild-local route resolution;
+  - locks one-listener ownership, shared upload ownership, and direct-only webhook exclusion.
 
 ### Validation / cleanup / blockers
 
@@ -58,6 +60,11 @@ Pending before completion claim:
 - exact-head focused/full GitHub CI;
 - branch-vs-main final diff review;
 - post-merge production Android canary with a supported X/video link posted directly into the configured memes destination.
+
+Latest review corrections:
+- removed duplicate native-video send/file-close logic from the direct memes path by introducing one canonical upload owner shared with existing proxy routing;
+- scoped webhook exclusion to direct-destination enhancement so existing proxy-source webhook routing is not accidentally changed;
+- extended regression coverage for upload rejection, cross-guild isolation, shared upload ownership, and webhook scope.
 
 No unrelated task is active.
 
